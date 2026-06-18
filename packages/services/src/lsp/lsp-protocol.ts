@@ -42,6 +42,29 @@ export interface LspCompletionItem {
   commitCharacters?: string[];
 }
 
+export interface LspTextEdit {
+  range: LspRange0;
+  newText: string;
+}
+
+export interface LspTextDocumentEdit {
+  textDocument: { uri: string; version?: number | null };
+  edits: LspTextEdit[];
+}
+
+export interface LspWorkspaceEdit {
+  changes?: Record<string, LspTextEdit[]>;
+  documentChanges?: Array<LspTextDocumentEdit | Record<string, unknown>>;
+}
+
+export interface LspCodeAction {
+  title: string;
+  kind?: string;
+  isPreferred?: boolean;
+  edit?: LspWorkspaceEdit;
+  command?: { title?: string; command: string; arguments?: unknown[] };
+}
+
 export interface LspLocationLike {
   uri?: string;
   targetUri?: string;
@@ -59,6 +82,7 @@ export interface LspHover {
 export interface ServerCapabilities {
   textDocumentSync?: number | { change?: number };
   positionEncoding?: string;
+  codeActionProvider?: boolean | { codeActionKinds?: string[] };
 }
 
 // ─── position conversions (±1 only — see header) ───────────────────

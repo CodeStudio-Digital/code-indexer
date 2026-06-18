@@ -249,8 +249,13 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
     case 'lsp.references':
     case 'lsp.diagnostics': {
       const op = path.split('.')[1];
-      return { url: `/api/lsp/${ip!.projectId}/${op}`, init: json({ file: ip!.file, position: ip!.position }) };
+      return {
+        url: `/api/lsp/${ip!.projectId}/${op}`,
+        init: json({ file: ip!.file, position: ip!.position, content: ip!.content, context: ip!.context }),
+      };
     }
+    case 'lsp.codeActions':
+      return { url: `/api/lsp/${ip!.projectId}/code-actions`, init: json({ file: ip!.file, range: ip!.range }) };
     case 'lsp.didOpen':
       return {
         url: `/api/lsp/${ip!.projectId}/did-open`,

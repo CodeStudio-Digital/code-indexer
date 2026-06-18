@@ -28,7 +28,14 @@ export interface LspSpawnSpec {
 }
 
 const INIT_TIMEOUT_MS = 30_000;
-const REQ_TIMEOUT_MS = { completion: 5_000, hover: 5_000, definition: 10_000, references: 30_000, resolve: 5_000 } as const;
+const REQ_TIMEOUT_MS = {
+  completion: 5_000,
+  hover: 5_000,
+  definition: 10_000,
+  references: 30_000,
+  resolve: 5_000,
+  codeAction: 10_000,
+} as const;
 const STDERR_RING = 8 * 1024;
 
 export class LspServerHandle {
@@ -129,6 +136,24 @@ export class LspServerHandle {
             },
           },
           hover: { contentFormat: ['markdown', 'plaintext'] },
+          codeAction: {
+            dynamicRegistration: false,
+            codeActionLiteralSupport: {
+              codeActionKind: {
+                valueSet: [
+                  'quickfix',
+                  'refactor',
+                  'refactor.extract',
+                  'refactor.inline',
+                  'refactor.rewrite',
+                  'source',
+                  'source.organizeImports',
+                  'source.fixAll',
+                ],
+              },
+            },
+            isPreferredSupport: true,
+          },
           definition: {}, references: {}, documentSymbol: {}, signatureHelp: {},
         },
       },
@@ -228,6 +253,17 @@ export class LspServerHandle {
       position: toLsp(position),
       context: { includeDeclaration: true },
     }, REQ_TIMEOUT_MS.references);
+  }
+
+  codeActions(
+    absPath: string,
+    range: { start: { line: number; column: number }; end: { line: number; column: number } },
+  ): Promise<unknown> {
+    return this.rpc.request('textDocument/codeAction', {
+      textDocument: { uri: pathToUri(absPath) },
+      range: { start: toLsp(range.start), end: toLsp(range.end) },
+      context: { diagnostics: [] },
+    }, REQ_TIMEOUT_MS.codeAction);
   }
 
   /** Graceful: shutdown request → exit notification → SIGKILL after 3s. */

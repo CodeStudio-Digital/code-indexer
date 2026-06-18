@@ -6,7 +6,15 @@
  * answer — the router then falls to the index fallback.
  */
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { CompletionItem, DocChange, HoverInfo, LspLocation } from '@mcp/api-bus';
+import type {
+  CodeActionDTO,
+  CompletionItem,
+  DocChange,
+  HoverInfo,
+  LspLocation,
+  TextEditDTO,
+  WorkspaceEditDTO,
+} from '@mcp/api-bus';
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
 // Canonicalizador ÚNICO (W3): didOpen e completion passam a usar a MESMA chave de path
 // (forward-slash + drive lowercase), senão o intelephense não reconhece o arquivo no Windows.
@@ -26,9 +34,13 @@ import {
   mapSeverity,
   uriToPath,
   type LspCompletionItem,
+  type LspCodeAction,
   type LspHover,
   type LspLocationLike,
   type LspRange0,
+  type LspTextEdit,
+  type LspTextDocumentEdit,
+  type LspWorkspaceEdit,
 } from '@mcp/services/lsp/lsp-protocol.js';
 import { serverForLanguage, serverById } from '@mcp/services/lsp/server-registry.js';
 import { mapLspConfigSection, languageLevelForServer } from '@mcp/services/lsp/lsp-config-map.js';
@@ -48,6 +60,55 @@ function rangeFrom(r?: LspRange0): { start: { line: number; column: number }; en
   return r
     ? { start: fromLsp(r.start), end: fromLsp(r.end) }
     : { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } };
+}
+
+function textEditFrom(e: LspTextEdit): TextEditDTO {
+  return { range: rangeFrom(e.range), newText: e.newText };
+}
+
+function isTextDocumentEdit(entry: unknown): entry is LspTextDocumentEdit {
+  if (!entry || typeof entry !== 'object') return false;
+  const record = entry as Record<string, unknown>;
+  const textDocument = record.textDocument as Record<string, unknown> | undefined;
+  return !!textDocument && typeof textDocument.uri === 'string' && Array.isArray(record.edits);
+}
+
+export function mapServerWorkspaceEdit(edit: LspWorkspaceEdit | undefined): WorkspaceEditDTO | undefined {
+  if (!edit) return undefined;
+  const changes: Record<string, TextEditDTO[]> = {};
+  const push = (uri: string, edits: LspTextEdit[]): void => {
+    const file = uriToPath(uri);
+    const mapped = edits.map(textEditFrom);
+    if (mapped.length > 0) changes[file] = [...(changes[file] ?? []), ...mapped];
+  };
+
+  for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
+    if (Array.isArray(edits)) push(uri, edits);
+  }
+  for (const entry of edit.documentChanges ?? []) {
+    if (isTextDocumentEdit(entry)) push(entry.textDocument.uri, entry.edits);
+  }
+
+  return Object.keys(changes).length > 0 ? { changes } : undefined;
+}
+
+export function mapServerCodeActions(raw: unknown): CodeActionDTO[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  const out: CodeActionDTO[] = [];
+  for (const entry of arr) {
+    if (!entry || typeof entry !== 'object') continue;
+    const action = entry as LspCodeAction;
+    if (typeof action.title !== 'string' || !action.title.trim()) continue;
+    const edit = mapServerWorkspaceEdit(action.edit);
+    if (!edit) continue;
+    out.push({
+      title: action.title,
+      kind: action.kind ?? 'quickfix',
+      isPreferred: action.isPreferred || undefined,
+      edit,
+    });
+  }
+  return out;
 }
 
 /** Singleton wiring — first call hooks document events + diagnostics. */
@@ -85,6 +146,7 @@ export function ensureLspManager(db: CodeIndexDB): LspServerManager {
       if (!root) return;
       const rel = absToRel(root, absPath);
       if (!rel) return;
+      publishDiagnostics(projectId, { file: rel, source: 'syntax', diagnostics: [] });
       publishDiagnostics(projectId, {
         file: rel,
         source: `lsp:${serverId}`,
@@ -288,6 +350,22 @@ export async function serverReferences(
   if (!acq) return null;
   try {
     return toLocations(await acq.handle.references(relToAbs(root, file), position));
+  } catch {
+    return null;
+  }
+}
+
+export async function serverCodeActions(
+  db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
+  range: { start: { line: number; column: number }; end: { line: number; column: number } },
+): Promise<CodeActionDTO[] | null> {
+  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  if (!acq) return null;
+  const abs = relToAbs(root, file);
+  const liveDoc = getDoc(projectId, file);
+  if (liveDoc) acq.handle.ensureOpen(abs, liveDoc.languageId, liveDoc.version, liveDoc.content);
+  try {
+    return mapServerCodeActions(await acq.handle.codeActions(abs, range));
   } catch {
     return null;
   }

@@ -24,6 +24,23 @@ export interface LspLocation {
   range: { start: Position; end: Position };
 }
 
+export interface TextEditDTO {
+  range: { start: Position; end: Position };
+  newText: string;
+}
+
+export interface WorkspaceEditDTO {
+  /** Absolute file paths for backend/provider edits; ranges remain 1-based. */
+  changes: Record<string, TextEditDTO[]>;
+}
+
+export interface CodeActionDTO {
+  title: string;
+  kind: string;
+  isPreferred?: boolean;
+  edit?: WorkspaceEditDTO;
+}
+
 export interface CompletionItem {
   label: string;
   kind: string;
@@ -88,7 +105,7 @@ export interface DocChange {
 export interface DiagnosticsFrame {
   /** Project-relative forward-slash path (the editor's model key). */
   file: string;
-  source: 'ts' | `lsp:${string}` | 'index';
+  source: 'ts' | `lsp:${string}` | 'index' | 'syntax';
   diagnostics: DiagnosticItem[];
 }
 
@@ -305,5 +322,5 @@ export interface LspApi {
   codeActions(
     input: { projectId: number; file: string; range: { start: Position; end: Position } },
     ctx: ApiContext,
-  ): Promise<Array<{ title: string; kind: string; edits?: unknown }>>;
+  ): Promise<CodeActionDTO[]>;
 }

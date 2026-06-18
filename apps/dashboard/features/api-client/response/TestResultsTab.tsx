@@ -7,16 +7,22 @@ interface Props {
   tests?: ScriptTestResult[];
   consoleLogs?: string[];
   scriptError?: string;
+  updatedVars?: string[];
 }
 
-export function TestResultsTab({ tests = [], consoleLogs = [], scriptError }: Props) {
+export function TestResultsTab({ tests = [], consoleLogs = [], scriptError, updatedVars = [] }: Props) {
   const passed = tests.filter((t) => t.passed).length;
-  if (!tests.length && !consoleLogs.length && !scriptError) {
+  if (!tests.length && !consoleLogs.length && !scriptError && !updatedVars.length) {
     return <div className="h-full flex items-center justify-center text-xs text-muted-foreground p-4 text-center">No tests. Add a Tests script with <code className="mx-1">pm.test(...)</code> in the request editor.</div>;
   }
   return (
     <div className="p-2 text-xs space-y-2 overflow-auto h-full">
       {scriptError && <div className="text-red-500 font-mono whitespace-pre-wrap">Script error: {scriptError}</div>}
+      {updatedVars.length > 0 && (
+        <div className="text-emerald-600">
+          Saved {updatedVars.length} environment variable{updatedVars.length > 1 ? 's' : ''}: <span className="font-mono">{updatedVars.join(', ')}</span>
+        </div>
+      )}
       {!!tests.length && (
         <div className="text-muted-foreground">{passed}/{tests.length} passed</div>
       )}

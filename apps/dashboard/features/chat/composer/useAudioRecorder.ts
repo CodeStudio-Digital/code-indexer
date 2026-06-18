@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readDataUrlBase64 } from '../utils.js';
 import { transcribeAudio, TranscribeError } from './transcribe-api.js';
+import { readMicDeviceId } from './mic-device.js';
+import { publishVoiceCapture, clearVoiceCaptureAnalyser, setVoiceCaptureStop } from './voice-capture-store.js';
 
 export type RecorderStatus = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'error';
 export type RecorderErrorCode =
@@ -32,7 +34,7 @@ const GET_USER_MEDIA_TIMEOUT_MS = 20_000;
  * deadline we reject with an AbortError; a stream that resolves late is stopped
  * so the mic indicator doesn't leak.
  */
-function getAudioStream(timeoutMs: number): Promise<MediaStream> {
+function getAudioStream(timeoutMs: number, constraints: MediaStreamConstraints): Promise<MediaStream> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
@@ -42,7 +44,7 @@ function getAudioStream(timeoutMs: number): Promise<MediaStream> {
       err.name = 'AbortError';
       reject(err);
     }, timeoutMs);
-    navigator.mediaDevices.getUserMedia({ audio: true }).then(
+    navigator.mediaDevices.getUserMedia(constraints).then(
       (stream) => {
         if (settled) { stream.getTracks().forEach((t) => t.stop()); return; }
         settled = true;
@@ -98,9 +100,25 @@ export function useAudioRecorder(opts: UseAudioRecorderOpts) {
   // Gate for the `onstop` handler: true → transcribe; false → discard. Cleared
   // on unmount so a recording torn down mid-flight doesn't fire a wasted call.
   const transcribeOnStopRef = useRef(true);
+  // Web Audio graph powering the live waveform, + ownership of the shared store.
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const capturingRef = useRef(false);
 
   const safeSetStatus = useCallback((s: RecorderStatus) => {
     if (mountedRef.current) setStatus(s);
+  }, []);
+
+  // Publish/clear the singleton capture status, but only while THIS instance
+  // owns the live recording (guards the dual-mount case).
+  const publishCaptureStatus = useCallback((s: RecorderStatus) => {
+    if (capturingRef.current) publishVoiceCapture({ status: s });
+  }, []);
+  const endCapture = useCallback((s: RecorderStatus) => {
+    if (capturingRef.current) {
+      capturingRef.current = false;
+      publishVoiceCapture({ status: s });
+    }
   }, []);
 
   const releaseStream = useCallback(() => {
@@ -110,6 +128,15 @@ export function useAudioRecorder(opts: UseAudioRecorderOpts) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    // Tear down the analyser/AudioContext and release ownership of the store's
+    // analyser (identity-scoped, so a sibling recorder isn't clobbered).
+    const a = analyserRef.current;
+    if (a) { try { a.disconnect(); } catch { /* noop */ } }
+    clearVoiceCaptureAnalyser(a);
+    analyserRef.current = null;
+    const ctx = audioContextRef.current;
+    audioContextRef.current = null;
+    if (ctx && ctx.state !== 'closed') ctx.close().catch(() => { /* noop */ });
   }, []);
 
   const fail = useCallback((code: RecorderErrorCode) => {
@@ -122,27 +149,32 @@ export function useAudioRecorder(opts: UseAudioRecorderOpts) {
     releaseStream();
     if (!transcribeOnStopRef.current) {
       chunksRef.current = [];
+      endCapture('idle');
       return;
     }
     const blob = new Blob(chunksRef.current, { type: mimeRef.current });
     chunksRef.current = [];
     if (blob.size === 0) {
+      endCapture('idle');
       fail('empty');
       return;
     }
+    publishCaptureStatus('transcribing');
     safeSetStatus('transcribing');
     try {
       const base64 = await readDataUrlBase64(blob);
       const text = await transcribeAudio(base64, mimeRef.current, language);
+      endCapture('idle');
       if (!mountedRef.current) return;
       onResult(text);
       setErrorCode(null);
       setStatus('idle');
     } catch (e) {
+      endCapture('idle');
       if (e instanceof TranscribeError) fail(e.code);
       else fail('http');
     }
-  }, [fail, language, onResult, releaseStream, safeSetStatus]);
+  }, [endCapture, fail, language, onResult, publishCaptureStatus, releaseStream, safeSetStatus]);
 
   const start = useCallback(async () => {
     if (status === 'recording' || status === 'requesting' || status === 'transcribing') return;
@@ -153,9 +185,15 @@ export function useAudioRecorder(opts: UseAudioRecorderOpts) {
     }
     setErrorCode(null);
     safeSetStatus('requesting');
+    // Honor the picked OS device (null = system default). `exact` surfaces a
+    // gone device as OverconstrainedError → 'no-device' so the user re-picks.
+    const deviceId = readMicDeviceId();
+    const constraints: MediaStreamConstraints = {
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+    };
     let stream: MediaStream;
     try {
-      stream = await getAudioStream(GET_USER_MEDIA_TIMEOUT_MS);
+      stream = await getAudioStream(GET_USER_MEDIA_TIMEOUT_MS, constraints);
     } catch (e) {
       const name = e instanceof Error ? e.name : '';
       if (name === 'NotAllowedError' || name === 'SecurityError') fail('denied');
@@ -174,6 +212,29 @@ export function useAudioRecorder(opts: UseAudioRecorderOpts) {
     mimeRef.current = mime;
     chunksRef.current = [];
     transcribeOnStopRef.current = true;
+    // Tap an AnalyserNode for the live waveform — non-fatal (recording still
+    // works if Web Audio is unavailable). NEVER connect to destination (no
+    // playback → no feedback). Released in releaseStream().
+    try {
+      const Ctx =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (Ctx) {
+        const audioContext = new Ctx();
+        // Created after the getUserMedia await → may start suspended (autoplay
+        // policy), which freezes the analyser clock. Resume so data flows.
+        if (audioContext.state === 'suspended') void audioContext.resume().catch(() => {});
+        const sourceNode = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.7;
+        sourceNode.connect(analyser);
+        audioContextRef.current = audioContext;
+        analyserRef.current = analyser;
+      }
+    } catch {
+      analyserRef.current = null;
+    }
     // Construct AND start under one guard: on some Electron/Chromium builds
     // start() can throw even though isTypeSupported passed. Set recorderRef only
     // after start() succeeds so a throw can't leave a half-armed recorder + an
@@ -193,6 +254,8 @@ export function useAudioRecorder(opts: UseAudioRecorderOpts) {
       return;
     }
     recorderRef.current = recorder;
+    capturingRef.current = true;
+    publishVoiceCapture({ status: 'recording', analyser: analyserRef.current });
     safeSetStatus('recording');
     timerRef.current = setTimeout(() => {
       if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
@@ -213,8 +276,17 @@ export function useAudioRecorder(opts: UseAudioRecorderOpts) {
         if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
       } catch { /* noop */ }
       releaseStream();
+      endCapture('idle');
     };
-  }, [releaseStream]);
+  }, [releaseStream, endCapture]);
+
+  // Expose `stop` to the composer-level recording overlay while recording, so
+  // its Stop button can end the capture without prop-drilling the recorder.
+  useEffect(() => {
+    if (status !== 'recording') return;
+    setVoiceCaptureStop(stop);
+    return () => setVoiceCaptureStop(null);
+  }, [status, stop]);
 
   return { status, errorCode, start, stop };
 }

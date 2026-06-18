@@ -214,12 +214,14 @@ export function useApiClient(projectId: number) {
         response,
         requests: prev.requests.map((r) => (r.id === rid ? { ...r, last_status: response.status, last_run_at: new Date().toISOString() } : r)),
       }));
+      // A test/pre script wrote env vars (e.g. saved a token) → reflect them in the UI.
+      if (response.envUpdated) await refreshEnvironments();
     } catch (e) {
       patch({ error: e instanceof Error ? e.message : String(e) });
     } finally {
       patch({ sending: false });
     }
-  }, [projectId, s.selectedEnvId, patch]);
+  }, [projectId, s.selectedEnvId, patch, refreshEnvironments]);
 
   return {
     state: s,

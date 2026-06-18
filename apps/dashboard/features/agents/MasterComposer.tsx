@@ -8,6 +8,9 @@ import { useFileDrop } from '../chat/composer/useFileDrop.js';
 import { DropOverlay } from '../chat/composer/DropOverlay.js';
 import { useComposerDraft } from '../chat/composer/useComposerDraft.js';
 import { MicButton } from '../chat/composer/MicButton.js';
+import { MicDevicePicker } from '../chat/composer/MicDevicePicker.js';
+import { VoiceCaptureBar } from '../chat/composer/VoiceCaptureBar.js';
+import { useVoiceCaptureStatus, requestVoiceCaptureStop } from '../chat/composer/voice-capture-store.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 
 interface MasterComposerProps {
@@ -79,6 +82,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
   const appendTranscript = useCallback((text: string) => {
     setInput((prev) => (prev ? `${prev.trimEnd()} ${text}` : text));
   }, []);
+  const voiceRecording = useVoiceCaptureStatus() === 'recording';
 
   const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled });
 
@@ -147,7 +151,8 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
       )}
 
       <div className="flex gap-2 items-end">
-        <div className="flex-1 rounded-md border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+        <div className="relative flex-1 rounded-md border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+          {voiceRecording && <VoiceCaptureBar onStop={requestVoiceCaptureStop} />}
           <textarea
             ref={textareaRef}
             value={input}
@@ -181,6 +186,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                 </span>
               </label>
               <MicButton onTranscript={appendTranscript} disabled={disabled} className="ml-1" />
+              <MicDevicePicker disabled={disabled} />
               {supportsThinking && (
                 <button
                   type="button"

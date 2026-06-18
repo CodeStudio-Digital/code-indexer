@@ -27,6 +27,11 @@ function requirePosition(ctx: LspOpCtx): { line: number; column: number } {
   return ctx.position;
 }
 
+function requireRange(ctx: LspOpCtx): NonNullable<LspOpCtx['range']> {
+  if (!ctx.range) throw new Error(`lsp op on ${ctx.file}: range required`);
+  return ctx.range;
+}
+
 /** Live buffer: explicit content (legacy callers) > document store > disk (backend reads). */
 function liveContent(ctx: LspOpCtx): string | undefined {
   return ctx.content ?? getDoc(ctx.projectId, ctx.file)?.content;
@@ -87,6 +92,11 @@ export function createInProcessLspExecutor(db: CodeIndexDB): LspBackendExecutor 
     async tsSemanticTokens(ctx) {
       syncTs(ctx);
       return getTsService(ctx.root).getSemanticTokens(ctx.file);
+    },
+
+    async tsCodeActions(ctx) {
+      syncTs(ctx);
+      return getTsService(ctx.root).getCodeActions(ctx.file, requireRange(ctx));
     },
 
     async fallbackCompletion(ctx) {

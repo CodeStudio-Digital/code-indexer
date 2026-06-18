@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/
 import { PipelinePicker } from './PipelinePicker.js';
 import { OutputCapPicker } from './OutputCapPicker.js';
 import { MicButton } from './MicButton.js';
+import { MicDevicePicker } from './MicDevicePicker.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
 
 interface ComposerActionIconsProps {
@@ -101,7 +102,12 @@ export function ComposerActionIcons({
         <TooltipContent side="top">{t('composer.attach', { defaultValue: 'Anexar arquivos' })}</TooltipContent>
       </Tooltip>
 
-      {onTranscript && <MicButton onTranscript={onTranscript} disabled={streaming} />}
+      {onTranscript && (
+        <span className="inline-flex items-center">
+          <MicButton onTranscript={onTranscript} disabled={streaming} />
+          <MicDevicePicker disabled={streaming} />
+        </span>
+      )}
 
       {setSelectedPipelineId && (
         <PipelinePicker

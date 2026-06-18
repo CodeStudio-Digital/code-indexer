@@ -4,7 +4,11 @@ import {
   describeLocation,
   detectMemberTrigger,
   enclosingClass,
+  inferPhpVariableClass,
   isTypePosition,
+  phpImportPlanForCompletion,
+  resolveReceiverClass,
+  tsImportPlanForCompletion,
 } from '../fallback-members.js';
 import type { DBSymbol } from '@mcp/shared/types.js';
 
@@ -48,6 +52,24 @@ describe('detectMemberTrigger', () => {
   it('returns access=null for a plain word (no member operator)', () => {
     const line = '    new Profi';
     expect(detectMemberTrigger(line, line.length + 1).access).toBeNull();
+  });
+
+  it('detects inline new instance access after constructor parens', () => {
+    const line = '        new ApiAuthenticator()->';
+    const t = detectMemberTrigger(line, line.length + 1);
+    expect(t).toEqual({ access: 'instance', receiver: 'ApiAuthenticator', prefix: '' });
+    expect(resolveReceiverClass(t, [], 1)).toBe('ApiAuthenticator');
+  });
+
+  it('detects inline new instance access with FQN and typed member prefix', () => {
+    const line = '        new \\Infrastructure\\Security\\ApiAuthenticator($foo)->che';
+    const t = detectMemberTrigger(line, line.length + 1);
+    expect(t).toEqual({
+      access: 'instance',
+      receiver: 'Infrastructure\\Security\\ApiAuthenticator',
+      prefix: 'che',
+    });
+    expect(resolveReceiverClass(t, [], 1)).toBe('ApiAuthenticator');
   });
 });
 
@@ -125,6 +147,9 @@ describe('isTypePosition', () => {
     expect(isTypePosition('class A implements ')).toBe(true);
     expect(isTypePosition('if ($x instanceof ')).toBe(true);
     expect(isTypePosition('use ')).toBe(true);
+    expect(isTypePosition('async list(): ')).toBe(true);
+    expect(isTypePosition('const value: ')).toBe(true);
+    expect(isTypePosition('foo as ')).toBe(true);
   });
   it('false in a plain expression position', () => {
     expect(isTypePosition('        $x = ')).toBe(false);
@@ -133,10 +158,123 @@ describe('isTypePosition', () => {
   });
 });
 
+describe('tsImportPlanForCompletion', () => {
+  it('adds type-only imports for indexed interfaces/types', () => {
+    const plan = tsImportPlanForCompletion(
+      "import { x } from './x';\n\nexport function run(): Gene\n",
+      'src/services/agent.ts',
+      sym({
+        name: 'GeneratedKnowledgeDoc',
+        kind: 'interface',
+        file_path: 'src/shared/generated.ts',
+        exported: 1,
+      }),
+    );
+    expect(plan.additionalTextEdits).toEqual([{
+      range: { start: { line: 2, column: 1 }, end: { line: 2, column: 1 } },
+      newText: "import type { GeneratedKnowledgeDoc } from '../shared/generated';\n",
+    }]);
+  });
+});
+
+describe('inferPhpVariableClass', () => {
+  it('infers Eloquent builder variables from static model query calls', () => {
+    const content = [
+      '<?php',
+      'function listConfigs() {',
+      "  $query = LoyaltyPointsConfigModel::with(['financialEvent'])",
+      "    ->orderBy('created_at', 'desc');",
+      '',
+      '  $query->',
+      '}',
+      '',
+    ].join('\n');
+    expect(inferPhpVariableClass(content, '$query', 6)).toBe('Builder');
+  });
+
+  it('infers variables from new expressions and phpdoc @var', () => {
+    expect(inferPhpVariableClass('<?php\n$auth = new ApiAuthenticator();\n$auth->', '$auth', 3))
+      .toBe('ApiAuthenticator');
+    expect(inferPhpVariableClass('<?php\n/** @var ApiAuthenticator $auth */\n$auth->', '$auth', 3))
+      .toBe('ApiAuthenticator');
+  });
+});
+
 describe('describeLocation', () => {
   it('returns the dir, PHP with backslashes', () => {
     expect(describeLocation('a/b/c/File.php', 'php')).toBe('a\\b\\c');
     expect(describeLocation('a/b/c/File.ts', 'typescript')).toBe('a/b/c');
     expect(describeLocation('Top.php', 'php')).toBe('');
+  });
+});
+
+describe('phpImportPlanForCompletion', () => {
+  const target = [
+    '<?php',
+    'namespace infrastructure\\security;',
+    '',
+    'class ApiAuthenticator {}',
+    '',
+  ].join('\n');
+
+  it('inserts a use statement after namespace/existing imports', () => {
+    const current = [
+      '<?php',
+      'namespace domain\\service\\access;',
+      '',
+      'use domain\\model\\access\\GateAccessNomenclatureModel;',
+      '',
+      'class GateNomenclatureService {}',
+      '',
+    ].join('\n');
+
+    const plan = phpImportPlanForCompletion(current, target, 'ApiAuthenticator');
+    expect(plan.insertText).toBeUndefined();
+    expect(plan.additionalTextEdits).toEqual([{
+      range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } },
+      newText: 'use infrastructure\\security\\ApiAuthenticator;\n',
+    }]);
+  });
+
+  it('does not add a duplicate import', () => {
+    const current = [
+      '<?php',
+      'namespace domain\\service\\access;',
+      '',
+      'use infrastructure\\security\\ApiAuthenticator;',
+      '',
+      'class GateNomenclatureService {}',
+      '',
+    ].join('\n');
+
+    expect(phpImportPlanForCompletion(current, target, 'ApiAuthenticator')).toEqual({});
+  });
+
+  it('does not import a class from the current namespace', () => {
+    const current = [
+      '<?php',
+      'namespace infrastructure\\security;',
+      '',
+      'class AuthConsumer {}',
+      '',
+    ].join('\n');
+
+    expect(phpImportPlanForCompletion(current, target, 'ApiAuthenticator')).toEqual({});
+  });
+
+  it('falls back to fully qualified insertion when the short name is already imported', () => {
+    const current = [
+      '<?php',
+      'namespace domain\\service\\access;',
+      '',
+      'use vendor\\security\\ApiAuthenticator;',
+      '',
+      'class GateNomenclatureService {}',
+      '',
+    ].join('\n');
+
+    expect(phpImportPlanForCompletion(current, target, 'ApiAuthenticator')).toEqual({
+      insertText: '\\infrastructure\\security\\ApiAuthenticator',
+    });
   });
 });

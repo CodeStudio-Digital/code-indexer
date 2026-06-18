@@ -104,11 +104,11 @@ export function RequestEditor({ request, baseUrl, sending, onSave, onSend, onOpe
           />
         </div>
         {onOpenCode && (
-          <Button size="sm" variant="outline" className="h-9 w-9 p-0" title="Generate code (cURL, fetch, …)" onClick={() => { persist({ ...d }); onOpenCode(d.id); }}>
+          <Button size="sm" variant="outline" className="h-9 w-9 p-0" title="Generate code (cURL, fetch, …)" onClick={async () => { await persist({ ...d }); onOpenCode(d.id); }}>
             <Code2 className="h-4 w-4" />
           </Button>
         )}
-        <Button size="sm" className="h-9 gap-1.5 px-4" disabled={sending} onClick={() => { persist({ ...d }); onSend(d.id); }}>
+        <Button size="sm" className="h-9 gap-1.5 px-4" disabled={sending} onClick={async () => { await persist({ ...d }); onSend(d.id); }}>
           {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
           Send
         </Button>

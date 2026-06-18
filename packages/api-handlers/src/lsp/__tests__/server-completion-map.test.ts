@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapServerCompletionItem } from '../server-backend.js';
+import { mapServerCodeActions, mapServerCompletionItem, mapServerWorkspaceEdit } from '../server-backend.js';
 import type { LspCompletionItem } from '@mcp/services/lsp/lsp-protocol.js';
 
 describe('mapServerCompletionItem', () => {
@@ -100,5 +100,77 @@ describe('mapServerCompletionItem', () => {
       range: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } },
       newText: 'xyz',
     });
+  });
+});
+
+describe('mapServerWorkspaceEdit', () => {
+  it('converts changes from URI keys into absolute-path contract edits', () => {
+    expect(mapServerWorkspaceEdit({
+      changes: {
+        'file:///d:/proj/src/a.php': [
+          { range: { start: { line: 1, character: 0 }, end: { line: 1, character: 0 } }, newText: 'use App\\A;\n' },
+        ],
+      },
+    })).toEqual({
+      changes: {
+        'd:/proj/src/a.php': [
+          { range: { start: { line: 2, column: 1 }, end: { line: 2, column: 1 } }, newText: 'use App\\A;\n' },
+        ],
+      },
+    });
+  });
+
+  it('converts documentChanges textDocument edits too', () => {
+    expect(mapServerWorkspaceEdit({
+      documentChanges: [
+        {
+          textDocument: { uri: 'file:///d:/proj/src/b.ts', version: 3 },
+          edits: [
+            { range: { start: { line: 0, character: 2 }, end: { line: 0, character: 5 } }, newText: 'Thing' },
+          ],
+        },
+      ],
+    })).toEqual({
+      changes: {
+        'd:/proj/src/b.ts': [
+          { range: { start: { line: 1, column: 3 }, end: { line: 1, column: 6 } }, newText: 'Thing' },
+        ],
+      },
+    });
+  });
+});
+
+describe('mapServerCodeActions', () => {
+  it('keeps edit-backed actions and drops command-only actions', () => {
+    const actions = mapServerCodeActions([
+      {
+        title: 'Import class',
+        kind: 'quickfix',
+        isPreferred: true,
+        edit: {
+          changes: {
+            'file:///d:/proj/src/a.php': [
+              { range: { start: { line: 3, character: 0 }, end: { line: 3, character: 0 } }, newText: 'use App\\A;\n' },
+            ],
+          },
+        },
+      },
+      { title: 'Run server command', command: { command: 'x' } },
+    ]);
+
+    expect(actions).toEqual([
+      {
+        title: 'Import class',
+        kind: 'quickfix',
+        isPreferred: true,
+        edit: {
+          changes: {
+            'd:/proj/src/a.php': [
+              { range: { start: { line: 4, column: 1 }, end: { line: 4, column: 1 } }, newText: 'use App\\A;\n' },
+            ],
+          },
+        },
+      },
+    ]);
   });
 });

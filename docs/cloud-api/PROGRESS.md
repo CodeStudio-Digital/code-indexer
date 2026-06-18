@@ -430,6 +430,33 @@ Full audit JSON: the workflow run `wf_0a4403a6-806` (transcript in this session'
 
 ---
 
+## 8h. Milestone log (cont.) — M13: DEPLOYED to production + OpenAPI
+
+- **M13 — first production deploy + a critical prod-only fix + OpenAPI spec.**
+  - **Deployed** `codestudio-cloud-api` to **`https://codestudio-cloud-api.maiconspo6792.workers.dev`**
+    (`wrangler deploy`; both Durable Objects shipped via migration tags v1+v2; D1/KV/R2 bindings live).
+    Secrets set via `wrangler secret put`: `ACCESS_SIGNING_SECRET`, `IP_HASH_SALT`, `SHARE_SIGNING_PRIVKEY`
+    (a fresh Ed25519 prod keypair; pubkey + all three saved to the gitignored
+    `services/cloud-api/SECRETS.prod.local.txt`). Stripe/Turnstile/email left unset (those features inert).
+  - **🔴 CRITICAL prod-only gotcha found + fixed:** the **production workerd caps PBKDF2 at 100,000
+    iterations** (`NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not supported`).
+    `wrangler dev --local` does NOT enforce this, so signup/login passed every local smoke but **500'd on
+    the real edge**. Since Workers also forbids runtime WASM-compile (no Argon2id), the fix is **chained
+    PBKDF2**: `deriveBits` now loops in ≤100k-iteration chunks (6×100k = 600k effective), feeding each
+    chunk's output as the next chunk's salt — same work factor, within the cap, same self-describing PHC.
+    (`infra/pbkdf2-hasher.ts`.) Documented follow-up: scrypt (pure-JS @noble/hashes) or static-import
+    Argon2 `.wasm` for memory-hardness. Also raised signup rate-limit 5→20/h/IP (5 was too aggressive).
+  - **Verified LIVE on the production URL:** signup **201**, login (correct) **200**, login (wrong) **401**,
+    `/me` returns the account, refresh **200**, entitlements **tier=pro/trialing** (auto-trial), peppered
+    `ip_hash` confirmed, security headers present. **Login is functional in production.**
+  - **OpenAPI 3.1 spec** written to **`docs/cloud-api/openapi.yaml`** (27 paths / 29 operations / 7 schemas,
+    server = the prod URL, bearer security scheme) — import into Postman / Insomnia / the IDE API client.
+  - **Note — diagnostics:** `wrangler dev --remote` is NOT supported with Durable Objects (use `wrangler
+    tail` for live prod logs). Cloudflare's edge **rejects a spoofed `cf-connecting-ip`** (HTTP 403 "error
+    code: 1000") — you can't fake the source IP to dodge per-IP limits against the real edge (a good thing).
+
+---
+
 ## 9. State of the build & next steps (for the morning review)
 
 **Done & verified tonight (unsupervised):** Phase 0 (scaffolding) + Phase 1 (full identity: signup,
