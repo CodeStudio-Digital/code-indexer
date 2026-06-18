@@ -189,6 +189,7 @@
   "empty.suggestion3": "Adicione testes para o módulo principal",
   "empty.suggestion4": "Refatore para maior clareza",
   "composer.placeholder": "Descreva uma tarefa de programação…",
+  "composer.selectModel": "Selecione o Modelo",
   "composer.thinkingOn": "Modo thinking LIGADO",
   "composer.thinkingOff": "Modo thinking DESLIGADO",
   "composer.remove": "Remover",

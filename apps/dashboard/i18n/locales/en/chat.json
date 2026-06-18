@@ -189,6 +189,7 @@
   "empty.suggestion3": "Add tests for the main module",
   "empty.suggestion4": "Refactor for clarity",
   "composer.placeholder": "Describe a coding task…",
+  "composer.selectModel": "Select a model",
   "composer.thinkingOn": "Thinking mode ON",
   "composer.thinkingOff": "Thinking mode OFF",
   "composer.remove": "Remove",

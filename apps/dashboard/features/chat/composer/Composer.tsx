@@ -7,6 +7,7 @@ import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../
 import { fileToAttachment } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
+import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.js';
 import { RailComposerBar } from './RailComposerBar.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
 import { useFileDrop } from './useFileDrop.js';
@@ -158,6 +159,10 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     const draftKey = props.sessionId != null ? `coder:${props.sessionId}` : null;
     const { clearDraft } = useComposerDraft({ draftKey, input, setInput, attachments, setAttachments });
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    // Model settings (provider / model / turns / temperature / reasoning /
+    // fallback) collapse behind a dialog opened from the provider·model chip
+    // in the action-icons strip — keeps the bottom toolbar row calm.
+    const [modelDialogOpen, setModelDialogOpen] = useState(false);
     // Keep only the smart keyboard behaviors (Tab indent + Enter list
     // continuation) — the visual markdown formatting toolbar was removed
     // (useless markers for an AI-prompt composer).
@@ -618,20 +623,51 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               setSelectedPipelineId={props.setSelectedPipelineId}
               onTranscript={appendTranscript}
             />
+            {/* provider · model chip — opens the model settings dialog. */}
+            <button
+              type="button"
+              onClick={() => setModelDialogOpen(true)}
+              className="ml-auto inline-flex items-center max-w-[60%] h-7 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={t('toolbar.modelSettings', { defaultValue: 'Model settings' })}
+            >
+              <span className="truncate font-mono">
+                {modelSettingsLabel(
+                  props.providerOptions,
+                  props.provider,
+                  props.model,
+                  t('composer.selectModel', { defaultValue: 'Select a model' }),
+                )}
+              </span>
+            </button>
           </div>
           <ComposerToolbar
             hasInput={hasInput}
             autoSuggestText={debouncedInput}
             agent={props.agent}
             setAgent={props.setAgent}
+            onSend={handleSend}
+            onAbort={props.onAbort}
+            streaming={streaming}
+            reasoningEffort={props.reasoningEffort ?? null}
+            setReasoningEffort={props.setReasoningEffort}
+            reasoningLevels={props.reasoningLevels ?? []}
+            planDepth={props.planDepth ?? null}
+            setPlanDepth={props.setPlanDepth}
+            selectedPipelineId={props.selectedPipelineId ?? null}
+            queueable={!!props.queueable}
+            onQueueSend={handleQueue}
+          />
+          <ModelSettingsDialog
+            open={modelDialogOpen}
+            onOpenChange={setModelDialogOpen}
+            showAgent={false}
+            agent={props.agent}
+            setAgent={props.setAgent}
+            autoSuggestText={debouncedInput}
             provider={props.provider}
             model={props.model}
             setModel={props.setModel}
             onSwitchProvider={props.onSwitchProvider}
-            onSend={handleSend}
-            onAbort={props.onAbort}
-            streaming={streaming}
-            handleFiles={handleFiles}
             providerOptions={props.providerOptions}
             currentProviderModels={props.currentProviderModels}
             maxTurns={props.maxTurns}
@@ -643,22 +679,10 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             reasoningLevels={props.reasoningLevels ?? []}
             planDepth={props.planDepth ?? null}
             setPlanDepth={props.setPlanDepth}
-            outputCapLevel={props.outputCapLevel ?? 'economic'}
-            setOutputCapLevel={props.setOutputCapLevel}
             fallbackProvider={props.fallbackProvider ?? null}
             fallbackModel={props.fallbackModel ?? null}
             onFallbackChange={props.onFallbackChange ?? (() => {})}
             getModelsForProvider={props.getModelsForProvider ?? (() => [])}
-            sessionId={props.sessionId ?? null}
-            selectedPipelineId={props.selectedPipelineId ?? null}
-            setSelectedPipelineId={props.setSelectedPipelineId}
-            thinking={props.thinking}
-            setThinking={props.setThinking}
-            supportsThinking={props.supportsThinking}
-            describeImages={props.describeImages}
-            setDescribeImages={props.setDescribeImages}
-            queueable={!!props.queueable}
-            onQueueSend={handleQueue}
           />
           </>
           )}
