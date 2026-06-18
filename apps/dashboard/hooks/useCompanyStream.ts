@@ -29,13 +29,16 @@ import type {
   AgentStatusPayload,
   SessionIdlePayload,
 } from '../state/company/stream-handlers/agentStatusEvent.js';
+import { notifyCompanyStreamEvent, type NotificationSourceContext } from '../features/notifications/index.js';
 
 // Re-export client state types so legacy consumers keep their imports.
 export type { AgentStreamState, BoardMessage, FallbackNotice } from '../state/company/types.js';
 
-export function useCompanyStream(companySessionId: number | null) {
+export function useCompanyStream(companySessionId: number | null, notificationContext?: NotificationSourceContext) {
   // ─── Selectors ───────────────────────────────────────────────
   const stream = useCompanyStore((s) => selectStream(s, companySessionId));
+  const notificationContextRef = useRef(notificationContext);
+  notificationContextRef.current = notificationContext;
 
   // Snapshot of liveness + pending master inbox count. Refreshed on
   // every `reattach()` call from /state-snapshot. The dashboard's
@@ -84,6 +87,12 @@ export function useCompanyStream(companySessionId: number | null) {
   const handleSSEEvent = useCallback(
     (eventType: string, data: unknown) => {
       if (companySessionId == null) return;
+      notifyCompanyStreamEvent(
+        companySessionId,
+        eventType,
+        data && typeof data === 'object' && !Array.isArray(data) ? data as Record<string, unknown> : undefined,
+        notificationContextRef.current,
+      );
 
       if (eventType === 'agent_event') {
         streamApplyAgentEvent(companySessionId, data as AgentEventEnvelope);

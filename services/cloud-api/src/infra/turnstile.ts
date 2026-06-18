@@ -11,7 +11,7 @@ export function createBotVerifier(secret: string | undefined): BotVerifier {
       if (!secret) return false;
       const form = new URLSearchParams({ secret, response: token });
       if (ip) form.set('remoteip', ip);
-      const res = await fetch(SITEVERIFY, { method: 'POST', body: form });
+      const res = await fetch(SITEVERIFY, { method: 'POST', body: form, signal: AbortSignal.timeout(5000) });
       if (!res.ok) return false;
       const data = (await res.json()) as { success?: boolean };
       return data.success === true;

@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { subscribeShared } from './shared-stream.js';
+import { markRouteEvent } from '../lib/perf/route-startup-metrics.js';
 
 export interface GitMetaFrameDTO {
   branch: string | null;
@@ -26,7 +27,7 @@ export function useGitMeta(projectId: number | null, onFrame: (frame: GitMetaFra
     // `replay: 'none'` — git-meta frames are deltas (the snapshot is the
     // server-pushed seed on subscribe), so a late joiner must not be re-fed a
     // stale frame. `retryMs: 2000` preserves the Electron-iterator reconnect.
-    return subscribeShared<GitMetaFrameDTO>(
+    const unsubscribe = subscribeShared<GitMetaFrameDTO>(
       {
         key: `gitMeta:${projectId}`,
         electronVerb: 'projects.gitMetaStream',
@@ -38,5 +39,7 @@ export function useGitMeta(projectId: number | null, onFrame: (frame: GitMetaFra
       },
       (frame: GitMetaFrameDTO) => cb.current(frame),
     );
+    markRouteEvent('gitMeta:subscribed', { projectId });
+    return unsubscribe;
   }, [projectId]);
 }

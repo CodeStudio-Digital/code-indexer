@@ -43,12 +43,13 @@ export function redactSnapshot(snapshot: ShareSnapshot, level: RedactionLevel): 
     return r.value;
   };
   const title = bump(redactText(snapshot.title, level));
+  const model = snapshot.model == null ? snapshot.model : bump(redactText(snapshot.model, level));
   const messages: ShareMessage[] = snapshot.messages.map((m) => ({
     idx: m.idx,
     role: m.role,
     blocks: m.blocks.map((b) => redactBlock(b, level, bump)),
   }));
-  return { value: { ...snapshot, title, messages }, redactionCount: count };
+  return { value: { ...snapshot, title, model, messages }, redactionCount: count };
 }
 
 function redactBlock(b: PublicBlock, level: RedactionLevel, bump: (r: RedactionResult<string>) => string): PublicBlock {

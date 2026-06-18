@@ -29,6 +29,7 @@ import {
 } from '../../../state/editor-chat-context.js';
 import { readActiveSelection } from '../../workspace/editor/chat-actions.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
+import type { NotificationSourceContext } from '../../notifications/index.js';
 
 type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
 
@@ -53,7 +54,20 @@ export function useEditorChatSession(projectId: number) {
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
 
-  const stream = useAgentStream(selectedId);
+  const notificationContext = useMemo<NotificationSourceContext | undefined>(() => {
+    if (!selectedId) return undefined;
+    return {
+      target: {
+        kind: 'project',
+        route: `/projects/${projectId}?session=${selectedId}`,
+        scopeId: projectId,
+        sessionId: selectedId,
+        label: sessionData?.session.title ?? `Project ${projectId} session`,
+      },
+    };
+  }, [projectId, selectedId, sessionData?.session.title]);
+
+  const stream = useAgentStream(selectedId, notificationContext);
   const {
     streaming, currentTurn, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn,
     answerQuestion, respondToPlan, respondToTasks, respondToToolApproval, switchProvider,

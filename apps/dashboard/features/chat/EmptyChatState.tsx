@@ -1,17 +1,27 @@
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageSquareCode, PanelLeft, Plus, Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { markRouteEvent } from '../../lib/perf/route-startup-metrics.js';
 
 interface EmptyChatStateProps {
   onNew: () => void;
+  projectId?: number;
   projectName: string;
   onOpenSidebar?: () => void;
 }
 
-export function EmptyChatState({ onNew, projectName, onOpenSidebar }: EmptyChatStateProps) {
+export function EmptyChatState({ onNew, projectId, projectName, onOpenSidebar }: EmptyChatStateProps) {
   const { t } = useTranslation('chat');
   const suggestions = [t('empty.suggestion1'), t('empty.suggestion2'), t('empty.suggestion3'), t('empty.suggestion4')];
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      markRouteEvent('EmptyChatState:painted', { projectId, tab: 'chat', detail: 'empty-chat-state' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [projectId, projectName]);
+
   return (
     <div className="flex-1 flex flex-col">
       {onOpenSidebar && (

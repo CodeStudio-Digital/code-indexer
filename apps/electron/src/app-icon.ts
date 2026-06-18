@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export const APP_USER_MODEL_ID = 'studio.codestudio.app';
+export const APP_DISPLAY_NAME = 'CodeStudio';
+export const APP_USER_MODEL_ID = APP_DISPLAY_NAME;
 
 export function resolveAppIconPath(): string | undefined {
   const electronRoot = path.resolve(__dirname, '..');

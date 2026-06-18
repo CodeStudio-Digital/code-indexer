@@ -79,6 +79,7 @@ async function stripePost(secret: string, path: string, body: URLSearchParams): 
     method: 'POST',
     headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/x-www-form-urlencoded' },
     body,
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`stripe_${res.status}`);
   return (await res.json()) as Record<string, unknown>;
@@ -92,13 +93,23 @@ export async function verifyStripeSignature(
   toleranceMs: number,
 ): Promise<boolean> {
   if (!secret) return false;
-  const parts = Object.fromEntries(header.split(',').map((kv) => kv.split('=') as [string, string]));
-  const t = Number(parts.t);
-  const v1 = parts.v1;
-  if (!t || !v1) return false;
+  // Stripe sends `t=...,v1=...,v1=...` (during key rotation there can be MORE THAN
+  // ONE v1). Collect every v1 and accept if ANY matches. Split only on the FIRST
+  // '=' so signature values are never truncated.
+  let t = 0;
+  const v1s: string[] = [];
+  for (const kv of header.split(',')) {
+    const i = kv.indexOf('=');
+    if (i < 0) continue;
+    const k = kv.slice(0, i);
+    const v = kv.slice(i + 1);
+    if (k === 't') t = Number(v);
+    else if (k === 'v1') v1s.push(v);
+  }
+  if (!t || v1s.length === 0) return false;
   if (Math.abs(Date.now() - t * 1000) > toleranceMs) return false;
   const expected = await hmacSha256Hex(secret, `${t}.${payload}`);
-  return timingSafeEqualHex(expected, v1);
+  return v1s.some((v1) => timingSafeEqualHex(expected, v1));
 }
 
 async function hmacSha256Hex(secret: string, message: string): Promise<string> {

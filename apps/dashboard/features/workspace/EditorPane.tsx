@@ -83,7 +83,10 @@ export function EditorPane() {
             ) : activeFile.kind === 'git-stash' ? (
               <StashDetailView tab={activeFile} />
             ) : activeFile.kind === 'merge' ? (
-              <MergeTabView tab={activeFile} />
+              // Key by path: a fresh instance per merged file so switching
+              // between two merge tabs never mounts the old file's content
+              // (and stale Apply target) under the new file's URI.
+              <MergeTabView key={activeFile.path} tab={activeFile} />
             ) : activeFile.kind === 'diff' ? (
               <DiffMount diff={activeFile} />
             ) : isDrawioPath(activeFile.path) ? (

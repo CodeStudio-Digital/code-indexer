@@ -9,6 +9,7 @@ import type { ContribToolWindow } from '../../../state/contribution-registry.js'
 import type { ProjectTabId } from '../tabs-config.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { ProjectPreview } from '../builder/ProjectPreview.js';
+import type { PreviewFramework } from '../builder/useSelectorMode.js';
 import { UserMemoryPanel } from '../../user-memory/UserMemoryPanel.js';
 
 // Abas pesadas → chunks LAZY (W2/P3): só baixam quando a aba é clicada.
@@ -33,9 +34,10 @@ export interface TransientSurfaceProps {
   projectName: string;
   contribWindows: ContribToolWindow[];
   builderJson: { stack: string; port: number } | null;
+  framework?: PreviewFramework;
 }
 
-export function TransientSurface({ tab, projectId, projectName, contribWindows, builderJson }: TransientSurfaceProps) {
+export function TransientSurface({ tab, projectId, projectName, contribWindows, builderJson, framework }: TransientSurfaceProps) {
   // Snapshots owns its own master/detail layout (full height, inner scroll).
   // key={projectId} → remount per project (matches ProjectPreview/DiagramsView)
   // so an open create/edit SnapshotForm can't carry the previous project's
@@ -57,6 +59,7 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
         projectId={projectId}
         pinnedPort={builderJson?.port}
         selectionEnabled={!!builderJson}
+        framework={framework}
       />
     );
   }

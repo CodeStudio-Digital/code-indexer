@@ -18,8 +18,8 @@ export function mountDiffRoutes(app: Hono, deps: ServerDeps): void {
       // by run id alone — only diff runs that belong to THIS project so a caller
       // can't read another project's file snapshots (paths, symbols, concepts)
       // by passing foreign run ids.
-      const ownsBoth = deps.db.getRun(before)?.project_id === projectId
-        && deps.db.getRun(after)?.project_id === projectId;
+      const ownsBoth = deps.db.getRun(before, projectId)?.project_id === projectId
+        && deps.db.getRun(after, projectId)?.project_id === projectId;
       if (!ownsBoth) return notFound(c, 'Run not found in this project');
       diff = diffService.diff(projectId, before, after);
     } else {

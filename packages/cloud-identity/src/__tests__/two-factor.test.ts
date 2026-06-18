@@ -202,7 +202,7 @@ function build() {
     login: new LoginUseCase(accounts, hasher, issuer, noopThrottle, twoFactor, fakeChallengeTokens),
     enroll2fa: new Enroll2faUseCase(fakeTotp, twoFactor),
     confirm2fa: new Confirm2faUseCase(fakeTotp, twoFactor, fakeRecovery, noopThrottle),
-    disable2fa: new Disable2faUseCase(fakeTotp, twoFactor),
+    disable2fa: new Disable2faUseCase(fakeTotp, twoFactor, accounts, hasher, noopThrottle),
     challenge2fa: new Challenge2faUseCase(
       fakeChallengeTokens,
       twoFactor,
@@ -272,9 +272,18 @@ describe('TOTP 2FA', () => {
   it('disable removes 2FA so login issues a session directly', async () => {
     const t = build();
     const { accId } = await enrolled(t, 'c@e.com');
-    const dis = await t.disable2fa.execute({ accountId: accId, code: '123456' });
+    const dis = await t.disable2fa.execute({ accountId: accId, password: 'longenoughpassword', code: '123456' });
     expect(dis.ok).toBe(true);
     const login = await t.login.execute({ emailRaw: 'c@e.com', passwordRaw: 'longenoughpassword', ...CTX });
     expect(login.ok).toBe(true);
+  });
+
+  it('disable REQUIRES the correct password (step-up), not just a TOTP code', async () => {
+    const t = build();
+    const { accId } = await enrolled(t, 'd@e.com');
+    const bad = await t.disable2fa.execute({ accountId: accId, password: 'wrong-password', code: '123456' });
+    expect(bad.ok).toBe(false); // password step-up failed → 2FA stays on
+    const login = await t.login.execute({ emailRaw: 'd@e.com', passwordRaw: 'longenoughpassword', ...CTX });
+    expect(login.ok).toBe(false); // still twofa_required
   });
 });

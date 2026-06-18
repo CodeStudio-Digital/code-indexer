@@ -158,6 +158,30 @@ function parseHeadBranchInfo(out: string): {
   return { branch, upstream, ahead, behind };
 }
 
+async function readHeadSummary(cwd: string): Promise<{
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}> {
+  const branchRes = await runGit(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const branch = branchRes.code === 0 ? branchRes.stdout.trim() || null : null;
+
+  const upstreamRes = await runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
+  const upstream = upstreamRes.code === 0 ? upstreamRes.stdout.trim() || null : null;
+  if (!upstream) return { branch, upstream: null, ahead: 0, behind: 0 };
+
+  const abRes = await runGit(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']);
+  if (abRes.code !== 0) return { branch, upstream, ahead: 0, behind: 0 };
+  const [aheadRaw, behindRaw] = abRes.stdout.trim().split(/\s+/);
+  return {
+    branch,
+    upstream,
+    ahead: Number(aheadRaw) || 0,
+    behind: Number(behindRaw) || 0,
+  };
+}
+
 /**
  * Build a changed-file list by merging `--name-status` (authoritative
  * status + rename old/new paths) with `--numstat` (per-file add/remove
@@ -238,7 +262,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     ProjectGitApi,
     'mergeState' | 'conflictFile' | 'resolveConflict' | 'mergeContinue' | 'mergeAbort'
   > = {
-    async status({ projectId }) {
+    async status({ projectId, includeFiles = true }) {
       const root = requireRoot(projectId);
       const { repoRoot, notARepo } = await detectRepo(root);
       if (notARepo) {
@@ -253,6 +277,14 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         };
       }
       const cwd = repoRoot ?? root;
+      if (includeFiles === false) {
+        return {
+          ...(await readHeadSummary(cwd)),
+          files: [],
+          repoRoot: cwd,
+          notARepo: false,
+        };
+      }
       // Combined porcelain v1 (files) + branch headers from v2 in one go
       // would be cleanest, but v1 doesn't emit headers; cheaper to make
       // two short calls.

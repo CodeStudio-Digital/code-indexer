@@ -11,10 +11,11 @@ import { requireClaims, unauthorized } from '../middleware/auth.js';
 import { enforceRateLimit, MINUTE, HOUR } from '../middleware/rate-limit.js';
 import { recordAudit } from '../middleware/audit.js';
 import { hashPii } from '../infra/sha256.js';
+import { createBotVerifier } from '../infra/turnstile.js';
 import { respondError } from './_respond.js';
 
 const tokenSchema = z.object({ token: z.string().min(1).max(4096) });
-const requestResetSchema = z.object({ email: z.string().min(3).max(320) });
+const requestResetSchema = z.object({ email: z.string().min(3).max(320), turnstileToken: z.string().max(4096).optional() });
 const resetSchema = z.object({ token: z.string().min(1).max(4096), password: z.string().min(1).max(512) });
 
 export function emailRouter(): Hono<{ Bindings: Env }> {
@@ -43,9 +44,12 @@ export function emailRouter(): Hono<{ Bindings: Env }> {
   app.post('/request-password-reset', async (c) => {
     const parsed = requestResetSchema.safeParse(await c.req.json().catch(() => ({})));
     if (parsed.success) {
-      // Rate-limit per IP AND per email (email-bomb / cost guard) — but still
-      // always return 200 so the limit never becomes an enumeration oracle.
       const ip = c.req.header('cf-connecting-ip') ?? null;
+      // Bot check (active only once TURNSTILE_SECRET is set). On failure we SKIP
+      // processing but still return the generic 200 — never an enumeration oracle.
+      const bot = createBotVerifier(c.env.TURNSTILE_SECRET);
+      const humanOk = !bot.enabled || (!!parsed.data.turnstileToken && (await bot.verify(parsed.data.turnstileToken, ip)));
+      // Rate-limit per IP AND per email (email-bomb / cost guard) — still always 200.
       const pepper = c.env.IP_HASH_SALT ?? '';
       const ipHash = ip ? await hashPii(ip, pepper) : 'noip';
       const emailHash = await hashPii(parsed.data.email.toLowerCase(), pepper);
@@ -53,11 +57,11 @@ export function emailRouter(): Hono<{ Bindings: Env }> {
         { key: `pwreset:ip:${ipHash}`, limit: 10, windowMs: HOUR },
         { key: `pwreset:email:${emailHash}`, limit: 3, windowMs: HOUR },
       ]);
-      if (!limited) {
+      if (humanOk && !limited) {
         await createIdentityBundle(c.env).requestPasswordReset.execute({ emailRaw: parsed.data.email });
       }
     }
-    return c.json({ ok: true }, 200); // never reveal whether the email exists (or was throttled)
+    return c.json({ ok: true }, 200); // never reveal whether the email exists / was throttled / failed bot check
   });
 
   app.post('/reset-password', async (c) => {

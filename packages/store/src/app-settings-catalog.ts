@@ -31,6 +31,7 @@ import { AGENT_SPAWN_SETTINGS } from './app-settings/agent-spawn.js';
 import { AGENT_TASK_SETTINGS } from './app-settings/agent-tasks.js';
 import { COMPANY_SETTINGS } from './app-settings/company.js';
 import { COMPANY_SUPERVISOR_SETTINGS } from './app-settings/company-supervisor.js';
+import { NOTIFICATION_SETTINGS } from './app-settings/notifications.js';
 import { MEMORY_SETTINGS } from './app-settings/memory.js';
 import { DEBUG_SETTINGS } from './app-settings/debug.js';
 import { INDEXING_SETTINGS } from './app-settings/indexing.js';
@@ -48,6 +49,7 @@ export const APP_SETTINGS: readonly SettingDef[] = [
   ...AGENT_TASK_SETTINGS,
   ...COMPANY_SETTINGS,
   ...COMPANY_SUPERVISOR_SETTINGS,
+  ...NOTIFICATION_SETTINGS,
   ...MEMORY_SETTINGS,
   ...DEBUG_SETTINGS,
 ];

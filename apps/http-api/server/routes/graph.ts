@@ -11,7 +11,7 @@ export function mountGraphRoutes(app: Hono, deps: ServerDeps): void {
     if (!filePath) return c.json({ error: 'file query param required' }, 400);
     const file = db.getFile(projectId, filePath);
     if (!file) return notFound(c, 'File not found');
-    return c.json(db.getDependencies(file.id));
+    return c.json(db.getDependencies(file.id, projectId));
   });
 
   app.get('/api/projects/:id/dependents', (c) => {

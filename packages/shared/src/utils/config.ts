@@ -79,6 +79,76 @@ export function mcpDataDir(env: NodeJS.ProcessEnv = process.env): string {
 
 const DEFAULT_DATA_DIR = mcpDataDir();
 
+/**
+ * Tiered-hybrid per-project DB split flags (plan §10). All OFF by default, so a
+ * fresh build behaves exactly as today. Each phase is independently gated and
+ * reversible by flipping its flag.
+ */
+export interface ProjectDbFlags {
+  /** Master switch. When false, every other flag is forced off. */
+  enabled: boolean;
+  /** P1 — new projects write their index/session data to their own DB. */
+  newProjects: boolean;
+  /** P2 — lazily backfill a project's INDEX tables into its own DB on open. */
+  splitIndex: boolean;
+  /** P3 — extend the lazy backfill to session-runtime + scope tables. */
+  splitSessions: boolean;
+  /**
+   * P2b — flip the app's INDEX reads/writes to the per-project DB for migrated
+   * projects. SEPARATE from `splitIndex` (which only copies+verifies): routing
+   * requires threading projectId through every bare-id caller + the full
+   * semantic pipeline, so it ships dark until that's complete + verified.
+   * With this OFF, the engine still produces verified project DBs but the app
+   * keeps reading/writing central (no behavior change, no bare-id breakage).
+   */
+  route: boolean;
+  /** P4 — split per-project vectors.db. */
+  vectors: boolean;
+  /** P5 — cross-project reads go through ATTACH/rollups. */
+  crossRead: boolean;
+  /** Eagerly run all pending backfills at boot instead of on first open. */
+  eagerMigrate: boolean;
+  /** Force the central-dir fallback for every project DB (tests/read-only roots). */
+  fallbackAll: boolean;
+  /** When to delete a project's rows from the central DB after a verified split. */
+  purgeMode: 'defer' | 'immediate';
+  /** Max concurrently-open project DB handles per pool. */
+  maxOpen: number;
+  /** Idle TTL before a pooled project handle is checkpointed + closed (ms). */
+  idleMs: number;
+}
+
+const envBool = (env: NodeJS.ProcessEnv, name: string): boolean => {
+  const v = env[name]?.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+};
+
+const envIntOr = (env: NodeJS.ProcessEnv, name: string, fallback: number): number => {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+export function projectDbFlags(env: NodeJS.ProcessEnv = process.env): ProjectDbFlags {
+  const enabled = envBool(env, 'MCP_PROJECT_DB');
+  const on = (name: string): boolean => enabled && envBool(env, name);
+  return {
+    enabled,
+    newProjects: on('MCP_PROJECT_DB_NEW'),
+    splitIndex: on('MCP_PROJECT_DB_SPLIT'),
+    splitSessions: on('MCP_PROJECT_DB_SPLIT_SESSIONS'),
+    route: on('MCP_PROJECT_DB_ROUTE'),
+    vectors: on('MCP_PROJECT_DB_VECTORS'),
+    crossRead: on('MCP_PROJECT_DB_XREAD'),
+    eagerMigrate: on('MCP_PROJECT_DB_EAGER_MIGRATE'),
+    fallbackAll: envBool(env, 'MCP_PROJECT_DB_FALLBACK_ALL'),
+    purgeMode: env.MCP_DB_SPLIT_PURGE?.trim() === 'immediate' ? 'immediate' : 'defer',
+    maxOpen: envIntOr(env, 'MCP_PROJECT_DB_MAX_OPEN', 8),
+    idleMs: envIntOr(env, 'MCP_PROJECT_DB_IDLE_MS', 60_000),
+  };
+}
+
 const DEFAULT_CONFIG: IndexerConfig = {
   dbPath: join(DEFAULT_DATA_DIR, 'index.db'),
   concurrency: 5,

@@ -284,3 +284,18 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .conflict-incoming { background: color-mix(in srgb, var(--primary) 12%, transparent); }
 .conflict-current-gutter { border-left: 3px solid var(--success); }
 .conflict-incoming-gutter { border-left: 3px solid var(--primary); }
+
+/* 3-way merge editor (IntelliJ-style, marker-free). Blue=ours, green=theirs,
+   amber=conflict. Whole-line tints in the side + Result panes; clickable
+   gutter arrows push a side into the Result. */
+.merge-ours      { background: color-mix(in srgb, var(--primary) 13%, transparent); }
+.merge-theirs    { background: color-mix(in srgb, var(--success) 13%, transparent); }
+.merge-both      { background: color-mix(in srgb, var(--muted-foreground) 8%, transparent); }
+.merge-conflict  { background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent); }
+.merge-accepted  { background: color-mix(in srgb, var(--success) 14%, transparent); }
+.merge-resolved  { opacity: 0.5; text-decoration: line-through;
+                   text-decoration-color: color-mix(in srgb, var(--muted-foreground) 60%, transparent); }
+.merge-arrow-right, .merge-arrow-left { cursor: pointer; font-weight: 700; text-align: center; }
+.merge-arrow-right::before { content: '»'; color: var(--primary); }
+.merge-arrow-left::before  { content: '«'; color: var(--success); }
+.merge-arrow-right:hover::before, .merge-arrow-left:hover::before { color: var(--foreground); }

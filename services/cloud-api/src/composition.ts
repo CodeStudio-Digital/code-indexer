@@ -72,7 +72,7 @@ export function createIdentityBundle(env: Env): IdentityBundle {
   const authTokens = createAuthTokenRepo(db);
   const challengeTokens = createChallengeTokens(authTokens, opaqueTokens, cryptoIdGen, systemClock);
   const mail = createMailComposer(env.APP_BASE_URL);
-  const sender = createEmailSender(env.EMAIL, env.EMAIL_FROM);
+  const sender = createEmailSender(env.EMAIL, env.EMAIL_FROM, env.EMAIL_DEBUG_LOG_BODY === '1');
 
   return {
     signup: new SignupUseCase(accounts, pbkdf2Hasher, issuer, cryptoIdGen, systemClock),
@@ -83,7 +83,7 @@ export function createIdentityBundle(env: Env): IdentityBundle {
     listSessions: new ListSessionsUseCase(sessions),
     enroll2fa: new Enroll2faUseCase(totp, twoFactor),
     confirm2fa: new Confirm2faUseCase(totp, twoFactor, recoveryCodes, throttle),
-    disable2fa: new Disable2faUseCase(totp, twoFactor),
+    disable2fa: new Disable2faUseCase(totp, twoFactor, accounts, pbkdf2Hasher, throttle),
     challenge2fa: new Challenge2faUseCase(challengeTokens, twoFactor, totp, recoveryCodes, accounts, issuer, throttle),
     sendVerification: new SendVerificationEmailUseCase(authTokens, opaqueTokens, mail, sender, cryptoIdGen, systemClock),
     verifyEmail: new VerifyEmailUseCase(authTokens, opaqueTokens, accounts, systemClock),

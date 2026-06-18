@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiBaseUrl } from '../lib/api-client.js';
 import { getCached, dedupe, writeThrough, invalidateAll } from '../lib/api-cache.js';
+import {
+  recordUseApiCacheHit,
+  startUseApiRouteSpan,
+} from '../lib/perf/route-startup-metrics.js';
 
 /** Cache/dedup key for a useApi GET — must equal the fetched URL exactly so
  *  the HTTP and Electron-protocol bases never collide and query strings key
@@ -48,6 +52,7 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
     // Uncacheable path: a caller-supplied RequestInit means custom method/
     // headers/body — never share or cache it. Plain one-shot fetch.
     if (options) {
+      const finishSpan = startUseApiRouteSpan(url);
       setLoading(true);
       setError(null);
       fetch(`${apiBaseUrl()}/api${url}`, options)
@@ -55,8 +60,14 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json();
         })
-        .then(json => { if (!cancelled) { setData(json as T); setLoading(false); } })
-        .catch(err => { if (!cancelled) { setError(err.message); setLoading(false); } });
+        .then(json => {
+          finishSpan({ status: 'ok' });
+          if (!cancelled) { setData(json as T); setLoading(false); }
+        })
+        .catch(err => {
+          finishSpan({ status: 'error', error: errorMessage(err) });
+          if (!cancelled) { setError(errorMessage(err)); setLoading(false); }
+        });
       return () => { cancelled = true; };
     }
 
@@ -70,6 +81,7 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
     if (!force) {
       const hit = getCached<T>(key);
       if (hit !== undefined) {
+        recordUseApiCacheHit(url);
         setData(hit);
         setLoading(false);
         setError(null);
@@ -81,17 +93,29 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
     setError(null);
 
     dedupe<T>(key, async () => {
-      const res = await fetch(`${apiBaseUrl()}/api${url}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return (await res.json()) as T;
+      const finishSpan = startUseApiRouteSpan(url);
+      try {
+        const res = await fetch(`${apiBaseUrl()}/api${url}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as T;
+        finishSpan({ status: 'ok' });
+        return json;
+      } catch (err) {
+        finishSpan({ status: 'error', error: errorMessage(err) });
+        throw err;
+      }
     })
       .then(json => { if (!cancelled) { setData(json); setLoading(false); } })
-      .catch(err => { if (!cancelled) { setError(err.message); setLoading(false); } });
+      .catch(err => { if (!cancelled) { setError(errorMessage(err)); setLoading(false); } });
 
     return () => { cancelled = true; };
   }, [url, tick, options]);
 
   return { data, loading, error, refetch, update };
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

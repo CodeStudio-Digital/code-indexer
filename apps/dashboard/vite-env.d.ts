@@ -56,7 +56,17 @@ declare global {
     /** App version reported by Electron's main process. */
     getAppVersion?: () => Promise<string>;
     /** Show a native desktop notification. */
-    showNotification?: (opts: { title: string; body: string }) => void;
+    showNotification?: (opts: {
+      title: string;
+      body: string;
+      route?: string;
+      tag?: string;
+      kind?: string;
+    }) => void;
+    /** Whether Electron can show native desktop notifications on this OS. */
+    isNotificationSupported?: () => Promise<boolean>;
+    /** Navigate an existing renderer window after a native notification click. */
+    onNavigate?: (cb: (route: string) => void) => () => void;
     /** Auto-updater hooks (stubbed until Dia 17 of the macro plan lands). */
     onUpdateAvailable?: (cb: () => void) => () => void;
     restartAndUpdate?: () => void;

@@ -33,7 +33,7 @@ import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
-import { APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
+import { APP_DISPLAY_NAME, APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
 import type { Hono } from 'hono';
 
@@ -98,6 +98,7 @@ protocol.registerSchemesAsPrivileged([
 async function bootstrap() {
   // Electron must be ready before any BrowserWindow can open. Do this FIRST
   // so the splash can be shown to cover the heavy in-process backend boot.
+  app.setName(APP_DISPLAY_NAME);
   await app.whenReady();
 
   if (process.platform === 'win32') {
@@ -417,7 +418,7 @@ async function createAppWindow(routeSuffix?: string, onReveal?: () => void): Pro
  */
 function registerWindowIpc() {
   ipcMain.handle('window:open', async (_event, payload: { route?: string; title?: string }) => {
-    const route = typeof payload?.route === 'string' ? payload.route : undefined;
+    const route = normalizeInternalRoute(payload?.route);
     const title = typeof payload?.title === 'string' ? payload.title : undefined;
     try {
       const win = await createAppWindow(route);
@@ -429,6 +430,39 @@ function registerWindowIpc() {
       return { ok: false, error: message };
     }
   });
+}
+
+function normalizeInternalRoute(route: unknown): string | undefined {
+  if (typeof route !== 'string') return undefined;
+  const trimmed = route.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return undefined;
+  return trimmed;
+}
+
+async function focusOrOpenRoute(route?: string): Promise<void> {
+  const windows = BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed());
+  const existing = BrowserWindow.getFocusedWindow()
+    ?? windows.find((win) => win.isVisible())
+    ?? windows[0];
+
+  if (!existing) {
+    await createAppWindow(route);
+    return;
+  }
+
+  if (existing.isMinimized()) existing.restore();
+  existing.show();
+  existing.focus();
+  if (!route) return;
+
+  const sendNavigate = (): void => {
+    if (!existing.isDestroyed()) existing.webContents.send('app:navigate', route);
+  };
+  if (existing.webContents.isLoading()) {
+    existing.webContents.once('did-finish-load', sendNavigate);
+  } else {
+    sendNavigate();
+  }
 }
 
 /**
@@ -474,10 +508,26 @@ function registerNativeIpc() {
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
 
-  ipcMain.on('app:notify', (_event, opts: { title: string; body: string }) => {
-    if (Notification.isSupported()) {
-      new Notification({ title: opts.title, body: opts.body }).show();
+  ipcMain.handle('app:notificationSupported', () => Notification.isSupported());
+
+  ipcMain.on('app:notify', (_event, opts: { title: string; body: string; route?: string; tag?: string; kind?: string }) => {
+    if (!Notification.isSupported()) return;
+    if (typeof opts?.title !== 'string' || typeof opts?.body !== 'string') return;
+    const route = normalizeInternalRoute(opts.route);
+    const icon = resolveAppIconPath();
+    const notification = new Notification({
+      title: opts.title,
+      body: opts.body,
+      ...(icon ? { icon } : {}),
+    });
+    if (route) {
+      notification.on('click', () => {
+        void focusOrOpenRoute(route).catch((err) => {
+          console.error('[electron] notification route click failed:', err);
+        });
+      });
     }
+    notification.show();
   });
 }
 

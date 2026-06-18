@@ -7,6 +7,7 @@
 import { BrowserWindow } from 'electron';
 import type { IPreviewDevtools, PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
 import { UNIVERSAL_INSPECTOR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-inspector-source.js';
+import { REACT_DETECT_SOURCE } from '@mcp/services/sandbox/builder/inspector/react-detect-source.js';
 import { UNIVERSAL_TOOLBAR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-toolbar-source.js';
 import { REGION_HELPERS_SOURCE } from '@mcp/services/sandbox/builder/inspector/region-runtime.js';
 import { PreviewWindow, DEFAULT_VIEWPORT, type Viewport } from './cdp.js';
@@ -261,7 +262,11 @@ export class PreviewWindowService implements IPreviewDevtools {
    * bar's Inspect toggle / dashboard can arm later). Used by both the dashboard
    * "Inspect" (arm) and "Open in new window" (navigate) entry points.
    */
-  async openInspect(key: string, url: string, opts: { arm?: boolean } = {}): Promise<{ windowId: number; url: string }> {
+  async openInspect(
+    key: string,
+    url: string,
+    opts: { arm?: boolean; selectorMode?: string } = {},
+  ): Promise<{ windowId: number; url: string }> {
     const res = await this.open(key, { url });
     const pw = this.byKey.get(key);
     if (pw) {
@@ -270,14 +275,31 @@ export class PreviewWindowService implements IPreviewDevtools {
         pw.onControl((action) => this.handleControl(key, action));
         this.inspectForwarded.add(pw);
       }
-      // region helpers FIRST (the inspector's marquee handlers call them), then
-      // the inspector, then the floating control bar.
-      await pw.armInspect(`${REGION_HELPERS_SOURCE}\n${UNIVERSAL_INSPECTOR_SOURCE}\n${UNIVERSAL_TOOLBAR_SOURCE}`);
+      // detection globals + region helpers FIRST (the inspector's detect()/marquee
+      // handlers call them), then the inspector, then the floating control bar.
+      await pw.armInspect(`${REACT_DETECT_SOURCE}\n${REGION_HELPERS_SOURCE}\n${UNIVERSAL_INSPECTOR_SOURCE}\n${UNIVERSAL_TOOLBAR_SOURCE}`);
+      // Selector mode: 'react' forces a React label on fiberless nodes (RSC),
+      // 'universal' keeps react→vue→angular→css. setSelectorMode registers it as
+      // its own on-new-document script so it survives in-window navigation/reload
+      // (not just the first page), and updates the current doc immediately.
+      const mode =
+        opts.selectorMode === 'react' || opts.selectorMode === 'universal' ? opts.selectorMode : 'auto';
+      await pw.setSelectorMode(mode);
       await pw.send('Runtime.evaluate', {
         expression: opts.arm ? 'window.__mcpArm && window.__mcpArm()' : 'window.__mcpDisarm && window.__mcpDisarm()',
       }).catch(() => undefined);
     }
     return { windowId: res.windowId, url: res.url };
+  }
+
+  /** Live-update an open inspect window's selector mode (dashboard toggle while
+   *  the window stays open). No-op if the window isn't open. */
+  async setInspectMode(key: string, mode: string): Promise<void> {
+    const pw = this.byKey.get(key);
+    if (pw && !pw.win.isDestroyed()) {
+      const m = mode === 'react' || mode === 'universal' ? mode : 'auto';
+      await pw.setSelectorMode(m);
+    }
   }
 
   async disarmInspect(key: string): Promise<void> {

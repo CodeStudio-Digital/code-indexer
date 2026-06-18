@@ -51,6 +51,12 @@ export interface SelectedElementPayload {
   /** `data-testid` / `id`, if present — extra anchors for the model. */
   testId?: string;
   /**
+   * The component is the NEAREST React ancestor with a fiber, not the exact
+   * clicked node (e.g. a Server-Component DOM node has no client fiber).
+   * Universal inspector only; absent on precise (stamped/own-fiber) picks.
+   */
+  componentApprox?: boolean;
+  /**
    * Ctrl/Cmd-click: accumulate into the selection set (multi-citation)
    * instead of replacing it. Absent/false → plain click → single select.
    */

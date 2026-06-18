@@ -32,6 +32,14 @@ interface StreamFrame<T> {
   error?: { message: string; code?: string; status?: number };
 }
 
+interface DesktopNotificationOptions {
+  title: string;
+  body: string;
+  route?: string;
+  tag?: string;
+  kind?: string;
+}
+
 let streamRequestSeq = 0;
 
 function nextRequestId(): string {
@@ -245,8 +253,8 @@ function openDuplex(channel: string, payload: unknown): { port: MessagePort; rea
  * React effects can clean up. Used by the custom title bar to track
  * maximize/restore + window focus state.
  */
-function subscribe(channel: string, cb: (value: boolean) => void): () => void {
-  const handler = (_event: Electron.IpcRendererEvent, value: boolean) => cb(value);
+function subscribe<T>(channel: string, cb: (value: T) => void): () => void {
+  const handler = (_event: Electron.IpcRendererEvent, value: T) => cb(value);
   ipcRenderer.on(channel, handler);
   return () => ipcRenderer.removeListener(channel, handler);
 }
@@ -306,7 +314,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       error?: string;
     }>,
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
-  showNotification: (opts: { title: string; body: string }) => ipcRenderer.send('app:notify', opts),
+  showNotification: (opts: DesktopNotificationOptions) => ipcRenderer.send('app:notify', opts),
+  isNotificationSupported: () => ipcRenderer.invoke('app:notificationSupported') as Promise<boolean>,
+  onNavigate: (cb: (route: string) => void) => subscribe('app:navigate', cb),
   // Auto-updater hooks land in Dia 17; stubbed so the dashboard typechecks.
   onUpdateAvailable: (_cb: () => void) => () => undefined,
   restartAndUpdate: () => undefined,

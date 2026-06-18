@@ -4,6 +4,7 @@ import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import { apiBaseUrl } from '../../lib/api-client.js';
 import { pushWorkerLog } from './worker-log-store.js';
+import { notifyCoderStreamEvent, type NotificationSourceContext } from '../../features/notifications/index.js';
 
 /**
  * Derive `{level, category, message}` for the worker-log entry from the
@@ -74,6 +75,7 @@ export interface OpenStreamOpts {
 export interface OpenStreamDeps {
   updateSession: UpdateSession;
   abortMap: Map<number, AbortController>;
+  notificationContext?: NotificationSourceContext;
   /**
    * Persisted highest SSE id per sid, used as Last-Event-ID on reattach.
    * Kept in a ref-backed Map (not React state) because it advances on every
@@ -99,7 +101,7 @@ export async function openStream(
   deps: OpenStreamDeps,
   onMessageComplete?: () => void,
 ): Promise<void> {
-  const { updateSession, abortMap, lastSeenSeqMap } = deps;
+  const { updateSession, abortMap, lastSeenSeqMap, notificationContext } = deps;
 
   updateSession(sid, {
     streaming: true,
@@ -207,6 +209,7 @@ export async function openStream(
       } catch {
         return;
       }
+      notifyCoderStreamEvent(sid, ev.event, data, notificationContext);
       // Capture EVERY event into the worker log BEFORE dispatch. The
       // existing per-event handlers below only fire for events the UI
       // explicitly renders (text, tool_*, plan, etc.) — many events

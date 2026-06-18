@@ -83,6 +83,18 @@ function SelectionChipItem({
     <div className="flex items-center gap-1.5 rounded-md border border-indigo-300 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40 px-2 py-1 text-xs">
       <MousePointerClick className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
       <span className="font-medium text-indigo-700 dark:text-indigo-300">&lt;{name}&gt;</span>
+      {selected.framework === 'react' && (
+        <span
+          className="rounded bg-indigo-100 dark:bg-indigo-900/50 px-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-300"
+          title={
+            selected.componentApprox
+              ? 'Nearest React component (this node has no exact source — e.g. a Server Component)'
+              : 'Detected via React'
+          }
+        >
+          {selected.componentApprox ? '~react' : 'react'}
+        </span>
+      )}
       {selected.loc && (
         <span className="text-muted-foreground truncate max-w-[180px]" title={selected.loc}>
           {selected.loc}

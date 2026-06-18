@@ -35,6 +35,7 @@ import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
 import { SidebarPanels } from './preview-sidebar/SidebarPanels.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import { useResizableWidth } from '../../hooks/useResizableWidth.js';
+import type { NotificationSourceContext } from '../notifications/index.js';
 import type {
   AvailableProject,
   PersistedAgentRun,
@@ -105,11 +106,6 @@ export function CompanySessionView({
   // that sub-session's board / agents / prompts.
   const siblings = useCompanySiblings(sessionId);
   const activeSessionId = siblings.activeSessionId ?? sessionId;
-  const stream = useCompanyStream(activeSessionId);
-  const { data: sessionData, refetch } = useApi<SessionFullData>(
-    `/company/sessions/${activeSessionId}`,
-  );
-
   // URL drives zone + tab + active front. `parseAgentsParams` falls back
   // to safe defaults when the URL is incomplete or malformed.
   const routeParams = useParams<{
@@ -123,6 +119,29 @@ export function CompanySessionView({
   const zone: Zone = route?.zone ?? 'work';
   const tab = route?.tab ?? DEFAULT_TAB_FOR_ZONE.work;
   const activeFrontId = route?.frontId ?? sessionId;
+  const notificationContext = useMemo<NotificationSourceContext>(() => {
+    const baseTarget = {
+      kind: 'company' as const,
+      scopeId: sessionId,
+      sessionId: activeSessionId,
+      label: sessionName,
+    };
+    return {
+      target: {
+        ...baseTarget,
+        route: buildAgentsUrl(sessionId, activeFrontId, 'work', 'board'),
+      },
+      pipelineTarget: {
+        ...baseTarget,
+        route: buildAgentsUrl(sessionId, activeFrontId, 'work', 'pipelines'),
+      },
+    };
+  }, [activeFrontId, activeSessionId, sessionId, sessionName]);
+  const stream = useCompanyStream(activeSessionId, notificationContext);
+  const { data: sessionData, refetch } = useApi<SessionFullData>(
+    `/company/sessions/${activeSessionId}`,
+  );
+
   const handleZoneTabChange = (nextZone: Zone, nextTab: string) => {
     navigate(buildAgentsUrl(sessionId, activeFrontId, nextZone, nextTab));
   };

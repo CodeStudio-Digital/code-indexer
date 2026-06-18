@@ -133,6 +133,8 @@ export function formatSelectedElement(sel: SelectedElement): string {
     sel.selector ? `selector="${sel.selector}"` : '',
     sel.testId ? `testid="${sel.testId}"` : '',
     classes ? `classes="${classes}"` : '',
+    // Appended LAST so non-approx output stays byte-identical to before.
+    sel.componentApprox ? `approx="true"` : '',
   ]
     .filter(Boolean)
     .join(' ');

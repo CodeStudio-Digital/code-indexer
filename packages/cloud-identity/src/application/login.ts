@@ -42,16 +42,25 @@ export class LoginUseCase {
   ) {}
 
   async execute(input: LoginInput): Promise<Result<LoginOutput, IdentityError>> {
-    const key = input.ipHash ?? 'unknown';
-    const gate = await this.throttle.check(key);
-    if (gate.locked) return err(IdentityErrors.accountLocked(gate.retryAfterMs));
+    // Throttle on TWO dimensions: per-IP (stops one host hammering) AND per-account
+    // (stops distributed/rotating-IP brute force against a single victim).
+    const ipKey = input.ipHash ?? 'unknown';
+    const ipGate = await this.throttle.check(ipKey);
+    if (ipGate.locked) return err(IdentityErrors.accountLocked(ipGate.retryAfterMs));
+
+    const emailRes = Email.create(input.emailRaw);
+    const acctKey = emailRes.ok ? `acct:${emailRes.value.canonical}` : null;
+    if (acctKey) {
+      const acctGate = await this.throttle.check(acctKey);
+      if (acctGate.locked) return err(IdentityErrors.accountLocked(acctGate.retryAfterMs));
+    }
 
     const fail = async (): Promise<Result<LoginOutput, IdentityError>> => {
-      await this.throttle.recordFailure(key);
+      await this.throttle.recordFailure(ipKey);
+      if (acctKey) await this.throttle.recordFailure(acctKey);
       return err(IdentityErrors.invalidCredentials());
     };
 
-    const emailRes = Email.create(input.emailRaw);
     if (!emailRes.ok) {
       await this.hasher.dummyVerify(input.passwordRaw);
       return fail();
@@ -65,8 +74,9 @@ export class LoginUseCase {
     if (!valid) return fail();
     if (cred.account.status === 'locked') return err(IdentityErrors.accountLocked(0));
 
-    // Password is correct — reset the throttle, then branch on 2FA.
-    await this.throttle.recordSuccess(key);
+    // Password is correct — reset both throttles, then branch on 2FA.
+    await this.throttle.recordSuccess(ipKey);
+    if (acctKey) await this.throttle.recordSuccess(acctKey);
     // Transparently upgrade a stale/weaker hash on successful login (best-effort).
     if (this.hasher.needsRehash(cred.passwordHash)) {
       try {

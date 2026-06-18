@@ -58,7 +58,7 @@ export async function processFileStructural(
   const supported = tsResult.supported;
   const symbols = supported ? tsResult.analysis.symbols ?? [] : [];
 
-  const fileId = db.transaction(() => {
+  const fileId = db.indexTransaction(projectId, () => {
     const { fileId: id } = db.upsertFileStructural(projectId, {
       path: file.relativePath,
       language: tsResult.language || 'unknown',
@@ -92,7 +92,7 @@ export async function processFileStructural(
       }
     }
 
-    db.upsertFileContent(id, content, sizeBytes);
+    db.upsertFileContent(id, content, sizeBytes, projectId);
     return id;
   });
 

@@ -86,7 +86,7 @@ export function expandGraph(
 
   const out: HybridSearchResult[] = [];
   for (let i = 0; i < ranked.length && out.length < maxResults; i++) {
-    const data = db.getFileById(ranked[i][0]);
+    const data = db.getFileById(ranked[i][0], projectId);
     if (!data || data.project_id !== projectId) continue;
     out.push({ id: data.id, type: 'file', score: 1 / (RRF_K + i + 1), fts_rank: null, vector_score: null, data });
   }
@@ -118,7 +118,7 @@ function collectNeighborFileIds(
     push(db.getFileByPath(projectId, dep.source_file_path)?.id);
   }
   // …and the files it imports that resolve to indexed files (dependencies).
-  for (const dep of db.getDependencies(file.id)) {
+  for (const dep of db.getDependencies(file.id, projectId)) {
     if (dep.target_file_path) push(db.getFileByPath(projectId, dep.target_file_path)?.id);
   }
   return ids;

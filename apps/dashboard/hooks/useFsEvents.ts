@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { subscribeShared } from './shared-stream.js';
+import { markRouteEvent } from '../lib/perf/route-startup-metrics.js';
 
 export interface FsEventDTO { path: string; kind: 'upsert' | 'delete'; isDir: boolean }
 interface FsEventsFrameDTO { events: FsEventDTO[] }
@@ -21,7 +22,7 @@ export function useFsEvents(projectId: number | null, onEvents: (events: FsEvent
     // of how many surfaces subscribe). `replay: 'none'` — these frames are
     // incremental deltas, NOT a snapshot, so a late joiner must not be re-fed a
     // stale batch. `retryMs: 2000` preserves the Electron-iterator reconnect.
-    return subscribeShared<FsEventsFrameDTO>(
+    const unsubscribe = subscribeShared<FsEventsFrameDTO>(
       {
         key: `fsEvents:${projectId}`,
         electronVerb: 'projects.fsEventsStream',
@@ -35,5 +36,7 @@ export function useFsEvents(projectId: number | null, onEvents: (events: FsEvent
         if (frame.events.length > 0) cb.current(frame.events);
       },
     );
+    markRouteEvent('fsEvents:subscribed', { projectId });
+    return unsubscribe;
   }, [projectId]);
 }

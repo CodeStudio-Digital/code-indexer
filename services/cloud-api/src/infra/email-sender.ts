@@ -9,20 +9,33 @@ export interface EmailServiceBinding {
   send(message: { to: string; from: string; subject: string; html: string; text: string }): Promise<unknown>;
 }
 
-export function createEmailSender(binding: EmailServiceBinding | undefined, from: string): EmailSender {
+export function createEmailSender(
+  binding: EmailServiceBinding | undefined,
+  from: string,
+  debugLogBody = false,
+): EmailSender {
   return {
     async send(message: MailMessage) {
-      if (!binding) {
+      if (binding) {
+        await binding.send({
+          to: message.to,
+          from,
+          subject: message.subject,
+          html: message.html,
+          text: message.text,
+        });
+        return;
+      }
+      // No EMAIL binding. The body carries one-time reset/verification tokens, so it
+      // must NEVER be logged in production (CWE-532). Logging the body is an EXPLICIT,
+      // gitignored, dev-only opt-in (`EMAIL_DEBUG_LOG_BODY=1` in .dev.vars) — prod
+      // never sets it, so it cannot accidentally leak. Otherwise drop with a
+      // token-free, recipient-free breadcrumb.
+      if (debugLogBody) {
         console.log(`[email:dev] to=${message.to} subject="${message.subject}"\n${message.text}`);
         return;
       }
-      await binding.send({
-        to: message.to,
-        from,
-        subject: message.subject,
-        html: message.html,
-        text: message.text,
-      });
+      console.warn(`[email] EMAIL binding not configured — "${message.subject}" not sent (body+recipient suppressed)`);
     },
   };
 }

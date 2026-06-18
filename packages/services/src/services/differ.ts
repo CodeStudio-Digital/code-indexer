@@ -5,8 +5,8 @@ export class DiffService {
   constructor(private db: CodeIndexDB) {}
 
   diff(projectId: number, runBefore: number, runAfter: number): RunDiff {
-    const snapshotsBefore = this.db.getFileSnapshots(runBefore);
-    const snapshotsAfter = this.db.getFileSnapshots(runAfter);
+    const snapshotsBefore = this.db.getFileSnapshots(runBefore, projectId);
+    const snapshotsAfter = this.db.getFileSnapshots(runAfter, projectId);
 
     const beforeMap = new Map(snapshotsBefore.map(s => [s.file_path, s]));
     const afterMap = new Map(snapshotsAfter.map(s => [s.file_path, s]));

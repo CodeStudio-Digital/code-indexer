@@ -174,6 +174,7 @@ import { projectLanguageLevels157 } from './157_project_language_levels.js';
 import { apiRequestFolder158 } from './158_api_request_folder.js';
 import { apiCollectionFolders159 } from './159_api_collection_folders.js';
 import { fileLocalHistory160 } from './160_file_local_history.js';
+import { projectDbSplit161 } from './161_project_db_split.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -364,6 +365,7 @@ export const MIGRATIONS: Migration[] = [
   apiRequestFolder158,
   apiCollectionFolders159,
   fileLocalHistory160,
+  projectDbSplit161,
 ];
 
 /**

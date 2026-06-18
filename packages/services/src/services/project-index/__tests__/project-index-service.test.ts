@@ -25,7 +25,7 @@ function fakeDb(project: { structural_indexed_at: string | null; last_indexed: s
 
 const SETTINGS: ProjectIndexSettings = {
   autoIndex: true, autoWatch: false, maxFiles: 20000,
-  maxWatchedProjects: 3, watchDebounceMs: 50, openDelayMs: 0,
+  maxWatchedProjects: 3, watchDebounceMs: 50, watchOpenDelayMs: 0, watchIdleMs: 0, openDelayMs: 0,
 };
 
 class FakeExecutor implements StructuralExecutor {
@@ -58,6 +58,65 @@ class FakeExecutor implements StructuralExecutor {
   async removeFiles(_projectId: number, relPaths: string[]) {
     this.removeCalls.push([...relPaths]);
     return { removed: relPaths.length };
+  }
+}
+
+class FakeFileWatcher {
+  started: number[] = [];
+  stopped: number[] = [];
+  active = new Set<number>();
+  events = new Map<number, { onFileChanged: (events: Array<{ path: string; kind: 'upsert' | 'delete'; isDir?: boolean }>) => void | Promise<void> }>();
+
+  startWatching(
+    projectId: number,
+    _options: object,
+    events: { onFileChanged: (events: Array<{ path: string; kind: 'upsert' | 'delete'; isDir?: boolean }>) => void | Promise<void> },
+  ): void {
+    this.started.push(projectId);
+    this.active.add(projectId);
+    this.events.set(projectId, events);
+  }
+
+  async stopWatching(projectId: number): Promise<void> {
+    this.stopped.push(projectId);
+    this.active.delete(projectId);
+    this.events.delete(projectId);
+  }
+
+  async stopAll(): Promise<void> {
+    await Promise.all(Array.from(this.active).map((id) => this.stopWatching(id)));
+  }
+
+  isWatching(projectId: number): boolean {
+    return this.active.has(projectId);
+  }
+}
+
+class FakeGitMetaWatcher {
+  started: number[] = [];
+  stopped: number[] = [];
+  active = new Set<number>();
+
+  startWatching(projectId: number): void {
+    this.started.push(projectId);
+    this.active.add(projectId);
+  }
+
+  async stopWatching(projectId: number): Promise<void> {
+    this.stopped.push(projectId);
+    this.active.delete(projectId);
+  }
+
+  async stopAll(): Promise<void> {
+    await Promise.all(Array.from(this.active).map((id) => this.stopWatching(id)));
+  }
+
+  isWatching(projectId: number): boolean {
+    return this.active.has(projectId);
+  }
+
+  readCurrent() {
+    return { branch: 'main', detached: false, changed: [] };
   }
 }
 
@@ -180,6 +239,58 @@ describe('ProjectIndexService', () => {
     expect(exec.removeCalls).toEqual([['src/y.ts']]);
     expect(exec.indexCalls).toEqual([['src/x.ts']]);
     expect(svc.getStatus(1).dirtyPending).toBe(0);
+    await svc.dispose();
+  });
+
+  it('incremental dirty queue drains in bounded batches', async () => {
+    const exec = new FakeExecutor();
+    const svc = makeService(exec);
+    svc.markDirty(
+      1,
+      Array.from({ length: 450 }, (_, i) => ({ path: `src/file-${i}.ts`, kind: 'upsert' as const })),
+    );
+    await sleep(80);
+    expect(exec.indexCalls.map((c) => c.length)).toEqual([200, 200, 50]);
+    expect(svc.getStatus(1).dirtyPending).toBe(0);
+    await svc.dispose();
+  });
+
+  it('git-meta subscription does not start the recursive file watcher', async () => {
+    const exec = new FakeExecutor();
+    const fileWatcher = new FakeFileWatcher();
+    const gitWatcher = new FakeGitMetaWatcher();
+    const svc = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: null, last_indexed: null }),
+      exec,
+      fileWatcher as never,
+      () => ({ ...SETTINGS, autoWatch: true }),
+      gitWatcher as never,
+    );
+    const unsubscribe = svc.subscribeGitMeta(1, () => {});
+    expect(gitWatcher.started).toEqual([1]);
+    expect(fileWatcher.started).toEqual([]);
+    unsubscribe();
+    await svc.dispose();
+  });
+
+  it('file watcher starts after subscribe delay and stops after idle cleanup', async () => {
+    const exec = new FakeExecutor();
+    const fileWatcher = new FakeFileWatcher();
+    const gitWatcher = new FakeGitMetaWatcher();
+    const svc = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: null, last_indexed: null }),
+      exec,
+      fileWatcher as never,
+      () => ({ ...SETTINGS, autoWatch: true, watchOpenDelayMs: 30, watchIdleMs: 0 }),
+      gitWatcher as never,
+    );
+    const unsubscribe = svc.subscribeFsEvents(1, () => {});
+    expect(fileWatcher.started).toEqual([]);
+    await sleep(45);
+    expect(fileWatcher.started).toEqual([1]);
+    unsubscribe();
+    await sleep(10);
+    expect(fileWatcher.stopped).toContain(1);
     await svc.dispose();
   });
 

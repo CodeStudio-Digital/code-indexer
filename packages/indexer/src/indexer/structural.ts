@@ -20,6 +20,12 @@ import { withConcurrency } from './indexer/enrich-references.js';
 import { processFileStructural } from './indexer/process-file-structural.js';
 import { removeFilesStructural } from './structural-incremental.js';
 
+const STRUCTURAL_YIELD_EVERY = 50;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 export interface StructuralProgress {
   current: number;
   total: number;
@@ -64,11 +70,20 @@ export async function runStructuralIndex(
   const project = db.getProject(projectId);
   if (!project) throw new Error(`project ${projectId} not found`);
 
-  const scanner = new FileScanner(project.root_path, opts.ignorePatterns ?? [], opts.maxFileSizeKB ?? 200);
-  const scan = await scanner.scan(db, projectId);
-  const totalFiles = scan.toIndex.length + scan.unchanged.length;
+  // Tiered-hybrid split (plan §8): lazily migrate this project's INDEX tables
+  // into its own DB before indexing. No-op unless the split flags are on and the
+  // project is still 'pending'. Fail-open: a split error never blocks indexing.
+  try {
+    db.ensureProjectSplit(projectId);
+  } catch (e) {
+    console.warn(`[structural] project-db split skipped for ${projectId}:`, (e as Error).message);
+  }
 
-  if (opts.maxFiles && totalFiles > opts.maxFiles) {
+  const scanner = new FileScanner(project.root_path, opts.ignorePatterns ?? [], opts.maxFileSizeKB ?? 200);
+  const scan = await scanner.scan(db, projectId, { maxFiles: opts.maxFiles });
+  const totalFiles = scan.totalFiles ?? scan.toIndex.length + scan.unchanged.length;
+
+  if (scan.aborted === 'too_large' || (opts.maxFiles && totalFiles > opts.maxFiles)) {
     return {
       totalFiles, indexed: 0, removed: 0, skipped: scan.unchanged.length,
       errorCount: 0, durationMs: Date.now() - startTime, aborted: 'too_large',
@@ -117,7 +132,9 @@ export async function runStructuralIndex(
         errorCount++;
         console.error(`[structural] Error processing ${file.relativePath}:`, err);
       }
-      opts.onProgress?.({ current: ++completed, total: scan.toIndex.length, currentFile: file.relativePath });
+      const current = ++completed;
+      opts.onProgress?.({ current, total: scan.toIndex.length, currentFile: file.relativePath });
+      if (current % STRUCTURAL_YIELD_EVERY === 0) await yieldToEventLoop();
     }, opts.concurrency ?? 5);
 
     try {
@@ -154,7 +171,7 @@ export async function runStructuralIndex(
     skippedFiles: scan.unchanged.length,
     errorCount,
     inputTokens: 0, outputTokens: 0, embeddingTokens: 0, estimatedCostUsd: 0,
-  });
+  }, projectId);
 
   return {
     runId, totalFiles, indexed, removed, skipped: scan.unchanged.length,
@@ -180,14 +197,14 @@ export function sweepContentCoverage(
   let skipped = 0;
   for (let i = 0; i < missing.length; i += 200) {
     const chunk = missing.slice(i, i + 200);
-    db.transaction(() => {
+    db.indexTransaction(projectId, () => {
       for (const f of chunk) {
         try {
           const abs = join(rootPath, f.path);
           const st = statSync(abs, { throwIfNoEntry: false });
           if (!st?.isFile()) { skipped++; continue; }
           const content = readFileSync(abs, 'utf-8');
-          if (db.upsertFileContent(f.id, content, st.size)) added++;
+          if (db.upsertFileContent(f.id, content, st.size, projectId)) added++;
           else skipped++;
         } catch {
           skipped++;

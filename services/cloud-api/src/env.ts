@@ -16,6 +16,9 @@ export interface Env {
   APP_BASE_URL: string;
   SHARE_BASE_URL: string;
   EMAIL_FROM: string;
+  /** Dev-only opt-in (set ONLY in .dev.vars) to log email bodies to the console for
+   *  local testing. Carries one-time tokens — MUST be absent in prod. */
+  EMAIL_DEBUG_LOG_BODY?: string;
   /** HMAC secret for access-token signing. Local: .dev.vars; prod: `wrangler secret put`. */
   ACCESS_SIGNING_SECRET: string;
   /** Secret pepper for hashing PII (IP/email) so stored hashes aren't reversible.

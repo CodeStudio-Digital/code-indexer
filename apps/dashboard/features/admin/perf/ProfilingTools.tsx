@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
 import { apiBaseUrl } from '../../../lib/api-client.js';
 import { ensureRendererVitals, getLongTasks, type LongTaskRow } from './renderer-vitals.js';
+import { RouteStartupPanel } from './RouteStartupPanel.js';
 
 interface SlowCallRow {
   channel: string;
@@ -111,6 +112,8 @@ export function ProfilingTools() {
         </div>
       )}
       {error && <div className="text-xs text-destructive">{error}</div>}
+
+      <RouteStartupPanel />
 
       <div>
         <div className="flex items-center justify-between mb-2">

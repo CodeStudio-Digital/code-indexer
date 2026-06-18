@@ -76,55 +76,10 @@ export const UNIVERSAL_INSPECTOR_SOURCE = String.raw`(function () {
     } catch (e) { return ''; }
   }
 
-  function reactFiber(el) {
-    for (var k in el) {
-      if (k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0) return el[k];
-    }
-    return null;
-  }
-  function reactInfo(el) {
-    var f = reactFiber(el); if (!f) return null;
-    var out = { framework: 'react', componentName: null, sourceFile: null, sourceLine: null };
-    var cur = f, hops = 0;
-    while (cur && hops < 40) {
-      if (!out.sourceFile) {
-        var src = cur._debugSource ||
-          (cur.memoizedProps && cur.memoizedProps.__source) ||
-          (cur.pendingProps && cur.pendingProps.__source);
-        if (src && src.fileName) { out.sourceFile = src.fileName; out.sourceLine = src.lineNumber || null; }
-      }
-      if (!out.componentName) {
-        var t = cur.type;
-        if (typeof t === 'function') out.componentName = t.displayName || t.name || null;
-        else if (t && typeof t === 'object') out.componentName = t.displayName || t.name || null;
-      }
-      if (out.sourceFile && out.componentName) break;
-      cur = cur.return; hops++;
-    }
-    return out;
-  }
-  function vueInfo(el) {
-    var c = el.__vueParentComponent;
-    if (!c) { var vn = el.__vnode || el._vnode; c = vn && vn.component; }
-    if (!c) return null;
-    var t = c.type || {};
-    return { framework: 'vue', componentName: t.__name || t.name || null, sourceFile: t.__file || null, sourceLine: null };
-  }
-  function angularInfo(el) {
-    var ng = window.ng;
-    try {
-      var inst = ng && ((ng.getComponent && ng.getComponent(el)) || (ng.getOwningComponent && ng.getOwningComponent(el)));
-      if (!inst) return el.__ngContext__ ? { framework: 'angular', componentName: null, sourceFile: null, sourceLine: null } : null;
-      var ctor = inst.constructor || {};
-      return { framework: 'angular', componentName: ctor.name || null, sourceFile: null, sourceLine: null };
-    } catch (e) { return null; }
-  }
-  function detect(el) {
-    try { var r = reactInfo(el); if (r) return r; } catch (e) {}
-    try { var v = vueInfo(el); if (v) return v; } catch (e) {}
-    try { var a = angularInfo(el); if (a) return a; } catch (e) {}
-    return { framework: 'unknown', componentName: null, sourceFile: null, sourceLine: null };
-  }
+  // Framework detection (React/Vue/Angular) lives in REACT_DETECT_SOURCE,
+  // injected as globals just before this IIFE — mcpDetectFramework(el) is the
+  // entry point. Kept separate so React 19 / Server-Component handling can grow
+  // without inflating this file. (No backticks here: this is inside String.raw.)
 
   // True when the event happens on the floating control bar (shadow host carries
   // data-mcp-toolbar). The region handlers MUST let these through, otherwise the
@@ -154,7 +109,7 @@ export const UNIVERSAL_INSPECTOR_SOURCE = String.raw`(function () {
   // single-click path and the region/marquee path.
   function buildPayload(el) {
     var r = rectOf(el);
-    var info = detect(el);
+    var info = mcpDetectFramework(el);
     var classes = ((el.getAttribute && el.getAttribute('class')) || '').split(/\s+/).filter(Boolean);
     var testId = (el.getAttribute && el.getAttribute('data-testid')) || el.id || '';
     return {
@@ -168,6 +123,7 @@ export const UNIVERSAL_INSPECTOR_SOURCE = String.raw`(function () {
       selector: cssSelector(el),
       sourceFile: info.sourceFile || undefined,
       sourceLine: info.sourceLine || undefined,
+      componentApprox: info.componentApprox || undefined,
       testId: testId || undefined,
     };
   }

@@ -112,6 +112,14 @@ describe('FileScanner stat-first', () => {
     expect(res.toIndex.some((f) => f.relativePath === 'big.ts')).toBe(false);
   });
 
+  it('aborts early when the candidate file cap is exceeded', async () => {
+    const scanner = new FileScanner(root);
+    const res = await scanner.scan(db, projectId, { maxFiles: 2 });
+    expect(res.aborted).toBe('too_large');
+    expect(res.totalFiles).toBe(3);
+    expect(res.toIndex).toHaveLength(0);
+  });
+
   it('MCP_SCAN_PARANOID=1 forces hashing even when stat matches', async () => {
     const scanner = new FileScanner(root);
     await scanAndPersist(scanner);

@@ -118,20 +118,6 @@ function applyToModel(
   model.pushEditOperations([], [{ range, text }], () => null);
 }
 
-/**
- * Replace a region (by its `<<<<<<<` line) with the chosen side. Exported
- * so the 3-pane "Accept all"/navigate buttons can drive it with the editor
- * in hand.
- */
-export function applyResolution(
-  editor: MonacoNs.editor.ICodeEditor,
-  startLine: number,
-  side: ConflictSide,
-): void {
-  const model = editor.getModel();
-  if (model) applyToModel(model, startLine, side);
-}
-
 // A SINGLE app-wide command backs every CodeLens (registered once, never
 // per-editor). `editor.addCommand` discards its disposable and registers
 // into the process-wide CommandsRegistry that the editor's dispose() does

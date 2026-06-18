@@ -123,6 +123,10 @@ export interface ProjectIndexSettings {
   maxWatchedProjects: number;
   /** MCP_WATCH_DEBOUNCE_MS — chokidar burst coalescing. */
   watchDebounceMs: number;
+  /** MCP_WATCH_OPEN_DELAY_MS — defer recursive watcher startup after UI subscribe. */
+  watchOpenDelayMs: number;
+  /** MCP_WATCH_IDLE_MS — stop recursive watcher after the last fs subscriber leaves. */
+  watchIdleMs: number;
   /**
    * MCP_INDEX_OPEN_DELAY_MS — defer the CPU-bound structural run on a
    * non-manual open so the renderer's first paint + screen mount finish
@@ -152,6 +156,8 @@ export function readProjectIndexSettings(): ProjectIndexSettings {
     maxFiles: envInt('MCP_AUTO_INDEX_MAX_FILES', 20000),
     maxWatchedProjects: envInt('MCP_WATCH_MAX_PROJECTS', 3),
     watchDebounceMs: envInt('MCP_WATCH_DEBOUNCE_MS', 1000),
+    watchOpenDelayMs: envIntZero('MCP_WATCH_OPEN_DELAY_MS', 1200),
+    watchIdleMs: envIntZero('MCP_WATCH_IDLE_MS', 60000),
     openDelayMs: envIntZero('MCP_INDEX_OPEN_DELAY_MS', 700),
   };
 }

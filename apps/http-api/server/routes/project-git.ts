@@ -22,7 +22,12 @@ export function mountProjectGitRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/projects/:id/git/status', async (c) => {
     try {
-      return c.json(await h.status({ projectId: parseIdParam(c) }, createContext()));
+      const includeFilesParam = c.req.query('includeFiles')?.toLowerCase();
+      const includeFiles =
+        includeFilesParam !== '0' &&
+        includeFilesParam !== 'false' &&
+        c.req.query('summary') !== '1';
+      return c.json(await h.status({ projectId: parseIdParam(c), includeFiles }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
     }

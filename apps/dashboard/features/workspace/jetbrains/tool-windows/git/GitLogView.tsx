@@ -50,7 +50,7 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
     try {
       const [cs, status, ms] = await Promise.all([
         apiCall<Commit[]>('projectGit.log', { projectId, limit, branch }),
-        apiCall<{ branch: string | null }>('projectGit.status', { projectId }),
+        apiCall<{ branch: string | null }>('projectGit.status', { projectId, includeFiles: false }),
         apiCall<{ kind: string | null }>('projectGit.mergeState', { projectId }),
       ]);
       setCommits(cs);

@@ -114,7 +114,7 @@ export async function processFile(
   // synchronous; the individual upserts' inner transactions become
   // savepoints. Before this, a crash between upsertFile and upsertSymbols
   // left a fresh file row pointing at stale symbols.
-  const fileId = deps.db.transaction(() => {
+  const fileId = deps.db.indexTransaction(project.id, () => {
     const id = deps.db.upsertFile(project.id, {
       path: file.relativePath,
       language: result.analysis.language,
@@ -139,8 +139,8 @@ export async function processFile(
 
     // Persist structure hash + embedding when tree-sitter produced them.
     const stash = tsResult as { _structHash?: string; _structEmbedding?: Float32Array };
-    if (tsResult.supported && stash._structHash) deps.db.setFileStructureHash(id, stash._structHash);
-    if (tsResult.supported && stash._structEmbedding) deps.db.setFileStructureEmbedding(id, stash._structEmbedding);
+    if (tsResult.supported && stash._structHash) deps.db.setFileStructureHash(id, stash._structHash, project.id);
+    if (tsResult.supported && stash._structEmbedding) deps.db.setFileStructureEmbedding(id, stash._structEmbedding, project.id);
 
     deps.db.upsertSymbols(project.id, id, file.relativePath, result.analysis.symbols);
     deps.db.upsertFileDependencies(project.id, id, file.relativePath, result.analysis.internal_deps, result.analysis.external_deps);
@@ -156,7 +156,7 @@ export async function processFile(
     // Structural runs advance content_hash WITHOUT this stamp; the mismatch
     // is what feeds the next full run's catch-up set.
     deps.db.setFileSemanticHash(project.id, file.relativePath, hash);
-    deps.db.upsertFileContent(id, content, sizeBytes);
+    deps.db.upsertFileContent(id, content, sizeBytes, project.id);
 
     deps.db.saveFileSnapshot({
       runId, projectId: project.id, filePath: file.relativePath, contentHash: hash,

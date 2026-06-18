@@ -60,6 +60,7 @@ import { toast } from '../../components/ui/prompt-dialog.js';
 import { useTranslation } from 'react-i18next';
 import { useFileTreeStore } from '../../state/file-tree.js';
 import { apiCall as apiCallFs } from '../../lib/api-client.js';
+import { markRouteEvent, setRouteTab } from '../../lib/perf/route-startup-metrics.js';
 import { installKeymapDispatcher } from '../../keymap/dispatcher.js';
 import { registerProjectCommands } from './project-commands.js';
 import { startRecentFilesTracking } from '../../state/recent-files.js';
@@ -176,6 +177,15 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   const [tab, setTab] = useState<ProjectTabId>(() =>
     initialSessionId ? 'chat' : 'chat',
   );
+
+  useEffect(() => {
+    markRouteEvent('ProjectView:mounted', { projectId, tab });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  useEffect(() => {
+    setRouteTab(tab, projectId);
+  }, [projectId, tab]);
 
   // Recent-session deep link forces the chat tab so the user sees the
   // session they clicked on (matches ProjectDetail's old behaviour).
@@ -339,6 +349,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
                 contribWindows={contribWindows}
                 builderJson={builderJson}
                 previewEnabled={previewEnabled}
+                framework={project?.framework}
               />
             </Panel>
             {layout.activeBottom && (

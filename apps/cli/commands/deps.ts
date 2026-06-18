@@ -9,7 +9,7 @@ export function register(program: Command): void {
     if (!project) { console.error('Project not found'); process.exit(1); }
     const file = db.getFile(project.id, filePath);
     if (!file) { console.error('File not found'); process.exit(1); }
-    const deps = db.getDependencies(file.id);
+    const deps = db.getDependencies(file.id, project.id);
     if (deps.length === 0) { console.log('No dependencies found.'); } else {
       for (const d of deps) { console.log(`  [${d.dep_type}] ${d.import_path}${d.target_file_path ? ` → ${d.target_file_path}` : ''}`); }
     }

@@ -22,6 +22,7 @@ import { useWorkspaceStore } from '../../../state/workspace.js';
 import { useGitRevision } from '../../../state/git-revision.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
+import { apiCall } from '../../../lib/api-client.js';
 import { cn } from '../../../lib/utils.js';
 import { ProjectSwitcher } from '../../../components/ProjectSwitcher.js';
 import { BranchPopover } from './status-bar/BranchPopover.js';
@@ -65,7 +66,7 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
   // operation (checkout / push / pull) so the chip re-syncs immediately
   // instead of waiting for the next navigation revalidation.
   const { data: git, refetch: refreshGit } = useApi<GitStatusSummary>(
-    `/projects/${projectId}/git/status`,
+    `/projects/${projectId}/git/status?includeFiles=0`,
   );
 
   // Re-sync the branch chip when the git-meta watcher reports a change
@@ -78,6 +79,7 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
+  const [commitStagedCount, setCommitStagedCount] = useState(0);
 
   // Reduce `files` once — gitDirty drives the amber dot, stagedCount
   // gates the Commit dialog's button. The handler returns one entry
@@ -87,6 +89,20 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
   const stagedCount = files.filter((f) => f.staged).length;
   const unstagedCount = files.filter((f) => !f.staged && f.state !== 'ignored').length;
   const gitDirty = stagedCount + unstagedCount;
+  const hasGitFileDetails = files.length > 0;
+
+  const openCommitDialog = async () => {
+    try {
+      const full = await apiCall<GitStatusSummary>('projectGit.status', {
+        projectId,
+        includeFiles: true,
+      });
+      setCommitStagedCount((full.files ?? []).filter((f) => f.staged).length);
+    } catch {
+      setCommitStagedCount(stagedCount);
+    }
+    setCommitOpen(true);
+  };
 
   return (
     <footer className="h-5 shrink-0 border-t bg-card/60 flex items-center px-2 gap-3 text-[10px] text-muted-foreground select-none">
@@ -136,11 +152,11 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
               <TooltipContent side="top">
                 <div className="text-[11px] leading-snug space-y-0.5">
                   <div>Branch: <span className="font-mono">{git.branch}</span></div>
-                  {stagedCount > 0 && <div>{stagedCount} staged</div>}
-                  {unstagedCount > 0 && <div>{unstagedCount} unstaged / untracked</div>}
+                  {hasGitFileDetails && stagedCount > 0 && <div>{stagedCount} staged</div>}
+                  {hasGitFileDetails && unstagedCount > 0 && <div>{unstagedCount} unstaged / untracked</div>}
                   {git.ahead ? <div>{git.ahead} ahead of remote</div> : null}
                   {git.behind ? <div>{git.behind} behind remote</div> : null}
-                  {!gitDirty && !git.ahead && !git.behind ? <div>Clean working tree.</div> : null}
+                  {hasGitFileDetails && !gitDirty && !git.ahead && !git.behind ? <div>Clean working tree.</div> : null}
                   <div className="text-muted-foreground/70 pt-1">Click for branch actions…</div>
                 </div>
               </TooltipContent>
@@ -154,7 +170,7 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
               <BranchPopover
                 projectId={projectId}
                 onMutated={refreshGit}
-                onRequestCommit={() => setCommitOpen(true)}
+                onRequestCommit={() => void openCommitDialog()}
                 onClose={() => setPopoverOpen(false)}
               />
             </PopoverContent>
@@ -188,10 +204,14 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
       {commitOpen && (
         <CommitDialog
           projectId={projectId}
-          stagedCount={stagedCount}
-          onClose={() => setCommitOpen(false)}
+          stagedCount={commitStagedCount}
+          onClose={() => {
+            setCommitOpen(false);
+            setCommitStagedCount(0);
+          }}
           onCommitted={() => {
             setCommitOpen(false);
+            setCommitStagedCount(0);
             refreshGit();
           }}
         />

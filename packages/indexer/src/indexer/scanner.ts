@@ -23,12 +23,16 @@
  */
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { glob } from 'glob';
+import { globIterate } from 'glob';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { ScannedFile, ScanResult, ScanStats } from '@mcp/shared/types.js';
 import { applyGraphPromotion, classifyPath, isHardExcluded, type FileIndexTier } from '@mcp/indexer/indexer/mapper.js';
 import { buildScannerIgnore, GLOB_PRUNE_DIRS, type ScannerIgnore } from '@mcp/indexer/indexer/scanner-ignore.js';
 import { hashContent, countLines } from '@mcp/indexer/indexer/content-hash.js';
+
+export interface ScanOptions {
+  maxFiles?: number;
+}
 
 export class FileScanner {
   private rootPath: string;
@@ -41,8 +45,10 @@ export class FileScanner {
     this.ig = buildScannerIgnore(this.rootPath, ignorePatterns, isHardExcluded);
   }
 
-  async scan(db: CodeIndexDB, projectId: number): Promise<ScanResult> {
-    const allFiles = await glob('**/*', {
+  async scan(db: CodeIndexDB, projectId: number, opts: ScanOptions = {}): Promise<ScanResult> {
+    const validFiles: string[] = [];
+    let ignoredCount = 0;
+    for await (const rawRelPath of globIterate('**/*', {
       cwd: this.rootPath,
       nodir: true,
       dot: false,
@@ -50,10 +56,24 @@ export class FileScanner {
       // Prune hard-safe dirs in the walk itself — they were 100% filtered
       // out afterwards anyway; this skips listing them at all.
       ignore: GLOB_PRUNE_DIRS.map((d) => `**/${d}/**`),
-    });
-
-    const validFiles = allFiles.filter((relPath) => !this.ig.ignores(relPath));
-    const ignoredCount = allFiles.length - validFiles.length;
+    })) {
+      const relPath = String(rawRelPath).replace(/\\/g, '/');
+      if (this.ig.ignores(relPath)) {
+        ignoredCount++;
+        continue;
+      }
+      validFiles.push(relPath);
+      if (opts.maxFiles && validFiles.length > opts.maxFiles) {
+        return {
+          toIndex: [],
+          unchanged: [],
+          toRemove: [],
+          totalFiles: validFiles.length,
+          aborted: 'too_large',
+          stats: { statOnly: 0, hashed: 0, skippedTooLarge: 0, ignored: ignoredCount },
+        };
+      }
+    }
 
     // Slim metadata (4 columns), not full rows with summaries/concepts.
     const existingMeta = new Map(
@@ -131,7 +151,7 @@ export class FileScanner {
     // Remaining entries in existingMeta are files to remove.
     const toRemove = Array.from(existingMeta.keys());
 
-    return { toIndex, unchanged, toRemove, stats };
+    return { toIndex, unchanged, toRemove, totalFiles: toIndex.length + unchanged.length, stats };
   }
 
   /** @deprecated kept for callers/tests — use content-hash.ts going forward. */

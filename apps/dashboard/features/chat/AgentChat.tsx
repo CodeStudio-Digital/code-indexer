@@ -54,6 +54,8 @@ import type {
 import { useAgentChatState } from './useAgentChatState.js';
 import { consumePendingAttachments, consumeSelectionPrefix, onStudioSend, usePublishAgentBusy } from '../builder/studio/studio-context-store.js';
 import type { AgentAttachment } from '../../hooks/useAgentStream.js';
+import type { NotificationSourceContext } from '../notifications/index.js';
+import { markRouteEvent } from '../../lib/perf/route-startup-metrics.js';
 
 export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId }: AgentChatProps) {
   const { t } = useTranslation(['chat', 'common']);
@@ -63,6 +65,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // project multi-select dialog. Default 'project' keeps every existing mount
   // byte-identical.
   const isGlobal = mode === 'global';
+  useEffect(() => {
+    markRouteEvent('AgentChat:mounted', { projectId, tab: 'chat', mode });
+  }, [mode, projectId]);
   const [view, setView] = useState<SessionView>('active');
   const { data: sessions, refetch: refetchSessions } = useApi<CoderSession[]>(
     isGlobal
@@ -225,8 +230,38 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setActiveProjectId(sessionData?.session.project_id ?? null);
   }, [isGlobal, selectedId, sessionData]);
 
-  const stream = useAgentStream(selectedId);
-  const { pipelineRuntime, openStream: openPipelineStream } = usePipelineStream(selectedId);
+  const notificationContext = useMemo<NotificationSourceContext | undefined>(() => {
+    if (!selectedId) return undefined;
+    const sessionTitle =
+      sessionData?.session.title
+      ?? sessions?.find((session) => session.id === selectedId)?.title
+      ?? (isGlobal ? 'Global session' : projectName ?? `Project ${projectId}`);
+
+    if (isGlobal) {
+      return {
+        target: {
+          kind: 'global',
+          route: `/global?session=${selectedId}`,
+          sessionId: selectedId,
+          label: sessionTitle,
+        },
+      };
+    }
+
+    if (projectId == null) return undefined;
+    return {
+      target: {
+        kind: 'project',
+        route: `/projects/${projectId}?session=${selectedId}`,
+        scopeId: projectId,
+        sessionId: selectedId,
+        label: sessionTitle,
+      },
+    };
+  }, [isGlobal, projectId, projectName, selectedId, sessionData?.session.title, sessions]);
+
+  const stream = useAgentStream(selectedId, notificationContext);
+  const { pipelineRuntime, openStream: openPipelineStream } = usePipelineStream(selectedId, notificationContext);
   const {
     streaming,
     currentTurn,
@@ -1265,6 +1300,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             <main className="flex h-full w-full min-w-0 bg-card overflow-hidden min-h-0">
               <EmptyChatState
                 onNew={handleNewSession}
+                projectId={projectId}
                 projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
                 onOpenSidebar={() => setMobileSidebarOpen(true)}
               />
