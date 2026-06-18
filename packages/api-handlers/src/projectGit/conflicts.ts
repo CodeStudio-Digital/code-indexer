@@ -81,9 +81,13 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
       const empty = { kind: null as MergeKind | null, conflictedFiles: [], oursLabel: '', theirsLabel: '' };
       const { repoRoot, notARepo } = await resolveRepoRoot(projectId);
       if (notARepo || !repoRoot) return empty;
-      const { kind, incomingSha } = await detectMergeKind(deps.runGit, repoRoot);
-      if (!kind) return empty;
+      const { kind: seqKind, incomingSha } = await detectMergeKind(deps.runGit, repoRoot);
       const conflictedFiles = await listConflictedFiles(deps.runGit, repoRoot);
+      // No sequencer op but unmerged files present → a stash pop/apply (or
+      // manual) conflict. Surface it in a generic 'working-tree' mode so the
+      // resolver still appears (no Continue — resolving just stages).
+      const kind: MergeKind | null = seqKind ?? (conflictedFiles.length > 0 ? 'working-tree' : null);
+      if (!kind) return empty;
       const branch = (await deps.runGit(repoRoot, ['branch', '--show-current'])).stdout.trim();
       let incomingSubject: string | undefined;
       if (incomingSha) {
@@ -95,7 +99,8 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
         kind,
         conflictedFiles,
         oursLabel: branch || 'HEAD (detached)',
-        theirsLabel: incomingSubject || shortSha || kind,
+        // Working-tree mode has no incoming commit, so no "theirs" label.
+        theirsLabel: kind === 'working-tree' ? '' : (incomingSubject || shortSha || kind),
         incomingSubject,
         incomingSha,
       };
@@ -133,11 +138,20 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
 
       if (resolution === 'ours' || resolution === 'theirs') {
         const flag = resolution === 'ours' ? '--ours' : '--theirs';
+        const stage = resolution === 'ours' ? 2 : 3;
         const co = await deps.runGit(repoRoot, ['checkout', flag, '--', rel]);
         if (co.code !== 0) {
-          // The chosen side deleted the file (modify/delete) — accepting it
-          // means staging the deletion, which `git rm` does.
-          const rm = await deps.runGit(repoRoot, ['rm', '--', rel]);
+          // checkout can fail for two very different reasons. (a) The chosen
+          // side has NO blob (modify/delete) — accepting it means staging the
+          // deletion, which `git rm` does. (b) The side DOES exist but the
+          // write failed (locked/read-only file, hook, …) — here a blind
+          // `git rm` would DESTROY content the user asked to keep, so we must
+          // surface the real error instead. Distinguish by probing the stage.
+          const sideExists = (await deps.runGit(repoRoot, ['show', `:${stage}:${rel}`])).code === 0;
+          if (sideExists) {
+            throw new ApiError('git_resolve_failed', 500, co.stderr.trim() || 'git checkout failed');
+          }
+          const rm = await deps.runGit(repoRoot, ['rm', '-f', '--', rel]);
           if (rm.code !== 0) {
             throw new ApiError('git_resolve_failed', 500, (co.stderr || rm.stderr).trim() || 'checkout failed');
           }
@@ -180,8 +194,38 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
       const { repoRoot, notARepo } = await resolveRepoRoot(projectId);
       if (notARepo || !repoRoot) throw new ApiError('not_a_repo', 400, 'not a git repository');
       const { kind } = await detectMergeKind(deps.runGit, repoRoot);
-      if (!kind) throw new ApiError('no_merge_in_progress', 409, 'no merge/cherry-pick/revert/rebase in progress');
-      return deps.runAsResult(repoRoot, 'git', [kind, '--abort']);
+      if (kind) return deps.runAsResult(repoRoot, 'git', [kind, '--abort']);
+      // No sequencer op (working-tree / stash conflict): there's no `--abort`.
+      // Discard the conflicted files back to their HEAD state — the stash, if
+      // any, stays in the list (git doesn't drop it on a conflicting pop), so
+      // nothing is permanently lost. Split by HEAD presence: `git checkout
+      // HEAD -- a b` is ATOMIC and fails the whole batch if ANY path is absent
+      // from HEAD (e.g. a modify/delete stash conflict, or a new file), so
+      // restore the in-HEAD paths and `git rm` the rest in two homogeneous batches.
+      const conflicts = await listConflictedFiles(deps.runGit, repoRoot);
+      if (conflicts.length === 0) {
+        throw new ApiError('no_merge_in_progress', 409, 'nothing to abort');
+      }
+      const inHead: string[] = [];
+      const absent: string[] = [];
+      for (const f of conflicts) {
+        const present = (await deps.runGit(repoRoot, ['cat-file', '-e', `HEAD:${f}`])).code === 0;
+        (present ? inHead : absent).push(f);
+      }
+      const errs: string[] = [];
+      const args: string[] = [];
+      if (inHead.length) {
+        args.push('checkout', 'HEAD', '--', ...inHead);
+        const r = await deps.runGit(repoRoot, ['checkout', 'HEAD', '--', ...inHead]);
+        if (r.code !== 0) errs.push(r.stderr.trim());
+      }
+      if (absent.length) {
+        args.push('rm', '-f', '--', ...absent);
+        const r = await deps.runGit(repoRoot, ['rm', '-f', '--', ...absent]);
+        if (r.code !== 0) errs.push(r.stderr.trim());
+      }
+      const ok = errs.length === 0;
+      return { command: 'git', args, ok, code: ok ? 0 : 1, stdout: '', stderr: errs.join('\n') };
     },
   };
 }

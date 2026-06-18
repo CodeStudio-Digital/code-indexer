@@ -51,6 +51,16 @@ export function createInProcessLspExecutor(db: CodeIndexDB): LspBackendExecutor 
       return getTsService(ctx.root).getCompletions(ctx.file, pos.line, pos.column);
     },
 
+    async tsCompletionDetails(ctx) {
+      const pos = requirePosition(ctx);
+      const entry = ctx.completionEntry;
+      if (!entry) return null;
+      syncTs(ctx);
+      return getTsService(ctx.root).getCompletionDetails(
+        ctx.file, pos.line, pos.column, entry.name, entry.source, entry.data,
+      );
+    },
+
     async tsHover(ctx) {
       const pos = requirePosition(ctx);
       syncTs(ctx);

@@ -9,7 +9,7 @@
  * recovering tests respectively; here we focus on the integration glue.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { ChatDelta, ChatUsage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ChatDelta, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolContext, CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -549,5 +549,74 @@ describe('ExecutingNode', () => {
     expect(event.kind).toBe('TurnSucceeded');
     expect(sawAbort).toBe(true);
     expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('[tool-timeout: `slow_tool` exceeded');
+  });
+
+  // P2 — when Compacting has already proven the context irreducible (consecutive
+  // no-ops), the pre-emit gate must SEND the (still-within-window) request rather
+  // than loop into Compacting and eventually abort with `compact_exhausted`.
+  function bigHistory(ratio = 0.92): AgentMessage[] {
+    const limits = deriveTokenLimits('claude-haiku-4-5-20251001');
+    const targetTokens = Math.floor(limits.effective * ratio);
+    const unit = 'lorem ipsum dolor ';
+    const perMsgChars = Math.ceil((targetTokens * 4) / 2); // text density ≈ chars/4, two msgs
+    const filler = unit.repeat(Math.ceil(perMsgChars / unit.length));
+    return [
+      { role: 'user', content: [{ type: 'text', text: filler }] },
+      { role: 'assistant', content: [{ type: 'text', text: filler }] },
+    ];
+  }
+
+  it('P2: sends instead of routing to Compacting when the context is proven irreducible', async () => {
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'text_delta', text: 'all done' },
+        { type: 'usage', usage: { input_tokens: 100, output_tokens: 5 } as ChatUsage },
+        { type: 'done', stop_reason: 'end_turn' },
+      ]),
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
+    });
+    ctx.messages = bigHistory();
+    ctx.consecutiveNoopCompactions = 2; // Compacting already proved it irreducible
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    expect(event.kind).not.toBe('TokenThresholdHit'); // did NOT loop into Compacting
+    expect(ctx.stopReason).not.toBe('compact_exhausted'); // did NOT abort
+    expect(event.kind).toBe('CleanFinish'); // the request was sent and completed
+  });
+
+  it('P2 control: still routes to Compacting (TokenThresholdHit) when not yet proven irreducible', async () => {
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'text_delta', text: 'unused — provider should not be reached' },
+        { type: 'done', stop_reason: 'end_turn' },
+      ]),
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
+    });
+    ctx.messages = bigHistory();
+    ctx.consecutiveNoopCompactions = 0;
+
+    const event = await new ExecutingNode().execute(ctx, null);
+    expect(event.kind).toBe('TokenThresholdHit');
+  });
+
+  it('P2 boundary: does NOT bypass when irreducible AND projection exceeds the window', async () => {
+    // The <=effective clause must hold the line: a request larger than the model
+    // window is never silently sent, even when compaction is proven irreducible.
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'text_delta', text: 'unused — provider must not be reached' },
+        { type: 'done', stop_reason: 'end_turn' },
+      ]),
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
+    });
+    ctx.messages = bigHistory(1.1); // projects ABOVE effective
+    ctx.consecutiveNoopCompactions = 2; // irreducible — but the request does NOT fit
+
+    const event = await new ExecutingNode().execute(ctx, null);
+    expect(event.kind).toBe('TokenThresholdHit'); // routes (eventually aborts), never sends
   });
 });

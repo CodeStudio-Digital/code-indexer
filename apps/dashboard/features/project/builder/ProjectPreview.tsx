@@ -5,7 +5,7 @@ import {
   type ParentToPreviewMessage,
   type PreviewToParentMessage,
 } from '@mcp/services/sandbox/builder/protocol.js';
-import { addPendingAttachment, addSelections, setSelected, toggleSelected } from '../../builder/studio/studio-context-store.js';
+import { addPendingAttachment, addSelections, payloadToSelected, setSelected, toggleSelected } from '../../builder/studio/studio-context-store.js';
 import { SelectionChip } from '../../builder/studio/selection/SelectionChip.js';
 import { RegionShotChip } from '../../builder/studio/selection/RegionShotChip.js';
 import { apiCall } from '../../../lib/api-client.js';
@@ -116,7 +116,7 @@ export function ProjectPreview({
   const handleRegionSelect = useCallback(
     async (msg: Extract<PreviewToParentMessage, { type: 'mcp:region-select' }>) => {
       if (msg.selections.length) {
-        addSelections(projectId, msg.selections.map((s) => ({ type: 'mcp:select', ...s })));
+        addSelections(projectId, msg.selections.map(payloadToSelected));
       }
       const f = iframeRef.current?.getBoundingClientRect();
       if (!f || msg.rect.width < 1 || msg.rect.height < 1) return;

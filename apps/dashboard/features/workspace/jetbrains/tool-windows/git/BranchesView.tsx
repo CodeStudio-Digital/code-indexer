@@ -40,9 +40,11 @@ interface BranchesViewProps {
   projectId: number;
   /** Called after every operation so the parent can refresh status etc. */
   onMutated: () => void;
+  /** A sequencer op is mid-flight — disable merge. */
+  opInProgress?: boolean;
 }
 
-export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
+export function BranchesView({ projectId, onMutated, opInProgress }: BranchesViewProps) {
   const { t } = useTranslation('workspace');
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -292,7 +294,7 @@ export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
     onDelete: (b: GitBranch) => void deleteBranch(b),
   };
   const renderRow = (b: GitBranch) => (
-    <BranchRow key={`${b.isRemote ? 'r' : 'l'}-${b.name}`} branch={b} actions={actions} />
+    <BranchRow key={`${b.isRemote ? 'r' : 'l'}-${b.name}`} branch={b} actions={actions} opInProgress={opInProgress} />
   );
 
   return (

@@ -1,72 +1,29 @@
 /**
- * Git tool window — full IDE-style git surface for the project's
- * `root_path`. Sub-tabs split responsibilities so each view stays
- * focused:
+ * Git tool window — shell. Estado/lógica vivem em `git/use-git-window.ts`; a barra de
+ * sub-abas em `git/GitTabNav.tsx`. Este arquivo só compõe o frame + o branch header +
+ * o banner de merge + a sub-view ativa.
  *
  *   - Changes  → working-tree status (stage / unstage / commit / discard)
  *   - Branches → list locals + remotes, checkout, create, delete, merge
- *   - History  → linear commit log per branch, context menu for
- *                cherry-pick / revert / reset
- *   - AI       → natural-language → plan of git commands → user confirm
- *                → executed sequentially, per-step results inline
- *
- * Diffs render in editor tabs (`openDiff` from workspace store). The
- * shared `notARepo` notice + branch header live in this container so
- * sub-views start with the assumption that we ARE in a git repo.
+ *   - History  → linear commit log per branch
+ *   - Stash    → stash list / apply / pop / drop
+ *   - Conflicts→ só durante uma op de sequencer (merge/cherry-pick/revert/rebase)
+ *   - AI       → natural-language → plan of git commands → confirm → execute
  */
-
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  Archive,
-  Check,
-  GitBranch,
-  GitCommit as GitCommitIcon,
-  GitMerge,
-  History,
-  Loader2,
-  Minus,
-  Plus,
-  RefreshCw,
-  Sparkles,
-  Trash2,
-  Undo2,
-} from 'lucide-react';
-import type { GitMergeState } from '@mcp/api-bus';
-import { apiCall } from '../../../../lib/api-client.js';
-import { useWorkspaceStore } from '../../../../state/workspace.js';
+import { GitBranch, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '../../../../components/ui/button.js';
-import { confirm, toast } from '../../../../components/ui/prompt-dialog.js';
 import { ToolWindowFrame } from '../ToolWindowFrame.js';
-import { cn } from '../../../../lib/utils.js';
 import { BranchesView } from './git/BranchesView.js';
 import { HistoryView } from './git/HistoryView.js';
 import { GitPromptView } from './git/GitPromptView.js';
 import { StashView } from './git/StashView.js';
-import { CommitBox } from './git/CommitBox.js';
-import { CollapsibleSection } from './git/CollapsibleSection.js';
-import { fileKind } from './git/file-kind.js';
+import { ChangesPane } from './git/ChangesPane.js';
 import { MergeBanner } from './git/merge/MergeBanner.js';
 import { ConflictsView } from './git/merge/ConflictsView.js';
-import { setConflicts, clearConflicts, onGitReloadRequest } from '../../editor/conflict-registry.js';
-
-type GitTab = 'changes' | 'branches' | 'history' | 'stash' | 'ai' | 'conflicts';
-
-interface GitStatusFile {
-  path: string;
-  state: string;
-  staged: boolean;
-}
-
-interface GitStatus {
-  branch: string | null;
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-  files: GitStatusFile[];
-  repoRoot: string | null;
-  notARepo: boolean;
-}
+import { requestGitReload } from '../../editor/conflict-registry.js';
+import { GitTabNav } from './git/GitTabNav.js';
+import { useGitWindow } from './git/use-git-window.js';
 
 interface GitWindowProps {
   projectId: number;
@@ -75,136 +32,10 @@ interface GitWindowProps {
 
 export function GitWindow({ projectId, onClose }: GitWindowProps) {
   const { t } = useTranslation('workspace');
-  const [status, setStatus] = useState<GitStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [openSections, setOpenSections] = useState({ staged: true, unstaged: true, untracked: false });
-  const [tab, setTab] = useState<GitTab>('changes');
-  const [mergeState, setMergeState] = useState<GitMergeState | null>(null);
-  const prevKindRef = useRef<GitMergeState['kind']>(null);
-  const openDiff = useWorkspaceStore((s) => s.openDiff);
-
-  const showDiff = useCallback(
-    async (file: GitStatusFile) => {
-      try {
-        const r = await apiCall<{ patch: string }>('projectGit.diff', {
-          projectId,
-          path: file.path,
-          staged: file.staged,
-        });
-        openDiff({
-          kind: 'diff',
-          projectId,
-          path: `diff:${file.staged ? 'staged' : 'unstaged'}:${file.path}`,
-          title: file.staged
-            ? t('git.stagedDiffTitle', { file: file.path.split('/').pop() ?? file.path })
-            : t('git.diffTitle', { file: file.path.split('/').pop() ?? file.path }),
-          patch: r.patch,
-          source: file.staged ? 'git-staged' : 'git-unstaged',
-        });
-      } catch (err) {
-        toast.error(t('git.diffFailed'), {
-          description: err instanceof Error ? err.message : String(err),
-        });
-      }
-    },
-    [projectId, openDiff, t],
-  );
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [s, ms] = await Promise.all([
-        apiCall<GitStatus>('projectGit.status', { projectId }),
-        apiCall<GitMergeState>('projectGit.mergeState', { projectId }),
-      ]);
-      setStatus(s);
-      setMergeState(ms);
-      // Feed the editor's conflict registry so open files light up inline.
-      if (ms.kind) setConflicts(projectId, ms.conflictedFiles);
-      else clearConflicts();
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  // Auto-surface the Conflicts tab the moment a sequencer op flips into a
-  // conflicted state; fall back to Changes once it clears.
-  useEffect(() => {
-    const kind = mergeState?.kind ?? null;
-    if (kind && !prevKindRef.current) setTab('conflicts');
-    else if (!kind && prevKindRef.current) setTab((cur) => (cur === 'conflicts' ? 'changes' : cur));
-    prevKindRef.current = kind;
-  }, [mergeState?.kind]);
-
-  // Clear the registry when this Git window unmounts (project switch / close).
-  useEffect(() => () => clearConflicts(), []);
-
-  // The 3-pane merge editor (in the editor pane) pings us after resolving.
-  useEffect(() => onGitReloadRequest(() => void reload()), [reload]);
-
-  const groups = useMemo(() => {
-    const staged: GitStatusFile[] = [];
-    const unstaged: GitStatusFile[] = [];
-    const untracked: GitStatusFile[] = [];
-    for (const f of status?.files ?? []) {
-      if (f.staged) staged.push(f);
-      else if (f.state === 'untracked') untracked.push(f);
-      else unstaged.push(f);
-    }
-    return { staged, unstaged, untracked };
-  }, [status]);
-
-  const onStage = async (paths: string[]) => {
-    try {
-      await apiCall('projectGit.stage', { projectId, paths });
-      await reload();
-    } catch (err) {
-      toast.error(t('git.stageFailed'), {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    }
-  };
-  const onUnstage = async (paths: string[]) => {
-    try {
-      await apiCall('projectGit.unstage', { projectId, paths });
-      await reload();
-    } catch (err) {
-      toast.error(t('git.unstageFailed'), {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    }
-  };
-  const onDiscard = async (paths: string[]) => {
-    const ok = await confirm({
-      title: t(paths.length === 1 ? 'git.discardTitle_one' : 'git.discardTitle_other', { count: paths.length }),
-      description:
-        paths.length === 1
-          ? t('git.discardDescription_one', { path: paths[0] })
-          : t('git.discardDescription_other', { count: paths.length }),
-      confirmLabel: t('git.discard'),
-      tone: 'destructive',
-    });
-    if (!ok) return;
-    try {
-      await apiCall('projectGit.discard', { projectId, paths });
-      await reload();
-      toast.success(t('git.discarded'), {
-        description: paths.length === 1 ? paths[0] : t('git.filesReverted', { count: paths.length }),
-      });
-    } catch (err) {
-      toast.error(t('git.discardFailed'), {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    }
-  };
+  const {
+    status, loading, error, openSections, setOpenSections, tab, setTab, mergeState,
+    groups, reload, showDiff, onStage, onUnstage, onDiscard,
+  } = useGitWindow(projectId);
 
   if (status?.notARepo) {
     return (
@@ -222,429 +53,81 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
   }
 
   return (
-    <>
-      <ToolWindowFrame
-        title="Git"
-        onClose={onClose}
-        actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-5 w-5 text-muted-foreground hover:text-foreground"
-            onClick={() => void reload()}
-            aria-label={t('git.refresh')}
-          >
-            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-          </Button>
-        }
-      >
-        <div className="h-full flex flex-col min-h-0">
-          {/* Branch header — always visible regardless of active tab.
-              Anchors the panel to the current repo state so the user
-              never wonders "which branch is the History/AI tab
-              talking about?". */}
-          {status && (
-            <div className="shrink-0 px-2.5 py-1.5 border-b text-[11px] flex items-center gap-2">
-              <GitBranch className="h-3 w-3 text-primary" />
-              <span className="font-medium truncate">{status.branch ?? t('git.detachedHead')}</span>
-              {status.upstream && (
-                <span className="text-muted-foreground/70 truncate">→ {status.upstream}</span>
-              )}
-              <span className="ml-auto flex items-center gap-2 text-muted-foreground">
-                {status.ahead > 0 && <span>↑ {status.ahead}</span>}
-                {status.behind > 0 && <span>↓ {status.behind}</span>}
-              </span>
-            </div>
-          )}
+    <ToolWindowFrame
+      title="Git"
+      onClose={onClose}
+      actions={
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-5 w-5 text-muted-foreground hover:text-foreground"
+          onClick={() => void reload()}
+          aria-label={t('git.refresh')}
+        >
+          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+        </Button>
+      }
+    >
+      <div className="h-full flex flex-col min-h-0">
+        {/* Branch header — sempre visível; ancora o painel ao estado do repo. */}
+        {status && (
+          <div className="shrink-0 px-2.5 py-1.5 border-b text-[11px] flex items-center gap-2">
+            <GitBranch className="h-3 w-3 text-primary" />
+            <span className="font-medium truncate">{status.branch ?? t('git.detachedHead')}</span>
+            {status.upstream && (
+              <span className="text-muted-foreground/70 truncate">→ {status.upstream}</span>
+            )}
+            <span className="ml-auto flex items-center gap-2 text-muted-foreground">
+              {status.ahead > 0 && <span>↑ {status.ahead}</span>}
+              {status.behind > 0 && <span>↓ {status.behind}</span>}
+            </span>
+          </div>
+        )}
 
-          {/* Merge/cherry-pick/revert in progress → banner with Resolve +
-              Abort, directly under the branch header (WebStorm-style). */}
-          {mergeState?.kind && (
-            <MergeBanner projectId={projectId} state={mergeState} onMutated={() => void reload()} />
-          )}
+        {/* Merge/cherry-pick/revert em progresso → banner com Resolve + Abort. */}
+        {mergeState?.kind && (
+          <MergeBanner projectId={projectId} state={mergeState} onMutated={requestGitReload} />
+        )}
 
-          {/* Sub-tab nav — narrow, icon+label. The selected tab gets a
-              top accent stripe + filled chip to match the IDE-rail
-              convention elsewhere in the workspace. */}
-          <GitTabNav
-            active={tab}
-            onChange={setTab}
-            conflictCount={mergeState?.kind ? mergeState.conflictedFiles.length : null}
+        <GitTabNav
+          active={tab}
+          onChange={setTab}
+          conflictCount={mergeState?.kind ? mergeState.conflictedFiles.length : null}
+        />
+
+        {error && tab === 'changes' && (
+          <div className="px-3 py-2 text-[11px] text-destructive shrink-0">{error}</div>
+        )}
+
+        {tab === 'changes' && (
+          <ChangesPane
+            projectId={projectId}
+            status={status}
+            error={error}
+            groups={groups}
+            openSections={openSections}
+            setOpenSections={setOpenSections}
+            showDiff={showDiff}
+            onStage={onStage}
+            onUnstage={onUnstage}
+            onDiscard={onDiscard}
+            onCommitted={() => void reload()}
           />
-
-          {error && tab === 'changes' && (
-            <div className="px-3 py-2 text-[11px] text-destructive shrink-0">{error}</div>
-          )}
-
-          {tab === 'changes' && (
-            <ChangesPane
-              projectId={projectId}
-              status={status}
-              error={error}
-              groups={groups}
-              openSections={openSections}
-              setOpenSections={setOpenSections}
-              showDiff={showDiff}
-              onStage={onStage}
-              onUnstage={onUnstage}
-              onDiscard={onDiscard}
-              onCommitted={() => void reload()}
-            />
-          )}
-          {tab === 'branches' && (
-            <BranchesView projectId={projectId} onMutated={() => void reload()} />
-          )}
-          {tab === 'history' && (
-            <HistoryView projectId={projectId} onMutated={() => void reload()} />
-          )}
-          {tab === 'stash' && (
-            <StashView projectId={projectId} onMutated={() => void reload()} />
-          )}
-          {tab === 'conflicts' && mergeState && (
-            <ConflictsView projectId={projectId} state={mergeState} onMutated={() => void reload()} />
-          )}
-          {tab === 'ai' && (
-            <GitPromptView projectId={projectId} onMutated={() => void reload()} />
-          )}
-        </div>
-      </ToolWindowFrame>
-    </>
-  );
-}
-
-interface GitTabNavProps {
-  active: GitTab;
-  onChange: (t: GitTab) => void;
-  /** Number of conflicted files when a sequencer op is in progress; null otherwise (tab hidden). */
-  conflictCount: number | null;
-}
-
-/**
- * Narrow sub-tab strip. Each tab is icon + short label. Active tab
- * gets a top accent stripe (matches the rail / IDE convention).
- *
- * Order matters: Changes first because that's the most common
- * action (stage + commit), Branches second (switch/checkout is
- * second-most), History for archeology, AI last because it's the
- * "I don't know the git command" escape hatch.
- */
-function GitTabNav({ active, onChange, conflictCount }: GitTabNavProps) {
-  const { t } = useTranslation('workspace');
-  const tabs: {
-    id: GitTab;
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    badge?: number;
-  }[] = [
-    { id: 'changes', label: t('git.tabs.changes'), icon: GitCommitIcon },
-    { id: 'branches', label: t('git.tabs.branches'), icon: GitBranch },
-    { id: 'history', label: t('git.tabs.history'), icon: History },
-    { id: 'stash', label: t('git.tabs.stash'), icon: Archive },
-    // Conflicts tab only exists while a sequencer op is mid-flight.
-    ...(conflictCount !== null
-      ? [{ id: 'conflicts' as const, label: t('git.tabs.conflicts'), icon: GitMerge, badge: conflictCount }]
-      : []),
-    { id: 'ai', label: t('git.tabs.ai'), icon: Sparkles },
-  ];
-  return (
-    <div className="shrink-0 flex items-stretch border-b bg-card/30">
-      {tabs.map(({ id, label, icon: Icon, badge }) => {
-        const isActive = active === id;
-        const isConflicts = id === 'conflicts';
-        return (
-          <button
-            key={id}
-            type="button"
-            onClick={() => onChange(id)}
-            className={cn(
-              'relative flex items-center gap-1.5 px-3 py-1.5 text-[11px] transition-colors',
-              isActive
-                ? 'text-foreground'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-              isConflicts && 'text-amber-500',
-            )}
-          >
-            <Icon className={cn('h-3 w-3', isActive && id === 'ai' && 'text-primary')} />
-            <span className="font-medium">{label}</span>
-            {badge !== undefined && badge > 0 && (
-              <span className="grid place-items-center min-w-[14px] h-[14px] px-1 rounded-full bg-amber-500/20 text-amber-500 text-[9px] font-semibold">
-                {badge}
-              </span>
-            )}
-            {isActive && (
-              <span className="absolute inset-x-1 top-0 h-[2px] bg-primary rounded-full" />
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-interface ChangesPaneProps {
-  projectId: number;
-  status: GitStatus | null;
-  error: string | null;
-  groups: {
-    staged: GitStatusFile[];
-    unstaged: GitStatusFile[];
-    untracked: GitStatusFile[];
-  };
-  openSections: { staged: boolean; unstaged: boolean; untracked: boolean };
-  setOpenSections: React.Dispatch<
-    React.SetStateAction<{ staged: boolean; unstaged: boolean; untracked: boolean }>
-  >;
-  showDiff: (file: GitStatusFile) => void | Promise<void>;
-  onStage: (paths: string[]) => void | Promise<void>;
-  onUnstage: (paths: string[]) => void | Promise<void>;
-  onDiscard: (paths: string[]) => void | Promise<void>;
-  onCommitted: () => void;
-}
-
-/**
- * Working-tree pane: three collapsible sections (staged / unstaged /
- * untracked) with row-level + bulk actions. The empty state asks the
- * user to make some changes; the inverse (everything committed) shows
- * a friendly "clean tree" message instead.
- */
-function ChangesPane({
-  projectId,
-  status,
-  error,
-  groups,
-  openSections,
-  setOpenSections,
-  showDiff,
-  onStage,
-  onUnstage,
-  onDiscard,
-  onCommitted,
-}: ChangesPaneProps) {
-  const { t } = useTranslation('workspace');
-  const total =
-    groups.staged.length + groups.unstaged.length + groups.untracked.length;
-
-  if (!status && !error) {
-    return (
-      <div className="flex-1 grid place-items-center text-[11px] text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin opacity-60" />
+        )}
+        {tab === 'branches' && (
+          <BranchesView projectId={projectId} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
+        )}
+        {tab === 'history' && (
+          <HistoryView projectId={projectId} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
+        )}
+        {tab === 'stash' && (
+          <StashView projectId={projectId} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
+        )}
+        {tab === 'conflicts' && mergeState && (
+          <ConflictsView projectId={projectId} state={mergeState} onMutated={requestGitReload} />
+        )}
+        {tab === 'ai' && <GitPromptView projectId={projectId} onMutated={() => void reload()} />}
       </div>
-    );
-  }
-  return (
-    <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex-1 min-h-0 overflow-y-auto">
-      {status && total === 0 && (
-        <div className="grid place-items-center px-6 py-10 text-center text-muted-foreground gap-2">
-          <Check className="h-5 w-5 opacity-50" />
-          <p className="text-[11.5px]">{t('git.cleanTree')}</p>
-        </div>
-      )}
-      {groups.staged.length > 0 && (
-        <CollapsibleSection
-          title={t('git.staged', { count: groups.staged.length })}
-          open={openSections.staged}
-          onToggle={() => setOpenSections((s) => ({ ...s, staged: !s.staged }))}
-          actions={
-            <button
-              type="button"
-              onClick={() => void onUnstage(groups.staged.map((f) => f.path))}
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-              title={t('git.unstageAll')}
-            >
-              {t('git.unstageAll')}
-            </button>
-          }
-        >
-          {groups.staged.map((f) => (
-            <FileRow
-              key={`s-${f.path}`}
-              file={f}
-              onClick={() => void showDiff(f)}
-              actions={
-                <RowButton
-                  icon={Minus}
-                  title={t('git.unstage')}
-                  onClick={() => void onUnstage([f.path])}
-                />
-              }
-            />
-          ))}
-        </CollapsibleSection>
-      )}
-
-      {groups.unstaged.length > 0 && (
-        <CollapsibleSection
-          title={t('git.changes', { count: groups.unstaged.length })}
-          open={openSections.unstaged}
-          onToggle={() => setOpenSections((s) => ({ ...s, unstaged: !s.unstaged }))}
-          actions={
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void onDiscard(groups.unstaged.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-destructive"
-                title={t('git.discardAllUnstaged')}
-              >
-                {t('git.discardAll')}
-              </button>
-              <button
-                type="button"
-                onClick={() => void onStage(groups.unstaged.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-                title={t('git.stageAll')}
-              >
-                {t('git.stageAll')}
-              </button>
-            </div>
-          }
-        >
-          {groups.unstaged.map((f) => (
-            <FileRow
-              key={`u-${f.path}`}
-              file={f}
-              onClick={() => void showDiff(f)}
-              actions={
-                <>
-                  <RowButton
-                    icon={Undo2}
-                    title={t('git.discard')}
-                    destructive
-                    onClick={() => void onDiscard([f.path])}
-                  />
-                  <RowButton
-                    icon={Plus}
-                    title={t('git.stage')}
-                    onClick={() => void onStage([f.path])}
-                  />
-                </>
-              }
-            />
-          ))}
-        </CollapsibleSection>
-      )}
-
-      {groups.untracked.length > 0 && (
-        <CollapsibleSection
-          title={t('git.untracked', { count: groups.untracked.length })}
-          open={openSections.untracked}
-          onToggle={() =>
-            setOpenSections((s) => ({ ...s, untracked: !s.untracked }))
-          }
-          actions={
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void onDiscard(groups.untracked.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-destructive"
-                title={t('git.deleteAllUntracked')}
-              >
-                {t('git.deleteAll')}
-              </button>
-              <button
-                type="button"
-                onClick={() => void onStage(groups.untracked.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-                title={t('git.stageAllUntracked')}
-              >
-                {t('git.stageAll')}
-              </button>
-            </div>
-          }
-        >
-          {groups.untracked.map((f) => (
-            <FileRow
-              key={`?-${f.path}`}
-              file={f}
-              actions={
-                <>
-                  <RowButton
-                    icon={Trash2}
-                    title={t('git.deleteFile')}
-                    destructive
-                    onClick={() => void onDiscard([f.path])}
-                  />
-                  <RowButton
-                    icon={Plus}
-                    title={t('git.stage')}
-                    onClick={() => void onStage([f.path])}
-                  />
-                </>
-              }
-            />
-          ))}
-        </CollapsibleSection>
-      )}
-      </div>
-      <CommitBox
-        projectId={projectId}
-        stagedCount={groups.staged.length}
-        upstream={status?.upstream ?? null}
-        onCommitted={onCommitted}
-      />
-    </div>
+    </ToolWindowFrame>
   );
 }
-
-function FileRow({
-  file,
-  actions,
-  onClick,
-}: {
-  file: GitStatusFile;
-  actions: React.ReactNode;
-  onClick?: () => void;
-}) {
-  const { t } = useTranslation('workspace');
-  const k = fileKind(file.state);
-  return (
-    <div
-      className={cn(
-        'group flex items-center gap-2 px-2.5 py-1 transition-colors border-b last:border-b-0 text-[11.5px]',
-        onClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/40',
-      )}
-      onClick={onClick}
-      title={onClick ? t('git.openDiffFor', { path: file.path }) : file.path}
-    >
-      <span className={cn('font-mono text-[10px] w-3 shrink-0 text-center', k.color)}>
-        {k.letter}
-      </span>
-      <span className="truncate flex-1">{file.path}</span>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {actions}
-      </div>
-    </div>
-  );
-}
-
-function RowButton({
-  icon: Icon,
-  title,
-  onClick,
-  destructive,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  onClick: () => void;
-  destructive?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        'h-5 w-5 grid place-items-center rounded-sm transition-colors',
-        destructive
-          ? 'text-muted-foreground hover:text-destructive hover:bg-destructive/10'
-          : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-      )}
-    >
-      <Icon className="h-3 w-3" />
-    </button>
-  );
-}
-

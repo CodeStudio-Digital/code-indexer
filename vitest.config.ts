@@ -42,6 +42,7 @@ export default defineConfig({
       ...pkgAliases('@cloudstudio/cloud-identity', 'cloud-identity'),
       ...pkgAliases('@cloudstudio/cloud-billing', 'cloud-billing'),
       ...pkgAliases('@cloudstudio/cloud-sharing', 'cloud-sharing'),
+      ...pkgAliases('@cloudstudio/cloud-feedback', 'cloud-feedback'),
       { find: /^@apps\/(.*)$/, replacement: resolve(repoRoot, 'apps/$1') },
     ],
   },

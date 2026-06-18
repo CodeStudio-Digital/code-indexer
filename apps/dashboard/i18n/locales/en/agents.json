@@ -86,7 +86,6 @@
   "company.companyLabel": "Company",
   "company.agentsLabel": "Agents",
   "company.noAgents": "No agents yet. Send a message to start.",
-  "company.templateRoles": "Template Roles",
   "projectAgents.title": "Agents per project",
   "projectAgents.noRoles": "No roles bound",
   "projectAgents.addRole": "Add role",

@@ -5,11 +5,13 @@ import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { createDeps } from './server/deps.js';
 import { mountProjectsRoutes } from './server/routes/projects.js';
+import { sweepOrphanGlobalWorkspaces } from './server/routes/coder/global-workspace.js';
 import { mountBuilderCheckpointRoutes } from './server/routes/builder-checkpoints.js';
 import { mountProjectScaffoldRoute } from './server/routes/projects-scaffold.js';
 import { mountHygieneRoutes } from './server/routes/hygiene.js';
 import { mountSearchRoutes } from './server/routes/search.js';
 import { mountFilesRoutes } from './server/routes/files.js';
+import { mountDrawioStaticRoutes } from './server/routes/drawio-static.js';
 import { mountGraphRoutes } from './server/routes/graph.js';
 import { mountSnapshotsRoutes } from './server/routes/snapshots.js';
 import { mountUserMemoryRoutes } from './server/routes/user-memory.js';
@@ -490,6 +492,16 @@ export function createApp() {
     console.warn(`[coder] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // GC orphan global-session virtual workspaces (synthetic union projects with
+  // no session, + stray junction dirs) left by a crash or uncovered delete path.
+  // SAFE: only unlinks junctions, never the real projects' files.
+  try {
+    const swept = sweepOrphanGlobalWorkspaces(deps);
+    if (swept > 0) console.log(`[coder] Startup sweep: ${swept} orphan global workspace(s) cleaned`);
+  } catch (e) {
+    console.warn(`[coder] Global-workspace sweep failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   // Frente E — periodic watchdog. The boot sweep above catches every
   // active session after a restart; this catches sessions that hang IN
   // FLIGHT (provider hang outside the dispatch timeout, MCP tool that
@@ -736,8 +748,12 @@ export function createApp() {
     mountDesignSystemRoutes(app, deps);
   }
   mountWorkspaceRoutes(app, deps);
+  // Self-hosted draw.io editor webapp — served at /drawio/* (mcp://app/drawio
+  // in Electron). Static assets, no auth; the embedded editor for the diagram
+  // capability loads from here. Degrades to a placeholder until vendored.
+  mountDrawioStaticRoutes(app);
   // Phase D — terminal diagnose endpoint. Pre-flight HTTP check the
-  // dashboard's TerminalPanel hits before opening the WS upgrade, so
+  // dashboard's terminal UI hits before opening the WS upgrade, so
   // gate rejections surface as structured JSON instead of an opaque
   // WebSocket close code 1006.
   mountTerminalDiagnoseRoute(app, { companyStore: deps.companyStore, db: deps.db });

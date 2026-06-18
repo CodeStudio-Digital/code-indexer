@@ -14,17 +14,20 @@
  * popover.
  */
 
-import { memo, useState } from 'react';
-import { Circle, GitBranch } from 'lucide-react';
+import { memo, useEffect, useState } from 'react';
+import { Circle, FileText, GitBranch } from 'lucide-react';
+import { FileIcon } from '../../../components/FileIcon.js';
 import { useApi } from '../../../hooks/useApi.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
+import { useGitRevision } from '../../../state/git-revision.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { cn } from '../../../lib/utils.js';
-import { fileIconFor } from '../../../lib/file-icon.js';
+import { ProjectSwitcher } from '../../../components/ProjectSwitcher.js';
 import { BranchPopover } from './status-bar/BranchPopover.js';
 import { IndexStatusSection } from './status-bar/IndexStatusSection.js';
 import { LanguageChip } from './status-bar/LanguageChip.js';
+import { LanguageLevelChip } from './status-bar/LanguageLevelChip.js';
 import { AiCompleteChip } from './status-bar/AiCompleteChip.js';
 import { CommitDialog } from './tool-windows/git/CommitDialog.js';
 
@@ -50,7 +53,7 @@ interface GitStatusSummary {
 function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const dirtyCount = useWorkspaceStore(
-    (s) => s.openFiles.filter((f) => f.kind !== 'diff' && f.dirty).length,
+    (s) => s.openFiles.filter((f) => f.kind !== 'diff' && f.dirty && f.projectId === projectId).length,
   );
   // The indexing chip + file/symbol counters live in IndexStatusSection,
   // which owns the live `useIndexStatus` subscription — so progress frames
@@ -65,10 +68,17 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
     `/projects/${projectId}/git/status`,
   );
 
+  // Re-sync the branch chip when the git-meta watcher reports a change
+  // (branch switch / commit / fetch) — covers external `git checkout` too.
+  const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
+  useEffect(() => {
+    if (gitRev) refreshGit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bump on revision only
+  }, [gitRev]);
+
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
 
-  const { Icon: TypeIcon, colorClass: typeColor } = fileIconFor(activeFilePath ?? '');
   // Reduce `files` once — gitDirty drives the amber dot, stagedCount
   // gates the Commit dialog's button. The handler returns one entry
   // per file per state (staged + working-tree), but for the dirty
@@ -80,10 +90,17 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
 
   return (
     <footer className="h-5 shrink-0 border-t bg-card/60 flex items-center px-2 gap-3 text-[10px] text-muted-foreground select-none">
-      <span className="inline-flex items-center gap-1 truncate">
+      {/* Project name doubles as a quick switcher; opens upward (status bar
+          hugs the bottom edge). */}
+      <ProjectSwitcher
+        currentProjectId={projectId}
+        side="top"
+        align="start"
+        triggerClassName="inline-flex items-center gap-1 truncate rounded px-1 -mx-1 transition-colors hover:bg-muted/40 hover:text-foreground"
+      >
         <Circle className="h-1.5 w-1.5 fill-green-500 text-green-500" />
         <span className="truncate max-w-[160px]">{projectName}</span>
-      </span>
+      </ProjectSwitcher>
       {git?.branch && (
         <>
           <span className="opacity-40">·</span>
@@ -146,7 +163,11 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
       )}
       <span className="opacity-40">·</span>
       <span className="inline-flex items-center gap-1 truncate max-w-[420px]">
-        <TypeIcon className={cn('h-2.5 w-2.5', activeFilePath ? typeColor : 'text-muted-foreground')} />
+        {activeFilePath ? (
+          <FileIcon path={activeFilePath} className="h-2.5 w-2.5" />
+        ) : (
+          <FileText className="h-2.5 w-2.5 text-muted-foreground" />
+        )}
         <span className="truncate">{activeFilePath ?? 'No file'}</span>
         {dirtyCount > 0 && (
           <span className="ml-1 text-foreground/80">({dirtyCount} unsaved)</span>
@@ -158,6 +179,8 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
             service / installed LSP server (green), structural-index
             fallback (sky) or syntax-only (amber). */}
         <LanguageChip projectId={projectId} activeFilePath={activeFilePath} />
+        {/* Seletor de versão da linguagem (PHP/Python) — auto-oculta para as demais. */}
+        <LanguageLevelChip projectId={projectId} activeFilePath={activeFilePath} />
         <span className="opacity-40">·</span>
         <AiCompleteChip />
       </span>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Loader2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { useIndexStatus } from '../workspace/jetbrains/status-bar/useIndexStatus.js';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { usePipelineStream } from '../../hooks/usePipelineStream.js';
@@ -21,6 +22,7 @@ import { ChatHeader } from './ChatHeader.js';
 import { ChatRightRail } from './right-panel/ChatRightRail.js';
 import { RightPanelHost } from './right-panel/RightPanelHost.js';
 import { usePluginPanels } from './right-panel/usePluginPanels.js';
+import { setDiagramXml, getDiagram } from './right-panel/diagram/diagram-store.js';
 import type { RightPanelId } from './right-panel/types.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
 import { levelFromSession, type OutputCapLevel } from './composer/output-cap-levels.js';
@@ -77,7 +79,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
-  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api'>('explore');
+  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram'>('explore');
 
   // SSE-driven agent transitions (Plan→Build after submit_plan approval,
   // Spec→Build after submit_spec, manual server-side switches). Backend
@@ -94,7 +96,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       if (
         next
         && next !== agent
-        && (next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' || next === 'spec' || next === 'api')
+        && (next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' || next === 'spec' || next === 'api' || next === 'diagram')
       ) {
         setAgent(next);
       }
@@ -102,6 +104,26 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     window.addEventListener('coder:session_agent_changed', onAgentChanged);
     return () => window.removeEventListener('coder:session_agent_changed', onAgentChanged);
   }, [agent, selectedId]);
+
+  // Live diagram updates: the draw.io agent's diagram_create/update emits
+  // `diagram_changed` over SSE (bridged to a DOM event by handlers.ts). Feed
+  // the session-keyed store so the embedded editor renders the new XML, and
+  // auto-open the wide Diagram panel the FIRST time per session (subsequent
+  // edits update in place without stealing focus).
+  const autoOpenedDiagram = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const onDiagramChanged = (e: Event): void => {
+      const d = (e as CustomEvent).detail as { sessionId?: number; path?: string; xml?: string };
+      if (!d || d.sessionId !== selectedId || !d.path || typeof d.xml !== 'string') return;
+      setDiagramXml(d.sessionId, d.path, d.xml);
+      if (!autoOpenedDiagram.current.has(d.sessionId)) {
+        autoOpenedDiagram.current.add(d.sessionId);
+        setActiveRightPanelId('diagram');
+      }
+    };
+    window.addEventListener('coder:diagram_changed', onDiagramChanged);
+    return () => window.removeEventListener('coder:diagram_changed', onDiagramChanged);
+  }, [selectedId]);
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
@@ -178,13 +200,29 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
 
+  // Composer gate: block sending while the session's project is ACTIVELY indexing
+  // (the freshly-created global union's first pass). Once `structural_ready` the
+  // agent can search/symbol, so we only block the two in-progress phases — never
+  // 'none' (which would deadlock the composer if auto-index is off). Inert for a
+  // normal already-indexed project (phase ready) and guarded on selectedId.
+  const idxStatus = useIndexStatus(sessionData?.session.project_id ?? 0);
+  const indexing = !!selectedId
+    && (idxStatus?.phase === 'scanning' || idxStatus?.phase === 'structural_indexing');
+
   // Global mode: root the right-rail file tree at the selected session's primary
   // linked project; re-derive whenever the session (or its payload) changes.
   useEffect(() => {
     if (!isGlobal) return;
-    const linked = sessionData?.linked_projects ?? [];
-    const primary = linked.find((p) => p.is_primary) ?? linked[0];
-    setActiveProjectId(primary?.project_id ?? sessionData?.session.project_id ?? null);
+    // Ignore a STALE payload still describing the previous session (useApi keeps
+    // the old data until the new GET resolves) — clear until the matching one
+    // lands, so the file tree never flashes the previous union's root on switch.
+    if (sessionData && sessionData.session.id !== selectedId) {
+      setActiveProjectId(null);
+      return;
+    }
+    // v2 virtual union: session.project_id is the SYNTHETIC union project; its
+    // junction dir shows every linked project as a top-level folder.
+    setActiveProjectId(sessionData?.session.project_id ?? null);
   }, [isGlobal, selectedId, sessionData]);
 
   const stream = useAgentStream(selectedId);
@@ -204,6 +242,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     toolLoopInterventions,
     pendingApprovals,
     lastEventAt,
+    preflight,
     sendMessage,
     reattach,
     abort,
@@ -264,6 +303,23 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSessionId]);
+
+  // Project switch: the chat tab is kept mounted (keep-alive) and re-rendered
+  // in place with the new projectId — selectedId would otherwise keep pointing
+  // at the PREVIOUS project's session, so the transcript, live SSE stream, and
+  // the composer + its per-session draft would all stay bound to the old
+  // project (and a message sent after switching would land in it). Drop the
+  // selection when projectId changes so the chat falls back to the new
+  // project's session list (EmptyChatState), unless a deep-linked session was
+  // provided for the incoming project (the initialSessionId effect re-selects).
+  const prevProjectIdRef = useRef(projectId);
+  useEffect(() => {
+    if (prevProjectIdRef.current === projectId) return;
+    prevProjectIdRef.current = projectId;
+    setSelectedId(initialSessionId ?? null);
+    clearCurrentTurn();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   // Auto-reattach: when a session is selected, probe for an in-flight run on
   // the server. If one exists, open the /attach SSE so the dashboard resumes
@@ -411,10 +467,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     return created;
   };
 
-  const createGlobalSession = async (opts: { projectIds: number[]; primaryProjectId: number; title?: string }) => {
+  const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseProjectId?: number }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
-      project_ids: opts.projectIds,
-      primary_project_id: opts.primaryProjectId,
+      ...(opts.reuseProjectId
+        ? { reuse_project_id: opts.reuseProjectId }
+        : { project_ids: opts.projectIds, primary_project_id: opts.primaryProjectId }),
       title: (opts.title ?? 'Nova sessão global').slice(0, 80),
       provider,
       model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
@@ -444,6 +501,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
+    // Block sending while the project is still indexing — covers BOTH the click
+    // path and the Cmd/Ctrl+Enter keyboard path (the overlay only blocks mouse).
+    if (indexing) return;
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
     // Builder studio: prepend the selected-element block(s) and drain any
@@ -467,8 +527,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: allAtts, agent, maxTurns, thinking, describeImages, selectedSkillIds });
-  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, describeImages, selectionPrefixSessionId]);
+    }, { attachments: allAtts, agent, maxTurns, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
+  }, [selectedId, indexing, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Delivery is run-state-aware and serves BOTH queue modes:
@@ -495,10 +555,22 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
     if (!selectedId) return;
     const prefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
+    // Region screenshots can't ride the queue (the /inject path has no attachment
+    // channel), so DRAIN + DISCARD them here instead of letting them silently
+    // attach to a LATER immediate send. Refs (text) still go with the queued
+    // message via the prefix above. (Full carry-through would need attachments
+    // threaded through useMessageQueue + /inject.)
+    if (selectionPrefixSessionId) consumePendingAttachments(selectionPrefixSessionId);
     queue.enqueue(prefix ? `${prefix}\n${text}` : text, mode, skillIds);
   }, [selectedId, selectionPrefixSessionId, queue]);
-  // Discard the queue when switching sessions (per-session, ephemeral).
-  useEffect(() => { queue.clear(); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Discard the queue AND any staged region screenshot when switching sessions.
+  // Both are ephemeral; the screenshot is keyed by the builder project (not the
+  // chat session), so without this it would bleed into the next session's first
+  // send (the Composer doesn't surface it, so it'd be an invisible mis-attach).
+  useEffect(() => {
+    queue.clear();
+    if (selectionPrefixSessionId) consumePendingAttachments(selectionPrefixSessionId);
+  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Builder preview "Fix" / auto-fix → send a message into this chat.
   // Scoped to the builder key (the project id) so only this chat reacts.
@@ -641,7 +713,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // sessions aren't selectable in this composer, so they're left untouched.
   useEffect(() => {
     const a = sessionData?.session?.agent;
-    if (a && (a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' || a === 'spec' || a === 'api')) {
+    if (a && (a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' || a === 'spec' || a === 'api' || a === 'diagram')) {
       setAgent(a);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -650,7 +722,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Persist a manual dropdown pick immediately so leaving WITHOUT sending still
   // remembers it. Applies to the NEXT run (agent identity is baked into the
   // runner at construction; mid-run transitions are runner-driven).
-  const handleAgentChange = (next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api') => {
+  const handleAgentChange = (next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram') => {
     setAgent(next);
     if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
   };
@@ -1173,15 +1245,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           onRenameGroup={handleRenameGroup}
           onDeleteGroup={handleDeleteGroup}
           projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
-          provider={provider}
-          setProvider={(v) => {
-            setProvider(v);
-            setModel('');
-          }}
-          model={model}
-          setModel={setModel}
-          providerOptions={providerOptions}
-          currentProviderModels={currentProviderModels}
         />
         </Panel>
         <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />
@@ -1226,6 +1289,14 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   summarizing={summarizing}
                   onOpenSidebar={() => setMobileSidebarOpen(true)}
                   pendingSnapshots={snapshotPending}
+                  // Builder-style canvas toggle — shown for diagram sessions so
+                  // the live draw.io canvas is openable even where the 40px
+                  // activity rail is hidden (split/narrow mounts).
+                  showCanvasToggle={agent === 'diagram' || getDiagram(selectedId ?? 0) != null}
+                  canvasActive={activeRightPanelId === 'diagram'}
+                  onToggleCanvas={() =>
+                    setActiveRightPanelId(activeRightPanelId === 'diagram' ? null : 'diagram')
+                  }
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -1244,6 +1315,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   sessionData={sessionData ?? null}
                   currentTurn={currentTurn}
                   streaming={streaming}
+                  preflight={preflight}
                   doneReason={doneReason}
                   error={error}
                   liveTurnDuplicatedInHistory={liveTurnDuplicatedInHistory}
@@ -1253,6 +1325,20 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   onLoadEarlier={loadEarlierMessages}
                 />
               </div>
+              <div className="relative">
+              {indexing && (
+                <div
+                  role="status"
+                  aria-busy="true"
+                  className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-card/85 backdrop-blur-sm text-sm text-muted-foreground"
+                >
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>
+                    {t('chat:global.indexing')}
+                    {idxStatus?.progress ? ` (${idxStatus.progress.current}/${idxStatus.progress.total})` : ''}
+                  </span>
+                </div>
+              )}
               <Composer
                 ref={composerRef}
                 filePicks={filePicks}
@@ -1302,20 +1388,30 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 onQueue={handleQueue}
                 queuedStrip={<QueuedMessages items={queue.items} onPromote={queue.promote} onRemove={queue.remove} />}
               />
+              </div>
             </main>
           )}
         </Panel>
         {selectedId && activeRightPanelId && (
           <>
-            <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />
+            {/* The diagram canvas escapes the `lg` viewport gate: the chat is
+                effectively <1024px in split mounts (ProjectView preview split,
+                editor copilot rail), where the builder-style canvas is most
+                wanted — gating it there left it display:none after auto-open.
+                Other (narrow tool-window) panels keep the gate. */}
+            <PanelResizeHandle
+              className={`w-px bg-border hover:bg-primary/40 transition-colors ${
+                activeRightPanelId === 'diagram' ? 'block' : 'hidden lg:block'
+              }`}
+            />
             <Panel
               id="right-panel"
               order={3}
-              defaultSize={22}
-              minSize={16}
-              maxSize={38}
+              defaultSize={activeRightPanelId === 'diagram' ? 52 : 22}
+              minSize={activeRightPanelId === 'diagram' ? 32 : 16}
+              maxSize={activeRightPanelId === 'diagram' ? 72 : 38}
               collapsible
-              className="hidden lg:block min-w-0"
+              className={activeRightPanelId === 'diagram' ? 'block min-w-0' : 'hidden lg:block min-w-0'}
             >
               <RightPanelHost
                 activeId={activeRightPanelId}

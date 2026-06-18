@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Brain, ChevronDown, ChevronUp, Gauge, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
@@ -7,6 +7,7 @@ import { fileToAttachment } from '../chat/utils.js';
 import { useFileDrop } from '../chat/composer/useFileDrop.js';
 import { DropOverlay } from '../chat/composer/DropOverlay.js';
 import { useComposerDraft } from '../chat/composer/useComposerDraft.js';
+import { MicButton } from '../chat/composer/MicButton.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 
 interface MasterComposerProps {
@@ -73,6 +74,11 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
     const arr = await Promise.all(Array.from(files).map(fileToAttachment));
     setAttachments((prev) => [...prev, ...arr]);
   }
+
+  // Voice dictation: append the transcript to whatever is already typed.
+  const appendTranscript = useCallback((text: string) => {
+    setInput((prev) => (prev ? `${prev.trimEnd()} ${text}` : text));
+  }, []);
 
   const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled });
 
@@ -174,6 +180,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                   <Paperclip className="h-3.5 w-3.5" />
                 </span>
               </label>
+              <MicButton onTranscript={appendTranscript} disabled={disabled} className="ml-1" />
               {supportsThinking && (
                 <button
                   type="button"

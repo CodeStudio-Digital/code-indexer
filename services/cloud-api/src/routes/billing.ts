@@ -12,6 +12,7 @@ import { createIdentityBundle } from '../composition.js';
 import { createBillingBundle } from '../billing-composition.js';
 import { WebhookSignatureError } from '../infra/stripe-gateway.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { recordAudit } from '../middleware/audit.js';
 
 function respondBillingError(c: Context<{ Bindings: Env }>, error: BillingError) {
   return c.json(toErrorBody(error), billingHttpStatus(error) as ContentfulStatusCode);
@@ -68,6 +69,7 @@ export function billingRouter(): Hono<{ Bindings: Env }> {
     }
     if (!event) return c.json({ received: true, ignored: true }, 200); // event we don't project
     const r = await bundle.handleWebhook.execute(event);
+    if (r.applied) recordAudit(c, 'billing_webhook_applied', 200, { accountId: event.accountId, status: event.status, plan: event.plan });
     return c.json({ received: true, applied: r.applied }, 200);
   });
 

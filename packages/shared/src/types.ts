@@ -79,6 +79,13 @@ export interface Project {
    * defaults the chat agent to `builder`. Null for ordinary projects.
    */
   builder_json: string | null;
+  /**
+   * Versão da linguagem por projeto (migration 157) — JSON
+   * `{"php":"8.2","python":"3.11"}`. Entregue ao servidor LSP (Intelephense/Pyright)
+   * para que completion/hover de símbolos nativos respeitem a versão. Null/ausente =
+   * usar o default do servidor. Ver `@mcp/shared/utils/language-levels`.
+   */
+  language_levels: string | null;
   created_at: string;
   updated_at: string;
   last_indexed: string | null;
@@ -90,6 +97,12 @@ export interface Project {
   structural_indexed_at: string | null;
   file_count: number;
   symbol_count: number;
+  /**
+   * 1 when this is a synthetic global-session union project (migration 155) —
+   * its `root_path` is a directory of junctions/symlinks to real projects.
+   * Hidden from `listProjects`. Undefined/0 for normal projects.
+   */
+  is_synthetic?: number;
 }
 
 // ─── LLM Analysis ────────────────────────────────────────────────

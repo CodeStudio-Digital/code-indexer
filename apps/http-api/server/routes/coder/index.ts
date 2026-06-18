@@ -14,6 +14,7 @@ import { mountCoderSnapshotRoutes } from './snapshot.js';
 import { mountCoderDriveRoutes } from './drive.js';
 import { mountCoderSummarizeClearRoute } from './summarize-clear.js';
 import { mountCoderRollbackRoute } from './rollback.js';
+import { mountCoderTranscribeRoutes } from './transcribe.js';
 import { mountApiClientRoutes } from '../api-client/index.js';
 import { mountCompanyRoutes } from '../company/index.js';
 
@@ -32,6 +33,7 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderDriveRoutes(app, deps);
   mountCoderSummarizeClearRoute(app, deps, runtime);
   mountCoderRollbackRoute(app, deps, runtime);
+  mountCoderTranscribeRoutes(app, deps);
   mountApiClientRoutes(app, deps);
   mountCompanyRoutes(app, deps);
 }

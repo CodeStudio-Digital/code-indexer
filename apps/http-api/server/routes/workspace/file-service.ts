@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { TREE_BLOCK as DEFAULT_IGNORE } from '@mcp/shared/utils/fs-ignore.js';
 
 export interface TreeEntry {
   name: string;
@@ -15,7 +16,6 @@ export interface FileReadResult {
   isBinary: boolean;
 }
 
-const DEFAULT_IGNORE = new Set(['.git', 'node_modules', '.next', 'dist', 'build', '.turbo', '.cache']);
 const MAX_TEXT_BYTES = 1_000_000; // 1 MB — hard cap for file reads
 
 export async function listDir(

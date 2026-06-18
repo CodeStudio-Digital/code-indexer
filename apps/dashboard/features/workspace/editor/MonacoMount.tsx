@@ -24,6 +24,7 @@ import { Loader2 } from 'lucide-react';
 // model's language id doubles as the LSP dispatch key (didOpen.languageId).
 import { languageIdForPath as inferLanguage } from '@mcp/shared/utils/language-id.js';
 import { useWorkspaceStore, type OpenFile } from '../../../state/workspace.js';
+import { useUiDensity } from '../../../state/ui-density.js';
 import { registerLspProviders } from './lspProvider.js';
 import {
   initEditorModels,
@@ -32,6 +33,7 @@ import {
   setActiveEditor,
   touchModel,
 } from './editor-models.js';
+import { modelPathFor } from './editor-models-path.js';
 import { consumePendingReveal } from './pending-reveal.js';
 import { registerChatActions } from './chat-actions.js';
 import { useEnsureFileContent } from './useEnsureFileContent.js';
@@ -50,8 +52,14 @@ interface MonacoMountProps {
 
 export function MonacoMount({ file }: MonacoMountProps) {
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
-  const currentPathRef = useRef(file.path);
+  // Chave do modelo Monaco namespaced por projectId (W1b): keia o `path` da URI e as
+  // chaves de view-state/LRU. O backend LSP continua recebendo o relpath limpo
+  // (lspProvider/documentSync derivam via parseModelPath). `language` é inferido do
+  // file.path REAL, não da chave prefixada.
+  const modelKey = modelPathFor(file.projectId, file.path);
+  const currentPathRef = useRef(modelKey);
   const setContent = useWorkspaceStore((s) => s.setContent);
+  const editorFontPx = useUiDensity((s) => s.metrics.editorFontPx);
   // Editor + monaco exposed as state (not just refs) so conflict UI can
   // attach reactively once the editor has actually mounted.
   const [editorInstance, setEditorInstance] = useState<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
@@ -84,9 +92,9 @@ export function MonacoMount({ file }: MonacoMountProps) {
       registerChatActions(editor, monaco);
       // Cursor/scroll/selection across UNMOUNTS (diff/welcome detours) —
       // while mounted, the wrapper handles per-path swaps itself.
-      restoreViewStateFor(file.path, editor);
+      restoreViewStateFor(modelKey, editor);
     },
-    [file.projectId, file.path],
+    [file.projectId, file.path, modelKey],
   );
 
   // Release the active-editor handle on unmount (commands no-op cleanly).
@@ -97,13 +105,13 @@ export function MonacoMount({ file }: MonacoMountProps) {
   // Track the active path: save view state when leaving a file (or
   // unmounting) and bump the model-LRU on every activation.
   useEffect(() => {
-    currentPathRef.current = file.path;
-    touchModel(file.path);
+    currentPathRef.current = modelKey;
+    touchModel(modelKey);
     return () => {
       const editor = editorRef.current;
       if (editor) saveViewStateFor(currentPathRef.current, editor);
     };
-  }, [file.path]);
+  }, [modelKey]);
 
   // One-shot reveal handoff (selection chip "open in editor", problems,
   // search). Waits for content — the wrapper swaps models a tick after the
@@ -128,9 +136,9 @@ export function MonacoMount({ file }: MonacoMountProps) {
       // those — only real edits should flag dirty. The MODEL is the source
       // of truth; the store mirror exists for dirty-tracking + persistence.
       if (value === undefined) return;
-      setContent(file.path, value);
+      setContent(file.projectId, file.path, value);
     },
-    [file.path, setContent],
+    [file.projectId, file.path, setContent],
   );
 
   // Ctrl+S lives in the command registry now ('file.save', allowInInputs)
@@ -155,7 +163,9 @@ export function MonacoMount({ file }: MonacoMountProps) {
       // (and its undo stack) alive across tab switches and detours through
       // diff/welcome surfaces. UNCONTROLLED on purpose — a controlled
       // `value` makes the wrapper issue spurious full-range edits.
-      path={file.path}
+      // `modelKey` namespaces the URI by projectId (W1b) so two projects sharing
+      // a relative path don't collide on one model.
+      path={modelKey}
       defaultValue={file.content}
       keepCurrentModel
       defaultLanguage={language}
@@ -164,7 +174,12 @@ export function MonacoMount({ file }: MonacoMountProps) {
       onMount={handleMount}
       onChange={handleChange}
       options={{
-        fontSize: 13,
+        // ResizeObserver-driven relayout. Load-bearing for tab keep-alive
+        // (MCP_TAB_KEEPALIVE): the editor stays mounted while hidden, so it
+        // must re-measure itself on reveal / window-resize instead of relying
+        // on a remount. Modern Monaco uses a ResizeObserver here (cheap).
+        automaticLayout: true,
+        fontSize: editorFontPx,
         fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, "Liberation Mono", Menlo, monospace',
         fontLigatures: true,
         fontWeight: '400',

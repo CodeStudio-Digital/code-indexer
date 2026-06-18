@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cloudstudio/cloud-billing": "workspace:*",
+    "@cloudstudio/cloud-feedback": "workspace:*",
     "@cloudstudio/cloud-identity": "workspace:*",
     "@cloudstudio/cloud-kernel": "workspace:*",
     "@cloudstudio/cloud-sharing": "workspace:*",

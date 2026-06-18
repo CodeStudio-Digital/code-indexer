@@ -511,6 +511,13 @@ export interface SessionState {
    * possible stall". Null until first event arrives.
    */
   lastEventAt: number | null;
+  /**
+   * Set while the BLOCKING task-preflight analysis runs on the first message
+   * of a fresh session — the chat shows an "Analyzing the task…" indicator
+   * instead of the bare spinner. Set on send (fresh first message), cleared on
+   * the first SSE event of the run and on terminal (done/error).
+   */
+  preflight: { startedAt: number } | null;
 }
 
 /**
@@ -568,6 +575,7 @@ export const EMPTY_STATE: SessionState = {
   toolLoopInterventions: [],
   pendingApprovals: [],
   lastEventAt: null,
+  preflight: null,
 };
 
 export type SessionPatch =

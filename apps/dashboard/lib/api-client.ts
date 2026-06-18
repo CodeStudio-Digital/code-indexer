@@ -15,8 +15,58 @@
  */
 
 import type { Api } from '@mcp/api-bus';
+import { getCached, dedupe, invalidateAll } from './api-cache.js';
 
 type DotPath = string;
+
+/**
+ * Idempotent read verbs whose result is safe to dedup + briefly cache so
+ * co-mounted consumers (e.g. StatusBar + GitWindow both reading git status,
+ * or multiple panels reading projects.get) collapse to ONE IPC round-trip.
+ * Deliberately excludes `files.tree`/`files.list` (the live file-tree store
+ * applies incremental fs-events; a re-read must reflect them) and per-
+ * keystroke reads (`lsp.completion`/`search.*`).
+ */
+const READ_VERBS = new Set<string>([
+  'projects.get',
+  'projects.stats',
+  'projects.list',
+  'projectGit.status',
+  'projectGit.log',
+  'plugins.activeContributions',
+  'snapshots.list',
+  'lsp.listServers',
+  'lsp.instances',
+  'lsp.languageLevels',
+]);
+
+/**
+ * Mutating verbs that change a resource a READ_VERB reads. On success they
+ * flush the short-TTL read cache so the next read revalidates (same
+ * flush-all policy as the HTTP mutation helpers in hooks/useApi.ts).
+ */
+const WRITE_VERBS = new Set<string>([
+  'files.write',
+  'files.delete',
+  'files.rename',
+  'files.mkdir',
+  'files.historyRestore',
+  'snapshots.create',
+  'snapshots.update',
+  'snapshots.delete',
+  'projectGit.stage',
+  'projectGit.unstage',
+  'projectGit.discard',
+  'projectGit.commit',
+  'lsp.removeServer',
+  'lsp.restartServer',
+  'lsp.setLanguageLevel',
+]);
+
+/** Stable cache key for a read verb + its args. */
+function callKey(path: DotPath, input: unknown): string {
+  return `CALL ${path} ${input === undefined ? '' : JSON.stringify(input)}`;
+}
 
 /**
  * Base URL for HTTP fetches against the backend.
@@ -103,7 +153,7 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: `/api/projects/${ip!.projectId}/file?path=${encodeURIComponent(String(ip!.path))}${ims}`, init: {} };
     }
     case 'files.write':
-      return { url: `/api/projects/${ip!.projectId}/file`, init: { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ip!.path, content: ip!.content }) } };
+      return { url: `/api/projects/${ip!.projectId}/file`, init: { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ip!.path, content: ip!.content, encoding: (ip as { encoding?: string }).encoding }) } };
     case 'files.delete':
       return {
         url: `/api/projects/${ip!.projectId}/file?path=${encodeURIComponent(String(ip!.path))}${ip!.recursive ? '&recursive=1' : ''}`,
@@ -119,6 +169,14 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
         url: `/api/projects/${ip!.projectId}/dir`,
         init: json({ path: ip!.path }),
       };
+    case 'files.historyList':
+      return { url: `/api/projects/${ip!.projectId}/file/history?path=${encodeURIComponent(String(ip!.path))}`, init: {} };
+    case 'files.historyGet':
+      return { url: `/api/projects/${ip!.projectId}/file/history/${Number(ip!.id)}`, init: {} };
+    case 'files.historyRestore':
+      return { url: `/api/projects/${ip!.projectId}/file/history/${Number(ip!.id)}/restore`, init: { method: 'POST' } };
+    case 'files.historyLabel':
+      return { url: `/api/projects/${ip!.projectId}/file/history/${Number(ip!.id)}/label`, init: json({ label: ip!.label }) };
     case 'snapshots.list':
       return {
         url: `/api/projects/${ip!.projectId}/snapshots${ip!.category ? `?category=${encodeURIComponent(String(ip!.category))}` : ''}`,
@@ -235,6 +293,10 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: `/api/lsp/servers/${ip!.serverId}`, init: { method: 'DELETE' } };
     case 'lsp.restartServer':
       return { url: `/api/lsp/${ip!.projectId}/servers/${ip!.serverId}/restart`, init: json({}) };
+    case 'lsp.setLanguageLevel':
+      return { url: `/api/lsp/${ip!.projectId}/language-level`, init: json({ languageId: ip!.languageId, level: ip!.level }) };
+    case 'lsp.languageLevels':
+      return { url: `/api/lsp/${ip!.projectId}/language-levels`, init: {} };
     default:
       return null;
   }
@@ -243,8 +305,29 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
 /**
  * One-shot RPC call. Prefers Electron IPC (full coverage of api-bus);
  * falls back to HTTP via `dottedToHttp` for the browser-dev path only.
+ *
+ * Front door: idempotent reads (READ_VERBS) go through the shared in-flight
+ * dedup + short-TTL cache (collapses co-mounted identical reads into one
+ * round-trip); writes (WRITE_VERBS) flush that cache on success; everything
+ * else passes straight through.
  */
-export async function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
+export function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
+  if (READ_VERBS.has(path)) {
+    const key = callKey(path, input);
+    const hit = getCached<T>(key);
+    if (hit !== undefined) return Promise.resolve(hit);
+    return dedupe<T>(key, () => apiCallRaw<T>(path, input));
+  }
+  if (WRITE_VERBS.has(path)) {
+    return apiCallRaw<T>(path, input).then((r) => {
+      invalidateAll();
+      return r;
+    });
+  }
+  return apiCallRaw<T>(path, input);
+}
+
+async function apiCallRaw<T>(path: DotPath, input?: unknown): Promise<T> {
   const invoke = electronInvoke();
   if (invoke) {
     const wrapped = (await invoke(path, input)) as { ok: boolean; value?: T; error?: { message: string; code?: string; status?: number } };

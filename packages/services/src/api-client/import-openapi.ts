@@ -7,6 +7,7 @@
  * reused; verified requests are NEVER overwritten (their fix/verification
  * survives re-import); new operations are inserted, unverified ones refreshed.
  */
+import { basename } from 'node:path';
 import type { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { parseOpenApi, type ParsedOperation } from './openapi-walker.js';
 import { probeOpenApiOnHost } from './openapi-probe.js';
@@ -30,6 +31,7 @@ export function reconcileOperations(
       query_json: JSON.stringify(op.query),
       body_json: op.bodyExample != null ? JSON.stringify(op.bodyExample, null, 2) : null,
       body_kind: (op.bodyExample != null ? 'json' : 'none') as 'json' | 'none',
+      folder: op.folder || null,
     };
     const prev = byKey.get(key);
     if (prev) {
@@ -66,28 +68,64 @@ export interface ImportOutcome {
   specChanged: boolean;
 }
 
-/** Probe → parse → upsert collection → reconcile. Returns a string on failure. */
+/** Parse raw spec → upsert collection (keyed by sourceKey) → reconcile. Shared
+ *  by the project-root import and the uploaded-file import. */
+async function finalizeImport(
+  store: ApiClientStore,
+  projectId: number,
+  raw: string,
+  format: 'yaml' | 'json',
+  sourceKey: string,
+): Promise<ImportOutcome | { error: string }> {
+  let parsed;
+  try { parsed = await parseOpenApi(raw, format); }
+  catch (e) { return { error: `spec parse failed: ${e instanceof Error ? e.message : String(e)}` }; }
+
+  // All writes in ONE transaction — a 300-endpoint spec is one commit instead of
+  // ~600 (insert/update per op + the collection upsert), turning a multi-hundred-ms
+  // import into a single bulk write.
+  return store.transaction(() => {
+    const prior = store.listCollections(projectId).find((col) => col.spec_source === sourceKey);
+    const specChanged = prior != null && prior.spec_hash !== parsed.hash;
+    const collection = prior ?? store.createCollection({
+      project_id: projectId,
+      name: `OpenAPI (${sourceKey})`,
+      spec_source: sourceKey,
+      spec_hash: parsed.hash,
+    });
+    store.updateCollection(collection.id, { spec_source: sourceKey, spec_hash: parsed.hash });
+
+    const { created, updated, stale } = reconcileOperations(store, collection.id, parsed.operations);
+    return { collectionId: collection.id, requestCount: parsed.operations.length, created, updated, stale, sourcePath: sourceKey, specChanged };
+  });
+}
+
+/** Probe the project root → import. Returns an error object on failure. */
 export async function importOpenApiInto(
   store: ApiClientStore,
   opts: { projectId: number; rootPath: string; specPath?: string },
 ): Promise<ImportOutcome | { error: string }> {
   const probed = await probeOpenApiOnHost(opts.rootPath, opts.specPath);
   if (!probed) return { error: 'no OpenAPI/Swagger spec found in the project root' };
+  return finalizeImport(store, opts.projectId, probed.raw, probed.format, probed.relPath);
+}
 
-  let parsed;
-  try { parsed = await parseOpenApi(probed.raw, probed.format); }
-  catch (e) { return { error: `spec parse failed: ${e instanceof Error ? e.message : String(e)}` }; }
+/** Import from raw spec content (an uploaded file picked in the UI). Format is
+ *  inferred from the filename extension, falling back to a content sniff. */
+export async function importOpenApiContent(
+  store: ApiClientStore,
+  opts: { projectId: number; content: string; filename?: string },
+): Promise<ImportOutcome | { error: string }> {
+  const raw = opts.content ?? '';
+  if (!raw.trim()) return { error: 'the selected file is empty' };
+  const format = detectFormat(opts.filename, raw);
+  const name = opts.filename ? basename(opts.filename) : 'openapi';
+  return finalizeImport(store, opts.projectId, raw, format, `upload:${name}`);
+}
 
-  const prior = store.listCollections(opts.projectId).find((col) => col.spec_source === probed.relPath);
-  const specChanged = prior != null && prior.spec_hash !== parsed.hash;
-  const collection = prior ?? store.createCollection({
-    project_id: opts.projectId,
-    name: `OpenAPI (${probed.relPath})`,
-    spec_source: probed.relPath,
-    spec_hash: parsed.hash,
-  });
-  store.updateCollection(collection.id, { spec_source: probed.relPath, spec_hash: parsed.hash });
-
-  const { created, updated, stale } = reconcileOperations(store, collection.id, parsed.operations);
-  return { collectionId: collection.id, requestCount: parsed.operations.length, created, updated, stale, sourcePath: probed.relPath, specChanged };
+function detectFormat(filename: string | undefined, raw: string): 'yaml' | 'json' {
+  const ext = (filename ?? '').toLowerCase();
+  if (ext.endsWith('.json')) return 'json';
+  if (ext.endsWith('.yaml') || ext.endsWith('.yml')) return 'yaml';
+  return raw.trimStart().startsWith('{') ? 'json' : 'yaml';
 }

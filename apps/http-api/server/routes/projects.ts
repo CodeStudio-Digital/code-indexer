@@ -142,6 +142,22 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     });
   });
 
+  /** Live git-metadata stream (SSE) — branch switches + ref/sequencer changes. */
+  app.get('/api/projects/:id/git-meta/stream', async (c) => {
+    const id = parseIdParam(c);
+    if (!deps.db.getProject(id)) return notFound(c);
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      try {
+        for await (const frame of h.gitMetaStream({ id }, createContext())) {
+          await stream.writeSSE({ id: String(seq++), event: 'git', data: JSON.stringify(frame) });
+        }
+      } finally {
+        await stream.close();
+      }
+    });
+  });
+
   /** Live status stream (SSE) — initial frame + one per transition. */
   app.get('/api/projects/:id/index-status/stream', async (c) => {
     const id = parseIdParam(c);

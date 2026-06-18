@@ -14,40 +14,43 @@ export function formatDuration(ms: number): string {
   return `${h}h${rm > 0 ? ` ${rm}m` : ''}`;
 }
 
-export function fileToAttachment(file: File): Promise<AgentAttachment> {
+/** Read a Blob/File as base64 (strips the `data:<type>;base64,` prefix). */
+export function readDataUrlBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    const isImage = file.type.startsWith('image/');
-    // RTF must reach the server-side office extractor as base64. Some browsers
-    // report it as `text/rtf`, which would otherwise hit the text branch and
-    // send raw RTF control-word markup to the model instead of clean text.
-    const isRtf = ext === 'rtf' || file.type === 'text/rtf' || file.type === 'application/rtf';
-    const isText =
-      !isRtf &&
-      (file.type.startsWith('text/') || file.type === 'application/json' || TEXT_LIKE_EXTS.has(ext));
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error);
-    if (isText) {
-      reader.onload = () =>
-        resolve({
-          name: file.name,
-          mediaType: file.type || 'text/plain',
-          text: String(reader.result ?? ''),
-        });
-      reader.readAsText(file);
-    } else {
-      reader.onload = () => {
-        const result = String(reader.result ?? '');
-        const base64 = result.includes(',') ? result.split(',', 2)[1] : result;
-        resolve({
-          name: file.name,
-          mediaType: file.type || (isImage ? 'image/png' : 'application/octet-stream'),
-          base64,
-        });
-      };
-      reader.readAsDataURL(file);
-    }
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      resolve(result.includes(',') ? result.split(',', 2)[1] : result);
+    };
+    reader.readAsDataURL(blob);
   });
+}
+
+export function fileToAttachment(file: File): Promise<AgentAttachment> {
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const isImage = file.type.startsWith('image/');
+  // RTF must reach the server-side office extractor as base64. Some browsers
+  // report it as `text/rtf`, which would otherwise hit the text branch and
+  // send raw RTF control-word markup to the model instead of clean text.
+  const isRtf = ext === 'rtf' || file.type === 'text/rtf' || file.type === 'application/rtf';
+  const isText =
+    !isRtf &&
+    (file.type.startsWith('text/') || file.type === 'application/json' || TEXT_LIKE_EXTS.has(ext));
+  if (isText) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () =>
+        resolve({ name: file.name, mediaType: file.type || 'text/plain', text: String(reader.result ?? '') });
+      reader.readAsText(file);
+    });
+  }
+  return readDataUrlBase64(file).then((base64) => ({
+    name: file.name,
+    mediaType: file.type || (isImage ? 'image/png' : 'application/octet-stream'),
+    base64,
+  }));
 }
 
 export function getPersistedAssistantText(message: PersistedMessage): string {

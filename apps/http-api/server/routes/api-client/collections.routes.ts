@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import { collectionInProject, requestInProject } from './_ownership.js';
 import type { CreateRequestInput, RequestPatch } from '@mcp/store/api-client-types.js';
 
 /**
@@ -25,28 +26,65 @@ export function mountApiCollectionRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.patch(`${base}/collections/:cid`, async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const cid = parseIdParam(c, 'cid');
-    if (!store.getCollection(cid)) return notFound(c, `Collection ${cid} not found`);
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
     const body = await parseJsonBody<{ name?: string; description?: string }>(c);
     store.updateCollection(cid, { name: body.name, description: body.description });
     return c.json(store.getCollection(cid));
   });
 
   app.delete(`${base}/collections/:cid`, (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const cid = parseIdParam(c, 'cid');
+    // Guard BEFORE the cascade — deleteCollection also drops the collection's
+    // requests + regression runs, so a stale cid must never reach it.
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
     store.deleteCollection(cid);
     return c.json({ ok: true });
   });
 
+  // ─── Folders (manual grouping) ───────────────────────────────────────
+  app.post(`${base}/collections/:cid/folders`, async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    const cid = parseIdParam(c, 'cid');
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
+    const body = await parseJsonBody<{ name: string }>(c);
+    if (!body.name?.trim()) return c.json({ error: 'folder name is required' }, 400);
+    store.addFolder(cid, body.name.trim());
+    return c.json(store.getCollection(cid));
+  });
+
+  app.patch(`${base}/collections/:cid/folders`, async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    const cid = parseIdParam(c, 'cid');
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
+    const body = await parseJsonBody<{ from: string; to: string }>(c);
+    if (!body.from || !body.to?.trim()) return c.json({ error: 'from and to are required' }, 400);
+    store.renameFolder(cid, body.from, body.to.trim());
+    return c.json(store.getCollection(cid));
+  });
+
+  app.delete(`${base}/collections/:cid/folders/:name`, (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    const cid = parseIdParam(c, 'cid');
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
+    store.deleteFolder(cid, decodeURIComponent(c.req.param('name')));
+    return c.json(store.getCollection(cid));
+  });
+
   // ─── Requests ────────────────────────────────────────────────────────
   app.get(`${base}/collections/:cid/requests`, (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const cid = parseIdParam(c, 'cid');
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
     return c.json({ requests: store.listRequests(cid) });
   });
 
   app.post(`${base}/collections/:cid/requests`, async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const cid = parseIdParam(c, 'cid');
-    if (!store.getCollection(cid)) return notFound(c, `Collection ${cid} not found`);
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
     const body = await parseJsonBody<Partial<CreateRequestInput>>(c);
     if (!body.name?.trim()) return c.json({ error: 'name is required' }, 400);
     return c.json(store.createRequest({
@@ -58,22 +96,47 @@ export function mountApiCollectionRoutes(app: Hono, deps: ServerDeps): void {
       query_json: body.query_json,
       body_json: body.body_json,
       body_kind: body.body_kind,
+      folder: body.folder,
       sort_order: body.sort_order,
       source: body.source,
     }));
   });
 
   app.patch(`${base}/requests/:rid`, async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const rid = parseIdParam(c, 'rid');
-    if (!store.getRequest(rid)) return notFound(c, `Request ${rid} not found`);
+    if (!requestInProject(store, projectId, rid)) return notFound(c, `Request ${rid} not found`);
     const body = await parseJsonBody<RequestPatch>(c);
     store.updateRequest(rid, body);
     return c.json(store.getRequest(rid));
   });
 
   app.delete(`${base}/requests/:rid`, (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const rid = parseIdParam(c, 'rid');
+    // Guard BEFORE delete — it cascades the request's history.
+    if (!requestInProject(store, projectId, rid)) return notFound(c, `Request ${rid} not found`);
     store.deleteRequest(rid);
+    return c.json({ ok: true });
+  });
+
+  app.post(`${base}/requests/:rid/duplicate`, (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    const rid = parseIdParam(c, 'rid');
+    if (!requestInProject(store, projectId, rid)) return notFound(c, `Request ${rid} not found`);
+    const dup = store.duplicateRequest(rid);
+    if (!dup) return notFound(c, `Request ${rid} not found`);
+    return c.json(dup);
+  });
+
+  // Persist a drag-reorder: orderedIds is the target folder's full ordered list.
+  app.post(`${base}/collections/:cid/reorder`, async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    const cid = parseIdParam(c, 'cid');
+    if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
+    const body = await parseJsonBody<{ orderedIds?: number[]; folder?: string | null }>(c);
+    const ids = Array.isArray(body.orderedIds) ? body.orderedIds.filter((n) => Number.isFinite(n)) : [];
+    store.reorderRequests(ids, body.folder ?? null);
     return c.json({ ok: true });
   });
 
@@ -81,8 +144,9 @@ export function mountApiCollectionRoutes(app: Hono, deps: ServerDeps): void {
   // asserts) so the non-LLM regression runner can assert it. A falsy/absent
   // expectedStatus CLEARS verification (drops it from the battery).
   app.post(`${base}/requests/:rid/verify`, async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const rid = parseIdParam(c, 'rid');
-    if (!store.getRequest(rid)) return notFound(c, `Request ${rid} not found`);
+    if (!requestInProject(store, projectId, rid)) return notFound(c, `Request ${rid} not found`);
     const body = await parseJsonBody<{ expectedStatus: number; assert?: unknown }>(c);
     const expected = Number(body.expectedStatus);
     if (!Number.isFinite(expected) || expected <= 0) {

@@ -100,7 +100,7 @@ interface OpenAiChatResponse {
 
 const CLOUDFLARE_PATH_TEMPLATE = 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1';
 
-function resolveBaseUrl(binding: ResolvedBinding, override?: string): string {
+export function resolveBaseUrl(binding: ResolvedBinding, override?: string): string {
   if (override) return override;
   const explicit = binding.provider.base_url;
   if (explicit && explicit.trim().length > 0) {

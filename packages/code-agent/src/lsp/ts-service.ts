@@ -754,7 +754,60 @@ export class TsLanguageService {
       // `detail` — short, cheap descriptor. For full info the caller
       // hits `getQuickInfoAtPosition` (lsp.hover).
       detail: e.kindModifiers || undefined,
+      // Auto-import: preservado p/ o resolve buscar o `import` edit (getCompletionEntryDetails).
+      source: e.source,
+      data: e.data,
+      hasAction: e.hasAction,
     }));
+  }
+
+  /**
+   * completionItem/resolve para auto-import (TS/JS): chama getCompletionEntryDetails e
+   * converte os `codeActions` (inserção de `import`) em text edits 1-based, mais o
+   * detalhe (assinatura) e a documentação. null = nada a resolver. Os edits de auto-import
+   * são SEMPRE no arquivo atual (single-doc), então additionalTextEdits cobre 100%.
+   */
+  getCompletionDetails(
+    file: string, line: number, column: number, name: string,
+    source?: string, data?: unknown,
+  ): CompletionDetails | null {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+    const offset = this.positionToOffset(abs, line, column);
+    if (offset === null) return null;
+    let details: ts.CompletionEntryDetails | undefined;
+    try {
+      details = service.getCompletionEntryDetails(
+        abs, offset, name, undefined, source,
+        { includeCompletionsForModuleExports: true },
+        data as ts.CompletionEntryData | undefined,
+      );
+    } catch (e) {
+      console.warn(`[lsp] getCompletionDetails: ${e instanceof Error ? e.message : String(e)} (file=${abs})`);
+      return null;
+    }
+    if (!details) return null;
+    const additionalTextEdits: NonNullable<CompletionDetails['additionalTextEdits']> = [];
+    for (const action of details.codeActions ?? []) {
+      for (const change of action.changes) {
+        if (change.fileName !== abs) continue; // auto-import vai no arquivo atual
+        for (const tc of change.textChanges) {
+          additionalTextEdits.push({
+            range: {
+              start: this.offsetToPosition(abs, tc.span.start),
+              end: this.offsetToPosition(abs, tc.span.start + tc.span.length),
+            },
+            newText: tc.newText,
+          });
+        }
+      }
+    }
+    return {
+      additionalTextEdits: additionalTextEdits.length ? additionalTextEdits : undefined,
+      detail: ts.displayPartsToString(details.displayParts) || undefined,
+      documentation: ts.displayPartsToString(details.documentation) || undefined,
+    };
   }
 
   /**
@@ -934,6 +987,21 @@ export interface CompletionEntry {
   insertText: string;
   isSnippet: boolean;
   detail?: string;
+  /** Auto-import metadata — só em candidatos de módulo externo. O resolve usa para
+   *  buscar o `import` edit via getCompletionEntryDetails (structured-clone-able). */
+  source?: string;
+  data?: unknown; // ts.CompletionEntryData (opaco)
+  hasAction?: boolean;
+}
+
+/** completionItem/resolve para auto-import TS/JS: o(s) `import` edit(s) + detail/docs. */
+export interface CompletionDetails {
+  additionalTextEdits?: Array<{
+    range: { start: { line: number; column: number }; end: { line: number; column: number } };
+    newText: string;
+  }>;
+  detail?: string;
+  documentation?: string;
 }
 
 // ── Module-level cache with idle-timeout eviction ────

@@ -9,7 +9,7 @@
  * open" placeholder.
  */
 
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect, useReducer } from 'react';
 import {
   FileCode2,
   FilePlus2,
@@ -22,6 +22,9 @@ import {
 import { useWorkspaceStore } from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { EditorTabBar } from './EditorTabBar.js';
+import { ExternalChangeBanner } from './ExternalChangeBanner.js';
+import { executeCommand, getCommand, onCommandsChanged } from '../../keymap/commands.js';
+import { useKeymapStore, bindingLabel } from '../../keymap/keymap-store.js';
 
 const MonacoMount = lazy(() =>
   import('./editor/MonacoMount.js').then((m) => ({ default: m.MonacoMount })),
@@ -34,6 +37,9 @@ const DiffMount = lazy(() =>
 );
 const MarkdownView = lazy(() =>
   import('./editor/MarkdownView.js').then((m) => ({ default: m.MarkdownView })),
+);
+const DrawioEditor = lazy(() =>
+  import('./editor/DrawioEditor.js').then((m) => ({ default: m.DrawioEditor })),
 );
 const GitLogView = lazy(() =>
   import('./jetbrains/tool-windows/git/GitLogView.js').then((m) => ({ default: m.GitLogView })),
@@ -49,10 +55,15 @@ function isMarkdownPath(path: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(path);
 }
 
+function isDrawioPath(path: string): boolean {
+  return /\.drawio$/i.test(path);
+}
+
 export function EditorPane() {
   const openFiles = useWorkspaceStore((s) => s.openFiles);
+  const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
-  const activeFile = openFiles.find((f) => f.path === activeFilePath) ?? null;
+  const activeFile = openFiles.find((f) => f.path === activeFilePath && f.projectId === activeProjectId) ?? null;
 
   return (
     <div className="h-full flex flex-col bg-background min-h-0">
@@ -75,14 +86,21 @@ export function EditorPane() {
               <MergeTabView tab={activeFile} />
             ) : activeFile.kind === 'diff' ? (
               <DiffMount diff={activeFile} />
+            ) : isDrawioPath(activeFile.path) ? (
+              <DrawioEditor file={activeFile} />
             ) : isMarkdownPath(activeFile.path) ? (
               <MarkdownView file={activeFile} />
             ) : (
-              <>
-                <MonacoMount file={activeFile} />
-                {/* Consent CTA: language has a tier-1 LSP server not yet installed. */}
-                <LspInstallPrompt projectId={activeFile.projectId} filePath={activeFile.path} />
-              </>
+              <div className="h-full flex flex-col min-h-0">
+                {activeFile.externallyChanged && (
+                  <ExternalChangeBanner projectId={activeFile.projectId} path={activeFile.path} />
+                )}
+                <div className="flex-1 min-h-0 relative">
+                  <MonacoMount file={activeFile} />
+                  {/* Consent CTA: language has a tier-1 LSP server not yet installed. */}
+                  <LspInstallPrompt projectId={activeFile.projectId} filePath={activeFile.path} />
+                </div>
+              </div>
             )}
           </Suspense>
         ) : (
@@ -99,22 +117,24 @@ export function EditorPane() {
  * front.
  */
 function WelcomeScreen() {
-  const layout = useWorkspaceLayout();
+  const terminalOpen = useWorkspaceLayout((s) => s.activeBottom === 'terminal');
 
-  const dispatch = (shortcut: string, mods: { shift?: boolean; alt?: boolean } = {}) => {
-    // The Workspace's global keydown listener is what actually triggers
-    // each action — sending a synthetic event keeps the action paths
-    // in one place. If user-agents start filtering synthetic ctrl
-    // combos we'll wire each card to a direct setState here.
-    const event = new KeyboardEvent('keydown', {
-      key: shortcut.toLowerCase(),
-      ctrlKey: true,
-      shiftKey: mods.shift ?? false,
-      altKey: mods.alt ?? false,
-      bubbles: true,
-      cancelable: true,
-    });
-    window.dispatchEvent(event);
+  // Drive the cards straight through the keymap command registry — the
+  // same path the dispatcher and Search Everywhere use. Subscribing to the
+  // preset/overrides (and to registry mounts) keeps every label honest: it
+  // shows the binding that is actually live, IntelliJ or VS Code, not a
+  // hardcoded guess. (The previous synthetic-KeyboardEvent hack targeted the
+  // retired Workspace listener and silently did nothing here.)
+  const preset = useKeymapStore((s) => s.preset);
+  const overrides = useKeymapStore((s) => s.overrides);
+  void preset;
+  void overrides;
+  const [, bumpOnRegistry] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => onCommandsChanged(bumpOnRegistry), []);
+
+  const labelFor = (id: string): string => {
+    const cmd = getCommand(id);
+    return cmd ? bindingLabel(cmd) : '';
   };
 
   return (
@@ -139,38 +159,36 @@ function WelcomeScreen() {
           <ActionCard
             icon={Search}
             label="Quick Open"
-            shortcut="Ctrl+P"
-            onClick={() => dispatch('p')}
+            shortcut={labelFor('navigate.file')}
+            onClick={() => executeCommand('navigate.file')}
           />
           <ActionCard
             icon={FileCode2}
             label="Project files"
-            shortcut="Ctrl+B"
-            onClick={() => dispatch('b')}
-            active={layout.activeLeft === 'files'}
+            shortcut={labelFor('view.toggleProjectTree')}
+            onClick={() => executeCommand('view.toggleProjectTree')}
           />
           <ActionCard
             icon={MessageSquare}
             label="Agent chat"
-            shortcut="Ctrl+Alt+B"
-            onClick={() => layout.setActiveRight(layout.activeRight === 'chat' ? null : 'chat')}
-            active={layout.activeRight === 'chat'}
+            shortcut={labelFor('view.toggleChat')}
+            onClick={() => executeCommand('view.toggleChat')}
           />
           <ActionCard
             icon={TerminalSquare}
             label="Terminal"
-            shortcut="Ctrl+J"
-            onClick={() => dispatch('j')}
-            active={layout.activeBottom === 'terminal'}
+            shortcut={labelFor('view.toggleTerminal')}
+            onClick={() => executeCommand('view.toggleTerminal')}
+            active={terminalOpen}
           />
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[10.5px] text-muted-foreground/80">
-          <KeyHint label="Save" keys={['Ctrl', 'S']} />
-          <KeyHint label="Save all" keys={['Ctrl', 'Shift', 'S']} />
-          <KeyHint label="Close tab" keys={['Ctrl', 'W']} />
-          <KeyHint label="Commands" keys={['Ctrl', 'Shift', 'P']} />
-          <KeyHint label="Rename" keys={['F2']} />
+          <KeyHint label="Save" binding={labelFor('file.save')} />
+          <KeyHint label="Save all" binding={labelFor('file.saveAll')} />
+          <KeyHint label="Close tab" binding={labelFor('file.closeTab')} />
+          <KeyHint label="Find Action" binding={labelFor('navigate.commands')} />
+          <KeyHint label="Search Everywhere" binding={labelFor('navigate.searchEverywhere')} />
         </div>
 
         <div className="text-[10px] text-muted-foreground/60 inline-flex items-center gap-1.5">
@@ -208,7 +226,12 @@ function ActionCard({ icon: Icon, label, shortcut, active, onClick }: ActionCard
   );
 }
 
-function KeyHint({ label, keys }: { label: string; keys: string[] }) {
+function KeyHint({ label, binding }: { label: string; binding: string }) {
+  // Unbound under the active preset → drop the hint rather than show a
+  // label with no keys. Split chord sequences ("Ctrl+K Ctrl+S") and combos
+  // ("Ctrl+Shift+S") into individual <kbd> tokens.
+  if (!binding) return null;
+  const keys = binding.split(' ').flatMap((chord) => chord.split('+'));
   return (
     <span className="inline-flex items-center gap-1">
       <span>{label}</span>

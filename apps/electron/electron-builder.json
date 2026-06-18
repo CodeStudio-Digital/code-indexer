@@ -28,6 +28,10 @@
     {
       "from": "apps/electron/build/icon.png",
       "to": "icon.png"
+    },
+    {
+      "from": "apps/http-api/vendor/drawio",
+      "to": "drawio"
     }
   ],
   "win": {
@@ -36,7 +40,10 @@
   },
   "mac": {
     "target": ["dmg"],
-    "icon": "apps/electron/build/icon.icns"
+    "icon": "apps/electron/build/icon.icns",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "O CodeStudio usa o microfone para ditado de voz no compositor de mensagens."
+    }
   },
   "linux": {
     "target": ["AppImage"],

@@ -24,6 +24,11 @@ const insertMsg = db.prepare(`
 const touchSession = db.prepare(
   "UPDATE coder_sessions SET updated_at = datetime('now') WHERE id = ?",
 );
+const updateMsgUsage = db.prepare(`
+  UPDATE coder_messages
+     SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_creation_tokens = ?
+   WHERE id = ?
+`);
 const insertTool = db.prepare(`
   INSERT INTO coder_tool_calls
     (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
@@ -44,16 +49,32 @@ const bumpStmt = db.prepare(`
 
 // Mirrors SessionStore.persistAssistantTurn — keep in sync if the schema changes.
 const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) => {
-  const r = insertMsg.run(
-    p.session_id,
-    p.message.role,
-    JSON.stringify(p.message.content),
-    p.usage?.input_tokens ?? 0,
-    p.usage?.output_tokens ?? 0,
-    p.usage?.cache_read_input_tokens ?? 0,
-    p.usage?.cache_creation_input_tokens ?? 0,
-  );
-  const messageId = Number(r.lastInsertRowid);
+  // Reuse the checkpointed assistant row when completing an in-flight turn;
+  // otherwise insert fresh. Mirrors store/messages.ts persistAssistantTurn.
+  let messageId: number;
+  if (p.existing_message_id != null) {
+    messageId = p.existing_message_id;
+    if (p.usage) {
+      updateMsgUsage.run(
+        p.usage.input_tokens,
+        p.usage.output_tokens,
+        p.usage.cache_read_input_tokens ?? 0,
+        p.usage.cache_creation_input_tokens ?? 0,
+        messageId,
+      );
+    }
+  } else {
+    const r = insertMsg.run(
+      p.session_id,
+      p.message.role,
+      JSON.stringify(p.message.content),
+      p.usage?.input_tokens ?? 0,
+      p.usage?.output_tokens ?? 0,
+      p.usage?.cache_read_input_tokens ?? 0,
+      p.usage?.cache_creation_input_tokens ?? 0,
+    );
+    messageId = Number(r.lastInsertRowid);
+  }
   touchSession.run(p.session_id);
   const runInsertTool = (tc: PersistAssistantTurnPayload['tool_calls'][number]): void => {
     insertTool.run(

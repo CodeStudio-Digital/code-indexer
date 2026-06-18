@@ -63,6 +63,16 @@ export interface RunnerEvents {
   message_complete: (message: AgentMessage, usage: ChatUsage | null) => void;
   turn_start: (turn: number) => void;
   /**
+   * Fired right before the runner parks on `waitForUserInput` (submit_tasks /
+   * submit_plan / ask_user / execute_tasks budget / PermissionGate approval).
+   * The turn blocks indefinitely here WITHOUT a following `turn_start`, so the
+   * host (`index.ts`) uses this to durably checkpoint the in-flight assistant
+   * message (carrying the still-pending interactive `tool_use`) — otherwise a
+   * quit/close before approval loses the whole turn and the approval can never
+   * be resumed. Host-internal: not forwarded over the SSE bus.
+   */
+  awaiting_input: (payload: { askId: string }) => void;
+  /**
    * Emitted exactly once when the run terminates. `reason` is the most
    * specific applicable value from {@link StopReason}. `error` carries the
    * underlying Error for failure modes (`error`, `recovery_capped`,
@@ -566,4 +576,17 @@ export interface RunnerEvents {
    * dashboard's Drive panel refetches live instead of polling.
    */
   session_drive_changed: (payload: { kind: 'memory' | 'investigation' }) => void;
+  /**
+   * A draw.io diagram was created/updated by an agent tool (diagram_create /
+   * diagram_update). `xml` rides along for instant render; the `.drawio` file
+   * is the durable source for a late-mounting panel. The SSE layer forwards it
+   * so the chat panel opens and the editor refreshes live.
+   */
+  diagram_changed: (payload: { path: string; xml: string }) => void;
+  /**
+   * `diagram_export` asks the LIVE embedded editor (if open) to render the
+   * named diagram to an image and persist it next to the `.drawio` file. No-op
+   * when no panel/editor is open for the session.
+   */
+  diagram_export_request: (payload: { path: string; format: 'svg' | 'png' }) => void;
 }

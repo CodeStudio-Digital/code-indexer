@@ -23,6 +23,8 @@ export interface LspSpawnSpec {
   env?: Record<string, string>;
   rootPath: string;
   initializationOptions?: unknown;
+  /** Config dinâmica per-projeto para `workspace/configuration` (language level). */
+  resolveConfig?: (section: string | null) => unknown;
 }
 
 const INIT_TIMEOUT_MS = 30_000;
@@ -34,6 +36,8 @@ export class LspServerHandle {
   capabilities: ServerCapabilities = {};
   /** Tail of stderr for crash forensics. */
   stderrTail = '';
+  /** URIs já abertas no server (dedup do didOpen + base do ensureOpen — W3). */
+  private opened = new Set<string>();
   private child: ChildProcessWithoutNullStreams;
   private rpc: LspRpcClient;
   private readyPromise: Promise<void>;
@@ -59,7 +63,7 @@ export class LspServerHandle {
       windowsHide: true,
       shell: false, // absolute command path — never .cmd shims here
     });
-    this.rpc = new LspRpcClient(this.child, hooks.log);
+    this.rpc = new LspRpcClient(this.child, hooks.log, spec.resolveConfig);
 
     this.child.stderr.on('data', (chunk: Buffer) => {
       this.stderrTail = (this.stderrTail + chunk.toString('utf-8')).slice(-STDERR_RING);
@@ -142,9 +146,21 @@ export class LspServerHandle {
   }
 
   didOpen(absPath: string, languageId: string, version: number, text: string): void {
+    const uri = pathToUri(absPath);
+    this.opened.add(uri);
     this.rpc.notify('textDocument/didOpen', {
-      textDocument: { uri: pathToUri(absPath), languageId, version, text },
+      textDocument: { uri, languageId, version, text },
     });
+  }
+
+  /**
+   * Garante que o buffer está aberto no server ANTES de uma completion/hover/etc. (W3):
+   * sem isto, uma completion pode chegar antes do didOpen (replay/race no spawn) e o
+   * server responde [] para um doc que "não conhece" — causa-raiz do P2. Idempotente.
+   */
+  ensureOpen(absPath: string, languageId: string, version: number, text: string): void {
+    if (this.opened.has(pathToUri(absPath))) return;
+    this.didOpen(absPath, languageId, version, text);
   }
 
   didChange(
@@ -164,7 +180,9 @@ export class LspServerHandle {
   }
 
   didClose(absPath: string): void {
-    this.rpc.notify('textDocument/didClose', { textDocument: { uri: pathToUri(absPath) } });
+    const uri = pathToUri(absPath);
+    this.opened.delete(uri);
+    this.rpc.notify('textDocument/didClose', { textDocument: { uri } });
   }
 
   completion(

@@ -42,7 +42,12 @@ export async function detectMergeKind(
     gitPath(runGit, repoRoot, 'rebase-apply'),
   ]);
   if ((await exists(rebaseMerge)) || (await exists(rebaseApply))) {
-    return { kind: 'rebase', incomingSha: await firstLine(await gitPath(runGit, repoRoot, 'rebase-merge/stopped-sha')) };
+    // Merge-backend rebase records the stopped commit in rebase-merge/stopped-sha;
+    // the am/apply backend has no such file — its sha lives in rebase-apply/original-commit.
+    const sha =
+      (await firstLine(await gitPath(runGit, repoRoot, 'rebase-merge/stopped-sha'))) ??
+      (await firstLine(await gitPath(runGit, repoRoot, 'rebase-apply/original-commit')));
+    return { kind: 'rebase', incomingSha: sha };
   }
   const revertHead = await gitPath(runGit, repoRoot, 'REVERT_HEAD');
   if (await exists(revertHead)) return { kind: 'revert', incomingSha: await firstLine(revertHead) };

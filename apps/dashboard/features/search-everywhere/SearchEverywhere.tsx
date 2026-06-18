@@ -11,7 +11,7 @@ import { Input } from '../../components/ui/input.js';
 import { Braces, FileCode2, History, SquareTerminal, Text } from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
 import { rankPath } from '../../lib/fuzzy.js';
-import { fileIconFor } from '../../lib/file-icon.js';
+import { FileIcon } from '../../components/FileIcon.js';
 import { cn } from '../../lib/utils.js';
 import { listCommands, executeCommand } from '../../keymap/commands.js';
 import { bindingLabel } from '../../keymap/keymap-store.js';
@@ -225,12 +225,11 @@ function SeRow({ item, active, onPick, onHover }: { item: Item; active: boolean;
     );
   }
   const path = item.path;
-  const { Icon, colorClass } = fileIconFor(path);
   const Lead = item.kind === 'recent' ? History : item.kind === 'text' ? Text : FileCode2;
   return (
     <button type="button" className={base} onClick={onPick} onMouseMove={onHover}>
       {item.kind === 'file' ? (
-        <Icon className={cn('h-3.5 w-3.5 shrink-0', colorClass)} />
+        <FileIcon path={path} className="h-3.5 w-3.5" />
       ) : (
         <Lead className="h-3.5 w-3.5 shrink-0 text-muted-foreground/80" />
       )}

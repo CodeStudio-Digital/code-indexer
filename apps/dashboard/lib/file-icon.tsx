@@ -29,6 +29,7 @@ import {
   Settings,
   Sparkles,
   Terminal,
+  Workflow,
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
@@ -75,6 +76,7 @@ export function fileIconFor(path: string): FileIconSpec {
     case 'md': case 'markdown': case 'mdx': return { Icon: FileText, colorClass: 'text-blue-300' };
     case 'html': case 'htm':                return { Icon: Code2, colorClass: 'text-orange-400' };
     case 'xml': case 'svg':                 return { Icon: Code2, colorClass: 'text-orange-300' };
+    case 'drawio':                          return { Icon: Workflow, colorClass: 'text-violet-300' };
 
     // Style
     case 'css':  return { Icon: Sparkles, colorClass: 'text-sky-300' };

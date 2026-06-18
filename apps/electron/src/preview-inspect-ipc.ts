@@ -71,10 +71,15 @@ export function mountPreviewInspectIpc(service: PreviewWindowService): void {
     'api:previewInspect:captureRegion',
     async (_e, input: { projectId: number; clip: { x: number; y: number; width: number; height: number } }) => {
       try {
+        // Fail fast on a degenerate clip — mirrors the inline path
+        // (preview-capture-ipc.ts). Without this, service.ts silently drops the
+        // clip and captures the WHOLE page, attaching the wrong screenshot.
+        const c = input.clip;
+        if (!c || !(c.width > 0) || !(c.height > 0)) throw new Error('captureRegion: empty clip');
         const res = (await service.invoke({
           key: inspectKey(input.projectId),
           method: 'screenshot',
-          args: { clip: input.clip },
+          args: { clip: c },
         })) as { base64?: string };
         return ok({ base64: res?.base64 ?? null });
       } catch (err) {

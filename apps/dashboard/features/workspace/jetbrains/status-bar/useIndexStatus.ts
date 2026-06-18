@@ -7,7 +7,7 @@
  * ~150ms server-side), so there is no polling.
  */
 import { useEffect, useState } from 'react';
-import { apiStream, electronApi } from '../../../../lib/api-client.js';
+import { subscribeShared } from '../../../../hooks/shared-stream.js';
 import type { ProjectIndexStatus } from '@mcp/api-bus';
 
 export type { ProjectIndexStatus };
@@ -17,39 +17,28 @@ export function useIndexStatus(projectId: number): ProjectIndexStatus | null {
 
   useEffect(() => {
     setStatus(null);
-    let cancelled = false;
-    let es: EventSource | null = null;
-    let closeIterator: (() => void) | null = null;
+    // No project (e.g. a chat with no session selected passes 0) — never open a
+    // stream for a non-positive id (the route 404s and EventSource would retry
+    // in a loop in browser-dev). Hardens every caller.
+    if (!Number.isInteger(projectId) || projectId <= 0) return;
 
-    if (electronApi()) {
-      const it = apiStream<ProjectIndexStatus>('projects.indexStatusStream', { id: projectId })[Symbol.asyncIterator]();
-      closeIterator = () => { void it.return?.(); };
-      void (async () => {
-        try {
-          while (!cancelled) {
-            const r = await it.next();
-            if (r.done || cancelled) break;
-            setStatus(r.value);
-          }
-        } catch {
-          /* stream closed (navigation/unmount) — nothing to surface */
-        }
-      })();
-    } else {
-      es = new EventSource(`/api/projects/${projectId}/index-status/stream`);
-      es.addEventListener('status', (ev) => {
-        if (cancelled) return;
-        try { setStatus(JSON.parse((ev as MessageEvent).data) as ProjectIndexStatus); } catch { /* ignore bad frame */ }
-      });
-      // EventSource auto-reconnects; the reopened stream re-sends the
-      // initial frame, so no manual recovery needed.
-    }
-
-    return () => {
-      cancelled = true;
-      closeIterator?.();
-      es?.close();
-    };
+    // Shared per-project subscription: the status bar, the chat composer gate
+    // and any other consumer of the SAME projectId now ride ONE stream instead
+    // of opening N. `replay: 'last'` re-delivers the current snapshot to a late
+    // joiner, so a second consumer is up to date instantly (no wait for the
+    // next transition). EventSource auto-reconnects; the Electron iterator
+    // re-sends its initial frame on reopen, so no manual retry is needed here.
+    return subscribeShared<ProjectIndexStatus>(
+      {
+        key: `indexStatus:${projectId}`,
+        electronVerb: 'projects.indexStatusStream',
+        electronArgs: { id: projectId },
+        sseUrl: `/api/projects/${projectId}/index-status/stream`,
+        sseEvent: 'status',
+        replay: 'last',
+      },
+      (frame) => setStatus(frame),
+    );
   }, [projectId]);
 
   return status;

@@ -24,6 +24,7 @@ import { bumpRecovery } from '../machine/context.js';
 import { recoveryCap } from '../recovery-config.js';
 import { compactWithLLM } from '../compaction/llm-compactor.js';
 import { computeProtectTokens, resolveRecedeTailRatio } from '../compaction/threshold.js';
+import { spillOversizedToolResults } from '../compaction/spill-oversized.js';
 
 export interface CompactingNodeOptions {
   /**
@@ -109,9 +110,42 @@ export class CompactingNode implements BehaviorNode {
     ctx.consecutiveNoTextTurns = 0;
 
     if (result.collapsedFrom === 0) {
-      // Nothing collapsed — either history already fits, or the tail is
-      // irreducible (recede found no compactable head). Count consecutive
-      // no-ops so the post-turn size gate can stop re-triggering us forever.
+      // P1 — the no-op is usually because a single recent `tool_result` exceeds
+      // the protected tail (`cutoff >= length`): the summarizer keeps the tail
+      // verbatim, so it can't shrink the block that's blowing the window.
+      // Deterministically spill those oversized blocks to the side-file store
+      // (recoverable via `get_tool_output`) so the next pass has real room.
+      // This is a genuine reduction — NOT the "nothing to do" no-op below.
+      const spill = spillOversizedToolResults({
+        messages: ctx.messages,
+        protectTokens,
+        store: ctx.opts.toolContext.toolOutputStore,
+      });
+      // Require real freed space (not just a touched block) before treating
+      // this as a reduction — otherwise a zero-progress spill would keep
+      // resetting the no-op streak and starve the pre-emit irreducible bypass.
+      if (spill.spilled > 0 && spill.freedChars > 0) {
+        ctx.messages = spill.messages;
+        // A real reduction freed space — clear the no-op streak and the
+        // compact-failure breaker, same as the summarizer path below.
+        ctx.consecutiveNoopCompactions = 0;
+        ctx.recovery.set('compact-failure', 0);
+        ctx.injectionState.recentCompactionAt = ctx.turn;
+        const charsAfter = approxChars(ctx.messages);
+        ctx.emit('history_compacted', {
+          strategy: 'deterministic',
+          pruned_messages: 0,
+          pruned_chars: spill.freedChars,
+          total_chars_before: charsBefore,
+          total_chars_after: charsAfter,
+          auto_continue: ctx.autoContinues,
+        });
+        return events.compactionDone({ collapsedFrom: 0, collapsedTo: 0 });
+      }
+      // Nothing collapsed AND nothing to spill — either history already fits, or
+      // the tail is irreducible by us (e.g. a huge user message). Count
+      // consecutive no-ops so the pre-emit / post-turn gates stop re-triggering
+      // us forever (the pre-emit gate then sends the request as-is).
       ctx.consecutiveNoopCompactions += 1;
       // Emit a `none` strategy event so the dashboard sees we considered
       // compaction and chose to skip.

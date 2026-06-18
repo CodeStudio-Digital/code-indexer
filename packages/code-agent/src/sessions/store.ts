@@ -78,6 +78,10 @@ export class SessionStore {
   getSessionProjects(sessionId: number): LinkedProject[] { return sessionProjects.listLinked(this.db, sessionId); }
   linkSessionProject(sessionId: number, projectId: number, opts: { label?: string | null; isPrimary?: boolean } = {}): void { sessionProjects.add(this.db, sessionId, projectId, opts); }
   unlinkSessionProject(sessionId: number, projectId: number): void { sessionProjects.remove(this.db, sessionId, projectId); }
+  /** Count sessions referencing a project — refcount for synthetic global workspaces. */
+  countSessionsForProject(projectId: number): number { return core.countSessionsForProject(this.db, projectId); }
+  /** Canonical real-project links of a synthetic union (from any sibling session). */
+  listUnionProjects(syntheticProjectId: number): LinkedProject[] { return core.listUnionProjects(this.db, syntheticProjectId); }
   deleteSession(id: number): void { core.del(this.db, id); }
   deleteSessionsBatch(ids: number[]): number { return core.delBatch(this.db, ids); }
   recoverStaleSessions(): number { return core.recoverStale(this.db); }
@@ -187,8 +191,8 @@ export class SessionStore {
   // ─── Session Drive: memory + investigations (migrations 125, 126) ──
   rememberMemory(sessionId: number, input: sessionDrive.RememberInput): sessionDrive.SessionMemoryRow { return sessionDrive.remember(this.db, sessionId, input); }
   listSessionMemory(sessionId: number, opts: { kind?: string } = {}): sessionDrive.SessionMemoryRow[] { return sessionDrive.listMemory(this.db, sessionId, opts); }
-  setSessionMemoryPinned(id: number, pinned: boolean): void { sessionDrive.setMemoryPinned(this.db, id, pinned); }
-  deleteSessionMemory(id: number): boolean { return sessionDrive.deleteMemory(this.db, id); }
+  setSessionMemoryPinned(sessionId: number, id: number, pinned: boolean): boolean { return sessionDrive.setMemoryPinned(this.db, sessionId, id, pinned); }
+  deleteSessionMemory(sessionId: number, id: number): boolean { return sessionDrive.deleteMemory(this.db, sessionId, id); }
   copySessionMemory(fromSessionId: number, toSessionId: number): number { return sessionDrive.copyMemory(this.db, fromSessionId, toSessionId); }
   recordInvestigation(input: sessionDrive.RecordInvestigationInput): sessionDrive.InvestigationRow { return sessionDrive.recordInvestigation(this.db, input); }
   setInvestigationEmbedding(id: number, embedding: Float32Array): void { sessionDrive.setInvestigationEmbedding(this.db, id, embedding); }

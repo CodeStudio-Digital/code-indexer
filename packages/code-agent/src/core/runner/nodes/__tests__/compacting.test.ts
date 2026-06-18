@@ -17,6 +17,12 @@ function user(text: string): AgentMessage {
 function assistant(text: string): AgentMessage {
   return { role: 'assistant', content: [{ type: 'text', text }] };
 }
+function toolUse(id: string): AgentMessage {
+  return { role: 'assistant', content: [{ type: 'tool_use', id, name: 'run', input: {} }] };
+}
+function toolResult(id: string, content: string): AgentMessage {
+  return { role: 'tool', content: [{ type: 'tool_result', tool_use_id: id, content }] };
+}
 
 const STUB_SUMMARY: CompactionSummaryV2 = {
   primary_request: 'build the thing',
@@ -136,6 +142,36 @@ describe('CompactingNode', () => {
 
     await new CompactingNode({ summarizeOverride: async () => STUB_SUMMARY }).execute(ctx, null);
     expect(ctx.consecutiveNoopCompactions).toBe(2);
+  });
+
+  it('P1: spills an oversized tool_result on no-op instead of looping (deterministic)', async () => {
+    const puts: string[] = [];
+    const store = { put: (c: string) => { puts.push(c); return `oid-${puts.length}`; } };
+    const { ctx, recordedEvents } = makeTestContext({
+      toolContext: { toolOutputStore: store } as never,
+    });
+    const big = 'x'.repeat(8000); // ~2000 tokens — far exceeds the protect override
+    ctx.messages = [user('run the tool'), toolUse('tu1'), toolResult('tu1', big)];
+    ctx.consecutiveNoopCompactions = 1; // a prior no-op streak
+
+    // summarize must NOT be called on the spill path (cutoff >= length no-ops first).
+    let summarizeCalls = 0;
+    const event = await new CompactingNode({
+      protectTokensOverride: 100,
+      summarizeOverride: async () => { summarizeCalls += 1; return STUB_SUMMARY; },
+    }).execute(ctx, null);
+
+    expect(event.kind).toBe('CompactionDone');
+    expect(summarizeCalls).toBe(0);
+    // Spill is a REAL reduction → the no-op streak is cleared, not incremented.
+    expect(ctx.consecutiveNoopCompactions).toBe(0);
+    // The oversized block was replaced with a capped head + recovery marker.
+    const block = ctx.messages[2].content[0] as { content: string };
+    expect(block.content.length).toBeLessThan(big.length);
+    expect(block.content).toContain('get_tool_output');
+    expect(puts).toEqual([big]);
+    const hist = recordedEvents.find((r) => r.event === 'history_compacted');
+    expect((hist!.args[0] as { strategy: string }).strategy).toBe('deterministic');
   });
 
   it('resets consecutiveNoopCompactions on a real compaction', async () => {

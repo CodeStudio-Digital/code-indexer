@@ -4,7 +4,7 @@
  *
  *   - Map           — files read vs changed (guide files)
  *   - Memory        — durable notes (remember tool), survive compaction
- *   - Investigations — auto-captured sub-agent explorations (project-scoped)
+ *   - Investigations — auto-captured sub-agent explorations (this session)
  *   - Plans         — submitted plan + task statuses
  *
  * Headless view (mirrors ToolStatsView): fetches when `active`, refetches on

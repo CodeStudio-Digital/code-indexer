@@ -42,6 +42,13 @@ export interface PersistAssistantTurnPayload {
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
   };
+  /**
+   * In-flight-turn checkpoint reconciliation — mirrors
+   * `PersistAssistantTurnInput.existing_message_id` in
+   * store/messages.ts. When set, the assistant row already exists (written by
+   * an `awaiting_input` checkpoint); reuse it instead of inserting a duplicate.
+   */
+  existing_message_id?: number;
 }
 
 export type DbWriteReq =

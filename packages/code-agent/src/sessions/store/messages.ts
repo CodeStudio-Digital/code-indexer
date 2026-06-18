@@ -116,6 +116,15 @@ export interface PersistAssistantTurnInput {
    */
   nested_tool_calls?: Array<Omit<AppendToolCallInput, 'message_id'>>;
   subagent_usage?: AppendMessageUsage;
+  /**
+   * In-flight-turn checkpoint reconciliation. When set, the assistant message
+   * row was ALREADY inserted by an earlier `awaiting_input` checkpoint (with
+   * `tool_calls: []`), so this call must NOT insert a second assistant row —
+   * it reuses this `message_id` for the tool-call audit rows + the paired
+   * `tool` message + the usage bump. Without it, completing a checkpointed
+   * turn at the next flush would duplicate the assistant message.
+   */
+  existing_message_id?: number;
 }
 
 /**
@@ -133,6 +142,14 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const touchSession = db.prepare("UPDATE coder_sessions SET updated_at = datetime('now') WHERE id = ?");
+  // Backfill the per-message token columns of a checkpointed assistant row at
+  // completion time (the checkpoint wrote them as 0). Keeps SUM(input_tokens)
+  // recomputes — e.g. the message-rollback path — accurate.
+  const updateMsgUsage = db.prepare(`
+    UPDATE coder_messages
+       SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_creation_tokens = ?
+     WHERE id = ?
+  `);
   const insertTool = db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
@@ -152,16 +169,32 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
   `);
 
   const tx = db.transaction(() => {
-    const r = insertMsg.run(
-      input.session_id,
-      input.message.role,
-      JSON.stringify(input.message.content),
-      input.usage?.input_tokens ?? 0,
-      input.usage?.output_tokens ?? 0,
-      input.usage?.cache_read_input_tokens ?? 0,
-      input.usage?.cache_creation_input_tokens ?? 0,
-    );
-    const messageId = Number(r.lastInsertRowid);
+    // When completing a checkpointed turn, the assistant row already exists —
+    // reuse its id instead of inserting a duplicate. Otherwise insert fresh.
+    let messageId: number;
+    if (input.existing_message_id != null) {
+      messageId = input.existing_message_id;
+      if (input.usage) {
+        updateMsgUsage.run(
+          input.usage.input_tokens,
+          input.usage.output_tokens,
+          input.usage.cache_read_input_tokens ?? 0,
+          input.usage.cache_creation_input_tokens ?? 0,
+          messageId,
+        );
+      }
+    } else {
+      const r = insertMsg.run(
+        input.session_id,
+        input.message.role,
+        JSON.stringify(input.message.content),
+        input.usage?.input_tokens ?? 0,
+        input.usage?.output_tokens ?? 0,
+        input.usage?.cache_read_input_tokens ?? 0,
+        input.usage?.cache_creation_input_tokens ?? 0,
+      );
+      messageId = Number(r.lastInsertRowid);
+    }
     touchSession.run(input.session_id);
     const runInsertTool = (tc: Omit<AppendToolCallInput, 'message_id'>): void => {
       insertTool.run(

@@ -339,7 +339,22 @@ export class ExecutingNode implements BehaviorNode {
       // from compacting prematurely (or never) before the provider call.
       calibration: ctx.estimateCalibration ?? 1,
     });
-    if (preEmit.shouldCompact) {
+    // P2 — irreducible-context bypass. The Compacting node may already have
+    // PROVEN (via consecutive no-ops) that there's no compactable head: a
+    // single recent message (typically a large tool_result) exceeds the
+    // protected tail, so summarizing the head can never bring the projection
+    // down. Routing into Compacting again just burns passes until the
+    // `compact_exhausted` abort below — killing a run whose request is still
+    // WITHIN the hard window (the 0.90 gate is a safety margin, not a ceiling;
+    // `effective` already reserves output room). Mirror the post-turn
+    // suppression gate: when irreducible AND the projection still fits the
+    // effective window, send the request as-is instead of looping/aborting.
+    const preEmitIrreducible =
+      preEmit.shouldCompact &&
+      ctx.consecutiveNoopCompactions >=
+        (Number(process.env.CODER_POSTTURN_COMPACT_NOOP_MAX ?? '2') || 2) &&
+      preEmit.projectedTokens <= preEmit.effective;
+    if (preEmit.shouldCompact && !preEmitIrreducible) {
       // The decrement below means `maxTurns` can't backstop a pre-emit
       // compaction that keeps firing without ever freeing the window
       // (e.g. the protected tail alone exceeds 90%, or a huge tool_result
@@ -369,8 +384,17 @@ export class ExecutingNode implements BehaviorNode {
       ctx.turn = Math.max(0, ctx.turn - 1);
       return events.tokenThresholdHit({ ratio: preEmit.ratio });
     }
-    // Gate passed — any prior compaction freed enough room, so reset the
-    // consecutive-pre-emit counter. A future runaway starts counting fresh.
+    if (preEmitIrreducible) {
+      dbg(
+        `pre-emit suppressed — context irreducible after ` +
+        `${ctx.consecutiveNoopCompactions} no-op pass(es): sending as-is ` +
+        `(projected=${preEmit.projectedTokens} effective=${preEmit.effective} ` +
+        `ratio=${preEmit.ratio.toFixed(3)})`,
+      );
+    }
+    // Gate passed (or suppressed as irreducible) — any prior compaction freed
+    // enough room, so reset the consecutive-pre-emit counter. A future runaway
+    // starts counting fresh.
     ctx.preEmitCompactions = 0;
 
     const tempResolution = ctx.bridge?.resolveTemperature?.();
@@ -640,7 +664,14 @@ export class ExecutingNode implements BehaviorNode {
       // model is delivering its final reply.
       runQualityCheck(ctx, joinText(result.textBlocks), [], result.toolUses);
       runPersistTelemetry([]);
-      ctx.stopReason = 'completed';
+      // Telemetry accuracy: if plan mode is active and no plan was ever
+      // approved (the one-shot nudge was already spent), the run finished
+      // WITHOUT delivering a plan — flag it as 'plan_required' rather than a
+      // clean 'completed' so monitoring can distinguish the two.
+      ctx.stopReason =
+        ctx.opts.planMode && ctx.bridge?.isPlanApproved?.() === false
+          ? 'plan_required'
+          : 'completed';
       return events.cleanFinish();
     }
 

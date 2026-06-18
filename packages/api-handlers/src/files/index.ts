@@ -17,25 +17,20 @@ import { promises as fs } from 'node:fs';
 import { ApiError, type FilesApi, type FileTreeNode } from '@mcp/api-bus';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
+import { TREE_BLOCK } from '@mcp/shared/utils/fs-ignore.js';
 import type { HandlerDeps } from '../types.js';
+import { createDirCache } from './dir-cache.js';
+import { captureLocalHistory } from './local-history.js';
+import { createHistoryHandlers } from './history-handlers.js';
 
-/**
- * Default directory blocklist for `tree`. Anything matching is hidden
- * to keep the IDE's file explorer responsive (a `node_modules` walk
- * would dominate the response).
- */
-const TREE_BLOCK = new Set([
-  'node_modules', '.git', 'dist', 'build', '.next', '.turbo', '.cache',
-  '.venv', 'venv', '__pycache__', '.pytest_cache', 'target', '.idea',
-  '.vscode', '.DS_Store',
-]);
+// Blocklist de diretórios do `tree` — fonte única em @mcp/shared/utils/fs-ignore.
 
 /**
  * Resolve a project-relative path to an absolute one, refusing any
  * resolved path that escapes the project's `root_path`. Returns the
  * absolute path. Throws ApiError(403) on traversal attempts.
  */
-function resolveSafe(rootPath: string, rel: string): string {
+export function resolveSafe(rootPath: string, rel: string): string {
   const normalizedRoot = path.resolve(rootPath);
   const candidate = path.resolve(normalizedRoot, rel);
   // path.relative returns '..' if the candidate escapes root.
@@ -48,6 +43,9 @@ function resolveSafe(rootPath: string, rel: string): string {
 
 export function createFilesHandlers(deps: HandlerDeps): FilesApi {
   const { db } = deps;
+  // Cache TTL-curto do fast path de `tree` (W2/P3). Flag MCP_TREE_DIR_CACHE=0 = rollback.
+  const dirCache = createDirCache();
+  const cacheEnabled = (): boolean => process.env.MCP_TREE_DIR_CACHE !== '0';
 
   function requireProject(projectId: number) {
     const project = db.getProject(projectId);
@@ -56,6 +54,8 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
   }
 
   return {
+    ...createHistoryHandlers(deps),
+
     async list({ projectId }) {
       return db.listFiles(projectId);
     },
@@ -102,6 +102,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       const project = requireProject(projectId);
       const abs = resolveSafe(project.root_path, rel);
       const buf = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8');
+      // Local History: snapshot da PRÉ-imagem ANTES de sobrescrever (a leitura
+      // precisa preceder o write, senão os bytes antigos já se foram). Fail-open
+      // por dentro — jamais rejeita o save.
+      await captureLocalHistory(deps, projectId, rel, { kind: 'save', readFrom: abs });
       // Ensure parent dir exists — saving a new file under a fresh folder
       // (common when scaffolding) shouldn't require a separate mkdir call.
       await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -110,6 +114,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       // Fast-path: symbols/FTS fresh in ~ms instead of waiting for the
       // chokidar debounce (the watcher event later short-circuits on hash).
       deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'upsert' }]);
+      dirCache.invalidate(projectId, rel); // próximo tree do parent reflete o arquivo novo
       return { ok: true as const, last_modified: stat.mtime.toISOString() };
     },
 
@@ -126,9 +131,12 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           await fs.rm(abs, { recursive: recursive ?? false, force: false });
           // Children removals arrive via the watcher (per-file unlink events).
         } else {
+          // Local History: snapshot ANTES do unlink → deleção recuperável.
+          await captureLocalHistory(deps, projectId, rel, { kind: 'pre-delete', readFrom: abs });
           await fs.unlink(abs);
           deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'delete' }]);
         }
+        dirCache.invalidate(projectId, rel);
         return { ok: true as const };
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
@@ -170,6 +178,8 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           { path: to.replace(/\\/g, '/'), kind: 'upsert' },
         ]);
       }
+      dirCache.invalidate(projectId, from);
+      dirCache.invalidate(projectId, to);
       return { ok: true as const, last_modified: lastModified };
     },
 
@@ -182,6 +192,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       deps.projectIndexService.publishFsEvents(projectId, [
         { path: rel.replace(/\\/g, '/'), kind: 'upsert', isDir: true },
       ]);
+      dirCache.invalidate(projectId, rel);
       return { ok: true as const };
     },
 
@@ -197,6 +208,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       // optimistically for dirs (IntelliJ/VS Code do the same — an empty
       // dir just expands to nothing).
       if (maxDepth <= 1) {
+        if (cacheEnabled()) {
+          const cached = dirCache.get(projectId, startRel);
+          if (cached) return cached;
+        }
         const entries = await fs.readdir(startAbs, { withFileTypes: true }).catch(() => []);
         const filtered = entries.filter((e) => !TREE_BLOCK.has(e.name));
         const children = await Promise.all(filtered.map(async (e): Promise<FileTreeNode> => {
@@ -216,12 +231,14 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
-        return {
+        const node: FileTreeNode = {
           name: path.basename(startAbs) || project.name,
           path: startRel,
           type: 'dir',
           children,
         };
+        if (cacheEnabled()) dirCache.set(projectId, startRel, node);
+        return node;
       }
 
       async function walk(absPath: string, relPath: string, depth: number): Promise<FileTreeNode> {

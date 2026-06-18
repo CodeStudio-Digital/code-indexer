@@ -100,6 +100,18 @@ describe('mcpCollectRegion', () => {
     expect(out.map((d) => d.loc)).toEqual(['BIG']);
   });
 
+  it('skips elements whose describe() returns null (e.g. the toolbar host)', () => {
+    const body = makeEl(rect(0, 0, 1000, 1000));
+    const { mcpCollectRegion } = loadApi(body);
+    const toolbar = makeEl(rect(10, 10, 30, 30), { 'data-mcp-loc': 'TB' }, body);
+    const real = makeEl(rect(50, 10, 30, 30), { 'data-mcp-loc': 'R' }, body);
+    const out = mcpCollectRegion(
+      { x: 0, y: 0, width: 100, height: 100 },
+      { all: () => [toolbar, real], describe: (el) => (el === toolbar ? null : describeLoc(el)) },
+    );
+    expect(out.map((d) => d.loc)).toEqual(['R']);
+  });
+
   it('skips marquee/overlay and zero-size elements', () => {
     const body = makeEl(rect(0, 0, 1000, 1000));
     const { mcpCollectRegion } = loadApi(body);

@@ -1,5 +1,5 @@
-/** Kernel-port adapters backed by the workerd runtime (Date / WebCrypto / console). */
-import type { Clock, IdGen, Logger, RandomSource } from '@cloudstudio/cloud-kernel';
+/** Kernel-port adapters backed by the workerd runtime (Date / WebCrypto). */
+import type { Clock, IdGen } from '@cloudstudio/cloud-kernel';
 
 export const systemClock: Clock = {
   now: () => Date.now(),
@@ -19,16 +19,3 @@ export const cryptoIdGen: IdGen = {
   },
 };
 
-export const webCryptoRandom: RandomSource = {
-  bytes: (n: number) => {
-    const b = new Uint8Array(n);
-    crypto.getRandomValues(b);
-    return b;
-  },
-};
-
-export const consoleLogger: Logger = {
-  info: (m, f) => console.log(JSON.stringify({ level: 'info', m, ...f })),
-  warn: (m, f) => console.warn(JSON.stringify({ level: 'warn', m, ...f })),
-  error: (m, f) => console.error(JSON.stringify({ level: 'error', m, ...f })),
-};

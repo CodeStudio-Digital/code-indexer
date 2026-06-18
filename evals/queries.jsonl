@@ -1,6 +1,5 @@
 {"query": "hybrid search RRF merge", "relevant_files": ["packages/indexer/src/search/hybrid.ts"]}
 {"query": "how does contextual retrieval prepend context before embedding", "relevant_files": ["packages/indexer/src/indexer/indexer/embedding-candidates.ts", "packages/indexer/src/indexer/indexer.ts"]}
-{"query": "context bundle token budget and dedup", "relevant_files": ["packages/indexer/src/search/context-bundle.ts"]}
 {"query": "tree-sitter symbol extractor", "relevant_files": ["packages/indexer/src/indexer/tree-sitter/extractor.ts"]}
 {"query": "vector store abstraction", "relevant_files": ["packages/store/src/vectors.ts"]}
 {"query": "cloudflare BGE embeddings service", "relevant_files": ["packages/indexer/src/search/embeddings.ts"]}

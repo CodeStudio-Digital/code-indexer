@@ -135,14 +135,8 @@ import {
   UNRESTRICTED_PUSH_TIME_CAP,
   UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP,
   REPEATABLE_NAME_PATTERN,
-  REPEATABLE_WINDOW,
   POLLING_STUCK_CAP,
   POLLING_STUCK_MIN_CHARS,
-  DUP_CALL_REMINDER_THRESHOLD,
-  SUMMARIZER_MAX_RUNS,
-  SUMMARIZER_COOLDOWN_TURNS,
-  RESULT_DUP_LARGE_THRESHOLD,
-  RESULT_DUP_HEAD_CHARS,
   canRunSummarizer,
 } from './runner/constants.js';
 export { canRunSummarizer };
@@ -257,6 +251,7 @@ import {
   finalizeToolOutput,
 } from './runner/pure-helpers.js';
 export { approxChars, shouldSpillToolOutput, capToolContent };
+import { resolveFinalizeCap } from './runner/compaction/threshold.js';
 
 /**
  * Build a tool_result block, applying push-time truncation if the content
@@ -1615,6 +1610,12 @@ export class CoderRunner extends EventEmitter {
    */
   waitForUserInput(askId?: string): Promise<string> {
     const key = askId ?? CoderRunner.DEFAULT_INPUT_KEY;
+    // Signal the host that this turn is about to block indefinitely so it can
+    // durably checkpoint the in-flight assistant message (incl. the pending
+    // interactive tool_use). Without this, a quit/close before the user
+    // approves loses the whole turn — the unflushed pause cannot be resumed
+    // (see findPendingInteraction in apps/http-api .../coder/state.ts).
+    this.emit('awaiting_input', { askId: key });
     return new Promise((resolve) => {
       this.pendingResolves.set(key, resolve);
     });
@@ -2298,11 +2299,16 @@ export class CoderRunner extends EventEmitter {
     shapedContent: string;
     isError: boolean;
   }): { content: string; truncated?: boolean; originalSize?: number } {
+    // P3 — clamp the user's cap with a context-relative ceiling so a single
+    // tool_result can't exceed the protected tail and deadlock compaction
+    // (`compact_exhausted`). `Infinity` ceiling (knob off) → user cap only.
+    // Resolved from the CURRENT provider model so it tracks `swapProvider`.
+    const cap = resolveFinalizeCap(this.effectivePushTimeCap, this.opts.provider.model);
     return finalizeToolOutput({
       rawContent: args.rawContent,
       shapedContent: args.shapedContent,
       isError: args.isError,
-      cap: this.effectivePushTimeCap,
+      cap,
       store: this.opts.toolContext.toolOutputStore,
     });
   }

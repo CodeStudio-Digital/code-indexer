@@ -45,6 +45,16 @@ export type ProjectIndexPhase =
   | 'too_large'
   | 'error';
 
+/** The single in-flight index pass (mirrors services/project-index types). */
+export interface ActiveIndexRun {
+  kind: 'structural' | 'semantic' | 'embeddings';
+  current: number;
+  total: number;
+  currentFile?: string;
+  startedAt: number;
+  costUsd?: number;
+}
+
 export interface ProjectIndexStatus {
   projectId: number;
   phase: ProjectIndexPhase;
@@ -53,6 +63,9 @@ export interface ProjectIndexStatus {
   fileCount: number;
   symbolCount: number;
   semanticStaleCount: number;
+  /** The live pass — undefined when idle. Survives renderer remounts. */
+  activeRun?: ActiveIndexRun;
+  /** @deprecated Use {@link activeRun}. Kept in sync for the StatusBar chip. */
   progress?: { current: number; total: number };
   lastStructuralAt: string | null;
   lastSemanticAt: string | null;
@@ -68,6 +81,15 @@ export interface FsEventWire {
 
 export interface FsEventsFrame {
   events: FsEventWire[];
+}
+
+/** Live git-metadata change — branch switch / ref update / sequencer state. */
+export interface GitMetaFrame {
+  /** Current branch name, or null when HEAD is detached / unreadable. */
+  branch: string | null;
+  detached: boolean;
+  /** Distinct kinds of `.git` change observed in this coalesced batch. */
+  changed: Array<'head' | 'ref' | 'sequencer'>;
 }
 
 export interface CreateProjectInput {
@@ -216,6 +238,13 @@ export interface ProjectsApi {
    * open-tab external-change handling.
    */
   fsEventsStream(input: { id: number }, ctx: ApiContext): AsyncStream<FsEventsFrame>;
+
+  /**
+   * Live git-metadata events (HEAD/refs watcher), coalesced ~250ms. Subscribing
+   * arms the watcher. Fires on branch switch — in-app OR external `git checkout`
+   * — so the branch chip / git window / file-tree colors refresh on screen.
+   */
+  gitMetaStream(input: { id: number }, ctx: ApiContext): AsyncStream<GitMetaFrame>;
 
   /** One-shot index (no streaming progress). */
   index(input: { id: number } & IndexProjectInput, ctx: ApiContext): Promise<IndexResult>;

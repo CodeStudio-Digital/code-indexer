@@ -48,6 +48,12 @@ export function setSelected(sid: number, sel: SelectedElement | null): void {
   notify(sid);
 }
 
+/** Lift a region-pick payload (the `mcp:select` body without `type`) to a full
+ *  SelectedElement. Single source of truth for the preview→store wrappers. */
+export function payloadToSelected(p: Omit<SelectedElement, 'type'>): SelectedElement {
+  return { type: 'mcp:select', ...p } as SelectedElement;
+}
+
 /** Region/marquee pick: append several elements at once, deduped by key. */
 export function addSelections(sid: number, sels: SelectedElement[]): void {
   if (!sels.length) return;

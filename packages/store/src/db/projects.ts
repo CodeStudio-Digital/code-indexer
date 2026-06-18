@@ -1,12 +1,22 @@
 import type { Project } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 import { repairCodeFtsIndexes } from './schema/fts.js';
+import { FileLocalHistoryStore } from '../file-local-history-store.js';
+
+/** Limpa o Local History de um projeto (rows + blobs órfãos). Tolerante a schema sem a tabela. */
+function pruneLocalHistory(db: DB, projectId: number): void {
+  try {
+    new FileLocalHistoryStore(db).pruneForProject(projectId);
+  } catch (e) {
+    if (!/no such table|no such column/i.test((e as Error).message)) throw e;
+  }
+}
 
 type ProjectUpdates = Partial<Pick<Project,
   'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' |
   'last_indexed' | 'structural_indexed_at' | 'file_count' | 'symbol_count' |
   'embeddings_enabled' | 'search_mode' |
-  'node_version' | 'runner_shell' | 'builder_json'
+  'node_version' | 'runner_shell' | 'builder_json' | 'language_levels'
 >>;
 
 export function create(db: DB, name: string, rootPath: string, description?: string): Project {
@@ -46,7 +56,29 @@ export function getByPath(db: DB, rootPath: string): Project | undefined {
 export function list(db: DB): Project[] {
   // id 0 is the reserved hidden "__user__" project that holds user-scope
   // memory (migration 145) — never a real, listable project.
-  return db.prepare('SELECT * FROM projects WHERE id <> 0 ORDER BY name').all() as Project[];
+  // `is_synthetic` (migration 155) hides the virtual union projects backing
+  // global sessions — they're an implementation detail, not user-facing.
+  return db
+    .prepare("SELECT * FROM projects WHERE id <> 0 AND COALESCE(is_synthetic, 0) = 0 ORDER BY name")
+    .all() as Project[];
+}
+
+/** The synthetic global-session union projects (migration 155) — for the
+ *  "reuse workspace" picker. Hidden from the normal `list()`. */
+export function listSynthetic(db: DB): Project[] {
+  return db
+    .prepare("SELECT * FROM projects WHERE COALESCE(is_synthetic, 0) = 1 ORDER BY updated_at DESC")
+    .all() as Project[];
+}
+
+/** Mark a project as synthetic (a global-session virtual union) — hides it from
+ *  the project list (migration 155). */
+export function setSynthetic(db: DB, id: number, synthetic: boolean): void {
+  try {
+    db.prepare("UPDATE projects SET is_synthetic = ? WHERE id = ?").run(synthetic ? 1 : 0, id);
+  } catch {
+    /* pre-155 DB without the column — caller tolerates (synthetic stays implicit). */
+  }
 }
 
 export function update(db: DB, id: number, updates: ProjectUpdates): void {
@@ -67,6 +99,7 @@ export function update(db: DB, id: number, updates: ProjectUpdates): void {
 }
 
 export function del(db: DB, id: number): void {
+  pruneLocalHistory(db, id);
   db.prepare('DELETE FROM projects WHERE id = ?').run(id);
 }
 
@@ -107,6 +140,7 @@ export function clearData(db: DB, id: number): void {
         if (!/no such table|no such column/i.test((e as Error).message)) throw e;
       }
     }
+    pruneLocalHistory(db, projectId); // rows + blobs (decref correto)
     db.prepare(
       `UPDATE projects
          SET file_count = 0, symbol_count = 0, last_indexed = NULL,

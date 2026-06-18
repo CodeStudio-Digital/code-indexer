@@ -183,12 +183,13 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     key: 'CODER_PREFLIGHT_TIMEOUT_MS',
     label: 'Task preflight timeout (ms)',
     description:
-      'Hard ceiling for the preflight one-shot call; on timeout the call is cancelled and the session ' +
-      'starts unseeded. Headroom for a reasoning model\'s first round-trip — actual latency is ~1-2s ' +
-      'once reasoning is minimized.',
+      'Hard ceiling for the preflight one-shot call. The first message of a fresh session BLOCKS on ' +
+      'this analysis (the chat shows an "Analyzing the task…" indicator while it runs); on timeout the ' +
+      'call is cancelled and the session starts unseeded. Buffered providers (z.ai, ChatGPT) need ' +
+      '~10-12s for a complete response, so the default is generous.',
     type: 'int',
     category: 'agent',
-    default: '8000',
+    default: '20000',
     min: 500,
     advanced: true,
   },

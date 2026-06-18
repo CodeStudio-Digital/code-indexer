@@ -104,26 +104,43 @@ export function isVirtualTab(f: OpenTab): f is OpenDiff | OpenGitLog | OpenGitSt
 interface WorkspaceState {
   openFiles: OpenTab[];
   activeFilePath: string | null;
+  /**
+   * The project the editor is currently scoped to. The store holds tabs for
+   * exactly ONE project at a time — `setProject` persists the outgoing project's
+   * tabs and hydrates the incoming one. All views (tab bar, editor) filter by
+   * this so a tab/buffer from another project can never surface (P1 isolation).
+   */
+  activeProjectId: number | null;
 
+  /** Atomic project switch: persist outgoing tabs, drop them, hydrate incoming. */
+  setProject: (projectId: number) => void;
   openFile: (file: OpenFile) => void;
   openDiff: (diff: OpenDiff) => void;
   openGitLog: (tab: OpenGitLog) => void;
   openGitStash: (tab: OpenGitStash) => void;
   openMerge: (tab: OpenMerge) => void;
-  closeFile: (path: string) => void;
+  closeFile: (projectId: number, path: string) => void;
   /** Close every tab except the given one. Activates the survivor. */
-  closeOthers: (keepPath: string) => void;
+  closeOthers: (projectId: number, keepPath: string) => void;
   /** Close every tab to the right of the given one. Active stays put. */
-  closeToTheRight: (anchorPath: string) => void;
+  closeToTheRight: (projectId: number, anchorPath: string) => void;
   closeAll: () => void;
   setActive: (path: string | null) => void;
-  setContent: (path: string, content: string) => void;
-  markClean: (path: string, lastModified: string) => void;
+  setContent: (projectId: number, path: string, content: string) => void;
+  markClean: (projectId: number, path: string, lastModified: string) => void;
   /** External (disk) content landed on a NON-dirty tab — replace without dirtying. */
-  applyExternalContent: (path: string, content: string, lastModified: string | null) => void;
+  applyExternalContent: (projectId: number, path: string, content: string, lastModified: string | null) => void;
   /** Disk changed under a DIRTY tab — flag the conflict, keep the user's buffer. */
-  markExternallyChanged: (path: string) => void;
+  markExternallyChanged: (projectId: number, path: string) => void;
+  /** "Keep mine" — dismiss the external-change flag WITHOUT touching content/dirty. */
+  dismissExternalChange: (projectId: number, path: string) => void;
 }
+
+/** Tab identity is (path, projectId) — never path alone (two projects can share src/index.ts). */
+const sameTab = (
+  a: { path: string; projectId: number },
+  b: { path: string; projectId: number },
+): boolean => a.path === b.path && a.projectId === b.projectId;
 
 // ─── Tab persistence per project ──────────────────────────────────
 //
@@ -169,13 +186,16 @@ export function loadPersistedTabs(projectId: number): PersistedTabs {
 export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activeFilePath: string | null): void {
   if (typeof window === 'undefined') return;
   // Drop transient surfaces (diffs, git-log/git-stash views) — only real files persist.
+  // Filter to THIS project (defesa-em-profundidade): even if a caller passes the full
+  // openFiles[], we never write another project's tabs under this project's key.
   const realFiles = openFiles.filter(
     (f) =>
       f.kind !== 'diff' &&
       f.kind !== 'git-log' &&
       f.kind !== 'git-stash' &&
       f.kind !== 'merge' &&
-      !isIndexerInternalPath(f.path),
+      !isIndexerInternalPath(f.path) &&
+      f.projectId === projectId,
   );
   const payload: PersistedTabs = {
     openFiles: realFiles.map((f) => ({ projectId: f.projectId, path: f.path })),
@@ -191,16 +211,39 @@ export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activ
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   openFiles: [],
   activeFilePath: null,
+  activeProjectId: null,
+
+  setProject: (projectId) =>
+    set((s) => {
+      if (s.activeProjectId === projectId) return s; // idempotente
+      // Persiste as abas do projeto que SAI (filtradas por segurança), depois dropa-as
+      // da memória — o que permite ao janitor do editor-models dispor os modelos Monaco
+      // do projeto antigo (→ documentSync didClose). Hidrata o projeto que entra com
+      // content:null (refetch lazy na ativação, igual ao useEnsureFileContent).
+      if (s.activeProjectId !== null) {
+        savePersistedTabs(
+          s.activeProjectId,
+          s.openFiles.filter((f) => f.projectId === s.activeProjectId),
+          s.activeFilePath,
+        );
+      }
+      const persisted = loadPersistedTabs(projectId);
+      const hydrated: OpenTab[] = persisted.openFiles
+        .filter((e) => e.projectId === projectId) // guarda de migração p/ chaves contaminadas
+        .map((e) => ({ kind: 'file', projectId, path: e.path, content: null, dirty: false, lastModified: null }));
+      return { activeProjectId: projectId, openFiles: hydrated, activeFilePath: persisted.activeFilePath };
+    }),
 
   openFile: (file) =>
     set((s) => {
-      const existing = s.openFiles.findIndex((f) => f.path === file.path && f.projectId === file.projectId);
+      const existing = s.openFiles.findIndex((f) => sameTab(f, file));
       if (existing >= 0) {
-        return { ...s, activeFilePath: file.path };
+        return { ...s, activeFilePath: file.path, activeProjectId: file.projectId };
       }
       return {
         openFiles: [...s.openFiles, file],
         activeFilePath: file.path,
+        activeProjectId: file.projectId,
       };
     }),
 
@@ -260,9 +303,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       return { openFiles: [...s.openFiles, tab], activeFilePath: tab.path };
     }),
 
-  closeFile: (path) =>
+  closeFile: (projectId, path) =>
     set((s) => {
-      const idx = s.openFiles.findIndex((f) => f.path === path);
+      const idx = s.openFiles.findIndex((f) => sameTab(f, { path, projectId }));
       if (idx < 0) return s;
       const next = s.openFiles.filter((_, i) => i !== idx);
       // Activate the neighbor on close — preferring the right side (matches
@@ -274,16 +317,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       return { openFiles: next, activeFilePath: nextActive };
     }),
 
-  closeOthers: (keepPath) =>
+  closeOthers: (projectId, keepPath) =>
     set((s) => {
-      const survivor = s.openFiles.find((f) => f.path === keepPath);
+      const survivor = s.openFiles.find((f) => sameTab(f, { path: keepPath, projectId }));
       if (!survivor) return s;
       return { openFiles: [survivor], activeFilePath: keepPath };
     }),
 
-  closeToTheRight: (anchorPath) =>
+  closeToTheRight: (projectId, anchorPath) =>
     set((s) => {
-      const anchorIx = s.openFiles.findIndex((f) => f.path === anchorPath);
+      const anchorIx = s.openFiles.findIndex((f) => sameTab(f, { path: anchorPath, projectId }));
       if (anchorIx < 0) return s;
       const next = s.openFiles.slice(0, anchorIx + 1);
       // If the active tab was on the right side, fall back onto the anchor.
@@ -298,38 +341,47 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setActive: (path) => set({ activeFilePath: path }),
 
-  setContent: (path, content) =>
+  setContent: (projectId, path, content) =>
     set((s) => ({
       openFiles: s.openFiles.map((f) =>
-        f.path === path && (f.kind === undefined || f.kind === 'file')
+        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
           ? { ...f, content, dirty: true }
           : f,
       ),
     })),
 
-  markClean: (path, lastModified) =>
+  markClean: (projectId, path, lastModified) =>
     set((s) => ({
       openFiles: s.openFiles.map((f) =>
-        f.path === path && (f.kind === undefined || f.kind === 'file')
+        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
           ? { ...f, dirty: false, lastModified, externallyChanged: false }
           : f,
       ),
     })),
 
-  applyExternalContent: (path, content, lastModified) =>
+  applyExternalContent: (projectId, path, content, lastModified) =>
     set((s) => ({
       openFiles: s.openFiles.map((f) =>
-        f.path === path && (f.kind === undefined || f.kind === 'file')
+        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
           ? { ...f, content, dirty: false, lastModified, externallyChanged: false }
           : f,
       ),
     })),
 
-  markExternallyChanged: (path) =>
+  markExternallyChanged: (projectId, path) =>
     set((s) => ({
       openFiles: s.openFiles.map((f) =>
-        f.path === path && (f.kind === undefined || f.kind === 'file')
+        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
           ? { ...f, externallyChanged: true }
+          : f,
+      ),
+    })),
+
+  dismissExternalChange: (projectId, path) =>
+    set((s) => ({
+      openFiles: s.openFiles.map((f) =>
+        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
+          ? { ...f, externallyChanged: false }
           : f,
       ),
     })),

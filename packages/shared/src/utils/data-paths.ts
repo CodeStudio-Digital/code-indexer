@@ -28,6 +28,22 @@ export function virtualProjectDir(
   return join(virtualProjectsBaseDir(env), String(id));
 }
 
+/**
+ * Base dir for global (multi-project) session workspaces — one subdir per
+ * global session holding directory junctions/symlinks to each linked project.
+ */
+export function globalWorkspacesBaseDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(mcpDataDir(env), 'global-workspaces');
+}
+
+/** The virtual union dir for a single global workspace id. */
+export function globalWorkspaceDir(
+  id: string | number,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return join(globalWorkspacesBaseDir(env), String(id));
+}
+
 /** Uploaded Design System theme zips. */
 export function designSystemUploadsDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(mcpDataDir(env), 'design-system-uploads');

@@ -109,6 +109,25 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  app.post('/api/lsp/:projectId/language-level', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ languageId: 'php' | 'python'; level: string }>();
+      return c.json(await h.setLanguageLevel({ projectId, languageId: body.languageId, level: body.level }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.get('/api/lsp/:projectId/language-levels', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      return c.json(await h.languageLevels({ projectId }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   /** Consent-gated install with streamed progress (SSE; MessagePort on Electron). */
   app.get('/api/lsp/servers/:serverId/install/stream', async (c) => {
     const serverId = c.req.param('serverId');

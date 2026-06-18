@@ -21,6 +21,7 @@ import {
   ListChecks,
   ScrollText,
   Settings,
+  Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
@@ -32,6 +33,7 @@ import { ToolStatsView } from '../ToolStatsModal.js';
 import { SessionDetailsView } from '../SessionDetailsModal.js';
 import { PlansPanel } from './PlansPanel.js';
 import { TasksPanel } from './TasksPanel.js';
+import { DiagramPanel } from './diagram/DiagramPanel.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
@@ -151,6 +153,13 @@ export function RightPanelHost(props: RightPanelHostProps) {
       return (
         <PanelChrome title={t('chat:rightRail.workerLog', 'Worker log')} icon={ScrollText} onClose={onClose}>
           <WorkerLogPanel sessionId={sessionId} onClose={onClose} embedded />
+        </PanelChrome>
+      );
+    case 'diagram':
+      return (
+        <PanelChrome title={t('chat:rightRail.diagram', 'Diagram')} icon={Workflow} onClose={onClose}
+          bodyClassName="overflow-hidden">
+          <DiagramPanel sessionId={sessionId} projectId={props.projectId} />
         </PanelChrome>
       );
     case 'details':

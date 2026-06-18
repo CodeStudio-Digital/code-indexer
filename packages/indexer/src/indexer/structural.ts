@@ -99,8 +99,16 @@ export async function runStructuralIndex(
   let errorCount = 0;
   let aborted: StructuralIndexResult['aborted'];
 
+  // Progress must be MONOTONIC. `withConcurrency` runs files out of order, so
+  // the enqueue index (idx) is not the completion order — reporting `idx + 1`
+  // made the bar jump forward and backward under concurrency ≥ 2. Count files
+  // as they actually finish instead. (`++completed` is a single synchronous op
+  // after each file's awaits resolve, so the single-threaded event loop makes
+  // it race-free.) Generalization (Option B): move this counter into
+  // `withConcurrency` so the embeddings/full-pipeline callers get it for free.
+  let completed = 0;
   try {
-    await withConcurrency(scan.toIndex, async (file, idx) => {
+    await withConcurrency(scan.toIndex, async (file) => {
       if (opts.signal?.aborted) { aborted = 'signal'; return; }
       try {
         await processFileStructural(db, projectId, file, treeSitter);
@@ -109,7 +117,7 @@ export async function runStructuralIndex(
         errorCount++;
         console.error(`[structural] Error processing ${file.relativePath}:`, err);
       }
-      opts.onProgress?.({ current: idx + 1, total: scan.toIndex.length, currentFile: file.relativePath });
+      opts.onProgress?.({ current: ++completed, total: scan.toIndex.length, currentFile: file.relativePath });
     }, opts.concurrency ?? 5);
 
     try {

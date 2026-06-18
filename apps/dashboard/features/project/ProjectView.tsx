@@ -3,8 +3,6 @@
  *
  *  ┌─────────────────────────────────────────────────────────────┐
  *  │  AppShell topbar (Projetos / Agentes / Admin / ...)         │   ← global nav (visible)
- *  ├─────────────────────────────────────────────────────────────┤
- *  │  ProjectTopBar — breadcrumb + project-scoped actions        │   ← slim, h-9
  *  ├─┬───────────────────────────────────────────────────────────┤
  *  │R│  PanelGroup vertical                                       │
  *  │a│  ┌─────────────────────────────────────────────────────┐  │
@@ -42,51 +40,24 @@
  *     switches.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import {
-  BookOpen,
-  Database,
-  DollarSign,
-  FileCode2,
-  FolderGit2,
-  GitBranch,
-  GitCompare,
-  History,
-  Layers,
-  LineChart,
-  MessageSquareCode,
-  Monitor,
-  Network,
-  PanelBottomClose,
-  PanelBottomOpen,
-  PanelRightOpen,
-  Play,
-  Puzzle,
-  Search,
-  TerminalSquare,
-  Webhook,
-  type LucideIcon,
-} from 'lucide-react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
-import { apiCall } from '../../lib/api-client.js';
+import { Monitor, Puzzle } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi.js';
 import type { Project } from '@mcp/shared/types.js';
-import { ProjectPreview } from './builder/ProjectPreview.js';
-import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { useRunningTasks, tasksForProject, isDevServerTask } from '../../state/running-tasks.js';
 import {
-  loadPersistedTabs,
   savePersistedTabs,
   useWorkspaceStore,
 } from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
-import type { ContribToolWindow } from '../../state/contribution-registry.js';
-import { WebviewWindow } from '../workspace/jetbrains/tool-windows/WebviewWindow.js';
-import { FileTreeView } from '../workspace/file-tree/FileTreeView.js';
 import { useFsEvents, type FsEventDTO } from '../../hooks/useFsEvents.js';
+import { useGitMeta } from '../../hooks/useGitMeta.js';
+import { useGitRevision } from '../../state/git-revision.js';
+import { toast } from '../../components/ui/prompt-dialog.js';
+import { useTranslation } from 'react-i18next';
 import { useFileTreeStore } from '../../state/file-tree.js';
 import { apiCall as apiCallFs } from '../../lib/api-client.js';
 import { installKeymapDispatcher } from '../../keymap/dispatcher.js';
@@ -95,57 +66,18 @@ import { startRecentFilesTracking } from '../../state/recent-files.js';
 import { SearchEverywhere } from '../search-everywhere/SearchEverywhere.js';
 import { FileStructurePopup } from '../search-everywhere/FileStructurePopup.js';
 import { KeymapDialog } from '../search-everywhere/KeymapDialog.js';
-import { EditorChatLayout } from './EditorChatLayout.js';
-import { BottomPanel } from '../workspace/BottomPanel.js';
+import { LocalHistoryDialog } from '../workspace/local-history/LocalHistoryDialog.js';
+import { BottomPanel, BOTTOM_BUILTIN_TAB_IDS } from '../workspace/BottomPanel.js';
 import { StatusBar } from '../workspace/jetbrains/StatusBar.js';
-import { GitWindow } from '../workspace/jetbrains/tool-windows/GitWindow.js';
-import AgentChat from '../chat/index.js';
-import CostDashboard from '../costs/index.js';
-import DiffViewer from '../diff/index.js';
-import SearchPanel from '../search/index.js';
-import SnapshotEditor from '../snapshots/index.js';
-import { ArchitectureTab } from './tabs/ArchitectureTab.js';
-import { DependenciesTab } from './tabs/DependenciesTab.js';
-import { FilesTab as IndexedFilesTab } from './tabs/FilesTab.js';
-import { RunsTab } from './tabs/RunsTab.js';
-import { RunnersTab } from './tabs/RunnersTab.js';
-import { ApiClientTab } from '../api-client/ApiClientTab.js';
-import { Button } from '../../components/ui/button.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
-import { cn } from '../../lib/utils.js';
+// Roteador de conteúdo das abas extraído para tabs/TabContent.tsx (W4 decompose) —
+// inclui as abas lazy + o ToolSurface. Aqui fica só o shell do ProjectView.
+import { TabContent } from './tabs/TabContent.js';
 
-// Built-in tab ids (chat/files/search/git/snapshots + analytics) plus any
-// plugin-contributed tool-window id — so widened to `string`.
-export type ProjectTabId = string;
-
-interface TabDef {
-  id: ProjectTabId;
-  label: string;
-  icon: LucideIcon;
-  /** Group separates the IDE-core tools (top) from the analytics-style
-   *  tools (bottom). Visually rendered as a divider in the rail. */
-  group: 'core' | 'analytics' | 'plugins';
-}
-
-const TABS: TabDef[] = [
-  { id: 'chat',         label: 'Sessões',       icon: MessageSquareCode, group: 'core' },
-  { id: 'files',        label: 'Files',         icon: FileCode2,         group: 'core' },
-  { id: 'search',       label: 'Search',        icon: Search,            group: 'core' },
-  { id: 'git',          label: 'Git',           icon: GitBranch,         group: 'core' },
-  { id: 'snapshots',    label: 'Snapshots',     icon: BookOpen,          group: 'core' },
-  { id: 'runners',      label: 'Runners',       icon: Play,              group: 'core' },
-  { id: 'api',          label: 'API',           icon: Webhook,           group: 'core' },
-  // Indexed lives in analytics — it's the per-project file table with
-  // sumarização/complexity/layer/flags, distinct from the IDE-style
-  // file tree (`files`). The Search tab already exposes the vector
-  // debug panel inline, so no separate "Vectors" entry needed.
-  { id: 'indexed',      label: 'Indexed',       icon: Database,          group: 'analytics' },
-  { id: 'dependencies', label: 'Dependencies',  icon: Network,           group: 'analytics' },
-  { id: 'architecture', label: 'Architecture',  icon: Layers,            group: 'analytics' },
-  { id: 'diff',         label: 'Diff',          icon: GitCompare,        group: 'analytics' },
-  { id: 'costs',        label: 'Costs',         icon: DollarSign,        group: 'analytics' },
-  { id: 'runs',         label: 'Runs',          icon: History,           group: 'analytics' },
-];
+// Config das abas (ProjectTabId/TabDef/TABS) extraída para tabs-config.ts; o top bar e
+// o rail viraram componentes próprios (ProjectTopBar/ProjectRail) — W4 decompose.
+import { TABS, type ProjectTabId, type TabDef } from './tabs-config.js';
+import { ProjectRail } from './ProjectRail.js';
+export type { ProjectTabId } from './tabs-config.js';
 
 interface ProjectViewProps {
   projectId: number;
@@ -156,14 +88,13 @@ interface ProjectViewProps {
 }
 
 export function ProjectView({ projectId, projectName, initialSessionId }: ProjectViewProps) {
-  const navigate = useNavigate();
   const location = useLocation();
+  const { t } = useTranslation('workspace');
   const layout = useWorkspaceLayout();
   const contribWindows = useContributions((s) => s.toolWindows);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
-  const openFiles = useWorkspaceStore((s) => s.openFiles);
-  const closeFile = useWorkspaceStore((s) => s.closeFile);
+  const setProject = useWorkspaceStore((s) => s.setProject);
 
   // Live filesystem events — ONE stream per project feeds both consumers:
   // the lazy file tree (incremental upsert/delete) and the open tabs
@@ -179,7 +110,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       );
       if (!tab || tab.kind === 'diff' || tab.kind === 'git-log' || tab.kind === 'git-stash') continue;
       if (e.kind === 'delete' || tab.dirty) {
-        ws.markExternallyChanged(e.path);
+        ws.markExternallyChanged(projectId, e.path);
         continue;
       }
       // Never-loaded tab (content null) loads on activation anyway.
@@ -194,9 +125,24 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         .then(async (res) => {
           if ('notModified' in res) return;
           const { applyExternalContent } = await import('../workspace/editor/editor-models.js');
-          applyExternalContent(e.path, res.content, res.last_modified);
+          applyExternalContent(projectId, e.path, res.content, res.last_modified);
         })
         .catch(() => undefined);
+    }
+  });
+
+  // Live git-metadata — ONE stream per project. A branch switch (in-app OR an
+  // external `git checkout`) bumps the git-revision store, which re-syncs the
+  // branch chip / git window / file-tree colors; a genuine switch also toasts.
+  // Editor contents already self-heal via the fs-events stream above (the
+  // working-tree files change on disk), and the backend re-indexes on its own.
+  useGitMeta(projectId, (frame) => {
+    // changed:[] marks the server seed (initial/reconnect snapshot) — record the
+    // branch without forcing a refetch unless it reveals a switch we missed.
+    const isSeed = frame.changed.length === 0;
+    const { branchChanged } = useGitRevision.getState().bump(projectId, frame.branch, isSeed);
+    if (branchChanged) {
+      toast.info(frame.branch ? t('git.branchSwitched', { branch: frame.branch }) : t('git.branchDetached'));
     }
   });
 
@@ -239,10 +185,20 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
 
   // Deep link to a specific tab via `?tab=<id>` — used by the global
   // running-tasks dropdown to jump straight to this project's Runners
-  // tab. Only honour ids we actually know about.
+  // surface. Bottom-panel tools (runners/terminal/...) open the drawer at
+  // that tab; everything else selects a side-rail tab. Only honour ids we
+  // actually know about. `getState()` avoids re-running on every layout change.
   useEffect(() => {
     const requested = new URLSearchParams(location.search).get('tab');
-    if (requested && TABS.some((tabDef) => tabDef.id === requested)) {
+    if (!requested) return;
+    // Legacy deep-links (?tab=runs|indexed|...) now resolve to the unified
+    // Index tab — the global running-tasks dropdown jumps to ?tab=runs.
+    const INDEX_ALIASES = new Set(['runs', 'indexed', 'search', 'dependencies', 'architecture', 'diff', 'costs']);
+    if (BOTTOM_BUILTIN_TAB_IDS.has(requested)) {
+      useWorkspaceLayout.getState().setActiveBottom(requested);
+    } else if (INDEX_ALIASES.has(requested)) {
+      setTab('index');
+    } else if (TABS.some((tabDef) => tabDef.id === requested)) {
       setTab(requested);
     }
   }, [location.search]);
@@ -278,29 +234,26 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   //     mount, the rest on first activation. A deleted-on-disk file shows
   //     its loading state until the user activates it and the read 404s —
   //     acceptable for a restored ghost. ───
-  useEffect(() => {
-    const persisted = loadPersistedTabs(projectId);
-    if (persisted.openFiles.length === 0) return;
-    for (const entry of persisted.openFiles) {
-      openFile({
-        projectId: entry.projectId,
-        path: entry.path,
-        content: null,
-        dirty: false,
-        lastModified: null,
-      });
-    }
-    if (persisted.activeFilePath) {
-      useWorkspaceStore.getState().setActive(persisted.activeFilePath);
-    }
-    // Only re-runs on projectId change. Re-running on `openFile` would
-    // restart the restore loop because openFile mutates the store.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  // ─── Project scope: UM swap atômico. setProject persiste as abas do projeto
+  //     que sai, dropa-as (para o editor nunca mostrar arquivos de outro
+  //     projeto — P1) e hidrata as abas persistidas DESTE projeto (content:null
+  //     → fetch lazy na ativação). Substitui o antigo loop de restore que só
+  //     ADICIONAVA, nunca limpava. ───
+  // useLayoutEffect (não useEffect): o swap roda ANTES do paint, então a troca de
+  // projeto nunca pinta um frame com as abas/arquivo do projeto anterior (alinha
+  // activeProjectId no store antes do browser desenhar). Mata o flash de 1 frame.
+  useLayoutEffect(() => {
+    setProject(projectId);
+  }, [projectId, setProject]);
 
+  // Persiste as abas deste projeto a cada mudança ENQUANTO ele está ativo.
+  // savePersistedTabs se auto-filtra por projectId, então uma aba estranha
+  // jamais é escrita sob esta chave.
   useEffect(() => {
     const unsubscribe = useWorkspaceStore.subscribe((state) => {
-      savePersistedTabs(projectId, state.openFiles, state.activeFilePath);
+      if (state.activeProjectId === projectId) {
+        savePersistedTabs(projectId, state.openFiles, state.activeFilePath);
+      }
     });
     return () => unsubscribe();
   }, [projectId]);
@@ -315,7 +268,13 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     const unregister = registerProjectCommands({
       projectId,
       setTab: (t) => setTab(t as ProjectTabId),
-      toggleBottomTerminal: () => layout.toggleBottom('terminal'),
+      // Ctrl+J = toggle the bottom drawer; opens at Terminal when closed,
+      // closes regardless of which bottom tab is active. getState() reads
+      // live (this closure is registered once per project).
+      toggleBottomTerminal: () => {
+        const l = useWorkspaceLayout.getState();
+        l.setActiveBottom(l.activeBottom ? null : 'terminal');
+      },
       toggleChat: () => setTab((cur) => (cur === 'chat' ? 'files' : 'chat')),
     });
     return () => {
@@ -327,12 +286,6 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     // enough (they read live state via getState()).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
-
-  // When the user toggles Files via the rail and there are NO files
-  // open yet, surface a helpful empty state so the editor pane isn't
-  // an empty void. Empty-state lives inside EditorPane so we don't
-  // duplicate it here.
-  void openFiles;
 
   // Plugin UI contributions — hydrate scoped to THIS project so activation
   // rules (auto-detection) are evaluated against its root: a plugin's panel
@@ -371,15 +324,8 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     // h-full inherits main's height (which AppShell sets via its own
     // flex-1 inside the 100dvh column).
     <div className="flex flex-col h-full min-h-0">
-      <ProjectTopBar
-        projectId={projectId}
-        projectName={projectName}
-        bottomOpen={layout.activeBottom !== null}
-        onToggleBottom={() => layout.toggleBottom('terminal')}
-        onOpenAnalytics={() => navigate(`/projects/${projectId}/analytics`)}
-      />
       <div className="flex flex-1 min-h-0">
-        <ProjectRail activeTab={tab} onSelect={setTab} layout={layout} pluginTabs={pluginTabs} extraCoreTabs={previewTabs} />
+        <ProjectRail projectId={projectId} activeTab={tab} onSelect={setTab} layout={layout} pluginTabs={pluginTabs} extraCoreTabs={previewTabs} />
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           <PanelGroup direction="vertical" autoSaveId="mcp-project-vert">
             <Panel minSize={20}>
@@ -418,438 +364,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       <SearchEverywhere projectId={projectId} onOpenFile={handleOpen} />
       <FileStructurePopup projectId={projectId} />
       <KeymapDialog />
+      <LocalHistoryDialog />
     </div>
   );
-}
-
-// ─── Top bar ────────────────────────────────────────────────────────
-
-interface ProjectTopBarProps {
-  projectId: number;
-  projectName: string;
-  bottomOpen: boolean;
-  onToggleBottom: () => void;
-  onOpenAnalytics: () => void;
-}
-
-function ProjectTopBar({
-  projectId,
-  projectName,
-  bottomOpen,
-  onToggleBottom,
-  onOpenAnalytics,
-}: ProjectTopBarProps) {
-  return (
-    <header className="h-9 shrink-0 border-b bg-card/60 flex items-center px-3 gap-2 text-[12px]">
-      <FolderGit2 className="h-3.5 w-3.5 text-primary shrink-0" />
-      <span className="font-medium truncate max-w-[300px]" title={projectName}>
-        {projectName}
-      </span>
-      <div className="ml-auto flex items-center gap-0.5">
-        <LinkDesignSystemDialog projectId={projectId} />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={onOpenAnalytics}
-              aria-label="Open project analytics"
-            >
-              <LineChart className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Analytics view</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={onToggleBottom}
-              aria-label={bottomOpen ? 'Close terminal' : 'Open terminal'}
-            >
-              {bottomOpen ? (
-                <PanelBottomClose className="h-3.5 w-3.5" />
-              ) : (
-                <PanelBottomOpen className="h-3.5 w-3.5" />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Terminal (Ctrl+J)</TooltipContent>
-        </Tooltip>
-      </div>
-    </header>
-  );
-}
-
-// ─── Activity rail ──────────────────────────────────────────────────
-
-interface ProjectRailProps {
-  activeTab: ProjectTabId;
-  onSelect: (id: ProjectTabId) => void;
-  layout: ReturnType<typeof useWorkspaceLayout>;
-  pluginTabs: TabDef[];
-  /** Conditional core tabs (e.g. Preview, shown when a dev server runs). */
-  extraCoreTabs?: TabDef[];
-}
-
-function ProjectRail({ activeTab, onSelect, layout, pluginTabs, extraCoreTabs = [] }: ProjectRailProps) {
-  const core = TABS.filter((t) => t.group === 'core');
-  const analytics = TABS.filter((t) => t.group === 'analytics');
-  return (
-    <nav
-      className="flex flex-col w-10 shrink-0 border-r bg-card/40 py-1 gap-0.5 items-center"
-      aria-label="Project sections"
-    >
-      {core.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
-      ))}
-      {extraCoreTabs.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
-      ))}
-      <span className="h-px w-6 bg-border my-1.5" aria-hidden />
-      {analytics.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
-      ))}
-      {pluginTabs.length > 0 && <span className="h-px w-6 bg-border my-1.5" aria-hidden />}
-      {pluginTabs.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
-      ))}
-      <div className="mt-auto pb-1">
-        {/* Terminal toggle — sits at the bottom of the rail mirroring
-            VS Code / JetBrains conventions. Active state reflects
-            whether the bottom panel is currently open. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => layout.toggleBottom('terminal')}
-              aria-label="Toggle terminal"
-              aria-pressed={layout.activeBottom !== null}
-              className={cn(
-                'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-                layout.activeBottom
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <TerminalSquare className="h-4 w-4" />
-              {layout.activeBottom && (
-                <span
-                  aria-hidden
-                  className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-                />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Terminal (Ctrl+J)</TooltipContent>
-        </Tooltip>
-      </div>
-    </nav>
-  );
-}
-
-function RailButton({
-  def,
-  active,
-  onSelect,
-}: {
-  def: TabDef;
-  active: boolean;
-  onSelect: (id: ProjectTabId) => void;
-}) {
-  const Icon = def.icon;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={() => onSelect(def.id)}
-          aria-label={def.label}
-          aria-current={active ? 'page' : undefined}
-          className={cn(
-            'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-            active
-              ? 'bg-accent text-accent-foreground'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-          )}
-        >
-          <Icon className="h-4 w-4" />
-          {active && (
-            <span
-              aria-hidden
-              className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-            />
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="right">{def.label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-// ─── Tab content router ─────────────────────────────────────────────
-
-interface TabContentProps {
-  tab: ProjectTabId;
-  projectId: number;
-  projectName: string;
-  initialSessionId?: number;
-  onOpenFile: (path: string) => void;
-  activeFilePath: string | null;
-  contribWindows: ContribToolWindow[];
-  /** Set for Builder projects → chat tab splits into chat | live preview. */
-  builderJson: { stack: string; port: number } | null;
-  /** Builder OR any project with a running dev server → preview available. */
-  previewEnabled: boolean;
-}
-
-function TabContent({
-  tab,
-  projectId,
-  projectName,
-  initialSessionId,
-  onOpenFile,
-  activeFilePath,
-  contribWindows,
-  builderJson,
-  previewEnabled,
-}: TabContentProps) {
-  // Preview pane visibility (builder/preview projects). Hook called
-  // unconditionally at the top to respect the rules of hooks.
-  const previewVisible = useWorkspaceLayout((s) => s.previewVisible);
-  const togglePreview = useWorkspaceLayout((s) => s.togglePreview);
-
-  // Files tab gets a sub-PanelGroup so the user can resize the file
-  // tree independently of the editor (just like JetBrains/VS Code).
-  if (tab === 'files') {
-    return (
-      <PanelGroup direction="horizontal" autoSaveId="mcp-project-files-horiz">
-        <Panel defaultSize={20} minSize={12} maxSize={40}>
-          <div className="h-full border-r overflow-hidden">
-            <FileTreeView projectId={projectId} activePath={activeFilePath} onOpen={onOpenFile} />
-          </div>
-        </Panel>
-        <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-        <Panel minSize={30}>
-          <EditorChatLayout projectId={projectId} projectName={projectName} />
-        </Panel>
-      </PanelGroup>
-    );
-  }
-
-  // Git tab mirrors the Files split: GitWindow on the left, editor on
-  // the right. Clicking a file in the Changes pane opens a diff via
-  // `useWorkspaceStore.openDiff` — having EditorPane mounted alongside
-  // means the diff renders inline (instead of forcing the user to flip
-  // to the Files tab to see what they just opened). Default size is
-  // wider than the file tree (28%) because the Changes list shows
-  // path + bulk-action buttons + ahead/behind chips — needs breathing
-  // room. `autoSaveId` is distinct so the persisted size doesn't
-  // collide with the Files tab.
-  if (tab === 'git') {
-    return (
-      <PanelGroup direction="horizontal" autoSaveId="mcp-project-git-horiz">
-        <Panel defaultSize={28} minSize={18} maxSize={50}>
-          <div className="h-full border-r overflow-hidden">
-            <GitWindow projectId={projectId} />
-          </div>
-        </Panel>
-        <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-        <Panel minSize={30}>
-          <EditorChatLayout projectId={projectId} projectName={projectName} />
-        </Panel>
-      </PanelGroup>
-    );
-  }
-
-  if (tab === 'chat') {
-    // Builder projects split the chat tab into chat | live preview (V0).
-    // The selection store + composer threading are keyed by projectId.
-    if (previewEnabled) {
-      const chat = (
-        <AgentChat
-          projectId={projectId}
-          projectName={projectName}
-          initialSessionId={initialSessionId}
-          selectionPrefixSessionId={projectId}
-        />
-      );
-      // STABLE tree across the preview toggle: the chat Panel (id 'builder-chat')
-      // is ALWAYS the first child of the SAME PanelGroup under the SAME wrapper,
-      // so toggling `previewVisible` only adds/removes the preview Panel — React
-      // never unmounts AgentChat (which would drop the open session). The
-      // "show preview" rail renders OUTSIDE the group when hidden.
-      return (
-        <div className="flex h-full min-h-0">
-          <PanelGroup
-            direction="horizontal"
-            autoSaveId="mcp-project-builder-horiz"
-            className="flex-1 min-w-0"
-          >
-            <Panel id="builder-chat" order={1} defaultSize={previewVisible ? 52 : 100} minSize={32}>
-              {chat}
-            </Panel>
-            {previewVisible && (
-              <>
-                <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-                <Panel id="builder-preview" order={2} defaultSize={48} minSize={28}>
-                  {/* key: full remount on project switch — local preview state
-                      (detected URL, problems, pop-out) must never leak from
-                      another project's dev server. */}
-                  <ProjectPreview
-                    key={projectId}
-                    projectId={projectId}
-                    pinnedPort={builderJson?.port}
-                    selectionEnabled={!!builderJson}
-                    onHide={togglePreview}
-                  />
-                </Panel>
-              </>
-            )}
-          </PanelGroup>
-          {!previewVisible && (
-            <button
-              onClick={togglePreview}
-              title="Show preview"
-              className="w-6 shrink-0 border-l flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <PanelRightOpen className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      );
-    }
-    return (
-      <AgentChat
-        projectId={projectId}
-        projectName={projectName}
-        initialSessionId={initialSessionId}
-      />
-    );
-  }
-
-  // Snapshots owns its own master/detail layout (resizable sidebar +
-  // detail) and needs the full viewport height, with scroll managed by
-  // its inner panes. Wrapping it in the generic `overflow-auto` /
-  // padded container below would create a redundant scrollbar and
-  // collapse `h-full` propagation.
-  if (tab === 'snapshots') {
-    return <SnapshotEditor projectId={projectId} />;
-  }
-
-  // Runners owns a full-height split (detected/active list + live xterm
-  // output), so it bypasses the padded scroll container like snapshots.
-  if (tab === 'runners') {
-    return <RunnersTab projectId={projectId} />;
-  }
-
-  // API client owns a full-height 3-pane layout (like snapshots/runners), so
-  // it bypasses the padded scroll container below.
-  if (tab === 'api') {
-    return <ApiClientTab projectId={projectId} />;
-  }
-
-  // Preview tab — the live dev-server preview, full-width. Shown for
-  // builder projects and any project with a running dev server.
-  if (tab === 'preview') {
-    return (
-      <ProjectPreview
-        key={projectId}
-        projectId={projectId}
-        pinnedPort={builderJson?.port}
-        selectionEnabled={!!builderJson}
-      />
-    );
-  }
-
-  // Plugin-contributed tool window → its sandboxed webview fills the area.
-  const pluginWin = contribWindows.find((w) => w.id === tab);
-  if (pluginWin) {
-    return (
-      <div className="h-full overflow-hidden">
-        <WebviewWindow
-          namespace={pluginWin.pluginNs}
-          title={pluginWin.title}
-          entry={pluginWin.entry}
-          projectId={projectId}
-        />
-      </div>
-    );
-  }
-
-  // Search and the analytics-style tabs render in a scrollable surface
-  // — none of them currently need a dedicated sub-panel layout. Wrapped
-  // in a uniform padded container so the user gets consistent breathing
-  // room across tools.
-  return (
-    <div className="h-full overflow-auto">
-      <ToolSurface tab={tab} projectId={projectId} projectName={projectName} />
-    </div>
-  );
-}
-
-function ToolSurface({
-  tab,
-  projectId,
-  projectName,
-}: {
-  tab: ProjectTabId;
-  projectId: number;
-  projectName: string;
-}) {
-  switch (tab) {
-    case 'search':
-      return (
-        <div className="px-4 py-3">
-          <SearchPanel projectId={projectId} projectName={projectName} />
-        </div>
-      );
-    // 'git' is intercepted by TabContent above (split panel layout with
-    // GitWindow + EditorPane); this case is unreachable but kept off the
-    // switch so we don't render a duplicate GitWindow if TabContent's
-    // branching is ever refactored.
-    // 'snapshots' is also intercepted by TabContent — it owns its own
-    // resizable master/detail layout.
-    case 'indexed':
-      return (
-        <div className="px-4 py-3">
-          <IndexedFilesTab projectId={projectId} />
-        </div>
-      );
-    case 'dependencies':
-      return (
-        <div className="px-4 py-3">
-          <DependenciesTab projectId={projectId} />
-        </div>
-      );
-    case 'architecture':
-      return (
-        <div className="px-4 py-3">
-          <ArchitectureTab projectId={projectId} />
-        </div>
-      );
-    case 'diff':
-      return (
-        <div className="px-4 py-3">
-          <DiffViewer projectId={projectId} />
-        </div>
-      );
-    case 'costs':
-      return (
-        <div className="px-4 py-3">
-          <CostDashboard projectId={projectId} />
-        </div>
-      );
-    case 'runs':
-      return (
-        <div className="px-4 py-3">
-          <RunsTab projectId={projectId} />
-        </div>
-      );
-    default:
-      return null;
-  }
 }

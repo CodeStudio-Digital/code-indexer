@@ -128,6 +128,10 @@ export async function openStream(
     : -1;
   // Throttle the `lastEventAt` commit (stall detector only needs ~1s).
   let lastEventAtCommit = 0;
+  // Clear the "Analyzing the task…" (preflight) indicator once the run actually
+  // starts streaming — the first event means preflight finished and the model
+  // is now producing output.
+  let preflightCleared = false;
 
   // Batch flushes to at most one per animation frame. Tokens arrive at
   // 50+/s; without batching every token triggers a full React re-render of
@@ -218,6 +222,10 @@ export async function openStream(
         lastEventAtCommit = entry.ts;
         updateSession(sid, { lastEventAt: entry.ts });
       }
+      if (!preflightCleared) {
+        preflightCleared = true;
+        updateSession(sid, { preflight: null });
+      }
       const handler = handlers[ev.event];
       if (handler) handler(data, ev.event);
     },
@@ -293,9 +301,16 @@ export async function openStream(
   } finally {
     if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
     if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }
-    updateSession(sid, { streaming: false });
-    // Only delete if we're still the active controller — a subsequent
-    // openStream for this sid may have replaced us.
-    if (abortMap.get(sid) === ctrl) abortMap.delete(sid);
+    // Only tear down if we're STILL the active controller — a newer openStream
+    // for this sid may have already replaced us (rapid resubmit / session
+    // switch). Clobbering the live slot's `streaming` / `preflight` here would
+    // hide the replacement run's "Analyzing the task…" indicator + spinner while
+    // it's still mid-preflight. A superseded stream's teardown is a no-op.
+    if (abortMap.get(sid) === ctrl) {
+      // Clear streaming + the preflight indicator (safety net for an error
+      // before any event arrived — the per-event clear above handles the happy path).
+      updateSession(sid, { streaming: false, preflight: null });
+      abortMap.delete(sid);
+    }
   }
 }

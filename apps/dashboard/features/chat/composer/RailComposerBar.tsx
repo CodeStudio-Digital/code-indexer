@@ -81,6 +81,8 @@ interface RailComposerBarProps {
   /** When streaming + queueable, show the queue split button beside Stop. */
   queueable?: boolean;
   onQueueSend?: (mode: QueueMode) => void;
+  /** Append voice-transcribed text to the composer input. */
+  onTranscript?: (text: string) => void;
 }
 
 export function RailComposerBar(props: RailComposerBarProps) {
@@ -138,6 +140,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
         selectedPipelineId={props.selectedPipelineId}
         setSelectedPipelineId={props.setSelectedPipelineId}
         showThink={false}
+        onTranscript={props.onTranscript}
       />
 
       <div className="ml-auto flex items-center gap-1">

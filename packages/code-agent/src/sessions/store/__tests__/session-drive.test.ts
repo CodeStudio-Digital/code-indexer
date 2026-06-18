@@ -65,10 +65,19 @@ describe('session-drive memory', () => {
 
   it('setMemoryPinned + deleteMemory', () => {
     const m = drive.remember(db, s1, { title: 'x', body: 'x' });
-    drive.setMemoryPinned(db, m.id, true);
+    expect(drive.setMemoryPinned(db, s1, m.id, true)).toBe(true);
     expect(drive.listMemory(db, s1)[0].pinned).toBe(1);
-    expect(drive.deleteMemory(db, m.id)).toBe(true);
+    expect(drive.deleteMemory(db, s1, m.id)).toBe(true);
     expect(drive.listMemory(db, s1)).toHaveLength(0);
+  });
+
+  it('setMemoryPinned + deleteMemory are session-scoped (foreign id is a no-op)', () => {
+    const m = drive.remember(db, s1, { title: 'x', body: 'x' });
+    // s2 must not touch s1's note even with the right memory id.
+    expect(drive.setMemoryPinned(db, s2, m.id, true)).toBe(false);
+    expect(drive.listMemory(db, s1)[0].pinned).toBe(0);
+    expect(drive.deleteMemory(db, s2, m.id)).toBe(false);
+    expect(drive.listMemory(db, s1)).toHaveLength(1);
   });
 
   it('memory is session-scoped (not shared across sessions)', () => {
@@ -107,6 +116,15 @@ describe('session-drive investigations', () => {
     drive.recordInvestigation(db, { session_id: s1, topic: 't', summary: 's' });
     expect(drive.countInvestigations(db, s2)).toBe(1);
     expect(drive.countInvestigations(db, s3)).toBe(0);
+  });
+
+  it('listInvestigations is session-scoped (panel mirrors the open session)', () => {
+    drive.recordInvestigation(db, { session_id: s1, topic: 't', summary: 's' });
+    expect(drive.listInvestigations(db, s1)).toHaveLength(1);
+    // s2 shares the project (so it RECALLS s1's digest) but the panel list
+    // must show only its own session's — none here.
+    expect(drive.recallInvestigations(db, s2, '')).toHaveLength(1);
+    expect(drive.listInvestigations(db, s2)).toHaveLength(0);
   });
 
   it('empty query returns recent (no keyword filter)', () => {

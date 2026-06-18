@@ -5,7 +5,7 @@
  * the Workspace fans a single stream out to the tree store + tab logic.
  */
 import { useEffect, useRef } from 'react';
-import { apiStream, electronApi } from '../lib/api-client.js';
+import { subscribeShared } from './shared-stream.js';
 
 export interface FsEventDTO { path: string; kind: 'upsert' | 'delete'; isDir: boolean }
 interface FsEventsFrameDTO { events: FsEventDTO[] }
@@ -17,44 +17,23 @@ export function useFsEvents(projectId: number | null, onEvents: (events: FsEvent
 
   useEffect(() => {
     if (projectId == null) return;
-    let cancelled = false;
-    let es: EventSource | null = null;
-    let closeIterator: (() => void) | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-
-    const connect = (): void => {
-      if (cancelled) return;
-      if (electronApi()) {
-        const it = apiStream<FsEventsFrameDTO>('projects.fsEventsStream', { id: projectId })[Symbol.asyncIterator]();
-        closeIterator = () => { void it.return?.(); };
-        void (async () => {
-          try {
-            while (!cancelled) {
-              const r = await it.next();
-              if (r.done || cancelled) break;
-              if (r.value.events.length > 0) cb.current(r.value.events);
-            }
-          } catch { /* dropped */ }
-          if (!cancelled) retry = setTimeout(connect, 2000);
-        })();
-      } else {
-        es = new EventSource(`/api/projects/${projectId}/fs-events/stream`);
-        es.addEventListener('fs', (ev) => {
-          if (cancelled) return;
-          try {
-            const frame = JSON.parse((ev as MessageEvent).data) as FsEventsFrameDTO;
-            if (frame.events.length > 0) cb.current(frame.events);
-          } catch { /* bad frame */ }
-        });
-      }
-    };
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (retry) clearTimeout(retry);
-      closeIterator?.();
-      es?.close();
-    };
+    // Shared per-project watcher subscription (refcounted; one stream regardless
+    // of how many surfaces subscribe). `replay: 'none'` — these frames are
+    // incremental deltas, NOT a snapshot, so a late joiner must not be re-fed a
+    // stale batch. `retryMs: 2000` preserves the Electron-iterator reconnect.
+    return subscribeShared<FsEventsFrameDTO>(
+      {
+        key: `fsEvents:${projectId}`,
+        electronVerb: 'projects.fsEventsStream',
+        electronArgs: { id: projectId },
+        sseUrl: `/api/projects/${projectId}/fs-events/stream`,
+        sseEvent: 'fs',
+        retryMs: 2000,
+        replay: 'none',
+      },
+      (frame: FsEventsFrameDTO) => {
+        if (frame.events.length > 0) cb.current(frame.events);
+      },
+    );
   }, [projectId]);
 }

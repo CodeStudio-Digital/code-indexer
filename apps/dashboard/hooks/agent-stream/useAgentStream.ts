@@ -94,6 +94,12 @@ export function useAgentStream(sessionId: number | null) {
          * before passing to runCoder.
          */
         selectedSkillIds?: string[];
+        /**
+         * True when this is the FIRST message of a fresh session — the backend
+         * runs the blocking task-preflight before streaming. Drives the
+         * "Analyzing the task…" indicator during that wait.
+         */
+        freshSession?: boolean;
       },
     ) => {
       if (!sessionId) return;
@@ -102,6 +108,11 @@ export function useAgentStream(sessionId: number | null) {
       // both reset the slot. The catch path in openStream re-populates it
       // when the server responds with INTERACTION_PENDING again.
       updateSession(sid, { interactionPending: null });
+      // Fresh first message → preflight runs (blocking) before the stream
+      // opens; show the "Analyzing the task…" indicator until the first event.
+      if (extras?.freshSession) {
+        updateSession(sid, { preflight: { startedAt: Date.now() } });
+      }
       await runStream(
         sid,
         {
@@ -360,6 +371,7 @@ export function useAgentStream(sessionId: number | null) {
     toolLoopInterventions: active.toolLoopInterventions,
     pendingApprovals: active.pendingApprovals,
     lastEventAt: active.lastEventAt,
+    preflight: active.preflight,
     sendMessage,
     sendWithInterject,
     dismissInteractionPending,

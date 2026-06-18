@@ -1,5 +1,12 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { ProjectIndexPhase, ProjectIndexStatus } from './types.js';
+import type { ActiveIndexRun, ProjectIndexPhase, ProjectIndexStatus } from './types.js';
+
+/** Phases that mean "a pass is in flight" — entering them keeps activeRun. */
+const INDEXING_PHASES = new Set<ProjectIndexPhase>([
+  'scanning',
+  'structural_indexing',
+  'semantic_indexing',
+]);
 
 type Listener = (s: ProjectIndexStatus) => void;
 
@@ -31,11 +38,33 @@ export class ProjectIndexStatusStore {
   }
 
   setPhase(projectId: number, phase: ProjectIndexPhase, error?: string): void {
-    this.patch(projectId, { phase, error, progress: undefined });
+    // Entering a working phase keeps the live run visible; settling to a
+    // resting/terminal phase clears it (clearActiveRun is the explicit clear).
+    const clear = !INDEXING_PHASES.has(phase);
+    this.patch(projectId, { phase, error, ...(clear ? { activeRun: undefined, progress: undefined } : {}) });
   }
 
   setProgress(projectId: number, current: number, total: number): void {
-    this.patch(projectId, { phase: 'structural_indexing', progress: { current, total } });
+    this.setActiveRun(projectId, { kind: 'structural', current, total });
+  }
+
+  /**
+   * Publish the live pass. `progress` is kept in sync as the deprecated alias
+   * the StatusBar chip reads. `startedAt` is preserved across frames of the
+   * same kind so an elapsed-time readout stays stable.
+   */
+  setActiveRun(projectId: number, run: Omit<ActiveIndexRun, 'startedAt'> & { startedAt?: number }): void {
+    const prev = this.entry(projectId).status.activeRun;
+    const startedAt = run.startedAt ?? (prev?.kind === run.kind ? prev.startedAt : Date.now());
+    this.patch(projectId, {
+      activeRun: { ...run, startedAt },
+      progress: { current: run.current, total: run.total },
+      phase: run.kind === 'structural' ? 'structural_indexing' : 'semantic_indexing',
+    });
+  }
+
+  clearActiveRun(projectId: number): void {
+    this.patch(projectId, { activeRun: undefined, progress: undefined });
   }
 
   setWatcher(projectId: number, active: boolean): void {
@@ -58,6 +87,8 @@ export class ProjectIndexStatusStore {
       // Keep runtime-only bits.
       watcherActive: entry.status.watcherActive,
       dirtyPending: entry.status.dirtyPending,
+      // The run is over — drop the live pass + its chip alias.
+      activeRun: undefined,
       progress: undefined,
       error: undefined,
     });

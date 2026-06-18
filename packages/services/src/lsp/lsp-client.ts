@@ -28,15 +28,24 @@ export class LspRpcClient {
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private log: (msg: string) => void = () => {},
+    /**
+     * Resolve a config per-projeto para cada `section` pedida em
+     * `workspace/configuration` (ex.: `intelephense.environment.phpVersion`,
+     * `python.analysis.pythonVersion`). `null`/ausente = "use your defaults"
+     * (comportamento original). Ver `lsp-config-map.ts`.
+     */
+    private resolveConfig?: (section: string | null) => unknown,
   ) {
     this.parser = new FrameParser((err) => this.log(`frame error: ${err.message}`));
     child.stdout.on('data', (chunk: Buffer) => {
       for (const msg of this.parser.push(chunk)) this.dispatch(msg as Record<string, unknown>);
     });
-    // Defaults every mainstream server expects to "just work".
+    // Defaults every mainstream server expects to "just work". The PER-ITEM
+    // config comes from `resolveConfig` (language level); null falls back to
+    // the server's own defaults — identical to the original behaviour.
     this.onRequest('workspace/configuration', (params) => {
-      const items = (params as { items?: unknown[] })?.items ?? [];
-      return items.map(() => null); // null = "use your defaults"
+      const items = (params as { items?: Array<{ section?: string }> })?.items ?? [];
+      return items.map((it) => this.resolveConfig?.(it?.section ?? null) ?? null);
     });
     this.onRequest('client/registerCapability', () => null);
     this.onRequest('client/unregisterCapability', () => null);

@@ -21,6 +21,7 @@ import {
   ListChecks,
   ScrollText,
   Settings,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
@@ -79,6 +80,7 @@ export function ChatRightRail({
     { id: 'plans', icon: ClipboardList, labelKey: 'rightRail.plans', kind: 'panel' },
     { id: 'tasks', icon: ListChecks, labelKey: 'rightRail.tasks', kind: 'panel' },
     { id: 'drive', icon: HardDrive, labelKey: 'rightRail.drive', kind: 'panel' },
+    { id: 'diagram', icon: Workflow, labelKey: 'rightRail.diagram', kind: 'panel' },
   ];
 
   const inspectEntries: RailEntry[] = [

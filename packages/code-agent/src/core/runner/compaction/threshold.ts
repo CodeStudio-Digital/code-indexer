@@ -125,6 +125,67 @@ export function resolveRecedeTailRatio(): number {
 }
 
 /**
+ * P3 — context-relative ceiling (in CHARS) on how large a single `tool_result`
+ * may be kept inline, applied ON TOP of the user's output-cap level. A single
+ * result bigger than the protected tail can never be summarized by compaction
+ * (the tail is kept verbatim), so it deadlocks the pre-emit gate
+ * (`compact_exhausted`). Capping a single result to under the protect budget —
+ * and spilling the rest to the side-file store (recoverable via
+ * `get_tool_output`) — prevents the deadlock at the source.
+ *
+ *   ceilingChars = (protectTokens − MARGIN) × CHARS_PER_TOKEN_DENSE × ratio
+ *
+ * `CHARS_PER_TOKEN_DENSE = 2` (the densest `estimateBlockTokens` rate) makes the
+ * bound SAFE: even JSON-dense content kept inline estimates ≤ `protectTokens`.
+ * The `MARGIN` reserves room for the per-block overhead `estimateBlockTokens`
+ * adds (~8 tokens) plus the truncation/recovery marker `capToolContent` appends
+ * (~180 tokens) — without it a block clamped exactly at the ceiling would
+ * estimate a few hundred tokens OVER protect and still be the no-op cause. Same
+ * spirit as the `ultra` cap note ("bounded — a hard ceiling prevents a single
+ * tool dump from overflowing the model context window").
+ */
+const CONTEXT_SPILL_CHARS_PER_TOKEN = 2;
+/** Tokens reserved for per-block overhead + the recovery marker (see above). */
+const CONTEXT_SPILL_MARGIN_TOKENS = 256;
+export const DEFAULT_CONTEXT_SPILL_RATIO = 1;
+
+/**
+ * Resolve the context-spill ratio knob. `0`/negative/non-finite → OFF
+ * (`0` return), restoring legacy behaviour (only the user's cap applies).
+ */
+export function resolveContextSpillRatio(): number {
+  const raw = process.env.CODER_CONTEXT_SPILL_RATIO;
+  if (raw == null || raw === '') return DEFAULT_CONTEXT_SPILL_RATIO;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n;
+}
+
+/**
+ * Char ceiling for a single inline `tool_result`. `Infinity` when the knob is
+ * off → caller applies only its own cap. The reserved margin guarantees a block
+ * clamped AT this ceiling still estimates ≤ `protectTokens` (overhead + marker
+ * included), so it can never be the cutoff-collapse no-op cause.
+ */
+export function contextSpillCeilingChars(model: string): number {
+  const ratio = resolveContextSpillRatio();
+  if (ratio <= 0) return Number.POSITIVE_INFINITY;
+  const protectTokens = computeProtectTokens({ model });
+  const budgetTokens = protectTokens - CONTEXT_SPILL_MARGIN_TOKENS;
+  return Math.max(1, Math.floor(budgetTokens * CONTEXT_SPILL_CHARS_PER_TOKEN * ratio));
+}
+
+/**
+ * Effective per-`tool_result` push-time cap: the user's cap clamped by the
+ * context-relative ceiling. Extracted (and exported) so the clamp wiring is
+ * unit-testable independently of `CoderRunner`. `Infinity` ceiling (knob off)
+ * → the user's cap wins unchanged.
+ */
+export function resolveFinalizeCap(userCap: number, model: string): number {
+  return Math.min(userCap, contextSpillCeilingChars(model));
+}
+
+/**
  * Durable auto-compaction toggle (`MCP_DURABLE_COMPACTION`, default ON). When
  * on, each in-memory compaction is also persisted as a boundary + summary so
  * the reduced context (and its cost) carries to the next run.

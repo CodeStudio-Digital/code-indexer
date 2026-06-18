@@ -161,11 +161,14 @@ export interface GitPlan {
 }
 
 /**
- * In-progress sequencer operation. git lets exactly one of merge /
- * cherry-pick / revert / rebase be mid-flight at a time; we detect which
- * by stat-ing its state file under the gitdir.
+ * In-progress conflict state. The first four are git sequencer ops
+ * (exactly one mid-flight at a time, detected by its gitdir state file).
+ * `'working-tree'` is the fallback for unmerged files with NO sequencer op
+ * — e.g. a `git stash pop`/`apply` that conflicted: there's no
+ * `<kind> --continue`, so the UI hides Continue and "abort" just discards
+ * the conflicted files back to HEAD.
  */
-export type MergeKind = 'merge' | 'cherry-pick' | 'revert' | 'rebase';
+export type MergeKind = 'merge' | 'cherry-pick' | 'revert' | 'rebase' | 'working-tree';
 
 /**
  * Snapshot of "are we stuck mid-merge?" state — drives the conflict

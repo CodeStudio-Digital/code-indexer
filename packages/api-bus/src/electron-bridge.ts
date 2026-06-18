@@ -39,6 +39,25 @@ export interface ElectronAPI {
    */
   onUpdateAvailable(callback: () => void): () => void;
   restartAndUpdate(): void;
+
+  /** OS platform — `'win32' | 'darwin' | 'linux'` (Node `process.platform`). */
+  platform: NodeJS.Platform;
+
+  /**
+   * Custom title-bar controls for the frameless window. The dashboard's
+   * top header renders its own min/max/close (win32/linux) and reads
+   * maximize/focus state from the subscribe callbacks (which return an
+   * unsubscribe fn). See apps/electron/src/window-controls-ipc.ts.
+   */
+  windowControls: {
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
+    quit(): void;
+    isMaximized(): Promise<boolean>;
+    onMaximizedChanged(cb: (v: boolean) => void): () => void;
+    onFocusChanged(cb: (v: boolean) => void): () => void;
+  };
 }
 
 declare global {

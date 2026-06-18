@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody } from '../_helpers.js';
+import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import { environmentInProject } from './_ownership.js';
 import { maskSecrets, mergeSecrets, type EnvVarMap } from '@mcp/services/api-client/env-secrets.js';
 
 /**
@@ -38,9 +39,17 @@ export function mountApiEnvironmentRoutes(app: Hono, deps: ServerDeps): void {
     }>(c);
     if (!body.name?.trim()) return c.json({ error: 'name is required' }, 400);
 
+    // Update path: the body's env id must belong to THIS project. Without the
+    // check a stale id from another project would be rewritten here (name,
+    // base_url, secrets) and its is_default flag flipped via the project-scoped
+    // UPDATE inside upsertEnvironment — cross-project tampering.
+    const existing = body.id != null ? environmentInProject(store, projectId, body.id) : null;
+    if (body.id != null && !existing) return notFound(c, `Environment ${body.id} not found`);
+
     let variables_json = body.variables_json;
     if (body.variables !== undefined) {
-      const existing = body.id != null ? store.getEnvironment(body.id) : null;
+      // mergeSecrets reads the existing (project-scoped) row so the secret
+      // sentinel preserves THIS project's stored secret, never a foreign one.
       variables_json = JSON.stringify(mergeSecrets(body.variables, existing?.variables_json));
     }
     return c.json(store.upsertEnvironment({
@@ -54,7 +63,10 @@ export function mountApiEnvironmentRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.delete(`${base}/environments/:eid`, (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const eid = parseIdParam(c, 'eid');
+    // A stale eid must not delete another project's environment.
+    if (!environmentInProject(store, projectId, eid)) return notFound(c, `Environment ${eid} not found`);
     store.deleteEnvironment(eid);
     return c.json({ ok: true });
   });

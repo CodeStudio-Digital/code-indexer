@@ -88,13 +88,14 @@ const protectedDashboardFiles = [
   'apps/dashboard/features/snapshots/SnapshotsPanel.tsx',
   'apps/dashboard/features/snapshots/diff/DiffRow.tsx',
   'apps/dashboard/features/snapshots/diff/ReviewComment.tsx',
-  'apps/dashboard/features/workspace/jetbrains/tool-windows/ChatWindow.tsx',
   'apps/dashboard/features/workspace/jetbrains/tool-windows/GitWindow.tsx',
   'apps/dashboard/features/workspace/jetbrains/tool-windows/WebviewWindow.tsx',
 ];
 
 const protectedAllowlist = new Map<string, Set<string>>([
   ['apps/dashboard/AppShell.tsx', new Set(['CodeStudio', 'v'])],
+  // Brand wordmark + version prefix moved out of AppShell into the app menu.
+  ['apps/dashboard/components/AppMenu.tsx', new Set(['CodeStudio', 'v'])],
   ['apps/dashboard/features/admin/ChromeServicePanel.tsx', new Set(['· CDP'])],
   ['apps/dashboard/features/admin/PipelineBindingsPanel.tsx', new Set(['global', 'template', 'session'])],
   ['apps/dashboard/features/admin/PluginsPanel.tsx', new Set(['v', 'MCP_MARKET_URL'])],

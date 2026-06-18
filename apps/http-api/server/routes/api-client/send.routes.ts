@@ -1,10 +1,21 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody } from '../_helpers.js';
-import { type CookieJar, createJar, sendHttp } from '@mcp/shared/utils/http-engine.js';
-import {
-  buildUrl, parseEnvVariables, parseMap, resolveMap, resolveTemplate,
-} from '@mcp/services/api-client/request-builder.js';
+import { requestInProject, resolveScopedEnv } from './_ownership.js';
+import { type CookieJar, createJar, jarSnapshot } from '@mcp/shared/utils/http-engine.js';
+import { parseEnvVariables } from '@mcp/services/api-client/request-builder.js';
+import { executeRequest } from '@mcp/services/api-client/execute-request.js';
+import { UNSET } from '@mcp/services/api-client/script-runtime/types.js';
+
+/** Response read cap for the API client (override via MCP_API_CLIENT_READ_CAP). */
+const READ_CAP = Math.max(64 * 1024, Number(process.env.MCP_API_CLIENT_READ_CAP) || 5 * 1024 * 1024);
+
+/** Map script variableUpdates (UNSET → null) for ApiClientStore.applyEnvVarUpdates. */
+function toEnvUpdates(updates: Record<string, string>): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const [k, v] of Object.entries(updates)) out[k] = v === UNSET ? null : v;
+  return out;
+}
 
 /**
  * "Send request" proxy. The browser cannot call a dev server cross-origin
@@ -59,59 +70,67 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
   app.post('/api/projects/:projectId/api-client/requests/:rid/send', async (c) => {
     const projectId = parseIdParam(c, 'projectId');
     const rid = parseIdParam(c, 'rid');
-    const req = store.getRequest(rid);
+    // Cross-project isolation: a stale request id from the previous project
+    // (project switch leaves the client holding it) must not resolve here.
+    const req = requestInProject(store, projectId, rid);
     if (!req) return c.json({ error: `Request ${rid} not found` }, 404);
 
-    const body = await parseJsonBody<{ envId?: number }>(c);
-    const env = body.envId != null
-      ? store.getEnvironment(body.envId)
-      : store.getDefaultEnvironment(projectId);
+    const body = await parseJsonBody<{ envId?: number; persistVars?: boolean }>(c);
+    // Resolve the env scoped to THIS project. A stale envId pointing at another
+    // project's environment (its own base_url + secrets) is ignored → fall back
+    // to this project's default. That was the cross-project "requests hit the
+    // other API's base URL" bug, and also keeps applyEnvVarUpdates (below) from
+    // writing script var updates into a foreign project's environment.
+    const env = resolveScopedEnv(store, projectId, body.envId);
     const vars = parseEnvVariables(env?.variables_json);
     const baseUrl = env?.base_url ?? '';
-
-    let url: URL;
-    try {
-      url = buildUrl(baseUrl, req.path_template, parseMap(req.query_json), vars);
-    } catch {
-      return c.json({ error: `Could not resolve URL from base '${baseUrl}' + path '${req.path_template}'. Set a base URL in the environment.` }, 422);
-    }
-
-    const headers = resolveMap(parseMap(req.headers_json), vars);
-    let outBody: string | undefined;
-    if (req.body_kind !== 'none' && req.body_json != null) {
-      outBody = resolveTemplate(req.body_json, vars);
-      if (req.body_kind === 'json' && !Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
-        headers['content-type'] = 'application/json';
-      }
-    }
+    const jar = jarFor(projectId, req.collection_id);
 
     const t0 = Date.now();
+    let res;
     try {
-      const res = await sendHttp({
-        url, method: req.method, headers, body: outBody,
-        jar: jarFor(projectId, req.collection_id),
-      });
-      const ms = Date.now() - t0;
-      store.updateRequest(rid, { last_status: res.status, last_run_at: new Date().toISOString() });
-      recordHistory(store, rid, { status: res.status, ok: res.status < 400, duration_ms: ms, url: url.href });
-      return c.json({
-        status: res.status,
-        statusText: res.statusText,
-        headers: res.headers,
-        body: res.body,
-        ms,
-        url: url.href,
-      });
+      res = await executeRequest({ request: req, baseUrl, variables: vars, jar, maxBytes: READ_CAP });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      recordHistory(store, rid, { status: null, ok: false, duration_ms: Date.now() - t0, url: url.href, error: msg });
-      return c.json({ error: msg, url: url.href }, 502);
+      // An unresolvable URL (no base URL set) is a config error, not a 502.
+      if (/Invalid URL|could not|resolve/i.test(msg) && !/ECONN|timed out|socket/i.test(msg)) {
+        return c.json({ error: `Could not resolve URL from base '${baseUrl}' + path '${req.path_template}'. Set a base URL in the environment.` }, 422);
+      }
+      recordHistory(store, rid, { status: null, ok: false, duration_ms: Date.now() - t0, url: req.path_template, error: msg });
+      return c.json({ error: msg, url: req.path_template }, 502);
     }
+
+    store.updateRequest(rid, { last_status: res.status, last_run_at: new Date().toISOString() });
+    recordHistory(store, rid, { status: res.status, ok: res.status < 400, duration_ms: res.ms, url: res.url });
+
+    // Persist script var updates back to the env (default on for manual sends).
+    if (body.persistVars !== false && env && Object.keys(res.variableUpdates).length) {
+      try { store.applyEnvVarUpdates(env.id, toEnvUpdates(res.variableUpdates)); } catch { /* non-fatal */ }
+    }
+
+    return c.json({
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+      body: res.body,
+      ms: res.ms,
+      url: res.url,
+      size: res.size,
+      truncated: res.truncated,
+      tests: [...(res.preScript?.tests ?? []), ...(res.testScript?.tests ?? [])],
+      consoleLogs: [...(res.preScript?.consoleLogs ?? []), ...(res.testScript?.consoleLogs ?? [])],
+      scriptError: res.preScript?.error ?? res.testScript?.error,
+      cookies: jarSnapshot(jar, new URL(res.url).host),
+    });
   });
 
   // Per-request timeline — newest first, capped by HISTORY_KEEP on write.
   app.get('/api/projects/:projectId/api-client/requests/:rid/history', (c) => {
+    const projectId = parseIdParam(c, 'projectId');
     const rid = parseIdParam(c, 'rid');
+    // A stale rid from another project must not leak its send timeline (urls,
+    // statuses, error blobs) under this project's route.
+    if (!requestInProject(store, projectId, rid)) return c.json({ history: [] });
     // Clamp to [1, HISTORY_KEEP] — a negative limit becomes "unlimited" in SQLite.
     const limit = Math.max(1, Math.min(Number(c.req.query('limit') ?? HISTORY_KEEP) || HISTORY_KEEP, HISTORY_KEEP));
     return c.json({ history: store.listRequestHistory(rid, limit) });

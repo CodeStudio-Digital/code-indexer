@@ -8,6 +8,9 @@ import { asAccountId } from '@cloudstudio/cloud-kernel';
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { enforceRateLimit, MINUTE, HOUR } from '../middleware/rate-limit.js';
+import { recordAudit } from '../middleware/audit.js';
+import { hashPii } from '../infra/sha256.js';
 import { respondError } from './_respond.js';
 
 const tokenSchema = z.object({ token: z.string().min(1).max(4096) });
@@ -28,6 +31,8 @@ export function emailRouter(): Hono<{ Bindings: Env }> {
     const bundle = createIdentityBundle(c.env);
     const claims = await requireClaims(c, bundle);
     if (!claims) return unauthorized(c);
+    const limited = await enforceRateLimit(c, [{ key: `resend:acct:${claims.sub}`, limit: 3, windowMs: 15 * MINUTE }]);
+    if (limited) return limited;
     const account = await bundle.accounts.findById(asAccountId(claims.sub));
     if (!account) return unauthorized(c);
     if (account.isEmailVerified) return c.json({ ok: true, alreadyVerified: true }, 200);
@@ -38,9 +43,21 @@ export function emailRouter(): Hono<{ Bindings: Env }> {
   app.post('/request-password-reset', async (c) => {
     const parsed = requestResetSchema.safeParse(await c.req.json().catch(() => ({})));
     if (parsed.success) {
-      await createIdentityBundle(c.env).requestPasswordReset.execute({ emailRaw: parsed.data.email });
+      // Rate-limit per IP AND per email (email-bomb / cost guard) — but still
+      // always return 200 so the limit never becomes an enumeration oracle.
+      const ip = c.req.header('cf-connecting-ip') ?? null;
+      const pepper = c.env.IP_HASH_SALT ?? '';
+      const ipHash = ip ? await hashPii(ip, pepper) : 'noip';
+      const emailHash = await hashPii(parsed.data.email.toLowerCase(), pepper);
+      const limited = await enforceRateLimit(c, [
+        { key: `pwreset:ip:${ipHash}`, limit: 10, windowMs: HOUR },
+        { key: `pwreset:email:${emailHash}`, limit: 3, windowMs: HOUR },
+      ]);
+      if (!limited) {
+        await createIdentityBundle(c.env).requestPasswordReset.execute({ emailRaw: parsed.data.email });
+      }
     }
-    return c.json({ ok: true }, 200); // never reveal whether the email exists
+    return c.json({ ok: true }, 200); // never reveal whether the email exists (or was throttled)
   });
 
   app.post('/reset-password', async (c) => {
@@ -50,7 +67,11 @@ export function emailRouter(): Hono<{ Bindings: Env }> {
       token: parsed.data.token,
       newPasswordRaw: parsed.data.password,
     });
-    return r.ok ? c.json({ ok: true }, 200) : respondError(c, r.error);
+    if (r.ok) {
+      recordAudit(c, 'password_reset', 200, { accountId: r.value.accountId });
+      return c.json({ ok: true }, 200);
+    }
+    return respondError(c, r.error);
   });
 
   return app;

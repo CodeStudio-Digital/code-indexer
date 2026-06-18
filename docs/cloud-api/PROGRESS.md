@@ -332,18 +332,122 @@ Full audit JSON: the workflow run `wf_0a4403a6-806` (transcript in this session'
 
 ---
 
+## 8e. Milestone log (cont.) — Phase 5 Feedback
+
+- **M9 — Phase 5: Feedback intake (bug/idea/report + R2 attachments + Turnstile).** New pure package
+  **`packages/cloud-feedback`** (deps: cloud-kernel + **cloud-sharing** — reuses the redaction engine):
+  - domain: `feedback.ts` (`FeedbackKind` bug|idea|other, `FeedbackStatus` lifecycle, discriminated
+    `Submitter` account|anonymous, `FeedbackTicket`, `FeedbackAttachment`, `FeedbackSummary`), `errors.ts`
+    (`FeedbackError` + `feedbackHttpStatus`: validation 400, human_required/failed 403, rate_limited 429,
+    not_found 404, attachment_too_large 413, attachment_type_rejected 415, storage 503), `ports.ts`
+    (`FeedbackRepo`, `AttachmentStore`, `BotVerifier`, `ContentSniffer`).
+  - application: `submit-feedback.ts` (attributed vs **anonymous-requires-Turnstile**; **re-redacts the
+    free-text message through the shared sharing `redactText`** so a pasted secret/path never lands in the
+    DB; attachments must be owned by the caller), `attachments.ts` (Worker-PROXIED upload — sniff magic
+    bytes + size cap BEFORE R2, server-generated key, ignores client content-type), `list-feedback.ts`.
+  - Worker infra: `infra/content-sniffer.ts` (images-only allowlist PNG/JPEG/GIF/WEBP — structurally
+    rejects SVG/HTML/PDF/polyglots), `infra/r2-attachment-store.ts` (R2 `ASSETS` bucket),
+    `infra/turnstile.ts` (siteverify; `enabled=false` w/o secret ⇒ anon disabled), `infra/d1/feedback-repo.ts`
+    (raw IP/email NEVER stored — only salted hashes; list-own hides spam). Migration **`0006_feedback.sql`**
+    (`feedback_tickets`, `feedback_attachments`) applied to **remote + local** D1.
+  - Wiring: `feedback-composition.ts`, `routes/feedback.ts` (`POST /v1/feedback` optional-auth,
+    `POST /v1/feedback/attachment` Bearer, `GET /v1/feedback` Bearer); body cap 6 MB on the attachment
+    sub-path, 32 KB on submit. `Env` gained optional `TURNSTILE_SECRET`.
+  - **Verified:** **+17 unit tests** (`cloud-feedback` submit attributed/anon/Turnstile-gating +
+    body-redaction + attachment ownership + list-own; worker `content-sniffer.test.ts` — PNG/JPEG/GIF/WEBP
+    accepted, SVG/HTML/polyglot/empty/random rejected). **84 cloud tests green total.** Worker `tsc` **0**.
+    Live `wrangler dev` smoke: submit bug → **201** with the secret redacted in the stored message; PNG
+    upload → **201 image/png**; disguised HTML → **415 attachment_type_rejected**; submit with the owned
+    attachment → **201** (attachmentCount 1); list-own shows both (redacted); anonymous w/o Turnstile →
+    **403 human_verification_required**; unauth list → **401**. **PHASE 5 COMPLETE** (admin triage UI/
+    endpoints deferred — they need a role/scope system; user-facing intake is done).
+
+---
+
+## 8f. Milestone log (cont.) — Phase 6 (partial): edge security headers + CORS
+
+- **M10 — Phase 6 (partial): security headers + CORS allowlist.** New `src/middleware/security.ts`
+  (Hono `secureHeaders` + `cors`), applied FIRST in the chain on every route:
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'` (the API is
+  JSON-only — nothing is ever loaded), `Strict-Transport-Security` (1y + subdomains),
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
+  `Cross-Origin-Resource-Policy: same-site`. CORS is an **origin allowlist** from `ALLOWED_ORIGINS`
+  (comma-separated) — echoes only allowlisted origins, **never `*`**, `credentials: false` (bearer-only,
+  so no cookie/CSRF surface). `Env` gained optional `ALLOWED_ORIGINS`. **Verified:** Worker `tsc` **0**;
+  live smoke — all six headers present on `/v1/health`, signup still **201** (no regression), a
+  disallowed `Origin` is **not** echoed (no `Access-Control-Allow-Origin`). Remaining Phase 6 items
+  (rate-limit coverage incl. the deferred email/feedback limits, audit log, account deletion/export,
+  admin triage role system, CI) are still open — see §9.
+
+---
+
+## 8g. Milestone log (cont.) — Phase 6 hardening (rate-limit + audit + account lifecycle)
+
+- **M11 — rate limiting, append-only audit log, GDPR account export + erasure.**
+  - **Rate limiting:** kernel `RateLimiter` port + a generic `RateLimitDO` (one serialized DO per key) +
+    `infra/rate-limiter.ts` adapter + `middleware/rate-limit.ts` (`enforceRateLimit(c, rules)` → 429 +
+    `Retry-After`; no-op when the binding is absent for local dev). Wired into the abuse/cost vectors:
+    signup (5/h/IP), password-reset (10/h/IP + 3/h/email — still always 200, no enumeration), resend
+    (3/15m/acct), feedback (20/day authed · 3/h/IP anon), attachment (10/h). wrangler DO binding
+    `RATE_LIMIT` + migration tag `v2`.
+  - **Audit log:** `infra/audit.ts` (`AuditLog` + `redactMeta` — primitive scalars only, secret-ish keys
+    dropped) + `middleware/audit.ts` (`recordAudit` via `executionCtx.waitUntil` — never blocks/fails the
+    response). Migration **`0007_hardening.sql`**: `audit_log` (account_id is plain TEXT, **NO FK** → the
+    row survives account erasure) + triggers blocking UPDATE/DELETE (append-only). Recorded at: signup,
+    login_ok/fail, token_refresh(+reuse), mfa_enabled/disabled, mfa_challenge_ok/fail, password_reset,
+    share_created/revoked, feedback_submitted, billing_webhook_applied, account_export/deleted/delete_denied.
+  - **Account lifecycle:** `routes/account.ts` — `GET /v1/account/export` (cross-context aggregation:
+    profile + sessions + subscription + shares + feedback) and `DELETE /v1/account` (reauth: current
+    password + literal `"DELETE"` → **immediate hard erasure** via FK cascade — true right-to-erasure, no
+    half-state). `infra/account-admin.ts` (`hardDelete` + `purgeAccountBlobs`).
+  - **Verified:** Worker tsc 0; **89 cloud tests** (incl. `audit-redact.test.ts`); live smoke — signup
+    5×201→**429**; export all-keys Bearer-gated; delete wrong-pw 401 / no-confirm 400 / ok 200 /
+    post-login 401 / dangling-token 401; **`account_deleted` tombstone survives erasure**; audit
+    UPDATE+DELETE both **ABORT** (append-only).
+
+- **M12 — adversarial security review (12-agent workflow) + fixes (all re-verified).** Ran a 4-dimension ×
+  3-skeptic review (`wf_1d801937-a26`, 40 agents) over the Phase 6 code. **8 of 12 candidates confirmed**
+  (4 dismissed). All fixed:
+  - **[HIGH] Unsalted `ip_hash`/`emailHash`** (`sha256Hex(ip)` of a 2³² IPv4 / known email is rainbow-table
+    reversible — and the schema comments falsely claimed "salted"). → New `hashPii(value, pepper)` =
+    **HMAC-SHA256** keyed by `IP_HASH_SALT`; routed ALL IP/email hashing through it (audit/auth/2fa/
+    feedback/email); `sha256Hex` kept ONLY for high-entropy token hashing (correct there). Comments
+    corrected. **Live-verified**: stored `ip_hash` now equals `HMAC(salt,ip)`, not bare `sha256(ip)`.
+  - **[HIGH] Account erasure left feedback attachment blobs in R2** (DB cascade doesn't touch R2). →
+    `purgeAccountBlobs` lists+deletes `feedback/<accountId>/` before the DB delete (fails closed: R2 error
+    ⇒ 500, account survives). **Live-verified**: object present before delete, "key does not exist" after.
+  - **[MED] Fixed-window ~2× boundary burst** → `RateLimitDO` rewritten to a **sliding-window** log.
+  - **[MED] /auth/refresh unaudited** → audits `token_refresh` + `token_refresh_fail` (**live-verified the
+    `token_reuse` theft signal is captured**).
+  - **[MED] 2FA challenge unaudited** → audits `mfa_challenge_ok/fail` (brute-force trail).
+  - **[MED] `password_reset` audit had account_id NULL** → `ResetPasswordUseCase` now returns `accountId`;
+    the row is attributed.
+  - **[MED] DELETE /v1/account reauth = unbounded password oracle** → added a 10/h per-account rate limit.
+  - **[LOW] Audit fire-and-forget swallows errors** → ACCEPTED: a failed write must not fail a deletion;
+    the existing `console.error` is the alerting signal (visible in Workers logs).
+  - Re-verified: Worker tsc 0, **89 cloud tests green**, migrations 0001–0007 on remote + local D1.
+  **PHASE 6 COMPLETE** except deliberately-deferred items (admin triage role system; CI pipeline).
+
+---
+
 ## 9. State of the build & next steps (for the morning review)
 
 **Done & verified tonight (unsupervised):** Phase 0 (scaffolding) + Phase 1 (full identity: signup,
 login, refresh w/ rotation+reuse-revocation, logout/immediate-revocation, session list, IP lockout DO,
 TOTP 2FA + recovery codes) + Phase 2 (email verification + password reset) + Phase 3 (billing:
 entitlements + 14-day auto-trial + Stripe behind a `PaymentGateway` port + idempotent webhook) +
-**Phase 4 (sharing: two-layer redaction engine + Ed25519-signed denormalized snapshots + public
-read-only viewer feed, entitlement-gated)**. **67 unit tests green** (17 identity + 24 billing +
-26 sharing/signer), Worker tsc 0 errors, multiple live `wrangler dev` smokes (incl. the RFC-6238 TOTP
-vector, real email-token round-trips, the billing auto-trial + webhook-signature path, and the
-sharing create→redact→sign→public-view→revoke flow). Migrations 0001–0005 on **remote + local** D1.
-**Nothing committed.**
+Phase 4 (sharing: two-layer redaction engine + Ed25519-signed denormalized snapshots + public
+read-only viewer feed, entitlement-gated) + Phase 5 (feedback: bug/idea intake + Worker-proxied
+magic-byte-sniffed R2 attachments + Turnstile-gated anonymous path, free-text re-redacted) + **Phase 6
+(hardening: security headers + CORS allowlist, generic sliding-window rate limiting, append-only audit
+log, GDPR account export + erasure) — PLUS a 12-agent adversarial security review that confirmed 8 of 12
+candidate findings (2 HIGH, 5 MED, 1 LOW), all fixed and re-verified**.
+**89 unit tests green** (17 identity + 24 billing + 26 sharing/signer + 17 feedback/sniffer + 5 audit-redact),
+Worker tsc 0 errors, extensive live `wrangler dev` smokes (RFC-6238 TOTP vector, email-token round-trips,
+billing auto-trial + webhook-signature, sharing create→redact→sign→public-view→revoke, feedback
+submit→redact→attachment-sniff→list→anon-gate, security headers, rate-limit 429, append-only triggers,
+peppered-`ip_hash` HMAC match, R2 blob erasure on delete, `token_reuse` audit). Migrations 0001–0007 on
+**remote + local** D1. **Nothing committed.** Phase 6 remaining: admin triage role system + CI only.
 
 **Known external state (not blockers, just FYI):** the monorepo `tsc -p tsconfig.prod.json` reports
 **10 errors, all in `packages/code-agent/*`** — concurrent WIP by other work in the tree, **NOT** the
@@ -351,8 +455,9 @@ cloud API (which is clean via the Worker tsc + vitest).
 
 **To go live (your decisions / inputs needed):**
 1. **Deploy the Worker:** `pnpm --filter @cloudstudio/cloud-api exec wrangler deploy` (after
-   `wrangler login`). Set the prod secret: `wrangler secret put ACCESS_SIGNING_SECRET`. The D1 schema is
-   already on the remote DB (`codestudio-cloud`), migrations 0001–0003 applied.
+   `wrangler login`). Set prod secrets: `ACCESS_SIGNING_SECRET`, `IP_HASH_SALT`, `SHARE_SIGNING_PRIVKEY`
+   (+ Stripe/Turnstile when enabling those). The D1 schema is already on the remote DB
+   (`codestudio-cloud`), migrations 0001–0007 applied; `wrangler deploy` ships the two Durable Objects.
 2. **Email delivery:** onboard a sender domain in Cloudflare (Compute → Email Service → Email Sending),
    then uncomment the `send_email` binding in `wrangler.jsonc` and set `EMAIL_FROM`. Until then signup
    still works; the verification email just logs to the console.
@@ -367,10 +472,20 @@ cloud API (which is clean via the Worker tsc + vitest).
    and a `SHARE_BASE_URL` var (the viewer origin). The signed JSON feed at `/s/:slug` is already live; the
    HTML viewer page + desktop "Share" button are Phase 7.
 
+5. **Feedback (Phase 5 go-live):** set `wrangler secret put TURNSTILE_SECRET` (+ the Turnstile sitekey
+   in the client) to enable the anonymous submit path. Authenticated feedback + attachments already work;
+   attachments stream into the `ASSETS` R2 bucket under `feedback/<accountId>/<uuid>.<ext>`.
+
+6. **Hardening (Phase 6 go-live):** `wrangler secret put IP_HASH_SALT` (REQUIRED — without it PII hashes
+   degrade to keyless/reversible) and set `ALLOWED_ORIGINS` (var) to the web viewer/dashboard origins. The
+   `RATE_LIMIT` Durable Object ships via `wrangler deploy` (migration tag v2).
+
 **Next phases (in order, each its own session/part):**
-5. **Phase 5 — Feedback** (R2 attachments + Turnstile). Plan §4.
-6. **Phase 6 — Hardening** (rate-limit coverage audit, audit log, CSP, account deletion/export, CI).
-7. **Phase 7 — Client integration** (desktop token store, cloud client, auth/share/feedback UI). Plan §7.
+6b. **Phase 6 tail (deferred):** admin triage role/scope system (the feedback admin endpoints) + a CI
+    pipeline. These need a roles design + a push to verify; everything else in Phase 6 is done.
+7. **Phase 7 — Client integration** (desktop token store in `safeStorage`, single-flight refresh, cloud
+   client, auth/subscription/share/feedback UI, the HTML share viewer page). Plan §7. **This is the
+   largest remaining piece and the natural next focus.**
 
 Phase 3's money path is built and unit+smoke-verified end-to-end **except** the two Stripe-hosted
 redirects (checkout/portal), which are coded but inert until the test keys are set. Phase 4's sharing is

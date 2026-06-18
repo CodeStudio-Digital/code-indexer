@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import { runCoder } from '@mcp/code-agent/index.js';
+import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
@@ -372,17 +373,11 @@ export function mountCoderStreamRoutes(
     {
       const session = sessionStore.getSession(id);
       if (session?.project_id != null) {
+        // Global session: rebuild the synthetic union's junctions if missing,
+        // then index the union itself (session.project_id IS the synthetic
+        // project whose root spans every linked project via junctions).
+        if (session.is_global) ensureGlobalWorkspaceLinks(deps, session);
         deps.projectIndexService.ensureFresh(session.project_id, 'session');
-        // Global session: also keep every linked secondary project fresh, so the
-        // agent's cross-project search/symbols (mcp__<slug>__*) hit live indexes.
-        // ensureFresh is a no-op when already fresh, so looping is cheap.
-        if (session.is_global) {
-          for (const lp of sessionStore.getSessionProjects(id)) {
-            if (lp.project_id !== session.project_id) {
-              deps.projectIndexService.ensureFresh(lp.project_id, 'session');
-            }
-          }
-        }
       }
     }
 

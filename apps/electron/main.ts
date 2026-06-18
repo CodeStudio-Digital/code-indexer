@@ -18,7 +18,7 @@
  * loopback — every call is in-process IPC.
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell, Notification, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Notification, protocol, session } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createApp } from '@apps/http-api/server.js';
@@ -29,6 +29,7 @@ import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
 import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
+import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
@@ -103,6 +104,30 @@ async function bootstrap() {
     app.setAppUserModelId(APP_USER_MODEL_ID);
   }
 
+  // Allow microphone capture for the composer voice-dictation button. Electron
+  // denies `media`/`audioCapture` by default, so getUserMedia would reject
+  // silently without this grant. Two layers of scoping:
+  //   1. audio-only — camera/geolocation/etc. stay denied.
+  //   2. origin-gated — only the trusted app origins (packaged file://, the
+  //      in-process mcp:// backend, or the dev server) may capture the mic.
+  //      Preview/loopback windows share this default session but load arbitrary
+  //      localhost content, so a stray/over-permissive page there must NOT be
+  //      able to open the mic without a prompt.
+  // OS-level mic permission (Windows privacy / macOS prompt) still applies on top.
+  const allowMic = (permission: string) => permission === 'media' || permission === 'audioCapture';
+  const micOriginAllowed = (url: string | undefined | null): boolean => {
+    if (!url) return false;
+    return url.startsWith('mcp://') || url.startsWith('file://') || (!!DEV_URL && url.startsWith(DEV_URL));
+  };
+  session.defaultSession.setPermissionRequestHandler((wc, permission, cb, details) => {
+    const url = wc?.getURL() || details?.requestingUrl || '';
+    cb(allowMic(permission) && micOriginAllowed(url));
+  });
+  session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
+    const url = requestingOrigin || wc?.getURL() || '';
+    return allowMic(permission) && micOriginAllowed(url);
+  });
+
   // Pin the local-embedding model cache to a stable per-user dir so the
   // transformers.js model downloads once and survives app updates — never
   // into the read-only asar bundle. Read by LocalEmbeddingService. Set
@@ -165,6 +190,7 @@ async function bootstrap() {
   mountTerminalIpc(deps);
   registerNativeIpc();
   registerWindowIpc();
+  registerWindowControlsIpc();
   registerOAuthLoopbackIpc(honoApp);
   registerMcpProtocol(honoApp);
 
@@ -197,6 +223,14 @@ async function bootstrap() {
     e.preventDefault();
     void (async () => {
       try {
+        // Dispose worker pools FIRST so each worker's `stop` handler parks an
+        // interactive pause / flushes its in-flight turn before the shared
+        // dbWriter is closed below. Windows GUI quit emits no SIGINT/SIGTERM,
+        // so the http-api signal handler never runs — without this the worker
+        // dies unflushed and loses the last turn.
+        const { disposeCoderWorkerPool } = await import('../http-api/sse/coderWorkerPoolSingleton.js');
+        const { disposeWorkerOrchestratorPool } = await import('../http-api/sse/workerPoolSingleton.js');
+        await Promise.allSettled([disposeCoderWorkerPool(), disposeWorkerOrchestratorPool()]);
         const { runShutdownTasks } = await import('../http-api/server/shutdown-tasks.js');
         const { disposeIndexerProcessResources } = await import('@mcp/indexer/bootstrap/dispose.js');
         await Promise.allSettled([runShutdownTasks(), disposeIndexerProcessResources()]);
@@ -282,6 +316,17 @@ function attachWindowHandlers(win: BrowserWindow) {
     event.preventDefault();
     void shell.openExternal(url);
   });
+
+  // Push window-state changes to the renderer so the custom title bar can
+  // (a) swap the maximize⇄restore icon and (b) dim the bar when the window
+  // loses focus — both native behaviors the frameless chrome must replicate.
+  const send = (channel: string, value: boolean): void => {
+    if (!win.isDestroyed()) win.webContents.send(channel, value);
+  };
+  win.on('maximize', () => send('window:maximized-changed', true));
+  win.on('unmaximize', () => send('window:maximized-changed', false));
+  win.on('focus', () => send('window:focus-changed', true));
+  win.on('blur', () => send('window:focus-changed', false));
 }
 
 /**
@@ -301,6 +346,16 @@ async function createAppWindow(routeSuffix?: string, onReveal?: () => void): Pro
     title: 'CodeStudio',
     ...(appIconPath ? { icon: appIconPath } : {}),
     autoHideMenuBar: true,
+    // Frameless title bar: the dashboard's top `<header>` IS the title bar
+    // (drag region + custom min/max/close), so the redundant native caption
+    // bar is removed. `titleBarStyle: 'hidden'` (NOT `frame: false`) keeps the
+    // OS resize borders and native double-click-to-maximize on the drag
+    // region. On macOS we keep the native traffic-lights (convention) and
+    // nudge them down to vertically center in the 36px header.
+    titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 12, y: 11 } }
+      : {}),
     // Stay hidden until the renderer paints its first frame, then reveal —
     // this is what kills the blank/white window flash. The dark background
     // also avoids a white flicker for the brief pre-paint moment.

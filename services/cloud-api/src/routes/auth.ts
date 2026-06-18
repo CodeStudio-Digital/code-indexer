@@ -8,10 +8,13 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { asAccountId } from '@cloudstudio/cloud-kernel';
+import { identityHttpStatus } from '@cloudstudio/cloud-identity';
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
-import { sha256Hex } from '../infra/sha256.js';
+import { hashPii } from '../infra/sha256.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
+import { recordAudit } from '../middleware/audit.js';
 import { respondError } from './_respond.js';
 
 type Ctx = Context<{ Bindings: Env }>;
@@ -28,7 +31,7 @@ const invalidInput = (c: Ctx, details: unknown) =>
 
 async function reqCtx(c: Ctx): Promise<{ ua: string | null; ipHash: string | null }> {
   const ip = c.req.header('cf-connecting-ip') ?? null;
-  return { ua: c.req.header('user-agent') ?? null, ipHash: ip ? await sha256Hex(ip) : null };
+  return { ua: c.req.header('user-agent') ?? null, ipHash: ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null };
 }
 
 export function authRouter(): Hono<{ Bindings: Env }> {
@@ -41,6 +44,9 @@ export function authRouter(): Hono<{ Bindings: Env }> {
       return c.json({ code: 'password_mismatch', message: 'Passwords do not match.' }, 400);
     }
     const { ua, ipHash } = await reqCtx(c);
+    // Signup fires a verification email → rate-limit per IP (email-bomb / cost guard).
+    const limited = await enforceRateLimit(c, [{ key: `signup:ip:${ipHash}`, limit: 5, windowMs: HOUR }]);
+    if (limited) return limited;
     const bundle = createIdentityBundle(c.env);
     const r = await bundle.signup.execute({
       emailRaw: parsed.data.email,
@@ -55,6 +61,7 @@ export function authRouter(): Hono<{ Bindings: Env }> {
     } catch {
       /* ignore */
     }
+    recordAudit(c, 'signup', 201, { accountId: r.value.account.id });
     return c.json(r.value, 201);
   });
 
@@ -68,13 +75,21 @@ export function authRouter(): Hono<{ Bindings: Env }> {
       userAgent: ua,
       ipHash,
     });
-    return r.ok ? c.json(r.value, 200) : respondError(c, r.error);
+    if (r.ok) {
+      recordAudit(c, 'login_ok', 200, { accountId: r.value.account.id });
+      return c.json(r.value, 200);
+    }
+    recordAudit(c, 'login_fail', identityHttpStatus(r.error), { reason: r.error.code });
+    return respondError(c, r.error);
   });
 
   app.post('/refresh', async (c) => {
     const parsed = refreshSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return invalidInput(c, parsed.error.flatten());
     const r = await createIdentityBundle(c.env).refresh.execute({ refreshToken: parsed.data.refreshToken });
+    // Audit rotation — `token_reuse` here is the stolen-token / theft signal.
+    if (r.ok) recordAudit(c, 'token_refresh', 200);
+    else recordAudit(c, 'token_refresh_fail', identityHttpStatus(r.error), { reason: r.error.code });
     return r.ok ? c.json(r.value, 200) : respondError(c, r.error);
   });
 

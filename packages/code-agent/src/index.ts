@@ -59,6 +59,7 @@ import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
 import { parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
 import { buildDsConsumerBlock } from '@mcp/code-agent/core/ds-consumer-prompt.js';
+import { buildDiagramGuidance } from '@mcp/code-agent/prompts/diagram-guidance.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
@@ -88,6 +89,7 @@ import { execCommandTools } from '@mcp/code-agent/tools/exec-command.js';
 import { webTools } from '@mcp/code-agent/tools/web.js';
 import { httpTools } from '@mcp/code-agent/tools/http.js';
 import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
+import { diagramTools } from '@mcp/code-agent/tools/diagram/index.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
@@ -226,21 +228,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const project = db.getProject(session.project_id);
   if (!project) throw new Error(`Project ${session.project_id} not found`);
 
-  // Global (multi-project) session: the linked SECONDARY projects. The PRIMARY
-  // (`session.project_id`) stays the native cwd and keeps its normal single
-  // bridge; each secondary is additionally exposed as prefixed `mcp__<slug>__*`
-  // read tools (Seam B below). Empty for normal sessions AND for company runs
-  // (company gets its projects from `companyContext.orchestrator` instead), so
-  // this is completely inert for them. Sorted by project_id so the resulting
-  // tool array — a prompt-cache prefix — stays byte-stable across turns.
-  const linkedSecondaryProjects: { id: number; name: string; rootPath: string }[] =
-    (!opts.companyContext && session.is_global)
-      ? store
-          .getSessionProjects(session.id)
-          .filter((lp) => lp.project_id !== session.project_id)
-          .map((lp) => ({ id: lp.project_id, name: lp.name, rootPath: lp.root_path }))
-          .sort((a, b) => a.id - b.id)
-      : [];
+  // Global (multi-project) session — v2 VIRTUAL UNION model: the session runs
+  // over a SYNTHETIC project whose `root_path` is a directory of junctions to
+  // every linked project (built by the http-api). So the normal single-project
+  // path ALREADY spans every project — the runner needs no per-project bridges
+  // and no multi-root resolver. Kept empty so the Phase-2 bridge loop and the
+  // Phase-3 `roots`/`selectRoot` stay completely INERT for normal, company AND
+  // global sessions alike.
+  const linkedSecondaryProjects: { id: number; name: string; rootPath: string }[] = [];
 
   // Deterministic project→slug shared by every prefixed-tool path AND the
   // multi-root fs resolver. The tool array is a prompt-cache prefix, so this
@@ -352,6 +347,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // they only surface for the `api` agent (or after expand_toolset('api')).
   // They read ctx.projectId + the module-global ApiClientStore.
   registry.registerAll(apiClientTools);
+  // draw.io diagram tools — gated to the `diagram` tool tier, so they only
+  // surface for the `diagram` agent (or after expand_toolset('diagram')).
+  // Stateless: each reads ctx.cwd and writes .drawio via the fs port.
+  registry.registerAll(diagramTools);
   registry.registerAll(globTools);
   registry.registerAll(ragSearchDocsTools);
   registry.registerAll(ragReadDocTools);
@@ -1197,9 +1196,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     repoMap,
     agentLoopV2: agentLoopV2EnvFlag,
     agentId: effectiveAgentId ?? undefined,
-    // Plan-depth directive (only consumed in plan mode). Explicit opt wins
-    // (company/role), else the sticky session column (migration 151), else
-    // `normal`. Cache-stable axis above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
+    // Plan-depth directive (consumed only in plan mode; the `spec` agent is
+    // excluded in buildSystemPrompt). Explicit opt wins (company/role), else
+    // the sticky session column (migration 151), else `normal`. The value is
+    // normalized defensively in buildPlanDepthBlock. Cache-stable axis above
+    // SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
     planDepth:
       opts.planDepth
       ?? (session.plan_depth_override as 'simple' | 'normal' | 'complex' | null)
@@ -1240,6 +1241,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // DS consumer block — derives from the pinned published version
     // (immutable rows), so the prefix stays byte-stable across turns.
     systemPrompt += '\n' + buildDsConsumerBlock(dsConsumer);
+  }
+
+  // Draw.io diagram guidance — appended only when the `diagram` tier will be
+  // active (the `diagram` agent, or a session that persisted
+  // expand_toolset('diagram')). Static + byte-stable → prompt-cache safe.
+  const diagramTierActive =
+    effectiveAgentId === 'diagram' ||
+    (persistedToolset?.extraTiers?.includes('diagram') ?? false);
+  if (diagramTierActive) {
+    systemPrompt += '\n' + buildDiagramGuidance();
   }
 
   // Append skill awareness block. Mode resolution priority:
@@ -1351,6 +1362,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // safe). Other sessions unlock on demand via `expand_toolset('api')`.
   if (effectiveAgentId === 'api') {
     activeTiers.add('api');
+  }
+  // Auto-activate the `diagram` tier for the draw.io diagram agent so the
+  // diagram_* tools are present from turn 1. Other sessions unlock on demand
+  // via `expand_toolset('diagram')`.
+  if (effectiveAgentId === 'diagram') {
+    activeTiers.add('diagram');
   }
   // Sticky extra tiers (mig 142): master/preview/custom tiers this session
   // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that
@@ -1930,6 +1947,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       cache_read_input_tokens: number;
       cache_creation_input_tokens: number;
     };
+    /**
+     * In-flight checkpoint (set by `awaiting_input` when the turn parks on
+     * waitForUserInput). `promise` resolves when the assistant message has been
+     * durably written; `messageId` is that row's id so the eventual flush
+     * COMPLETES it (existing_message_id) instead of inserting a duplicate.
+     * Stored on the turn itself — discarded with the buffer — so concurrent
+     * turns can never clobber each other's checkpoint state.
+     */
+    checkpoint?: { promise: Promise<void>; messageId: number | null };
   }
   /**
    * Cheap heuristic for the `truncated` flag in coder_tool_calls. Every
@@ -1954,6 +1980,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (!pendingTurn) return;
     const turn = pendingTurn;
     pendingTurn = null;
+    // If this turn was checkpointed while awaiting input (see `awaiting_input`),
+    // wait for that write to settle and reuse its row id so we COMPLETE (not
+    // duplicate) the assistant message. State lives on `turn`, so a later turn's
+    // checkpoint cannot clobber ours across this await.
+    if (turn.checkpoint) {
+      try { await turn.checkpoint.promise; } catch { /* fall back to fresh insert */ }
+    }
     // By now persistTurnTelemetry has run for this turn (runner emits
     // it before turn_start), so lastTurnTelemetryId points at the row we
     // want to JOIN against. Stamp every tool call with it.
@@ -1971,6 +2004,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       tool_calls: turn.toolCalls,
       nested_tool_calls: turn.nestedToolCalls.length > 0 ? turn.nestedToolCalls : undefined,
       subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
+      // Reuse the checkpointed assistant row (if the write succeeded) so the
+      // tool rows + paired tool message attach to it rather than a duplicate.
+      existing_message_id: turn.checkpoint?.messageId ?? undefined,
     };
     try {
       if (dbWriter) {
@@ -1984,6 +2020,55 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       console.error(`[coder] persistAssistantTurn failed for session ${session.id}:`, err);
     }
   };
+
+  // Interactive tool_use names the RESUME path can restore as a live card on
+  // reopen (must match `findPendingInteraction` in coder/state.ts). Only these
+  // are worth checkpointing: a PermissionGate pause (write_file/run_command) or
+  // an execute_tasks budget ask would persist a dangling NON-interactive
+  // tool_use that the dashboard renders as a stuck "running" spinner with no
+  // approve affordance — worse than the pre-fix behavior (turn cleanly gone).
+  const RESUMABLE_INTERACTIVE_TOOLS = new Set([
+    'submit_plan', 'submit_tasks', 'ask_user', 'submit_spec', 'submit_specification_to_master',
+  ]);
+  const hasResumableInteractiveToolUse = (msg: AgentMessage): boolean =>
+    Array.isArray(msg.content) &&
+    msg.content.some((b) => b.type === 'tool_use' && RESUMABLE_INTERACTIVE_TOOLS.has(b.name));
+
+  // Durably persist JUST the assistant message of the turn that is about to
+  // block on user input. Non-destructive: `pendingTurn` stays live so the
+  // tool_result that arrives after approval still buffers and the eventual
+  // flushPendingTurn completes the row. tool_calls:[] → no paired tool message
+  // is written yet; usage:null → no usage bump (both happen at the real flush).
+  const checkpointPendingTurn = (): void => {
+    const turn = pendingTurn;
+    // One checkpoint per turn (a turn can hit multiple permission pauses).
+    if (!turn || turn.checkpoint) return;
+    // Only checkpoint turns the resume path can restore as an interactive card.
+    if (!hasResumableInteractiveToolUse(turn.message)) return;
+    const cp: { promise: Promise<void>; messageId: number | null } = {
+      promise: Promise.resolve(),
+      messageId: null,
+    };
+    turn.checkpoint = cp;
+    cp.promise = (async () => {
+      const payload = {
+        session_id: session.id,
+        message: turn.message,
+        usage: null,
+        tool_calls: [],
+      };
+      try {
+        cp.messageId = dbWriter
+          ? await dbWriter.persistAssistantTurn(payload)
+          : store.persistAssistantTurn(payload);
+      } catch (err) {
+        // Non-fatal: drop the checkpoint so the end-of-turn flush inserts fresh.
+        turn.checkpoint = undefined;
+        console.error(`[coder] checkpointPendingTurn failed for session ${session.id}:`, err);
+      }
+    })();
+  };
+  runner.on('awaiting_input', () => { checkpointPendingTurn(); });
 
   runner.on('tool_call_start', (id, name, input) => {
     pendingToolCalls.set(id, { name, input });

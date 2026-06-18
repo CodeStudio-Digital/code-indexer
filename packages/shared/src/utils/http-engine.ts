@@ -20,6 +20,10 @@ export interface RawResponse {
   statusText: string;
   headers: Record<string, string | string[] | undefined>;
   body: string;
+  /** Total bytes the response would have had (may exceed body.length if capped). */
+  size: number;
+  /** True when the body was cut off at the read cap. */
+  truncated: boolean;
 }
 
 // ─── Cookie jar (host → name → value) ──────────────────────────────────────
@@ -55,16 +59,26 @@ export function isLoopbackHost(host: string): boolean {
   return /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/i.test(host);
 }
 
+/** Snapshot a jar's cookies for one host as `[{name,value}]` (for the UI). */
+export function jarSnapshot(jar: CookieJar, host: string): { name: string; value: string }[] {
+  const m = jar.get(host);
+  if (!m) return [];
+  return [...m.entries()].map(([name, value]) => ({ name, value }));
+}
+
 // ─── Transport ─────────────────────────────────────────────────────────────
 export function doRequest(o: {
   url: URL;
   method: string;
   headers: Record<string, string>;
-  body?: string;
+  body?: string | Buffer;
   insecure: boolean;
   timeoutMs: number;
+  /** Max bytes to buffer from the response body. Defaults to READ_CAP. */
+  maxBytes?: number;
   signal?: AbortSignal;
 }): Promise<RawResponse> {
+  const cap = o.maxBytes ?? READ_CAP;
   return new Promise((resolve, reject) => {
     const isHttps = o.url.protocol === 'https:';
     const reqFn = isHttps ? httpsRequest : httpRequest;
@@ -79,18 +93,20 @@ export function doRequest(o: {
       (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
-        res.on('data', (c: Buffer) => { total += c.length; if (total <= READ_CAP) chunks.push(c); });
+        res.on('data', (c: Buffer) => { total += c.length; if (total <= cap) chunks.push(c); });
         res.on('end', () => resolve({
           status: res.statusCode ?? 0,
           statusText: res.statusMessage ?? '',
           headers: res.headers,
           body: Buffer.concat(chunks).toString('utf8'),
+          size: total,
+          truncated: total > cap,
         }));
       },
     );
     req.setTimeout(o.timeoutMs, () => req.destroy(new Error(`request timed out after ${o.timeoutMs}ms`)));
     req.on('error', reject);
-    if (o.body) req.write(o.body);
+    if (o.body != null && o.body.length > 0) req.write(o.body);
     req.end();
   });
 }
@@ -102,11 +118,13 @@ export interface SendOptions {
   headers?: Record<string, string>;
   /** JSON body — serialized and sent as application/json (overrides `body`). */
   json?: unknown;
-  body?: string;
+  body?: string | Buffer;
   /** Accept self-signed TLS. Defaults to true for loopback hosts. */
   insecure?: boolean;
   /** Timeout in ms — clamped to [1000, 120000]. Default 30000. */
   timeoutMs?: number;
+  /** Max bytes to buffer from the response. Defaults to READ_CAP. */
+  maxBytes?: number;
   /** Cookie jar to read prior cookies from and store Set-Cookie into. */
   jar?: CookieJar;
   signal?: AbortSignal;
@@ -124,13 +142,13 @@ export async function sendHttp(o: SendOptions): Promise<RawResponse> {
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(o.headers ?? {})) headers[k] = String(v);
 
-  let body: string | undefined;
+  let body: string | Buffer | undefined;
   if (o.json !== undefined && o.json !== null) {
     body = JSON.stringify(o.json);
     if (!Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
       headers['content-type'] = 'application/json';
     }
-  } else if (typeof o.body === 'string') {
+  } else if (typeof o.body === 'string' || Buffer.isBuffer(o.body)) {
     body = o.body;
   }
 
@@ -142,7 +160,7 @@ export async function sendHttp(o: SendOptions): Promise<RawResponse> {
     }
   }
 
-  const res = await doRequest({ url: o.url, method, headers, body, insecure, timeoutMs, signal: o.signal });
+  const res = await doRequest({ url: o.url, method, headers, body, insecure, timeoutMs, maxBytes: o.maxBytes, signal: o.signal });
   if (o.jar) storeSetCookies(o.jar, o.url.host, res.headers['set-cookie']);
   return res;
 }

@@ -13,6 +13,7 @@ import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { createSharingBundle } from '../sharing-composition.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { recordAudit } from '../middleware/audit.js';
 
 const blockSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string().max(100_000) }),
@@ -60,6 +61,7 @@ export function sharingRouter(): Hono<{ Bindings: Env }> {
       entitlement: { sharing: ent.features.sharing, maxActiveShares: ent.limits.maxActiveShares },
     });
     if (!r.ok) return respondShareError(c, r.error);
+    recordAudit(c, 'share_created', 201, { accountId, shareId: r.value.shareId, visibility: parsed.data.visibility });
     return c.json({ ...r.value, url: `${c.env.SHARE_BASE_URL}/s/${r.value.slug}` }, 201);
   });
 
@@ -74,6 +76,7 @@ export function sharingRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
     const r = await createSharingBundle(c.env).revoke.execute({ shareId: asShareId(c.req.param('id')), ownerAccountId: asAccountId(claims.sub) });
+    if (r.ok) recordAudit(c, 'share_revoked', 200, { accountId: claims.sub, shareId: c.req.param('id') });
     return r.ok ? c.json(r.value, 200) : respondShareError(c, r.error);
   });
 

@@ -8,12 +8,21 @@ import {
   Edit3,
   FilePlus2,
   FolderPlus,
+  History,
   Trash2,
 } from 'lucide-react';
 import { apiCall } from '../../../lib/api-client.js';
 import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import type { TreeEntry } from '../../../state/file-tree.js';
+import { useLocalHistory } from '../../../state/local-history-store.js';
+import { deleteSelection } from './delete-selection.js';
+
+/** Seleção viva (count para o rótulo; getPaths lido no clique). */
+export interface MenuSelection {
+  count: number;
+  getPaths: () => string[];
+}
 
 export function posixBasename(p: string): string {
   const ix = p.lastIndexOf('/');
@@ -50,9 +59,11 @@ export function buildContextItems(
   projectId: number,
   onMutated: () => void,
   onStartRename: () => void,
+  selection?: MenuSelection,
 ): ContextMenuItem[] {
   const isDir = entry.type === 'dir';
   const parentPath = isDir ? entry.path : posixDirname(entry.path);
+  const multi = (selection?.count ?? 0) > 1;
 
   const promptCreate = async (kind: 'file' | 'folder') => {
     const name = await prompt({
@@ -100,11 +111,36 @@ export function buildContextItems(
       .catch(() => toast.error('Could not access clipboard'));
   };
 
+  // Múltiplos selecionados: o menu age sobre o conjunto inteiro.
+  if (multi && selection) {
+    const doCopyPaths = () => {
+      void navigator.clipboard
+        .writeText(selection.getPaths().join('\n'))
+        .then(() => toast.info(`${selection.count} paths copied`))
+        .catch(() => toast.error('Could not access clipboard'));
+    };
+    return [
+      { id: 'copy-paths', label: `Copy paths (${selection.count})`, icon: ClipboardCopy, onSelect: doCopyPaths },
+      {
+        id: 'delete-selected',
+        label: `Delete selected (${selection.count})`,
+        icon: Trash2,
+        destructive: true,
+        separatorBefore: true,
+        onSelect: () => void deleteSelection(projectId, selection.getPaths(), onMutated),
+      },
+    ];
+  }
+
   return [
     { id: 'new-file', label: 'New file', icon: FilePlus2, onSelect: () => void promptCreate('file') },
     { id: 'new-folder', label: 'New folder', icon: FolderPlus, onSelect: () => void promptCreate('folder') },
     { id: 'rename', label: 'Rename', icon: Edit3, shortcut: 'F2', separatorBefore: true, onSelect: onStartRename },
     { id: 'copy-path', label: 'Copy path', icon: ClipboardCopy, onSelect: doCopyPath },
+    // Local History só para arquivos (pastas não têm versões).
+    ...(!isDir
+      ? [{ id: 'history', label: 'Local History', icon: History, onSelect: () => useLocalHistory.getState().open(projectId, entry.path) } as ContextMenuItem]
+      : []),
     { id: 'delete', label: 'Delete', icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => void doDelete() },
   ];
 }

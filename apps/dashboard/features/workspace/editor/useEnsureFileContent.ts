@@ -29,7 +29,7 @@ export function useEnsureFileContent(file: OpenFile): void {
     })
       .then((res) => {
         if (cancelled || 'notModified' in res) return;
-        applyExternalContent(file.path, res.content, res.last_modified);
+        applyExternalContent(file.projectId, file.path, res.content, res.last_modified);
       })
       .catch(() => {
         /* deleted/unreadable — the fs-events stream surfaces the delete */

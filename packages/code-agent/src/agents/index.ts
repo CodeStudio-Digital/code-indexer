@@ -25,7 +25,7 @@
  */
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 
-export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'builder' | 'api';
+export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'builder' | 'api' | 'diagram';
 
 export interface AgentDefinition {
   id: AgentId;
@@ -122,6 +122,16 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     // Verification, not creativity — keep it deterministic.
     defaultTemperature: 0.1,
   },
+  diagram: {
+    id: 'diagram',
+    description:
+      'Draw.io diagrams. Authors complex diagrams (flowchart, software/cloud architecture, network, ER, sequence, C4) as real .drawio files rendered in a live embedded editor. Navigate tier + the `diagram` tool tier (diagram_create/update/read/list/export). Use to design architecture and implementation solutions visually.',
+    profile: 'navigate',
+    planMode: false,
+    maxTurns: 120,
+    // Visual design benefits from a little variation while staying coherent.
+    defaultTemperature: 0.4,
+  },
 };
 
 export function isAgentId(v: string): v is AgentId {
@@ -132,7 +142,8 @@ export function isAgentId(v: string): v is AgentId {
     v === 'admin' ||
     v === 'spec' ||
     v === 'builder' ||
-    v === 'api'
+    v === 'api' ||
+    v === 'diagram'
   );
 }
 

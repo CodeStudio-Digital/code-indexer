@@ -393,16 +393,21 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
  * ambition — a CEILING, not a quota. The shared closing line reiterates
  * right-sizing so a trivial task in `complex` still yields a small plan.
  */
-function buildPlanDepthBlock(depth: 'simple' | 'normal' | 'complex'): string {
-  const body: Record<typeof depth, string> = {
+function buildPlanDepthBlock(depth: string): string {
+  const body = {
     simple:
       'Target a lean, direct plan (~50–150 lines of markdown). Investigate just enough to be correct: localize the change and its immediate call-sites, then plan.',
     normal:
       'Target a complete plan (~300–1000 lines of markdown). Investigate the affected areas thoroughly: dependencies, call-sites, reusable prior art, and the verification path.',
     complex:
       'Target a meticulous plan (2000+ lines of markdown). Investigate exhaustively: map the full dependency graph, edge cases, migrations, and a concrete end-to-end verification plan. Decompose with `submit_tasks` when the work has 2+ independent parts.',
-  };
-  return `## Plan depth — ${depth}\n${body[depth]}\nThis is a target ceiling, not a quota: if the task is genuinely simpler than the selected depth and your investigation is exhausted, deliver the smaller plan the task warrants.`;
+  } as const;
+  // Normalize at the single rendering chokepoint: callers reach here via a
+  // type cast over the persisted column (index.ts), so a value corrupted by
+  // direct SQL (never via the validated PATCH) would otherwise render
+  // "## Plan depth — <garbage>\nundefined". Anything not simple/complex → normal.
+  const key: keyof typeof body = depth === 'simple' || depth === 'complex' ? depth : 'normal';
+  return `## Plan depth — ${key}\n${body[key]}\nThis is a target ceiling, not a quota: if the task is genuinely simpler than the selected depth and your investigation is exhausted, deliver the smaller plan the task warrants.`;
 }
 
 /**

@@ -101,6 +101,21 @@ describe('buildSymbolCompletion', () => {
     );
     expect(item.labelDetails).toEqual({ description: 'domain\\service\\users' });
   });
+
+  it('callable: params em labelDetails.detail + namespace à direita (IntelliJ-style)', () => {
+    const item = buildSymbolCompletion(
+      sym({ name: 'find', kind: 'method', parameters: '(int $id)', return_type: 'User', file_path: 'domain/repo/UserRepo.php' }),
+      1, { showPath: true, languageId: 'php' },
+    );
+    expect(item.labelDetails).toEqual({ detail: '(int $id)', description: 'domain\\repo' });
+  });
+
+  it('sem path: description cai no tipo de retorno; params vazios não viram detail', () => {
+    const item = buildSymbolCompletion(
+      sym({ name: 'count', kind: 'function', parameters: '()', return_type: 'int' }), 0,
+    );
+    expect(item.labelDetails).toEqual({ description: 'int' });
+  });
 });
 
 describe('isTypePosition', () => {

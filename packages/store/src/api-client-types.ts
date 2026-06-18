@@ -3,7 +3,11 @@
  * mirror the DB columns (snake_case) so hydration is a near-cast — only the
  * integer-boolean columns (`verified`, `is_default`) are coerced.
  */
-export type ApiBodyKind = 'none' | 'json' | 'raw' | 'form';
+// 'form' is a legacy alias (pre-mig-156) read as 'urlencoded' by the backend.
+export type ApiBodyKind =
+  | 'none' | 'json' | 'raw' | 'form-data' | 'urlencoded' | 'graphql' | 'binary' | 'form';
+export type ApiBodyRawLang = 'text' | 'json' | 'xml' | 'html' | 'javascript';
+export type ApiAuthType = 'none' | 'bearer' | 'basic' | 'apikey' | 'oauth2';
 export type ApiRequestSource = 'manual' | 'openapi' | 'agent';
 export type ApiRunStatus = 'running' | 'passed' | 'failed' | 'error';
 export type ApiRunTrigger = 'manual' | 'cli' | 'agent';
@@ -15,6 +19,8 @@ export interface ApiCollection {
   description: string;
   spec_source: string | null;
   spec_hash: string | null;
+  /** Explicit ordered folder names (JSON string[]) — lets empty folders persist. */
+  folders_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -41,6 +47,25 @@ export interface ApiRequest {
   query_json: string;
   body_json: string | null;
   body_kind: ApiBodyKind;
+  /** raw-body sub-language hint (when body_kind === 'raw'). */
+  body_raw_lang: ApiBodyRawLang | null;
+  /** KvRow[] JSON for form-data (rows may carry a file `src`). */
+  body_form_json: string;
+  /** KvRow[] JSON for x-www-form-urlencoded. */
+  body_urlencoded_json: string;
+  /** `{ query: string, variables: string }` JSON for GraphQL. */
+  body_graphql_json: string | null;
+  /** Absolute host path streamed for body_kind === 'binary'. */
+  body_binary_path: string | null;
+  /** Pre-request JS (Postman `pm.*`). */
+  pre_request_script: string | null;
+  /** Test/post-response JS (Postman `pm.*`). */
+  test_script: string | null;
+  auth_type: ApiAuthType | null;
+  /** Per-type auth config JSON; shape depends on auth_type. */
+  auth_json: string | null;
+  /** Single-level group label (OpenAPI tag / first path segment). '' = top level. */
+  folder: string | null;
   verified: boolean;
   expected_status: number | null;
   assert_json: string | null;
@@ -106,6 +131,16 @@ export interface CreateRequestInput {
   query_json?: string;
   body_json?: string | null;
   body_kind?: ApiBodyKind;
+  body_raw_lang?: ApiBodyRawLang | null;
+  body_form_json?: string;
+  body_urlencoded_json?: string;
+  body_graphql_json?: string | null;
+  body_binary_path?: string | null;
+  pre_request_script?: string | null;
+  test_script?: string | null;
+  auth_type?: ApiAuthType | null;
+  auth_json?: string | null;
+  folder?: string | null;
   sort_order?: number;
   source?: ApiRequestSource;
 }
@@ -124,6 +159,9 @@ export type RequestPatch = Partial<
   Pick<
     ApiRequest,
     | 'name' | 'method' | 'path_template' | 'headers_json' | 'query_json'
-    | 'body_json' | 'body_kind' | 'sort_order' | 'last_status' | 'last_run_at'
+    | 'body_json' | 'body_kind' | 'body_raw_lang' | 'body_form_json'
+    | 'body_urlencoded_json' | 'body_graphql_json' | 'body_binary_path'
+    | 'pre_request_script' | 'test_script' | 'auth_type' | 'auth_json' | 'folder'
+    | 'sort_order' | 'last_status' | 'last_run_at'
   >
 >;

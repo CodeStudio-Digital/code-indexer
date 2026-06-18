@@ -40,9 +40,11 @@ interface StashViewProps {
   projectId: number;
   /** Bubble to parent so Changes tab re-fetches status after apply/pop. */
   onMutated: () => void;
+  /** A conflict is already in progress — block apply/pop. */
+  opInProgress?: boolean;
 }
 
-export function StashView({ projectId, onMutated }: StashViewProps) {
+export function StashView({ projectId, onMutated, opInProgress }: StashViewProps) {
   const [stashes, setStashes] = useState<GitStashEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -99,7 +101,7 @@ export function StashView({ projectId, onMutated }: StashViewProps) {
         if (method !== 'projectGit.stashApply') {
           const { openFiles, closeFile } = useWorkspaceStore.getState();
           for (const f of openFiles) {
-            if (f.kind === 'git-stash') closeFile(f.path);
+            if (f.kind === 'git-stash') closeFile(f.projectId, f.path);
           }
         }
         onMutated();
@@ -170,6 +172,7 @@ export function StashView({ projectId, onMutated }: StashViewProps) {
           className="h-6 w-6"
           onClick={() => setCreateOpen(true)}
           title="New stash"
+          disabled={opInProgress}
         >
           <Plus className="h-3 w-3" />
         </Button>
@@ -189,6 +192,7 @@ export function StashView({ projectId, onMutated }: StashViewProps) {
             key={s.index}
             entry={s}
             busy={busyRef === s.index}
+            opInProgress={opInProgress}
             onOpen={() => openDetail(s)}
             onPop={() => void runOp('Pop', 'projectGit.stashPop', s.index)}
             onApply={() => void runOp('Apply', 'projectGit.stashApply', s.index)}

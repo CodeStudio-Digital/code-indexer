@@ -6,8 +6,7 @@
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { sendHttp } from '@mcp/shared/utils/http-engine.js';
-import { buildUrl, parseMap, resolveMap, resolveTemplate } from '@mcp/services/api-client/request-builder.js';
+import { executeRequest } from '@mcp/services/api-client/execute-request.js';
 import { runCollection } from '@mcp/services/api-client/regression-runner.js';
 import { resolveApiCtx, jarForProject, resolveEnvFor } from './shared.js';
 
@@ -37,30 +36,26 @@ export const apiRunRequestTool: CoderTool = {
     if (!req) return err(`request ${args.requestId} not found`);
 
     const { baseUrl, variables } = resolveEnvFor(r.store, r.projectId, args.envId != null ? Number(args.envId) : undefined);
-    let url: URL;
-    try { url = buildUrl(baseUrl, req.path_template, parseMap(req.query_json), variables); }
-    catch { return err(`could not resolve URL from base '${baseUrl}' + path '${req.path_template}'. Create/select an environment with a base_url.`); }
-
-    const headers = resolveMap(parseMap(req.headers_json), variables);
-    let body: string | undefined;
-    if (req.body_kind !== 'none' && req.body_json != null) {
-      body = resolveTemplate(req.body_json, variables);
-      if (req.body_kind === 'json' && !Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
-        headers['content-type'] = 'application/json';
-      }
-    }
-
-    const t0 = Date.now();
     let res;
-    try { res = await sendHttp({ url, method: req.method, headers, body, jar: jarForProject(r.projectId), signal: ctx.signal }); }
-    catch (e) { return err(`request failed: ${e instanceof Error ? e.message : String(e)}`); }
+    try {
+      res = await executeRequest({ request: req, baseUrl, variables, jar: jarForProject(r.projectId), signal: ctx.signal });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/Invalid URL|resolve/i.test(msg) && !/ECONN|timed out|socket/i.test(msg)) {
+        return err(`could not resolve URL from base '${baseUrl}' + path '${req.path_template}'. Create/select an environment with a base_url.`);
+      }
+      return err(`request failed: ${msg}`);
+    }
     r.store.updateRequest(req.id, { last_status: res.status, last_run_at: new Date().toISOString() });
 
     const out = res.body.length > BODY_CAP ? `${res.body.slice(0, BODY_CAP)}\n… [truncated ${res.body.length - BODY_CAP} chars]` : res.body;
     const ct = String(res.headers['content-type'] ?? '');
+    const tests = [...(res.preScript?.tests ?? []), ...(res.testScript?.tests ?? [])];
+    const testLine = tests.length ? `tests: ${tests.filter((t) => t.passed).length}/${tests.length} passed` : '';
     return ok([
-      `${req.method} ${url.href} → ${res.status} ${res.statusText} (${Date.now() - t0}ms)`,
+      `${req.method} ${res.url} → ${res.status} ${res.statusText} (${res.ms}ms)`,
       ct ? `content-type: ${ct}` : '',
+      testLine,
       '',
       out || '(empty body)',
     ].filter(Boolean).join('\n'));
@@ -111,6 +106,13 @@ export const apiRunCollectionTool: CoderTool = {
       status: report.status, total: report.total, passed: report.passed,
       failed: report.failed, results_json: JSON.stringify(report.results),
     });
+    const ranResults = report.results.filter((x) => !x.skipped && x.actual != null);
+    if (ranResults.length) {
+      const now = new Date().toISOString();
+      r.store.transaction(() => {
+        for (const x of ranResults) r.store.updateRequest(x.requestId, { last_status: x.actual, last_run_at: now });
+      });
+    }
 
     if (report.passed === 0 && report.failed === 0) {
       return ok(`Regression run #${runId}: nothing ran — no verified requests in collection ${cid}. Run each request and api_mark_verified the good ones first.`);

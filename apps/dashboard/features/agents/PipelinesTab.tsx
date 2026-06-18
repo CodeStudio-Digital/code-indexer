@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Network, Pause, Play, Plus, RefreshCw, Square, Trash2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { useApi, apiPost, apiDelete } from '../../hooks/useApi.js';
+import { usePolling } from '../../hooks/usePolling.js';
 import { confirm } from '../../components/ui/prompt-dialog.js';
 import { PipelineBuilder } from './pipelines/PipelineBuilder.js';
 import type {
@@ -75,11 +76,9 @@ export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
   const executionListError = responseError(executionsApi.data);
 
   // Refetch executions every 4s so progress updates land without SSE.
-  useEffect(() => {
-    const t = setInterval(() => executionsApi.refetch(), 4000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Visibility-aware: pauses while the window is hidden (no immediate fetch —
+  // executionsApi already loaded on mount).
+  usePolling(() => executionsApi.refetch(), 4000, { immediate: false });
 
   const availableRoles = useMemo(() => {
     const fromConfig: string[] = [];
@@ -350,13 +349,11 @@ function ExecutionDetail({
 
   // Poll only while live — pause/complete/failed/aborted are terminal
   // for the dashboard view (resume re-launches and creates new rows).
-  useEffect(() => {
-    const live = detail.data?.execution.status === 'running';
-    if (!live) return;
-    const t = setInterval(() => detail.refetch(), 3000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail.data?.execution.status]);
+  // Visibility-aware via usePolling.
+  usePolling(() => detail.refetch(), 3000, {
+    enabled: detail.data?.execution.status === 'running',
+    immediate: false,
+  });
 
   const handleAbort = async () => {
     await apiPost(

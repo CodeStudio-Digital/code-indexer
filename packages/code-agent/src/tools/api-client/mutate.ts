@@ -52,7 +52,7 @@ export const apiUpdateRequestTool: CoderTool = {
       headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Full header map (replaces existing).' },
       query: { type: 'object', additionalProperties: { type: 'string' }, description: 'Full query map (replaces existing).' },
       body: { type: 'string', description: 'Raw/JSON body string.' },
-      bodyKind: { type: 'string', enum: ['none', 'json', 'raw', 'form'] },
+      bodyKind: { type: 'string', enum: ['none', 'json', 'raw', 'form-data', 'urlencoded', 'graphql', 'binary'] },
     },
     required: ['requestId'],
     additionalProperties: false,

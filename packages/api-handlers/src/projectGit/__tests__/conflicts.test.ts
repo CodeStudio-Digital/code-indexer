@@ -4,9 +4,15 @@
  * the same shape index.ts injects: thin spawn wrappers for runGit /
  * runAsResult plus a fake requireRoot/detectRepo pointing at the temp repo.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+
+// These are REAL-git integration tests: each test spawns ~10-20 `git`
+// processes against a fresh temp repo. On Windows (esp. with Defender
+// scanning %TEMP%) a spawn can cost ~0.5s, so the default 5s/20s timeouts
+// are far too tight. Give them generous headroom.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createConflictHandlers } from '../conflicts.js';
@@ -144,7 +150,7 @@ describe('conflict resolver engine', () => {
     expect(r.ok).toBe(true);
     const after = await h.mergeState({ projectId: 1 }, {} as never);
     expect(after.kind).toBeNull();
-  }, 20_000);
+  });
 
   it('aborts an in-progress cherry-pick', async () => {
     const dir = await setupConflictRepo();
@@ -154,5 +160,90 @@ describe('conflict resolver engine', () => {
     const after = await h.mergeState({ projectId: 1 }, {} as never);
     expect(after.kind).toBeNull();
     expect(readFileSync(join(dir, 'file.txt'), 'utf8')).toContain('MAIN');
+  });
+});
+
+/** Build a repo parked in a `git stash pop` conflict (no sequencer state). */
+async function setupStashConflictRepo(): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-stash-'));
+  dirs.push(dir);
+  const g = async (...args: string[]) => {
+    const r = await runGit(dir, args);
+    if (r.code !== 0) throw new Error(`git ${args.join(' ')} -> ${r.stderr}`);
+    return r;
+  };
+  await g('init', '-b', 'main');
+  await g('config', 'user.email', 't@example.com');
+  await g('config', 'user.name', 'Tester');
+  await g('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(dir, 'file.txt'), 'a\nshared\nz\n');
+  await g('add', '.');
+  await g('commit', '-m', 'base');
+  writeFileSync(join(dir, 'file.txt'), 'a\nSTASHED\nz\n');
+  await g('stash', 'push', '-m', 'wip'); // working tree reverts to 'shared'
+  writeFileSync(join(dir, 'file.txt'), 'a\nCOMMITTED\nz\n');
+  await g('commit', '-am', 'committed change');
+  await runGit(dir, ['stash', 'pop']); // conflicts on the shared line
+  return dir;
+}
+
+describe('conflict resolver — stash / working-tree mode', () => {
+  it("reports kind 'working-tree' for a stash-pop conflict (no sequencer op)", async () => {
+    const h = makeHandlers(await setupStashConflictRepo());
+    const s = await h.mergeState({ projectId: 1 }, {} as never);
+    expect(s.kind).toBe('working-tree');
+    expect(s.conflictedFiles).toContain('file.txt');
+    expect(s.theirsLabel).toBe(''); // no incoming commit
+  });
+
+  it('discards via mergeAbort (checkout HEAD) while the stash entry survives', async () => {
+    const dir = await setupStashConflictRepo();
+    const h = makeHandlers(dir);
+    const r = await h.mergeAbort({ projectId: 1 }, {} as never);
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(dir, 'file.txt'), 'utf8')).toContain('COMMITTED'); // restored to HEAD
+    const after = await h.mergeState({ projectId: 1 }, {} as never);
+    expect(after.kind).toBeNull();
+    // The stash was NOT dropped on the conflicting pop — still recoverable.
+    const stashes = (await runGit(dir, ['stash', 'list'])).stdout.trim();
+    expect(stashes).not.toBe('');
+  });
+
+  // Regression for the atomic-abort bug: a modify/delete stash conflict leaves
+  // the conflicted path ABSENT from HEAD, so a single `git checkout HEAD -- <f>`
+  // would fail the whole batch. Abort must `git rm` such paths instead.
+  it('aborts a modify/delete stash conflict (path absent from HEAD) without failing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-md-'));
+    dirs.push(dir);
+    const g = async (...args: string[]) => {
+      const r = await runGit(dir, args);
+      if (r.code !== 0) throw new Error(`git ${args.join(' ')} -> ${r.stderr}`);
+      return r;
+    };
+    await g('init', '-b', 'main');
+    await g('config', 'user.email', 't@example.com');
+    await g('config', 'user.name', 'Tester');
+    await g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(dir, 'target.txt'), 'original\n');
+    await g('add', '.');
+    await g('commit', '-m', 'base');
+    writeFileSync(join(dir, 'target.txt'), 'STASHED MOD\n');
+    await g('stash', 'push', '-m', 'wip'); // working tree back to 'original'
+    await g('rm', 'target.txt');
+    await g('commit', '-m', 'delete target'); // HEAD no longer has target.txt
+    await runGit(dir, ['stash', 'pop']); // modify/delete conflict on target.txt
+
+    const h = makeHandlers(dir);
+    const before = await h.mergeState({ projectId: 1 }, {} as never);
+    expect(before.kind).toBe('working-tree');
+    expect(before.conflictedFiles).toContain('target.txt');
+    // Sanity: the path really is absent from HEAD (the atomic-batch trap).
+    expect((await runGit(dir, ['cat-file', '-e', 'HEAD:target.txt'])).code).not.toBe(0);
+
+    const r = await h.mergeAbort({ projectId: 1 }, {} as never);
+    expect(r.ok).toBe(true); // would be false with the old single-batch checkout
+    expect(existsSync(join(dir, 'target.txt'))).toBe(false); // restored to HEAD (deleted)
+    const after = await h.mergeState({ projectId: 1 }, {} as never);
+    expect(after.kind).toBeNull();
   });
 });

@@ -19,7 +19,7 @@ export function recentFiles(projectId: number): string[] {
 }
 
 let started = false;
-let lastActive: string | null = null;
+let lastActive: string | null = null; // chave (projectId:path) do último ativo
 
 /** Idempotent — call once from the Project view. */
 export function startRecentFilesTracking(): void {
@@ -27,10 +27,13 @@ export function startRecentFilesTracking(): void {
   started = true;
   useWorkspaceStore.subscribe((state) => {
     const active = state.activeFilePath;
-    if (!active || active === lastActive) return;
-    lastActive = active;
+    // Dedup pela TUPLA (projectId, path): dois projetos com o mesmo relpath ativo
+    // (ex.: src/index.ts) não podem deixar um early-return mascarar o MRU do outro.
+    const key = active != null ? `${state.activeProjectId}:${active}` : null;
+    if (!active || key === lastActive) return;
+    lastActive = key;
     const tab = state.openFiles.find(
-      (f) => (f.kind === undefined || f.kind === 'file') && f.path === active,
+      (f) => (f.kind === undefined || f.kind === 'file') && f.path === active && f.projectId === state.activeProjectId,
     );
     if (!tab || (tab.kind !== undefined && tab.kind !== 'file')) return;
     const projectId = tab.projectId;

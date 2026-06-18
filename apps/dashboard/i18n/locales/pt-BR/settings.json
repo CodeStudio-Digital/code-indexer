@@ -109,7 +109,7 @@
   "item.CODER_PREFLIGHT_MAX_TOOLS.label": "Preflight: máx. de tools pinadas",
   "item.CODER_PREFLIGHT_SKILLS_MAX.description": "Quantas skills ativas são mostradas ao analisador do preflight (cap de entrada, limita o custo do prompt). O analisador sugere um pequeno subconjunto relevante à tarefa. Defina 0 para desabilitar as sugestões de skill.",
   "item.CODER_PREFLIGHT_SKILLS_MAX.label": "Preflight: cap do catálogo de skills",
-  "item.CODER_PREFLIGHT_TIMEOUT_MS.description": "Teto da chamada one-shot do preflight; no timeout a chamada é cancelada e a sessão inicia sem seed. Folga para o 1º round-trip de um modelo de raciocínio — a latência real fica ~1-2s com raciocínio minimizado.",
+  "item.CODER_PREFLIGHT_TIMEOUT_MS.description": "Teto da chamada one-shot do preflight. A 1ª mensagem de uma sessão nova ESPERA por esta análise (o chat mostra um indicador \"Analisando a tarefa…\" enquanto roda); no timeout a chamada é cancelada e a sessão inicia sem seed. Provedores buffered (z.ai, ChatGPT) precisam de ~10-12s para a resposta completa, então o padrão é generoso.",
   "item.CODER_PREFLIGHT_TIMEOUT_MS.label": "Preflight: timeout (ms)",
   "item.CODER_PREFLIGHT_VISIBLE_CAP.description": "Sessões com seed limitam a lista de tools visíveis a min(cap do modelo, este valor). Tools NEVER_TRIM e pins do preflight sempre sobrevivem; tools ocultas seguem chamáveis via find_tools.",
   "item.CODER_PREFLIGHT_VISIBLE_CAP.label": "Preflight: teto de tools visíveis",

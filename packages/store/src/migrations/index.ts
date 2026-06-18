@@ -168,6 +168,12 @@ import { sessionPlanDepth151 } from './151_session_plan_depth.js';
 import { globalSessions152 } from './152_global_sessions.js';
 import { sessionToolOutputCapLevel153 } from './153_session_tool_output_cap_level.js';
 import { snapshotProjectScope154 } from './154_snapshot_project_scope.js';
+import { projectSynthetic155 } from './155_project_synthetic.js';
+import { apiRequestPostmanOverhaul156 } from './156_api_request_postman_overhaul.js';
+import { projectLanguageLevels157 } from './157_project_language_levels.js';
+import { apiRequestFolder158 } from './158_api_request_folder.js';
+import { apiCollectionFolders159 } from './159_api_collection_folders.js';
+import { fileLocalHistory160 } from './160_file_local_history.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -352,6 +358,12 @@ export const MIGRATIONS: Migration[] = [
   globalSessions152,
   sessionToolOutputCapLevel153,
   snapshotProjectScope154,
+  projectSynthetic155,
+  apiRequestPostmanOverhaul156,
+  projectLanguageLevels157,
+  apiRequestFolder158,
+  apiCollectionFolders159,
+  fileLocalHistory160,
 ];
 
 /**

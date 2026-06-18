@@ -12,6 +12,8 @@ import { create } from 'zustand';
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../lib/api-client.js';
 import type { EditorCompleteResult } from '@mcp/api-bus';
+import { logLsp } from './lsp-log.js';
+import { parseModelPath } from './editor-models-path.js';
 
 type Monaco = typeof MonacoNs;
 
@@ -100,7 +102,7 @@ export function registerInlineCompletions(monaco: Monaco, projectId: number): Mo
       try {
         const res = await apiCall<EditorCompleteResult>('editor.complete', {
           projectId,
-          file: model.uri.path.replace(/^\//, ''),
+          file: parseModelPath(model.uri.path).relPath,
           language: model.getLanguageId(),
           position: { line: position.lineNumber, col: position.column },
           prefix,
@@ -145,7 +147,9 @@ export function registerInlineCompletions(monaco: Monaco, projectId: number): Mo
           ],
           enableForwardStability: true,
         };
-      } catch {
+      } catch (err) {
+        logLsp({ op: 'inline', file: parseModelPath(model.uri.path).relPath, lang: model.getLanguageId(),
+                 outcome: 'threw', err: err instanceof Error ? err.message : String(err) });
         snoozedUntil = Date.now() + 30_000;
         return empty;
       } finally {

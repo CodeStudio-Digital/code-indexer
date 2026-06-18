@@ -18,7 +18,7 @@
 // IMPORTANT: workers import via relative paths only. Node's loader
 // resolves these before tsx/tsconfig `paths` get a chance, so an alias
 // like `@mcp/orchestrator-host` throws "Cannot find package" inside a
-// worker_thread. See apps/http-api/sse/workerKit.ts for context.
+// worker_thread.
 import { parentPort, workerData } from 'node:worker_threads';
 import {
   MessageBridge,

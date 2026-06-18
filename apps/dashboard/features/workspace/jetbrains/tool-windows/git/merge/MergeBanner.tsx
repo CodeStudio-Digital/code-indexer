@@ -18,6 +18,7 @@ const VERB_KEY: Record<NonNullable<GitMergeState['kind']>, string> = {
   merge: 'git.conflict.banner.merge',
   revert: 'git.conflict.banner.revert',
   rebase: 'git.conflict.banner.rebase',
+  'working-tree': 'git.conflict.banner.workingTree',
 };
 
 interface MergeBannerProps {
@@ -31,6 +32,8 @@ export function MergeBanner({ projectId, state, onMutated }: MergeBannerProps) {
   const [busy, setBusy] = useState<null | 'continue' | 'abort'>(null);
   if (!state.kind) return null;
   const remaining = state.conflictedFiles.length;
+  // Stash/working-tree conflicts have no `--continue` and no incoming commit.
+  const isWorkingTree = state.kind === 'working-tree';
 
   const onContinue = async () => {
     setBusy('continue');
@@ -51,9 +54,9 @@ export function MergeBanner({ projectId, state, onMutated }: MergeBannerProps) {
 
   const onAbort = async () => {
     const ok = await confirm({
-      title: t('git.conflict.abortConfirmTitle'),
-      description: t('git.conflict.abortConfirmBody'),
-      confirmLabel: t('git.conflict.abort'),
+      title: t(isWorkingTree ? 'git.conflict.discardConfirmTitle' : 'git.conflict.abortConfirmTitle'),
+      description: t(isWorkingTree ? 'git.conflict.discardConfirmBody' : 'git.conflict.abortConfirmBody'),
+      confirmLabel: t(isWorkingTree ? 'git.conflict.discardConflicts' : 'git.conflict.abort'),
       tone: 'destructive',
     });
     if (!ok) return;
@@ -73,25 +76,32 @@ export function MergeBanner({ projectId, state, onMutated }: MergeBannerProps) {
     <div className="shrink-0 flex items-center gap-2 px-2.5 py-1.5 border-b bg-amber-500/10 text-[11px]">
       <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
       <span className="truncate">
-        <span className="font-medium">{t(VERB_KEY[state.kind])}</span>{' '}
-        <span className="font-mono">{state.theirsLabel}</span>
-        {' → '}
-        <span className="font-mono">{state.oursLabel}</span>
+        <span className="font-medium">{t(VERB_KEY[state.kind])}</span>
+        {!isWorkingTree && (
+          <>
+            {' '}
+            <span className="font-mono">{state.theirsLabel}</span>
+            {' → '}
+            <span className="font-mono">{state.oursLabel}</span>
+          </>
+        )}
         {' · '}
         {t('git.conflict.count', { count: remaining })}
       </span>
       <div className="ml-auto flex items-center gap-1 shrink-0">
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-6 px-2 text-[11px] gap-1 text-emerald-500 hover:text-emerald-400 disabled:opacity-40"
-          disabled={remaining > 0 || busy !== null}
-          onClick={() => void onContinue()}
-          title={remaining > 0 ? t('git.conflict.continueBlocked') : t('git.conflict.continue')}
-        >
-          {busy === 'continue' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-          {t('git.conflict.continue')}
-        </Button>
+        {!isWorkingTree && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-[11px] gap-1 text-emerald-500 hover:text-emerald-400 disabled:opacity-40"
+            disabled={remaining > 0 || busy !== null}
+            onClick={() => void onContinue()}
+            title={remaining > 0 ? t('git.conflict.continueBlocked') : t('git.conflict.continue')}
+          >
+            {busy === 'continue' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+            {t('git.conflict.continue')}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -100,7 +110,7 @@ export function MergeBanner({ projectId, state, onMutated }: MergeBannerProps) {
           onClick={() => void onAbort()}
         >
           {busy === 'abort' ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
-          {t('git.conflict.abort')}
+          {isWorkingTree ? t('git.conflict.discardConflicts') : t('git.conflict.abort')}
         </Button>
       </div>
     </div>

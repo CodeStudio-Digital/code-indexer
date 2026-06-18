@@ -11,11 +11,15 @@ import { AssistantBubble } from './AssistantBubble.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
 import { renderStreamBlock } from './renderStreamBlock.js';
+import { PreflightBlock } from './PreflightBlock.js';
 
 interface MessageListProps {
   sessionData: SessionData | null;
   currentTurn: AssistantTurn | null;
   streaming: boolean;
+  /** Set while the blocking preflight runs on a fresh first message. Optional —
+   *  call sites that don't surface the indicator (e.g. the editor rail) omit it. */
+  preflight?: { startedAt: number } | null;
   doneReason: string | null;
   error: string | null;
   liveTurnDuplicatedInHistory: boolean;
@@ -354,12 +358,14 @@ const PersistedMessages = React.memo(function PersistedMessages({
 const LiveTurn = React.memo(function LiveTurn({
   currentTurn,
   streaming,
+  preflight,
   providerId,
   handlers,
   hidden,
 }: {
   currentTurn: AssistantTurn | null;
   streaming: boolean;
+  preflight: { startedAt: number } | null;
   providerId: string;
   handlers: PromptHandlers;
   hidden: boolean;
@@ -369,6 +375,15 @@ const LiveTurn = React.memo(function LiveTurn({
     return (
       <AssistantBubble providerId={providerId} streaming={streaming}>
         {currentTurn!.blocks.map((b, i) => renderStreamBlock(b, i, handlers))}
+      </AssistantBubble>
+    );
+  }
+  // Blocking preflight on a fresh first message — labelled indicator instead of
+  // the bare spinner, until the first SSE event clears it.
+  if (preflight && !hidden) {
+    return (
+      <AssistantBubble providerId={providerId} streaming>
+        <PreflightBlock startedAt={preflight.startedAt} />
       </AssistantBubble>
     );
   }
@@ -390,6 +405,7 @@ export function MessageList({
   sessionData,
   currentTurn,
   streaming,
+  preflight = null,
   doneReason,
   error,
   liveTurnDuplicatedInHistory,
@@ -501,6 +517,7 @@ export function MessageList({
       <LiveTurn
         currentTurn={currentTurn}
         streaming={streaming}
+        preflight={preflight}
         providerId={providerId}
         handlers={handlers}
         hidden={liveTurnDuplicatedInHistory}

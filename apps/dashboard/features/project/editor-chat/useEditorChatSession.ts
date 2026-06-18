@@ -78,6 +78,20 @@ export function useEditorChatSession(projectId: number) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
+  // Project switch: the editor Copilot rail shares the keep-alive code surface
+  // and is re-rendered in place with a new projectId, so selectedId would keep
+  // the PREVIOUS project's session open (its live stream, composer, and the
+  // per-session agent/temperature/effort settings). Drop it when projectId
+  // changes so the rail re-scopes to the incoming project's session list.
+  const prevProjectIdRef = useRef(projectId);
+  useEffect(() => {
+    if (prevProjectIdRef.current === projectId) return;
+    prevProjectIdRef.current = projectId;
+    setSelectedId(null);
+    clearCurrentTurn();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
   // End-of-run: refetch the persisted session, then drop the live turn.
   useEffect(() => {
     if (!doneReason || !selectedId) return;

@@ -108,6 +108,15 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
     // live updates instead of polling.
     publish(bus, 'session_drive_changed', payload);
   });
+  runner.on('diagram_changed', (payload) => {
+    // Agent created/updated a .drawio diagram. Dashboard bridges this to a DOM
+    // event: the chat panel auto-opens + the embedded editor reloads the XML.
+    publish(bus, 'diagram_changed', payload);
+  });
+  runner.on('diagram_export_request', (payload) => {
+    // diagram_export → ask the live embedded editor to render + persist an image.
+    publish(bus, 'diagram_export_request', payload);
+  });
   runner.on('fallback_activated', (payload) => {
     publish(bus, 'fallback_activated', payload);
   });

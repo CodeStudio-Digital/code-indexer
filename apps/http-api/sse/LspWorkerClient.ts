@@ -36,6 +36,7 @@ export interface LspWorkerClientOpts {
 /** Per-op request timeouts (ms). Timeout policy lives in lsp-executor.ts. */
 const OP_TIMEOUTS: Record<LspExecutorOp, number> = {
   tsCompletions: 8_000,
+  tsCompletionDetails: 8_000,
   tsHover: 8_000,
   tsDefinition: 10_000,
   tsReferences: 10_000,
@@ -86,6 +87,7 @@ export class LspWorkerClient implements LspBackendExecutor {
 
   // Property style: the interface-indexed type contextually drives call<T>.
   tsCompletions: LspBackendExecutor['tsCompletions'] = (ctx) => this.call('tsCompletions', ctx);
+  tsCompletionDetails: LspBackendExecutor['tsCompletionDetails'] = (ctx) => this.call('tsCompletionDetails', ctx);
   tsHover: LspBackendExecutor['tsHover'] = (ctx) => this.call('tsHover', ctx);
   tsDefinition: LspBackendExecutor['tsDefinition'] = (ctx) => this.call('tsDefinition', ctx);
   tsReferences: LspBackendExecutor['tsReferences'] = (ctx) => this.call('tsReferences', ctx);

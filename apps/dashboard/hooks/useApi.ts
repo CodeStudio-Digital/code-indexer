@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiBaseUrl } from '../lib/api-client.js';
+import { getCached, dedupe, writeThrough, invalidateAll } from '../lib/api-cache.js';
+
+/** Cache/dedup key for a useApi GET — must equal the fetched URL exactly so
+ *  the HTTP and Electron-protocol bases never collide and query strings key
+ *  distinct entries. `GET ` namespaces it apart from apiCall's `CALL ` keys. */
+function getKey(url: string): string {
+  return `GET ${apiBaseUrl()}/api${url}`;
+}
 
 interface UseApiResult<T> {
   data: T | null;
@@ -18,8 +26,15 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
 
   const refetch = useCallback(() => setTick(t => t + 1), []);
   const update = useCallback((fn: (prev: T) => T) => {
-    setData((cur) => (cur !== null ? fn(cur) : cur));
-  }, []);
+    setData((cur) => {
+      if (cur === null) return cur;
+      const next = fn(cur);
+      // Keep same-URL siblings consistent: refresh the live cache entry so a
+      // sibling useApi(sameUrl) mounting within the TTL sees the optimistic value.
+      writeThrough(getKey(url), next);
+      return next;
+    });
+  }, [url]);
 
   useEffect(() => {
     if (!url) {
@@ -29,23 +44,52 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
     }
 
     let cancelled = false;
+
+    // Uncacheable path: a caller-supplied RequestInit means custom method/
+    // headers/body — never share or cache it. Plain one-shot fetch.
+    if (options) {
+      setLoading(true);
+      setError(null);
+      fetch(`${apiBaseUrl()}/api${url}`, options)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(json => { if (!cancelled) { setData(json as T); setLoading(false); } })
+        .catch(err => { if (!cancelled) { setError(err.message); setLoading(false); } });
+      return () => { cancelled = true; };
+    }
+
+    // refetch() (tick > 0) forces a network round-trip, bypassing the cache
+    // READ — but still goes through dedupe() so concurrent refetches share one
+    // request and the fresh body is written to cache. Initial mount (tick === 0)
+    // may serve a fresh cache hit synchronously (no loading flash).
+    const force = tick > 0;
+    const key = getKey(url);
+
+    if (!force) {
+      const hit = getCached<T>(key);
+      if (hit !== undefined) {
+        setData(hit);
+        setLoading(false);
+        setError(null);
+        return; // cache hit — no fetch, no cleanup needed
+      }
+    }
+
     setLoading(true);
     setError(null);
 
-    fetch(`${apiBaseUrl()}/api${url}`, options)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(json => {
-        if (!cancelled) { setData(json as T); setLoading(false); }
-      })
-      .catch(err => {
-        if (!cancelled) { setError(err.message); setLoading(false); }
-      });
+    dedupe<T>(key, async () => {
+      const res = await fetch(`${apiBaseUrl()}/api${url}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()) as T;
+    })
+      .then(json => { if (!cancelled) { setData(json); setLoading(false); } })
+      .catch(err => { if (!cancelled) { setError(err.message); setLoading(false); } });
 
     return () => { cancelled = true; };
-  }, [url, tick]);
+  }, [url, tick, options]);
 
   return { data, loading, error, refetch, update };
 }
@@ -93,12 +137,14 @@ export async function apiPost<T>(url: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw await failure(res, `POST ${url} failed`);
+  invalidateAll(); // mutation succeeded — drop the short-TTL read cache so siblings revalidate
   return res.json() as Promise<T>;
 }
 
 export async function apiDelete(url: string): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/api${url}`, { method: 'DELETE' });
   if (!res.ok) throw await failure(res, `DELETE ${url} failed`);
+  invalidateAll();
 }
 
 export async function apiPatch<T>(url: string, body: unknown): Promise<T> {
@@ -108,6 +154,7 @@ export async function apiPatch<T>(url: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw await failure(res, `PATCH ${url} failed`);
+  invalidateAll();
   return res.json() as Promise<T>;
 }
 
@@ -118,5 +165,6 @@ export async function apiPut<T>(url: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw await failure(res, `PUT ${url} failed`);
+  invalidateAll();
   return res.json() as Promise<T>;
 }
