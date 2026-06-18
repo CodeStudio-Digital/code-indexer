@@ -15,6 +15,7 @@ import { respondError } from './_respond.js';
 import { hashPii } from '../infra/sha256.js';
 
 const codeSchema = z.object({ code: z.string().min(1).max(32) });
+const disableSchema = z.object({ password: z.string().min(1).max(512), code: z.string().min(1).max(32) });
 const challengeSchema = z.object({
   challengeToken: z.string().min(1).max(4096),
   code: z.string().min(1).max(32),
@@ -45,12 +46,12 @@ export function twoFactorRouter(): Hono<{ Bindings: Env }> {
   });
 
   app.post('/2fa/disable', async (c) => {
-    const parsed = codeSchema.safeParse(await c.req.json().catch(() => ({})));
+    const parsed = disableSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid input.' }, 400);
     const bundle = createIdentityBundle(c.env);
     const claims = await requireClaims(c, bundle);
     if (!claims) return unauthorized(c);
-    const r = await bundle.disable2fa.execute({ accountId: asAccountId(claims.sub), code: parsed.data.code });
+    const r = await bundle.disable2fa.execute({ accountId: asAccountId(claims.sub), password: parsed.data.password, code: parsed.data.code });
     if (r.ok) recordAudit(c, 'mfa_disabled', 200, { accountId: claims.sub });
     return r.ok ? c.json(r.value, 200) : respondError(c, r.error);
   });

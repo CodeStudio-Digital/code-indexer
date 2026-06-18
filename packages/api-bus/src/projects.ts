@@ -17,6 +17,11 @@ export interface Project {
   user_id?: string;
   /** Per-project agent-memory toggle (migration 115; default 1 = on). */
   memory_enabled?: number;
+  /**
+   * Frontend framework inferred from package.json at read time (not persisted).
+   * Drives the preview element-selector mode. Set by the `get` handler.
+   */
+  framework?: 'next' | 'react' | 'vue' | 'angular' | null;
 }
 
 export interface ProjectStats {

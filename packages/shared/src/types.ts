@@ -86,6 +86,13 @@ export interface Project {
    * usar o default do servidor. Ver `@mcp/shared/utils/language-levels`.
    */
   language_levels: string | null;
+  /**
+   * Frontend framework inferred from package.json at READ time (not persisted;
+   * set by the `get` handler). Drives the preview element-selector mode
+   * ("react" native detection vs the generic "universal" picker). Undefined on
+   * rows not fetched through `get` (e.g. `listProjects`).
+   */
+  framework?: 'next' | 'react' | 'vue' | 'angular' | null;
   created_at: string;
   updated_at: string;
   last_indexed: string | null;
@@ -472,6 +479,10 @@ export interface ScanResult {
   toIndex: ScannedFile[];
   unchanged: string[];
   toRemove: string[];
+  /** Candidate files seen before an early abort, or the final candidate count. */
+  totalFiles?: number;
+  /** Early scan abort; lets callers bail before mutating project index state. */
+  aborted?: 'too_large';
   stats?: ScanStats;
 }
 

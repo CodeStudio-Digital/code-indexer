@@ -84,7 +84,7 @@ const get_symbol_details = defineTool({
     if (!sym) throw new Error(`Symbol with id ${args.symbol_id} not found. Use search or get_file_skeleton to find valid symbol IDs. Do not retry with the same symbol_id.`);
     const tags = JSON.parse(sym.tags) as string[];
     const refs = db.getSymbolCallers(sym.project_id, sym.name);
-    const rels = db.getSymbolRelations(sym.id);
+    const rels = db.getSymbolRelations(sym.id, sym.project_id);
 
     const sections = [
       `# ${sym.kind} \`${sym.name}\``,
@@ -703,7 +703,7 @@ const semantic_neighbors = defineTool({
     for (const m of usable) {
       const refId = m.metadata.ref_id ? parseInt(m.metadata.ref_id, 10) : 0;
       if (!refId || refId === sym.id) continue;
-      const n = db.getSymbolById(refId);
+      const n = db.getSymbolById(refId, sym.project_id);
       if (!n) continue;
       neighbors.push(`${m.score.toFixed(3)} ${n.file_path}:${n.line ?? '?'} ${n.kind} ${n.name}`);
       if (neighbors.length >= limit) break;

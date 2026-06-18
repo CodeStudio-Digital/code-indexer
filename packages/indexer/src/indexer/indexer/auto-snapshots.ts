@@ -108,7 +108,7 @@ function collectAnalytics(
       try { mods = JSON.parse(sym.modifiers) as string[]; } catch { /* ignore */ }
       let extendsFrom: string | undefined;
       let implementsList: string[] | undefined;
-      const relations = db.getSymbolRelations(sym.id);
+      const relations = db.getSymbolRelations(sym.id, project.id);
       if (relations) {
         const ext = relations.find((r) => r.relation_type === 'extends');
         if (ext) extendsFrom = ext.related_symbol_name;

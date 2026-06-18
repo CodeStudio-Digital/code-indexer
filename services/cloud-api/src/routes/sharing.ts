@@ -13,6 +13,7 @@ import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { createSharingBundle } from '../sharing-composition.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
 import { recordAudit } from '../middleware/audit.js';
 
 const blockSchema = z.discriminatedUnion('type', [
@@ -49,6 +50,9 @@ export function sharingRouter(): Hono<{ Bindings: Env }> {
     if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid snapshot.', details: parsed.error.flatten() }, 400);
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
+    // Publishing signs + stores a snapshot (CPU + storage) — cap per account.
+    const limited = await enforceRateLimit(c, [{ key: `share:acct:${claims.sub}`, limit: 30, windowMs: HOUR }]);
+    if (limited) return limited;
     const sharing = createSharingBundle(c.env);
     if (!sharing.signerConfigured) return c.json({ code: 'sharing_not_configured', message: 'Sharing is not configured.' }, 501);
     const accountId = asAccountId(claims.sub);

@@ -26,6 +26,19 @@ app.use('*', corsAllowlist());
 // while a share snapshot is a whole conversation (capped at ~2 MB; the use-case
 // re-checks the canonical size). GET routes carry no body, so they're unaffected.
 const tooLarge = (c: Context<{ Bindings: Env }>) => c.json({ code: 'payload_too_large', message: 'Request too large.' }, 413);
+// Fail-closed config guard: a missing/weak access-token secret yields FORGEABLE
+// tokens, and a missing PII pepper makes ip/email hashes reversible. Refuse to
+// serve any real route (health stays up for liveness) if either is unsafe.
+app.use('*', async (c, next) => {
+  if (c.req.path === '/v1/health') return next();
+  const secret = c.env.ACCESS_SIGNING_SECRET;
+  if (!secret || secret.length < 32 || !c.env.IP_HASH_SALT) {
+    console.error('[config] refusing to serve: ACCESS_SIGNING_SECRET missing/weak or IP_HASH_SALT unset');
+    return c.json({ code: 'server_misconfigured', message: 'Service temporarily unavailable.' }, 503);
+  }
+  return next();
+});
+
 app.use('/v1/auth/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 app.use('/v1/billing/*', bodyLimit({ maxSize: 64 * 1024, onError: tooLarge }));
 app.use('/v1/share', bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge }));

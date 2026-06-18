@@ -5,6 +5,7 @@ import type {
   PipelineNodeRuntimeStatus,
   PipelineRuntimeState,
 } from './agent-stream/types.js';
+import { notifyPipelineStreamEvent, type NotificationSourceContext } from '../features/notifications/index.js';
 
 const TERMINAL_PIPELINE_EVENTS = new Set([
   'pipeline_completed',
@@ -30,7 +31,7 @@ const pipelineStreamBackoff = {
  * `POST /pipelines/:pid/start`). This avoids the 404-reconnect loop that
  * happens when no executor has ever been registered for the session.
  */
-export function usePipelineStream(sessionId: number | null): {
+export function usePipelineStream(sessionId: number | null, notificationContext?: NotificationSourceContext): {
   pipelineRuntime: PipelineRuntimeState | null;
   openStream: () => void;
   reset: () => void;
@@ -38,6 +39,8 @@ export function usePipelineStream(sessionId: number | null): {
   const [runtime, setRuntime] = useState<PipelineRuntimeState | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const openStreamRef = useRef<() => void>(() => {});
+  const notificationContextRef = useRef(notificationContext);
+  notificationContextRef.current = notificationContext;
 
   const reset = useCallback(() => setRuntime(null), []);
   const openStream = useCallback(() => openStreamRef.current(), []);
@@ -52,6 +55,8 @@ export function usePipelineStream(sessionId: number | null): {
     let lastSeenSeq = -1;
 
     const handleEvent = (eventName: string, data: Record<string, unknown>) => {
+      notifyPipelineStreamEvent(sessionId, eventName, data, notificationContextRef.current);
+
       if (eventName === 'pipeline_started') {
         const d = data as { executionId: number; pipelineId: number; startNodeId?: string };
         setRuntime({

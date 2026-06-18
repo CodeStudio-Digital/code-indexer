@@ -6,6 +6,7 @@
 
 import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type ProjectIndexStatus, type FsEventsFrame, type GitMetaFrame, type IndexStreamEvent, type ScaffoldStreamEvent } from '@mcp/api-bus';
 import { runScaffoldStream } from './scaffold.js';
+import { detectProjectFramework } from './detect-framework.js';
 import {
   CreateProjectService,
   UpdateProjectService,
@@ -129,7 +130,9 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       // transports (HTTP + Electron IPC). Fire-and-forget: memory-only
       // checks inside; never delays the GET.
       deps.projectIndexService.ensureFresh(id, 'open');
-      return project;
+      // Cheap package.json read — classifies the framework so the preview pane
+      // can auto-pick the React-native element picker over the universal one.
+      return { ...project, framework: detectProjectFramework(project.root_path) };
     },
 
     async create(input) {

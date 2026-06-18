@@ -17,7 +17,7 @@ import { createD1Executor } from '../infra/d1/d1-executor.js';
 import { pbkdf2Hasher } from '../infra/pbkdf2-hasher.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
 import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
-import { recordAudit } from '../middleware/audit.js';
+import { recordAudit, recordAuditNow } from '../middleware/audit.js';
 
 const deleteSchema = z.object({ password: z.string().min(1).max(512), confirm: z.literal('DELETE') });
 
@@ -80,7 +80,8 @@ export function accountRouter(): Hono<{ Bindings: Env }> {
     // return 500 and the account survives — better than orphaning the user's files.
     await purgeAccountBlobs(c.env.ASSETS, accountId);
     await createAccountAdmin(createD1Executor(c.env.DB)).hardDelete(accountId);
-    recordAudit(c, 'account_deleted', 200, { accountId });
+    // Compliance event — persist the audit row SYNCHRONOUSLY before returning.
+    await recordAuditNow(c, 'account_deleted', 200, { accountId });
     return c.json({ deleted: true }, 200);
   });
 

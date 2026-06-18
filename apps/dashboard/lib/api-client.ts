@@ -16,6 +16,10 @@
 
 import type { Api } from '@mcp/api-bus';
 import { getCached, dedupe, invalidateAll } from './api-cache.js';
+import {
+  recordApiCallCacheHit,
+  startApiCallRouteSpan,
+} from './perf/route-startup-metrics.js';
 
 type DotPath = string;
 
@@ -212,7 +216,10 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
         init: { method: 'DELETE' },
       };
     case 'projectGit.status':
-      return { url: `/api/projects/${ip!.projectId}/git/status`, init: {} };
+      return {
+        url: `/api/projects/${ip!.projectId}/git/status${ip!.includeFiles === false ? '?includeFiles=0' : ''}`,
+        init: {},
+      };
     case 'projectGit.diff':
       return {
         url: `/api/projects/${ip!.projectId}/git/diff`,
@@ -320,7 +327,10 @@ export function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
   if (READ_VERBS.has(path)) {
     const key = callKey(path, input);
     const hit = getCached<T>(key);
-    if (hit !== undefined) return Promise.resolve(hit);
+    if (hit !== undefined) {
+      recordApiCallCacheHit(path, input);
+      return Promise.resolve(hit);
+    }
     return dedupe<T>(key, () => apiCallRaw<T>(path, input));
   }
   if (WRITE_VERBS.has(path)) {
@@ -333,29 +343,43 @@ export function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
 }
 
 async function apiCallRaw<T>(path: DotPath, input?: unknown): Promise<T> {
-  const invoke = electronInvoke();
-  if (invoke) {
-    const wrapped = (await invoke(path, input)) as { ok: boolean; value?: T; error?: { message: string; code?: string; status?: number } };
-    if (!wrapped.ok) {
-      const err = wrapped.error ?? { message: 'unknown ipc error' };
-      const e = new Error(err.message) as Error & { code?: string; status?: number };
-      if (err.code) e.code = err.code;
-      if (err.status) e.status = err.status;
-      throw e;
+  const finishSpan = startApiCallRouteSpan(path, input);
+  try {
+    const invoke = electronInvoke();
+    if (invoke) {
+      const wrapped = (await invoke(path, input)) as { ok: boolean; value?: T; error?: { message: string; code?: string; status?: number } };
+      if (!wrapped.ok) {
+        const err = wrapped.error ?? { message: 'unknown ipc error' };
+        const e = new Error(err.message) as Error & { code?: string; status?: number };
+        if (err.code) e.code = err.code;
+        if (err.status) e.status = err.status;
+        throw e;
+      }
+      finishSpan({ status: 'ok' });
+      return wrapped.value as T;
     }
-    return wrapped.value as T;
+    // HTTP fallback (browser dev only — Electron always has `invoke`).
+    const mapped = dottedToHttp(path, input);
+    if (!mapped) {
+      throw new Error(`apiCall("${path}"): no HTTP fallback mapped — this method is Electron-only or needs a mapping entry`);
+    }
+    const res = await fetch(mapped.url, mapped.init);
+    if (!res.ok) throw new Error(`HTTP ${res.status} on ${path}`);
+    // Some routes return text (e.g. snapshots.getForContext); detect by header.
+    const ct = res.headers.get('content-type') ?? '';
+    const value = ct.includes('application/json')
+      ? ((await res.json()) as T)
+      : ((await res.text()) as unknown as T);
+    finishSpan({ status: 'ok' });
+    return value;
+  } catch (err) {
+    finishSpan({ status: 'error', error: errorMessage(err) });
+    throw err;
   }
-  // HTTP fallback (browser dev only — Electron always has `invoke`).
-  const mapped = dottedToHttp(path, input);
-  if (!mapped) {
-    throw new Error(`apiCall("${path}"): no HTTP fallback mapped — this method is Electron-only or needs a mapping entry`);
-  }
-  const res = await fetch(mapped.url, mapped.init);
-  if (!res.ok) throw new Error(`HTTP ${res.status} on ${path}`);
-  // Some routes return text (e.g. snapshots.getForContext); detect by header.
-  const ct = res.headers.get('content-type') ?? '';
-  if (ct.includes('application/json')) return (await res.json()) as T;
-  return (await res.text()) as unknown as T;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

@@ -5,11 +5,14 @@
  * PanelGroup, então alternar só adiciona/remove o Panel do preview; o AgentChat nunca
  * é desmontado (o que dropava a sessão aberta).
  */
+import { useEffect } from 'react';
 import { PanelRightOpen } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useWorkspaceLayout } from '../../../state/workspace-layout.js';
 import { ProjectPreview } from '../builder/ProjectPreview.js';
+import type { PreviewFramework } from '../builder/useSelectorMode.js';
 import AgentChat from '../../chat/index.js';
+import { markRouteEvent } from '../../../lib/perf/route-startup-metrics.js';
 
 export interface ChatSurfaceProps {
   projectId: number;
@@ -17,11 +20,15 @@ export interface ChatSurfaceProps {
   initialSessionId?: number;
   builderJson: { stack: string; port: number } | null;
   previewEnabled: boolean;
+  framework?: PreviewFramework;
 }
 
-export function ChatSurface({ projectId, projectName, initialSessionId, builderJson, previewEnabled }: ChatSurfaceProps) {
+export function ChatSurface({ projectId, projectName, initialSessionId, builderJson, previewEnabled, framework }: ChatSurfaceProps) {
   const previewVisible = useWorkspaceLayout((s) => s.previewVisible);
   const togglePreview = useWorkspaceLayout((s) => s.togglePreview);
+  useEffect(() => {
+    markRouteEvent('ChatSurface:mounted', { projectId, tab: 'chat' });
+  }, [projectId]);
 
   if (!previewEnabled) {
     return <AgentChat projectId={projectId} projectName={projectName} initialSessionId={initialSessionId} />;
@@ -54,6 +61,7 @@ export function ChatSurface({ projectId, projectName, initialSessionId, builderJ
                 projectId={projectId}
                 pinnedPort={builderJson?.port}
                 selectionEnabled={!!builderJson}
+                framework={framework}
                 onHide={togglePreview}
               />
             </Panel>

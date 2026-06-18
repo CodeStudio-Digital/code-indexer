@@ -6,7 +6,7 @@
  */
 import { type Result, ok, err, type AccountId } from '@cloudstudio/cloud-kernel';
 import { IdentityErrors, type IdentityError } from '../domain/errors.js';
-import type { LoginThrottle, RecoveryCodeService, TotpPort, TwoFactorRepo } from '../domain/ports.js';
+import type { AccountRepo, LoginThrottle, PasswordHasher, RecoveryCodeService, TotpPort, TwoFactorRepo } from '../domain/ports.js';
 
 export interface EnrollOutput {
   otpauthUri: string;
@@ -44,6 +44,8 @@ export class Confirm2faUseCase {
     if (gate.locked) return err(IdentityErrors.accountLocked(gate.retryAfterMs));
     const tf = await this.twoFactor.getSecret(input.accountId);
     if (!tf) return err(IdentityErrors.twofaInvalid());
+    // Already enabled → don't re-confirm (would rotate/invalidate live recovery codes).
+    if (tf.enabled) return err(IdentityErrors.twofaInvalid());
     if (!(await this.totp.verify(tf.secret, input.code))) {
       await this.throttle.recordFailure(key);
       return err(IdentityErrors.twofaInvalid());
@@ -63,11 +65,27 @@ export class Disable2faUseCase {
   constructor(
     private readonly totp: TotpPort,
     private readonly twoFactor: TwoFactorRepo,
+    private readonly accounts: AccountRepo,
+    private readonly hasher: PasswordHasher,
+    private readonly throttle: LoginThrottle,
   ) {}
-  async execute(input: { accountId: AccountId; code: string }): Promise<Result<{ ok: true }, IdentityError>> {
+  async execute(input: { accountId: AccountId; password: string; code: string }): Promise<Result<{ ok: true }, IdentityError>> {
     const tf = await this.twoFactor.getSecret(input.accountId);
     if (!tf || !tf.enabled) return ok({ ok: true }); // already off — idempotent
-    if (!(await this.totp.verify(tf.secret, input.code))) return err(IdentityErrors.twofaInvalid());
+    const key = `2fa:${input.accountId}`;
+    const gate = await this.throttle.check(key);
+    if (gate.locked) return err(IdentityErrors.accountLocked(gate.retryAfterMs));
+    // Step-up: removing a second factor requires BOTH the current password AND a
+    // valid TOTP code — a stolen access token alone (no password) cannot strip 2FA.
+    const account = await this.accounts.findById(input.accountId);
+    const cred = account ? await this.accounts.findCredentialByCanonical(account.emailCanonical) : null;
+    const passwordOk = cred ? await this.hasher.verify(input.password, cred.passwordHash) : false;
+    const codeOk = await this.totp.verify(tf.secret, input.code);
+    if (!passwordOk || !codeOk) {
+      await this.throttle.recordFailure(key);
+      return err(IdentityErrors.twofaInvalid());
+    }
+    await this.throttle.recordSuccess(key);
     await this.twoFactor.disable(input.accountId);
     return ok({ ok: true });
   }

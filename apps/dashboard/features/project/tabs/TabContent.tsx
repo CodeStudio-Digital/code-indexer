@@ -15,11 +15,13 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '../../../lib/utils.js';
+import { markRouteEvent } from '../../../lib/perf/route-startup-metrics.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { ProjectTabId } from '../tabs-config.js';
 import { CodeSurface } from './CodeSurface.js';
 import { ChatSurface } from './ChatSurface.js';
 import { TransientSurface } from './TransientSurface.js';
+import type { PreviewFramework } from '../builder/useSelectorMode.js';
 
 /** Abas mantidas vivas (escondidas via CSS) na troca de aba. */
 const KEEP_ALIVE = new Set<ProjectTabId>(['chat', 'files', 'git']);
@@ -46,6 +48,8 @@ export interface TabContentProps {
   builderJson: { stack: string; port: number } | null;
   /** Builder OR any project with a running dev server → preview available. */
   previewEnabled: boolean;
+  /** Inferred framework → preview auto-picks React-native vs universal picker. */
+  framework?: PreviewFramework;
 }
 
 /**
@@ -62,7 +66,7 @@ function KeepAlivePane({ hidden, children }: { hidden: boolean; children: ReactN
 }
 
 export function TabContent(props: TabContentProps) {
-  const { tab } = props;
+  const { tab, projectId } = props;
   const isCode = tab === 'files' || tab === 'git';
 
   // Hooks chamados INCONDICIONALMENTE (rules of hooks) — só usados no caminho keep-alive.
@@ -75,6 +79,9 @@ export function TabContent(props: TabContentProps) {
     if (tab === 'files' || tab === 'git') setCodeSeen(true);
     if (tab === 'chat') setChatSeen(true);
   }, [tab]);
+  useEffect(() => {
+    markRouteEvent('TabContent:mounted', { projectId, tab });
+  }, [projectId, tab]);
 
   const renderCode = (): ReactNode => (
     <CodeSurface
@@ -92,6 +99,7 @@ export function TabContent(props: TabContentProps) {
       initialSessionId={props.initialSessionId}
       builderJson={props.builderJson}
       previewEnabled={props.previewEnabled}
+      framework={props.framework}
     />
   );
   const renderTransient = (): ReactNode => (
@@ -101,6 +109,7 @@ export function TabContent(props: TabContentProps) {
       projectName={props.projectName}
       contribWindows={props.contribWindows}
       builderJson={props.builderJson}
+      framework={props.framework}
     />
   );
 

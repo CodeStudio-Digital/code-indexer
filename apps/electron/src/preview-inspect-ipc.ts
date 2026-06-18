@@ -30,9 +30,21 @@ function fail(err: unknown) {
 }
 
 export function mountPreviewInspectIpc(service: PreviewWindowService): void {
-  ipcMain.handle('api:previewInspect:open', async (_e, input: { projectId: number; url: string; arm?: boolean }) => {
+  ipcMain.handle('api:previewInspect:open', async (_e, input: { projectId: number; url: string; arm?: boolean; selectorMode?: string }) => {
     try {
-      return ok(await service.openInspect(inspectKey(input.projectId), String(input.url ?? ''), { arm: !!input.arm }));
+      return ok(await service.openInspect(inspectKey(input.projectId), String(input.url ?? ''), {
+        arm: !!input.arm,
+        selectorMode: input.selectorMode,
+      }));
+    } catch (err) {
+      return fail(err);
+    }
+  });
+
+  ipcMain.handle('api:previewInspect:setMode', async (_e, input: { projectId: number; selectorMode?: string }) => {
+    try {
+      await service.setInspectMode(inspectKey(input.projectId), String(input.selectorMode ?? 'auto'));
+      return ok({ ok: true });
     } catch (err) {
       return fail(err);
     }

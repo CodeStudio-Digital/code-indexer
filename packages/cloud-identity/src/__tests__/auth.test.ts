@@ -329,6 +329,7 @@ describe('identity auth', () => {
     const t = build(counting);
     await t.signup.execute({ emailRaw: 'c@example.com', passwordRaw: 'longenoughpassword', ...CTX });
     await t.login.execute({ emailRaw: 'c@example.com', passwordRaw: 'wrong-password-x', ...CTX });
-    expect(failures).toBe(1);
+    // A failed login records on BOTH throttle dimensions: per-IP and per-account.
+    expect(failures).toBe(2);
   });
 });

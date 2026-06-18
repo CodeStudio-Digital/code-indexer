@@ -133,7 +133,7 @@ export async function executeEmbedding(
   // One transaction for the chunk's hash commits — these were 50 individual
   // autocommit UPDATEs (each its own WAL commit) per chunk. `onCommit` is
   // synchronous by contract (see EmbeddingCandidate.onCommit).
-  deps.db.transaction(() => {
+  deps.db.indexTransaction(project.id, () => {
     for (const c of candidates) c.onCommit();
   });
   return { tokens, lshFailed };

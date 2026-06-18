@@ -3,7 +3,7 @@
  * Carrega status + mergeState, agrupa arquivos por stage, e expõe as ações
  * (stage/unstage/discard/showDiff/reload). O shell (GitWindow.tsx) só consome.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { GitMergeState } from '@mcp/api-bus';
 import { apiCall } from '../../../../../lib/api-client.js';
@@ -52,6 +52,11 @@ export interface GitWindowModel {
   onDiscard: (paths: string[]) => Promise<void>;
 }
 
+// Auto-switch memory per project, OUTSIDE the hook — GitWindow unmounts on
+// every Git↔Files tab toggle, so a useRef would reset and re-yank the user to
+// the Conflicts tab on every return mid-merge. Module scope survives remounts.
+const autoSwitchedKind = new Map<number, GitMergeState['kind']>();
+
 export function useGitWindow(projectId: number): GitWindowModel {
   const { t } = useTranslation('workspace');
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -60,7 +65,6 @@ export function useGitWindow(projectId: number): GitWindowModel {
   const [openSections, setOpenSections] = useState<OpenSections>({ staged: true, unstaged: true, untracked: false });
   const [tab, setTab] = useState<GitTab>('changes');
   const [mergeState, setMergeState] = useState<GitMergeState | null>(null);
-  const prevKindRef = useRef<GitMergeState['kind']>(null);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
 
   const showDiff = useCallback(
@@ -126,16 +130,21 @@ export function useGitWindow(projectId: number): GitWindowModel {
   }, [gitRev]);
 
   // Auto-surface the Conflicts tab the moment a sequencer op flips into a
-  // conflicted state; fall back to Changes once it clears.
+  // conflicted state; fall back to Changes once it clears. Keyed per project in
+  // module scope so a tab-toggle remount mid-merge doesn't re-force the switch.
   useEffect(() => {
     const kind = mergeState?.kind ?? null;
-    if (kind && !prevKindRef.current) setTab('conflicts');
-    else if (!kind && prevKindRef.current) setTab((cur) => (cur === 'conflicts' ? 'changes' : cur));
-    prevKindRef.current = kind;
-  }, [mergeState?.kind]);
+    const prev = autoSwitchedKind.get(projectId) ?? null;
+    if (kind && !prev) setTab('conflicts');
+    else if (!kind && prev) setTab((cur) => (cur === 'conflicts' ? 'changes' : cur));
+    autoSwitchedKind.set(projectId, kind);
+  }, [mergeState?.kind, projectId, setTab]);
 
-  // Clear the registry when this Git window unmounts (project switch / close).
-  useEffect(() => () => clearConflicts(), []);
+  // NOTE: deliberately NO force-clear of the conflict registry on unmount — the
+  // Git window unmounts on every Files↔Git tab toggle, and clearing here would
+  // kill the inline conflict decorations on an open file mid-merge. The registry
+  // is kept current by reload() (setConflicts / clearConflicts(projectId)); the
+  // inline path is also projectId-scoped and self-gates on actual buffer markers.
 
   // The 3-pane merge editor (in the editor pane) pings us after resolving.
   useEffect(() => onGitReloadRequest(() => void reload()), [reload]);

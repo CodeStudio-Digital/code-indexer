@@ -58,7 +58,7 @@ export function importedCatalogs(
   if (!fileRow) return { text: '', chars: 0 };
 
   let deps: DBFileDependency[];
-  try { deps = db.getDependencies(fileRow.id); } catch { return { text: '', chars: 0 }; }
+  try { deps = db.getDependencies(fileRow.id, projectId); } catch { return { text: '', chars: 0 }; }
 
   const lines: string[] = [];
   let count = 0;

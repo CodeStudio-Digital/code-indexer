@@ -220,7 +220,7 @@ export interface GitConflictFile {
 export type ConflictResolution = 'ours' | 'theirs' | { content: string };
 
 export interface ProjectGitApi {
-  status(input: { projectId: number }, ctx: ApiContext): Promise<GitStatus>;
+  status(input: { projectId: number; includeFiles?: boolean }, ctx: ApiContext): Promise<GitStatus>;
 
   diff(
     input: { projectId: number; path?: string; staged?: boolean },

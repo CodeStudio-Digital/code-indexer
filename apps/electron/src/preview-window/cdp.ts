@@ -34,6 +34,10 @@ export class PreviewWindow {
   private controlListeners = new Set<(action: string) => void>();
   /** True once the inspector script has been registered for new documents. */
   private inspectArmed = false;
+  /** Identifier of the on-new-document script that sets `window.__mcpSelectorMode`.
+   *  Kept SEPARATE from the static inspector source (registered once) so a live
+   *  mode toggle can replace it — and so the mode survives in-window navigation. */
+  private modeScriptId: string | null = null;
   /** Current viewport (native window content size — informational). */
   viewport: Viewport = { ...DEFAULT_VIEWPORT };
 
@@ -87,6 +91,27 @@ export class PreviewWindow {
 
   async disarmInspect(): Promise<void> {
     await this.send('Runtime.evaluate', { expression: 'window.__mcpDisarm && window.__mcpDisarm()' }).catch(() => undefined);
+  }
+
+  /**
+   * Set the element-selector mode ('react' | 'universal' | 'auto'). Applied to
+   * the CURRENT document immediately AND (re)registered as its own on-new-document
+   * script so it survives SPA navigation / reload / HMR — replacing the previous
+   * one so a live toggle takes effect on every future document too. The inspector
+   * reads `window.__mcpSelectorMode` lazily at click time, so this can run before
+   * or after the inspector source without ordering concerns.
+   */
+  async setSelectorMode(mode: string): Promise<void> {
+    const expr = `window.__mcpSelectorMode=${JSON.stringify(mode)}`;
+    await this.send('Runtime.evaluate', { expression: expr }).catch(() => undefined);
+    if (this.modeScriptId) {
+      await this.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: this.modeScriptId }).catch(() => undefined);
+      this.modeScriptId = null;
+    }
+    const res = (await this.send('Page.addScriptToEvaluateOnNewDocument', { source: `${expr};` }).catch(() => null)) as
+      | { identifier?: string }
+      | null;
+    this.modeScriptId = res?.identifier ?? null;
   }
 
   /** Reset console/network ring buffers — called on navigate / window reuse so

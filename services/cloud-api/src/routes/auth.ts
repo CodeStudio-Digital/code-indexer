@@ -12,6 +12,7 @@ import { identityHttpStatus } from '@cloudstudio/cloud-identity';
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { hashPii } from '../infra/sha256.js';
+import { createBotVerifier } from '../infra/turnstile.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
 import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
 import { recordAudit } from '../middleware/audit.js';
@@ -23,7 +24,10 @@ const credsSchema = z.object({
   email: z.string().min(3).max(320),
   password: z.string().min(1).max(512),
 });
-const signupSchema = credsSchema.extend({ passwordConfirm: z.string().min(1).max(512).optional() });
+const signupSchema = credsSchema.extend({
+  passwordConfirm: z.string().min(1).max(512).optional(),
+  turnstileToken: z.string().max(4096).optional(),
+});
 const refreshSchema = z.object({ refreshToken: z.string().min(1).max(4096) });
 
 const invalidInput = (c: Ctx, details: unknown) =>
@@ -47,6 +51,14 @@ export function authRouter(): Hono<{ Bindings: Env }> {
     // Signup fires a verification email → rate-limit per IP (email-bomb / cost guard).
     const limited = await enforceRateLimit(c, [{ key: `signup:ip:${ipHash}`, limit: 20, windowMs: HOUR }]);
     if (limited) return limited;
+    // Bot check (active only once TURNSTILE_SECRET is set; no-op otherwise).
+    const bot = createBotVerifier(c.env.TURNSTILE_SECRET);
+    if (bot.enabled) {
+      const ip = c.req.header('cf-connecting-ip') ?? null;
+      if (!parsed.data.turnstileToken || !(await bot.verify(parsed.data.turnstileToken, ip))) {
+        return c.json({ code: 'turnstile_failed', message: 'Bot verification failed.' }, 403);
+      }
+    }
     const bundle = createIdentityBundle(c.env);
     const r = await bundle.signup.execute({
       emailRaw: parsed.data.email,

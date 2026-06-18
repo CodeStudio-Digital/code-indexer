@@ -80,7 +80,7 @@ export function buildEmbeddingCandidates(
   const candidates: EmbeddingCandidate[] = [];
 
   const fileIds = files.map((f) => f.fileId);
-  const fileHashMap = db.getFileEmbeddingHashes(fileIds);
+  const fileHashMap = db.getFileEmbeddingHashes(fileIds, project.id);
 
   const allSymbolIds: number[] = [];
   const symIdMapByFile = new Map<string, Map<string, number>>();
@@ -90,7 +90,7 @@ export function buildEmbeddingCandidates(
     symIdMapByFile.set(file.path, map);
     for (const s of dbSymbols) allSymbolIds.push(s.id);
   }
-  const symHashMap = db.getSymbolEmbeddingHashes(allSymbolIds);
+  const symHashMap = db.getSymbolEmbeddingHashes(allSymbolIds, project.id);
 
   for (const file of files) {
     appendFileCandidate(candidates, db, project, file, fileHashMap);
@@ -126,7 +126,7 @@ function appendFileCandidate(
       filePath: file.path,
       metadata: { project_name: project.name, type: 'file', ref_id: String(file.fileId) },
       hash: fileHash,
-      onCommit: () => db.setFileEmbeddingHash(file.fileId, fileHash),
+      onCommit: () => db.setFileEmbeddingHash(file.fileId, fileHash, project.id),
     });
   }
 }
@@ -216,7 +216,7 @@ function appendSigCandidate(
       filePath,
       metadata: { project_name: project.name, type: 'symbol', ref_id: String(symDbId) },
       hash: sigHash,
-      onCommit: () => db.setSymbolEmbeddingHash(symDbId, sigHash, 'sig'),
+      onCommit: () => db.setSymbolEmbeddingHash(symDbId, sigHash, 'sig', project.id),
     });
   }
 }
@@ -291,7 +291,7 @@ function appendBodyCandidate(
       groupKey,
       ...(isLast && supersededIds.length > 0 ? { supersededIds } : {}),
       onCommit: isLast
-        ? () => db.setSymbolEmbeddingHash(symDbId, combinedHash, 'body')
+        ? () => db.setSymbolEmbeddingHash(symDbId, combinedHash, 'body', project.id)
         : () => { /* committed by the last window of the group */ },
     });
   });
@@ -337,7 +337,7 @@ function mergeSiblings(
       filePath,
       metadata: { project_name: project.name, type: 'symbol_group', ref_id: String(anchorSymDbId) },
       hash: bodyHash,
-      onCommit: () => db.setSymbolEmbeddingHash(anchorSymDbId, bodyHash, 'body'),
+      onCommit: () => db.setSymbolEmbeddingHash(anchorSymDbId, bodyHash, 'body', project.id),
     });
   };
 

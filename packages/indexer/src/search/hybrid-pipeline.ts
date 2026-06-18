@@ -229,7 +229,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
           if (vector.length === 0) return [];
           const matches = await this.deps.vectorStore!.search(vector, { topK: perVariant, filter, namespace });
           totalRaw += matches.length;
-          return this.rehydrate(matches);
+          return this.rehydrate(matches, q.projectId);
         }),
       );
       q.diag.vectorRawMatches = totalRaw;
@@ -291,6 +291,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
 
   private rehydrate(
     matches: Array<{ score: number; metadata: Record<string, string> }>,
+    projectId?: number,
   ): HybridSearchPipelineCandidate[] {
     const out: HybridSearchPipelineCandidate[] = [];
     for (const match of matches) {
@@ -298,8 +299,8 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
       const refId = match.metadata.ref_id ? parseInt(match.metadata.ref_id, 10) : 0;
       if (!refId) continue;
       const data: DBFile | DBSymbol | undefined = isFile
-        ? this.deps.db.getFileById(refId)
-        : this.deps.db.getSymbolById(refId);
+        ? this.deps.db.getFileById(refId, projectId)
+        : this.deps.db.getSymbolById(refId, projectId);
       if (!data) continue;
       const r: HybridSearchResult = {
         id: data.id,
@@ -335,7 +336,7 @@ export class RecentFilesSourceStage
     const out: HybridSearchPipelineCandidate[] = [];
     for (let i = 0; i < matches.length; i++) {
       const m = matches[i];
-      const data = this.deps.db.getFileById(m.fileId);
+      const data = this.deps.db.getFileById(m.fileId, q.projectId);
       if (!data || data.project_id !== q.projectId) continue;
       const r: HybridSearchResult = {
         id: data.id,

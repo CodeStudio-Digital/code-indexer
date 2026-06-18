@@ -48,6 +48,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    setupFiles: [resolve(repoRoot, 'vitest.setup.ts')],
     include: [
       'src/__tests__/**/*.test.ts',
       'packages/*/src/__tests__/**/*.test.ts',

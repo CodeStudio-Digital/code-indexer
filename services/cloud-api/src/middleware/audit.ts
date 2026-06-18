@@ -11,29 +11,47 @@ import { cryptoIdGen, systemClock } from '../infra/runtime.js';
 import { hashPii } from '../infra/sha256.js';
 import type { Env } from '../env.js';
 
+async function writeAudit(
+  c: Context<{ Bindings: Env }>,
+  event: string,
+  status: number,
+  opts: { accountId?: string | null; [key: string]: unknown },
+): Promise<void> {
+  const ip = c.req.header('cf-connecting-ip') ?? null;
+  const { accountId = null, ...meta } = opts; // everything except accountId is meta (redacted on write)
+  try {
+    const log = createAuditLog(createD1Executor(c.env.DB), cryptoIdGen, systemClock);
+    const e: AuditEvent = {
+      event,
+      status,
+      accountId,
+      ipHash: ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null,
+      meta,
+    };
+    await log.record(e);
+  } catch (err) {
+    console.error('[audit] write failed', { event, err: String(err) });
+  }
+}
+
+/** Fire-and-forget audit (most events): never blocks/fails the response. */
 export function recordAudit(
   c: Context<{ Bindings: Env }>,
   event: string,
   status: number,
   opts: { accountId?: string | null; [key: string]: unknown } = {},
 ): void {
-  const ip = c.req.header('cf-connecting-ip') ?? null;
-  const { accountId = null, ...meta } = opts; // everything except accountId is meta (redacted on write)
-  const write = async () => {
-    try {
-      const log = createAuditLog(createD1Executor(c.env.DB), cryptoIdGen, systemClock);
-      const e: AuditEvent = {
-        event,
-        status,
-        accountId,
-        ipHash: ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null,
-        meta,
-      };
-      await log.record(e);
-    } catch (err) {
-      console.error('[audit] write failed', { event, err: String(err) });
-    }
-  };
-  // Don't block the response on the audit write.
-  c.executionCtx.waitUntil(write());
+  c.executionCtx.waitUntil(writeAudit(c, event, status, opts));
+}
+
+/** Awaited audit for compliance-critical events (e.g. account deletion) — the
+ *  trail must be persisted before we return success. Still swallows errors so a
+ *  transient audit failure can't block the user's right-to-erasure. */
+export async function recordAuditNow(
+  c: Context<{ Bindings: Env }>,
+  event: string,
+  status: number,
+  opts: { accountId?: string | null; [key: string]: unknown } = {},
+): Promise<void> {
+  await writeAudit(c, event, status, opts);
 }

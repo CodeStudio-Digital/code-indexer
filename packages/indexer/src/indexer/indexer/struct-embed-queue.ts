@@ -57,11 +57,11 @@ export async function flushStructEmbeddings(
   await withConcurrency(chunks, async (chunk) => {
     try {
       const { vectors, tokens } = await deps.embeddingService.embed(chunk.map((c) => c.structSig));
-      deps.db.transaction(() => {
+      deps.db.indexTransaction(project.id, () => {
         chunk.forEach((item, i) => {
           const vec = vectors[i];
           if (vec && vec.length > 0) {
-            deps.db.setFileStructureEmbedding(item.fileId, new Float32Array(vec));
+            deps.db.setFileStructureEmbedding(item.fileId, new Float32Array(vec), project.id);
             result.embedded++;
           } else {
             result.failed++;

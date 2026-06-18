@@ -324,7 +324,7 @@ const get_context_for = defineTool({
         const topFilePaths = new Set(fileResults.map(r => (r.data as unknown as { path: string }).path));
         for (const r of fileResults.slice(0, 3)) {
           const f = r.data as unknown as { id: number; path: string };
-          const deps = db.getDependencies(f.id);
+          const deps = db.getDependencies(f.id, project.id);
           const dependents = db.getDependents(project.id, f.id);
           for (const d of [...deps, ...dependents]) {
             const path = 'target_file_path' in d ? d.target_file_path : (d as { source_file_path: string }).source_file_path;

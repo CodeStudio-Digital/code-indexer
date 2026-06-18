@@ -41,7 +41,11 @@ export interface UniversalInspect {
   focus: () => void;
 }
 
-export function useUniversalInspect(projectId: number, url: string | null): UniversalInspect {
+export function useUniversalInspect(
+  projectId: number,
+  url: string | null,
+  selectorMode: 'react' | 'universal' = 'universal',
+): UniversalInspect {
   const [windowOpen, setWindowOpen] = useState(false);
   const stopRef = useRef<(() => void) | null>(null);
   const canInspect = !!url && electronApi() != null;
@@ -81,13 +85,23 @@ export function useUniversalInspect(projectId: number, url: string | null): Univ
     })();
     setWindowOpen(true);
     try {
-      await apiCall('previewInspect.open', { projectId, url, arm });
+      await apiCall('previewInspect.open', { projectId, url, arm, selectorMode });
     } catch {
       stopRef.current?.();
       stopRef.current = null;
       setWindowOpen(false);
     }
-  }, [projectId, url]);
+  }, [projectId, url, selectorMode]);
+
+  // Live mode toggle: the window only ever opens from a CLOSED state (open()
+  // sets the initial mode), so this effect only matters when the user cycles
+  // SelectorModeButton while the window stays open — push the new mode without
+  // re-opening (which would disarm). No-ops on the backend if the window isn't
+  // open yet, and is idempotent with open()'s own mode set.
+  useEffect(() => {
+    if (!windowOpen) return;
+    void apiCall('previewInspect.setMode', { projectId, selectorMode }).catch(() => undefined);
+  }, [selectorMode, windowOpen, projectId]);
 
   const close = useCallback(() => {
     stopRef.current?.();

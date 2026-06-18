@@ -389,7 +389,7 @@ export class HybridSearch {
       }
       const out: HybridSearchResult[] = [];
       for (let i = 0; i < matches.length; i++) {
-        const file = this.db.getFileById(matches[i].id);
+        const file = this.db.getFileById(matches[i].id, projectId);
         if (!file) continue;
         out.push({ id: file.id, type: 'file', score: 0, fts_rank: i + 1, vector_score: null, data: file });
       }
@@ -464,7 +464,7 @@ export class HybridSearch {
    * If a HyDE service is available, we also include a synthetic code snippet.
    */
   private async vectorSearchExpanded(
-    _projectId: number,
+    projectId: number,
     projectName: string,
     query: string,
     type: SearchType,
@@ -517,7 +517,7 @@ export class HybridSearch {
           if (vector.length === 0) return [];
           const matches = await this.vectorStore!.search(vector, { topK: perVariant, filter, namespace });
           totalRawMatches += matches.length;
-          return this.rehydrateVectorMatches(matches);
+          return this.rehydrateVectorMatches(matches, projectId);
         }),
       );
 
@@ -560,6 +560,7 @@ export class HybridSearch {
   /** Rehydrate vector matches from SQLite — shared by vectorSearchExpanded and snapshot search. */
   private rehydrateVectorMatches(
     matches: Array<{ score: number; metadata: Record<string, string> }>,
+    projectId?: number,
   ): HybridSearchResult[] {
     const results: HybridSearchResult[] = [];
     for (const match of matches) {
@@ -568,8 +569,8 @@ export class HybridSearch {
       if (!refId) continue;
 
       const data: DBFile | DBSymbol | undefined = isFile
-        ? this.db.getFileById(refId)
-        : this.db.getSymbolById(refId);
+        ? this.db.getFileById(refId, projectId)
+        : this.db.getSymbolById(refId, projectId);
       if (!data) continue;
 
       results.push({
@@ -730,7 +731,7 @@ export class HybridSearch {
     const matches = this.recentFilesSource.match(projectId, query, limit);
     const results: HybridSearchResult[] = [];
     for (const m of matches) {
-      const data = this.db.getFileById(m.fileId);
+      const data = this.db.getFileById(m.fileId, projectId);
       if (!data || data.project_id !== projectId) continue;
       results.push({
         id: data.id,

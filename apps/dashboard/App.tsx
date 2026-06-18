@@ -28,6 +28,7 @@ import { buildAgentsDefaultUrl } from './features/agents/routing.js';
 import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
 import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/index.js';
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
+import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
 
 // ─── Route components ────────────────────────────────────────
 
@@ -96,6 +97,13 @@ function AppRoot() {
     navigate(route, { replace: true });
   }, [navigate]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    return window.electronAPI?.onNavigate?.((route) => {
+      if (route.startsWith('/')) navigate(route);
+    });
+  }, [navigate]);
+
   // Plugin webview bridge — host side of the postMessage channel for
   // sandboxed plugin iframes (namespace-bound invokeTool / storage /
   // permissions). Mounted once here at the app root; the legacy Workspace
@@ -147,6 +155,11 @@ function ProjectViewRoute() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const projectId = Number(id);
+  useEffect(() => {
+    if (Number.isFinite(projectId)) {
+      startProjectRoute(projectId, { tab: 'chat', source: 'react-route' });
+    }
+  }, [projectId]);
   const project = useApi<{ id: number; name: string }>(
     Number.isFinite(projectId) ? `/projects/${projectId}` : '',
   );

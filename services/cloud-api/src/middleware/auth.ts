@@ -5,7 +5,7 @@
  * request; the access token still bounds the blast radius if the read is skipped.
  */
 import type { Context } from 'hono';
-import { asSessionId } from '@cloudstudio/cloud-kernel';
+import { asAccountId, asSessionId } from '@cloudstudio/cloud-kernel';
 import type { AccessClaims } from '@cloudstudio/cloud-identity';
 import type { Env } from '../env.js';
 import type { IdentityBundle } from '../composition.js';
@@ -20,7 +20,13 @@ export async function requireClaims(
   const claims = await bundle.verifyAccess(token);
   if (!claims) return null;
   const active = await bundle.sessions.findActive(asSessionId(claims.sid));
-  return active ? claims : null;
+  if (!active) return null;
+  // Re-check account status: locking/suspending an account must take effect on the
+  // NEXT request, not only when the short access token expires. (A delete cascades
+  // the session away, so `findActive` already covers deletion; this covers locked.)
+  const account = await bundle.accounts.findById(asAccountId(claims.sub));
+  if (!account || !account.isActive) return null;
+  return claims;
 }
 
 export function unauthorized(c: Context<{ Bindings: Env }>) {

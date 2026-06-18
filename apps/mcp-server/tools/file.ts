@@ -122,7 +122,7 @@ const get_file_structure = defineTool({
     }
     const symbols = db.getSymbolsByFile(project.id, filePath);
     const concepts = JSON.parse(file.concepts) as string[];
-    const deps = db.getDependencies(file.id);
+    const deps = db.getDependencies(file.id, project.id);
     const dependents = db.getDependents(project.id, file.id);
 
     const sections = [
@@ -620,7 +620,7 @@ const get_dependencies = defineTool({
     const filePath = normalizeFilePath(args.file_path as string, project.root_path);
     const file = db.getFile(project.id, filePath);
     if (!file) throw new Error(`File "${filePath}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
-    const deps = db.getDependencies(file.id);
+    const deps = db.getDependencies(file.id, project.id);
     return deps.map(d => `${d.dep_type} ${d.import_path}${d.target_file_path ? ` → ${d.target_file_path}` : ''}`).join('\n') || 'No dependencies found.';
   }),
 });

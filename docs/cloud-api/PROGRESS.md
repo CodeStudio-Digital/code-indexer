@@ -457,6 +457,37 @@ Full audit JSON: the workflow run `wf_0a4403a6-806` (transcript in this session'
 
 ---
 
+## 8i. Milestone log (cont.) — M14: full AppSec review + remediation
+
+- **M14 — AppSec review (OWASP/ASVS) of the whole backend + fixes.** Ran a 8-dimension × 3-skeptic
+  adversarial review (`wf_0041f2ea-748`, 116 agents): **36 candidates → 23 kept** (13 refuted). Remediated:
+  - **[CRÍTICO] Reset/verify tokens leaked to Workers Logs** — the no-binding email fallback logged the
+    full link (with the one-time token), and that path is ACTIVE in prod (no EMAIL binding). Fix: never
+    log body/recipient; body-logging is now an explicit gitignored dev-only opt-in (`EMAIL_DEBUG_LOG_BODY`).
+    **Live-verified**: a prod password-reset logs only a token-free "not sent (suppressed)" line.
+  - **[ALTO] 2FA disable had no password step-up + no throttle** → now requires current password AND a TOTP
+    code, throttled (`Disable2faUseCase` + route + regression test).
+  - **[ALTO] Login throttle keyed only on IP** → added a per-account dimension (`acct:<email>`), checked +
+    recorded alongside the IP key.
+  - **[ALTO] Account status (locked) never re-checked on authed requests** → `requireClaims` now loads the
+    account and rejects non-active.
+  - **[ALTO] Share creation had no rate limit** → 30/h per account (TOCTOU quota race noted as low/billing).
+  - **[ALTO] No fail-closed config check** → a global guard 503s every route (except /health) if
+    `ACCESS_SIGNING_SECRET` is missing/weak (<32) or `IP_HASH_SALT` is unset (forgeable tokens / reversible PII).
+  - **[MÉDIO] No bot challenge on signup/reset** → Turnstile wired (active once `TURNSTILE_SECRET` is set;
+    reset stays generic-200). **[MÉDIO] External fetches no timeout** → `AbortSignal.timeout` on Stripe(10s)
+    + Turnstile(5s). **[MÉDIO] Stripe sig parser** → handles multiple `v1` + values containing `=`.
+  - **[BAIXO] Share `model` served unredacted** → now run through the redactor. **[BAIXO] Confirm2fa
+    re-run rotated recovery codes** → guarded. **[BAIXO] account_deleted audit** → now awaited (sync).
+  - Positive verifications (no action): SSRF absent (fetch targets hardcoded), CORS allowlist (no wildcard,
+    no credentials), Stripe webhook raw-body verify, cache only on the public viewer, strong security headers,
+    D1 fully parameterized (no SQL injection), no hardcoded prod secrets.
+  - **Documented (not fixed this pass):** TOTP single-use-within-window (needs a `last_step` migration —
+    P2), trial-farming via mass signup (gate trial on email-verified — P3), recovery-code entropy (~50 bits).
+  - Re-verified: **90 cloud tests green**, Worker tsc 0, redeployed, live smoke (auth + no-token-in-logs).
+
+---
+
 ## 9. State of the build & next steps (for the morning review)
 
 **Done & verified tonight (unsupervised):** Phase 0 (scaffolding) + Phase 1 (full identity: signup,

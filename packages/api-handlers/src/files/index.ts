@@ -72,7 +72,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       const file = db.getFile(projectId, filePath);
       if (!file) throw new ApiError('not_found', 404, 'file not found');
       const symbols = db.getSymbolsByFile(projectId, filePath);
-      const dependencies = db.getDependencies(file.id);
+      const dependencies = db.getDependencies(file.id, projectId);
       const dependents = db.getDependents(projectId, file.id);
       return { ...file, symbols, dependencies, dependents };
     },

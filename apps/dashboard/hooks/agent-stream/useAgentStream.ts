@@ -9,6 +9,7 @@ import type {
 } from './types.js';
 import { EMPTY_STATE } from './types.js';
 import { pruneSessions } from './prune-sessions.js';
+import type { NotificationSourceContext } from '../../features/notifications/index.js';
 
 /**
  * Streams a coder session message via SSE (POST /api/coder/sessions/:id/messages).
@@ -19,12 +20,14 @@ import { pruneSessions } from './prune-sessions.js';
  * Blocks are kept in arrival order so the rendering matches what the model
  * actually emitted (text → tool_use → text → tool_use, etc.).
  */
-export function useAgentStream(sessionId: number | null) {
+export function useAgentStream(sessionId: number | null, notificationContext?: NotificationSourceContext) {
   // All streaming state is keyed by sessionId so background runs in other
   // sessions never bleed into the currently-viewed session. Switching tabs
   // never interrupts an in-flight run; coming back shows it where it was.
   const [stateMap, setStateMap] = useState<Record<number, SessionState>>({});
   const abortMap = useRef<Map<number, AbortController>>(new Map());
+  const notificationContextRef = useRef(notificationContext);
+  notificationContextRef.current = notificationContext;
   // Highest SSE id per sid for reattach Last-Event-ID. A ref (not React
   // state) because openStream advances it on every event — see OpenStreamDeps.
   const lastSeenSeqRef = useRef<Map<number, number>>(new Map());
@@ -57,7 +60,12 @@ export function useAgentStream(sessionId: number | null) {
       openStream(
         sid,
         opts,
-        { updateSession, abortMap: abortMap.current, lastSeenSeqMap: lastSeenSeqRef.current },
+        {
+          updateSession,
+          abortMap: abortMap.current,
+          lastSeenSeqMap: lastSeenSeqRef.current,
+          notificationContext: notificationContextRef.current,
+        },
         onMessageComplete,
       ),
     [updateSession],

@@ -29,8 +29,20 @@ export interface ElectronAPI {
   /** App version from electron `app.getVersion()`. */
   getAppVersion(): Promise<string>;
 
-  /** Native OS notification (used after agent run finishes in background). */
-  showNotification(opts: { title: string; body: string }): void;
+  /** Native OS notification with optional deep-link route. */
+  showNotification(opts: {
+    title: string;
+    body: string;
+    route?: string;
+    tag?: string;
+    kind?: string;
+  }): void;
+
+  /** Whether Electron can show native desktop notifications on this OS. */
+  isNotificationSupported?(): Promise<boolean>;
+
+  /** Subscribe to main-process internal navigation requests. */
+  onNavigate?(callback: (route: string) => void): () => void;
 
   /**
    * Auto-updater hooks. Wired in apps/electron/main.ts against

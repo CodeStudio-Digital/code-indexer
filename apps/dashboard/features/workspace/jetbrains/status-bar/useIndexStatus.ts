@@ -8,6 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { subscribeShared } from '../../../../hooks/shared-stream.js';
+import { markRouteEvent } from '../../../../lib/perf/route-startup-metrics.js';
 import type { ProjectIndexStatus } from '@mcp/api-bus';
 
 export type { ProjectIndexStatus };
@@ -28,6 +29,7 @@ export function useIndexStatus(projectId: number): ProjectIndexStatus | null {
     // joiner, so a second consumer is up to date instantly (no wait for the
     // next transition). EventSource auto-reconnects; the Electron iterator
     // re-sends its initial frame on reopen, so no manual retry is needed here.
+    let firstFrame = true;
     return subscribeShared<ProjectIndexStatus>(
       {
         key: `indexStatus:${projectId}`,
@@ -37,7 +39,13 @@ export function useIndexStatus(projectId: number): ProjectIndexStatus | null {
         sseEvent: 'status',
         replay: 'last',
       },
-      (frame) => setStatus(frame),
+      (frame) => {
+        if (firstFrame) {
+          firstFrame = false;
+          markRouteEvent('indexStatus:first-frame', { projectId, phase: frame.phase });
+        }
+        setStatus(frame);
+      },
     );
   }, [projectId]);
 

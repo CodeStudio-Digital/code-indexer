@@ -22,6 +22,8 @@ import { CheckpointsTimeline } from '../../builder/checkpoints/CheckpointsTimeli
 import { useProjectDevServer } from './useProjectDevServer.js';
 import { PreviewUrlEditor } from './PreviewUrlEditor.js';
 import { useUniversalInspect } from './useUniversalInspect.js';
+import { useSelectorMode, type PreviewFramework } from './useSelectorMode.js';
+import { SelectorModeButton } from './SelectorModeButton.js';
 import { apiPost } from '../../../hooks/useApi.js';
 
 /**
@@ -48,6 +50,7 @@ export function ProjectPreview({
   projectId,
   pinnedPort,
   selectionEnabled = false,
+  framework,
   onHide,
 }: {
   projectId: number;
@@ -55,6 +58,8 @@ export function ProjectPreview({
   pinnedPort?: number;
   /** Element selection (builder projects with the source-stamp only). */
   selectionEnabled?: boolean;
+  /** Inferred framework (Project.framework) → auto-picks the selector mode. */
+  framework?: PreviewFramework;
   onHide?: () => void;
 }) {
   const { status, url, start, restart, manualUrl, setManualUrl } = useProjectDevServer(projectId, {
@@ -160,10 +165,15 @@ export function ProjectPreview({
     }
   }, [projectId, restart]);
 
+  // Element-selector mode (universal CDP path). 'auto' resolves to React-native
+  // detection for React/Next projects, else the generic universal picker.
+  const { mode: selectorMode, setMode: setSelectorMode, effective: effectiveSelector } =
+    useSelectorMode(projectId, framework);
+
   // Universal CDP preview window: Inspect (armed) + "open in new window" (navigate).
   // Both share one window; the in-window floating bar toggles selection.
   const { canInspect, windowOpen, open: openInspectWin, close: closeInspectWin, focus: focusInspectWin } =
-    useUniversalInspect(projectId, url);
+    useUniversalInspect(projectId, url, effectiveSelector);
 
   // Auto-start the dev server when the pane opens for a builder project
   // (pinned port → we know it'll serve). For general projects we wait for
@@ -275,15 +285,25 @@ export function ProjectPreview({
             data-mcp-loc selector — hide it when that precise selector is
             available (builder/Vite) so we don't show two pickers. */}
         {canInspect && !selectionEnabled && (
-          <button
-            onClick={() => { if (windowOpen) closeInspectWin(); else void openInspectWin(true); }}
-            className={`p-1.5 rounded-md ${windowOpen ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40' : 'hover:bg-muted'}`}
-            title={windowOpen
-              ? 'Close the preview window'
-              : 'Inspect — open the app in a window with a control bar; pick any element (any framework) to cite it'}
-          >
-            <Crosshair className="h-3.5 w-3.5" />
-          </button>
+          <>
+            <SelectorModeButton
+              mode={selectorMode}
+              effective={effectiveSelector}
+              framework={framework}
+              onChange={setSelectorMode}
+            />
+            <button
+              onClick={() => { if (windowOpen) closeInspectWin(); else void openInspectWin(true); }}
+              className={`p-1.5 rounded-md ${windowOpen ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40' : 'hover:bg-muted'}`}
+              title={windowOpen
+                ? 'Close the preview window'
+                : effectiveSelector === 'react'
+                  ? 'Inspect (React-native detection) — open the app in a window with a control bar; pick any element to cite its component'
+                  : 'Inspect — open the app in a window with a control bar; pick any element (any framework) to cite it'}
+            >
+              <Crosshair className={`h-3.5 w-3.5 ${effectiveSelector === 'react' && !windowOpen ? 'text-indigo-600 dark:text-indigo-400' : ''}`} />
+            </button>
+          </>
         )}
         {selectionEnabled && (
           <>
