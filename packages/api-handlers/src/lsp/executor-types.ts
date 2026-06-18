@@ -5,7 +5,7 @@
  * inside the dedicated lsp worker_thread, so behavior is identical by
  * construction; only the thread changes.
  */
-import type { CompletionItem, DocChange, HoverInfo, LspLocation } from '@mcp/api-bus';
+import type { CodeActionDTO, CompletionItem, DocChange, HoverInfo, LspLocation } from '@mcp/api-bus';
 import type {
   CompletionEntry,
   CompletionDetails,
@@ -22,6 +22,7 @@ export interface LspOpCtx {
   /** Project-relative path — the editor's model key. */
   file: string;
   position?: { line: number; column: number };
+  range?: { start: { line: number; column: number }; end: { line: number; column: number } };
   /** Explicit content from legacy callers (HTTP compat, agent tools). */
   content?: string;
   /** Language id for ops that render language-aware output (fallbackHover). */
@@ -46,6 +47,7 @@ export interface LspBackendExecutor {
   tsReferences(ctx: LspOpCtx): Promise<ReferenceResult>;
   tsDiagnostics(ctx: LspOpCtx): Promise<DiagnosticResult[]>;
   tsSemanticTokens(ctx: LspOpCtx): Promise<number[]>;
+  tsCodeActions(ctx: LspOpCtx): Promise<CodeActionDTO[]>;
   // Structural-index fallback ops — these already return wire DTOs.
   fallbackCompletion(ctx: LspOpCtx): Promise<CompletionItem[]>;
   fallbackDefinition(ctx: LspOpCtx): Promise<LspLocation[]>;
@@ -68,6 +70,7 @@ export const EMPTY_RESULTS: Record<LspExecutorOp, unknown> = {
   tsReferences: { references: [] },
   tsDiagnostics: [],
   tsSemanticTokens: [],
+  tsCodeActions: [],
   fallbackCompletion: [],
   fallbackDefinition: [],
   fallbackHover: null,

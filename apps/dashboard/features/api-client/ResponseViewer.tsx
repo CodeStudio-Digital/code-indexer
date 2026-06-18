@@ -47,10 +47,11 @@ export function ResponseViewer({ response, error, sending, verifiedStatus, onMar
 
   const tests = response.tests ?? [];
   const failedTests = tests.filter((t) => !t.passed).length;
+  const testBadge = failedTests || tests.length || response.updatedVars?.length || (response.scriptError ? 1 : 0) || undefined;
   const tabs: SubTabDef<Tab>[] = [
     { id: 'body', label: 'Body' },
     { id: 'headers', label: 'Headers', badge: Object.keys(response.headers).length, badgeTone: 'primary' },
-    { id: 'tests', label: 'Test Results', badge: failedTests || tests.length || undefined, badgeTone: failedTests ? 'danger' : 'success' },
+    { id: 'tests', label: 'Test Results', badge: testBadge, badgeTone: failedTests || response.scriptError ? 'danger' : 'success' },
     { id: 'cookies', label: 'Cookies', badge: response.cookies?.length, badgeTone: 'primary' },
     { id: 'timing', label: 'Timing' },
   ];
@@ -74,7 +75,7 @@ export function ResponseViewer({ response, error, sending, verifiedStatus, onMar
       <div className="flex-1 min-h-0">
         {tab === 'body' && <ResponseBody body={response.body} headers={response.headers} truncated={response.truncated} />}
         {tab === 'headers' && <div className="h-full overflow-auto"><ResponseHeaders headers={response.headers} /></div>}
-        {tab === 'tests' && <TestResultsTab tests={response.tests} consoleLogs={response.consoleLogs} scriptError={response.scriptError} />}
+        {tab === 'tests' && <TestResultsTab tests={response.tests} consoleLogs={response.consoleLogs} scriptError={response.scriptError} updatedVars={response.updatedVars} />}
         {tab === 'cookies' && <CookiesTab cookies={response.cookies} />}
         {tab === 'timing' && <TimingTab response={response} />}
       </div>

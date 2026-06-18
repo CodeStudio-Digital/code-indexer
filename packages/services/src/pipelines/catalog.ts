@@ -334,7 +334,7 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
     pipelineName: 'code-agent',
     bindingRole: 'transcription',
     description:
-      'Speech-to-text (STT) model that transcribes audio recorded by the composer mic button. OpenAI-Whisper-compatible endpoint (POST {base_url}/audio/transcriptions): OpenAI whisper-1/gpt-4o-transcribe, Groq whisper-large-v3, local whisper.cpp/faster-whisper. Unset = the mic button stays disabled.',
+      'Speech-to-text (STT) for the composer mic button. Two provider kinds work: (1) Google Gemini (e.g. gemini-2.5-flash / -flash-lite) — transcribes via its native multimodal API; (2) OpenAI-Whisper-compatible endpoints (POST {base_url}/audio/transcriptions) — OpenAI whisper-1, Groq whisper-large-v3 (free + fast), local whisper.cpp/faster-whisper. Unset = the mic button stays disabled.',
     recommendedDefault: {
       providerKind: 'openai',
       modelHint: 'whisper-1',

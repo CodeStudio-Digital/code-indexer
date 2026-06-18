@@ -14,6 +14,7 @@ interface ServerStatusDTO {
   state: 'no-server' | 'not-installed' | 'starting' | 'ready' | 'failed' | 'disabled';
   server?: { id: string; label: string; version: string; sizeLabel: string };
   autoPrompt?: boolean;
+  reason?: string;
 }
 type InstallFrame =
   | { phase: 'start' }
@@ -28,6 +29,10 @@ function snoozed(): Record<string, boolean> {
 }
 function snooze(lang: string): void {
   localStorage.setItem(SNOOZE_KEY, JSON.stringify({ ...snoozed(), [lang]: true }));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function LspInstallPrompt({ projectId, filePath }: { projectId: number; filePath: string }) {
@@ -51,9 +56,26 @@ export function LspInstallPrompt({ projectId, filePath }: { projectId: number; f
     return () => { cancelled = true; };
   }, [projectId, language]);
 
-  if (!status || status.state !== 'not-installed' || !status.server || dismissed.current) return null;
+  if (!status || dismissed.current) return null;
   if (status.autoPrompt === false) return null; // admin turned the banner off
+  if (status.state !== 'not-installed' && !installing && !error) return null;
+  if (!status.server) return null;
   const server = status.server;
+
+  const waitForReady = async (): Promise<void> => {
+    setStatus((s) => s ? { ...s, state: 'starting' } : s);
+    setLastLog('Starting language server…');
+    for (let i = 0; i < 30; i++) {
+      const next = await apiCall<ServerStatusDTO>('lsp.serverStatus', { projectId, languageId: language });
+      setStatus(next);
+      if (next.state === 'ready') return;
+      if (next.state === 'failed') {
+        throw new Error(next.reason || `${next.server?.label ?? server.label} failed to start`);
+      }
+      await delay(1000);
+    }
+    throw new Error(`${server.label} did not become ready within 30s`);
+  };
 
   const install = async (): Promise<void> => {
     setInstalling(true);
@@ -78,8 +100,9 @@ export function LspInstallPrompt({ projectId, filePath }: { projectId: number; f
         });
       }
       setStatus({ ...status, state: 'starting' });
+      await waitForReady();
       dismissed.current = true;
-      setStatus(null); // banner gone; providers start answering via the server
+      setStatus(null); // banner gone; providers answer via the ready server
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

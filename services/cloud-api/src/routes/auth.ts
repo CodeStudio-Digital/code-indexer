@@ -45,7 +45,7 @@ export function authRouter(): Hono<{ Bindings: Env }> {
     }
     const { ua, ipHash } = await reqCtx(c);
     // Signup fires a verification email → rate-limit per IP (email-bomb / cost guard).
-    const limited = await enforceRateLimit(c, [{ key: `signup:ip:${ipHash}`, limit: 5, windowMs: HOUR }]);
+    const limited = await enforceRateLimit(c, [{ key: `signup:ip:${ipHash}`, limit: 20, windowMs: HOUR }]);
     if (limited) return limited;
     const bundle = createIdentityBundle(c.env);
     const r = await bundle.signup.execute({

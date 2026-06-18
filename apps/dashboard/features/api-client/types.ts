@@ -93,6 +93,10 @@ export interface SendResponse {
   cookies?: { name: string; value: string }[];
   size?: number;
   truncated?: boolean;
+  /** True when a script wrote env vars (persisted server-side). */
+  envUpdated?: boolean;
+  /** Names of env vars a script set/unset this send. */
+  updatedVars?: string[];
 }
 
 /** One recorded send (migration 148) — a row in the per-request Timeline. */

@@ -54,6 +54,22 @@ export interface LspLocationDTO {
   range: { start: Position; end: Position };
 }
 
+export interface TextEditDTO {
+  range: { start: Position; end: Position };
+  newText: string;
+}
+
+export interface WorkspaceEditDTO {
+  changes: Record<string, TextEditDTO[]>;
+}
+
+export interface CodeActionDTO {
+  title: string;
+  kind: string;
+  isPreferred?: boolean;
+  edit?: WorkspaceEditDTO;
+}
+
 export function toEditOps(
   monaco: Monaco,
   edits: NonNullable<CompletionItemDTO['additionalTextEdits']>,
@@ -66,6 +82,25 @@ export function toEditOps(
 
 export function toMonacoRange(monaco: Monaco, r: { start: Position; end: Position }): MonacoNs.IRange {
   return new monaco.Range(r.start.line, r.start.column, r.end.line, r.end.column);
+}
+
+export function toWorkspaceEdit(monaco: Monaco, edit?: WorkspaceEditDTO): MonacoNs.languages.WorkspaceEdit | undefined {
+  if (!edit) return undefined;
+  const edits: MonacoNs.languages.WorkspaceEdit['edits'] = [];
+  for (const [file, fileEdits] of Object.entries(edit.changes)) {
+    const resource = monaco.Uri.file(file);
+    for (const e of fileEdits) {
+      edits.push({
+        resource,
+        textEdit: {
+          range: toMonacoRange(monaco, e.range),
+          text: e.newText,
+        },
+        versionId: undefined,
+      });
+    }
+  }
+  return { edits };
 }
 
 export function mapCompletionKind(monaco: Monaco, kind: string): MonacoNs.languages.CompletionItemKind {

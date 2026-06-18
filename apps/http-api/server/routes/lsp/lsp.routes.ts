@@ -22,6 +22,8 @@ import { parseIdParam } from '../_helpers.js';
 interface PositionBody {
   file: string;
   position: Position;
+  content?: string;
+  context?: { triggerKind: number; triggerCharacter?: string };
 }
 
 function mapApiError(c: Context, err: unknown) {
@@ -180,6 +182,16 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
       return c.json(await h.completion({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/code-actions', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; range: { start: Position; end: Position } }>();
+      return c.json(await h.codeActions({ projectId, ...body }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
     }

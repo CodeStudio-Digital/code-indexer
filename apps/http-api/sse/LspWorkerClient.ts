@@ -42,6 +42,7 @@ const OP_TIMEOUTS: Record<LspExecutorOp, number> = {
   tsReferences: 10_000,
   tsDiagnostics: 20_000,
   tsSemanticTokens: 10_000,
+  tsCodeActions: 10_000,
   fallbackCompletion: 5_000,
   fallbackDefinition: 5_000,
   fallbackHover: 5_000,
@@ -93,6 +94,7 @@ export class LspWorkerClient implements LspBackendExecutor {
   tsReferences: LspBackendExecutor['tsReferences'] = (ctx) => this.call('tsReferences', ctx);
   tsDiagnostics: LspBackendExecutor['tsDiagnostics'] = (ctx) => this.call('tsDiagnostics', ctx);
   tsSemanticTokens: LspBackendExecutor['tsSemanticTokens'] = (ctx) => this.call('tsSemanticTokens', ctx);
+  tsCodeActions: LspBackendExecutor['tsCodeActions'] = (ctx) => this.call('tsCodeActions', ctx);
   fallbackCompletion: LspBackendExecutor['fallbackCompletion'] = (ctx) => this.call('fallbackCompletion', ctx);
   fallbackDefinition: LspBackendExecutor['fallbackDefinition'] = (ctx) => this.call('fallbackDefinition', ctx);
   fallbackHover: LspBackendExecutor['fallbackHover'] = (ctx) => this.call('fallbackHover', ctx);

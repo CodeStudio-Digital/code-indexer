@@ -79,6 +79,15 @@ describe('diagnostics-hub', () => {
     expect(hasDiagnosticsSubscribers(7)).toBe(false);
     publishDiagnostics(7, frame('a.ts', 'after-close')); // must not throw
   });
+
+  it('replays the latest frame to subscribers that connect after publish', async () => {
+    publishDiagnostics(8, frame('late.php', 'already computed'));
+    const it = subscribeDiagnostics(8)[Symbol.asyncIterator]();
+    const first = await it.next();
+    expect(first.value.file).toBe('late.php');
+    expect(first.value.diagnostics[0]?.message).toBe('already computed');
+    await it.return!();
+  });
 });
 
 describe('index-fallback wordAt', () => {

@@ -92,6 +92,7 @@ export interface DiagnosticResult {
 export class TsLanguageService {
   private readonly projectRoot: string;
   private readonly files = new Map<string, { version: string; content: string }>();
+  private packageExports: PackageAutoImportEntry[] | null = null;
   private service: ts.LanguageService | null = null;
   private rootFiles: string[] = [];
   private compilerOptions: ts.CompilerOptions;
@@ -534,17 +535,8 @@ export class TsLanguageService {
    * which is exactly when completion needs to fire.
    */
   private positionToOffset(fileAbs: string, line: number, column: number): number | null {
-    const cached = this.files.get(fileAbs);
-    let content: string;
-    if (cached) {
-      content = cached.content;
-    } else {
-      try {
-        content = readFileSync(fileAbs, 'utf-8');
-      } catch {
-        return null;
-      }
-    }
+    const content = this.contentFor(fileAbs);
+    if (content === null) return null;
     // 1-based line/col → 0-based offset.
     const lines = content.split('\n');
     if (line < 1 || line > lines.length) return null;
@@ -558,17 +550,8 @@ export class TsLanguageService {
    *  cache-first lookup so error-location math stays consistent with
    *  the buffer the user actually sees. */
   private offsetToPosition(fileAbs: string, offset: number): { line: number; column: number } {
-    const cached = this.files.get(fileAbs);
-    let content: string;
-    if (cached) {
-      content = cached.content;
-    } else {
-      try {
-        content = readFileSync(fileAbs, 'utf-8');
-      } catch {
-        return { line: 1, column: 1 };
-      }
-    }
+    const content = this.contentFor(fileAbs);
+    if (content === null) return { line: 1, column: 1 };
     let line = 1;
     let col = 1;
     for (let i = 0; i < offset && i < content.length; i++) {
@@ -580,6 +563,159 @@ export class TsLanguageService {
       }
     }
     return { line, column: col };
+  }
+
+  private contentFor(fileAbs: string): string | null {
+    const cached = this.files.get(fileAbs);
+    if (cached) return cached.content;
+    try {
+      return readFileSync(fileAbs, 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
+  private identifierPrefixAt(fileAbs: string, offset: number): string {
+    const content = this.contentFor(fileAbs);
+    if (content === null) return '';
+    let start = Math.max(0, Math.min(offset, content.length));
+    while (start > 0 && /[A-Za-z0-9_$]/.test(content[start - 1]!)) start--;
+    return content.slice(start, Math.max(0, Math.min(offset, content.length)));
+  }
+
+  private loadPackageExports(): PackageAutoImportEntry[] {
+    if (this.packageExports) return this.packageExports;
+    const out: PackageAutoImportEntry[] = [];
+    const rootPackageJson = `${this.projectRoot}/package.json`;
+    if (!existsSync(rootPackageJson)) {
+      this.packageExports = out;
+      return out;
+    }
+
+    let pkg: Record<string, unknown>;
+    try {
+      pkg = JSON.parse(readFileSync(rootPackageJson, 'utf-8')) as Record<string, unknown>;
+    } catch {
+      this.packageExports = out;
+      return out;
+    }
+
+    const depSections = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+    const packageNames = new Set<string>();
+    for (const section of depSections) {
+      const deps = pkg[section] as Record<string, unknown> | undefined;
+      if (!deps || typeof deps !== 'object') continue;
+      for (const name of Object.keys(deps)) packageNames.add(name);
+    }
+
+    for (const packageName of packageNames) {
+      const dts = this.resolvePackageDeclaration(packageName);
+      if (!dts) continue;
+      out.push(...this.extractPackageDeclarationExports(packageName, dts));
+    }
+    this.packageExports = out;
+    return out;
+  }
+
+  private resolvePackageDeclaration(packageName: string): string | null {
+    const direct = this.resolveDeclarationInsidePackage(`${this.projectRoot}/node_modules/${packageName}`);
+    if (direct) return direct;
+    const typesName = packageName.startsWith('@')
+      ? `@types/${packageName.slice(1).replace('/', '__')}`
+      : `@types/${packageName}`;
+    return this.resolveDeclarationInsidePackage(`${this.projectRoot}/node_modules/${typesName}`);
+  }
+
+  private resolveDeclarationInsidePackage(packageDir: string): string | null {
+    const packageJson = `${packageDir}/package.json`;
+    if (existsSync(packageJson)) {
+      try {
+        const pkg = JSON.parse(readFileSync(packageJson, 'utf-8')) as Record<string, unknown>;
+        for (const key of ['types', 'typings'] as const) {
+          const value = pkg[key];
+          if (typeof value === 'string') {
+            const p = tsCanonical(resolve(packageDir, value));
+            if (existsSync(p)) return p;
+          }
+        }
+        if (typeof pkg.main === 'string') {
+          const p = tsCanonical(resolve(packageDir, pkg.main.replace(/\.(mjs|cjs|js|jsx)$/i, '.d.ts')));
+          if (existsSync(p)) return p;
+        }
+      } catch {
+        /* fall through to index.d.ts */
+      }
+    }
+    const index = tsCanonical(resolve(packageDir, 'index.d.ts'));
+    return existsSync(index) ? index : null;
+  }
+
+  private extractPackageDeclarationExports(packageName: string, dtsPath: string): PackageAutoImportEntry[] {
+    let text: string;
+    try {
+      text = readFileSync(dtsPath, 'utf-8');
+    } catch {
+      return [];
+    }
+    const sf = ts.createSourceFile(dtsPath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const out: PackageAutoImportEntry[] = [];
+    const add = (name: string, kind: string): void => {
+      if (!name || name === 'default') return;
+      out.push({ name, kind, moduleSpecifier: packageName });
+    };
+    const addBindingName = (name: ts.BindingName, kind: string): void => {
+      if (ts.isIdentifier(name)) add(name.text, kind);
+    };
+    for (const stmt of sf.statements) {
+      if (ts.isClassDeclaration(stmt) && stmt.name && hasExportModifier(stmt)) add(stmt.name.text, 'class');
+      else if (ts.isInterfaceDeclaration(stmt) && hasExportModifier(stmt)) add(stmt.name.text, 'interface');
+      else if (ts.isFunctionDeclaration(stmt) && stmt.name && hasExportModifier(stmt)) add(stmt.name.text, 'function');
+      else if (ts.isEnumDeclaration(stmt) && hasExportModifier(stmt)) add(stmt.name.text, 'enum');
+      else if (ts.isTypeAliasDeclaration(stmt) && hasExportModifier(stmt)) add(stmt.name.text, 'type');
+      else if (ts.isVariableStatement(stmt) && hasExportModifier(stmt)) {
+        for (const decl of stmt.declarationList.declarations) addBindingName(decl.name, 'const');
+      } else if (ts.isExportDeclaration(stmt) && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
+        for (const el of stmt.exportClause.elements) add((el.propertyName ?? el.name).text, 'const');
+      }
+    }
+    return out;
+  }
+
+  private packageAutoImportCompletions(fileAbs: string, offset: number, seenNames: Set<string>): CompletionEntry[] {
+    const prefix = this.identifierPrefixAt(fileAbs, offset);
+    if (prefix.length < 2) return [];
+    return this.loadPackageExports()
+      .filter((e) => e.name.startsWith(prefix) && !seenNames.has(e.name))
+      .slice(0, 50)
+      .map((e) => ({
+        name: e.name,
+        kind: e.kind,
+        sortText: `16${e.name}`,
+        insertText: e.name,
+        isSnippet: false,
+        detail: `export from ${e.moduleSpecifier}`,
+        source: e.moduleSpecifier,
+        data: { __mcpPackageAutoImport: true, exportName: e.name, moduleSpecifier: e.moduleSpecifier },
+        hasAction: true,
+      }));
+  }
+
+  private buildNamedImportEdit(fileAbs: string, exportName: string, moduleSpecifier: string): CompletionDetails {
+    const content = this.contentFor(fileAbs) ?? '';
+    const importLine = `import { ${exportName} } from "${moduleSpecifier}";`;
+    if (content.includes(importLine)) return {};
+    const insert = content.startsWith('#!') ? content.indexOf('\n') + 1 : 0;
+    const newText = `${importLine}\n${insert === 0 ? '\n' : ''}`;
+    return {
+      additionalTextEdits: [{
+        range: {
+          start: this.offsetToPosition(fileAbs, insert),
+          end: this.offsetToPosition(fileAbs, insert),
+        },
+        newText,
+      }],
+      detail: `import { ${exportName} } from "${moduleSpecifier}"`,
+    };
   }
 
   // ── Public API used by tools ──────────────────
@@ -745,7 +881,7 @@ export class TsLanguageService {
       return [];
     }
     if (!result) return [];
-    return result.entries.map((e) => ({
+    const entries: CompletionEntry[] = result.entries.map((e) => ({
       name: e.name,
       kind: String(e.kind),
       sortText: e.sortText,
@@ -759,6 +895,8 @@ export class TsLanguageService {
       data: e.data,
       hasAction: e.hasAction,
     }));
+    const seen = new Set(entries.map((e) => e.name));
+    return [...entries, ...this.packageAutoImportCompletions(abs, offset, seen)];
   }
 
   /**
@@ -776,10 +914,13 @@ export class TsLanguageService {
     const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return null;
+    if (isPackageAutoImportData(data)) {
+      return this.buildNamedImportEdit(abs, data.exportName, data.moduleSpecifier);
+    }
     let details: ts.CompletionEntryDetails | undefined;
     try {
       details = service.getCompletionEntryDetails(
-        abs, offset, name, undefined, source,
+        abs, offset, name, ts.getDefaultFormatCodeSettings(), source,
         { includeCompletionsForModuleExports: true },
         data as ts.CompletionEntryData | undefined,
       );
@@ -808,6 +949,90 @@ export class TsLanguageService {
       detail: ts.displayPartsToString(details.displayParts) || undefined,
       documentation: ts.displayPartsToString(details.documentation) || undefined,
     };
+  }
+
+  getCodeActions(
+    file: string,
+    range: { start: { line: number; column: number }; end: { line: number; column: number } },
+  ): CodeActionResult[] {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+    const start = this.positionToOffset(abs, range.start.line, range.start.column);
+    const end = this.positionToOffset(abs, range.end.line, range.end.column);
+    if (start === null || end === null) return [];
+
+    let diagnostics: readonly ts.Diagnostic[];
+    try {
+      diagnostics = [
+        ...service.getSyntacticDiagnostics(abs),
+        ...service.getSemanticDiagnostics(abs),
+        ...service.getSuggestionDiagnostics(abs),
+      ];
+    } catch (e) {
+      console.warn(
+        `[lsp] getCodeActions diagnostics: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
+
+    const lo = Math.min(start, end);
+    const hi = Math.max(start, end);
+    const codes = Array.from(new Set(
+      diagnostics
+        .filter((d) => d.start !== undefined && d.length !== undefined)
+        .filter((d) => {
+          const dStart = d.start!;
+          const dEnd = dStart + d.length!;
+          return dEnd >= lo && dStart <= hi;
+        })
+        .map((d) => d.code),
+    ));
+    if (codes.length === 0) return [];
+
+    let fixes: readonly ts.CodeFixAction[];
+    try {
+      fixes = service.getCodeFixesAtPosition(
+        abs,
+        lo,
+        hi,
+        codes,
+        ts.getDefaultFormatCodeSettings(),
+        {
+          includeCompletionsForModuleExports: true,
+          allowTextChangesInNewFiles: false,
+        },
+      );
+    } catch (e) {
+      console.warn(
+        `[lsp] getCodeActions fixes: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
+
+    return fixes
+      .map<CodeActionResult | null>((fix) => {
+        const changes: Record<string, TsTextEdit[]> = {};
+        for (const change of fix.changes) {
+          const fileName = tsCanonical(change.fileName);
+          const edits = change.textChanges.map((tc) => ({
+            range: {
+              start: this.offsetToPosition(fileName, tc.span.start),
+              end: this.offsetToPosition(fileName, tc.span.start + tc.span.length),
+            },
+            newText: tc.newText,
+          }));
+          if (edits.length > 0) changes[fileName] = [...(changes[fileName] ?? []), ...edits];
+        }
+        if (Object.keys(changes).length === 0) return null;
+        return {
+          title: fix.description,
+          kind: 'quickfix',
+          isPreferred: fix.fixName.toLowerCase().includes('import') ? true : undefined,
+          edit: { changes },
+        };
+      })
+      .filter((a): a is CodeActionResult => !!a);
   }
 
   /**
@@ -994,6 +1219,33 @@ export interface CompletionEntry {
   hasAction?: boolean;
 }
 
+interface PackageAutoImportEntry {
+  name: string;
+  kind: string;
+  moduleSpecifier: string;
+}
+
+interface PackageAutoImportData {
+  __mcpPackageAutoImport: true;
+  exportName: string;
+  moduleSpecifier: string;
+}
+
+function isPackageAutoImportData(data: unknown): data is PackageAutoImportData {
+  if (!data || typeof data !== 'object') return false;
+  const record = data as Record<string, unknown>;
+  return (
+    record.__mcpPackageAutoImport === true &&
+    typeof record.exportName === 'string' &&
+    typeof record.moduleSpecifier === 'string'
+  );
+}
+
+function hasExportModifier(node: ts.Node): boolean {
+  if (!ts.canHaveModifiers(node)) return false;
+  return !!ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+}
+
 /** completionItem/resolve para auto-import TS/JS: o(s) `import` edit(s) + detail/docs. */
 export interface CompletionDetails {
   additionalTextEdits?: Array<{
@@ -1002,6 +1254,18 @@ export interface CompletionDetails {
   }>;
   detail?: string;
   documentation?: string;
+}
+
+export interface TsTextEdit {
+  range: { start: { line: number; column: number }; end: { line: number; column: number } };
+  newText: string;
+}
+
+export interface CodeActionResult {
+  title: string;
+  kind: string;
+  isPreferred?: boolean;
+  edit?: { changes: Record<string, TsTextEdit[]> };
 }
 
 // ── Module-level cache with idle-timeout eviction ────

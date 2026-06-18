@@ -11,7 +11,7 @@
 
 export type LspOp =
   | 'completion' | 'resolve' | 'hover' | 'definition'
-  | 'references' | 'inline' | 'semanticTokens';
+  | 'references' | 'inline' | 'semanticTokens' | 'codeActions';
 
 export type LspOutcome = 'ok' | 'threw' | 'empty' | 'timeout' | 'no-provider';
 

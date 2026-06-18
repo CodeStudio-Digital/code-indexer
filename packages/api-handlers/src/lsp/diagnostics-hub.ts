@@ -21,11 +21,19 @@ type Subscriber = {
 };
 
 const subscribers = new Map<number, Set<Subscriber>>();
+const latest = new Map<number, Map<string, DiagnosticsFrame>>();
 
 export function publishDiagnostics(projectId: number, frame: DiagnosticsFrame): void {
+  const k = `${frame.file}|${frame.source}`;
+  let projectLatest = latest.get(projectId);
+  if (!projectLatest) {
+    projectLatest = new Map();
+    latest.set(projectId, projectLatest);
+  }
+  projectLatest.set(k, frame);
+
   const subs = subscribers.get(projectId);
   if (!subs || subs.size === 0) return;
-  const k = `${frame.file}|${frame.source}`;
   for (const sub of subs) {
     if (sub.closed) continue;
     sub.pending.set(k, frame);
@@ -51,6 +59,9 @@ export function subscribeDiagnostics(projectId: number): AsyncIterable<Diagnosti
       let set = subscribers.get(projectId);
       if (!set) { set = new Set(); subscribers.set(projectId, set); }
       set.add(sub);
+      for (const [key, frame] of latest.get(projectId) ?? []) {
+        sub.pending.set(key, frame);
+      }
 
       const cleanup = () => {
         if (sub.closed) return;

@@ -9,6 +9,8 @@ import { ComposerToolbar } from './ComposerToolbar.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
 import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.js';
 import { RailComposerBar } from './RailComposerBar.js';
+import { VoiceCaptureBar } from './VoiceCaptureBar.js';
+import { useVoiceCaptureStatus, requestVoiceCaptureStop } from './voice-capture-store.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
 import { useFileDrop } from './useFileDrop.js';
 import { DropOverlay } from './DropOverlay.js';
@@ -207,6 +209,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     const appendTranscript = useCallback((text: string) => {
       setInput((prev) => (prev ? `${prev.trimEnd()} ${text}` : text));
     }, []);
+    const voiceRecording = useVoiceCaptureStatus() === 'recording';
 
     const handleFiles = useCallback(async (files: FileList | null) => {
       if (!files || files.length === 0) return;
@@ -476,6 +479,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
         )}
 
         <div className={`relative rounded-xl border border-l-2 ${BORDER_TINT[props.agent] ?? ''} bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-background transition`}>
+          {voiceRecording && <VoiceCaptureBar onStop={requestVoiceCaptureStop} />}
           {/* Slash command autocomplete dropdown */}
           {showSlash && filteredSlash.length > 0 && (
             <div className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-lg border bg-popover text-popover-foreground shadow-md max-h-48 overflow-auto">

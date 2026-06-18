@@ -104,8 +104,10 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
     recordHistory(store, rid, { status: res.status, ok: res.status < 400, duration_ms: res.ms, url: res.url });
 
     // Persist script var updates back to the env (default on for manual sends).
-    if (body.persistVars !== false && env && Object.keys(res.variableUpdates).length) {
-      try { store.applyEnvVarUpdates(env.id, toEnvUpdates(res.variableUpdates)); } catch { /* non-fatal */ }
+    const varKeys = Object.keys(res.variableUpdates);
+    let envUpdated = false;
+    if (body.persistVars !== false && env && varKeys.length) {
+      try { store.applyEnvVarUpdates(env.id, toEnvUpdates(res.variableUpdates)); envUpdated = true; } catch { /* non-fatal */ }
     }
 
     return c.json({
@@ -121,6 +123,9 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
       consoleLogs: [...(res.preScript?.consoleLogs ?? []), ...(res.testScript?.consoleLogs ?? [])],
       scriptError: res.preScript?.error ?? res.testScript?.error,
       cookies: jarSnapshot(jar, new URL(res.url).host),
+      // Which env vars a script wrote, so the UI can refresh + show feedback.
+      envUpdated,
+      updatedVars: envUpdated ? varKeys : undefined,
     });
   });
 
