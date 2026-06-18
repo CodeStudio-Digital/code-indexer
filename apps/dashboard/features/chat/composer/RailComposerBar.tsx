@@ -17,17 +17,12 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Gauge, Layers, Network, Repeat, Send, Settings2, Square, Thermometer } from 'lucide-react';
+import { Brain, Network, Send, Settings2, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
-import { Input } from '../../../components/ui/input.js';
-import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
-import { FallbackPicker } from '../../../components/FallbackPicker.js';
-import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
-import { AgentPicker } from './AgentPicker.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
+import { ModelSettingsDialog } from './ModelSettingsDialog.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
@@ -164,147 +159,33 @@ export function RailComposerBar(props: RailComposerBarProps) {
         )}
       </div>
 
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t('chat:toolbar.modelSettings')}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">{t('chat:toolbar.agent', { defaultValue: 'Agent' })}</label>
-              <AgentPicker value={props.agent} onChange={props.setAgent} autoSuggestFor={props.autoSuggestText} />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">{t('chat:toolbar.provider')}</label>
-              <Combobox
-                value={props.provider}
-                onChange={(v) => props.onSwitchProvider(v, '')}
-                options={props.providerOptions.map((p) => ({ value: p.id, label: p.label }))}
-                placeholder={t('chat:toolbar.provider')}
-                searchPlaceholder={t('chat:toolbar.searchProvider')}
-                emptyLabel={t('chat:toolbar.noProvider')}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">{t('chat:toolbar.model')}</label>
-              {props.currentProviderModels.length > 0 ? (
-                <Combobox
-                  value={props.model}
-                  onChange={(v) => { props.setModel(v); props.onSwitchProvider(props.provider, v); }}
-                  options={props.currentProviderModels.map<ComboboxOption>((m) => ({
-                    value: m.mode ? `${m.id}::${m.mode}` : m.id,
-                    label: m.id,
-                    hint: m.mode,
-                  }))}
-                  placeholder={t('chat:toolbar.defaultModel')}
-                  searchPlaceholder={t('chat:toolbar.searchModel')}
-                  emptyLabel={t('chat:toolbar.noModel')}
-                />
-              ) : (
-                <Input
-                  type="text"
-                  value={props.model}
-                  onChange={(e) => props.setModel(e.target.value)}
-                  onBlur={(e) => props.onSwitchProvider(props.provider, e.target.value)}
-                  placeholder={PROVIDERS.find((p) => p.id === props.provider)?.defaultModel}
-                  className="h-8 text-xs font-mono"
-                />
-              )}
-            </div>
-            <div className="flex gap-3">
-              <div className="flex-1 space-y-1.5">
-                <label className="text-xs text-muted-foreground">{t('chat:toolbar.maxTurns')}</label>
-                <div className="flex items-center gap-1.5">
-                  <Repeat className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <Input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={props.maxTurns ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      props.setMaxTurns(v === '' ? null : Math.max(1, parseInt(v, 10) || 1));
-                    }}
-                    placeholder="50"
-                    className="h-7 text-xs font-mono px-1.5"
-                  />
-                </div>
-              </div>
-              <div className="flex-1 space-y-1.5">
-                <label className="text-xs text-muted-foreground">{t('chat:toolbar.temperature', { defaultValue: 'Temperature' })}</label>
-                <div className="flex items-center gap-1.5">
-                  <Thermometer className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={props.temperature ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === '') { props.setTemperature(null); return; }
-                      const parsed = parseFloat(v);
-                      if (!Number.isFinite(parsed)) return;
-                      props.setTemperature(Math.min(1, Math.max(0, parsed)));
-                    }}
-                    placeholder={t('chat:toolbar.temperatureAuto', { defaultValue: 'auto' })}
-                    className="h-7 text-xs font-mono px-1.5"
-                  />
-                </div>
-              </div>
-            </div>
-            {props.setReasoningEffort && props.reasoningLevels && props.reasoningLevels.length > 0 && (
-              <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">{t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}</label>
-                <div className="flex items-center gap-1.5">
-                  <Gauge className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <select
-                    aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
-                    className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
-                    value={props.reasoningEffort ?? ''}
-                    onChange={(e) => props.setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
-                  >
-                    <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
-                    {props.reasoningLevels.map((lv) => (
-                      <option key={lv} value={lv}>
-                        {lv}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-            {props.agent === 'plan' && props.setPlanDepth && (
-              <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">{t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}</label>
-                <div className="flex items-center gap-1.5">
-                  <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <select
-                    aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
-                    className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
-                    value={props.planDepth ?? 'normal'}
-                    onChange={(e) => props.setPlanDepth?.(e.target.value)}
-                  >
-                    <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
-                    <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
-                    <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
-                  </select>
-                </div>
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">{t('chat:toolbar.fallback', { defaultValue: 'Fallback' })}</label>
-              <FallbackPicker
-                fallbackProvider={props.fallbackProvider}
-                fallbackModel={props.fallbackModel}
-                providerOptions={props.providerOptions}
-                getModelsForProvider={props.getModelsForProvider}
-                onChange={props.onFallbackChange}
-              />
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ModelSettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        showAgent
+        agent={props.agent}
+        setAgent={props.setAgent}
+        autoSuggestText={props.autoSuggestText}
+        provider={props.provider}
+        model={props.model}
+        setModel={props.setModel}
+        onSwitchProvider={props.onSwitchProvider}
+        providerOptions={props.providerOptions}
+        currentProviderModels={props.currentProviderModels}
+        maxTurns={props.maxTurns}
+        setMaxTurns={props.setMaxTurns}
+        temperature={props.temperature}
+        setTemperature={props.setTemperature}
+        reasoningEffort={props.reasoningEffort}
+        setReasoningEffort={props.setReasoningEffort}
+        reasoningLevels={props.reasoningLevels}
+        planDepth={props.planDepth}
+        setPlanDepth={props.setPlanDepth}
+        fallbackProvider={props.fallbackProvider}
+        fallbackModel={props.fallbackModel}
+        onFallbackChange={props.onFallbackChange}
+        getModelsForProvider={props.getModelsForProvider}
+      />
     </div>
   );
 }
