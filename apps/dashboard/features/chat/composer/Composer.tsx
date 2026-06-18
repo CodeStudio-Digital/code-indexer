@@ -10,6 +10,8 @@ import { ComposerActionIcons } from './ComposerActionIcons.js';
 import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.js';
 import { RailComposerBar } from './RailComposerBar.js';
 import { VoiceCaptureBar } from './VoiceCaptureBar.js';
+import { MicButton } from './MicButton.js';
+import { MicDevicePicker } from './MicDevicePicker.js';
 import { useVoiceCaptureStatus, requestVoiceCaptureStop } from './voice-capture-store.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
 import { useFileDrop } from './useFileDrop.js';
@@ -626,12 +628,13 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               selectedPipelineId={props.selectedPipelineId}
               setSelectedPipelineId={props.setSelectedPipelineId}
               onTranscript={appendTranscript}
+              showMic={false}
             />
             {/* provider · model chip — opens the model settings dialog. */}
             <button
               type="button"
               onClick={() => setModelDialogOpen(true)}
-              className="ml-auto inline-flex items-center max-w-[60%] h-7 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="ml-auto inline-flex items-center max-w-[55%] h-7 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               title={t('toolbar.modelSettings', { defaultValue: 'Model settings' })}
             >
               <span className="truncate font-mono">
@@ -643,6 +646,9 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                 )}
               </span>
             </button>
+            {/* Mic + device picker live AFTER the model name. */}
+            <MicButton onTranscript={appendTranscript} disabled={streaming} />
+            <MicDevicePicker disabled={streaming} />
           </div>
           <ComposerToolbar
             hasInput={hasInput}

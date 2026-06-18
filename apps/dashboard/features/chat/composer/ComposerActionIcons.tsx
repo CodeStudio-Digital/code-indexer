@@ -35,6 +35,9 @@ interface ComposerActionIconsProps {
   showThink?: boolean;
   /** Append voice-transcribed text to the composer input. Hides the mic when unset. */
   onTranscript?: (text: string) => void;
+  /** Render the mic + device picker here. The full chat composer sets this
+   *  false and renders them after the model chip instead. Default true (rail). */
+  showMic?: boolean;
 }
 
 export function ComposerActionIcons({
@@ -53,6 +56,7 @@ export function ComposerActionIcons({
   setSelectedPipelineId,
   showThink = true,
   onTranscript,
+  showMic = true,
 }: ComposerActionIconsProps) {
   const { t } = useTranslation('chat');
   // Transient "applied to the running session" pulse: the permission-mode
@@ -102,7 +106,7 @@ export function ComposerActionIcons({
         <TooltipContent side="top">{t('composer.attach', { defaultValue: 'Anexar arquivos' })}</TooltipContent>
       </Tooltip>
 
-      {onTranscript && (
+      {showMic && onTranscript && (
         <span className="inline-flex items-center">
           <MicButton onTranscript={onTranscript} disabled={streaming} />
           <MicDevicePicker disabled={streaming} />
