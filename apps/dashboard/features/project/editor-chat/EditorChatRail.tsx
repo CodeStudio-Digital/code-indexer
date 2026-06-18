@@ -5,8 +5,9 @@
  * the chat primitives via `useEditorChatSession`; sessions are shared with
  * the full Chat tab.
  */
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, ChevronRight, FilePlus2, FileText } from 'lucide-react';
+import { ArrowLeft, ChevronRight, FilePlus2, FileText, Loader2, Plus } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { TooltipProvider } from '../../../components/ui/tooltip.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
@@ -42,15 +43,25 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
   if (s.selectedId == null) {
     return (
       <div className="h-full flex flex-col bg-card/20 min-h-0">
-        <RailHeader title={t('chat.title')} onClose={onClose} />
+        <RailHeader
+          title={t('chat.title')}
+          onClose={onClose}
+          action={
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5 text-muted-foreground hover:text-foreground"
+              onClick={() => void s.createSession()}
+              disabled={s.creating}
+              aria-label={t('chat.new')}
+              title={t('chat.new')}
+            >
+              {s.creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+            </Button>
+          }
+        />
         <div className="flex-1 min-h-0">
-          <SessionPickerDropdown
-            projectName={projectName}
-            sessions={s.sessions}
-            creating={s.creating}
-            onCreate={() => void s.createSession()}
-            onPick={s.setSelectedId}
-          />
+          <SessionPickerDropdown projectName={projectName} sessions={s.sessions} onPick={s.setSelectedId} />
         </div>
       </div>
     );
@@ -147,7 +158,17 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
   );
 }
 
-function RailHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose: () => void }) {
+function RailHeader({
+  title,
+  onBack,
+  onClose,
+  action,
+}: {
+  title: string;
+  onBack?: () => void;
+  onClose: () => void;
+  action?: ReactNode;
+}) {
   const { t } = useTranslation('workspace');
   return (
     <header className="h-7 shrink-0 border-b bg-card/40 flex items-center px-1.5 gap-1">
@@ -165,6 +186,7 @@ function RailHeader({ title, onBack, onClose }: { title: string; onBack?: () => 
       <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] flex-1 truncate">
         {title}
       </span>
+      {action}
       <Button
         variant="ghost"
         size="icon"

@@ -49,13 +49,17 @@ function escapeRe(s: string): string {
   return s.replace(RE_SPECIAL, '\\$&');
 }
 
-/** Build the search RegExp (global) or null when the input is invalid/empty. */
+/**
+ * Build the search RegExp (global, multiline) or null when invalid/empty. The
+ * `m` flag makes `^`/`$` anchor per-line, so a regex like `;$` behaves the same
+ * in the line-by-line grep AND in the whole-content replace (no anchor drift).
+ */
 export function buildMatcher(o: GrepOptions): RegExp | null {
   if (!o.query) return null;
   let src = o.regex ? o.query : escapeRe(o.query);
   if (o.wholeWord) src = `\\b(?:${src})\\b`;
   try {
-    return new RegExp(src, 'g' + (o.caseSensitive ? '' : 'i'));
+    return new RegExp(src, 'gm' + (o.caseSensitive ? '' : 'i'));
   } catch {
     return null;
   }
@@ -110,7 +114,10 @@ export async function grepProject(db: FileLister, projectId: number, o: GrepOpti
     const lines = content.split('\n');
     const fileMatches: GrepMatch[] = [];
     for (let i = 0; i < lines.length && total < maxMatches; i++) {
-      const text = lines[i];
+      // Drop the trailing CR from CRLF files so match offsets + display are
+      // computed on the clean line (the CR sits past any match anyway).
+      const raw = lines[i];
+      const text = raw.charCodeAt(raw.length - 1) === 13 ? raw.slice(0, -1) : raw;
       if (text.length > maxLineLen) continue;
       matcher.lastIndex = 0;
       let m: RegExpExecArray | null;

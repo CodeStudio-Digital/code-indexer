@@ -197,6 +197,12 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
 
     useImperativeHandle(ref, () => ({ setInput, setAttachments }), []);
 
+    // Voice dictation: append the transcript to whatever is already typed.
+    // Functional updater (memoised []) — transcription resolves async.
+    const appendTranscript = useCallback((text: string) => {
+      setInput((prev) => (prev ? `${prev.trimEnd()} ${text}` : text));
+    }, []);
+
     const handleFiles = useCallback(async (files: FileList | null) => {
       if (!files || files.length === 0) return;
       const arr = await Promise.all(Array.from(files).map(fileToAttachment));
@@ -583,6 +589,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               setToolPermissionMode={props.setToolPermissionMode}
               queueable={!!props.queueable}
               onQueueSend={handleQueue}
+              onTranscript={appendTranscript}
             />
           ) : (
           <>
@@ -609,6 +616,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               sessionId={props.sessionId}
               selectedPipelineId={props.selectedPipelineId}
               setSelectedPipelineId={props.setSelectedPipelineId}
+              onTranscript={appendTranscript}
             />
           </div>
           <ComposerToolbar

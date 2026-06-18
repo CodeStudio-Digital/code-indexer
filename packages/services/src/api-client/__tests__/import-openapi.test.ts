@@ -31,7 +31,7 @@ function fakeStore(rows: Row[]): ApiClientStore & { rows: Map<number, Row> } {
 }
 
 const op = (method: string, path: string): ParsedOperation =>
-  ({ method, path, name: `${method} ${path}`, headers: {}, query: {} });
+  ({ method, path, name: `${method} ${path}`, folder: '', headers: {}, query: {} });
 
 describe('reconcileOperations', () => {
   it('creates new, preserves verified, counts correctly', () => {

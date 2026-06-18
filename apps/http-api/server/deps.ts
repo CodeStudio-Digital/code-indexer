@@ -25,6 +25,7 @@ import { CompanySandboxServicesStore } from '@mcp/store/company-sandbox-services
 import { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import { CompanySessionDatabaseStore } from '@mcp/store/company-session-database-store.js';
 import { CompanyLocalProjectStore } from '@mcp/store/company-local-project-store.js';
+import { FileLocalHistoryStore } from '@mcp/store/file-local-history-store.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
 import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.js';
@@ -476,6 +477,8 @@ export interface CompanyDeps {
   companySandboxServicesStore: CompanySandboxServicesStore;
   /** Shared env vars per session; injected into every container + written as /app/.env. */
   companySessionEnvStore: CompanySessionEnvStore;
+  /** Local History (JetBrains-style) — versões de arquivos independentes do git (mig 160). */
+  fileLocalHistoryStore: FileLocalHistoryStore;
   /**
    * Typed databases registered per session (Databases tab). Stores metadata
    * only — actual connection strings live in `companySessionEnvStore` so
@@ -681,6 +684,7 @@ export function createDeps(): ServerDeps {
   const companySessionEnvStore = new CompanySessionEnvStore(db.raw());
   const companySessionDatabaseStore = new CompanySessionDatabaseStore(db.raw());
   const companyLocalProjectStore = new CompanyLocalProjectStore(db.raw());
+  const fileLocalHistoryStore = new FileLocalHistoryStore(db.raw());
   const skillStore = new SkillStore(db.raw());
   const qaTestRunStore = new QaTestRunStore(db.raw());
   const qaTestResultStore = new QaTestResultStore(db.raw());
@@ -1129,6 +1133,7 @@ export function createDeps(): ServerDeps {
     companySessionEnvStore,
     companySessionDatabaseStore,
     companyLocalProjectStore,
+    fileLocalHistoryStore,
     skillStore,
     qaTestRunStore,
     qaTestResultStore,

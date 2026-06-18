@@ -133,6 +133,19 @@ describe('pending attachments (region screenshots)', () => {
   it('consume on an empty slot returns []', () => {
     expect(consumePendingAttachments(sid())).toEqual([]);
   });
+
+  it('keeps separate sessions isolated (no cross-session bleed)', () => {
+    const s1 = sid();
+    const s2 = sid();
+    addPendingAttachment(s1, shot('s1.png'));
+    addPendingAttachment(s2, shot('s2.png'));
+    expect(getPendingAttachments(s1).map((a) => a.name)).toEqual(['s1.png']);
+    expect(getPendingAttachments(s2).map((a) => a.name)).toEqual(['s2.png']);
+    // Draining one must not touch the other.
+    consumePendingAttachments(s1);
+    expect(getPendingAttachments(s1)).toEqual([]);
+    expect(getPendingAttachments(s2).map((a) => a.name)).toEqual(['s2.png']);
+  });
 });
 
 describe('updateSelected (visual-edit loc chase)', () => {

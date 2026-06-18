@@ -12,13 +12,13 @@ export async function saveFile(projectId: number, path: string): Promise<boolean
     (f) => (f.kind === undefined || f.kind === 'file') && f.path === path && f.projectId === projectId,
   );
   const stored = tab && (tab.kind === undefined || tab.kind === 'file') ? tab.content : null;
-  const value = modelFor(path)?.getValue() ?? stored;
+  const value = modelFor(projectId, path)?.getValue() ?? stored;
   if (value == null) return false; // never-loaded tab — nothing to persist
   try {
     const res = await apiCall<{ ok: true; last_modified: string }>('files.write', {
       projectId, path, content: value,
     });
-    useWorkspaceStore.getState().markClean(path, res.last_modified);
+    useWorkspaceStore.getState().markClean(projectId, path, res.last_modified);
     return true;
   } catch (err) {
     console.error('[workspace] save failed:', err);

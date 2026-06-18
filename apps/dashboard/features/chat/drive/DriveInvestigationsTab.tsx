@@ -1,7 +1,7 @@
 /**
  * Investigations tab — durable digests of sub-agent (spawn_agent)
- * explorations, auto-captured on completion (project-scoped). Compact list;
- * a click opens the full digest in a modal rendered as markdown.
+ * explorations, auto-captured on completion, scoped to the open session.
+ * Compact list; a click opens the full digest in a modal rendered as markdown.
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';

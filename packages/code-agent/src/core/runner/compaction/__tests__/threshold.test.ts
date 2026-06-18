@@ -10,14 +10,69 @@ import {
   shouldCompact90,
   computeProtectTokens,
   resolveTriggerRatio,
+  contextSpillCeilingChars,
+  resolveFinalizeCap,
   DEFAULT_TRIGGER_RATIO,
   DEFAULT_PROTECT_RATIO,
 } from '../threshold.js';
+import { estimateBlockTokens } from '@mcp/code-agent/core/token-accounting.js';
+import { capToolContent } from '../../pure-helpers.js';
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
 afterEach(() => {
   delete process.env.CODER_COMPACT_TRIGGER_RATIO;
+  delete process.env.CODER_CONTEXT_SPILL_RATIO;
+});
+
+describe('contextSpillCeilingChars (P3)', () => {
+  it('keeps a ceiling-sized dense tool_result AT or under the protect budget (the real invariant)', () => {
+    // This is the property the spill exists to guarantee: a tool_result clamped
+    // at the ceiling — head + the marker capToolContent appends — must estimate
+    // ≤ protectTokens, INCLUDING the per-block overhead estimateBlockTokens adds.
+    const protectTokens = computeProtectTokens({ model: MODEL });
+    const ceiling = contextSpillCeilingChars(MODEL);
+    expect(ceiling).toBeLessThan(protectTokens * 2); // margin reserved, not a bare 2×
+    // Densest possible content, longer than the ceiling so capToolContent caps it.
+    const dense = '{"k":'.repeat(ceiling); // JSON-punctuation-heavy → /2 estimate
+    const capped = capToolContent(dense, ceiling, 'oid-test');
+    expect(capped.truncated).toBe(true);
+    const block = { type: 'tool_result' as const, tool_use_id: 't', content: capped.content };
+    expect(estimateBlockTokens(block)).toBeLessThanOrEqual(protectTokens);
+  });
+
+  it('is OFF (Infinity) when the knob is 0 — restores legacy cap-only behaviour', () => {
+    process.env.CODER_CONTEXT_SPILL_RATIO = '0';
+    expect(contextSpillCeilingChars(MODEL)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('scales linearly with the ratio knob', () => {
+    const base = contextSpillCeilingChars(MODEL);
+    process.env.CODER_CONTEXT_SPILL_RATIO = '2';
+    expect(contextSpillCeilingChars(MODEL)).toBe(base * 2);
+  });
+
+  it('treats a non-finite knob as off', () => {
+    process.env.CODER_CONTEXT_SPILL_RATIO = 'nope';
+    expect(contextSpillCeilingChars(MODEL)).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+describe('resolveFinalizeCap (P3 clamp wiring)', () => {
+  it('clamps a large user cap down to the context ceiling', () => {
+    const ceiling = contextSpillCeilingChars(MODEL);
+    // A user on max/ultra has an effective cap far above the ceiling.
+    expect(resolveFinalizeCap(10_000_000, MODEL)).toBe(ceiling);
+  });
+
+  it('leaves a user cap below the ceiling untouched', () => {
+    expect(resolveFinalizeCap(1000, MODEL)).toBe(1000);
+  });
+
+  it('is a no-op (user cap wins) when the knob is off', () => {
+    process.env.CODER_CONTEXT_SPILL_RATIO = '0';
+    expect(resolveFinalizeCap(10_000_000, MODEL)).toBe(10_000_000);
+  });
 });
 
 describe('shouldCompact90', () => {

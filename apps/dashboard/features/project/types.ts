@@ -1,13 +1,3 @@
-export interface Stats {
-  file_count: number;
-  symbol_count: number;
-  total_lines: number;
-  total_size: number;
-  languages: Record<string, number>;
-  last_indexed: string | null;
-  run_count: number;
-}
-
 export interface DBFile {
   id: number;
   path: string;

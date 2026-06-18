@@ -40,6 +40,22 @@ export interface FileTreeNode {
   hasChildren?: boolean;
 }
 
+/**
+ * Uma revisão do Local History (sem o conteúdo — vem só no `historyGet`).
+ * Espelha a linha de `file_local_history` (mig 160).
+ */
+export interface HistoryRevision {
+  id: number;
+  path: string;
+  content_hash: string | null;
+  size: number;
+  kind: 'save' | 'external' | 'pre-delete' | 'pre-agent' | 'manual';
+  label: string | null;
+  existed_before: number;
+  oversized: number;
+  created_at: string;
+}
+
 export interface FilesApi {
   list(input: { projectId: number }, ctx: ApiContext): Promise<unknown[]>;
   manifest(input: { projectId: number }, ctx: ApiContext): Promise<ManifestInfo>;
@@ -88,4 +104,20 @@ export interface FilesApi {
 
   listConcepts(input: { projectId: number }, ctx: ApiContext): Promise<Array<{ concept: string; count: number }>>;
   conceptFiles(input: { projectId: number; concept: string }, ctx: ApiContext): Promise<unknown[]>;
+
+  // ── Local History (mig 160) ───────────────────────────────────────
+  /** Revisões de um arquivo, mais novo primeiro. */
+  historyList(input: { projectId: number; path: string }, ctx: ApiContext): Promise<{ revisions: HistoryRevision[] }>;
+  /** Uma revisão + seu conteúdo (null para oversized/tombstone). */
+  historyGet(
+    input: { projectId: number; id: number },
+    ctx: ApiContext,
+  ): Promise<{ rev: HistoryRevision; content: string | null }>;
+  /** Restaura uma revisão (grava o conteúdo de volta; tombstone → apaga). Não-destrutivo. */
+  historyRestore(
+    input: { projectId: number; id: number },
+    ctx: ApiContext,
+  ): Promise<{ ok: true; last_modified: string | null; deleted?: true }>;
+  /** Rotula uma revisão (a protege da poda automática). */
+  historyLabel(input: { projectId: number; id: number; label: string }, ctx: ApiContext): Promise<{ ok: true }>;
 }

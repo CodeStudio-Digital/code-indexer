@@ -4,15 +4,12 @@
  * full Chat tab (same project_id), so anything started here shows up there.
  */
 import { useTranslation } from 'react-i18next';
-import { Inbox, Loader2, MessageSquare, Plus } from 'lucide-react';
-import { Button } from '../../../components/ui/button.js';
+import { Inbox, MessageSquare } from 'lucide-react';
 import type { CoderSession } from '../../chat/types.js';
 
 interface Props {
   projectName: string;
   sessions: CoderSession[] | null;
-  creating: boolean;
-  onCreate: () => void;
   onPick: (id: number) => void;
 }
 
@@ -28,21 +25,12 @@ function relativeTime(iso: string): string {
   return `${Math.round(hr / 24)}d`;
 }
 
-export function SessionPickerDropdown({ projectName, sessions, creating, onCreate, onPick }: Props) {
+export function SessionPickerDropdown({ projectName, sessions, onPick }: Props) {
   const { t } = useTranslation('workspace');
   const list = sessions ?? [];
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="shrink-0 px-2.5 py-2 border-b bg-card/40 flex items-center justify-between gap-2">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] truncate">
-          {t('chat.title')}
-        </span>
-        <Button size="sm" className="h-6 text-[10.5px] px-2 gap-1" onClick={onCreate} disabled={creating}>
-          {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-          {t('chat.new')}
-        </Button>
-      </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {list.length === 0 ? (
           <div className="px-3 py-6 grid place-items-center text-center gap-2.5">

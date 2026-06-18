@@ -126,7 +126,7 @@ export interface TerminalUpgradeDeps {
  * upgrade applies, but as a JSON response — the browser can't read
  * the HTTP status of a rejected WebSocket upgrade (the spec collapses
  * every rejection into close code 1006 with no reason), so the
- * TerminalPanel calls this endpoint first and surfaces the structured
+ * terminal UI calls this endpoint first and surfaces the structured
  * error instead of an opaque "code 1006".
  *
  * Mounted at `GET /api/terminal/diagnose?sessionId=N&target=sandbox|host`.

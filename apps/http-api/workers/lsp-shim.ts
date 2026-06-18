@@ -3,7 +3,8 @@
  * non-TS files to the main process (where the LSP router + external servers
  * live) via MessageBridge RPC. Mirror of memory-shims.ts.
  */
-// IMPORTANT: workers import via relative paths only (see workerKit.ts).
+// IMPORTANT: workers import via relative paths only — Node's loader resolves
+// these before tsx/tsconfig `paths`, so `@mcp/*` aliases fail inside workers.
 import {
   setGlobalAgentLspBackend,
   type AgentLspLocation,

@@ -33,6 +33,11 @@ const detectDark = () =>
 
 export function MergeTabView({ tab }: { tab: OpenMerge }) {
   const { t } = useTranslation('workspace');
+  // Read `t` via a ref inside the heavy mount effect so a language switch
+  // (which changes `t`'s identity) doesn't tear down + re-create the three
+  // editors — that would discard the user's in-progress Result-pane edits.
+  const tRef = useRef(t);
+  tRef.current = t;
   const closeFile = useWorkspaceStore((s) => s.closeFile);
   const [data, setData] = useState<GitConflictFile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,12 +66,12 @@ export function MergeTabView({ tab }: { tab: OpenMerge }) {
     );
     handlesRef.current = handles;
     const ui = attachConflictUI(handles.resultEditor, monaco, {
-      current: t('git.conflict.acceptCurrent'),
-      incoming: t('git.conflict.acceptIncoming'),
-      both: t('git.conflict.acceptBoth'),
+      current: tRef.current('git.conflict.acceptCurrent'),
+      incoming: tRef.current('git.conflict.acceptIncoming'),
+      both: tRef.current('git.conflict.acceptBoth'),
     });
     return () => { ui.dispose(); handles.dispose(); handlesRef.current = null; };
-  }, [data, tab.file, t]);
+  }, [data, tab.file]);
 
   const navigate = (dir: 1 | -1) => {
     const ed = handlesRef.current?.resultEditor;
@@ -99,7 +104,7 @@ export function MergeTabView({ tab }: { tab: OpenMerge }) {
     try {
       await apiCall('projectGit.resolveConflict', { projectId: tab.projectId, path: tab.file, resolution });
       requestGitReload();
-      closeFile(tab.path);
+      closeFile(tab.projectId, tab.path);
     } catch (e) {
       toast.error(t('git.conflict.resolveFailed'), { description: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -137,7 +142,7 @@ export function MergeTabView({ tab }: { tab: OpenMerge }) {
               {applying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
               {t('git.conflict.applyMerge')}
             </Button>
-            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] gap-1 text-muted-foreground" onClick={() => closeFile(tab.path)}>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] gap-1 text-muted-foreground" onClick={() => closeFile(tab.projectId, tab.path)}>
               <X className="h-3 w-3" />
               {t('git.conflict.cancel')}
             </Button>

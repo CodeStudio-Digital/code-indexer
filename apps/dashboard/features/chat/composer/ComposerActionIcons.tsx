@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { PipelinePicker } from './PipelinePicker.js';
 import { OutputCapPicker } from './OutputCapPicker.js';
+import { MicButton } from './MicButton.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
 
 interface ComposerActionIconsProps {
@@ -31,6 +32,8 @@ interface ComposerActionIconsProps {
   setSelectedPipelineId?: (v: number | null) => void;
   /** Hide the thinking icon (the rail renders its own prominent Think pill). */
   showThink?: boolean;
+  /** Append voice-transcribed text to the composer input. Hides the mic when unset. */
+  onTranscript?: (text: string) => void;
 }
 
 export function ComposerActionIcons({
@@ -48,6 +51,7 @@ export function ComposerActionIcons({
   selectedPipelineId,
   setSelectedPipelineId,
   showThink = true,
+  onTranscript,
 }: ComposerActionIconsProps) {
   const { t } = useTranslation('chat');
   // Transient "applied to the running session" pulse: the permission-mode
@@ -96,6 +100,8 @@ export function ComposerActionIcons({
         </TooltipTrigger>
         <TooltipContent side="top">{t('composer.attach', { defaultValue: 'Anexar arquivos' })}</TooltipContent>
       </Tooltip>
+
+      {onTranscript && <MicButton onTranscript={onTranscript} disabled={streaming} />}
 
       {setSelectedPipelineId && (
         <PipelinePicker

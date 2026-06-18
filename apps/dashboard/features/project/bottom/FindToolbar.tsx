@@ -77,14 +77,14 @@ export function FindToolbar({ c }: { c: FindCtl }) {
         </div>
         <Button
           size="sm"
-          variant="outline"
+          variant={c.armed ? 'destructive' : 'outline'}
           className="h-7 gap-1 text-xs shrink-0"
           disabled={c.replacing || loading || !result || result.fileCount === 0}
           onClick={() => void c.replaceAll()}
-          title={'Replace all matches'}
+          title={c.armed ? 'Click again to confirm' : 'Replace all matches'}
         >
           {c.replacing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Replace className="h-3.5 w-3.5" />}
-          {'Replace All'}
+          {c.armed && result ? `Replace ${result.total}?` : 'Replace All'}
         </Button>
       </div>
 

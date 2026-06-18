@@ -12,6 +12,8 @@ export interface ParsedOperation {
   method: string;
   path: string;
   name: string;
+  /** Group label: first OpenAPI tag, else first path segment. */
+  folder: string;
   headers: Record<string, string>;
   query: Record<string, string>;
   bodyExample?: unknown;
@@ -88,6 +90,14 @@ function operationName(op: AnyObj, method: string, path: string): string {
   return (id || summary || `${method} ${path}`).slice(0, 120);
 }
 
+/** Folder = first tag (how Postman groups an import); fallback to first path segment. */
+function operationFolder(op: AnyObj, path: string): string {
+  const tags = op.tags as unknown[] | undefined;
+  if (Array.isArray(tags) && tags.length && typeof tags[0] === 'string') return tags[0];
+  const seg = path.replace(/^\/+/, '').split('/').find((s) => s && !s.startsWith('{'));
+  return seg ?? '';
+}
+
 async function parseRaw(raw: string, format: 'yaml' | 'json'): Promise<AnyObj> {
   if (format === 'json') return JSON.parse(raw) as AnyObj;
   const mod = (await import('yaml')) as { parse: (s: string) => unknown };
@@ -122,6 +132,7 @@ export async function parseOpenApi(raw: string, format: 'yaml' | 'json'): Promis
         method: verb.toUpperCase(),
         path,
         name: operationName(op, verb.toUpperCase(), path),
+        folder: operationFolder(op, path),
         headers,
         query,
         bodyExample: bodyFromOperation(doc, op),

@@ -23,7 +23,13 @@ export function setConflicts(projectId: number, paths: string[]): void {
   emit();
 }
 
-export function clearConflicts(): void {
+/**
+ * Clear the conflict set. Pass a projectId to only clear when it owns the
+ * current set (so a different project's clean reload can't wipe this one's
+ * highlighting); omit it to force-clear (e.g. on unmount / project switch).
+ */
+export function clearConflicts(projectId?: number): void {
+  if (projectId !== undefined && state.projectId !== projectId) return;
   if (state.projectId === null && state.paths.size === 0) return;
   state = { projectId: null, paths: new Set() };
   emit();

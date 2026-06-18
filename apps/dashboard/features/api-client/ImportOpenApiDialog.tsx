@@ -1,11 +1,12 @@
 /**
- * Import an OpenAPI/Swagger spec into a collection. Leaving the path empty
- * auto-detects conventional locations (openapi.yaml, docs/openapi.json, …)
- * under the project root. Re-import is idempotent and preserves verified
- * requests.
+ * Import an OpenAPI/Swagger spec into a collection. Three ways:
+ *   - pick a file from your computer (read + sent as content),
+ *   - type a path relative to the project root,
+ *   - leave blank to auto-detect under the project root.
+ * Re-import is idempotent and preserves verified requests.
  */
-import { useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Loader2, Upload, FileJson, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -21,14 +22,27 @@ interface Props {
 
 export function ImportOpenApiDialog({ projectId, open, onOpenChange, onImported }: Props) {
   const [path, setPath] = useState('');
+  const [file, setFile] = useState<{ name: string; content: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const pickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!f) return;
+    setError(null);
+    try { setFile({ name: f.name, content: await f.text() }); }
+    catch { setError('could not read the selected file'); }
+  };
 
   const run = async () => {
     setBusy(true); setError(null); setResult(null);
     try {
-      const r = await api.importOpenApi(projectId, path);
+      const r = file
+        ? await api.importOpenApiContent(projectId, file.content, file.name)
+        : await api.importOpenApi(projectId, path);
       setResult(r);
       onImported(r.collectionId);
     } catch (e) {
@@ -42,10 +56,29 @@ export function ImportOpenApiDialog({ projectId, open, onOpenChange, onImported 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Import OpenAPI</DialogTitle></DialogHeader>
-        <p className="text-xs text-muted-foreground">
-          Leave blank to auto-detect (openapi.yaml / docs/openapi.json / swagger.json …) under the project root.
-        </p>
-        <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="path/to/openapi.yaml (optional)" className="h-8 text-sm font-mono" />
+
+        <input ref={fileInput} type="file" accept=".yaml,.yml,.json,application/json,application/x-yaml,text/yaml" className="hidden" onChange={pickFile} />
+
+        {file ? (
+          <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            <FileJson className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="font-mono text-xs truncate flex-1" title={file.name}>{file.name}</span>
+            <button type="button" aria-label="Remove file" className="text-muted-foreground hover:text-foreground" onClick={() => setFile(null)}>
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <Button variant="outline" size="sm" className="w-full gap-2" onClick={() => fileInput.current?.click()}>
+              <Upload className="h-3.5 w-3.5" /> Choose file from computer…
+            </Button>
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="h-px flex-1 bg-border" /> or path in the project <span className="h-px flex-1 bg-border" />
+            </div>
+            <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="path/to/openapi.yaml (blank = auto-detect)" className="h-8 text-sm font-mono" />
+          </>
+        )}
+
         {error && <div className="text-xs text-red-500">{error}</div>}
         {result && (
           <div className="text-xs text-emerald-600">

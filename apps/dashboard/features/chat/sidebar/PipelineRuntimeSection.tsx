@@ -5,6 +5,7 @@ import { CollapsibleSection } from './CollapsibleSection.js';
 import { cn } from '../../../lib/utils.js';
 import { Button } from '../../../components/ui/button.js';
 import { useApi, apiPost } from '../../../hooks/useApi.js';
+import { usePolling } from '../../../hooks/usePolling.js';
 import { PipelineStageOutput } from './pipeline/PipelineStageOutput.js';
 import type { PipelineRuntimeState } from '../../../hooks/agent-stream/types.js';
 import type { PipelineExecution, PipelineNodeExecution } from '@mcp/company/types.js';
@@ -35,11 +36,14 @@ export function PipelineRuntimeSection({ sessionId, pipelineRuntime }: PipelineR
   const refetch = detailApi.refetch;
 
   const status = pipelineRuntime?.status ?? detailApi.data?.execution.status;
-  useEffect(() => {
-    if (!status || !ACTIVE.has(status)) return;
-    const id = setInterval(() => refetch(), 2500);
-    return () => clearInterval(id);
-  }, [status, refetch]);
+  // ONE timer, only while live (visibility-aware). `immediate:false` — detailApi
+  // already fetched on mount; the unstable `refetch` no longer churns the timer
+  // because usePolling holds it in a ref. The node-advance refetch below is an
+  // event-driven one-shot, NOT a second loop on the same endpoint.
+  usePolling(() => refetch(), 2500, {
+    enabled: !!status && ACTIVE.has(status),
+    immediate: false,
+  });
   // Snappier refresh when the live runtime advances a node.
   useEffect(() => {
     refetch();

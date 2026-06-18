@@ -18,6 +18,7 @@
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../lib/api-client.js';
 import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
+import { parseModelPath } from './editor-models-path.js';
 
 type Monaco = typeof MonacoNs;
 
@@ -31,7 +32,10 @@ interface DocChangeDTO {
 }
 
 function relOf(model: MonacoNs.editor.ITextModel): string {
-  return model.uri.path.replace(/^\//, '');
+  // Strip do prefixo de namespacing por projectId (W1b) → relpath limpo (== f.path
+  // do store, == file enviado ao backend). isWorkspaceFile e o keying por-arquivo
+  // continuam corretos.
+  return parseModelPath(model.uri.path).relPath;
 }
 
 async function isWorkspaceFile(rel: string, projectId: number): Promise<boolean> {
@@ -41,10 +45,24 @@ async function isWorkspaceFile(rel: string, projectId: number): Promise<boolean>
     .openFiles.some((f) => f.kind === 'file' && f.path === rel && f.projectId === projectId);
 }
 
-export function startDocumentSync(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
+export interface DocumentSync extends MonacoNs.IDisposable {
+  /**
+   * Força o didChange pendente de `rel` e resolve quando a cauda da chain de envio
+   * terminou (didChange → backend changeDoc → stdin FIFO do server). No-op resolvido
+   * se `rel` não está anexado (diff/preview) ou o modelo foi disposto. A completion
+   * chama isto ANTES de pedir ao server: senão ela corre na frente do didChange e o
+   * server computa sobre um buffer velho (posição além do fim que ele conhece) → [].
+   */
+  flush(rel: string): Promise<void>;
+}
+
+export function startDocumentSync(monaco: Monaco, projectId: number): DocumentSync {
   const perModel = new Map<string, MonacoNs.IDisposable[]>();
   // Per-file send chain — serializes didOpen/didChange/didClose.
   const chains = new Map<string, Promise<void>>();
+  // Per-file "drena o didChange pendente AGORA" — deixa a completion esvaziar o
+  // batch de 16ms antes de consultar o server (ver DocumentSync.flush).
+  const flushers = new Map<string, () => void>();
   let stopped = false;
 
   const enqueue = (rel: string, task: () => Promise<void>): void => {
@@ -90,6 +108,15 @@ export function startDocumentSync(monaco: Monaco, projectId: number): MonacoNs.I
       });
     };
 
+    // Forçador externo (DocumentSync.flush): cancela o timer do batch e drena o
+    // pending AGORA. O `flush` interno zera `timer` mas não faz clearTimeout, então
+    // cancelamos aqui para não deixar um 2º disparo agendado.
+    const forceFlush = (): void => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      flush();
+    };
+    flushers.set(rel, forceFlush);
+
     const disposers: MonacoNs.IDisposable[] = [
       model.onDidChangeContent((e) => {
         for (const c of e.changes) {
@@ -110,6 +137,7 @@ export function startDocumentSync(monaco: Monaco, projectId: number): MonacoNs.I
         pending = [];
         perModel.get(rel)?.forEach((d) => d.dispose());
         perModel.delete(rel);
+        flushers.delete(rel);
         enqueue(rel, async () => {
           if (stopped) return;
           await apiCall('lsp.didClose', { projectId, file: rel });
@@ -129,6 +157,11 @@ export function startDocumentSync(monaco: Monaco, projectId: number): MonacoNs.I
       createSub.dispose();
       for (const disposers of perModel.values()) disposers.forEach((d) => d.dispose());
       perModel.clear();
+      flushers.clear();
+    },
+    async flush(rel: string): Promise<void> {
+      flushers.get(rel)?.();                          // drena o didChange pendente agora
+      await (chains.get(rel) ?? Promise.resolve());   // espera a cauda da chain do arquivo
     },
   };
 }

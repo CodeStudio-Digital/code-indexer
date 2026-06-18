@@ -36,7 +36,7 @@ export function buildExpandTools(
   // explicitly load orchestration tools — though the runner already
   // auto-activates it whenever `companyContext.isMaster === true`, so
   // most masters never need to call it themselves.
-  const coreExpandable = ['navigate', 'admin', 'master', 'preview'];
+  const coreExpandable = ['navigate', 'admin', 'master', 'preview', 'diagram'];
   const customNames = customTiers ? [...customTiers.keys()].sort() : [];
   const allTiers = [...coreExpandable, ...customNames];
 
@@ -62,7 +62,10 @@ export function buildExpandTools(
     '- "preview": live-app DevTools over a dedicated window — preview_open/navigate, ' +
     'preview_console/network/eval/screenshot/inspect_css/performance/memory/storage, and ' +
     'preview_click/fill/type/press/wait_for/scroll/hover. Unlock to SEE, inspect, or drive ' +
-    'the running app (open the dev-server URL first). Auto-active for builder/dev-server projects.';
+    'the running app (open the dev-server URL first). Auto-active for builder/dev-server projects.\n' +
+    '- "diagram": author draw.io diagrams — diagram_create/update/read/list/export. Saves real ' +
+    '.drawio files rendered in a live embedded editor. Unlock to draw architecture, flowcharts, ' +
+    'network/ER/sequence/C4. Auto-active for the `diagram` agent.';
 
   if (customTiers && customTiers.size > 0) {
     description += '\n\nExternal tool groups (on-demand):';
@@ -134,9 +137,3 @@ export function buildExpandTools(
 
   return [expandToolset];
 }
-
-/**
- * Legacy export for backwards compatibility — produces the tool with no custom tiers.
- * @deprecated Use buildExpandTools() instead.
- */
-export const expandTools: CoderTool[] = buildExpandTools();

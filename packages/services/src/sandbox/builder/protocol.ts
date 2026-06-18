@@ -81,8 +81,13 @@ export type PreviewToParentMessage =
   | ({ type: 'mcp:select' } & SelectedElementPayload)
   /**
    * Marquee/region pick: every stamped element inside the drawn box, plus the
-   * box itself in VIEWPORT coords (+ `dpr`) so the host can clip a screenshot
-   * to exactly that region. Region picks are additive (a batch citation).
+   * box itself in VIEWPORT coords so the host can clip a screenshot to exactly
+   * that region. Region picks are additive (a batch citation).
+   *
+   * `rect` is in CSS pixels (DIP). Both screenshot paths take DIP/CSS-px today
+   * (`webContents.capturePage(rect)` and CDP `Page.captureScreenshot({clip})`),
+   * so `dpr` is carried but currently UNUSED — kept as a hint pending a high-DPI
+   * (devicePixelRatio ≠ 1) verification; do not scale by it without testing.
    */
   | { type: 'mcp:region-select'; selections: SelectedElementPayload[]; rect: RectLike; dpr: number }
   | { type: 'mcp:clear' }

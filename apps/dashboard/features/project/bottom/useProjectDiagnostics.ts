@@ -18,10 +18,14 @@ import {
   type FlatDiagnostics,
 } from './diagnostics-reducer.js';
 
-export function useProjectDiagnostics(projectId: number): FlatDiagnostics {
+export function useProjectDiagnostics(projectId: number, enabled = true): FlatDiagnostics {
   const [state, setState] = useState<DiagnosticsState>(emptyDiagnosticsState);
 
   useEffect(() => {
+    // Gate (W2/P3): sem o painel Problems visível, NÃO assina o stream — durante a
+    // indexação ele despeja muitos frames e era a janela de lag mesmo com o terminal
+    // fechado. O badge religa assim que o usuário abre Problems pela 1ª vez.
+    if (!enabled) { setState(emptyDiagnosticsState()); return; }
     setState(emptyDiagnosticsState()); // drop the previous project's problems
     let stopped = false;
     let es: EventSource | null = null;
@@ -66,7 +70,7 @@ export function useProjectDiagnostics(projectId: number): FlatDiagnostics {
       closeIterator?.();
       es?.close();
     };
-  }, [projectId]);
+  }, [projectId, enabled]);
 
   return useMemo(() => flatten(state), [state]);
 }

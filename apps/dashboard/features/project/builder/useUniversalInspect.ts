@@ -16,6 +16,7 @@ import { apiCall, apiStream, electronApi } from '../../../lib/api-client.js';
 import {
   addPendingAttachment,
   addSelections,
+  payloadToSelected,
   setSelected,
   toggleSelected,
   type SelectedElement,
@@ -59,7 +60,7 @@ export function useUniversalInspect(projectId: number, url: string | null): Univ
           if (t === 'mcp:region-select') {
             const rs = d as RegionFrame;
             if (rs.selections?.length) {
-              addSelections(projectId, rs.selections.map((s) => ({ ...s, type: 'mcp:select' as const }) as SelectedElement));
+              addSelections(projectId, rs.selections.map(payloadToSelected));
             }
             // The CDP window has its own debugger, so clip Page.captureScreenshot
             // directly to the box (window viewport coords — no offset needed).

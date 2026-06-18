@@ -59,4 +59,18 @@ describe('parseOpenApi', () => {
     expect(post.successStatus).toBe(201);
     expect(post.bodyExample).toEqual({ id: 0, name: '', tags: [''] });
   });
+
+  it('derives a folder from the first path segment when there are no tags', async () => {
+    const { operations } = await parseOpenApi(SPEC, 'json');
+    expect(operations.every((o) => o.folder === 'users')).toBe(true);
+  });
+
+  it('prefers the first tag as the folder', async () => {
+    const spec = JSON.stringify({
+      openapi: '3.0.0', info: { title: 'T', version: '1' },
+      paths: { '/x': { get: { operationId: 'gx', tags: ['Billing', 'Other'], responses: { '200': {} } } } },
+    });
+    const { operations } = await parseOpenApi(spec, 'json');
+    expect(operations[0].folder).toBe('Billing');
+  });
 });

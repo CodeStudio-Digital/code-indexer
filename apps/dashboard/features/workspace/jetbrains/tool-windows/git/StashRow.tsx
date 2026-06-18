@@ -33,9 +33,11 @@ export interface StashRowProps {
   onApply: () => void;
   onDrop: () => void;
   onShow: () => void;
+  /** A conflict is already in progress — block apply/pop (they'd stack conflicts). */
+  opInProgress?: boolean;
 }
 
-export function StashRow({ entry, busy, onOpen, onPop, onApply, onDrop, onShow }: StashRowProps) {
+export function StashRow({ entry, busy, onOpen, onPop, onApply, onDrop, onShow, opInProgress }: StashRowProps) {
   // Drop the auto "WIP on branch:" prefix when present — the `branch`
   // field already shows it as a chip, so repeating it eats column width
   // on narrow panels.
@@ -44,8 +46,8 @@ export function StashRow({ entry, busy, onOpen, onPop, onApply, onDrop, onShow }
   const items: ContextMenuItem[] = [
     { id: 'open', label: 'Open (show stashed files)', icon: FolderOpen, onSelect: onOpen },
     { id: 'show', label: 'Show combined diff', icon: Eye, onSelect: onShow },
-    { id: 'apply', separatorBefore: true, label: 'Apply (keep stash)', icon: FilePlus, onSelect: onApply },
-    { id: 'pop', label: 'Pop (apply + drop)', icon: ArrowUpFromLine, onSelect: onPop },
+    { id: 'apply', separatorBefore: true, label: 'Apply (keep stash)', icon: FilePlus, disabled: opInProgress, onSelect: onApply },
+    { id: 'pop', label: 'Pop (apply + drop)', icon: ArrowUpFromLine, disabled: opInProgress, onSelect: onPop },
     {
       id: 'drop',
       separatorBefore: true,

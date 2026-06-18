@@ -6,6 +6,7 @@
  * chat (humano no loop — o agente roda audit → fix → publish).
  */
 import { useCallback, useEffect, useState } from 'react';
+import { usePolling } from '../../../hooks/usePolling.js';
 import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { ArrowLeft, Loader2, Rocket } from 'lucide-react';
@@ -69,11 +70,12 @@ export function DsStudioView({
     }
   }, [dsSessionId]);
 
+  // Immediate load on mount + whenever the bound DS session changes.
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
-    return () => clearInterval(timer);
   }, [refresh]);
+  // Recurring poll — visibility-aware, pauses while the window is hidden.
+  usePolling(() => void refresh(), REFRESH_INTERVAL_MS, { immediate: false });
 
   if (error && !detail) {
     return (

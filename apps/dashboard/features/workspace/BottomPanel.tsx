@@ -7,12 +7,14 @@
  * placeholders until needed).
  */
 
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import {
   TerminalSquare,
   AlertCircle,
   FileText,
   Search,
+  Play,
+  Loader2,
   ChevronDown,
   ChevronUp,
   X,
@@ -24,19 +26,32 @@ import { ErrorBoundary } from '../../components/ErrorBoundary.js';
 import { WorkspaceTerminal } from './WorkspaceTerminal.js';
 import { WebviewWindow } from './jetbrains/tool-windows/WebviewWindow.js';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
+import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { ProblemsPanel } from '../project/bottom/ProblemsPanel.js';
 import { OutputPanel } from '../project/bottom/OutputPanel.js';
 import { FindPanel } from '../project/bottom/FindPanel.js';
 import { useProjectDiagnostics } from '../project/bottom/useProjectDiagnostics.js';
 
-type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'find';
+// Runners é uma aba pesada (xterm + detect): vira chunk LAZY, baixado só
+// quando o usuário abre a aba — não pesa no chunk inicial do ProjectView.
+const RunnersTab = lazy(() =>
+  import('../project/tabs/RunnersTab.js').then((m) => ({ default: m.RunnersTab })),
+);
+
+type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'find' | 'runners';
 
 const TABS: Array<{ id: BuiltinTabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'terminal', label: 'Terminal', icon: TerminalSquare },
+  { id: 'runners', label: 'Runners', icon: Play },
   { id: 'problems', label: 'Problems', icon: AlertCircle },
   { id: 'output', label: 'Output', icon: FileText },
   { id: 'find', label: 'Find', icon: Search },
 ];
+
+/** Built-in bottom-panel tab ids — used by the ProjectView deep-link
+ *  handler to route `?tab=runners` (etc.) into the bottom drawer instead
+ *  of a side-rail tab. */
+export const BOTTOM_BUILTIN_TAB_IDS = new Set<string>(TABS.map((t) => t.id));
 
 interface BottomPanelProps {
   projectId: number;
@@ -57,11 +72,19 @@ export function BottomPanel({
   onOpenFile,
   pluginWindows = [],
 }: BottomPanelProps) {
-  // `tab` is an open string so plugin window ids (not in BuiltinTabId) can win.
-  const [tab, setTab] = useState<string>('terminal');
+  // A aba ativa do drawer É o `activeBottom` do layout store (fonte única) — assim
+  // o deep-link `?tab=runners` e o dropdown global de tasks abrem a aba certa só
+  // mexendo no store. Fallback 'terminal' nunca acontece na prática: o BottomPanel
+  // só monta quando activeBottom é não-nulo.
+  const activeBottom = useWorkspaceLayout((s) => s.activeBottom);
+  const setActiveBottom = useWorkspaceLayout((s) => s.setActiveBottom);
+  const tab = activeBottom ?? 'terminal';
+  // Gate (W2/P3): só assinamos o diagnostics stream depois que o usuário abre Problems
+  // pela 1ª vez (e o mantemos ligado para o badge). Antes disso, durante a indexação,
+  // o despejo de frames não toca a UI.
+  const [seenProblems, setSeenProblems] = useState(false);
   const activePlugin = pluginWindows.find((w) => w.id === tab);
-  // Live count drives the Problems tab badge even while that tab is inactive.
-  const diagnostics = useProjectDiagnostics(projectId);
+  const diagnostics = useProjectDiagnostics(projectId, tab === 'problems' || seenProblems);
   const problemCount = diagnostics.errorCount + diagnostics.warningCount;
 
   return (
@@ -76,7 +99,8 @@ export function BottomPanel({
                 key={def.id}
                 type="button"
                 onClick={() => {
-                  setTab(def.id);
+                  setActiveBottom(def.id);
+                  if (def.id === 'problems') setSeenProblems(true);
                   if (!isOpen) onToggle();
                 }}
                 className={cn(
@@ -110,7 +134,7 @@ export function BottomPanel({
                 key={w.id}
                 type="button"
                 onClick={() => {
-                  setTab(w.id);
+                  setActiveBottom(w.id);
                   if (!isOpen) onToggle();
                 }}
                 title={w.title}
@@ -155,6 +179,17 @@ export function BottomPanel({
               switching tabs clears a stuck error. */}
           <ErrorBoundary label={tab} resetKey={tab}>
             {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
+            {tab === 'runners' && !activePlugin && (
+              <Suspense
+                fallback={
+                  <div className="h-full grid place-items-center">
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  </div>
+                }
+              >
+                <RunnersTab projectId={projectId} />
+              </Suspense>
+            )}
             {tab === 'problems' && !activePlugin && (
               <ProblemsPanel items={diagnostics.items} onOpenFile={onOpenFile} />
             )}

@@ -31,6 +31,12 @@ export class ApiClientStore {
     this.db = typeof dbOrPath === 'string' ? new Database(dbOrPath) : dbOrPath;
   }
 
+  /** Run `fn` in a single transaction — collapses N writes into one commit
+   *  (e.g. importing a large OpenAPI spec row-by-row). `fn` must be synchronous. */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   // ─── Collections ─────────────────────────────────────────────────────
   listCollections(projectId: number): ApiCollection[] {
     return (this.db.prepare('SELECT * FROM api_collections WHERE project_id = ? ORDER BY id DESC')
@@ -65,6 +71,35 @@ export class ApiClientStore {
     this.db.prepare('DELETE FROM api_requests WHERE collection_id = ?').run(id);
     this.db.prepare('DELETE FROM api_regression_runs WHERE collection_id = ?').run(id);
     this.db.prepare('DELETE FROM api_collections WHERE id = ?').run(id);
+  }
+
+  // ─── Folders (explicit per-collection list; requests carry a `folder` label) ──
+  private readFolders(collectionId: number): string[] {
+    const c = this.getCollection(collectionId);
+    try { return c?.folders_json ? (JSON.parse(c.folders_json) as string[]) : []; } catch { return []; }
+  }
+
+  /** Add an empty folder (idempotent). */
+  addFolder(collectionId: number, name: string): void {
+    const n = name.trim();
+    if (!n) return;
+    const folders = this.readFolders(collectionId);
+    if (!folders.includes(n)) this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify([...folders, n]) });
+  }
+
+  /** Rename a folder in the list AND on every request that used it. */
+  renameFolder(collectionId: number, from: string, to: string): void {
+    const t = to.trim();
+    if (!t || t === from) return;
+    const folders = [...new Set(this.readFolders(collectionId).map((f) => (f === from ? t : f)))];
+    this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(folders) });
+    this.db.prepare("UPDATE api_requests SET folder = ?, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(t, collectionId, from);
+  }
+
+  /** Remove a folder; its requests fall back to the top level (folder = NULL). */
+  deleteFolder(collectionId: number, name: string): void {
+    this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(this.readFolders(collectionId).filter((f) => f !== name)) });
+    this.db.prepare("UPDATE api_requests SET folder = NULL, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(collectionId, name);
   }
 
   // ─── Environments ────────────────────────────────────────────────────
@@ -108,6 +143,30 @@ export class ApiClientStore {
     this.db.prepare('DELETE FROM api_environments WHERE id = ?').run(id);
   }
 
+  /**
+   * Apply variable updates produced by a request script (`pm.environment.set/unset`)
+   * to an environment's variables_json. A `null` value deletes the key (the route
+   * maps the script's UNSET sentinel → null). Preserves the `{value,secret}` shape
+   * and an existing `secret:true` flag; new keys default to non-secret. No-op when
+   * there are no updates. Never writes the secret mask (script values are cleartext).
+   */
+  applyEnvVarUpdates(envId: number, updates: Record<string, string | null>): void {
+    const keys = Object.keys(updates);
+    if (keys.length === 0) return;
+    const env = this.getEnvironment(envId);
+    if (!env) return;
+    let vars: Record<string, { value?: string; secret?: boolean } | string> = {};
+    try { vars = JSON.parse(env.variables_json || '{}'); } catch { vars = {}; }
+    for (const k of keys) {
+      const v = updates[k];
+      if (v === null) { delete vars[k]; continue; }
+      const prev = vars[k];
+      const secret = prev && typeof prev === 'object' ? !!prev.secret : false;
+      vars[k] = { value: v, secret };
+    }
+    this.applyPatch('api_environments', envId, { variables_json: JSON.stringify(vars) });
+  }
+
   // ─── Requests ────────────────────────────────────────────────────────
   listRequests(collectionId: number): ApiRequest[] {
     return (this.db.prepare('SELECT * FROM api_requests WHERE collection_id = ? ORDER BY sort_order ASC, id ASC')
@@ -122,18 +181,61 @@ export class ApiClientStore {
   createRequest(input: CreateRequestInput): ApiRequest {
     const info = this.db.prepare(
       `INSERT INTO api_requests
-         (collection_id, name, method, path_template, headers_json, query_json, body_json, body_kind, sort_order, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (collection_id, name, method, path_template, headers_json, query_json, body_json, body_kind,
+          body_raw_lang, body_form_json, body_urlencoded_json, body_graphql_json, body_binary_path,
+          pre_request_script, test_script, auth_type, auth_json, folder, sort_order, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       input.collection_id, input.name, input.method ?? 'GET', input.path_template ?? '',
-      input.headers_json ?? '{}', input.query_json ?? '{}', input.body_json ?? null,
-      input.body_kind ?? 'none', input.sort_order ?? 0, input.source ?? 'manual',
+      input.headers_json ?? '[]', input.query_json ?? '[]', input.body_json ?? null,
+      input.body_kind ?? 'none', input.body_raw_lang ?? null, input.body_form_json ?? '[]',
+      input.body_urlencoded_json ?? '[]', input.body_graphql_json ?? null, input.body_binary_path ?? null,
+      input.pre_request_script ?? null, input.test_script ?? null, input.auth_type ?? null,
+      input.auth_json ?? null, input.folder ?? null, input.sort_order ?? 0, input.source ?? 'manual',
     );
     return this.getRequest(Number(info.lastInsertRowid))!;
   }
 
   updateRequest(id: number, patch: RequestPatch): void {
     this.applyPatch('api_requests', id, patch);
+  }
+
+  /** Deep-copy a request (all fields incl. body kinds/scripts/auth) as a new
+   *  manual request in the same collection + folder. Verification is NOT copied. */
+  duplicateRequest(id: number): ApiRequest | null {
+    const r = this.getRequest(id);
+    if (!r) return null;
+    return this.createRequest({
+      collection_id: r.collection_id,
+      name: `${r.name} copy`,
+      method: r.method,
+      path_template: r.path_template,
+      headers_json: r.headers_json,
+      query_json: r.query_json,
+      body_json: r.body_json,
+      body_kind: r.body_kind,
+      body_raw_lang: r.body_raw_lang,
+      body_form_json: r.body_form_json,
+      body_urlencoded_json: r.body_urlencoded_json,
+      body_graphql_json: r.body_graphql_json,
+      body_binary_path: r.body_binary_path,
+      pre_request_script: r.pre_request_script,
+      test_script: r.test_script,
+      auth_type: r.auth_type,
+      auth_json: r.auth_json,
+      folder: r.folder,
+      sort_order: r.sort_order + 1,
+      source: 'manual',
+    });
+  }
+
+  /** Set the order (sort_order = position) of a folder's requests, and pin each
+   *  to `folder`, in one transaction. `orderedIds` is the full ordered list of
+   *  that folder after a drag-reorder (the dragged row may have just moved in). */
+  reorderRequests(orderedIds: number[], folder: string | null): void {
+    this.transaction(() => {
+      orderedIds.forEach((id, i) => this.applyPatch('api_requests', id, { sort_order: i, folder }));
+    });
   }
 
   markVerified(id: number, expectedStatus: number, assertJson?: string | null): void {
@@ -224,10 +326,12 @@ export class ApiClientStore {
 
 /** Columns `applyPatch` may write, per table — guards against key injection. */
 const ALLOWED_COLUMNS: Record<string, ReadonlySet<string>> = {
-  api_collections: new Set(['name', 'description', 'spec_source', 'spec_hash']),
+  api_collections: new Set(['name', 'description', 'spec_source', 'spec_hash', 'folders_json']),
   api_environments: new Set(['name', 'base_url', 'variables_json', 'is_default']),
   api_requests: new Set([
     'name', 'method', 'path_template', 'headers_json', 'query_json',
-    'body_json', 'body_kind', 'sort_order', 'last_status', 'last_run_at',
+    'body_json', 'body_kind', 'body_raw_lang', 'body_form_json', 'body_urlencoded_json',
+    'body_graphql_json', 'body_binary_path', 'pre_request_script', 'test_script',
+    'auth_type', 'auth_json', 'folder', 'sort_order', 'last_status', 'last_run_at',
   ]),
 };

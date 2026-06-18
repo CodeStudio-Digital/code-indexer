@@ -159,14 +159,16 @@ export class IndexProjectUseCase {
         });
         const startedAt = Date.now();
         let lastFlushed = 0;
+        let lastPercent = 0; // defesa: a barra nunca regride, mesmo se a fonte mandar fora de ordem
         const result = await this.runStructural(projectId, input, (p) => {
           const now = Date.now();
           if (p.current !== p.total && now - lastFlushed <= 120) return;
           lastFlushed = now;
+          lastPercent = Math.max(lastPercent, p.total > 0 ? Math.round((p.current / p.total) * 100) : 0);
           void callbacks.onProgress?.({
             current: p.current, total: p.total, current_file: p.currentFile,
             elapsed_ms: now - startedAt, cost_usd: 0,
-            percent: p.total > 0 ? Math.round((p.current / p.total) * 100) : 0,
+            percent: lastPercent,
           });
         });
         await callbacks.onDone?.(toIndexResult(result));
@@ -197,18 +199,20 @@ export class IndexProjectUseCase {
       // concurrency runs don't flood the channel. Terminal frames are
       // always flushed on done.
       let lastFlushed = 0;
+      let lastPercent = 0; // defesa: barra monotônica também no passe semântico
       let latest: IndexProgress | null = null;
       const flush = async () => {
         if (!latest) return;
         const p = latest;
         latest = null;
+        lastPercent = Math.max(lastPercent, p.total > 0 ? Math.round((p.current / p.total) * 100) : 0);
         await callbacks.onProgress?.({
           current: p.current,
           total: p.total,
           current_file: p.currentFile,
           elapsed_ms: p.elapsedMs,
           cost_usd: p.costUsd,
-          percent: p.total > 0 ? Math.round((p.current / p.total) * 100) : 0,
+          percent: lastPercent,
         });
       };
 

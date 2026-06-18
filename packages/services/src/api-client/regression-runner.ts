@@ -4,20 +4,15 @@
  * a green run here means the API still behaves as documented. Powers both the
  * in-app "Run all" button and (later) a CLI for CI.
  */
-import { type CookieJar, sendHttp } from '@mcp/shared/utils/http-engine.js';
-import { buildUrl, parseMap, resolveMap, resolveTemplate } from './request-builder.js';
+import type { CookieJar } from '@mcp/shared/utils/http-engine.js';
+import { executeRequest, type ExecRequest, type ExecuteResult } from './execute-request.js';
+import { UNSET, type ScriptTestResult } from './script-runtime/types.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-export interface RunRequestLike {
+export interface RunRequestLike extends ExecRequest {
   id: number;
   name: string;
-  method: string;
-  path_template: string;
-  headers_json: string;
-  query_json: string;
-  body_json: string | null;
-  body_kind: string;
   expected_status: number | null;
   assert_json: string | null;
 }
@@ -31,6 +26,8 @@ export interface AssertionResult {
   ok: boolean;
   skipped?: boolean;
   reason?: string;
+  /** pm.test() outcomes (pre + test phases) when the request has scripts. */
+  tests?: ScriptTestResult[];
 }
 
 export interface RunReport {
@@ -91,6 +88,17 @@ function assertResponse(
   return { ok: true };
 }
 
+/** Legacy status/shape assert AND every pm.test must pass; scripts errors fail. */
+function mergeVerdict(req: RunRequestLike, exec: ExecuteResult, tests: ScriptTestResult[]): { ok: boolean; reason?: string } {
+  const legacy = assertResponse(req, { status: exec.status, headers: exec.headers, body: exec.body });
+  if (!legacy.ok) return legacy;
+  const failedTest = tests.find((t) => !t.passed);
+  if (failedTest) return { ok: false, reason: `${failedTest.name}: ${failedTest.error ?? 'failed'}` };
+  const scriptError = exec.preScript?.error ?? exec.testScript?.error;
+  if (scriptError) return { ok: false, reason: `script error: ${scriptError}` };
+  return { ok: true };
+}
+
 export async function runCollection(opts: {
   requests: RunRequestLike[];
   baseUrl: string;
@@ -102,6 +110,9 @@ export async function runCollection(opts: {
 }): Promise<RunReport> {
   const results: AssertionResult[] = [];
   let passed = 0, failed = 0, skipped = 0;
+  // Run-level shared variable scope: a login request that sets {{token}} makes
+  // it available to later requests (Postman semantics; mirrors the shared jar).
+  const runVars = { ...opts.variables };
 
   for (const req of opts.requests) {
     if (opts.signal?.aborted) break;
@@ -117,18 +128,17 @@ export async function runCollection(opts: {
     }
 
     try {
-      const url = buildUrl(opts.baseUrl, req.path_template, parseMap(req.query_json), opts.variables);
-      const headers = resolveMap(parseMap(req.headers_json), opts.variables);
-      let body: string | undefined;
-      if (req.body_kind !== 'none' && req.body_json != null) {
-        body = resolveTemplate(req.body_json, opts.variables);
-        if (req.body_kind === 'json' && !Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
-          headers['content-type'] = 'application/json';
-        }
+      const exec = await executeRequest({
+        request: req, baseUrl: opts.baseUrl, variables: runVars,
+        jar: opts.jar, signal: opts.signal, runScripts: true,
+      });
+      // Chain script var updates into the shared scope for the next request.
+      for (const [k, v] of Object.entries(exec.variableUpdates)) {
+        if (v === UNSET) delete runVars[k]; else runVars[k] = v;
       }
-      const res = await sendHttp({ url, method: req.method, headers, body, jar: opts.jar, signal: opts.signal });
-      const verdict = assertResponse(req, res);
-      const r = { ...base, actual: res.status, ok: verdict.ok, reason: verdict.reason };
+      const tests = [...(exec.preScript?.tests ?? []), ...(exec.testScript?.tests ?? [])];
+      const verdict = mergeVerdict(req, exec, tests);
+      const r: AssertionResult = { ...base, actual: exec.status, ok: verdict.ok, reason: verdict.reason, tests: tests.length ? tests : undefined };
       verdict.ok ? passed++ : failed++;
       results.push(r); opts.onProgress?.(r);
     } catch (e) {

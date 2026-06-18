@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Info, Loader2, PanelLeft, Scissors } from 'lucide-react';
+import { AlertTriangle, Bot, Info, Loader2, PanelLeft, Scissors, Workflow } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -38,6 +38,12 @@ interface ChatHeaderProps {
   onOpenToolStats?: () => void;
   /** Pending file-snapshot count to badge on the Snapshots button. 0 hides the badge. */
   pendingSnapshots?: number;
+  /** Show the builder-style draw.io canvas toggle (diagram sessions). */
+  showCanvasToggle?: boolean;
+  /** Whether the diagram canvas panel is currently open. */
+  canvasActive?: boolean;
+  /** Toggle the diagram canvas. Works even where the 40px activity rail is hidden. */
+  onToggleCanvas?: () => void;
   /** Whether the right-side Meta sidebar is currently open. */
   metaSidebarOpen?: boolean;
   /** Toggle the Meta sidebar (goal/tasks/skills/services). Hides the button if undefined. */
@@ -48,7 +54,7 @@ interface ChatHeaderProps {
   onToggleWorkerLog?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -161,6 +167,30 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
             <StatsTooltip session={session} lastUsage={lastUsage} stats={stats} contextWindow={contextWindow} lastTurnInput={lastTurnInput} ctxPct={ctxPct} />
           </TooltipContent>
         </Tooltip>
+        {/* Builder-style draw.io canvas toggle — only for diagram sessions.
+            Lives in the header so the live canvas is openable even where the
+            40px activity rail is hidden (narrow/split mounts). */}
+        {showCanvasToggle && onToggleCanvas && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('chat:header.toggleCanvas')}
+                aria-pressed={canvasActive}
+                onClick={onToggleCanvas}
+                className={cn(
+                  'p-1.5 rounded-md transition-colors',
+                  canvasActive
+                    ? 'bg-accent text-accent-foreground'
+                    : 'hover:bg-muted text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Workflow className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{t('chat:header.toggleCanvas')}</TooltipContent>
+          </Tooltip>
+        )}
         {/* Manual "summarize & clear" — sits next to the context gauge so the
             user can act on context pressure they just saw. Disabled mid-run
             (the backend also refuses with 409). */}

@@ -126,6 +126,54 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  // ── Local History (mig 160) ──────────────────────────────────────
+  // Registradas ANTES do wildcard `/files/*` abaixo (mesmo cuidado de ordenação).
+  app.get('/api/projects/:id/file/history', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const filePath = c.req.query('path');
+      if (!filePath) return c.json({ error: 'path query param required' }, 400);
+      return c.json(await h.historyList({ projectId, path: filePath }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.get('/api/projects/:id/file/history/:revId', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const id = Number(c.req.param('revId'));
+      return c.json(await h.historyGet({ projectId, id }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/projects/:id/file/history/:revId/restore', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const id = Number(c.req.param('revId'));
+      return c.json(await h.historyRestore({ projectId, id }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/projects/:id/file/history/:revId/label', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const id = Number(c.req.param('revId'));
+      const body = await c.req.json<{ label: string }>();
+      if (!body.label) return c.json({ error: 'label required' }, 400);
+      return c.json(await h.historyLabel({ projectId, id, label: body.label }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
   // Legacy detail endpoint — kept for backwards compat with the dashboard's
   // FileViewer. The wildcard route MUST be registered AFTER `/file-tree`
   // and `/file` above so Hono doesn't capture them as wildcard paths.

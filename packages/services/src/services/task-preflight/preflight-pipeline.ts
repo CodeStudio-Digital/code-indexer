@@ -30,7 +30,7 @@ import {
 const PIPELINE_NAME = 'code-agent';
 const ROLE = 'preflight';
 const LABEL = `${PIPELINE_NAME}/${ROLE}`;
-const DEFAULT_TIMEOUT_MS = 8000;
+const DEFAULT_TIMEOUT_MS = 20000;
 const DEFAULT_MAX_TOOLS = 12;
 const MAX_MEMORIES = 5;
 const MAX_SKILLS = 3;
@@ -145,15 +145,19 @@ export class TaskPreflightService {
       // at the deadline, abort the call (cancel the underlying request) and fail
       // open. The session then starts unseeded — never blocked.
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let timedOut = false;
       const timeoutSentinel = Symbol('preflight-timeout');
       const raced = await Promise.race([
         call,
         new Promise<typeof timeoutSentinel>((resolve) => {
-          timer = setTimeout(() => resolve(timeoutSentinel), timeoutMs);
+          timer = setTimeout(() => { timedOut = true; resolve(timeoutSentinel); }, timeoutMs);
         }),
       ]);
       if (timer) clearTimeout(timer);
-      if (raced === timeoutSentinel) {
+      // `timedOut` also catches the tight race where the timeout aborts the call
+      // and the aborted call resolves with `{errorBody:'…aborted'}` first — that
+      // must report `timeout`, not `provider_error`.
+      if (raced === timeoutSentinel || timedOut) {
         controller.abort();
         void call.catch(() => undefined); // abandoned; never unhandled
         return done({ status: 'timeout', ...ids, error: `preflight timed out after ${timeoutMs}ms` });

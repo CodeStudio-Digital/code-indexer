@@ -22,6 +22,7 @@ import {
 } from '../../../../../components/ui/select.js';
 import { confirm, toast } from '../../../../../components/ui/prompt-dialog.js';
 import type { OpenGitLog } from '../../../../../state/workspace.js';
+import { requestGitReload, onGitReloadRequest } from '../../../editor/conflict-registry.js';
 import { CommitRow, type Commit } from './CommitRow.js';
 import { CommitDetailPanel } from './CommitDetailPanel.js';
 import { checkoutBranch } from './branch-actions.js';
@@ -42,16 +43,19 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
+  const [opInProgress, setOpInProgress] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const [cs, status] = await Promise.all([
+      const [cs, status, ms] = await Promise.all([
         apiCall<Commit[]>('projectGit.log', { projectId, limit, branch }),
         apiCall<{ branch: string | null }>('projectGit.status', { projectId }),
+        apiCall<{ kind: string | null }>('projectGit.mergeState', { projectId }),
       ]);
       setCommits(cs);
       setCurrentBranch(status.branch);
+      setOpInProgress(ms.kind !== null);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -63,6 +67,10 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Keep the commit-action gating fresh when a conflict is started/resolved
+  // from another surface (the 3-pane merge editor, the Git window banner).
+  useEffect(() => onGitReloadRequest(() => void reload()), [reload]);
 
   const isCurrent = !isRemote && currentBranch === branch;
 
@@ -92,6 +100,8 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
           description: r.stderr.trim().slice(0, 300) || r.stdout.trim().slice(0, 300),
         });
       await reload();
+      // A conflict here must light up the Git tool window's banner/Conflicts tab.
+      requestGitReload();
     } catch (e) {
       toast.error(`${label} failed`, { description: e instanceof Error ? e.message : String(e) });
     }
@@ -174,6 +184,7 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
                 key={c.sha}
                 commit={c}
                 selected={selected === c.sha}
+                disabled={opInProgress}
                 onSelect={() => setSelected(c.sha)}
                 onCherryPick={() => void runOp('Cherry-pick', 'projectGit.cherryPick', { commits: [c.sha] })}
                 onRevert={() => void revert(c)}

@@ -35,7 +35,7 @@ import { COMPANY_TOOLS, BUILDER_TOOLS } from '@mcp/code-agent/tools/tiers-compan
 // public entry point for tier data.
 export { COMPANY_TOOLS, BUILDER_TOOLS };
 
-export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview' | 'api';
+export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview' | 'api' | 'diagram';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -46,6 +46,7 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'master',
   'preview',
   'api',
+  'diagram',
 ]);
 
 /**
@@ -92,6 +93,21 @@ export const API_TOOLS: ReadonlySet<string> = new Set<string>([
   'api_update_request',
   'api_mark_verified',
   'api_run_collection',
+]);
+
+/**
+ * draw.io diagram tools — the dedicated `diagram` tier. Activated only for the
+ * `diagram` agent (author/edit `.drawio` files rendered in a live embedded
+ * editor), so they never pollute other sessions' turn-1 prompt. Listed
+ * explicitly so the bootstrap fallback in `getToolTier` can't expose them;
+ * other sessions unlock on demand via `expand_toolset('diagram')`.
+ */
+export const DIAGRAM_TOOLS: ReadonlySet<string> = new Set<string>([
+  'diagram_create',
+  'diagram_update',
+  'diagram_read',
+  'diagram_list',
+  'diagram_export',
 ]);
 
 /**
@@ -443,6 +459,7 @@ export function getToolTier(
   if (MASTER_TOOLS.has(name)) return 'master';
   if (PREVIEW_TOOLS.has(name)) return 'preview';
   if (API_TOOLS.has(name)) return 'api';
+  if (DIAGRAM_TOOLS.has(name)) return 'diagram';
   // Always-on within their own session class; map to bootstrap (see set docs).
   if (COMPANY_TOOLS.has(name) || BUILDER_TOOLS.has(name)) return 'bootstrap';
   // Unlisted — no explicit tier.
@@ -466,6 +483,7 @@ export function allTieredToolNames(): Set<string> {
     ...MASTER_TOOLS,
     ...PREVIEW_TOOLS,
     ...API_TOOLS,
+    ...DIAGRAM_TOOLS,
     ...COMPANY_TOOLS,
     ...BUILDER_TOOLS,
   ]);
@@ -672,6 +690,12 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   mcp__update_snapshot: 'Update an existing snapshot',
   mcp__delete_snapshot: 'Delete a snapshot',
   mcp__get_snapshot_history: 'Snapshot version history',
+  // ─── Diagram (draw.io) ────────────────────────────────────────
+  diagram_create: 'Create a new draw.io diagram (.drawio) from mxGraph XML',
+  diagram_update: 'Replace the full mxGraph XML of an existing diagram',
+  diagram_read: 'Read a saved diagram\'s mxGraph XML to edit it',
+  diagram_list: 'List the draw.io diagrams saved under diagrams/',
+  diagram_export: 'Export a diagram to SVG/PNG via the live editor',
 };
 
 /** Metadata for a single known tool. */
@@ -705,6 +729,7 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('master', MASTER_TOOLS);
   push('preview', PREVIEW_TOOLS);
   push('api', API_TOOLS);
+  push('diagram', DIAGRAM_TOOLS);
   // Company/builder tools resolve to bootstrap in getToolTier (always-on within
   // their session class); label them as such so the catalog matches.
   push('bootstrap', COMPANY_TOOLS);
@@ -720,6 +745,7 @@ export const TIER_COUNTS = {
   master: MASTER_TOOLS.size,
   preview: PREVIEW_TOOLS.size,
   api: API_TOOLS.size,
+  diagram: DIAGRAM_TOOLS.size,
   company: COMPANY_TOOLS.size,
   builder: BUILDER_TOOLS.size,
 } as const;

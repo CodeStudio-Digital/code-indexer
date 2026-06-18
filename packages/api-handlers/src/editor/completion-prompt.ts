@@ -36,6 +36,11 @@ const SYSTEM_PROMPT = [
   'Never repeat the code that is already before the cursor.',
   'Match the surrounding indentation and code style exactly.',
   'Keep it short: finish the current statement or small block, then stop.',
+  'When PROJECT CONTEXT is given below, it is ordered most-relevant first: the',
+  'enclosing scope, the members available on the expression at the cursor, the',
+  'current class and file symbols, then imported APIs. PREFER these exact names,',
+  'signatures and member calls — they are the real symbols in this codebase.',
+  'Do not invent methods that are not listed for a known receiver.',
 ].join(' ');
 
 export function buildCompletionMessages(input: {
@@ -45,7 +50,7 @@ export function buildCompletionMessages(input: {
   context: string;
 }): ChatMessage[] {
   const contextBlock = input.context
-    ? `Signatures from imported project files (for reference only):\n${input.context}\n\n`
+    ? `PROJECT CONTEXT (most relevant first):\n${input.context}\n\n`
     : '';
   return [
     { role: 'system', content: SYSTEM_PROMPT },

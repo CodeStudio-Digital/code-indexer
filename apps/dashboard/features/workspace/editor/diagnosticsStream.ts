@@ -8,6 +8,7 @@
  */
 import type * as MonacoNs from 'monaco-editor';
 import { apiStream, electronApi } from '../../../lib/api-client.js';
+import { parseModelPath } from './editor-models-path.js';
 
 type Monaco = typeof MonacoNs;
 
@@ -24,10 +25,18 @@ interface DiagnosticsFrameDTO {
   }>;
 }
 
-function applyFrame(monaco: Monaco, frame: DiagnosticsFrameDTO): void {
+function applyFrame(monaco: Monaco, projectId: number, frame: DiagnosticsFrameDTO): void {
+  // frame.file é o relpath limpo (chave do modelo no backend); parseModelPath faz o
+  // strip do prefixo de namespacing por projectId (W1b) para casar. Casa TAMBÉM pelo
+  // projectId (não só relpath): dois projetos podem ter o mesmo relpath em modelos
+  // namespaceados distintos — sem o guard, markers de um cairiam no modelo do outro
+  // se ambos coexistirem (espelha modelFor). projectId null = modelo legado/OFF-mode.
   const model = monaco.editor
     .getModels()
-    .find((m) => m.uri.path.replace(/^\//, '') === frame.file);
+    .find((m) => {
+      const p = parseModelPath(m.uri.path);
+      return p.relPath === frame.file && (p.projectId === projectId || p.projectId === null);
+    });
   if (!model || model.isDisposed()) return;
   const sev = monaco.MarkerSeverity;
   const severity = { error: sev.Error, warning: sev.Warning, info: sev.Info, hint: sev.Hint };
@@ -63,7 +72,7 @@ export function startDiagnosticsStream(monaco: Monaco, projectId: number): Monac
           while (!stopped) {
             const r = await it.next();
             if (r.done || stopped) break;
-            applyFrame(monaco, r.value);
+            applyFrame(monaco, projectId, r.value);
           }
         } catch { /* stream dropped */ }
         // Producer side restarted (backend reload) — reconnect with backoff.
@@ -73,7 +82,7 @@ export function startDiagnosticsStream(monaco: Monaco, projectId: number): Monac
       es = new EventSource(`/api/lsp/${projectId}/diagnostics/stream`);
       es.addEventListener('diagnostics', (ev) => {
         if (stopped) return;
-        try { applyFrame(monaco, JSON.parse((ev as MessageEvent).data) as DiagnosticsFrameDTO); } catch { /* bad frame */ }
+        try { applyFrame(monaco, projectId, JSON.parse((ev as MessageEvent).data) as DiagnosticsFrameDTO); } catch { /* bad frame */ }
       });
       // EventSource auto-reconnects.
     }

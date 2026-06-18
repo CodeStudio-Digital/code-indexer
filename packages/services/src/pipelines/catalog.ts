@@ -23,6 +23,7 @@ export type BindingRole =
   | 'rewriter'
   | 'reviewer'
   | 'vision'
+  | 'transcription'
   | 'distiller'
   | 'preflight'
   | 'autocomplete';
@@ -324,6 +325,24 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
     introducedInPhase: 'vision-fallback',
   },
 
+  // ─── Speech-to-text (audio → text) ───────────────────────────────────────
+  // Powers the composer microphone button: recorded audio is transcribed by
+  // THIS model and the transcript is inserted into the message input. Uses an
+  // OpenAI-compatible POST {base_url}/audio/transcriptions endpoint (Whisper
+  // style). Unset = the mic button stays disabled with a hint to configure it.
+  {
+    pipelineName: 'code-agent',
+    bindingRole: 'transcription',
+    description:
+      'Speech-to-text (STT) model that transcribes audio recorded by the composer mic button. OpenAI-Whisper-compatible endpoint (POST {base_url}/audio/transcriptions): OpenAI whisper-1/gpt-4o-transcribe, Groq whisper-large-v3, local whisper.cpp/faster-whisper. Unset = the mic button stays disabled.',
+    recommendedDefault: {
+      providerKind: 'openai',
+      modelHint: 'whisper-1',
+      config: { response_format: 'json', temperature: 0 },
+    },
+    introducedInPhase: 'voice-to-text',
+  },
+
   // ─── Task preflight (first-prompt analysis) ──────────────────────────────
   // When bound, the FIRST user prompt of a fresh coder chat session is
   // analyzed by this cheap model BEFORE the agent starts: it picks the
@@ -355,18 +374,18 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
     pipelineName: 'editor',
     bindingRole: 'autocomplete',
     description:
-      'Inline AI code completion (ghost text) in the editor. PRIVACY: the code around the cursor is sent to this provider on each suggestion. Pick a FAST, cheap model — reasoning is auto-disabled per request for GLM/Gemini-2.5+/Qwen3/R1 (set disable_thinking:false to opt out); other thinking models will burn the token budget and return empty. Unset = feature unavailable (editor toggle shows "not configured"). Config knobs: max_tokens, temperature, debounce_ms, multiline, max_prefix_lines, max_suffix_lines, context_budget_chars, timeout_ms, disable_thinking.',
+      'Inline AI code completion (ghost text) in the editor. PRIVACY: the code around the cursor is sent to this provider on each suggestion. Pick a FAST, cheap, code-specialized model — a model with a native fill-in-the-middle endpoint (deepseek-coder, qwen2.5-coder, codestral) gives the cleanest/fastest completions; any chat model also works. Reasoning is auto-disabled per request for GLM/Gemini-2.5+/Qwen3/R1 (set disable_thinking:false to opt out); other thinking models will burn the token budget and return empty. Unset = feature unavailable (editor toggle shows "not configured"). Config knobs: max_tokens, temperature, debounce_ms, multiline, max_prefix_lines, max_suffix_lines, context_budget_chars, timeout_ms, disable_thinking, fim (force/disable the native FIM endpoint; auto-detected by default), context_mode ("layered" default, or "imports_only" as an A/B baseline).',
     recommendedDefault: {
       providerKind: 'deepseek',
-      modelHint: 'deepseek-chat',
+      modelHint: 'deepseek-coder',
       config: {
         temperature: 0.2,
-        max_tokens: 160,
+        max_tokens: 256,
         debounce_ms: 300,
         multiline: true,
         max_prefix_lines: 80,
         max_suffix_lines: 30,
-        context_budget_chars: 2000,
+        context_budget_chars: 2500,
         timeout_ms: 8000,
       },
     },

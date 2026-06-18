@@ -20,24 +20,29 @@ import {
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu.js';
 import { Input } from '../../components/ui/input.js';
-import { fileIconFor } from '../../lib/file-icon.js';
+import { FileIcon } from '../../components/FileIcon.js';
+import { reloadFromDisk } from './editor/reload-from-disk.js';
 
-/** Icon + color for a tab — virtual surfaces get their own glyph. */
-function tabIcon(file: OpenTab): { Icon: React.ComponentType<{ className?: string }>; colorClass: string } {
-  if (file.kind === 'git-log') return { Icon: GitBranch, colorClass: 'text-primary' };
-  if (file.kind === 'git-stash') return { Icon: Archive, colorClass: 'text-amber-400' };
-  if (file.kind === 'diff') return { Icon: GitCompare, colorClass: 'text-amber-300' };
-  return fileIconFor(file.path);
+/** Icon for a tab — virtual surfaces get their own glyph; files use Material icons. */
+function TabIcon({ file, className }: { file: OpenTab; className?: string }) {
+  if (file.kind === 'git-log') return <GitBranch className={cn('shrink-0 text-primary', className)} />;
+  if (file.kind === 'git-stash') return <Archive className={cn('shrink-0 text-amber-400', className)} />;
+  if (file.kind === 'diff') return <GitCompare className={cn('shrink-0 text-amber-300', className)} />;
+  return <FileIcon path={file.path} className={className} />;
 }
 
 export function EditorTabBar() {
   const openFiles = useWorkspaceStore((s) => s.openFiles);
+  const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const setActive = useWorkspaceStore((s) => s.setActive);
   const closeFile = useWorkspaceStore((s) => s.closeFile);
   const closeOthers = useWorkspaceStore((s) => s.closeOthers);
   const closeToTheRight = useWorkspaceStore((s) => s.closeToTheRight);
   const closeAll = useWorkspaceStore((s) => s.closeAll);
+  // Só as abas do projeto ativo aparecem (isolamento P1). O store mantém um
+  // projeto por vez via setProject; filtramos por defesa-em-profundidade.
+  const tabs = openFiles.filter((f) => f.projectId === activeProjectId);
 
   // Track whether the inline tab strip is overflowing so we can offer
   // the overflow dropdown only when it's useful.
@@ -51,7 +56,7 @@ export function EditorTabBar() {
     const ro = new ResizeObserver(check);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [openFiles.length]);
+  }, [tabs.length]);
 
   // Scroll the active tab into view when it changes (so picking it from
   // Quick Open / the dropdown actually surfaces it).
@@ -62,7 +67,7 @@ export function EditorTabBar() {
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   }, [activeFilePath]);
 
-  if (openFiles.length === 0) {
+  if (tabs.length === 0) {
     return (
       <div className="h-8 shrink-0 border-b flex items-center px-3 gap-2 bg-card/20">
         <FileCode2 className="h-3 w-3 text-muted-foreground/60" />
@@ -81,25 +86,25 @@ export function EditorTabBar() {
         // here clashes with the editor's own scrollbars below.
         style={{ scrollbarWidth: 'none' }}
       >
-        {openFiles.map((file) => (
+        {tabs.map((file) => (
           <TabChip
-            key={file.path}
+            key={`${file.projectId}:${file.path}`}
             file={file}
             active={file.path === activeFilePath}
             onActivate={() => setActive(file.path)}
-            onClose={() => closeFile(file.path)}
-            onCloseOthers={() => closeOthers(file.path)}
-            onCloseRight={() => closeToTheRight(file.path)}
+            onClose={() => closeFile(file.projectId, file.path)}
+            onCloseOthers={() => closeOthers(file.projectId, file.path)}
+            onCloseRight={() => closeToTheRight(file.projectId, file.path)}
             onCloseAll={closeAll}
           />
         ))}
       </div>
       {overflow && (
         <OverflowDropdown
-          files={openFiles}
+          files={tabs}
           activeFilePath={activeFilePath}
           onPick={setActive}
-          onClose={closeFile}
+          onClose={(path) => { if (activeProjectId != null) closeFile(activeProjectId, path); }}
         />
       )}
     </div>
@@ -131,7 +136,6 @@ function TabChip({
   // Disk changed under unsaved edits (or the file was deleted) — fs-events
   // stream sets this; saving or reloading clears it.
   const conflicted = !isVirtual && file.externallyChanged === true;
-  const { Icon: TypeIcon, colorClass } = tabIcon(file);
 
   const items: ContextMenuItem[] = [
     { id: 'close', label: 'Close', onSelect: onClose },
@@ -153,6 +157,15 @@ function TabChip({
         void navigator.clipboard.writeText(file.path).catch(() => undefined);
       },
     },
+    ...(!isVirtual
+      ? [
+          {
+            id: 'reload-disk',
+            label: 'Reload from disk',
+            onSelect: () => void reloadFromDisk(file.projectId, file.path),
+          } as ContextMenuItem,
+        ]
+      : []),
   ];
   const { triggerProps, Menu } = useContextMenu(items);
 
@@ -187,13 +200,7 @@ function TabChip({
         {active && (
           <span aria-hidden className="absolute inset-x-0 top-0 h-[2px] bg-primary" />
         )}
-        <TypeIcon
-          className={cn(
-            'h-3.5 w-3.5 shrink-0',
-            colorClass,
-            !active && 'opacity-80',
-          )}
-        />
+        <TabIcon file={file} className={cn('h-3.5 w-3.5', !active && 'opacity-80')} />
         <span className={cn('text-[11.5px] truncate font-medium', active && 'tracking-tight', conflicted && 'text-amber-400')}>
           {display}
         </span>
@@ -300,7 +307,6 @@ function OverflowDropdown({ files, activeFilePath, onPick, onClose }: OverflowDr
             const subtitle = isVirtual ? '' : (file.path.includes('/') ? posixDirname(file.path) : '');
             const dirtyOne = !isVirtual && file.dirty;
             const active = file.path === activeFilePath;
-            const { Icon, colorClass } = tabIcon(file);
             return (
               <div
                 key={file.path}
@@ -314,7 +320,7 @@ function OverflowDropdown({ files, activeFilePath, onPick, onClose }: OverflowDr
                 }}
                 title={isVirtual ? file.title : file.path}
               >
-                <Icon className={cn('h-3.5 w-3.5 shrink-0', colorClass)} />
+                <TabIcon file={file} className="h-3.5 w-3.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-[12px] font-medium truncate flex items-center gap-1.5">
                     {display}

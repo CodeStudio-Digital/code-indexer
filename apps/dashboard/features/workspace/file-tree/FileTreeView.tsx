@@ -14,10 +14,14 @@ import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
 import { apiCall } from '../../../lib/api-client.js';
 import { cn } from '../../../lib/utils.js';
-import { fileIconFor } from '../../../lib/file-icon.js';
 import { useFileTreeStore, visibleRows } from '../../../state/file-tree.js';
-import { FileTreeRow } from './FileTreeRow.js';
-import { buildDirSeverity, colorForStatus, commitRename, type GitFileStatus } from './tree-context.js';
+import { useSelectionStore } from '../../../state/file-tree-selection.js';
+import { useUiDensity } from '../../../state/ui-density.js';
+import { useGitRevision } from '../../../state/git-revision.js';
+import { FileTreeRow, type ClickMods } from './FileTreeRow.js';
+import { FilteredRow } from './FilteredRow.js';
+import { useTreeKeyboard } from './use-tree-keyboard.js';
+import { buildDirSeverity, commitRename, type GitFileStatus } from './tree-context.js';
 
 interface FileTreeViewProps {
   projectId: number;
@@ -26,7 +30,18 @@ interface FileTreeViewProps {
 }
 
 export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProps) {
-  const store = useFileTreeStore();
+  // Seletores ESTREITOS (não o store inteiro): assinar `useFileTreeStore()` sem
+  // seletor re-renderizava a árvore a cada mudança de qualquer campo (incl. o set
+  // `loading`). Não assinamos `children`/`loading` aqui — `rows` lê o snapshot via
+  // getState() keyed em `version`.
+  const storeProjectId = useFileTreeStore((s) => s.projectId);
+  const version = useFileTreeStore((s) => s.version);
+  const expanded = useFileTreeStore((s) => s.expanded);
+  const error = useFileTreeStore((s) => s.error);
+  const init = useFileTreeStore((s) => s.init);
+  const reveal = useFileTreeStore((s) => s.reveal);
+  const toggle = useFileTreeStore((s) => s.toggle);
+  const refreshStore = useFileTreeStore((s) => s.refresh);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [allPaths, setAllPaths] = useState<string[] | null>(null);
@@ -34,17 +49,21 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (store.projectId !== projectId) store.init(projectId);
+    if (storeProjectId !== projectId) init(projectId);
+    useSelectionStore.getState().init(projectId); // reset seleção na troca de projeto (idempotente)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init on project switch only
   }, [projectId]);
 
   // Auto-reveal the active file (IntelliJ "Always Select Opened File").
   useEffect(() => {
-    if (activePath) void store.reveal(activePath);
+    if (activePath) void reveal(activePath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath]);
 
-  // Git status poll (7s) → file colors + dir severity bubbling.
+  // Git status poll (7s) → file colors + dir severity bubbling. Also keyed on
+  // the git-revision: a branch switch / commit (incl. external `git checkout`)
+  // re-runs this immediately instead of waiting up to 7s for the next tick.
+  const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -73,7 +92,8 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
     };
     void tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gitRev forces an immediate re-poll
+  }, [projectId, gitRev]);
 
   // F2 renames the active file (when focus isn't in an input).
   useEffect(() => {
@@ -107,16 +127,23 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
     return allPaths.filter((p) => p.toLowerCase().includes(q)).slice(0, 300);
   }, [filterActive, allPaths, search]);
 
+  // Lê o snapshot children+expanded via getState(), keyed em `version` — evita assinar
+  // `children` (cujo Map ref muda a cada load) e recomputa só em mudança estrutural.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- version IS the dep
-  const rows = useMemo(() => visibleRows(store), [store.version, store.projectId]);
+  const rows = useMemo(() => visibleRows(useFileTreeStore.getState()), [version, storeProjectId]);
   const count = filterActive ? filtered.length : rows.length;
 
+  // Altura de linha vem da densidade (Feature 4) — o virtualizer e o style inline
+  // precisam do MESMO número, senão as linhas absolutas se sobrepõem.
+  const rowH = useUiDensity((s) => s.metrics.treeRowPx);
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 22,
+    estimateSize: () => rowH,
     overscan: 12,
   });
+  // Re-medir quando a densidade muda (estimateSize fica cacheado).
+  useEffect(() => virtualizer.measure(), [rowH, virtualizer]);
 
   const onCommitRename = useCallback(
     async (fromPath: string, newName: string) => {
@@ -125,11 +152,45 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
     },
     [projectId],
   );
+  // Callbacks ESTÁVEIS para as rows memoizadas não re-renderizarem por identidade nova.
+  const onCancelRename = useCallback(() => setRenamingPath(null), []);
+  const onCommitRenameRow = useCallback(
+    (from: string, name: string) => void onCommitRename(from, name),
+    [onCommitRename],
+  );
 
   const refresh = useCallback(() => {
-    store.refresh();
+    refreshStore();
     setAllPaths(null);
-  }, [store]);
+  }, [refreshStore]);
+
+  // Refs lidas LAZY dentro dos handlers estáveis (padrão getState-em-vez-de-subscribe):
+  // o callback nunca precisa de `rows`/`filtered` na dep array → identidade estável,
+  // preservando o memo() das linhas virtualizadas.
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const filteredRef = useRef(filtered);
+  filteredRef.current = filtered;
+  const filterActiveRef = useRef(filterActive);
+  filterActiveRef.current = filterActive;
+
+  const getOrder = useCallback(
+    () => (filterActiveRef.current ? filteredRef.current : rowsRef.current.map((r) => r.entry.path)),
+    [],
+  );
+
+  const onRowClick = useCallback(
+    (path: string, _isDir: boolean, mods: ClickMods) => {
+      const order = getOrder();
+      const sel = useSelectionStore.getState();
+      if (mods.range) sel.selectRange(path, order);
+      else if (mods.additive) sel.toggle(path);
+      else sel.setSingle(path);
+    },
+    [getOrder],
+  );
+
+  useTreeKeyboard({ projectId, scrollRef, getOrder, onMutated: refresh });
 
   return (
     <div className="h-full flex flex-col bg-card/30 min-h-0">
@@ -151,7 +212,7 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
         </div>
       </div>
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto py-1 px-0.5">
-        {store.error && <div className="text-[11px] text-destructive px-3 py-2">{store.error}</div>}
+        {error && <div className="text-[11px] text-destructive px-3 py-2">{error}</div>}
         {filterActive && allPaths && filtered.length === 0 && (
           <div className="text-[11px] text-muted-foreground px-3 py-2">No files match &quot;{search}&quot;.</div>
         )}
@@ -159,28 +220,21 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
           {virtualizer.getVirtualItems().map((v) => {
             const style: React.CSSProperties = {
               position: 'absolute', top: 0, left: 0, width: '100%',
-              transform: `translateY(${v.start}px)`, height: 22,
+              transform: `translateY(${v.start}px)`, height: rowH,
             };
             if (filterActive) {
               const path = filtered[v.index];
               if (!path) return null;
-              const { Icon, colorClass } = fileIconFor(path);
-              const color = colorForStatus(gitStatus.get(path));
               return (
-                <button
+                <FilteredRow
                   key={path}
-                  type="button"
+                  path={path}
+                  active={path === activePath}
+                  status={gitStatus.get(path)}
                   style={style}
-                  onClick={() => onOpen(path)}
-                  className={cn(
-                    'text-left flex items-center gap-1.5 px-1.5 rounded-sm text-[11.5px]',
-                    path === activePath ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                  )}
-                  title={path}
-                >
-                  <Icon className={cn('h-3.5 w-3.5 shrink-0', colorClass)} />
-                  <span className={cn('truncate', color.text, color.extra)}>{path}</span>
-                </button>
+                  onRowClick={onRowClick}
+                  onOpen={onOpen}
+                />
               );
             }
             const row = rows[v.index];
@@ -193,14 +247,15 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
                   depth={row.depth}
                   projectId={projectId}
                   active={row.entry.path === activePath}
-                  expanded={store.expanded.has(row.entry.path)}
+                  expanded={expanded.has(row.entry.path)}
                   status={status}
                   renaming={renamingPath === row.entry.path}
                   onOpen={onOpen}
-                  onToggle={store.toggle}
+                  onToggle={toggle}
+                  onRowClick={onRowClick}
                   onStartRename={setRenamingPath}
-                  onCommitRename={(from, name) => void onCommitRename(from, name)}
-                  onCancelRename={() => setRenamingPath(null)}
+                  onCommitRename={onCommitRenameRow}
+                  onCancelRename={onCancelRename}
                   onMutated={refresh}
                 />
               </div>

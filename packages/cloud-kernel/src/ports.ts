@@ -58,3 +58,18 @@ export interface RandomSource {
   /** `n` cryptographically-secure random bytes. */
   bytes(n: number): Uint8Array;
 }
+
+/**
+ * RateLimiter — a fixed-window counter keyed by an arbitrary string. Prod adapter
+ * is a Durable Object (strongly consistent, serialized per key); tests use an
+ * in-memory fake. `consume` counts ONE hit and reports whether it stayed within
+ * `limit` for the current `windowMs`.
+ */
+export interface RateLimiter {
+  consume(key: string, limit: number, windowMs: number): Promise<RateLimitDecision>;
+}
+export interface RateLimitDecision {
+  allowed: boolean;
+  /** ms until the window resets (only meaningful when `allowed` is false). */
+  retryAfterMs: number;
+}

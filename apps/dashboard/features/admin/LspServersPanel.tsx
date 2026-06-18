@@ -16,7 +16,7 @@ interface ServerInfo {
   installed: boolean;
   sizeLabel: string;
 }
-interface Instance { projectId: number; serverId: string; state: string }
+interface Instance { projectId: number; serverId: string; state: string; lastExitReason?: string; stderrTail?: string }
 type InstallFrame =
   | { phase: 'start' }
   | { phase: 'log'; line: string }
@@ -152,25 +152,39 @@ export function LspServersPanel() {
             {instances.map((i) => (
               <div
                 key={`${i.projectId}:${i.serverId}`}
-                className="flex items-center gap-3 rounded border bg-card/30 px-2 py-1 text-[11.5px]"
+                className="rounded border bg-card/30 px-2 py-1"
               >
-                <span className="font-mono">{i.serverId}</span>
-                <span className="text-muted-foreground">projeto #{i.projectId}</span>
-                <span
-                  className={
-                    i.state === 'ready'
-                      ? 'text-emerald-500/90'
-                      : i.state === 'failed' || i.state === 'crashed'
-                        ? 'text-red-400'
-                        : 'text-amber-400'
-                  }
-                >
-                  {i.state}
-                </span>
-                <span className="flex-1" />
-                <Button variant="ghost" size="sm" onClick={() => void restart(i)}>
-                  <RotateCw className="h-3 w-3 mr-1" /> Restart
-                </Button>
+                <div className="flex items-center gap-3 text-[11.5px]">
+                  <span className="font-mono">{i.serverId}</span>
+                  <span className="text-muted-foreground">projeto #{i.projectId}</span>
+                  <span
+                    className={
+                      i.state === 'ready'
+                        ? 'text-emerald-500/90'
+                        : i.state === 'failed' || i.state === 'crashed'
+                          ? 'text-red-400'
+                          : 'text-amber-400'
+                    }
+                  >
+                    {i.state}
+                  </span>
+                  <span className="flex-1" />
+                  <Button variant="ghost" size="sm" onClick={() => void restart(i)}>
+                    <RotateCw className="h-3 w-3 mr-1" /> Restart
+                  </Button>
+                </div>
+                {(i.lastExitReason || i.stderrTail) && (
+                  <details className="mt-1">
+                    <summary className="text-[10.5px] text-amber-400/90 cursor-pointer select-none">
+                      {i.lastExitReason ? `motivo: ${i.lastExitReason}` : 'stderr'}
+                    </summary>
+                    {i.stderrTail && (
+                      <pre className="mt-1 text-[10px] font-mono whitespace-pre-wrap text-muted-foreground/80 max-h-40 overflow-auto border rounded p-1 bg-background/40">
+                        {i.stderrTail}
+                      </pre>
+                    )}
+                  </details>
+                )}
               </div>
             ))}
           </div>

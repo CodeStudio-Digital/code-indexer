@@ -46,11 +46,13 @@ interface GitBranchSummary {
 interface HistoryViewProps {
   projectId: number;
   onMutated: () => void;
+  /** A sequencer op is mid-flight — disable cherry-pick/revert/reset. */
+  opInProgress?: boolean;
 }
 
 const PAGE_SIZES = [30, 60, 120, 250];
 
-export function HistoryView({ projectId, onMutated }: HistoryViewProps) {
+export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewProps) {
   const [commits, setCommits] = useState<Commit[]>([]);
   const [branches, setBranches] = useState<GitBranchSummary[]>([]);
   const [branch, setBranch] = useState<string>(''); // empty = current
@@ -206,6 +208,7 @@ export function HistoryView({ projectId, onMutated }: HistoryViewProps) {
           <CommitRow
             key={c.sha}
             commit={c}
+            disabled={opInProgress}
             onCherryPick={() => void cherryPick(c)}
             onRevert={() => void revert(c)}
             onReset={(mode) => void reset(c, mode)}

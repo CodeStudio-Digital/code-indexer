@@ -80,9 +80,48 @@ export interface ConflictLabels {
 }
 
 /**
- * Replace a region (by its current `<<<<<<<` line) with the chosen side.
- * Re-parses live so the edit is correct even if earlier accepts shifted
- * lines. Exported so the 3-pane "Accept all" buttons can reuse it.
+ * The replacement text for resolving a region to a side. The 'both' case
+ * joins only the NON-empty sides so an empty side never injects a blank
+ * line (and both-empty yields '' rather than a lone '\n').
+ */
+export function computeResolutionText(region: ConflictRegion, side: ConflictSide): string {
+  if (side === 'current') return region.currentText;
+  if (side === 'incoming') return region.incomingText;
+  return [region.currentText, region.incomingText].filter((s) => s.length > 0).join('\n');
+}
+
+/**
+ * Apply a resolution to a model in one undoable edit. Re-parses live so the
+ * edit is correct even if earlier accepts shifted lines. When the chosen
+ * side is empty, the range extends through the START of the next line so the
+ * whole block is removed instead of collapsing into a stray blank line
+ * (unless the block is the last line in the file, where there's nothing to
+ * swallow into).
+ */
+function applyToModel(
+  model: MonacoNs.editor.ITextModel,
+  startLine: number,
+  side: ConflictSide,
+): void {
+  const region = parseConflictRegions(model.getValue()).find((r) => r.startLine === startLine);
+  if (!region) return;
+  const text = computeResolutionText(region, side);
+  const range =
+    text === '' && region.endLine < model.getLineCount()
+      ? { startLineNumber: region.startLine, startColumn: 1, endLineNumber: region.endLine + 1, endColumn: 1 }
+      : {
+          startLineNumber: region.startLine,
+          startColumn: 1,
+          endLineNumber: region.endLine,
+          endColumn: model.getLineMaxColumn(region.endLine),
+        };
+  model.pushEditOperations([], [{ range, text }], () => null);
+}
+
+/**
+ * Replace a region (by its `<<<<<<<` line) with the chosen side. Exported
+ * so the 3-pane "Accept all"/navigate buttons can drive it with the editor
+ * in hand.
  */
 export function applyResolution(
   editor: MonacoNs.editor.ICodeEditor,
@@ -90,20 +129,25 @@ export function applyResolution(
   side: ConflictSide,
 ): void {
   const model = editor.getModel();
-  if (!model) return;
-  const region = parseConflictRegions(model.getValue()).find((r) => r.startLine === startLine);
-  if (!region) return;
-  const text =
-    side === 'current' ? region.currentText
-    : side === 'incoming' ? region.incomingText
-    : `${region.currentText}\n${region.incomingText}`;
-  const range = {
-    startLineNumber: region.startLine,
-    startColumn: 1,
-    endLineNumber: region.endLine,
-    endColumn: model.getLineMaxColumn(region.endLine),
-  };
-  model.pushEditOperations([], [{ range, text }], () => null);
+  if (model) applyToModel(model, startLine, side);
+}
+
+// A SINGLE app-wide command backs every CodeLens (registered once, never
+// per-editor). `editor.addCommand` discards its disposable and registers
+// into the process-wide CommandsRegistry that the editor's dispose() does
+// NOT clean up — so a fresh editor per merge tab would leak a command (and
+// pin the disposed editor via the handler closure). A module-level command
+// that resolves the target model by URI from its arguments avoids that.
+let applyCommandId: string | null = null;
+function ensureApplyCommand(monaco: typeof MonacoNs): string {
+  if (applyCommandId) return applyCommandId;
+  const id = 'mcp.conflict.applyResolution';
+  monaco.editor.registerCommand(id, (_accessor, uriStr: string, startLine: number, side: ConflictSide) => {
+    const model = monaco.editor.getModel(monaco.Uri.parse(uriStr));
+    if (model) applyToModel(model, startLine, side);
+  });
+  applyCommandId = id;
+  return id;
 }
 
 export function attachConflictUI(
@@ -137,9 +181,7 @@ export function attachConflictUI(
   };
   refresh();
 
-  const cmdId = editor.addCommand(0, (_ctx, startLine: number, side: ConflictSide) => {
-    applyResolution(editor, startLine, side);
-  }) as string;
+  const cmdId = ensureApplyCommand(monaco);
 
   const emitter = new monaco.Emitter<void>();
   const provider = monaco.languages.registerCodeLensProvider('*', {
@@ -149,9 +191,9 @@ export function attachConflictUI(
       const lenses = parseConflictRegions(m.getValue()).flatMap((r) => {
         const range = new monaco.Range(r.startLine, 1, r.startLine, 1);
         return [
-          { range, command: { id: cmdId, title: labels.current, arguments: [r.startLine, 'current'] } },
-          { range, command: { id: cmdId, title: labels.incoming, arguments: [r.startLine, 'incoming'] } },
-          { range, command: { id: cmdId, title: labels.both, arguments: [r.startLine, 'both'] } },
+          { range, command: { id: cmdId, title: labels.current, arguments: [uri, r.startLine, 'current'] } },
+          { range, command: { id: cmdId, title: labels.incoming, arguments: [uri, r.startLine, 'incoming'] } },
+          { range, command: { id: cmdId, title: labels.both, arguments: [uri, r.startLine, 'both'] } },
         ];
       });
       return { lenses, dispose() { /* */ } };

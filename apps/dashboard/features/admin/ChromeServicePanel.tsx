@@ -11,7 +11,8 @@
  * visually consistent. State is small enough to keep inline; the
  * fetch logic lives in `chrome-service-api.ts`.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { usePolling } from '../../hooks/usePolling.js';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Play, Square, RotateCcw, Check, AlertCircle, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
@@ -49,12 +50,8 @@ export function ChromeServicePanel() {
     }
   }
 
-  useEffect(() => {
-    void refresh();
-    const t = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Visibility-aware status poll — pauses while the window is hidden.
+  usePolling(() => void refresh(), REFRESH_INTERVAL_MS);
 
   async function withBusy(fn: () => Promise<void>) {
     setBusy(true);

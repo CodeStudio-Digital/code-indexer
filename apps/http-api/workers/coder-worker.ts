@@ -30,7 +30,7 @@
 // resolves these before tsx/tsconfig `paths` get a chance, so an alias
 // like `@mcp/orchestrator-host` throws "Cannot find package" inside a
 // worker_thread. Relative paths resolve identically under tsx, tsc and
-// raw node — see `apps/http-api/sse/workerKit.ts` for context.
+// raw node.
 import { parentPort, workerData } from 'node:worker_threads';
 import {
   MessageBridge,
@@ -762,11 +762,34 @@ bridge.handle('abort', () => {
 
 bridge.handle('stop', async () => {
   recordRpc('stop');
+  // `stop` is the EVICT/shutdown path (WorkerHost.evict → dispose). It must
+  // NOT abort an interactive pause: `runner.abort()` resolves waitForUserInput
+  // with {aborted:true}, the tool returns "aborted by user", and the eventual
+  // flush seals the pending tool_use as a REJECTION — so on reopen the user
+  // can no longer approve. The in-flight assistant message was already
+  // durably checkpointed (host `awaiting_input` hook), so leave the turn
+  // PARKED; the dangling tool_use is recovered by findPendingInteraction on
+  // the next open. Explicit user aborts go through the separate `abort` RPC.
   try {
     const run = activeRun;
-    run?.ctrl.abort();
-    if (run?.runner) {
-      try { run.runner.abort(); } catch { /* best-effort */ }
+    if (run?.runner?.isWaitingForInput()) {
+      // Parked awaiting approval — durable already; do nothing destructive.
+      return { ok: true };
+    }
+    if (run) {
+      // Normal in-flight turn: abort and wait (bounded) for the run to settle
+      // so flushPendingTurn + drainSession land before the worker is killed.
+      const handle = run.handle;
+      run.ctrl.abort();
+      if (run.runner) {
+        try { run.runner.abort(); } catch { /* best-effort */ }
+      }
+      if (handle?.done) {
+        await Promise.race([
+          handle.done.catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, 4000)),
+        ]);
+      }
     }
   } catch { /* best-effort */ }
   return { ok: true };

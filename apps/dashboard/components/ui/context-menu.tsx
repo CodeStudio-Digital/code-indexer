@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 
 export interface ContextMenuItem {
@@ -21,7 +22,10 @@ export interface ContextMenuItem {
   destructive?: boolean;
   disabled?: boolean;
   separatorBefore?: boolean;
-  onSelect: () => void;
+  /** Nested items — rendered as a flyout submenu that opens on hover. */
+  submenu?: ContextMenuItem[];
+  /** Leaf action. Omitted for submenu parents. */
+  onSelect?: () => void;
 }
 
 interface UseContextMenuResult {
@@ -98,17 +102,7 @@ function ContextMenuView({ pos, items, onClose }: ContextMenuViewProps) {
       className="fixed z-[100] min-w-[180px] py-1 rounded-md border bg-popover text-popover-foreground shadow-xl shadow-black/30 text-[12px]"
       style={{ left: adjusted.x, top: adjusted.y }}
     >
-      {items.map((item) => {
-        if (item.separatorBefore) {
-          return (
-            <div key={`sep-${item.id}`}>
-              <div className="h-px bg-border my-1 mx-1" />
-              <MenuItem item={item} onClose={onClose} />
-            </div>
-          );
-        }
-        return <MenuItem key={item.id} item={item} onClose={onClose} />;
-      })}
+      {items.map((item) => <MenuItem key={item.id} item={item} onClose={onClose} />)}
     </div>,
     document.body,
   );
@@ -116,36 +110,66 @@ function ContextMenuView({ pos, items, onClose }: ContextMenuViewProps) {
 
 function MenuItem({ item, onClose }: { item: ContextMenuItem; onClose: () => void }) {
   const Icon = item.icon;
+  const [subOpen, setSubOpen] = useState(false);
+  const rowClass = cn(
+    'w-full flex items-center gap-2 px-2.5 py-1 text-left transition-colors',
+    item.disabled
+      ? 'text-muted-foreground/50 cursor-not-allowed'
+      : item.destructive
+        ? 'text-destructive hover:bg-destructive/10'
+        : 'hover:bg-accent hover:text-accent-foreground',
+  );
+
+  // Submenu parent — opens a flyout on hover. The flyout is a DOM descendant so
+  // moving the cursor from the row into it doesn't fire the row's mouseleave.
+  if (item.submenu) {
+    return (
+      <>
+        {item.separatorBefore && <div className="h-px bg-border my-1 mx-1" />}
+        <div className="relative" onMouseEnter={() => setSubOpen(true)} onMouseLeave={() => setSubOpen(false)}>
+          <button type="button" role="menuitem" className={cn(rowClass, subOpen && 'bg-accent text-accent-foreground')}>
+            {Icon && <Icon className="h-3 w-3 shrink-0" />}
+            <span className="flex-1">{item.label}</span>
+            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+          </button>
+          {subOpen && (
+            <div
+              role="menu"
+              className="absolute left-full top-0 -mt-1 ml-0.5 min-w-[160px] max-h-72 overflow-auto py-1 rounded-md border bg-popover text-popover-foreground shadow-xl shadow-black/30"
+            >
+              {item.submenu.map((sub) => <MenuItem key={sub.id} item={sub} onClose={onClose} />)}
+            </div>
+          )}
+        </div>
+      </>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      role="menuitem"
-      disabled={item.disabled}
-      onClick={(e) => {
-        // The portal renders to document.body, but React synthetic events
-        // still bubble through the *component* tree — i.e. up to the
-        // trigger row/card's onClick (which opens the project). Stop here
-        // so a menu-item click never doubles as a row click.
-        e.stopPropagation();
-        if (item.disabled) return;
-        item.onSelect();
-        onClose();
-      }}
-      className={cn(
-        'w-full flex items-center gap-2 px-2.5 py-1 text-left',
-        'transition-colors',
-        item.disabled
-          ? 'text-muted-foreground/50 cursor-not-allowed'
-          : item.destructive
-            ? 'text-destructive hover:bg-destructive/10'
-            : 'hover:bg-accent hover:text-accent-foreground',
-      )}
-    >
-      {Icon && <Icon className="h-3 w-3 shrink-0" />}
-      <span className="flex-1">{item.label}</span>
-      {item.shortcut && (
-        <span className="text-[10px] text-muted-foreground/70 font-mono">{item.shortcut}</span>
-      )}
-    </button>
+    <>
+      {item.separatorBefore && <div className="h-px bg-border my-1 mx-1" />}
+      <button
+        type="button"
+        role="menuitem"
+        disabled={item.disabled}
+        onClick={(e) => {
+          // The portal renders to document.body, but React synthetic events
+          // still bubble through the *component* tree — i.e. up to the
+          // trigger row/card's onClick (which opens the project). Stop here
+          // so a menu-item click never doubles as a row click.
+          e.stopPropagation();
+          if (item.disabled) return;
+          item.onSelect?.();
+          onClose();
+        }}
+        className={rowClass}
+      >
+        {Icon && <Icon className="h-3 w-3 shrink-0" />}
+        <span className="flex-1">{item.label}</span>
+        {item.shortcut && (
+          <span className="text-[10px] text-muted-foreground/70 font-mono">{item.shortcut}</span>
+        )}
+      </button>
+    </>
   );
 }

@@ -66,6 +66,54 @@ describe('grepProject', () => {
     expect(r.total).toBe(1);
     expect(r.truncated).toBe(true);
   });
+
+  it('strips the CR from CRLF lines (clean text + offsets)', async () => {
+    const local = mkdtempSync(join(tmpdir(), 'mcp-crlf-'));
+    mkdirSync(join(local, 'src'), { recursive: true });
+    writeFileSync(join(local, 'src', 'd.ts'), 'const Service = 1;\r\nother\r\n');
+    try {
+      const r = await grepProject(fakeDb(local, ['src/d.ts']), 1, { query: 'Service' });
+      const m = r.files[0].matches[0];
+      expect(m.text).toBe('const Service = 1;');
+      expect(m.text.slice(m.start, m.end)).toBe('Service');
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  it('reports every occurrence on a line with correct offsets', async () => {
+    const local = mkdtempSync(join(tmpdir(), 'mcp-multi-'));
+    mkdirSync(join(local, 'src'), { recursive: true });
+    writeFileSync(join(local, 'src', 'f.ts'), 'foo foo foo\n');
+    try {
+      const r = await grepProject(fakeDb(local, ['src/f.ts']), 1, { query: 'foo' });
+      expect(r.total).toBe(3);
+      const ms = r.files[0].matches;
+      expect(ms.map((m) => m.start)).toEqual([0, 4, 8]);
+      expect(ms.every((m) => m.text.slice(m.start, m.end) === 'foo')).toBe(true);
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('anchored regex parity (grep vs replace)', () => {
+  it('`;$` matches per-line in BOTH grep and replace', async () => {
+    const local = mkdtempSync(join(tmpdir(), 'mcp-anchor-'));
+    mkdirSync(join(local, 'src'), { recursive: true });
+    writeFileSync(join(local, 'src', 'e.ts'), 'a;\nb;\nc\n');
+    try {
+      const g = await grepProject(fakeDb(local, ['src/e.ts']), 1, { query: ';$', regex: true });
+      expect(g.total).toBe(2); // two lines end with ';'
+      const res = await replaceInProject(fakeDb(local, ['src/e.ts']), undefined, 1, {
+        query: ';$', replacement: '', regex: true,
+      });
+      expect(res.replaced).toBe(2); // same two, not just the last line
+      expect(readFileSync(join(local, 'src', 'e.ts'), 'utf8')).toBe('a\nb\nc\n');
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('replaceInProject', () => {

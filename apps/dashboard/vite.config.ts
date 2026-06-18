@@ -89,6 +89,13 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      // Self-hosted draw.io editor webapp (browser dev only). In Electron the
+      // iframe loads mcp://app/drawio/* directly; here it goes through the
+      // backend via this proxy. See features/chat/right-panel/diagram.
+      '/drawio': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
     },
   },
 });

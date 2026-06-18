@@ -31,24 +31,26 @@ interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onChanged: () => void;
+  /** Env to edit; null = create a new one. */
+  editId: number | null;
 }
 
-export function EnvEditor({ projectId, environments, open, onOpenChange, onChanged }: Props) {
-  const [editId, setEditId] = useState<number | null>(null);
+export function EnvEditor({ projectId, environments, open, onOpenChange, onChanged, editId }: Props) {
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [isDefault, setIsDefault] = useState(false);
   const [vars, setVars] = useState<EnvVariable[]>([]);
 
   const load = (env: ApiEnvironment | null) => {
-    setEditId(env?.id ?? null);
     setName(env?.name ?? '');
     setBaseUrl(env?.base_url ?? '');
     setIsDefault(env?.is_default ?? environments.length === 0);
     setVars(env ? parseVars(env.variables_json) : []);
   };
 
-  useEffect(() => { if (open) load(environments[0] ?? null); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (open) load(editId == null ? null : environments.find((e) => e.id === editId) ?? null);
+  }, [open, editId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
     if (!name.trim()) return;
@@ -63,23 +65,13 @@ export function EnvEditor({ projectId, environments, open, onOpenChange, onChang
     if (editId == null) return;
     await api.deleteEnvironment(projectId, editId);
     onChanged();
-    load(environments.find((e) => e.id !== editId) ?? null);
+    onOpenChange(false);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Environments</DialogTitle></DialogHeader>
-
-        <div className="flex gap-2 flex-wrap">
-          {environments.map((e) => (
-            <button key={e.id} onClick={() => load(e)}
-              className={`text-xs px-2 py-1 rounded border ${editId === e.id ? 'bg-muted' : ''}`}>
-              {e.name}{e.is_default ? ' ★' : ''}
-            </button>
-          ))}
-          <button onClick={() => load(null)} className="text-xs px-2 py-1 rounded border border-dashed">+ New</button>
-        </div>
+        <DialogHeader><DialogTitle>{editId == null ? 'New environment' : 'Edit environment'}</DialogTitle></DialogHeader>
 
         <div className="space-y-2">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Environment name" className="h-8 text-sm" />

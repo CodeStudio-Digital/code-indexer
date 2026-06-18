@@ -28,9 +28,15 @@
     { "binding": "ASSETS", "bucket_name": "codestudio-cloud-assets" }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "LOGIN_THROTTLE", "class_name": "LoginThrottleDO" }]
+    "bindings": [
+      { "name": "LOGIN_THROTTLE", "class_name": "LoginThrottleDO" },
+      { "name": "RATE_LIMIT", "class_name": "RateLimitDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LoginThrottleDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["LoginThrottleDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["RateLimitDO"] }
+  ],
   // Email Sending: enable once the sender domain is onboarded (Compute → Email
   // Service → Email Sending) — uncomment and set EMAIL_FROM to that domain.
   //   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@yourdomain"] }],

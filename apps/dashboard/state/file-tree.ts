@@ -6,6 +6,8 @@
  */
 import { create } from 'zustand';
 import { apiCall } from '../lib/api-client.js';
+import { createBoundedQueue } from './file-tree-loader.js';
+import { useSelectionStore } from './file-tree-selection.js';
 
 export interface TreeEntry {
   name: string;
@@ -18,7 +20,21 @@ interface TreeNodeDTO extends TreeEntry { children?: TreeNodeDTO[] }
 export interface FsEventDTO { path: string; kind: 'upsert' | 'delete'; isDir: boolean }
 
 const PERSIST_PREFIX = 'mcp-ide:file-tree:';
-const MAX_PERSISTED = 500;
+// 200 dirs expandidos já é um power-user extremo; com a fila bounded (cap 5) e a
+// ordenação por profundidade, os visíveis chegam nas 1ªs waves.
+const MAX_PERSISTED = 200;
+
+// Fila ÚNICA do restore da árvore (W2): cap de concorrência mata o thundering herd.
+const loaderQueue = createBoundedQueue(5);
+
+/** Enfileira o restore (root + dirs persistidos, rasos primeiro) na fila bounded. */
+function queueTreeRestore(expanded: Set<string>, load: (dir: string) => Promise<void>): void {
+  const depthOf = (p: string): number => (p === '' ? 0 : p.split('/').length);
+  loaderQueue.push('', 0, () => load(''));
+  for (const dir of [...expanded].sort((a, b) => depthOf(a) - depthOf(b))) {
+    loaderQueue.push(dir, depthOf(dir) + 1, () => load(dir));
+  }
+}
 
 function parentOf(p: string): string {
   const ix = p.lastIndexOf('/');
@@ -74,6 +90,7 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
 
   init: (projectId) => {
     const expanded = new Set(loadPersisted(projectId));
+    loaderQueue.clear(); // cancela o restore do projeto anterior
     set({
       projectId,
       children: new Map(),
@@ -82,11 +99,10 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
       error: null,
       version: 0,
     });
-    void get().ensureLoaded('');
-    // Restore the persisted expansion eagerly (parallel) — without this the
-    // reopened tree showed expanded-but-EMPTY folders until re-clicked.
-    // Each load is a single readdir on the fast path, so 100s are fine.
-    for (const dir of expanded) void get().ensureLoaded(dir);
+    // Root + dirs persistidos por uma fila BOUNDED ordenada por profundidade (rasos
+    // primeiro). Substitui o fan-out paralelo de até 500 readdirs que travava a
+    // abertura. O guard de projectId em ensureLoaded dropa resultados stale.
+    queueTreeRestore(expanded, (dir) => get().ensureLoaded(dir));
   },
 
   ensureLoaded: async (dir) => {
@@ -130,11 +146,17 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   },
 
   reveal: async (path) => {
+    // Captura o projeto no início e reconfere no set final (espelha ensureLoaded).
+    // Sem isso, um reveal em voo do projeto A — após a troca para B (init resetou
+    // `expanded`) — adicionaria ancestrais de A ao set de B e os persistiria no
+    // localStorage de B. O await abaixo cede o event loop, abrindo essa janela.
+    const pid = get().projectId;
     const ancestors: string[] = [];
     let dir = parentOf(path);
     while (dir) { ancestors.unshift(dir); dir = parentOf(dir); }
     for (const a of ['', ...ancestors]) await get().ensureLoaded(a);
     set((s) => {
+      if (s.projectId !== pid) return {};   // trocou de projeto mid-reveal → no-op
       const next = new Set(s.expanded);
       for (const a of ancestors) next.add(a);
       if (s.projectId != null) persist(s.projectId, next);
@@ -144,6 +166,9 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
 
   applyFsEvents: (events) => {
     if (events.length > 500) { get().refresh(); return; }
+    // Poda a seleção quando um path some do disco (delete externo OU nosso).
+    const deleted = events.filter((e) => e.kind === 'delete').map((e) => e.path);
+    if (deleted.length) useSelectionStore.getState().prune(deleted);
     set((s) => {
       const children = new Map(s.children);
       const expanded = new Set(s.expanded);
@@ -186,9 +211,9 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   refresh: () => {
     const { projectId, expanded } = get();
     if (projectId == null) return;
+    loaderQueue.clear();
     set((s) => ({ children: new Map(), loading: new Set(), version: s.version + 1 }));
-    void get().ensureLoaded('');
-    for (const dir of expanded) void get().ensureLoaded(dir);
+    queueTreeRestore(expanded, (dir) => get().ensureLoaded(dir));
   },
 }));
 

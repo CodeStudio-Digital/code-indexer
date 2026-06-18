@@ -12,8 +12,15 @@ import { twoFactorRouter } from './routes/two-factor.js';
 import { emailRouter } from './routes/email.js';
 import { billingRouter } from './routes/billing.js';
 import { sharingRouter, publicShareRouter } from './routes/sharing.js';
+import { feedbackRouter } from './routes/feedback.js';
+import { accountRouter } from './routes/account.js';
+import { securityHeaders, corsAllowlist } from './middleware/security.js';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Edge security first: strict headers on every response + a CORS origin allowlist.
+app.use('*', securityHeaders());
+app.use('*', corsAllowlist());
 
 // Body caps are scoped: auth/billing payloads are tiny (anti-amplification),
 // while a share snapshot is a whole conversation (capped at ~2 MB; the use-case
@@ -23,6 +30,10 @@ app.use('/v1/auth/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 app.use('/v1/billing/*', bodyLimit({ maxSize: 64 * 1024, onError: tooLarge }));
 app.use('/v1/share', bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge }));
 app.use('/v1/share/*', bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge }));
+app.use('/v1/feedback', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge })); // submit JSON is small
+app.use('/v1/feedback/*', bodyLimit({ maxSize: 6 * 1024 * 1024, onError: tooLarge })); // attachment ≤ 5 MB
+app.use('/v1/account', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
+app.use('/v1/account/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 
 app.get('/v1/health', (c) =>
   c.json({
@@ -40,6 +51,8 @@ app.route('/v1/auth', emailRouter());
 app.route('/v1/billing', billingRouter());
 app.route('/v1/share', sharingRouter());
 app.route('/s', publicShareRouter()); // public read-only viewer (no auth)
+app.route('/v1/feedback', feedbackRouter());
+app.route('/v1/account', accountRouter());
 
 // JSON-only API: never render HTML, even for 404s.
 app.notFound((c) => c.json({ code: 'not_found', message: 'Not found' }, 404));
@@ -54,3 +67,4 @@ export default app;
 
 // Durable Object classes must be exported from the Worker entry.
 export { LoginThrottleDO } from './login-throttle-do.js';
+export { RateLimitDO } from './rate-limit-do.js';

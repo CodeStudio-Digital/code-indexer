@@ -4,7 +4,7 @@
  * apps/http-api/server/routes/projects.ts now delegate here.
  */
 
-import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type ProjectIndexStatus, type FsEventsFrame, type IndexStreamEvent, type ScaffoldStreamEvent } from '@mcp/api-bus';
+import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type ProjectIndexStatus, type FsEventsFrame, type GitMetaFrame, type IndexStreamEvent, type ScaffoldStreamEvent } from '@mcp/api-bus';
 import { runScaffoldStream } from './scaffold.js';
 import {
   CreateProjectService,
@@ -259,6 +259,50 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       };
     },
 
+    gitMetaStream({ id }): AsyncStream<GitMetaFrame> {
+      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      const svc = deps.projectIndexService;
+      // Indefinite stream → must unsubscribe on return(). The watcher already
+      // coalesces a checkout burst (~250ms) into one event, so we forward each
+      // event straight through as a frame (no extra coalescing here).
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<GitMetaFrame> {
+          const queue: GitMetaFrame[] = [];
+          let waiter: ((r: IteratorResult<GitMetaFrame>) => void) | null = null;
+          let closed = false;
+          const push = (frame: GitMetaFrame) => {
+            if (closed) return;
+            if (waiter) { const w = waiter; waiter = null; w({ value: frame, done: false }); }
+            else queue.push(frame);
+          };
+          const unsub = svc.subscribeGitMeta(id, (event) => {
+            push({ branch: event.branch, detached: event.detached, changed: event.changed });
+          });
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            unsub();
+            if (waiter) { const w = waiter; waiter = null; w({ value: undefined as never, done: true }); }
+          };
+          return {
+            async next(): Promise<IteratorResult<GitMetaFrame>> {
+              if (queue.length > 0) return { value: queue.shift()!, done: false };
+              if (closed) return { value: undefined as never, done: true };
+              return new Promise((resolve) => { waiter = resolve; });
+            },
+            async return(): Promise<IteratorResult<GitMetaFrame>> {
+              cleanup();
+              return { value: undefined as never, done: true };
+            },
+            async throw(e?: unknown): Promise<IteratorResult<GitMetaFrame>> {
+              cleanup();
+              throw e;
+            },
+          };
+        },
+      };
+    },
+
     indexStatusStream({ id }): AsyncStream<ProjectIndexStatus> {
       if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
       const svc = deps.projectIndexService;
@@ -319,11 +363,33 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     },
 
     indexStream({ id, ...input }): AsyncStream<IndexStreamEvent> {
+      // Mirror every frame into the main-process status store. The manual run no
+      // longer lives only in renderer state tied to the SSE fetch: the live pass
+      // sits in the SoT, so navigating away and back re-hydrates the bar from the
+      // status stream. The run promise is independent of whoever drains the SSE,
+      // so a disconnect doesn't kill it — the store keeps updating either way.
+      const svc = deps.projectIndexService;
+      const runKind = (input as IndexProjectInput).mode === 'structural' ? 'structural' : 'semantic';
+      const startedAt = Date.now();
       return streamFromCallbacks<IndexStreamEvent>((emit) =>
         lockedIndexRun(id, input as IndexProjectInput, () => indexUseCase.runStream(id, input as IndexProjectInput, {
-          onStart: (p) => emit({ event: 'start', data: p }),
-          onProgress: (p) => emit({ event: 'progress', data: p }),
-          onDone: (result) =>
+          onStart: (p) => {
+            svc.setActiveRun(id, { kind: runKind, current: 0, total: 0, startedAt });
+            emit({ event: 'start', data: p });
+          },
+          onProgress: (p) => {
+            svc.setActiveRun(id, {
+              kind: runKind,
+              current: p.current,
+              total: p.total,
+              currentFile: p.current_file || undefined,
+              costUsd: p.cost_usd,
+              startedAt,
+            });
+            emit({ event: 'progress', data: p });
+          },
+          onDone: (result) => {
+            svc.refreshStatus(id); // clears the live pass + settles phase from DB
             emit({
               event: 'done',
               data: {
@@ -335,19 +401,37 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
                 durationMs: result.durationMs,
                 costUsd: result.costUsd,
               },
-            }),
-          onError: (message) => emit({ event: 'error', data: { message } }),
+            });
+          },
+          onError: (message) => {
+            svc.refreshStatus(id);
+            emit({ event: 'error', data: { message } });
+          },
         })),
       );
     },
 
     retryEmbeddingsStream({ id }): AsyncStream<IndexStreamEvent> {
+      const svc = deps.projectIndexService;
+      const startedAt = Date.now();
       return streamFromCallbacks<IndexStreamEvent>((emit) =>
         indexUseCase.retryEmbeddingsStream(id, {
-          onStart: (p) => emit({ event: 'start', data: p }),
-          onProgress: (p) => emit({ event: 'progress', data: p }),
-          onDone: (result) => emit({ event: 'done', data: result as never }),
-          onError: (message) => emit({ event: 'error', data: { message } }),
+          onStart: (p) => {
+            svc.setActiveRun(id, { kind: 'embeddings', current: 0, total: 0, startedAt });
+            emit({ event: 'start', data: p });
+          },
+          onProgress: (p) => {
+            svc.setActiveRun(id, { kind: 'embeddings', current: p.current, total: p.total, startedAt });
+            emit({ event: 'progress', data: p });
+          },
+          onDone: (result) => {
+            svc.refreshStatus(id);
+            emit({ event: 'done', data: result as never });
+          },
+          onError: (message) => {
+            svc.refreshStatus(id);
+            emit({ event: 'error', data: { message } });
+          },
         }),
       );
     },

@@ -21,6 +21,9 @@ export function useFindReplace(projectId: number) {
   const [selected, setSelected] = useState<Selected | null>(null);
   const [replacing, setReplacing] = useState(false);
   const [replaceMsg, setReplaceMsg] = useState<string | null>(null);
+  // Two-step confirm: Replace All writes files, so the first click arms and the
+  // second executes. Any change to the search/replace/results disarms it.
+  const [armed, setArmed] = useState(false);
 
   const run = useCallback(
     async (q: string, o: FindOpts) => {
@@ -55,8 +58,13 @@ export function useFindReplace(projectId: number) {
   }, []);
   const setMask = useCallback((mask: string) => setOpts((o) => ({ ...o, mask })), []);
 
+  // Disarm the confirm whenever the inputs or the result set change.
+  useEffect(() => { setArmed(false); }, [query, replacement, opts, result]);
+
   const replaceAll = useCallback(async () => {
     if (!query || !result || result.fileCount === 0) return;
+    if (!armed) { setArmed(true); return; } // first click arms the confirm
+    setArmed(false);
     setReplacing(true);
     setReplaceMsg(null);
     try {
@@ -71,13 +79,13 @@ export function useFindReplace(projectId: number) {
     } finally {
       setReplacing(false);
     }
-  }, [projectId, query, replacement, opts, result, run]);
+  }, [projectId, query, replacement, opts, result, armed, run]);
 
   return {
     query, setQuery, replacement, setReplacement,
     opts, toggle, setMask,
     result, loading, error,
     selected, setSelected,
-    replacing, replaceMsg, replaceAll,
+    replacing, replaceMsg, replaceAll, armed,
   };
 }

@@ -30,17 +30,13 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu.js';
-import { Input } from '../../components/ui/input.js';
 import { ScrollArea } from '../../components/ui/scroll-area.js';
-import { Combobox, type ComboboxOption } from '../../components/ui/combobox.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
-import { PROVIDERS, providerAccent } from './constants.js';
+import { providerAccent } from './constants.js';
 import type {
   CoderSession,
   CoderSessionGroup,
-  EnrichedProviderModel,
-  ProviderOption,
 } from './types.js';
 
 export type SessionView = 'active' | 'archived';
@@ -67,12 +63,6 @@ interface SessionSidebarProps {
   onRenameGroup: (group: CoderSessionGroup) => void;
   onDeleteGroup: (group: CoderSessionGroup) => void;
   projectName: string;
-  provider: string;
-  setProvider: (p: string) => void;
-  model: string;
-  setModel: (m: string) => void;
-  providerOptions: ProviderOption[];
-  currentProviderModels: EnrichedProviderModel[];
   /** Mobile drawer open state. On mobile the sidebar is a slide-in overlay. */
   mobileOpen?: boolean;
   /** Called when the mobile drawer should close (backdrop tap, X button). */
@@ -103,12 +93,6 @@ export function SessionSidebar({
   onRenameGroup,
   onDeleteGroup,
   projectName,
-  provider,
-  setProvider,
-  model,
-  setModel,
-  providerOptions,
-  currentProviderModels,
   mobileOpen = false,
   onMobileClose,
 }: SessionSidebarProps) {
@@ -295,40 +279,6 @@ export function SessionSidebar({
             {t('chat:sidebar.archived')}
           </button>
         </div>
-
-        <Combobox
-          value={provider}
-          onChange={(v) => {
-            setProvider(v);
-            setModel('');
-          }}
-          options={providerOptions.map((p) => ({ value: p.id, label: p.label }))}
-          placeholder={t('chat:sidebar.provider')}
-          searchPlaceholder={t('chat:sidebar.searchProvider')}
-          emptyLabel={t('chat:sidebar.noProvider')}
-        />
-        {currentProviderModels.length > 0 ? (
-          <Combobox
-            value={model}
-            onChange={setModel}
-            options={currentProviderModels.map<ComboboxOption>((m) => ({
-              value: m.mode ? `${m.id}::${m.mode}` : m.id,
-              label: m.id,
-              hint: m.mode,
-            }))}
-            placeholder={t('chat:sidebar.defaultModel')}
-            searchPlaceholder={t('chat:sidebar.searchModel')}
-            emptyLabel={t('chat:sidebar.noModel')}
-          />
-        ) : (
-          <Input
-            type="text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder={PROVIDERS.find((p) => p.id === provider)?.defaultModel}
-            className="h-8 text-xs font-mono"
-          />
-        )}
       </div>
 
       {/* Batch-action bar */}

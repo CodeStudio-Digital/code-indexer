@@ -6,11 +6,13 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { asAccountId } from '@cloudstudio/cloud-kernel';
+import { identityHttpStatus } from '@cloudstudio/cloud-identity';
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { recordAudit } from '../middleware/audit.js';
 import { respondError } from './_respond.js';
-import { sha256Hex } from '../infra/sha256.js';
+import { hashPii } from '../infra/sha256.js';
 
 const codeSchema = z.object({ code: z.string().min(1).max(32) });
 const challengeSchema = z.object({
@@ -38,6 +40,7 @@ export function twoFactorRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, bundle);
     if (!claims) return unauthorized(c);
     const r = await bundle.confirm2fa.execute({ accountId: asAccountId(claims.sub), code: parsed.data.code });
+    if (r.ok) recordAudit(c, 'mfa_enabled', 200, { accountId: claims.sub });
     return r.ok ? c.json(r.value, 200) : respondError(c, r.error);
   });
 
@@ -48,6 +51,7 @@ export function twoFactorRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, bundle);
     if (!claims) return unauthorized(c);
     const r = await bundle.disable2fa.execute({ accountId: asAccountId(claims.sub), code: parsed.data.code });
+    if (r.ok) recordAudit(c, 'mfa_disabled', 200, { accountId: claims.sub });
     return r.ok ? c.json(r.value, 200) : respondError(c, r.error);
   });
 
@@ -59,8 +63,11 @@ export function twoFactorRouter(): Hono<{ Bindings: Env }> {
       challengeToken: parsed.data.challengeToken,
       code: parsed.data.code,
       userAgent: c.req.header('user-agent') ?? null,
-      ipHash: ip ? await sha256Hex(ip) : null,
+      ipHash: ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null,
     });
+    // Audit the 2FA challenge so a brute-force of TOTP/recovery codes leaves a trail.
+    if (r.ok) recordAudit(c, 'mfa_challenge_ok', 200);
+    else recordAudit(c, 'mfa_challenge_fail', identityHttpStatus(r.error), { reason: r.error.code });
     return r.ok ? c.json(r.value, 200) : respondError(c, r.error);
   });
 

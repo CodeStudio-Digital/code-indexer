@@ -37,7 +37,11 @@ export interface BranchRowActions {
   onDelete: (b: GitBranch) => void;
 }
 
-export function BranchRow({ branch: b, actions }: { branch: GitBranch; actions: BranchRowActions }) {
+export function BranchRow({
+  branch: b,
+  actions,
+  opInProgress,
+}: { branch: GitBranch; actions: BranchRowActions; opInProgress?: boolean }) {
   const items: ContextMenuItem[] = [];
   // Switch / checkout — primary action, disabled on the current branch.
   items.push({
@@ -63,6 +67,7 @@ export function BranchRow({ branch: b, actions }: { branch: GitBranch; actions: 
       separatorBefore: true,
       label: 'Merge into current branch',
       icon: GitMerge,
+      disabled: opInProgress,
       onSelect: () => actions.onMerge(b),
     });
   }

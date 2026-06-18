@@ -8,6 +8,7 @@
 import type { CompletionItem, DocChange, HoverInfo, LspLocation } from '@mcp/api-bus';
 import type {
   CompletionEntry,
+  CompletionDetails,
   DefinitionResult,
   DiagnosticResult,
   HoverResult,
@@ -31,11 +32,15 @@ export interface LspOpCtx {
    * doc events across an evict/respawn) — the client resyncs and retries.
    */
   docVersion?: number;
+  /** completionItem/resolve (TS auto-import): a entry escolhida + seu source/data opacos. */
+  completionEntry?: { name: string; source?: string; data?: unknown };
 }
 
 export interface LspBackendExecutor {
   // TS service ops — raw ts-service shapes; the router keeps the DTO maps.
   tsCompletions(ctx: LspOpCtx): Promise<CompletionEntry[]>;
+  /** Auto-import resolve (TS/JS): ctx.completionEntry + ctx.position → import edits. */
+  tsCompletionDetails(ctx: LspOpCtx): Promise<CompletionDetails | null>;
   tsHover(ctx: LspOpCtx): Promise<HoverResult | null>;
   tsDefinition(ctx: LspOpCtx): Promise<DefinitionResult>;
   tsReferences(ctx: LspOpCtx): Promise<ReferenceResult>;
@@ -57,6 +62,7 @@ export type LspExecutorOp = keyof LspBackendExecutor;
  */
 export const EMPTY_RESULTS: Record<LspExecutorOp, unknown> = {
   tsCompletions: [],
+  tsCompletionDetails: null,
   tsHover: null,
   tsDefinition: { targets: [] },
   tsReferences: { references: [] },

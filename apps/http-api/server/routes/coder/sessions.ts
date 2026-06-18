@@ -12,6 +12,11 @@ import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helpers.js';
 import {
+  createGlobalWorkspaceSession,
+  reuseGlobalWorkspaceSession,
+  teardownGlobalWorkspaceIfOrphan,
+} from './global-workspace.js';
+import {
   coderWorkerEnabled,
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
@@ -183,6 +188,9 @@ interface CreateGlobalSessionBody {
   primary_project_id?: number;
   /** All linked projects (including the primary). At least one required. */
   project_ids: number[];
+  /** Reuse an existing virtual workspace (synthetic union project) instead of
+   *  creating a new one. When set, `project_ids` is ignored. */
+  reuse_project_id?: number;
 }
 
 interface CreateSessionBody {
@@ -203,6 +211,26 @@ export function mountCoderSessionsRoutes(
 ): void {
   const { sessionStore, providerStore } = deps;
   const { activeRuns } = runtime;
+
+  // Abort a session's LIVE run (worker pool or legacy bus) — best-effort. Used
+  // before tearing down a global session's virtual workspace so the runner +
+  // indexer stop touching the junction dir + synthetic project we're about to
+  // remove (otherwise the cwd vanishes mid-turn and a re-index races deleteProject).
+  const abortActiveRun = async (id: number): Promise<void> => {
+    try {
+      if (coderWorkerEnabled()) {
+        await getCoderWorkerPool().abort(id);
+        return;
+      }
+      const bus = activeRuns.get(id);
+      if (bus) {
+        bus.ctrl.abort();
+        bus.runner?.abort();
+      }
+    } catch {
+      /* best-effort — teardown still proceeds */
+    }
+  };
 
   /**
    * Global recent sessions, cross-project. Powers the main app sidebar
@@ -229,54 +257,79 @@ export function mountCoderSessionsRoutes(
   });
 
   /**
-   * Create a global session linking 1+ projects. The primary project is the
-   * native cwd; the rest are exposed to the agent as `mcp__<slug>__*` read tools
-   * and writable secondary roots.
+   * Reusable virtual workspaces (synthetic union projects) — for the "Reaproveitar"
+   * option in the create dialog. Each is refcounted, so all listed here have ≥1
+   * session. `label` is the friendly description (the linked project names).
+   */
+  app.get('/api/coder/global-workspaces', (c) => {
+    const workspaces = deps.db.listSyntheticProjects().map((p) => ({
+      id: p.id,
+      label: p.description || p.name,
+      sessionCount: sessionStore.countSessionsForProject(p.id),
+    }));
+    return c.json(workspaces);
+  });
+
+  /**
+   * Create a global session: the agent works over a VIRTUAL UNION of the linked
+   * projects (a synthetic project whose root is a directory of junctions to each
+   * real project), so all tools — native + indexed search — span every project
+   * with no primary/secondary split and no bridges. The `primary` mark is just
+   * the default repo label (e.g. for git).
    */
   app.post('/api/coder/sessions/global', async (c) => {
     const body = await parseJsonBody<CreateGlobalSessionBody>(c);
-    const projectIds = Array.isArray(body.project_ids)
-      ? Array.from(new Set(body.project_ids.filter((n) => Number.isFinite(n))))
-      : [];
     if (!body.title || !body.provider) {
       return c.json({ error: 'title, provider required' }, 400);
     }
+    // Reuse path: attach a new session to an EXISTING virtual workspace (already
+    // built + indexed) — no re-build, no re-index, instant.
+    if (body.reuse_project_id) {
+      try {
+        const session = reuseGlobalWorkspaceSession(deps, {
+          reuseProjectId: body.reuse_project_id,
+          title: body.title,
+          provider: body.provider,
+          model: body.model ?? '',
+          agent: body.agent ?? null,
+        });
+        return c.json(session, 201);
+      } catch (e) {
+        return c.json({ error: `could not reuse workspace: ${e instanceof Error ? e.message : String(e)}` }, 400);
+      }
+    }
+    const projectIds = Array.isArray(body.project_ids)
+      ? Array.from(new Set(body.project_ids.filter((n) => Number.isFinite(n))))
+      : [];
     if (projectIds.length === 0) {
       return c.json({ error: 'project_ids must contain at least one project' }, 400);
     }
     const primaryId = body.primary_project_id && projectIds.includes(body.primary_project_id)
       ? body.primary_project_id
       : projectIds[0];
-    // Validate every linked project exists before creating anything.
+    // Resolve + validate every linked project before creating anything.
+    const projects: { id: number; name: string; root_path: string; isPrimary: boolean }[] = [];
     for (const pid of projectIds) {
-      if (!deps.db.getProject(pid)) {
-        return c.json({ error: `project ${pid} not found` }, 400);
+      const p = deps.db.getProject(pid);
+      if (!p) return c.json({ error: `project ${pid} not found` }, 400);
+      // A synthetic union is itself a dir of junctions — linking one would nest a
+      // workspace inside a workspace. Reuse is the supported path (reuse_project_id).
+      if (p.is_synthetic) {
+        return c.json({ error: `project ${pid} is a virtual workspace and cannot be linked` }, 400);
       }
+      projects.push({ id: p.id, name: p.name, root_path: p.root_path, isPrimary: pid === primaryId });
     }
-    const session = sessionStore.createGlobalSession({
-      project_id: primaryId,
-      title: body.title,
-      provider: body.provider,
-      model: body.model ?? '',
-      agent: body.agent ?? null,
-      secondaryProjects: projectIds
-        .filter((pid) => pid !== primaryId)
-        .map((pid) => ({ projectId: pid })),
-    });
-    // Best-effort base_commit_sha capture for the PRIMARY project only (the
-    // reviewer subagent diffs the cwd). Mirrors the single-project create route.
+    let session;
     try {
-      const project = (deps as { projectStore?: { getProject?: (id: number) => { workdir?: string | null } | null } }).projectStore?.getProject?.(primaryId);
-      const workdir = project?.workdir;
-      if (workdir) {
-        const { execSync } = await import('node:child_process');
-        const sha = execSync('git rev-parse HEAD', { cwd: workdir, encoding: 'utf8', timeout: 2000 }).trim();
-        if (sha && /^[0-9a-f]{40}$/i.test(sha)) {
-          sessionStore.setSessionBaseCommit(session.id, sha);
-        }
-      }
-    } catch {
-      /* not a git repo or no workdir — fine */
+      session = createGlobalWorkspaceSession(deps, {
+        title: body.title,
+        provider: body.provider,
+        model: body.model ?? '',
+        agent: body.agent ?? null,
+        projects,
+      });
+    } catch (e) {
+      return c.json({ error: `could not create global workspace: ${e instanceof Error ? e.message : String(e)}` }, 500);
     }
     return c.json(session, 201);
   });
@@ -345,7 +398,19 @@ export function mountCoderSessionsRoutes(
     const body = await parseJsonBody<{ ids?: number[] }>(c);
     const ids = Array.isArray(body.ids) ? body.ids.filter((n) => Number.isFinite(n)) : [];
     if (ids.length === 0) return c.json({ error: 'ids required' }, 400);
+    // Capture the unions of the global sessions BEFORE deletion, then refcount-
+    // teardown each AFTER — so a union shared by several deleted sessions is torn
+    // down exactly once, only when it ends up with zero sessions.
+    const unionIds = new Set<number>();
+    for (const id of ids) {
+      const session = sessionStore.getSession(id);
+      if (session?.is_global) {
+        unionIds.add(session.project_id);
+        await abortActiveRun(id); // stop the runner before its union is torn down
+      }
+    }
     const deleted = sessionStore.deleteSessionsBatch(ids);
+    for (const u of unionIds) teardownGlobalWorkspaceIfOrphan(deps, u);
     return c.json({ ok: true, deleted });
   });
 
@@ -760,9 +825,17 @@ export function mountCoderSessionsRoutes(
     return c.json({ id: msg.row.id, role: msg.role, content: msg.content });
   });
 
-  app.delete('/api/coder/sessions/:id', (c) => {
+  app.delete('/api/coder/sessions/:id', async (c) => {
     const id = parseIdParam(c);
+    // Global session: refcount-teardown its synthetic workspace AFTER deletion —
+    // only when no other session still references the union (reuse-safe). Abort
+    // any live run first so the runner/indexer stops touching the union before
+    // we unlink its junctions + delete the synthetic project.
+    const session = sessionStore.getSession(id);
+    const unionId = session?.is_global ? session.project_id : null;
+    if (session?.is_global) await abortActiveRun(id);
     sessionStore.deleteSession(id);
+    if (unionId != null) teardownGlobalWorkspaceIfOrphan(deps, unionId);
     return c.json({ ok: true });
   });
 

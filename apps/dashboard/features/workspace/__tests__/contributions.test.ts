@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { collectContributions } from '../../../state/contribution-registry.js';
-import { buildThemeCommands } from '../registries/commands.js';
 
 describe('collectContributions', () => {
   it('flattens enabled plugins, tags namespace, skips disabled/empty', () => {
@@ -29,18 +28,5 @@ describe('collectContributions', () => {
     expect(result.toolWindows[0].side).toBe('right');
     // Declared icon names ride along (rails map them via pluginWindowIcon).
     expect(result.toolWindows[0].icon).toBe('cloud');
-  });
-});
-
-describe('buildThemeCommands', () => {
-  it('makes one apply-theme palette command per theme', () => {
-    const cmds = buildThemeCommands([
-      { pluginNs: 'a', id: 'dark', label: 'A Dark', appearance: 'dark', tokens: {} },
-    ]);
-    expect(cmds).toHaveLength(1);
-    expect(cmds[0].id).toBe('plugin.a.theme.dark');
-    expect(cmds[0].category).toBe('Themes');
-    expect(cmds[0].label).toBe('Apply theme: A Dark');
-    expect(typeof cmds[0].run).toBe('function');
   });
 });

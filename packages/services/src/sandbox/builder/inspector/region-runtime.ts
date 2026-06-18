@@ -62,6 +62,8 @@ function mcpHasAncestorIn(el, set) {
  * Returns an array of payloads (deduped by loc|selector|tag+text, capped at 12).
  */
 function mcpCollectRegion(region, opts) {
+  // Tolerance (px) for the fully-contained test: absorbs sub-pixel rounding and
+  // anti-aliasing so an element flush with the box edge still counts as inside.
   var tol = 2;
   var rx2 = region.x + region.width, ry2 = region.y + region.height;
   var cand = [];

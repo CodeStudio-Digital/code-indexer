@@ -240,7 +240,37 @@ function openDuplex(channel: string, payload: unknown): { port: MessagePort; rea
   return { port: intermediate.port1, ready };
 }
 
+/**
+ * Subscribe to a main→renderer push channel. Returns an unsubscribe fn so
+ * React effects can clean up. Used by the custom title bar to track
+ * maximize/restore + window focus state.
+ */
+function subscribe(channel: string, cb: (value: boolean) => void): () => void {
+  const handler = (_event: Electron.IpcRendererEvent, value: boolean) => cb(value);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
+  /**
+   * OS platform, surfaced so the renderer can pick window-control chrome:
+   * custom min/max/close on win32/linux, native traffic-lights on darwin.
+   */
+  platform: process.platform,
+  /**
+   * Drive the frameless window's title bar. Handlers live in
+   * apps/electron/src/window-controls-ipc.ts and act on the *sending*
+   * window (so "open in new window" stays isolated).
+   */
+  windowControls: {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    toggleMaximize: () => ipcRenderer.send('window:toggleMaximize'),
+    close: () => ipcRenderer.send('window:close'),
+    quit: () => ipcRenderer.send('app:quit'),
+    isMaximized: () => ipcRenderer.invoke('window:isMaximized') as Promise<boolean>,
+    onMaximizedChanged: (cb: (v: boolean) => void) => subscribe('window:maximized-changed', cb),
+    onFocusChanged: (cb: (v: boolean) => void) => subscribe('window:focus-changed', cb),
+  },
   // Primitives — see the IPC primitives section above. The renderer
   // builds a Proxy on top of these (Proxies don't cross contextBridge).
   invoke: invokeApi,

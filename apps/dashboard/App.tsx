@@ -15,7 +15,7 @@ import {
   ToastHost,
 } from './components/ui/prompt-dialog.js';
 import Admin from './features/admin/index.js';
-import { ProjectDetail, ProjectList, ProjectView } from './features/project/index.js';
+import { ProjectList, ProjectView } from './features/project/index.js';
 import { AgentChat } from './features/chat/index.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
@@ -119,44 +119,29 @@ function HomeRoute() {
   return <ProjectList onSelectProject={(id) => navigate(`/projects/${id}`)} />;
 }
 
-function ProjectRoute() {
+/**
+ * `/projects/:id/analytics` — legacy. The analytics-only screen (ProjectDetail)
+ * was folded into ProjectView, whose rail already exposes every analytics tab
+ * (incl. the migrated "Memória" panel). Kept as a redirect so old bookmarks and
+ * deep links resolve to the unified project surface instead of 404-ing.
+ */
+function AnalyticsRedirect() {
   const { id } = useParams<{ id: string }>();
-  const [searchParams] = useSearchParams();
-  const projectId = Number(id);
-  const project = useApi<{ id: number; name: string }>(
-    Number.isFinite(projectId) ? `/projects/${projectId}` : '',
-  );
-
-  if (!Number.isFinite(projectId)) return <Navigate to="/" replace />;
-  if (!project.data) {
-    return <div className="px-4 py-6 text-sm text-muted-foreground">Loading project…</div>;
-  }
-
-  const sessionIdRaw = searchParams.get('session');
-  const initialSessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined;
-
-  return (
-    <ProjectDetail
-      projectId={projectId}
-      projectName={project.data.name}
-      initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
-    />
-  );
+  return <Navigate to={`/projects/${id}`} replace />;
 }
 
 /**
  * `/projects/:id` — the unified project IDE surface (ProjectView).
  *
  * Replaces the standalone JetBrains-style Workspace AND the old
- * analytics-only ProjectDetail tab list. Renders inside the AppShell
- * chrome (the topbar nav stays visible) so users can jump between
- * Projetos / Agentes / Admin / etc. without leaving the project they
- * just opened.
+ * analytics-only ProjectDetail tab list (now fully folded in — the rail
+ * exposes every analytics tab plus the migrated "Memória" panel). Renders
+ * inside the AppShell chrome (the topbar nav stays visible) so users can
+ * jump between Projetos / Agentes / Admin / etc. without leaving the
+ * project they just opened.
  *
- * The legacy `/projects/:id/analytics` route still works for the
- * chart-heavy slice — ProjectView exposes a button on its topbar to
- * open it. We may consolidate further once analytics graduates into
- * its own tab in the rail.
+ * The legacy `/projects/:id/analytics` route is now just a redirect here
+ * (see AnalyticsRedirect) so old bookmarks/deep links still resolve.
  */
 function ProjectViewRoute() {
   const { id } = useParams<{ id: string }>();
@@ -226,7 +211,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <HomeRoute /> },
       { path: 'projects/:id', element: <ProjectViewRoute /> },
-      { path: 'projects/:id/analytics', element: <ProjectRoute /> },
+      { path: 'projects/:id/analytics', element: <AnalyticsRedirect /> },
       { path: 'agents', element: <AgentsTab /> },
       { path: 'global', element: <GlobalSessionRoute /> },
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },

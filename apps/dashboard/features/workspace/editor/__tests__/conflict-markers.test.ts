@@ -4,7 +4,12 @@
  * needs a live Monaco editor and is covered by manual E2E.)
  */
 import { describe, expect, it } from 'vitest';
-import { parseConflictRegions, hasConflictMarkers } from '../conflict-markers.js';
+import {
+  parseConflictRegions,
+  hasConflictMarkers,
+  computeResolutionText,
+  type ConflictRegion,
+} from '../conflict-markers.js';
 
 const TWO_WAY = [
   'before',
@@ -59,5 +64,27 @@ describe('parseConflictRegions', () => {
 
   it('ignores an unterminated marker (no separator/end)', () => {
     expect(parseConflictRegions('<<<<<<< HEAD\norphan\nno end here')).toHaveLength(0);
+  });
+});
+
+describe('computeResolutionText', () => {
+  const mk = (currentText: string, incomingText: string): ConflictRegion => ({
+    startLine: 1, sepLine: 3, endLine: 5, currentText, incomingText,
+  });
+
+  it('returns the chosen side verbatim', () => {
+    expect(computeResolutionText(mk('ours', 'theirs'), 'current')).toBe('ours');
+    expect(computeResolutionText(mk('ours', 'theirs'), 'incoming')).toBe('theirs');
+    expect(computeResolutionText(mk('ours', 'theirs'), 'both')).toBe('ours\ntheirs');
+  });
+
+  it('does not inject a blank line when one side is empty in "both"', () => {
+    expect(computeResolutionText(mk('', 'theirs'), 'both')).toBe('theirs');
+    expect(computeResolutionText(mk('ours', ''), 'both')).toBe('ours');
+    expect(computeResolutionText(mk('', ''), 'both')).toBe('');
+  });
+
+  it('an empty chosen side yields empty text (caller deletes the block)', () => {
+    expect(computeResolutionText(mk('', 'theirs'), 'current')).toBe('');
   });
 });

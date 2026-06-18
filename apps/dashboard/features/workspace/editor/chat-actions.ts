@@ -24,7 +24,7 @@ function activeFile(): { projectId: number; path: string } | null {
   const ws = useWorkspaceStore.getState();
   const path = ws.activeFilePath;
   if (!path) return null;
-  const open = ws.openFiles.find((f) => f.path === path);
+  const open = ws.openFiles.find((f) => f.path === path && f.projectId === ws.activeProjectId);
   if (!open || open.kind === 'git-log' || open.kind === 'git-stash' || open.kind === 'diff') return null;
   return { projectId: open.projectId, path };
 }

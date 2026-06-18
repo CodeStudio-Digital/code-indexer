@@ -45,12 +45,15 @@ export function mountCoderDriveRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  // Pin / unpin a note.
+  // Pin / unpin a note. Scoped to the session in the path: a stale/foreign
+  // memoryId can't pin another session's note (returns false → 404).
   app.patch('/api/coder/sessions/:id/drive/memory/:memoryId', async (c) => {
+    const sessionId = parseIdParam(c);
     const memoryId = parseIdParam(c, 'memoryId');
     const body = await parseJsonBody<{ pinned: boolean }>(c);
     try {
-      deps.sessionStore.setSessionMemoryPinned(memoryId, !!body.pinned);
+      const ok = deps.sessionStore.setSessionMemoryPinned(sessionId, memoryId, !!body.pinned);
+      if (!ok) return notFound(c, `Memory ${memoryId} not found`);
       return c.json({ ok: true });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
@@ -58,9 +61,11 @@ export function mountCoderDriveRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.delete('/api/coder/sessions/:id/drive/memory/:memoryId', (c) => {
+    const sessionId = parseIdParam(c);
     const memoryId = parseIdParam(c, 'memoryId');
     try {
-      const deleted = deps.sessionStore.deleteSessionMemory(memoryId);
+      // Scoped delete — a foreign memoryId never deletes another session's note.
+      const deleted = deps.sessionStore.deleteSessionMemory(sessionId, memoryId);
       if (!deleted) return notFound(c, `Memory ${memoryId} not found`);
       return c.json({ ok: true });
     } catch (e) {

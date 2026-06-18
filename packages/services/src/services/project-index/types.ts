@@ -14,6 +14,23 @@ export type ProjectIndexPhase =
   | 'too_large'
   | 'error';
 
+/**
+ * The single in-flight index pass for a project. Passes are serialized by the
+ * per-project mutex, so there is at most ONE at a time — `kind` lets the UI
+ * label/scope it ("Indexing symbols 40/120" vs "Embedding 12/80") and gives
+ * each its own monotonic bar. Lives in the main-process status store, so it
+ * survives a renderer remount (the fix for "leave the screen, lose progress").
+ */
+export interface ActiveIndexRun {
+  kind: 'structural' | 'semantic' | 'embeddings';
+  current: number;
+  total: number;
+  currentFile?: string;
+  /** epoch ms — for an elapsed-time readout when the UI re-hydrates. */
+  startedAt: number;
+  costUsd?: number;
+}
+
 export interface ProjectIndexStatus {
   projectId: number;
   phase: ProjectIndexPhase;
@@ -24,6 +41,9 @@ export interface ProjectIndexStatus {
   symbolCount: number;
   /** Files whose LLM/embedding layer lags current content (dumb→smart gap). */
   semanticStaleCount: number;
+  /** The live pass (structural/semantic/embeddings) — undefined when idle. */
+  activeRun?: ActiveIndexRun;
+  /** @deprecated Use {@link activeRun}. Kept in sync for the StatusBar chip. */
   progress?: { current: number; total: number };
   lastStructuralAt: string | null;
   lastSemanticAt: string | null;

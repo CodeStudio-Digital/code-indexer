@@ -582,6 +582,38 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       }
     },
 
+    diagram_changed: (data) => {
+      // Agent created/updated a .drawio diagram. Bridge to a DOM event so
+      // AgentChat auto-opens the Diagram panel and the embedded editor
+      // reloads the new XML (the .drawio file is the durable source).
+      if (typeof window === 'undefined') return;
+      const d = data as { path?: string; xml?: string };
+      try {
+        window.dispatchEvent(
+          new CustomEvent('coder:diagram_changed', {
+            detail: { sessionId: sid, path: d.path, xml: d.xml },
+          }),
+        );
+      } catch {
+        /* defensive */
+      }
+    },
+
+    diagram_export_request: (data) => {
+      // diagram_export asked the live editor to render + persist an image.
+      if (typeof window === 'undefined') return;
+      const d = data as { path?: string; format?: string };
+      try {
+        window.dispatchEvent(
+          new CustomEvent('coder:diagram_export', {
+            detail: { sessionId: sid, path: d.path, format: d.format },
+          }),
+        );
+      } catch {
+        /* defensive */
+      }
+    },
+
     tool_loop_intervention: (data) => {
       // Server-emitted when any of the four loop-detection guards fired.
       // Prepend so the most recent intervention shows first; cap at 5 to

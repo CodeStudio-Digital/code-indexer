@@ -18,6 +18,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { usePolling } from '../../hooks/usePolling.js';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -85,6 +86,12 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [streamState, setStreamState] = useState<StreamState>('connecting');
   const closeStreamRef = useRef<(() => void) | null>(null);
+  // Mirror streamState into a ref so loadStatus can read it without listing it
+  // as a dep (which would restart the poll on every connect/reconnect).
+  const streamStateRef = useRef<StreamState>('connecting');
+  useEffect(() => {
+    streamStateRef.current = streamState;
+  }, [streamState]);
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
@@ -98,9 +105,11 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
           : s;
       setStatus(filtered);
       // Side-load incidents. Prefer the bound session; otherwise fall back
-      // to the first active session (global view).
+      // to the first active session (global view). Skip while the SSE stream
+      // is live — it already pushes incidents into `liveBuffer`, so polling
+      // them here would be a duplicate request.
       const targetSession = sessionId ?? s.sessions[0]?.sessionId;
-      if (targetSession != null) {
+      if (targetSession != null && streamStateRef.current !== 'live') {
         try {
           const inc = await fetchSupervisorIncidents(targetSession, 30);
           setIncidents(inc.incidents);
@@ -115,12 +124,13 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
     }
   }, [sessionId]);
 
-  // Poll status every POLL_MS.
+  // Immediate load on mount + whenever the bound session changes.
   useEffect(() => {
     void loadStatus();
-    const id = setInterval(() => void loadStatus(), POLL_MS);
-    return () => clearInterval(id);
   }, [loadStatus]);
+  // Recurring poll (status is in-memory per worker, not pushed by the SSE
+  // stream). Visibility-aware: pauses while the window is hidden.
+  usePolling(() => void loadStatus(), POLL_MS, { immediate: false });
 
   // Live incidents — uses `openSupervisorStream` (fetch+ReadableStream
   // SSE parser) so it works in both browser dev AND Electron's `mcp://`

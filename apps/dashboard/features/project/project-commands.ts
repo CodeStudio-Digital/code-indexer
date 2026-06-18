@@ -117,7 +117,7 @@ export function registerProjectCommands(deps: ProjectCommandDeps): () => void {
       when: isDesktop,
       run: () => {
         const path = activeFile();
-        if (path) useWorkspaceStore.getState().closeFile(path);
+        if (path) useWorkspaceStore.getState().closeFile(deps.projectId, path);
       },
     },
     // ─── View ───────────────────────────────────────────────────────

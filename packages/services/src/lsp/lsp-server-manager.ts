@@ -13,6 +13,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { lspServersBaseDir } from '@mcp/shared/utils/data-paths.js';
+import { relToAbsCanonical } from '@mcp/shared/utils/fs-canonical.js';
 import { LspServerHandle } from './lsp-server-handle.js';
 import type { LspDiagnostic } from './lsp-protocol.js';
 import { entryFor, installDirFor, isInstalled, serverForLanguage, type LspServerDef } from './server-registry.js';
@@ -29,6 +30,10 @@ export interface LspManagerDeps {
   onDiagnostics: (projectId: number, absPath: string, serverId: string, diagnostics: LspDiagnostic[]) => void;
   /** Fired on every server lifecycle transition — drives the live chip. */
   onStateChange?: (projectId: number, serverId: string, state: LspInstanceState, reason?: string) => void;
+  /** Versão da linguagem do projeto p/ este server (initializationOptions). undefined = default. */
+  resolveLanguageLevel?: (projectId: number, serverId: string) => string | undefined;
+  /** Config dinâmica per-projeto para `workspace/configuration` (section pedido pelo server). */
+  resolveLspConfig?: (projectId: number, serverId: string, section: string | null) => unknown;
   log?: (msg: string) => void;
 }
 
@@ -121,11 +126,14 @@ export class LspServerManager {
     }
   }
 
-  listInstances(): Array<{ projectId: number; serverId: string; state: string }> {
+  listInstances(): Array<{ projectId: number; serverId: string; state: string; lastExitReason?: string; stderrTail?: string }> {
     return [...this.entries.values()].map((e) => ({
       projectId: e.projectId,
       serverId: e.def.id,
       state: e.handle?.state ?? (e.spawning ? 'starting' : this.inFailedWindow(e) ? 'failed' : 'idle'),
+      // LSP Doctor (Fase 0) — motivo da última falha + cauda do stderr p/ diagnóstico de P2.
+      lastExitReason: e.lastExitReason,
+      stderrTail: e.handle?.stderrTail?.trim().slice(-400) || undefined,
     }));
   }
 
@@ -190,6 +198,7 @@ export class LspServerManager {
 
     let handle: LspServerHandle | null = null;
     try {
+      const languageLevel = this.deps.resolveLanguageLevel?.(projectId, def.id);
       handle = new LspServerHandle(
         {
           command: node.command,
@@ -197,7 +206,8 @@ export class LspServerManager {
           cwd: root,
           rootPath: root,
           env: node.env,
-          initializationOptions: def.initializationOptions?.({ cacheDir: join(baseDir, '.cache') }),
+          initializationOptions: def.initializationOptions?.({ cacheDir: join(baseDir, '.cache'), languageLevel }),
+          resolveConfig: (section) => this.deps.resolveLspConfig?.(projectId, def.id, section) ?? null,
         },
         {
           onDiagnostics: (absPath, diagnostics) => this.deps.onDiagnostics(projectId, absPath, def.id, diagnostics),
@@ -222,9 +232,10 @@ export class LspServerManager {
       entry.handle = handle;
       entry.spawning = null;
       this.touch(entry);
-      // Replay every open buffer of this server's languages.
+      // Replay every open buffer of this server's languages — chave de path canônica
+      // (W3) idêntica à da completion, senão o ensureOpen re-abre e o server pode divergir.
       for (const doc of this.deps.docsForReplay(projectId, def.languages)) {
-        handle.didOpen(`${root.replace(/\\/g, '/')}/${doc.file}`, doc.languageId, doc.version, doc.content);
+        handle.didOpen(relToAbsCanonical(root, doc.file), doc.languageId, doc.version, doc.content);
       }
       this.deps.log?.(`[lsp] ${def.id} ready for project ${projectId}`);
       this.emit(entry, 'ready');

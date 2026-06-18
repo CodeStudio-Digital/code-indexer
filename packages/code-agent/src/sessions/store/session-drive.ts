@@ -5,8 +5,10 @@
  * Three concerns, all keyed off a coder session:
  *   - memory:        per-session notes the agent writes (`remember` tool),
  *                    re-injected after compaction + shown in the Drive panel.
- *   - investigations: project-scoped digests of sub-agent explorations,
- *                    auto-captured on spawn completion + keyword-recalled.
+ *   - investigations: digests of sub-agent explorations, auto-captured on
+ *                    spawn completion. The agent RECALLS them project-wide
+ *                    (cross-session), but the Drive panel LISTS only the open
+ *                    session's (see `listInvestigations` vs `recall*`).
  *   - file map:      derived (no table) from `coder_tool_calls` — which files
  *                    the session read vs changed.
  *
@@ -91,13 +93,20 @@ export function listMemory(db: DB, sessionId: number, opts: { kind?: string } = 
   ).all(sessionId) as SessionMemoryRow[];
 }
 
-export function setMemoryPinned(db: DB, id: number, pinned: boolean): void {
-  db.prepare(`UPDATE coder_session_memory SET pinned = ?, updated_at = datetime('now') WHERE id = ?`)
-    .run(pinned ? 1 : 0, id);
+/**
+ * Pin/unpin a note. Scoped by `session_id` so a stale/foreign memory id (the
+ * Drive panel route carries the session in its path) can never flip a note that
+ * belongs to another session. Returns false when no row matched (wrong id OR
+ * wrong session) → the route answers 404.
+ */
+export function setMemoryPinned(db: DB, sessionId: number, id: number, pinned: boolean): boolean {
+  return db.prepare(`UPDATE coder_session_memory SET pinned = ?, updated_at = datetime('now') WHERE id = ? AND session_id = ?`)
+    .run(pinned ? 1 : 0, id, sessionId).changes > 0;
 }
 
-export function deleteMemory(db: DB, id: number): boolean {
-  return db.prepare('DELETE FROM coder_session_memory WHERE id = ?').run(id).changes > 0;
+/** Delete a note, scoped by `session_id` (see {@link setMemoryPinned}). */
+export function deleteMemory(db: DB, sessionId: number, id: number): boolean {
+  return db.prepare('DELETE FROM coder_session_memory WHERE id = ? AND session_id = ?').run(id, sessionId).changes > 0;
 }
 
 /**
@@ -252,11 +261,16 @@ export function recallInvestigationsByVector(db: DB, sessionId: number, queryVec
   return scored.slice(0, limit).map((s) => s.row);
 }
 
+/**
+ * Investigations captured in THIS session — the slice the Drive panel shows.
+ * Strictly `session_id`-scoped, UNLIKE the agent-facing recall (project-wide
+ * by design): the panel mirrors the open session, so it must not surface
+ * sibling sessions' explorations from the same project.
+ */
 export function listInvestigations(db: DB, sessionId: number, limit = 50): InvestigationRow[] {
-  const { where, param } = scopeClause(db, sessionId);
   return db.prepare(
-    `SELECT ${INV_COLS} FROM coder_investigations WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ?`,
-  ).all(param, limit) as InvestigationRow[];
+    `SELECT ${INV_COLS} FROM coder_investigations WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).all(sessionId, limit) as InvestigationRow[];
 }
 
 export function countInvestigations(db: DB, sessionId: number): number {

@@ -3,7 +3,7 @@
  * only if the account exists). Reset consumes the one-time token, sets the new
  * password, and revokes ALL sessions + refresh tokens (forces re-login).
  */
-import { type Result, ok, err, type Clock, type IdGen } from '@cloudstudio/cloud-kernel';
+import { type Result, ok, err, type Clock, type IdGen, type AccountId } from '@cloudstudio/cloud-kernel';
 import { Email } from '../domain/email.js';
 import { Password } from '../domain/password.js';
 import { IdentityErrors, type IdentityError } from '../domain/errors.js';
@@ -58,7 +58,7 @@ export class ResetPasswordUseCase {
     private readonly refresh: RefreshTokenRepo,
     private readonly clock: Clock,
   ) {}
-  async execute(input: { token: string; newPasswordRaw: string }): Promise<Result<{ ok: true }, IdentityError>> {
+  async execute(input: { token: string; newPasswordRaw: string }): Promise<Result<{ ok: true; accountId: AccountId }, IdentityError>> {
     const passwordRes = Password.create(input.newPasswordRaw);
     if (!passwordRes.ok) return passwordRes;
     const hash = await this.opaque.hashOf(input.token);
@@ -74,6 +74,6 @@ export class ResetPasswordUseCase {
     // A reset invalidates every existing session everywhere.
     await this.sessions.revokeAllForAccount(row.accountId, now);
     await this.refresh.revokeByAccount(row.accountId, now);
-    return ok({ ok: true });
+    return ok({ ok: true, accountId: row.accountId });
   }
 }

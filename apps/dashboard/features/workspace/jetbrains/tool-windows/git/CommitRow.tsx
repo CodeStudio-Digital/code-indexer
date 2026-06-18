@@ -34,6 +34,8 @@ export interface CommitRowProps {
   /** When set, the row is selectable and fires this on click. */
   onSelect?: () => void;
   selected?: boolean;
+  /** A merge/cherry-pick/etc. is mid-flight — disable history-rewriting actions. */
+  disabled?: boolean;
 }
 
 export function CommitRow({
@@ -43,35 +45,41 @@ export function CommitRow({
   onReset,
   onSelect,
   selected,
+  disabled,
 }: CommitRowProps) {
   const items: ContextMenuItem[] = [
     {
       id: 'cherry-pick',
       label: 'Cherry-pick onto current branch',
       icon: Replace,
+      disabled,
       onSelect: onCherryPick,
     },
     {
       id: 'revert',
       label: 'Revert (new commit that undoes this)',
       icon: RotateCcw,
+      disabled,
       onSelect: onRevert,
     },
     {
       id: 'reset-soft',
       separatorBefore: true,
       label: 'Reset HEAD → here (soft)',
+      disabled,
       onSelect: () => onReset('soft'),
     },
     {
       id: 'reset-mixed',
       label: 'Reset HEAD → here (mixed)',
+      disabled,
       onSelect: () => onReset('mixed'),
     },
     {
       id: 'reset-hard',
       label: 'Reset HEAD → here (hard, destructive)',
       destructive: true,
+      disabled,
       onSelect: () => onReset('hard'),
     },
     {

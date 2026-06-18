@@ -8,6 +8,13 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { CompletionItem, DocChange, HoverInfo, LspLocation } from '@mcp/api-bus';
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
+// Canonicalizador ÚNICO (W3): didOpen e completion passam a usar a MESMA chave de path
+// (forward-slash + drive lowercase), senão o intelephense não reconhece o arquivo no Windows.
+import {
+  canonicalAbs as normAbs,
+  relToAbsCanonical as relToAbs,
+  absToRelCanonical as absToRel,
+} from '@mcp/shared/utils/fs-canonical.js';
 import {
   getLspServerManager,
   type LspServerManager,
@@ -24,6 +31,9 @@ import {
   type LspRange0,
 } from '@mcp/services/lsp/lsp-protocol.js';
 import { serverForLanguage, serverById } from '@mcp/services/lsp/server-registry.js';
+import { mapLspConfigSection, languageLevelForServer } from '@mcp/services/lsp/lsp-config-map.js';
+import { parseLanguageLevels } from '@mcp/shared/utils/language-levels.js';
+import { detectLanguageLevel } from './language-level-detect.js';
 import { resolveProjectNodeBinDir } from '../runtime/node-manager.js';
 import { docsForProject, getDoc, onDocEvent } from './document-store.js';
 import { publishDiagnostics } from './diagnostics-hub.js';
@@ -31,19 +41,8 @@ import { publishServerStatus } from './server-status-hub.js';
 
 let wired = false;
 
-function normAbs(p: string): string {
-  return p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_m, d: string) => `${d.toLowerCase()}:`);
-}
-
-function absToRel(root: string, absPath: string): string | null {
-  const a = normAbs(absPath);
-  const r = normAbs(root).replace(/\/$/, '');
-  return a.toLowerCase().startsWith(`${r.toLowerCase()}/`) ? a.slice(r.length + 1) : null;
-}
-
-function relToAbs(root: string, rel: string): string {
-  return `${root.replace(/\\/g, '/').replace(/\/$/, '')}/${rel.replace(/\\/g, '/')}`;
-}
+// normAbs / absToRel / relToAbs vêm do canonicalizador único (@mcp/shared/utils/fs-canonical),
+// importados com alias acima — a chave de path agora é idêntica em didOpen e completion.
 
 function rangeFrom(r?: LspRange0): { start: { line: number; column: number }; end: { line: number; column: number } } {
   return r
@@ -53,11 +52,30 @@ function rangeFrom(r?: LspRange0): { start: { line: number; column: number }; en
 
 /** Singleton wiring — first call hooks document events + diagnostics. */
 export function ensureLspManager(db: CodeIndexDB): LspServerManager {
+  // Versão da linguagem por projeto (migration 157) → config do server. Rollback: MCP_LSP_LANGUAGE_LEVEL=0.
+  const langLevelEnabled = process.env.MCP_LSP_LANGUAGE_LEVEL !== '0';
+  // Versão EFETIVA: escolha explícita do usuário OU auto-detect do manifesto (composer.json/pyproject.toml).
+  const levelsFor = (projectId: number) => {
+    if (!langLevelEnabled) return {};
+    const proj = db.getProject(projectId);
+    const merged = parseLanguageLevels(proj?.language_levels ?? null);
+    const root = proj?.root_path;
+    if (!root) return merged;
+    for (const lang of ['php', 'python'] as const) {
+      if (!merged[lang]) {
+        const detected = detectLanguageLevel(root, lang);
+        if (detected) merged[lang] = detected;
+      }
+    }
+    return merged;
+  };
   const manager = getLspServerManager({
     resolveNodeBin: (projectId) => {
       try { return resolveProjectNodeBinDir(db, projectId, mcpDataDir()); } catch { return null; }
     },
     resolveRoot: (projectId) => db.getProject(projectId)?.root_path ?? null,
+    resolveLanguageLevel: (projectId, serverId) => languageLevelForServer(serverId, levelsFor(projectId)),
+    resolveLspConfig: (projectId, serverId, section) => mapLspConfigSection(serverId, section, levelsFor(projectId)),
     docsForReplay: (projectId, languages) =>
       docsForProject(projectId)
         .filter(({ doc }) => languages.includes(doc.languageId))
@@ -107,9 +125,11 @@ export function ensureLspManager(db: CodeIndexDB): LspServerManager {
         // covers THIS doc too (the store registered it before emitting).
         void manager.acquire(projectId, doc.languageId).then((acq) => {
           if (acq && acq.handle.state === 'ready') {
-            // Replay already sent didOpen for store docs on a FRESH spawn;
-            // for an already-running server this open must be forwarded.
-            acq.handle.didOpen(abs, doc.languageId, doc.version, doc.content);
+            // ensureOpen (not didOpen): on a FRESH spawn the replay already
+            // sent didOpen for this doc — ensureOpen is a no-op then (URI já no
+            // Set `opened`); for an already-running server it forwards the open.
+            // Evita um textDocument/didOpen duplicado no cold-spawn.
+            acq.handle.ensureOpen(abs, doc.languageId, doc.version, doc.content);
           }
         });
         return;
@@ -183,13 +203,24 @@ export async function serverCompletion(
 ): Promise<CompletionItem[] | null> {
   const acq = await ensureLspManager(db).acquire(projectId, languageId);
   if (!acq) return null;
+  const abs = relToAbs(root, file);
+  // W3: garante o didOpen (buffer vivo) ANTES da completion — senão o server responde
+  // [] para um doc que não conhece (race didOpen→completion / path Windows divergente).
+  const liveDoc = getDoc(projectId, file);
+  if (liveDoc) acq.handle.ensureOpen(abs, liveDoc.languageId, liveDoc.version, liveDoc.content);
   try {
-    const raw = await acq.handle.completion(relToAbs(root, file), position, context);
+    const raw = await acq.handle.completion(abs, position, context);
     const items: LspCompletionItem[] = Array.isArray(raw)
       ? raw as LspCompletionItem[]
       : ((raw as { items?: LspCompletionItem[] })?.items ?? []);
     return items.slice(0, 120).map(mapServerCompletionItem);
-  } catch {
+  } catch (err) {
+    // Fase 0 — superfície o erro de protocolo do server (gated por MCP_LSP_DEBUG=1)
+    // com a cauda do stderr, p/ o doctor diagnosticar P2.
+    if (process.env.MCP_LSP_DEBUG === '1') {
+      const tail = acq.handle.stderrTail?.slice(-200) ?? '';
+      console.error(`[lsp.serverCompletion] proj=${projectId} ${languageId} threw: ${err instanceof Error ? err.message : String(err)}${tail ? ` — stderr: ${tail}` : ''}`);
+    }
     return null;
   }
 }

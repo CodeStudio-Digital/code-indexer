@@ -6,6 +6,7 @@
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { initOptionsForServer } from './lsp-config-map.js';
 
 export interface LspServerDef {
   id: string;
@@ -18,7 +19,8 @@ export interface LspServerDef {
   args: string[];
   /** Honest download-size hint for the consent CTA. */
   sizeLabel: string;
-  initializationOptions?: (ctx: { cacheDir: string }) => unknown;
+  /** `languageLevel` = versão da linguagem escolhida p/ o projeto (undefined = default). */
+  initializationOptions?: (ctx: { cacheDir: string; languageLevel?: string }) => unknown;
 }
 
 export const LSP_SERVER_REGISTRY: readonly LspServerDef[] = [
@@ -30,7 +32,11 @@ export const LSP_SERVER_REGISTRY: readonly LspServerDef[] = [
     entryRelPath: 'node_modules/intelephense/lib/intelephense.js',
     args: ['--stdio'],
     sizeLabel: '~25 MB',
-    initializationOptions: ({ cacheDir }) => ({ storagePath: join(cacheDir, 'intelephense') }),
+    initializationOptions: ({ cacheDir, languageLevel }) => ({
+      storagePath: join(cacheDir, 'intelephense'),
+      // Versão da linguagem (env.phpVersion) — via redundante à workspace/configuration.
+      ...(initOptionsForServer('intelephense', languageLevel) ?? {}),
+    }),
   },
   {
     id: 'pyright',

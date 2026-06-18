@@ -260,8 +260,16 @@ export interface LspApi {
   /** Catalog + installed flags for the admin panel / editor CTA. */
   listServers(input: void, ctx: ApiContext): Promise<LspServerInfo[]>;
 
-  /** Live server instances (per project) for the admin panel. */
-  instances(input: void, ctx: ApiContext): Promise<Array<{ projectId: number; serverId: string; state: string }>>;
+  /** Live server instances (per project) for the admin panel + LSP Doctor. */
+  instances(input: void, ctx: ApiContext): Promise<Array<{
+    projectId: number;
+    serverId: string;
+    state: string;
+    /** Last failure reason (stderr tail / timeout) when the server crashed. */
+    lastExitReason?: string;
+    /** Tail of the server's stderr ring — surfaced in the Doctor for P2 diagnosis. */
+    stderrTail?: string;
+  }>>;
 
   /** Consent-gated npm install with streamed progress (log tail). */
   installServerStream(input: { serverId: string }, ctx: ApiContext): AsyncStream<LspInstallFrame>;
@@ -269,6 +277,25 @@ export interface LspApi {
   removeServer(input: { serverId: string }, ctx: ApiContext): Promise<{ ok: boolean }>;
 
   restartServer(input: { projectId: number; serverId: string }, ctx: ApiContext): Promise<{ ok: true }>;
+
+  /**
+   * Define a versão da linguagem (language level) do projeto e reinicia o server
+   * que a serve (intelephense/pyright) para reler a config. Entregue ao server via
+   * `workspace/configuration` + `initializationOptions`.
+   */
+  setLanguageLevel(
+    input: { projectId: number; languageId: 'php' | 'python'; level: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+
+  /**
+   * Versão EFETIVA por linguagem para o chip: escolha explícita, senão auto-detect do
+   * manifesto (composer.json/pyproject.toml), senão o default. `source` distingue a origem.
+   */
+  languageLevels(
+    input: { projectId: number },
+    ctx: ApiContext,
+  ): Promise<Record<'php' | 'python', { level: string; source: 'explicit' | 'detected' | 'default' }>>;
 
   rename(
     input: { projectId: number; file: string; position: Position; newName: string },

@@ -64,7 +64,11 @@ export class CodeIndexDB {
   getProjectByName(name: string): Project | undefined { return projects.getByName(this.db, name); }
   getProjectByPath(rootPath: string): Project | undefined { return projects.getByPath(this.db, rootPath); }
   listProjects(): Project[] { return projects.list(this.db); }
+  /** Synthetic global-session union projects (hidden from listProjects). */
+  listSyntheticProjects(): Project[] { return projects.listSynthetic(this.db); }
   updateProject(id: number, updates: Parameters<typeof projects.update>[2]): void { projects.update(this.db, id, updates); }
+  /** Mark a project as a synthetic global-session union (hidden from listProjects). */
+  setProjectSynthetic(id: number, synthetic: boolean): void { projects.setSynthetic(this.db, id, synthetic); }
   deleteProject(id: number): void { projects.del(this.db, id); }
   /** Wipe a project's data (index/sessions/snapshots/runs/costs) but KEEP its row. */
   clearProjectData(id: number): void { projects.clearData(this.db, id); }
