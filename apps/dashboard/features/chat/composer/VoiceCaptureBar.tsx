@@ -135,7 +135,7 @@ export function VoiceCaptureBar({ onStop }: VoiceCaptureBarProps) {
 
   return (
     <div className="absolute inset-0 z-10 flex items-center gap-3 rounded-[inherit] border border-rose-500/30 bg-background/90 px-3 backdrop-blur-sm">
-      <div ref={logoWrapRef} className="shrink-0 will-change-[filter,transform]">
+      <div ref={logoWrapRef} className="shrink-0" style={{ willChange: 'filter, transform' }}>
         <LogoMark className="h-12 w-12" />
       </div>
       <canvas ref={canvasRef} className="h-9 flex-1" />
