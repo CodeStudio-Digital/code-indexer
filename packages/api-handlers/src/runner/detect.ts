@@ -26,6 +26,22 @@ function readJson(path: string): Record<string, unknown> | null {
   }
 }
 
+function readText(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** Per-project package-manager overrides (from the project settings). */
+export interface DetectOptions {
+  /** Force the JS manager (else lockfile auto-detect). */
+  nodeManager?: RunnerManager;
+  /** Force the Python manager (else manifest auto-detect). */
+  pythonManager?: RunnerManager;
+}
+
 /** Pick the JS package manager from the lockfile present at the root. */
 function detectJsManager(root: string): RunnerManager {
   if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
@@ -34,10 +50,10 @@ function detectJsManager(root: string): RunnerManager {
   return 'npm';
 }
 
-function detectJs(root: string): DetectedGroup | null {
+function detectJs(root: string, override?: RunnerManager): DetectedGroup | null {
   const pkg = readJson(join(root, 'package.json'));
   if (!pkg) return null;
-  const manager = detectJsManager(root);
+  const manager = override ?? detectJsManager(root);
   const scripts = (pkg.scripts ?? {}) as Record<string, string>;
   const runners: DetectedRunner[] = Object.keys(scripts).map((name) => ({
     id: `${manager}:${name}`,
@@ -71,6 +87,38 @@ function detectPhp(root: string): DetectedGroup | null {
     installNeeded: !existsSync(join(root, 'vendor')),
     installCommand: 'composer install',
   };
+}
+
+/**
+ * Detect a Python project + its package manager. Auto: Poetry when a
+ * `poetry.lock` or a `[tool.poetry]` pyproject is present, else pip. The
+ * per-project override (pip/poetry) wins. `installNeeded` is best-effort —
+ * a missing local virtualenv (.venv/venv/env) — since Poetry's env can live
+ * elsewhere; the install button is idempotent. No script scan in v1.
+ */
+function detectPython(root: string, override?: RunnerManager): DetectedGroup | null {
+  const hasRequirements = existsSync(join(root, 'requirements.txt'));
+  const hasPyproject = existsSync(join(root, 'pyproject.toml'));
+  const hasPoetryLock = existsSync(join(root, 'poetry.lock'));
+  if (!hasRequirements && !hasPyproject && !hasPoetryLock) return null;
+
+  let auto: RunnerManager = 'pip';
+  if (hasPoetryLock) auto = 'poetry';
+  else if (hasPyproject && /\[tool\.poetry\]/.test(readText(join(root, 'pyproject.toml')) ?? '')) auto = 'poetry';
+  const manager = override ?? auto;
+
+  const source = hasPyproject ? 'pyproject.toml' : 'requirements.txt';
+  // pip targets requirements.txt only when it exists; otherwise install the
+  // pyproject project itself (PEP 621 / setuptools / hatch / pdm / flit) —
+  // `pip install -r requirements.txt` would fail with "Could not open file".
+  const installCommand =
+    manager === 'poetry'
+      ? 'poetry install'
+      : hasRequirements
+        ? 'pip install -r requirements.txt'
+        : 'pip install .';
+  const venvPresent = ['.venv', 'venv', 'env'].some((d) => existsSync(join(root, d)));
+  return { manager, source, runners: [], installNeeded: !venvPresent, installCommand };
 }
 
 const MAVEN_GOALS = ['compile', 'test', 'package', 'spring-boot:run'];
@@ -152,12 +200,14 @@ function detectDotnet(root: string): DetectedGroup | null {
 }
 
 /** Detect all runnable commands for a project root. */
-export function detectRunners(root: string): DetectedRunners {
+export function detectRunners(root: string, opts?: DetectOptions): DetectedRunners {
   const groups: DetectedGroup[] = [];
-  const js = detectJs(root);
+  const js = detectJs(root, opts?.nodeManager);
   if (js) groups.push(js);
   const php = detectPhp(root);
   if (php) groups.push(php);
+  const py = detectPython(root, opts?.pythonManager);
+  if (py) groups.push(py);
   groups.push(...detectJava(root));
   const dotnet = detectDotnet(root);
   if (dotnet) groups.push(dotnet);

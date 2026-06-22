@@ -15,6 +15,8 @@ import designSystemsPtBR from './locales/pt-BR/designSystems.json';
 import workspacePtBR from './locales/pt-BR/workspace.json';
 import pluginsPtBR from './locales/pt-BR/plugins.json';
 import settingsPtBR from './locales/pt-BR/settings.json';
+import cloudPtBR from './locales/pt-BR/cloud.json';
+import apiClientPtBR from './locales/pt-BR/apiClient.json';
 
 import commonEn from './locales/en/common.json';
 import adminEn from './locales/en/admin.json';
@@ -29,6 +31,8 @@ import designSystemsEn from './locales/en/designSystems.json';
 import workspaceEn from './locales/en/workspace.json';
 import pluginsEn from './locales/en/plugins.json';
 import settingsEn from './locales/en/settings.json';
+import cloudEn from './locales/en/cloud.json';
+import apiClientEn from './locales/en/apiClient.json';
 
 i18n
   .use(LanguageDetector)
@@ -49,6 +53,8 @@ i18n
         workspace: workspacePtBR,
         plugins: pluginsPtBR,
         settings: settingsPtBR,
+        cloud: cloudPtBR,
+        apiClient: apiClientPtBR,
       },
       en: {
         common: commonEn,
@@ -64,6 +70,8 @@ i18n
         workspace: workspaceEn,
         plugins: pluginsEn,
         settings: settingsEn,
+        cloud: cloudEn,
+        apiClient: apiClientEn,
       },
     },
     fallbackLng: 'pt-BR',

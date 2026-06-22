@@ -6,9 +6,8 @@
  */
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { norm } from '../../../lib/normalize.js';
 import type { SettingCategory, SettingItem } from './types.js';
-
-const norm = (s: string): string => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 
 export interface FilterArgs {
   items: SettingItem[];

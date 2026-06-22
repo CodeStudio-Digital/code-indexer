@@ -87,6 +87,31 @@ export interface Project {
    */
   language_levels: string | null;
   /**
+   * Versão de RUNTIME (interpretador) por projeto para PHP/Python (migration 167)
+   * — JSON `{"php":"managed:8.3.7","python":"managed:3.12.3"}`. É o interpretador
+   * que o terminal/runner colocam no PATH (ver `runtime-resolve.ts`), distinto de
+   * `language_levels` (alvo de análise do LSP). Node fica em `node_version`.
+   * Null/ausente = default do sistema. Ver `@mcp/shared/utils/runtime-versions`.
+   */
+  runtime_versions: string | null;
+  /**
+   * Per-project package-manager preference (migration 169) — JSON
+   * `{"node":"pnpm","python":"poetry"}`. Overrides the runner's lockfile
+   * auto-detect and drives the dependency assistant (install/update). PHP is
+   * fixed (composer), so no key. Missing/NULL = auto. Lives in the routed
+   * `project_runtime_config` table; populated by the getProject overlay only.
+   * See `@mcp/shared/utils/package-managers`.
+   */
+  package_managers: string | null;
+  /**
+   * Git remote URL + default branch (migration 170). Powers the cloud project
+   * library: a synced project pointer carries `git_remote`, and "Import from
+   * cloud" clones it. Auto-detected on open/scaffold; null when not a git repo.
+   * Optional (like `framework`) so existing Project literals/mocks don't break.
+   */
+  git_remote?: string | null;
+  default_branch?: string | null;
+  /**
    * Frontend framework inferred from package.json at READ time (not persisted;
    * set by the `get` handler). Drives the preview element-selector mode
    * ("react" native detection vs the generic "universal" picker). Undefined on

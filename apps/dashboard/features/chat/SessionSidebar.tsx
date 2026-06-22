@@ -3,12 +3,14 @@ import { useTranslation } from 'react-i18next';
 import {
   Archive,
   ArchiveRestore,
+  Check,
   CheckSquare,
   ChevronDown,
   ChevronRight,
   Copy,
   FolderPlus,
   FolderX,
+  Inbox,
   MessageSquareCode,
   MoreHorizontal,
   Pencil,
@@ -185,99 +187,118 @@ export function SessionSidebar({
           'lg:rounded-none lg:shadow-none lg:transition-none lg:border-0 lg:border-r',
         )}
       >
-      <div className="p-3 border-b space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold flex items-center gap-2">
-            <MessageSquareCode className="h-4 w-4 text-primary" />
-            {t('chat:sidebar.sessions')}
-          </h3>
-          <div className="flex items-center gap-1">
+      {/* Thin single-row header — matches the system's section strips
+          (icon + compact title on the left, action icons on the right). */}
+      <div className="flex items-center gap-1 border-b px-2 h-9">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <MessageSquareCode className="h-4 w-4 text-primary shrink-0" />
+          <span className="text-xs font-semibold truncate">{t('chat:sidebar.sessions')}</span>
+        </div>
+        <div className="ml-auto flex items-center gap-0.5 shrink-0">
+          {/* View filter — replaces the active/archived segmented control.
+              The trigger icon reflects the current view at a glance. */}
+          <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  size="icon"
-                  variant={selectMode ? 'default' : 'ghost'}
-                  className="h-7 w-7"
-                  onClick={() => {
-                    if (selectMode) exitSelectMode();
-                    else setSelectMode(true);
-                  }}
-                  aria-label={t('chat:sidebar.toggleSelect')}
-                >
-                  <CheckSquare className="h-3.5 w-3.5" />
-                </Button>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-auto px-1.5 gap-0.5"
+                    aria-label={t('chat:sidebar.viewFilter')}
+                  >
+                    {isArchivedView ? <Archive className="h-3.5 w-3.5" /> : <Inbox className="h-3.5 w-3.5" />}
+                    <ChevronDown className="h-3 w-3 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent>{selectMode ? t('chat:sidebar.exitSelect') : t('chat:sidebar.selectMultiple')}</TooltipContent>
+              <TooltipContent>{t('chat:sidebar.viewFilter')}</TooltipContent>
             </Tooltip>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => onViewChange('active')}>
+                <Inbox />
+                {t('chat:sidebar.active')}
+                {view === 'active' && <Check className="ml-auto" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onViewChange('archived')}>
+                <Archive />
+                {t('chat:sidebar.archived')}
+                {view === 'archived' && <Check className="ml-auto" />}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant={selectMode ? 'default' : 'ghost'}
+                className="h-7 w-7"
+                onClick={() => {
+                  if (selectMode) exitSelectMode();
+                  else setSelectMode(true);
+                }}
+                aria-label={t('chat:sidebar.toggleSelect')}
+              >
+                <CheckSquare className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{selectMode ? t('chat:sidebar.exitSelect') : t('chat:sidebar.selectMultiple')}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                onClick={onCreateGroup}
+                aria-label={t('chat:sidebar.newGroup')}
+              >
+                <FolderPlus className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('chat:sidebar.newGroup')}</TooltipContent>
+          </Tooltip>
+          {sessions && sessions.length > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="h-7 w-7"
-                  onClick={onCreateGroup}
-                  aria-label={t('chat:sidebar.newGroup')}
+                  className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={() => onDeleteAll()}
+                  aria-label={t('chat:sidebar.deleteAll')}
                 >
-                  <FolderPlus className="h-3.5 w-3.5" />
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{t('chat:sidebar.newGroup')}</TooltipContent>
+              <TooltipContent>{t('chat:sidebar.deleteAll')}</TooltipContent>
             </Tooltip>
-            {sessions && sessions.length > 0 && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                    onClick={() => onDeleteAll()}
-                    aria-label={t('chat:sidebar.deleteAll')}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{t('chat:sidebar.deleteAll')}</TooltipContent>
-              </Tooltip>
-            )}
-            {onMobileClose && (
+          )}
+          {onMobileClose && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 lg:hidden"
+              onClick={onMobileClose}
+              aria-label={t('chat:sidebar.closeSessions')}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-7 w-7 lg:hidden"
-                onClick={onMobileClose}
-                aria-label={t('chat:sidebar.closeSessions')}
+                className="h-7 w-7"
+                onClick={onNew}
+                aria-label={t('chat:sidebar.new')}
               >
-                <X className="h-3.5 w-3.5" />
+                <Plus className="h-3.5 w-3.5" />
               </Button>
-            )}
-            <Button size="sm" onClick={onNew}>
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </div>
-
-        {/* Tabs: active / archived */}
-        <div className="grid grid-cols-2 rounded-md border p-0.5 text-xs">
-          <button
-            type="button"
-            onClick={() => onViewChange('active')}
-            className={cn(
-              'rounded px-2 py-1 transition-colors',
-              view === 'active' ? 'bg-accent text-accent-foreground' : 'hover:bg-muted',
-            )}
-          >
-            {t('chat:sidebar.active')}
-          </button>
-          <button
-            type="button"
-            onClick={() => onViewChange('archived')}
-            className={cn(
-              'rounded px-2 py-1 transition-colors',
-              view === 'archived' ? 'bg-accent text-accent-foreground' : 'hover:bg-muted',
-            )}
-          >
-            {t('chat:sidebar.archived')}
-          </button>
+            </TooltipTrigger>
+            <TooltipContent>{t('chat:sidebar.new')}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

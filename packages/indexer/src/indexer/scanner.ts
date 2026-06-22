@@ -32,6 +32,20 @@ import { hashContent, countLines } from '@mcp/indexer/indexer/content-hash.js';
 
 export interface ScanOptions {
   maxFiles?: number;
+  /**
+   * Liveness callback for the (otherwise silent) walk. `scanned` is files seen
+   * so far; `total` is 0 until the candidate list is known (glob phase), then
+   * the candidate count (stat phase). Throttled here by count — the service
+   * coalesces again by time before it reaches the UI.
+   */
+  onScanProgress?: (scanned: number, total: number) => void;
+}
+
+/** Files between cooperative yields / progress emits during the stat walk. */
+const SCAN_STEP = 500;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 export class FileScanner {
@@ -63,6 +77,9 @@ export class FileScanner {
         continue;
       }
       validFiles.push(relPath);
+      // Discovery liveness — total unknown (0) until the walk finishes. The
+      // for-await already yields to the loop on each async tick.
+      if (validFiles.length % SCAN_STEP === 0) opts.onScanProgress?.(validFiles.length, 0);
       if (opts.maxFiles && validFiles.length > opts.maxFiles) {
         return {
           toIndex: [],
@@ -88,7 +105,19 @@ export class FileScanner {
     const unchanged: string[] = [];
     const stats: ScanStats = { statOnly: 0, hashed: 0, skippedTooLarge: 0, ignored: ignoredCount };
 
+    let processed = 0;
     for (const relPath of validFiles) {
+      // Cooperative yield: this loop is fully synchronous (statSync/readFileSync)
+      // and, in the in-process fallback, runs on the Electron MAIN thread — a
+      // large project would block it solid (frozen UI that "never recovers").
+      // Yielding every SCAN_STEP files keeps IPC alive; the worker path pays a
+      // negligible cost. Doubles as the throttled "scanning" progress emit.
+      if (processed > 0 && processed % SCAN_STEP === 0) {
+        opts.onScanProgress?.(processed, validFiles.length);
+        await yieldToEventLoop();
+      }
+      processed++;
+
       const absPath = join(this.rootPath, relPath);
       const normalizedPath = relPath.replace(/\\/g, '/');
 

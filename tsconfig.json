@@ -4,5 +4,5 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*.ts", "packages/*/src/**/*.ts", "apps/*/**/*.ts"],
-  "exclude": ["apps/dashboard/**", "node_modules", "dist", "worker", "packages/*/dist"]
+  "exclude": ["apps/dashboard/**", "apps/account-portal/**", "node_modules", "dist", "worker", "packages/*/dist"]
 }

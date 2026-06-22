@@ -22,7 +22,10 @@ import { app, BrowserWindow, ipcMain, dialog, shell, Notification, protocol, ses
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createApp } from '@apps/http-api/server.js';
+import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
 import { mountIpcHandlers } from './src/handlers-mount.js';
+import { createElectronProfiler } from './src/perf-trace.js';
+import { setElectronProfiler } from '@apps/http-api/server/perf/electron-profiler.js';
 import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { PreviewWindowService } from './src/preview-window/service.js';
 import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
@@ -32,6 +35,7 @@ import { mountTerminalIpc } from './src/terminal-ipc.js';
 import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
+import { mountCloudIpc } from './src/cloud/cloud-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import { APP_DISPLAY_NAME, APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
@@ -60,6 +64,24 @@ const DEV_URL = process.env.MCP_ELECTRON_DEV_URL;
 // parse the file as ESM, silently failing to expose contextBridge.
 // See dev.ts buildSync block for the full explanation.
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
+
+// ─── Renderer/main V8 heap ceiling ───────────────────────────────
+//
+// The dashboard renderer is heavy (many Monaco models, chat history,
+// terminal scrollback) and was observed running at ~94% of V8's default
+// old-space limit (1371 / 1457 MB in the perf panel). At that fill level
+// V8 runs frequent major GC, and those pauses surface as the recurring
+// main-thread longtasks that jank the whole UI long after a project opens.
+// Raising the ceiling gives the working set headroom so V8 stops thrashing.
+//
+// `--js-flags` set on the browser-process command line is forwarded by
+// Chromium to renderer + utility processes too, so this lifts the limit
+// where the 1.4 GB heap actually lives. MUST be set before `app.whenReady()`
+// (and before any renderer spawns) — module load is the right place.
+// Tunable via MCP_RENDERER_HEAP_MB (unset/invalid → 4096).
+const heapMbEnv = Number(process.env.MCP_RENDERER_HEAP_MB);
+const maxOldSpaceMb = Number.isFinite(heapMbEnv) && heapMbEnv > 0 ? Math.floor(heapMbEnv) : 4096;
+app.commandLine.appendSwitch('js-flags', `--max-old-space-size=${maxOldSpaceMb}`);
 
 // ─── Custom protocol for in-process backend ──────────────────────
 //
@@ -195,6 +217,11 @@ async function bootstrap() {
   registerOAuthLoopbackIpc(honoApp);
   registerMcpProtocol(honoApp);
 
+  // Full-app trace (contentTracing) + renderer CPU profile (CDP) — the two
+  // capabilities the in-process http-api can't reach. Drives /api/admin/perf/
+  // {full-trace,renderer-profile}. See perf-trace.ts.
+  setElectronProfiler(createElectronProfiler());
+
   // Agent preview/devtools: wire the main-process service so the `preview_*`
   // tools (coder + company) can open a dedicated window + read CDP. Reaches
   // the runner workers via the bridge handler in the worker pools.
@@ -211,6 +238,8 @@ async function bootstrap() {
   // Region screenshot of the inline preview iframe (captures the dashboard
   // window's painted pixels clipped to the marquee box).
   mountPreviewCaptureIpc();
+  // Cloud account/login transport (separate HTTPS surface to the deployed Worker).
+  mountCloudIpc();
   app.on('before-quit', () => previewService.closeAll());
   app.on('before-quit', () => stopOAuthLoopback());
 
@@ -369,6 +398,9 @@ async function createAppWindow(routeSuffix?: string, onReveal?: () => void): Pro
       sandbox: false,
     },
   });
+  // Tag as a real app/UI window so the renderer CPU profiler (perf-trace.ts)
+  // targets THIS, never a preview/inspect or splash window.
+  (win as unknown as { __mcpAppWindow?: boolean }).__mcpAppWindow = true;
 
   // Reveal on first paint. `did-finish-load` is a belt-and-suspenders
   // fallback so a delayed/absent `ready-to-show` can never leave the window
@@ -540,6 +572,15 @@ function registerNativeIpc() {
  * behaves identically to talking to a real HTTP server — except there
  * is no socket, no port, no loopback.
  */
+/**
+ * Collapse numeric path segments to `:id` so the slow-call table groups by
+ * route shape — `/api/projects/10/git/status` and `/api/projects/123/git/status`
+ * share one row — instead of exploding per id past the bounded MAX_CHANNELS.
+ */
+function normalizeRouteKey(pathname: string): string {
+  return pathname.replace(/\/\d+(?=\/|$)/g, '/:id');
+}
+
 function registerMcpProtocol(honoApp: Hono) {
   protocol.handle('mcp', async (req) => {
     try {
@@ -561,7 +602,19 @@ function registerMcpProtocol(honoApp: Hono) {
         // required by the spec when body is a ReadableStream.
         duplex: hasBody ? 'half' : undefined,
       } as RequestInit & { duplex?: 'half' });
-      return await honoApp.fetch(honoReq);
+      // B0 instrumentation: the `useApi` (HTTP-style) reads — sessions:list,
+      // groups:list, projects.get, files.* — flow through this protocol
+      // handler, NOT the `invoke` path that handlers-mount already wraps with
+      // timeCall. Without this they were invisible in the admin "slow IPC"
+      // panel even though they're the slow ones in the perf trace. Key by a
+      // normalized route (numeric ids → :id) so the bounded table groups by
+      // route instead of exploding per project/session id. For a JSON route
+      // honoApp.fetch resolves only after the (synchronous) SQLite handler +
+      // serialization complete, so this wall-time ≈ the main-thread block;
+      // cross-check against loopP99/loopMax in perf-sampler to separate true
+      // blocking from awaited async (e.g. git spawns).
+      const channel = `mcp:${req.method} ${normalizeRouteKey(url.pathname)}`;
+      return await timeCall(channel, () => honoApp.fetch(honoReq));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return new Response(JSON.stringify({ error: message }), {

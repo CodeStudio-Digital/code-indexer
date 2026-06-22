@@ -1,7 +1,10 @@
 /** Subscription state — the single source of truth that entitlements project from. */
 import type { AccountId } from '@cloudstudio/cloud-kernel';
 
-export type PlanId = 'free' | 'pro';
+/** Tiers form a ladder: free < pro < team < enterprise. `pro` is the individual
+ *  paid tier; `team`/`enterprise` are reachable only via an org-owned subscription
+ *  (P4) — a per-account subscription never carries them today. */
+export type PlanId = 'free' | 'pro' | 'team' | 'enterprise';
 export type SubStatus = 'none' | 'trialing' | 'active' | 'past_due' | 'canceled';
 
 export interface Subscription {

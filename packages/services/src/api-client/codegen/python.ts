@@ -30,6 +30,11 @@ export function generatePython(req: CodegenRequest): string {
   return lines.join('\n');
 }
 
-function pyStr(s: string): string { return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`; }
+function pyStr(s: string): string {
+  // Escape \r as well — a bare CR inside a Python "..." literal is a line
+  // terminator (SyntaxError). CRLF bodies pasted from Windows/HTTP responses
+  // are common; \n is escaped above, the \r must be too. \t is also escaped.
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')}"`;
+}
 function py(v: unknown): string { return JSON.stringify(v, null, 4); }
 function safeParse(s?: string): unknown { if (!s) return undefined; try { return JSON.parse(s); } catch { return s; } }

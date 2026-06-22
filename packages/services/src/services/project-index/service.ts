@@ -13,6 +13,7 @@ import {
   type ProjectIndexSettings,
   type ProjectIndexStatus,
   type StructuralExecutor,
+  type StructuralProgressFrame,
 } from './types.js';
 
 export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch';
@@ -381,7 +382,7 @@ export class ProjectIndexService {
     const result = await this.executor.runStructuralIndex(projectId, {
       maxFiles: s.maxFiles,
       allowEmptyWipe: manual,
-      onProgress: (p) => this.publishStructuralProgress(projectId, p.current, p.total),
+      onProgress: (p) => this.publishStructuralProgress(projectId, p),
     });
     if (result.aborted === 'too_large') {
       this.status.setPhase(projectId, 'too_large');
@@ -413,13 +414,18 @@ export class ProjectIndexService {
     this.markDirty(projectId, dirty);
   }
 
-  private publishStructuralProgress(projectId: number, current: number, total: number): void {
+  private publishStructuralProgress(projectId: number, p: StructuralProgressFrame): void {
     const now = Date.now();
     const last = this.lastProgressAt.get(projectId) ?? 0;
-    if (current >= total || now - last >= PROGRESS_MIN_INTERVAL_MS) {
-      this.lastProgressAt.set(projectId, now);
-      this.status.setProgress(projectId, current, total);
-    }
+    // A final frame (current reached a known total) always flushes; otherwise
+    // coalesce. Scanning frames carry total 0 until the walk ends, so they ride
+    // the time gate. Routing by phase keeps the chip on "Scanning…" with a live
+    // count rather than jumping to "Indexing 0/0".
+    const done = p.total > 0 && p.current >= p.total;
+    if (!done && now - last < PROGRESS_MIN_INTERVAL_MS) return;
+    this.lastProgressAt.set(projectId, now);
+    if (p.phase === 'scanning') this.status.setScanProgress(projectId, p.current, p.total);
+    else this.status.setProgress(projectId, p.current, p.total);
   }
 
   private scheduleDrain(projectId: number): void {

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { FolderGit2 } from 'lucide-react';
+import { Trans, useTranslation } from 'react-i18next';
+import { FolderGit2, FolderOpen } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { toast } from '../../components/ui/prompt-dialog.js';
 import {
   Dialog,
   DialogContent,
@@ -31,9 +32,9 @@ interface ProjectCreateDialogProps {
  * that the path exists + is a directory and that neither the name nor the
  * root_path clash with an existing project.
  *
- * We keep it simple: no file browser (the HTTP API runs on the host and
- * the dashboard is a static bundle), just a raw text field for the path —
- * this matches what users already type in the CLI.
+ * Under Electron we offer a native folder picker (window.electronAPI.openDirectory);
+ * outside Electron the picker is unavailable, so the raw text field is the
+ * fallback — same path users already type in the CLI.
  */
 export default function ProjectCreateDialog({
   open,
@@ -46,6 +47,28 @@ export default function ProjectCreateDialog({
   const [description, setDescription] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.openDirectory;
+
+  async function pickDirectory() {
+    if (!isElectron) {
+      toast.message(t('common:onboarding.project.pickToast.title'), {
+        description: t('common:onboarding.project.pickToast.description'),
+      });
+      return;
+    }
+    try {
+      const dir = await window.electronAPI!.openDirectory!();
+      if (dir) {
+        setRootPath(dir);
+        setError(null);
+      }
+    } catch (err) {
+      toast.error(t('common:onboarding.project.pickerFailed'), {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   function reset() {
     setRootPath('');
@@ -105,7 +128,11 @@ export default function ProjectCreateDialog({
             <div>
               <DialogTitle>{t('projects:create.title')}</DialogTitle>
               <DialogDescription>
-                {t('projects:create.description')}
+                <Trans
+                  i18nKey="create.description"
+                  ns="projects"
+                  components={{ bold: <strong className="font-semibold text-foreground" /> }}
+                />
               </DialogDescription>
             </div>
           </div>
@@ -116,14 +143,25 @@ export default function ProjectCreateDialog({
             <label className="text-sm font-medium">
               {t('projects:create.folderLabel')} <span className="text-destructive">*</span>
             </label>
-            <Input
-              value={rootPath}
-              onChange={(e) => setRootPath(e.target.value)}
-              placeholder={t('projects:create.folderPlaceholder')}
-              className="font-mono text-xs"
-              autoFocus
-              required
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                value={rootPath}
+                onChange={(e) => setRootPath(e.target.value)}
+                placeholder={t('projects:create.folderPlaceholder')}
+                className="font-mono text-xs"
+                autoFocus
+                required
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={pickDirectory}
+                className="shrink-0 gap-1.5"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                {t('common:onboarding.project.browse')}
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">
               {t('projects:create.folderHint')}
             </p>

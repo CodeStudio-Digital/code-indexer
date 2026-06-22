@@ -450,17 +450,21 @@ export function startRouteSpan(name: string, meta: RouteMetricMeta = {}): (doneM
   }
   const startedAt = perfNow();
   const startMs = routeOffset(sample, startedAt);
+  const startProjectId = meta.projectId ?? sample.projectId;
+  const startTab = meta.tab ?? sample.tab;
   limitPush(
     sample.events,
     {
       id: nextEventId++,
       name: `${name}:start`,
       route: sample.route,
-      projectId: meta.projectId ?? sample.projectId,
-      tab: meta.tab ?? sample.tab,
+      projectId: startProjectId,
+      tab: startTab,
       atMs: startMs,
       meta: sanitizeMeta({
         ...meta,
+        projectId: startProjectId,
+        tab: startTab,
         status: 'pending',
       }),
     },
@@ -474,8 +478,8 @@ export function startRouteSpan(name: string, meta: RouteMetricMeta = {}): (doneM
     done = true;
     const endedAt = perfNow();
     const status = doneMeta.status ?? meta.status ?? (doneMeta.error ? 'error' : 'ok');
-    const projectId = doneMeta.projectId ?? meta.projectId ?? sample.projectId;
-    const tab = doneMeta.tab ?? meta.tab ?? sample.tab;
+    const projectId = doneMeta.projectId ?? startProjectId;
+    const tab = doneMeta.tab ?? startTab;
     limitPush(
       sample.events,
       {
@@ -694,7 +698,51 @@ function classifyApiCall(
     };
   }
 
+  if (
+    path === 'projectGit.mergeState' ||
+    path === 'projectGit.branchesDetailed' ||
+    path === 'projectGit.log' ||
+    path === 'projectGit.stashList' ||
+    path === 'projectGit.commitDetail' ||
+    path === 'projectGit.stashDetail' ||
+    path === 'projectGit.baseline'
+  ) {
+    return { name: path, projectId: pidFromInput(input) };
+  }
+
+  // Low-frequency, useful renderer-side spans. Deliberately EXCLUDES the
+  // high-cardinality / pollable channels (files.read/tree/list — many per open;
+  // lsp.serverStatus — polled in a loop by the install prompt): each classified
+  // call pushes a start+end event pair, and a burst of those could evict the
+  // startup milestones from the bounded event ring this panel reads. Their
+  // latency is already captured backend-side by the slow-ipc percentile table.
+  if (path === 'lsp.codeActions') {
+    return { name: path, projectId: pidFromInput(input), detail: detailPath(input) };
+  }
+
+  if (path === 'plugins.readAsset') {
+    const ns = input && typeof input === 'object' && 'namespace' in input
+      ? String((input as { namespace?: unknown }).namespace)
+      : undefined;
+    return { name: path, detail: ns };
+  }
+
   return undefined;
+}
+
+/** Pull a `projectId` out of a typical `{ projectId, ... }` input. */
+function pidFromInput(input: unknown): number | undefined {
+  return input && typeof input === 'object' && 'projectId' in input
+    ? parseProjectId(String((input as { projectId?: unknown }).projectId))
+    : undefined;
+}
+
+/** Pull a `path`/`file`/`languageId` discriminator for span detail. */
+function detailPath(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const o = input as Record<string, unknown>;
+  const raw = o.path ?? o.file ?? o.dir ?? o.languageId;
+  return typeof raw === 'string' ? raw : undefined;
 }
 
 function sanitizeMeta(meta: RouteMetricMeta): RouteMetricMeta {

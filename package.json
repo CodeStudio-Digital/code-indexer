@@ -13,6 +13,8 @@
   "scripts": {
     "build": "tsc && tsc-alias && node scripts/copy-prompts.mjs",
     "build:dashboard": "vite build apps/dashboard",
+    "build:portal": "vite build apps/account-portal",
+    "dev:portal": "vite dev apps/account-portal",
     "build:all": "tsc && tsc-alias && node scripts/copy-prompts.mjs && vite build apps/dashboard",
     "dev:server": "tsx watch apps/http-api/server.ts",
     "dev:dashboard": "vite dev apps/dashboard",

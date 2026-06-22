@@ -13,6 +13,7 @@ import { RefreshCw, Search, X } from 'lucide-react';
 import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
 import { apiCall } from '../../../lib/api-client.js';
+import { startRouteSpan } from '../../../lib/perf/route-startup-metrics.js';
 import { cn } from '../../../lib/utils.js';
 import { useFileTreeStore, visibleRows } from '../../../state/file-tree.js';
 import { useSelectionStore } from '../../../state/file-tree-selection.js';
@@ -25,11 +26,14 @@ import { buildDirSeverity, commitRename, type GitFileStatus } from './tree-conte
 
 interface FileTreeViewProps {
   projectId: number;
+  active: boolean;
   activePath: string | null;
   onOpen: (path: string) => void;
 }
 
-export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProps) {
+const ACTIVE_GIT_STATUS_POLL_MS = 30_000;
+
+export function FileTreeView({ projectId, active, activePath, onOpen }: FileTreeViewProps) {
   // Seletores ESTREITOS (não o store inteiro): assinar `useFileTreeStore()` sem
   // seletor re-renderizava a árvore a cada mudança de qualquer campo (incl. o set
   // `loading`). Não assinamos `children`/`loading` aqui — `rows` lê o snapshot via
@@ -51,6 +55,7 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
   useEffect(() => {
     if (storeProjectId !== projectId) init(projectId);
     useSelectionStore.getState().init(projectId); // reset seleção na troca de projeto (idempotente)
+    setGitStatus(new Map());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init on project switch only
   }, [projectId]);
 
@@ -60,18 +65,22 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath]);
 
-  // Git status poll (7s) → file colors + dir severity bubbling. Also keyed on
-  // the git-revision: a branch switch / commit (incl. external `git checkout`)
-  // re-runs this immediately instead of waiting up to 7s for the next tick.
+  // Git status poll (30s base) → file colors + dir severity bubbling. Also
+  // keyed on the git-revision: a branch switch / commit (incl. external `git
+  // checkout`) re-runs this immediately instead of waiting for the next tick.
   const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
   useEffect(() => {
+    if (!active) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
+      const finishSpan = startRouteSpan('FileTree:gitStatus', { projectId, tab: 'files' });
+      const startedAt = performance.now();
       try {
         const status = await apiCall<{ files: Array<{ path: string; state: GitFileStatus; staged: boolean }>; notARepo: boolean }>(
           'projectGit.status', { projectId },
         );
+        finishSpan({ status: 'ok' });
         if (cancelled) return;
         const map = new Map<string, GitFileStatus>();
         if (!status.notARepo) {
@@ -79,21 +88,28 @@ export function FileTreeView({ projectId, activePath, onOpen }: FileTreeViewProp
             if (!f.staged || !map.has(f.path)) map.set(f.path, f.state);
           }
         }
-        // Identity-stable when nothing changed — otherwise the 7s poll
+        // Identity-stable when nothing changed — otherwise the poll
         // re-rendered the whole tree (and rebuilt dirSeverity) every tick.
         setGitStatus((prev) => {
           if (prev.size === map.size && [...map].every(([k, v]) => prev.get(k) === v)) return prev;
           return map;
         });
-      } catch {
-        if (!cancelled) setGitStatus((prev) => (prev.size === 0 ? prev : new Map()));
+      } catch (err) {
+        finishSpan({ status: 'error', error: err instanceof Error ? err.message : String(err) });
       }
-      if (!cancelled) timer = setTimeout(tick, 7_000);
+      if (cancelled) return;
+      // Adaptive backoff: a slow `status` (heavy repo, cold index, no fsmonitor)
+      // must NOT re-fire every 30s and hammer the disk. Fast repos keep the 30s
+      // cadence; the git-meta watcher still delivers instant refreshes on .git
+      // changes, so a longer fallback only delays working-tree-only updates.
+      const elapsed = performance.now() - startedAt;
+      const next = elapsed > 3_000 ? Math.min(elapsed * 10, 120_000) : ACTIVE_GIT_STATUS_POLL_MS;
+      timer = setTimeout(tick, next);
     };
     void tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- gitRev forces an immediate re-poll
-  }, [projectId, gitRev]);
+  }, [projectId, gitRev, active]);
 
   // F2 renames the active file (when focus isn't in an input).
   useEffect(() => {

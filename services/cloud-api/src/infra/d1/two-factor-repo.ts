@@ -5,11 +5,14 @@ import type { TwoFactorRepo } from '@cloudstudio/cloud-identity';
 export function createTwoFactorRepo(db: DbExecutor, ids: IdGen): TwoFactorRepo {
   return {
     async getSecret(accountId) {
-      const row = await db.first<{ secret: string; enabled: number }>(
-        'SELECT secret, enabled FROM totp_secrets WHERE account_id = ?',
+      const row = await db.first<{ secret: string; enabled: number; last_step: number | null }>(
+        'SELECT secret, enabled, last_step FROM totp_secrets WHERE account_id = ?',
         [accountId],
       );
-      return row ? { secret: row.secret, enabled: row.enabled === 1 } : null;
+      return row ? { secret: row.secret, enabled: row.enabled === 1, lastStep: row.last_step } : null;
+    },
+    async markStep(accountId, step) {
+      await db.run("UPDATE totp_secrets SET last_step = ?, updated_at = datetime('now') WHERE account_id = ?", [step, accountId]);
     },
     async upsertPending(accountId, secret) {
       await db.run(

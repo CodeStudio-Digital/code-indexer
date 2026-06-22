@@ -972,6 +972,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Project id — lets project-aware tools (rag_search_docs scoping,
     // <indexed-docs> hint) resolve linked doc collections.
     projectId: project.id,
+    // Per-project PHP/Python (NOT Node) on PATH for shell tools. Resolved once
+    // per run by the host-supplied resolver; local sessions only (sandbox runs
+    // in a container with its own runtimes, so skip when builder-bound).
+    runtimeEnv: sandboxBinding ? undefined : opts.resolveRuntimeEnv?.(db, project.id),
     // Surface indexing status to tools so DB-dependent paths can fall back
     // to disk/regex/tree-sitter instead of returning empty results.
     projectIndexed: undefined, // set after isIndexed is computed (see below)

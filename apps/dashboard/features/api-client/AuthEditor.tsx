@@ -3,6 +3,7 @@
  * persists on blur. All fields accept `{{var}}`. Shows a hint when an explicit
  * Authorization header is set (explicit headers win over auth — server rule).
  */
+import { useTranslation } from 'react-i18next';
 import { Input } from '../../components/ui/input.js';
 import { parseRows } from './kv-grid/kv-utils.js';
 import type { ApiAuthType, ApiRequest } from './types.js';
@@ -15,15 +16,16 @@ interface Props {
 
 type Cfg = Record<string, string>;
 
-const TYPES: Array<{ value: ApiAuthType; label: string }> = [
-  { value: 'none', label: 'No Auth' },
-  { value: 'bearer', label: 'Bearer Token' },
-  { value: 'basic', label: 'Basic Auth' },
-  { value: 'apikey', label: 'API Key' },
-  { value: 'oauth2', label: 'OAuth 2.0 (token)' },
+const TYPES: Array<{ value: ApiAuthType; labelKey: string }> = [
+  { value: 'none', labelKey: 'typeNone' },
+  { value: 'bearer', labelKey: 'typeBearer' },
+  { value: 'basic', labelKey: 'typeBasic' },
+  { value: 'apikey', labelKey: 'typeApiKey' },
+  { value: 'oauth2', labelKey: 'typeOauth2' },
 ];
 
 export function AuthEditor({ draft, upd, persist }: Props) {
+  const { t } = useTranslation('apiClient');
   const type: ApiAuthType = (draft.auth_type ?? 'none') as ApiAuthType;
   let cfg: Cfg = {};
   try { cfg = draft.auth_json ? JSON.parse(draft.auth_json) : {}; } catch { cfg = {}; }
@@ -53,31 +55,31 @@ export function AuthEditor({ draft, upd, persist }: Props) {
   return (
     <div className="flex flex-col gap-3 p-1 max-w-md">
       <label className="flex items-center gap-2 text-xs">
-        <span className="text-muted-foreground">Type</span>
+        <span className="text-muted-foreground">{t('auth.typeLabel')}</span>
         <select className="text-xs bg-background border rounded px-2 py-1" value={type} onChange={(e) => setType(e.target.value as ApiAuthType)}>
-          {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          {TYPES.map((opt) => <option key={opt.value} value={opt.value}>{t(`auth.${opt.labelKey}`)}</option>)}
         </select>
       </label>
 
-      {type === 'bearer' && field('token', 'Token', '{{token}}')}
-      {type === 'oauth2' && (<>{field('token', 'Access Token', '{{access_token}}')}{field('headerPrefix', 'Header Prefix', 'Bearer')}</>)}
-      {type === 'basic' && (<>{field('username', 'Username')}{field('password', 'Password', '', true)}</>)}
+      {type === 'bearer' && field('token', t('auth.token'), '{{token}}')}
+      {type === 'oauth2' && (<>{field('token', t('auth.accessToken'), '{{access_token}}')}{field('headerPrefix', t('auth.headerPrefix'), 'Bearer')}</>)}
+      {type === 'basic' && (<>{field('username', t('auth.username'))}{field('password', t('auth.password'), '', true)}</>)}
       {type === 'apikey' && (
         <>
-          {field('key', 'Key', 'X-Api-Key')}
-          {field('value', 'Value', '{{api_key}}')}
+          {field('key', t('auth.key'), 'X-Api-Key')}
+          {field('value', t('auth.value'), '{{api_key}}')}
           <label className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground">Add to</span>
+            <span className="text-muted-foreground">{t('auth.addTo')}</span>
             <select className="text-xs bg-background border rounded px-2 py-1" value={cfg.in ?? 'header'} onChange={(e) => write({ in: e.target.value }, true)}>
-              <option value="header">Header</option>
-              <option value="query">Query Param</option>
+              <option value="header">{t('auth.inHeader')}</option>
+              <option value="query">{t('auth.inQuery')}</option>
             </select>
           </label>
         </>
       )}
 
       {type !== 'none' && hasAuthHeader && (
-        <p className="text-[11px] text-amber-500">An Authorization header is set in the Headers tab and takes precedence over this auth.</p>
+        <p className="text-[11px] text-amber-500">{t('auth.headerPrecedenceHint')}</p>
       )}
     </div>
   );

@@ -371,6 +371,14 @@ export interface ToolContext {
    */
   projectId?: number;
   /**
+   * Per-project runtime PATH/env (PHP/Python bin dirs + PHPRC) for shell tools
+   * to inject when spawning, so `php`/`composer`/`python`/`pip` resolve to the
+   * project's chosen runtime. Resolved once per run by the host (the agent
+   * can't import the resolver without a dep cycle). Node is deliberately
+   * excluded. Undefined → shell tools inherit the plain (system) env.
+   */
+  runtimeEnv?: import('@mcp/code-agent/ports/shell-port.js').AgentRuntimeEnv;
+  /**
    * Optional execution ports — when provided, filesystem/shell tools
    * route through these instead of talking to `node:fs` / `child_process`
    * directly. Left undefined, tools fall back to process-wide local

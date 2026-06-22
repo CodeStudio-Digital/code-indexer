@@ -4,6 +4,7 @@
  * word-wrap toolbar. Truncation banner when the read cap was hit.
  */
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Copy, Download, WrapText } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { cn } from '../../../lib/utils.js';
@@ -26,6 +27,7 @@ interface Props {
 }
 
 export function ResponseBody({ body, headers, truncated }: Props) {
+  const { t } = useTranslation('apiClient');
   const heavy = body.length > HEAVY_BYTES;
   const [mode, setMode] = useState<Mode>(heavy ? 'raw' : 'pretty');
   const [wrap, setWrap] = useState(!heavy);
@@ -44,19 +46,19 @@ export function ResponseBody({ body, headers, truncated }: Props) {
       <div className="flex items-center gap-1 px-2 py-1 border-b text-[11px]">
         {(['pretty', 'raw', 'preview'] as Mode[]).map((m) => (
           <button key={m} onClick={() => setMode(m)}
-            className={cn('px-1.5 py-0.5 rounded capitalize', mode === m ? 'bg-muted font-medium' : 'text-muted-foreground hover:text-foreground')}>
-            {m}
+            className={cn('px-1.5 py-0.5 rounded', mode === m ? 'bg-muted font-medium' : 'text-muted-foreground hover:text-foreground')}>
+            {t(`body.mode_${m}`)}
           </button>
         ))}
         <div className="ml-auto flex items-center gap-0.5">
           {mode === 'raw' && (
-            <Button type="button" variant="ghost" size="icon" className={cn('h-6 w-6', wrap && 'text-primary')} title="Word wrap" onClick={() => setWrap(!wrap)}><WrapText className="h-3.5 w-3.5" /></Button>
+            <Button type="button" variant="ghost" size="icon" className={cn('h-6 w-6', wrap && 'text-primary')} title={t('body.wordWrap')} onClick={() => setWrap(!wrap)}><WrapText className="h-3.5 w-3.5" /></Button>
           )}
-          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" title="Copy" onClick={copy}><Copy className="h-3.5 w-3.5" /></Button>
-          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" title="Save" onClick={save}><Download className="h-3.5 w-3.5" /></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" title={t('body.copy')} onClick={copy}><Copy className="h-3.5 w-3.5" /></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" title={t('body.save')} onClick={save}><Download className="h-3.5 w-3.5" /></Button>
         </div>
       </div>
-      {truncated && <div className="px-2 py-1 text-[11px] text-amber-500 border-b">Response truncated at the read cap — save to disk for the full body.</div>}
+      {truncated && <div className="px-2 py-1 text-[11px] text-amber-500 border-b">{t('body.truncated')}</div>}
       <div className="flex-1 min-h-0">
         {mode === 'pretty' && (heavy
           ? <TooBig body={body} />
@@ -69,19 +71,21 @@ export function ResponseBody({ body, headers, truncated }: Props) {
 }
 
 function TooBig({ body }: { body: string }) {
+  const { t } = useTranslation('apiClient');
   return (
     <div className="h-full flex items-center justify-center text-xs text-muted-foreground p-4 text-center">
-      Body is {(body.length / 1024 / 1024).toFixed(1)} MB — too large to pretty-print. Use Raw or Save.
+      {t('body.tooBig', { size: (body.length / 1024 / 1024).toFixed(1) })}
     </div>
   );
 }
 
 function Preview({ kind, body, heavy, wrap }: { kind: ReturnType<typeof responsePreviewKind>; body: string; heavy: boolean; wrap: boolean }) {
-  if (kind === 'html') return <iframe sandbox="" srcDoc={body} className="w-full h-full bg-white" title="HTML preview" />;
+  const { t } = useTranslation('apiClient');
+  if (kind === 'html') return <iframe sandbox="" srcDoc={body} className="w-full h-full bg-white" title={t('body.htmlPreview')} />;
   if (kind === 'json') return heavy
     ? <TooBig body={body} />
     : <div className="p-2 overflow-auto h-full"><JsonTree body={body} /></div>;
-  if (kind === 'image') return <div className="h-full flex items-center justify-center text-xs text-muted-foreground p-4 text-center">Binary image preview isn&apos;t available (the body was decoded as text). Save it to view.</div>;
+  if (kind === 'image') return <div className="h-full flex items-center justify-center text-xs text-muted-foreground p-4 text-center">{t('body.imageNotice')}</div>;
   return <pre className={cn('text-xs font-mono p-2 h-full overflow-auto', wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre')}>{body}</pre>;
 }
 

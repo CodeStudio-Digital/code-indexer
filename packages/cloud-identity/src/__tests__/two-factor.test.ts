@@ -65,7 +65,7 @@ const noopThrottle: LoginThrottle = {
 const fakeTotp: TotpPort = {
   generateSecret: () => 'JBSWY3DPEHPK3PXP',
   keyUri: (s, label) => `otpauth://totp/CodeStudio:${label}?secret=${s}`,
-  verify: async (_secret, code) => code === '123456',
+  verify: async (_secret, code) => (code === '123456' ? 1000 : null), // matched step 1000
 };
 const fakeRecovery: RecoveryCodeService = {
   async generate(n) {
@@ -113,6 +113,7 @@ class FakeAccountRepo implements AccountRepo {
       hash: a.passwordHash,
     });
   }
+  async insertOAuth() {}
   async updatePasswordHash() {}
   async markEmailVerified() {}
 }
@@ -130,6 +131,7 @@ class FakeSessionRepo implements SessionRepo {
     const r = this.rows.get(id);
     if (r) r.revoked = true;
   }
+  async setDeviceInfo() {}
   async listByAccount() {
     return [];
   }
@@ -161,17 +163,21 @@ class FakeRefreshRepo implements RefreshTokenRepo {
   async revokeByAccount() {}
 }
 class FakeTwoFactorRepo implements TwoFactorRepo {
-  secrets = new Map<string, { secret: string; enabled: boolean }>();
+  secrets = new Map<string, { secret: string; enabled: boolean; lastStep: number | null }>();
   codes = new Map<string, Set<string>>();
   async getSecret(id: AccountId) {
     return this.secrets.get(id) ?? null;
   }
   async upsertPending(id: AccountId, secret: string) {
-    this.secrets.set(id, { secret, enabled: false });
+    this.secrets.set(id, { secret, enabled: false, lastStep: null });
   }
   async enable(id: AccountId) {
     const s = this.secrets.get(id);
     if (s) s.enabled = true;
+  }
+  async markStep(id: AccountId, step: number) {
+    const s = this.secrets.get(id);
+    if (s) s.lastStep = step;
   }
   async disable(id: AccountId) {
     this.secrets.delete(id);
@@ -239,6 +245,21 @@ describe('TOTP 2FA', () => {
 
     const ch = await t.challenge2fa.execute({ challengeToken: challengeTokenOf(login.error), code: '123456', ...CTX });
     expect(ch.ok).toBe(true);
+  });
+
+  it('rejects a REPLAYED TOTP code at the same step (single-use)', async () => {
+    const t = build();
+    await enrolled(t, 'rp@e.com');
+    const l1 = await t.login.execute({ emailRaw: 'rp@e.com', passwordRaw: 'longenoughpassword', ...CTX });
+    if (l1.ok) return;
+    const ch1 = await t.challenge2fa.execute({ challengeToken: challengeTokenOf(l1.error), code: '123456', ...CTX });
+    expect(ch1.ok).toBe(true); // step 1000 consumed
+
+    const l2 = await t.login.execute({ emailRaw: 'rp@e.com', passwordRaw: 'longenoughpassword', ...CTX });
+    if (l2.ok) return;
+    const replay = await t.challenge2fa.execute({ challengeToken: challengeTokenOf(l2.error), code: '123456', ...CTX });
+    expect(replay.ok).toBe(false); // same step 1000 → rejected
+    if (!replay.ok) expect(replay.error.code).toBe('twofa_invalid');
   });
 
   it('challenge accepts a one-time recovery code and consumes it', async () => {

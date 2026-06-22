@@ -29,13 +29,35 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   /** Public var: the Stripe Price id for the Pro plan. */
   STRIPE_PRO_PRICE_ID?: string;
+  /** Public var: the Stripe Price id for the per-seat Teams plan. */
+  STRIPE_TEAMS_PRICE_ID?: string;
   /** Ed25519 PKCS8 private key (base64) for signing share snapshots. Local:
    *  .dev.vars; prod: `wrangler secret put`. Absent ⇒ share creation returns 501. */
   SHARE_SIGNING_PRIVKEY?: string;
   /** Cloudflare Turnstile secret for anonymous feedback. Absent ⇒ anonymous
    *  feedback is disabled (authenticated feedback still works). */
   TURNSTILE_SECRET?: string;
-  /** Comma-separated CORS origin allowlist (web share viewer / dashboard). The
-   *  desktop app is not a browser origin. Absent ⇒ no cross-origin browser access. */
+  /** Comma-separated CORS origin allowlist (web share viewer / dashboard / account
+   *  portal). The desktop app is not a browser origin. Absent ⇒ no cross-origin
+   *  browser access. */
   ALLOWED_ORIGINS?: string;
+  // ── OAuth (P7-B) — per-provider client credentials. A provider whose pair is
+  //    unset returns 404 (fail-soft, like Stripe/Turnstile). Set via `wrangler
+  //    secret put`; locally via .dev.vars.
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+  GITHUB_OAUTH_CLIENT_ID?: string;
+  GITHUB_OAUTH_CLIENT_SECRET?: string;
+  MS_OAUTH_CLIENT_ID?: string;
+  MS_OAUTH_CLIENT_SECRET?: string;
+  /** Azure tenant for Microsoft OAuth (default 'common'). */
+  MS_OAUTH_TENANT?: string;
+  /** HMAC secret signing the OAuth `state` (CSRF + PKCE-verifier carrier). Absent
+   *  ⇒ OAuth routes 404. */
+  OAUTH_STATE_SECRET?: string;
+  /** Public base URL the provider redirects back to (this worker). Defaults to
+   *  APP_BASE_URL. Must match the redirect URI registered in each provider console. */
+  OAUTH_PUBLIC_BASE_URL?: string;
+  /** Web portal base URL (Cloudflare Pages) for the `flow=portal` handoff. */
+  PORTAL_BASE_URL?: string;
 }

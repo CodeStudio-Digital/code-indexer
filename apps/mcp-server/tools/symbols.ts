@@ -76,11 +76,17 @@ const get_symbol_details = defineTool({
   description: 'Get symbol details by ID',
   inputSchema: {
     type: 'object',
-    properties: { symbol_id: { type: 'number' } },
+    properties: {
+      symbol_id: { type: 'number' },
+      project_name: { type: 'string', description: 'Project that owns the symbol — needed to resolve the id when per-project DBs are split.' },
+    },
     required: ['symbol_id'],
   },
   handler: (args, { db }) => {
-    const sym = db.getSymbolById(args.symbol_id as number);
+    // Surrogate ids are unique only within a project DB post-split; resolve the
+    // owning project when given (central fallback keeps the pre-split behavior).
+    const project = args.project_name ? db.getProjectByName(args.project_name as string) : undefined;
+    const sym = db.getSymbolById(args.symbol_id as number, project?.id);
     if (!sym) throw new Error(`Symbol with id ${args.symbol_id} not found. Use search or get_file_skeleton to find valid symbol IDs. Do not retry with the same symbol_id.`);
     const tags = JSON.parse(sym.tags) as string[];
     const refs = db.getSymbolCallers(sym.project_id, sym.name);
@@ -658,6 +664,7 @@ const semantic_neighbors = defineTool({
     type: 'object',
     properties: {
       symbol_id: { type: 'number', description: 'Seed symbol id. Use search_by_kind or get_file_skeleton to discover ids.' },
+      project_name: { type: 'string', description: 'Project that owns the symbol — needed to resolve the id when per-project DBs are split.' },
       limit: { type: 'number', description: 'Max neighbors to return (default 10)' },
       force_reread: {
         type: 'boolean',
@@ -667,7 +674,9 @@ const semantic_neighbors = defineTool({
     required: ['symbol_id'],
   },
   handler: async (args, { db, embeddingService, vectorStore }) => {
-    const sym = db.getSymbolById(args.symbol_id as number);
+    // Resolve the owning project DB for the surrogate id (central when absent).
+    const seedProject = args.project_name ? db.getProjectByName(args.project_name as string) : undefined;
+    const sym = db.getSymbolById(args.symbol_id as number, seedProject?.id);
     if (!sym) throw new Error(`Symbol with id ${args.symbol_id} not found. Use search or get_file_skeleton to find valid symbol IDs. Do not retry with the same symbol_id.`);
 
     if (!vectorStore || (embeddingService as { constructor: { name: string } }).constructor.name === 'NullEmbeddingService') {

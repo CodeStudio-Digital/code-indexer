@@ -13,6 +13,7 @@
  * empty table; the parent scrolls when there are many rows.
  */
 import { useId, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, List, Table2 } from 'lucide-react';
 import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
@@ -35,6 +36,7 @@ interface Props {
 const CELL = 'h-8 border-0 rounded-none bg-transparent px-2 text-xs font-mono shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:bg-muted/40';
 
 export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key', descriptions = true, suggestions, fileRows, disabled }: Props) {
+  const { t } = useTranslation('apiClient');
   const [bulk, setBulk] = useState(false);
   const listId = useId();
   const cols = descriptions ? '2rem minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) 2rem' : '2rem minmax(0,1fr) minmax(0,1fr) 2rem';
@@ -71,9 +73,9 @@ export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key',
       <div className="border rounded-md overflow-hidden">
         <div className="grid items-center text-[10px] uppercase tracking-wide text-muted-foreground bg-muted/40 border-b" style={{ gridTemplateColumns: cols }}>
           <span />
-          <span className="px-2 py-1">{descriptions ? 'Key' : placeholderKey}</span>
-          <span className="px-2 py-1 border-l border-border/40">Value</span>
-          {descriptions && <span className="px-2 py-1 border-l border-border/40">Description</span>}
+          <span className="px-2 py-1">{descriptions ? t('grid.colKey') : placeholderKey}</span>
+          <span className="px-2 py-1 border-l border-border/40">{t('grid.colValue')}</span>
+          {descriptions && <span className="px-2 py-1 border-l border-border/40">{t('grid.colDescription')}</span>}
           <span />
         </div>
         {render.map((row, i) => {
@@ -91,14 +93,14 @@ export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key',
                   checked={isBlank ? true : row.enabled}
                   disabled={disabled || isBlank}
                   onChange={(e) => toggleRow(i, e.target.checked)}
-                  title="Enabled"
+                  title={t('grid.enabled')}
                   tabIndex={isBlank ? -1 : 0}
                 />
               </div>
               <Input
                 value={row.key}
                 list={suggestions ? listId : undefined}
-                placeholder={isBlank ? `Add ${placeholderKey}…` : placeholderKey}
+                placeholder={isBlank ? t('grid.addPlaceholder', { field: placeholderKey }) : placeholderKey}
                 disabled={disabled}
                 onChange={(e) => (isBlank ? addRow({ key: e.target.value }) : setRow(i, { key: e.target.value }))}
                 onBlur={() => onCommit?.(rows)}
@@ -111,13 +113,13 @@ export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key',
                     value={row.src != null ? 'file' : 'text'}
                     onChange={(e) => commitRows(rows.map((r, j) => (j === i ? { ...r, src: e.target.value === 'file' ? '' : undefined, value: e.target.value === 'file' ? '' : r.value } : r)))}
                   >
-                    <option value="text">T</option>
-                    <option value="file">F</option>
+                    <option value="text">{t('grid.srcText')}</option>
+                    <option value="file">{t('grid.srcFile')}</option>
                   </select>
                 )}
                 <Input
                   value={row.src != null ? row.src : row.value}
-                  placeholder={row.src != null ? '/path/to/file' : 'value'}
+                  placeholder={row.src != null ? '/path/to/file' : t('grid.valuePlaceholder')}
                   disabled={disabled}
                   onChange={(e) => (isBlank
                     ? addRow({ value: e.target.value })
@@ -129,7 +131,7 @@ export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key',
               {descriptions && (
                 <Input
                   value={row.description ?? ''}
-                  placeholder="description"
+                  placeholder={t('grid.descriptionPlaceholder')}
                   disabled={disabled}
                   onChange={(e) => (isBlank ? addRow({ description: e.target.value }) : setRow(i, { description: e.target.value }))}
                   onBlur={() => onCommit?.(rows)}
@@ -139,7 +141,7 @@ export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key',
               <div className="flex justify-center border-l border-border/40">
                 <button
                   type="button"
-                  aria-label="Remove row"
+                  aria-label={t('grid.removeRow')}
                   className={cn('h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted opacity-0 group-hover:opacity-100', isBlank && 'invisible pointer-events-none')}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => removeRow(i)}
@@ -158,10 +160,11 @@ export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key',
 }
 
 function Toolbar({ bulk, onToggle }: { bulk: boolean; onToggle: () => void }) {
+  const { t } = useTranslation('apiClient');
   return (
     <div className="flex justify-end">
       <Button type="button" variant="ghost" size="sm" className="h-6 gap-1 text-[11px] text-muted-foreground" onClick={onToggle}>
-        {bulk ? <><Table2 className="h-3 w-3" /> Grid</> : <><List className="h-3 w-3" /> Bulk Edit</>}
+        {bulk ? <><Table2 className="h-3 w-3" /> {t('grid.grid')}</> : <><List className="h-3 w-3" /> {t('grid.bulkEdit')}</>}
       </Button>
     </div>
   );

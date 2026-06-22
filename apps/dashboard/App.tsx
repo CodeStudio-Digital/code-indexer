@@ -26,6 +26,7 @@ import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
 import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
+import { AccountGate } from './features/account/AccountGate.js';
 import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/index.js';
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
@@ -76,6 +77,17 @@ function AppRoot() {
         resetPreflight();
         setShowPreflight(true);
       },
+      // Recovery valve: disable the cloud sign-in/subscription gate. DEV ONLY —
+      // a no-op in production builds so it can't be used to crack the paywall.
+      bypassCloudGate: () => {
+        if (!(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) return;
+        try {
+          window.localStorage.setItem('mcp-cloud:gate-bypass', '1');
+        } catch {
+          /* ignore */
+        }
+        window.location.reload();
+      },
     };
   }, []);
 
@@ -118,6 +130,9 @@ function AppRoot() {
       ) : (
         showOnboarding && <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
       )}
+      {/* Top-most overlay: sign-in / trial / subscription gate. Renders nothing
+          once the account is entitled (or when the cloud bridge is absent). */}
+      <AccountGate />
     </>
   );
 }

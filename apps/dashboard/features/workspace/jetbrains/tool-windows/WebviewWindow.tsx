@@ -42,6 +42,8 @@ export function WebviewWindow({
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // The exact window we registered — so reload/unmount unregisters the right one.
+  const registeredWin = useRef<MessageEventSource | null>(null);
   // Subscribe so a language switch re-injects + reloads the frame with the new
   // locale (plugins read it via window.mcp.i18n). Uses the app's react-i18next.
   const { i18n, t } = useTranslation('plugins');
@@ -59,13 +61,30 @@ export function WebviewWindow({
     };
   }, [namespace, entry]);
 
-  // Drop the frame's bridge registration on unmount / reload.
+  // Drop the frame's bridge registration on unmount (the exact window we
+  // registered — reload re-registers via onLoad below).
   useEffect(() => {
     return () => {
-      const win = iframeRef.current?.contentWindow;
-      if (win) unregisterPluginFrame(win);
+      if (registeredWin.current) {
+        unregisterPluginFrame(registeredWin.current);
+        registeredWin.current = null;
+      }
     };
-  }, [html]);
+  }, []);
+
+  // Register the loaded window and hand it the `ready` signal so the shim flushes
+  // any tool calls it buffered during boot — closing the registration race that
+  // surfaced as "frame not registered".
+  const handleLoad = (): void => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    if (registeredWin.current && registeredWin.current !== win) {
+      unregisterPluginFrame(registeredWin.current);
+    }
+    registerPluginFrame(win, { namespace, projectId });
+    registeredWin.current = win;
+    win.postMessage({ __mcpPlugin: 'ready' }, '*');
+  };
 
   const doc =
     html === null
@@ -102,10 +121,7 @@ export function WebviewWindow({
             title={`plugin:${namespace}:${title}`}
             sandbox="allow-scripts"
             srcDoc={doc}
-            onLoad={() => {
-              const win = iframeRef.current?.contentWindow;
-              if (win) registerPluginFrame(win, { namespace, projectId });
-            }}
+            onLoad={handleLoad}
             className="h-full w-full border-0"
           />
         )}

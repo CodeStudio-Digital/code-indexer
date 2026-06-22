@@ -488,6 +488,104 @@ Full audit JSON: the workflow run `wf_0a4403a6-806` (transcript in this session'
 
 ---
 
+## 8j. Milestone log (cont.) — M15: hardening backlog + secret rotation
+
+- **M15 — implemented the full hardening backlog from the AppSec review + rotated prod secrets.**
+  - **TOTP single-use** — `TotpPort.verify` now returns the matched time-step; `TwoFactorRepo` tracks
+    `last_step` (migration **0008**, applied remote+local); challenge + disable reject a replayed code
+    (`step > lastStep`) and mark the step. New regression test (replay → rejected). Confirm guarded too.
+  - **Share quota atomic** — replaced check-then-insert with `insertIfUnderQuota` (a single conditional
+    `INSERT … WHERE (SELECT COUNT(*)…) < limit`), killing the TOCTOU race. Port/use-case/repo/fake updated.
+  - **Fail-closed anon IP** — anonymous feedback with no `cf-connecting-ip` is now refused (429) instead of
+    sharing a `noip` bucket.
+  - **Config** — `ENVIRONMENT=production` (was `development`; `/health` now reports production; `.dev.vars`
+    overrides to development locally), explicit **`ALLOWED_ORIGINS`** var (CORS allowlist now live —
+    verified: allowlisted origin echoed, others not), `observability.head_sampling_rate=0.1` (security
+    alerting rides the 100%-durable `audit_log`, not sampled logs). send_email doc clarified.
+  - **CI/CD** — `.github/workflows/cloud-api-ci.yml`: worker tsc + cloud vitest + **gitleaks** secret-scan
+    on push/PR; a **gated** (`environment: production`, manual-approval) `wrangler deploy` on master.
+  - **Tests** — Stripe multi-`v1` + `=`-in-value signature vectors; TOTP replay; 2FA disable step-up.
+    **93 cloud tests green**, Worker tsc 0.
+  - **Secret rotation (resolved pending Q1)** — `ACCESS_SIGNING_SECRET`, `IP_HASH_SALT`,
+    `SHARE_SIGNING_PRIVKEY` regenerated + re-set (the prior values had been shown in chat). New SHARE pubkey
+    recorded in `SECRETS.prod.local.txt`. **Redeployed + live-smoked**: signup/login/me/entitlements all OK
+    after rotation. (Webhook idempotency-by-event-id was already implemented — no change needed.)
+  - **Still documented (not blocking):** trial-farming gate on email-verified (P3); recovery-code entropy.
+
+---
+
+## 8k. Milestone log (cont.) — M16: Phase 7 client foundation
+
+- **M16 — recovery-code entropy fix + Phase 7 (desktop client) foundation.**
+  - **Recovery-code entropy** (last AppSec nit) — `generateCode` no longer truncates: deliberate ~64-bit
+    budget (8 CSPRNG bytes → 13 base32 chars, `XXXXX-XXXXX-XXX`). Worker redeployed.
+  - **Phase 7 foundation** — the cloud client is a SECOND transport (HTTPS to the deployed Worker), NOT the
+    in-process api bus; the refresh token lives only in Electron main.
+    - **Contract:** `packages/api-bus/src/cloud/contract.ts` (typed DTOs + `CloudContract` op-map),
+      re-exported from the api-bus index (consumers `import type { CloudOp } from '@mcp/api-bus'`).
+    - **Electron main** `apps/electron/src/cloud/`: `secure-token-store.ts` (refresh token encrypted via
+      `safeStorage`, injectable → testable), `token-manager.ts` (**single-flight refresh** — N racers ⇒ 1
+      rotation, reuse ⇒ forced logout; the one-shot refresh token can't be burned by a race),
+      `cloud-transport.ts` (bearer + 401→single-flight-retry + timeout + offline), `route-map.ts`
+      (main-only op→URL so the renderer can't aim the bearer anywhere), `cloud-ipc.ts` (establishes/strips
+      the session tokens, broadcasts `cloud:auth-changed`; wired in `main.ts`). preload exposes
+      `electronAPI.cloud.{fetch,getAuthState,logout,onAuthChanged}`.
+    - **Renderer** `apps/dashboard/lib/cloud/`: `cloud-client.ts` (`cloudCall`), `cloud-errors.ts`
+      (`mapCloudError` → UI intents), `use-cloud-session.ts` (React hook, flips on forced logout).
+    - **Verified:** **+7 unit tests** (`token-manager.test.ts` single-flight/reuse/expiry;
+      `cloud-errors.test.ts` mapping). **100 cloud+client tests green.** Electron tsc: **0 real type errors**
+      in the new files (only the pre-existing repo-wide rootDir noise); no api-bus export collisions.
+  - **Pending (task #14):** the actual auth UI screens (`features/account/*`) + an Electron app launch to
+    verify `safeStorage` persistence + the live login flow (can't verify headlessly). The Worker is
+    unchanged by Phase 7 (no redeploy).
+
+---
+
+## 8l. Milestone log (cont.) — M17: Phase 7 login UI
+
+- **M17 — Phase 7 auth UI (sign-in / sign-up / 2FA) in the dashboard.**
+  - `apps/dashboard/features/account/useCloudAuth.ts` — hook over `cloudCall`: signup/login,
+    `auth.challenge2fa` (login → `twofa_required` surfaces a challenge step, not an error), entitlements
+    fetch on login, sign-out. Tokens never touch the renderer (handled in main).
+  - `apps/dashboard/features/account/CloudAccountPanel.tsx` — sign-in/sign-up tabs, the 2FA code step, and
+    the signed-in view (email, plan from entitlements, trialing badge, email-unverified note, sign out).
+    Built on the existing shadcn primitives (`Button`/`Input`/`Tabs`).
+  - i18n: new `cloud` namespace (`locales/{en,pt-BR}/cloud.json`, registered) — EVERY visible string goes
+    through `t()` so the `i18n-coverage` literal scan stays clean (verified: none of my files are flagged).
+  - Mounted in **Admin → "CodeStudio Cloud"** (system group) — reachable, not dead code.
+  - **Verified:** 100 cloud+client tests green; the account files wire correctly. **Cannot verify headless:**
+    the rendered UI + the live login flow + `safeStorage` persistence need an Electron app launch (inherent
+    to UI work). No type/structure errors in the new files.
+  - **Note:** the repo-wide `i18n-coverage` test currently fails on UNRELATED uncommitted WIP (toast
+    literals in `api-client`/`workspace` files I'm constrained not to touch) — not from this work.
+  - **Remaining Phase 7 (follow-up):** forgot/reset-password, 2FA enroll, sessions list, subscription
+    (Stripe checkout via `openExternal`), and the share/feedback UI; + an app-launch end-to-end pass.
+
+---
+
+## 8m. Milestone log (cont.) — M18: Phase 7 full account UI
+
+- **M18 — the rest of the Phase 7 dashboard UI (password recovery, 2FA mgmt, sessions, subscription, feedback).**
+  - **Contract + route-map extended** with the missing ops: `auth.{forgotPassword,resetPassword,verifyEmail,
+    resendVerification,logoutAll,sessions}` and `twofa.{enroll,confirm,disable}` (TS enforces the route-map
+    covers every op).
+  - **New components** (`apps/dashboard/features/account/`): `ForgotResetForms.tsx` (request reset email →
+    paste code + new password), `TwoFactorSection.tsx` (enroll → show secret → confirm → reveal one-time
+    recovery codes; disable with password + code step-up), `SessionsSection.tsx` (device list + sign-out-
+    everywhere), `SubscriptionSection.tsx` (plan + Stripe checkout/portal via `electronAPI.openExternal`),
+    `FeedbackForm.tsx` (bug/idea/other). `CloudAccountPanel.tsx` rewritten to compose them (logged-out:
+    sign-in/up + recovery; logged-in: account + subscription + 2FA + sessions + feedback + verify-resend +
+    sign-out). Helper `lib/cloud/use-cloud-action.ts`.
+  - i18n `cloud` namespace grown to **66 keys, en/pt-BR parity verified**; every string via `t()` → none of
+    my files flagged by the literal scanner.
+  - **Verified:** **100 cloud+client tests green**; electron tsc **0 real errors** (only the repo-wide
+    rootDir noise); all account files reachable via the mounted panel. **Cannot verify headless:** the
+    rendered UI + the live flows need an Electron app launch (inherent).
+  - **Remaining (task #15):** the **share UI** (needs the local snapshot-build + client-redact pipeline,
+    Plan §7.5 — a separate feature) and an **app-launch E2E** pass. Everything else in Phase 7 is built.
+
+---
+
 ## 9. State of the build & next steps (for the morning review)
 
 **Done & verified tonight (unsupervised):** Phase 0 (scaffolding) + Phase 1 (full identity: signup,

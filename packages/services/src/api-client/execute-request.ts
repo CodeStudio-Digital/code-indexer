@@ -40,6 +40,12 @@ export interface ExecuteInput {
   signal?: AbortSignal;
   /** Run pre/test scripts (default true). */
   runScripts?: boolean;
+  /** Refuse private/loopback/link-local/metadata destinations (SSRF guard). */
+  blockPrivateHosts?: boolean;
+  /** Project root that file-backed bodies (binary/form-data) must stay within. */
+  fileRoot?: string;
+  /** Allow absolute / out-of-root file paths for bodies (trusted local caller). */
+  allowAbsoluteFiles?: boolean;
 }
 
 export interface ExecuteResult {
@@ -97,19 +103,28 @@ export async function executeRequest(input: ExecuteInput): Promise<ExecuteResult
     outBody = resolveTemplate(patchedBody, vars);
     defaultCt = defaultContentType(req.body_kind);
   } else {
-    const enc = await encodeBody(req, vars);
+    const enc = await encodeBody(req, vars, { fileRoot: input.fileRoot, allowAbsoluteFiles: input.allowAbsoluteFiles });
     outBody = enc.body;
     defaultCt = enc.contentType;
   }
-  if (defaultCt && !Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
-    headers['content-type'] = defaultCt;
+  if (defaultCt) {
+    const hasCt = Object.keys(headers).some((h) => h.toLowerCase() === 'content-type');
+    if (defaultCt.startsWith('multipart/form-data')) {
+      // The random boundary is intrinsic to the encoded body, so it MUST be the
+      // advertised one — override any user-set Content-Type (a multipart CT
+      // without the matching boundary makes the whole body unparseable).
+      for (const h of Object.keys(headers)) if (h.toLowerCase() === 'content-type') delete headers[h];
+      headers['content-type'] = defaultCt;
+    } else if (!hasCt) {
+      headers['content-type'] = defaultCt;
+    }
   }
 
   // ── Send ──
   const res = await sendHttp({
     url, method: seed.method, headers, body: outBody,
     jar: input.jar, insecure: input.insecure, timeoutMs: input.timeoutMs,
-    maxBytes: input.maxBytes, signal: input.signal,
+    maxBytes: input.maxBytes, blockPrivateHosts: input.blockPrivateHosts, signal: input.signal,
   });
   const ms = Date.now() - t0;
 

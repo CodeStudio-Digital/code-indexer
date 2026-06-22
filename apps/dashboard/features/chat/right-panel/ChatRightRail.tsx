@@ -12,6 +12,7 @@
 import { useTranslation } from 'react-i18next';
 import {
   BarChart3,
+  Bell,
   ClipboardList,
   Compass,
   Gauge,
@@ -50,6 +51,8 @@ interface ChatRightRailProps {
   onOpenSnapshots?: () => void;
   /** Pending snapshot count for the Snapshots badge. */
   pendingSnapshots?: number;
+  /** Unread session-notification count for the Notifications badge. */
+  unreadNotifications?: number;
   /** Plugin tool windows (side: 'right') — one rail icon each. */
   pluginWindows?: ContribToolWindow[];
 }
@@ -59,6 +62,7 @@ export function ChatRightRail({
   onSelectPanel,
   onOpenSnapshots,
   pendingSnapshots,
+  unreadNotifications,
   pluginWindows = [],
 }: ChatRightRailProps) {
   const { t } = useTranslation(['chat']);
@@ -84,6 +88,13 @@ export function ChatRightRail({
   ];
 
   const inspectEntries: RailEntry[] = [
+    {
+      id: 'notifications',
+      icon: Bell,
+      labelKey: 'rightRail.notifications',
+      kind: 'panel',
+      badge: unreadNotifications,
+    },
     { id: 'metrics', icon: Gauge, labelKey: 'rightRail.metrics', kind: 'panel' },
     { id: 'details', icon: Info, labelKey: 'rightRail.details', kind: 'panel' },
     { id: 'tool-stats', icon: BarChart3, labelKey: 'rightRail.toolStats', kind: 'panel' },

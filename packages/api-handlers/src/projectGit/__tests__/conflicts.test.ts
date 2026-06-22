@@ -49,16 +49,17 @@ function runAsResult(cwd: string, _cmd: 'git', args: string[], env?: Record<stri
   }));
 }
 
+// Mirror index.ts detectRepo: one spawn yields repoRoot + the resolved
+// absolute gitDir, which lets detectMergeKind read sequencer state via pure fs.
+async function fakeDetectRepo(root: string) {
+  const r = await runGit(root, ['rev-parse', '--show-toplevel', '--absolute-git-dir']);
+  if (r.code !== 0) return { repoRoot: null, gitDir: null, notARepo: true };
+  const [repoRoot = '', gitDir = ''] = r.stdout.split('\n').map((s) => s.trim());
+  return { repoRoot, gitDir, notARepo: false };
+}
+
 function makeHandlers(dir: string) {
-  return createConflictHandlers({
-    runGit,
-    runAsResult,
-    requireRoot: () => dir,
-    detectRepo: async (root) => {
-      const r = await runGit(root, ['rev-parse', '--show-toplevel']);
-      return r.code === 0 ? { repoRoot: r.stdout.trim(), notARepo: false } : { repoRoot: null, notARepo: true };
-    },
-  });
+  return createConflictHandlers({ runGit, runAsResult, requireRoot: () => dir, detectRepo: fakeDetectRepo });
 }
 
 const dirs: string[] = [];
@@ -98,8 +99,44 @@ describe('conflict resolver engine', () => {
     const s = await h.mergeState({ projectId: 1 }, {} as never);
     expect(s.kind).toBe('cherry-pick');
     expect(s.conflictedFiles).toContain('file.txt');
-    expect(s.oursLabel).toBe('main');
+    // One path per conflicted file (no per-stage duplication from the index).
+    expect(s.conflictedFiles).toHaveLength(1);
+    expect(s.oursLabel).toBe('main'); // derived from fs HEAD read, not `branch --show-current`
     expect(s.theirsLabel).toBe('feature change');
+  });
+
+  // Regression for the perf overhaul: with a resolved gitDir, sequencer
+  // detection must be PURE fs — zero `rev-parse --git-path` spawns (the old
+  // 5-6 spawn cascade was the 63s bottleneck on heavy repos).
+  it('detects sequencer state with no rev-parse --git-path spawns when gitDir is known', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-clean-'));
+    dirs.push(dir);
+    const g = async (...args: string[]) => {
+      const r = await runGit(dir, args);
+      if (r.code !== 0) throw new Error(`git ${args.join(' ')} -> ${r.stderr}`);
+    };
+    await g('init', '-b', 'main');
+    await g('config', 'user.email', 't@example.com');
+    await g('config', 'user.name', 'Tester');
+    await g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(dir, 'file.txt'), 'hello\n');
+    await g('add', '.');
+    await g('commit', '-m', 'base');
+
+    let gitPathSpawns = 0;
+    const spyRunGit: typeof runGit = (cwd, args, opts) => {
+      if (args[0] === 'rev-parse' && args.includes('--git-path')) gitPathSpawns++;
+      return runGit(cwd, args, opts);
+    };
+    const h = createConflictHandlers({
+      runGit: spyRunGit,
+      runAsResult,
+      requireRoot: () => dir,
+      detectRepo: fakeDetectRepo,
+    });
+    const s = await h.mergeState({ projectId: 1 }, {} as never);
+    expect(s.kind).toBeNull(); // clean repo, no op in progress
+    expect(gitPathSpawns).toBe(0); // pure-fs path, not the spawn cascade
   });
 
   it('reads ours/theirs/merged for a conflicted file', async () => {

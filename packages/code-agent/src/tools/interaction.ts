@@ -58,7 +58,7 @@ export const askUser: CoderTool = {
       question: { type: 'string', description: 'Single-sentence prompt. Keep it short and decision-shaped.' },
       header: {
         type: 'string',
-        description: 'Optional short UI label (≤16 chars). Shown above the question in the dashboard.',
+        description: 'Optional short UI label (≤40 chars). Shown above the question in the dashboard.',
       },
       options: {
         type: 'array',
@@ -90,8 +90,8 @@ export const askUser: CoderTool = {
     if (!runner) return err('ask_user tool requires runner context');
 
     const header = typeof args.header === 'string' ? args.header.trim() : '';
-    if (header.length > 16) {
-      return err(`header is too long (${header.length} chars) — keep it under 16. Use the question field for detail.`);
+    if (header.length > 40) {
+      return err(`header is too long (${header.length} chars) — keep it under 40. Use the question field for detail.`);
     }
 
     const optsRaw = Array.isArray(args.options) ? args.options : undefined;

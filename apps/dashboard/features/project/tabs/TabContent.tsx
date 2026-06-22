@@ -86,6 +86,7 @@ export function TabContent(props: TabContentProps) {
   const renderCode = (): ReactNode => (
     <CodeSurface
       mode={lastCodeMode.current}
+      visible={isCode}
       projectId={props.projectId}
       projectName={props.projectName}
       activeFilePath={props.activeFilePath}

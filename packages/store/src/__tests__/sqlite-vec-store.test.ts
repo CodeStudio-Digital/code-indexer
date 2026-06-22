@@ -63,6 +63,12 @@ describe('SqliteVecVectorStore', () => {
 
     const inDocs = await store.search([1, 0, 0], { topK: 10, namespace: 'docs:c5' });
     expect(inDocs.map((r) => r.id)).toEqual(['d']);
+    // 'd' was upserted WITHOUT project_name → stored as '' (vec0 0.1.9 rejects
+    // NULL in TEXT metadata) and OMITTED on read-back (truthy check), so the
+    // returned shape matches the pre-0.1.9 NULL-omit behavior: type+ref_id
+    // present, project_name absent.
+    expect(inDocs[0].metadata).toEqual({ type: 'doc_chunk', ref_id: '3' });
+    expect('project_name' in inDocs[0].metadata).toBe(false);
 
     // No namespace → sees everything (legacy/aggregate behavior).
     const all = await store.search([1, 0, 0], { topK: 10 });

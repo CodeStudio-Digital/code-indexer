@@ -12,7 +12,10 @@
   "compatibility_date": "2024-12-01",
   "compatibility_flags": ["nodejs_compat"],
   "account_id": "0748c7a37faefcdbd0b2ab71580791cd",
-  "observability": { "enabled": true },
+  // Sample 10% of requests for logs in prod (cost). Security alerting does NOT
+  // depend on this — login_fail/token_reuse/account_deleted are written 100% to
+  // the durable, append-only `audit_log` table in D1.
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
   "d1_databases": [
     {
       "binding": "DB",
@@ -37,13 +40,26 @@
     { "tag": "v1", "new_sqlite_classes": ["LoginThrottleDO"] },
     { "tag": "v2", "new_sqlite_classes": ["RateLimitDO"] }
   ],
-  // Email Sending: enable once the sender domain is onboarded (Compute → Email
-  // Service → Email Sending) — uncomment and set EMAIL_FROM to that domain.
-  //   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@yourdomain"] }],
+  // Email Sending — domain `public.codestudio.digital` onboarded + DNS verified
+  // (Cloudflare dash → Email → Email Sending). `allowed_sender_addresses` restricts
+  // which From the Worker may use (must match EMAIL_FROM). For local `wrangler dev`
+  // email tests, add `"remote": true` to proxy sends to the real service.
+  "send_email": [
+    { "name": "EMAIL", "allowed_sender_addresses": ["no-reply@public.codestudio.digital"] }
+  ],
   "vars": {
-    "ENVIRONMENT": "development",
+    "ENVIRONMENT": "production",
     "APP_BASE_URL": "https://app.codestudio.dev",
     "SHARE_BASE_URL": "https://share.codestudio.dev",
-    "EMAIL_FROM": "noreply@codestudio.dev"
+    "EMAIL_FROM": "no-reply@public.codestudio.digital",
+    // Explicit CORS allowlist (auditable). The desktop app is not a browser origin;
+    // these are the future web viewer / dashboard origins.
+    "ALLOWED_ORIGINS": "https://share.codestudio.dev,https://app.codestudio.dev,https://account.codestudio.dev",
+    // Browser OAuth (P7-B/C) — public config. The per-provider client id/secret +
+    // OAUTH_STATE_SECRET are SECRETS (set via `wrangler secret put`), not here.
+    // OAUTH_PUBLIC_BASE_URL is where providers redirect back (this Worker); the
+    // registered callback is <OAUTH_PUBLIC_BASE_URL>/v1/auth/oauth/<provider>/callback.
+    "OAUTH_PUBLIC_BASE_URL": "https://codestudio-cloud-api.maiconspo6792.workers.dev",
+    "PORTAL_BASE_URL": "https://account.codestudio.dev"
   }
 }

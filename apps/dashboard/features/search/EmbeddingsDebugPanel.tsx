@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, ChevronDown, ChevronRight, FlaskConical, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -30,8 +30,9 @@ interface EmbeddingStats {
     live: string | null;
     mismatch: boolean;
   };
-  sampleEmbedded: Array<{ type: string; path: string; embeddingHash: string }>;
-  sampleNotEmbedded: Array<{ type: string; path: string }>;
+  // Loaded lazily from /embeddings/samples after the headline stats render.
+  sampleEmbedded?: Array<{ type: string; path: string; embeddingHash: string }>;
+  sampleNotEmbedded?: Array<{ type: string; path: string }>;
 }
 
 interface TestStep {
@@ -78,14 +79,39 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
 
+  // Always reflects the current prop, so async resolutions can detect a
+  // project switch that happened while they were in flight.
+  const projectIdRef = useRef(projectId);
+  useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
+
+  // This panel instance is reused across project switches (the index surface
+  // isn't keyed by projectId), so reset on change — otherwise it keeps showing
+  // the previous project's coverage/health and re-arms the load.
+  useEffect(() => {
+    setStats(null);
+    setTestResult(null);
+  }, [projectId]);
+
   const loadStats = useCallback(async () => {
+    const reqProjectId = projectId;
     setLoading(true);
     try {
       const r = await fetch(`/api/projects/${projectId}/embeddings/stats`);
-      setStats(await r.json());
+      const data = await r.json();
+      if (reqProjectId !== projectIdRef.current) return; // switched mid-flight
+      setStats(data);
     } finally {
-      setLoading(false);
+      if (reqProjectId === projectIdRef.current) setLoading(false);
     }
+    // Defer the random-scan samples — they don't gate the coverage display.
+    try {
+      const sr = await fetch(`/api/projects/${projectId}/embeddings/samples`);
+      if (sr.ok) {
+        const samples = (await sr.json()) as Pick<EmbeddingStats, 'sampleEmbedded' | 'sampleNotEmbedded'>;
+        if (reqProjectId !== projectIdRef.current) return; // don't splice onto another project
+        setStats((prev) => (prev ? { ...prev, ...samples } : prev));
+      }
+    } catch { /* samples are best-effort */ }
   }, [projectId]);
 
   useEffect(() => {
@@ -182,7 +208,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
             </div>
 
             {/* Samples */}
-            {stats.sampleEmbedded.length > 0 && (
+            {stats.sampleEmbedded && stats.sampleEmbedded.length > 0 && (
               <div className="text-xs space-y-1">
                 <div className="font-medium text-muted-foreground">{t('search:debug.sampleEmbedded')}</div>
                 {stats.sampleEmbedded.map((f, i) => (
@@ -193,7 +219,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
                 ))}
               </div>
             )}
-            {stats.sampleNotEmbedded.length > 0 && (
+            {stats.sampleNotEmbedded && stats.sampleNotEmbedded.length > 0 && (
               <div className="text-xs space-y-1">
                 <div className="font-medium text-muted-foreground">{t('search:debug.sampleNotEmbedded')}</div>
                 {stats.sampleNotEmbedded.map((f, i) => (

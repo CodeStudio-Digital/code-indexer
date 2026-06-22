@@ -107,15 +107,23 @@ export async function runCollection(opts: {
   includeMutating?: boolean;
   onProgress?: (r: AssertionResult) => void;
   signal?: AbortSignal;
+  /** SSRF guard — refuse private/loopback destinations. */
+  blockPrivateHosts?: boolean;
+  /** File-body containment root + whether absolute paths are allowed. */
+  fileRoot?: string;
+  allowAbsoluteFiles?: boolean;
+  /** Response read cap — must match the send route so large bodies aren't truncated. */
+  maxBytes?: number;
 }): Promise<RunReport> {
   const results: AssertionResult[] = [];
   let passed = 0, failed = 0, skipped = 0;
+  let aborted = false;
   // Run-level shared variable scope: a login request that sets {{token}} makes
   // it available to later requests (Postman semantics; mirrors the shared jar).
   const runVars = { ...opts.variables };
 
   for (const req of opts.requests) {
-    if (opts.signal?.aborted) break;
+    if (opts.signal?.aborted) { aborted = true; break; }
     const base: AssertionResult = { requestId: req.id, name: req.name, method: req.method, expected: req.expected_status, actual: null, ok: false };
 
     if (req.expected_status == null) {
@@ -131,6 +139,9 @@ export async function runCollection(opts: {
       const exec = await executeRequest({
         request: req, baseUrl: opts.baseUrl, variables: runVars,
         jar: opts.jar, signal: opts.signal, runScripts: true,
+        blockPrivateHosts: opts.blockPrivateHosts,
+        fileRoot: opts.fileRoot, allowAbsoluteFiles: opts.allowAbsoluteFiles,
+        maxBytes: opts.maxBytes,
       });
       // Chain script var updates into the shared scope for the next request.
       for (const [k, v] of Object.entries(exec.variableUpdates)) {
@@ -150,7 +161,9 @@ export async function runCollection(opts: {
   return {
     total: results.length,
     passed, failed, skipped,
-    status: failed > 0 ? 'failed' : 'passed',
+    // An aborted run is incomplete — never record the partial result as a green
+    // 'passed' run (the sidebar dots + run history would falsely show success).
+    status: aborted ? 'error' : (failed > 0 ? 'failed' : 'passed'),
     results,
   };
 }

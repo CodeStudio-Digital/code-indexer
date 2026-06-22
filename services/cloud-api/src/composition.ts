@@ -16,12 +16,14 @@ import {
   RefreshUseCase,
   RequestPasswordResetUseCase,
   ResetPasswordUseCase,
+  ResolveOAuthIdentityUseCase,
   SendVerificationEmailUseCase,
   SessionIssuer,
   SignupUseCase,
   VerifyEmailUseCase,
 } from '@cloudstudio/cloud-identity';
-import type { AccessClaims, AccountRepo, SessionRepo } from '@cloudstudio/cloud-identity';
+import type { AccessClaims, AccountRepo, SessionRepo, TwoFactorRepo } from '@cloudstudio/cloud-identity';
+import { createOAuthIdentityRepo } from './infra/d1/oauth-identity-repo.js';
 import { pbkdf2Hasher } from './infra/pbkdf2-hasher.js';
 import { createAccessTokenSigner } from './infra/access-token-signer.js';
 import { createAccountRepo } from './infra/d1/account-repo.js';
@@ -55,8 +57,11 @@ export interface IdentityBundle {
   verifyEmail: VerifyEmailUseCase;
   requestPasswordReset: RequestPasswordResetUseCase;
   resetPassword: ResetPasswordUseCase;
+  resolveOAuth: ResolveOAuthIdentityUseCase;
   accounts: AccountRepo;
   sessions: SessionRepo;
+  twoFactor: TwoFactorRepo;
+  issuer: SessionIssuer;
   verifyAccess: (token: string) => Promise<AccessClaims | null>;
 }
 
@@ -105,8 +110,11 @@ export function createIdentityBundle(env: Env): IdentityBundle {
       refreshTokens,
       systemClock,
     ),
+    resolveOAuth: new ResolveOAuthIdentityUseCase(accounts, createOAuthIdentityRepo(db), cryptoIdGen, systemClock),
     accounts,
     sessions,
+    twoFactor,
+    issuer,
     verifyAccess: (token) => signer.verify(token),
   };
 }

@@ -11,9 +11,20 @@ export interface DiffLine {
 
 const MAX_CELLS = 4_000_000; // ~2000×2000 linhas
 
+/**
+ * Normaliza para comparação de linhas: remove BOM inicial e unifica CRLF/CR → LF.
+ * Sem isso, snapshot CRLF vs. disco LF (comum no Windows) faz toda linha divergir
+ * pelo `\r` final → diff acusa o arquivo inteiro como alterado. Espelha o
+ * `hashContent` do file-local-history-store (que já normaliza CRLF/CR → LF).
+ */
+export const normalizeForDiff = (s: string): string => {
+  const body = s.charCodeAt(0) === 0xfeff ? s.slice(1) : s; // tira BOM inicial
+  return body.replace(/\r\n?/g, '\n'); // CRLF e CR solto → LF
+};
+
 export function lineDiff(oldText: string, newText: string): DiffLine[] {
-  const a = oldText.split('\n');
-  const b = newText.split('\n');
+  const a = normalizeForDiff(oldText).split('\n');
+  const b = normalizeForDiff(newText).split('\n');
   const n = a.length;
   const m = b.length;
 

@@ -21,7 +21,7 @@ import type { HandlerDeps } from '../types.js';
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import { sharedPtyManager, defaultShell, loadPty, type PtyManager } from './pty-manager.js';
 import { detectShells } from './shells.js';
-import { resolveProjectNodeBinDir } from '../runtime/node-manager.js';
+import { resolveProjectRuntimeEnv } from '../runtime/runtime-resolve.js';
 
 export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
   const { db } = deps;
@@ -46,13 +46,13 @@ export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
   return {
     async spawn({ target, cols = 80, rows = 24, shell, shellArgs, cwd: cwdOverride, env }) {
       const cwd = cwdOverride ?? resolveCwd(target);
-      // Per-project Node version → prepend its bin dir to PATH so the
-      // terminal uses the same toolchain as the runner.
-      const nodeBinDir =
+      // Per-project runtimes (Node/PHP/Python) → prepend their bin dirs to PATH
+      // (and add e.g. PHPRC) so the terminal uses the same toolchains as the runner.
+      const { pathPrepend, extraEnv } =
         target.kind === 'project'
-          ? (resolveProjectNodeBinDir(db, target.projectId, ensureDataDir()) ?? undefined)
-          : undefined;
-      const { id } = manager.spawn({ shell, shellArgs, cwd, cols, rows, env, nodeBinDir });
+          ? resolveProjectRuntimeEnv(db, target.projectId, ensureDataDir())
+          : { pathPrepend: [], extraEnv: {} };
+      const { id } = manager.spawn({ shell, shellArgs, cwd, cols, rows, env, pathPrepend, extraEnv });
       const entry = manager.get(id);
       return {
         terminalId: id,

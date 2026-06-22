@@ -9,6 +9,9 @@ import {
   NullVectorStore,
   type VectorStore,
 } from '@mcp/store/vectors.js';
+import { SqliteVecVectorStore } from '@mcp/store/sqlite-vec-store.js';
+import { RoutingVectorStore } from '@mcp/store/vectors-routing.js';
+import { projectDbFlags } from '@mcp/shared/utils/config.js';
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
@@ -49,9 +52,21 @@ export function createSearchBundle(
   embeddingOverride?: EmbeddingService,
 ): SearchBundle {
   const embeddingService = embeddingOverride ?? createEmbeddingService(providerStore);
-  const vectorStore = createVectorStore(providerStore);
-  const searchableVectorStore =
-    vectorStore instanceof NullVectorStore ? null : vectorStore;
+  const rawVectorStore = createVectorStore(providerStore);
+  const searchableRaw = rawVectorStore instanceof NullVectorStore ? null : rawVectorStore;
+  // R2 routing flip — when the per-project vectors flag is on AND the backend is
+  // the embedded sqlite-vec store, wrap with a namespace-routing facade so
+  // `code:<project>` ops hit that project's own vectors.db while docs + snapshots
+  // (no `code:` namespace) + remote backends stay central. Flag-off / Null /
+  // remote → the raw store unchanged (byte-identical). Returned as BOTH
+  // vectorStore + searchableVectorStore so EVERY consumer routes by namespace
+  // regardless of which field it reads (code search + re-embed can't diverge).
+  const routed: VectorStore | null =
+    searchableRaw && projectDbFlags().vectors && searchableRaw instanceof SqliteVecVectorStore
+      ? new RoutingVectorStore(searchableRaw, db)
+      : searchableRaw;
+  const vectorStore: VectorStore = routed ?? rawVectorStore;
+  const searchableVectorStore = routed;
 
   const hydeService = new HyDEService(providerStore);
   const hybridSearch = new HybridSearch(
@@ -75,8 +90,11 @@ export function deriveKindLabel(
   instance: { constructor: { name: string } },
   suffix: 'EmbeddingService' | 'VectorStore',
 ): string {
+  // Unwrap the R2 routing facade so the admin diag shows the real backend kind
+  // (e.g. "sqlite-vec") instead of "routing-vector".
+  const real = instance instanceof RoutingVectorStore ? instance.central : instance;
   return (
-    instance.constructor.name
+    real.constructor.name
       .replace(suffix, '')
       .replace(/([A-Z])/g, (_, c: string, i: number) => (i ? '-' : '') + c.toLowerCase())
       .replace(/^-/, '') || 'unknown'

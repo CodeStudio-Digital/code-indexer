@@ -30,7 +30,7 @@ export interface GitStatus {
   upstream: string | null;
   ahead: number;
   behind: number;
-  files: GitStatusFile[];
+  files?: GitStatusFile[];
   /** Repository root, or null when the project isn't a git repo. */
   repoRoot: string | null;
   /** True when `root_path` isn't a git repo at all. */
@@ -219,6 +219,22 @@ export interface GitConflictFile {
  */
 export type ConflictResolution = 'ours' | 'theirs' | { content: string };
 
+/**
+ * Opt-in performance accelerators for the project's repo. `untrackedCache`
+ * is a safe local cache (`.git/index.uc`, no daemon); `fsmonitor` enables
+ * git's built-in file-system-monitor daemon (huge `status` speedup on big
+ * repos, but a background process). Both are off unless the user enables
+ * them and are fully reversible.
+ */
+export interface GitOptimizations {
+  untrackedCache: boolean;
+  fsmonitor: boolean;
+  /** Resolved git version string (e.g. "2.45.1"). */
+  gitVersion: string;
+  /** Whether the installed git ships the built-in fsmonitor daemon (≥ 2.37). */
+  fsmonitorSupported: boolean;
+}
+
 export interface ProjectGitApi {
   status(input: { projectId: number; includeFiles?: boolean }, ctx: ApiContext): Promise<GitStatus>;
 
@@ -226,6 +242,31 @@ export interface ProjectGitApi {
     input: { projectId: number; path?: string; staged?: boolean },
     ctx: ApiContext,
   ): Promise<GitDiffResult>;
+
+  /**
+   * The committed (HEAD) content of one file — the baseline the editor's
+   * change markers diff the live buffer against. `isRepo` is false when the
+   * project isn't a git repo (no markers at all); when true, `content` null
+   * means the file isn't at HEAD yet (new / untracked) and the gutter treats
+   * the whole file as added.
+   */
+  baseline(
+    input: { projectId: number; path: string },
+    ctx: ApiContext,
+  ): Promise<{ content: string | null; isRepo: boolean }>;
+
+  /**
+   * Stage just the part of a file's working-tree changes that overlaps the
+   * line range `[newStart, newEnd]` (1-based, on the working-tree/new side) —
+   * the partial-hunk staging behind the gutter "stage/commit this block"
+   * action. The file must already be flushed to disk. Builds a patch from
+   * `git diff` (worktree↔index), keeps the overlapping hunks, and
+   * `git apply --cached`s it. Throws 409 when the hunk no longer applies.
+   */
+  stageHunk(
+    input: { projectId: number; path: string; newStart: number; newEnd: number },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
 
   log(
     input: { projectId: number; limit?: number; path?: string; branch?: string },
@@ -252,6 +293,17 @@ export interface ProjectGitApi {
     ctx: ApiContext,
   ): Promise<GitDiffResult>;
 
+  /**
+   * Diff another branch against the current one. `worktree` → `git diff
+   * <branch>` (branch vs working tree, "Show diff with working tree");
+   * otherwise `git diff HEAD...<branch>` (symmetric from the merge-base,
+   * "Compare with current"). Opens as a normal diff tab.
+   */
+  branchDiff(
+    input: { projectId: number; branch: string; worktree?: boolean },
+    ctx: ApiContext,
+  ): Promise<GitDiffResult>;
+
   stage(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
   unstage(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
   discard(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
@@ -275,7 +327,18 @@ export interface ProjectGitApi {
    * backwards compatibility with older callers.
    */
   branchesDetailed(
-    input: { projectId: number; includeRemote?: boolean },
+    input: {
+      projectId: number;
+      includeRemote?: boolean;
+      /**
+       * Cache token — the caller's current git-revision. The handler caches
+       * the (expensive on big repos) `for-each-ref` result per
+       * (project, includeRemote, rev); same rev → cached, no git spawn; a new
+       * rev (a checkout/commit/fetch moved a ref) recomputes. Omit to always
+       * recompute.
+       */
+      rev?: number;
+    },
     ctx: ApiContext,
   ): Promise<GitBranch[]>;
 
@@ -298,6 +361,17 @@ export interface ProjectGitApi {
   // ── History-rewriting / merge ops ──────────────────────────
   merge(
     input: { projectId: number; branch: string; ffOnly?: boolean; noFf?: boolean; message?: string },
+    ctx: ApiContext,
+  ): Promise<GitRunResult>;
+
+  /**
+   * Rebase the current branch onto another ref (`git rebase <onto>`). Runs
+   * non-interactively (editor suppressed) so it can't hang; a conflict stops
+   * the rebase and is surfaced through `mergeState` (kind `'rebase'`), where
+   * the existing resolver + `mergeContinue`/`mergeAbort` take over.
+   */
+  rebase(
+    input: { projectId: number; onto: string },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
@@ -356,6 +430,25 @@ export interface ProjectGitApi {
   /** Abort the in-progress op (`<kind> --abort`), restoring pre-op state. */
   mergeAbort(input: { projectId: number }, ctx: ApiContext): Promise<GitRunResult>;
 
+  // ── Performance ────────────────────────────────────────────
+  /**
+   * Read the repo's performance-related config (core.untrackedCache /
+   * core.fsmonitor) plus the git version and fsmonitor support. Powers the
+   * "Git performance" toggles' current state.
+   */
+  gitOptimizations(input: { projectId: number }, ctx: ApiContext): Promise<GitOptimizations>;
+
+  /**
+   * Enable/disable the repo's accelerators (writes `.git/config`). Omitted
+   * fields are left unchanged. `fsmonitor` also starts/stops the built-in
+   * daemon. Returns the fresh state. Reversible; only ever called from an
+   * explicit user toggle.
+   */
+  configureGitOptimizations(
+    input: { projectId: number; untrackedCache?: boolean; fsmonitor?: boolean },
+    ctx: ApiContext,
+  ): Promise<GitOptimizations>;
+
   // ── Remote sync ────────────────────────────────────────────
   /**
    * Push the current (or given) branch to remote. `setUpstream: true`
@@ -388,6 +481,18 @@ export interface ProjectGitApi {
    */
   pull(
     input: { projectId: number; remote?: string; branch?: string; rebase?: boolean },
+    ctx: ApiContext,
+  ): Promise<GitRunResult>;
+
+  /**
+   * Fast-forward a NON-current local branch to its tracking upstream WITHOUT
+   * checking it out (`git fetch <remote> <src>:<branch>`). Refuses a
+   * non-fast-forward (diverged) update — the stderr is surfaced. The current
+   * branch is updated with `pull` instead (git won't fetch into a checked-out
+   * ref). Powers the branch menu's "Update" for non-current branches.
+   */
+  updateBranch(
+    input: { projectId: number; branch: string },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
@@ -474,4 +579,12 @@ export interface ProjectGitApi {
     input: { projectId: number },
     ctx: ApiContext,
   ): Promise<{ message: string }>;
+
+  /**
+   * Detect the project's `origin` remote URL + default branch (best-effort).
+   * Powers the cloud project-library pointer (P6-C). Returns nulls for a non-git
+   * project or when no `origin` remote is configured. On-demand only (NOT called
+   * on project open) to avoid a per-open git spawn.
+   */
+  detectRemote(input: { projectId: number }): Promise<{ gitRemote: string | null; defaultBranch: string | null }>;
 }

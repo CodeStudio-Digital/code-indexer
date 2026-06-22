@@ -141,10 +141,12 @@ export { verifySplit, type VerifyResult } from './verify.js';
 export { ensureCentralBackup, backupPathFor } from './backup.js';
 export { INDEX_TABLES, manifestFor, type SplitClass, type ManifestEntry } from './manifest.js';
 export {
-  SPLIT_COMPLETE_KEY,
-  isSplitComplete,
-  markSplitCompleteIfDone,
-  readSplitComplete,
-  pendingProjectCount,
-  centralStillHasProjectRows,
-} from './completion.js';
+  splitProjectVectors,
+  verifyVectorParity,
+  centralVectorsPath,
+  projectVectorsPath,
+  type VectorsSplitOutcome,
+  type VectorsSplitDeps,
+  type VecParity,
+} from './vectors-split.js';
+export { purgeProjectIndex, vacuumCentral, type PurgeResult } from './purge.js';

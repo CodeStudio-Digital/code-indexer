@@ -81,6 +81,7 @@ class FakeAccountRepo implements AccountRepo {
       hash: a.passwordHash,
     });
   }
+  async insertOAuth() {}
   async updatePasswordHash() {}
   async markEmailVerified() {}
 }
@@ -99,11 +100,21 @@ class FakeSessionRepo implements SessionRepo {
     const r = this.rows.get(id);
     if (r) r.revoked = true;
   }
+  async setDeviceInfo() {}
   async listByAccount(accountId: AccountId) {
     const out = [];
     for (const [id, r] of this.rows)
       if (r.accountId === accountId && !r.revoked)
-        out.push({ id: asSessionId(id), userAgent: r.userAgent, createdAt: r.createdAt, lastSeenAt: r.createdAt });
+        out.push({
+          id: asSessionId(id),
+          userAgent: r.userAgent,
+          deviceName: null,
+          osRelease: null,
+          geoCountry: null,
+          geoCity: null,
+          createdAt: r.createdAt,
+          lastSeenAt: r.createdAt,
+        });
     return out;
   }
   async revokeAllForAccount(accountId: AccountId) {
@@ -164,6 +175,7 @@ const noopTwoFactor: TwoFactorRepo = {
   async upsertPending() {},
   async enable() {},
   async disable() {},
+  async markStep() {},
   async addRecoveryCodes() {},
   async consumeRecoveryCode() {
     return false;

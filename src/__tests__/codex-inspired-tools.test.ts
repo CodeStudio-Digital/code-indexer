@@ -96,10 +96,10 @@ describe('ask_user — tightened schema', () => {
     expect(r.content).toContain('duplicate');
   });
 
-  it('rejects header longer than 16 chars', async () => {
+  it('rejects header longer than 40 chars', async () => {
     const runner = new FakeRunner();
     const r = await askUser.handler(
-      { question: 'q?', header: 'this header is far too long' },
+      { question: 'q?', header: 'this header is far too long to be a short ui label' },
       ctx(runner),
     );
     expect(r.isError).toBe(true);

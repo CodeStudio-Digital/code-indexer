@@ -3,6 +3,7 @@
  * Controlled: value in, onChange out, onBlur persists.
  */
 import { useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { editor } from 'monaco-editor';
 import { Wand2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
@@ -22,6 +23,7 @@ interface Props {
 const HEAVY_BYTES = 1024 * 1024;
 
 export function JsonRawEditor({ value, language, onChange, onBlur, showFormat = true }: Props) {
+  const { t } = useTranslation('apiClient');
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   // The blur listener is registered once in onMount; route it through a ref so it
   // always calls the LATEST onBlur (which closes over the current draft) — else
@@ -47,7 +49,7 @@ export function JsonRawEditor({ value, language, onChange, onBlur, showFormat = 
       {showFormat && (
         <div className="flex justify-end">
           <Button type="button" variant="ghost" size="sm" className="h-6 gap-1 text-[11px] text-muted-foreground" onClick={format}>
-            <Wand2 className="h-3 w-3" /> Format
+            <Wand2 className="h-3 w-3" /> {t('editor.format')}
           </Button>
         </div>
       )}

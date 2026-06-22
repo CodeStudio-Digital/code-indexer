@@ -4,6 +4,7 @@
  * server-side; this editor sends values on save but the list view masks them.
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Button } from '../../components/ui/button.js';
@@ -36,6 +37,7 @@ interface Props {
 }
 
 export function EnvEditor({ projectId, environments, open, onOpenChange, onChanged, editId }: Props) {
+  const { t } = useTranslation('apiClient');
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [isDefault, setIsDefault] = useState(false);
@@ -71,27 +73,27 @@ export function EnvEditor({ projectId, environments, open, onOpenChange, onChang
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>{editId == null ? 'New environment' : 'Edit environment'}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{editId == null ? t('env.newTitle') : t('env.editTitle')}</DialogTitle></DialogHeader>
 
         <div className="space-y-2">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Environment name" className="h-8 text-sm" />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('env.namePlaceholder')} className="h-8 text-sm" />
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:3000" className="h-8 text-sm font-mono" />
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} /> Default environment
+            <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} /> {t('env.defaultEnvironment')}
           </label>
         </div>
 
         <div className="space-y-1">
-          <div className="text-xs font-medium text-muted-foreground">Variables</div>
+          <div className="text-xs font-medium text-muted-foreground">{t('env.variables')}</div>
           {vars.map((v, i) => (
             <div key={i} className="flex gap-1 items-center">
-              <Input value={v.key} placeholder="key" className="h-7 text-xs font-mono w-32"
+              <Input value={v.key} placeholder={t('env.keyPlaceholder')} className="h-7 text-xs font-mono w-32"
                 onChange={(e) => setVars((p) => p.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} />
-              <Input value={v.value} placeholder="value" type={v.secret ? 'password' : 'text'} className="h-7 text-xs font-mono flex-1"
+              <Input value={v.value} placeholder={t('env.valuePlaceholder')} type={v.secret ? 'password' : 'text'} className="h-7 text-xs font-mono flex-1"
                 onChange={(e) => setVars((p) => p.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
-              <label className="flex items-center gap-1 text-[10px] text-muted-foreground" title="Mask this value">
+              <label className="flex items-center gap-1 text-[10px] text-muted-foreground" title={t('env.maskValue')}>
                 <input type="checkbox" checked={v.secret}
-                  onChange={(e) => setVars((p) => p.map((x, j) => j === i ? { ...x, secret: e.target.checked } : x))} /> secret
+                  onChange={(e) => setVars((p) => p.map((x, j) => j === i ? { ...x, secret: e.target.checked } : x))} /> {t('env.secret')}
               </label>
               <button className="text-muted-foreground hover:text-red-500" onClick={() => setVars((p) => p.filter((_, j) => j !== i))}>
                 <Trash2 className="h-3.5 w-3.5" />
@@ -100,15 +102,15 @@ export function EnvEditor({ projectId, environments, open, onOpenChange, onChang
           ))}
           <Button size="sm" variant="ghost" className="h-6 text-xs gap-1"
             onClick={() => setVars((p) => [...p, { key: '', value: '', secret: false }])}>
-            <Plus className="h-3 w-3" /> Add variable
+            <Plus className="h-3 w-3" /> {t('env.addVariable')}
           </Button>
         </div>
 
         <div className="flex justify-between pt-2">
           {editId != null
-            ? <Button variant="ghost" size="sm" className="text-red-500" onClick={remove}>Delete</Button>
+            ? <Button variant="ghost" size="sm" className="text-red-500" onClick={remove}>{t('env.delete')}</Button>
             : <span />}
-          <Button size="sm" onClick={save}>Save</Button>
+          <Button size="sm" onClick={save}>{t('env.save')}</Button>
         </div>
       </DialogContent>
     </Dialog>

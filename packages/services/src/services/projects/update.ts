@@ -2,6 +2,8 @@ import { existsSync, statSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { Project, SearchMode } from '@mcp/shared/types.js';
+import { parseRuntimeVersions } from '@mcp/shared/utils/runtime-versions.js';
+import { PHP_LEVELS, PYTHON_LEVELS, snapToLevels, writeLanguageLevel } from '@mcp/shared/utils/language-levels.js';
 import { ProjectError } from './errors.js';
 
 export interface UpdateProjectInput {
@@ -14,6 +16,52 @@ export interface UpdateProjectInput {
   node_version?: string | null;
   runner_shell?: string | null;
   memory_enabled?: boolean;
+  /** Per-project PHP/Python runtime ids — JSON string `{"php":"managed:8.3.7"}`. */
+  runtime_versions?: string | null;
+  /** Per-project package-manager prefs — JSON `{"node":"pnpm","python":"poetry"}`. */
+  package_managers?: string | null;
+  /** LSP language level JSON (migration 157) — set here when synced from a runtime change. */
+  language_levels?: string | null;
+}
+
+/** "8.3" out of a runtime id like 'managed:8.3.7' / 'homebrew:8.3.7'; undefined for 'system'. */
+function minorFromRuntimeId(id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  const ver = id.includes(':') ? id.slice(id.indexOf(':') + 1) : '';
+  const m = /(\d+)\.(\d+)/.exec(ver);
+  return m ? `${m[1]}.${m[2]}` : undefined;
+}
+
+/**
+ * Sync the LSP language level to a freshly-chosen runtime: derive the minor
+ * from the php/python runtime id and snap it onto the supported levels, so
+ * Intelephense/Pyright analyse against the version the project actually runs.
+ *
+ * Only syncs a language whose runtime id ACTUALLY CHANGED in this PATCH
+ * (`old` vs `next`) — otherwise a Python-only change (or a no-op re-save)
+ * would clobber a language level the user pinned by hand for PHP, and
+ * vice-versa. Returns the updated language_levels JSON, or undefined when
+ * nothing changed/maps. The running LSP picks it up on its next (re)start.
+ */
+function syncLanguageLevels(
+  nextRuntimeJson: string | null,
+  oldRuntimeJson: string | null,
+  currentLevels: string | null,
+): string | undefined {
+  const next = parseRuntimeVersions(nextRuntimeJson);
+  const old = parseRuntimeVersions(oldRuntimeJson);
+  let levels: string | null = currentLevels;
+  let changed = false;
+  const sync = (key: 'php' | 'python', supported: readonly string[]): void => {
+    if (next[key] === old[key]) return; // this language's runtime didn't change
+    const minor = minorFromRuntimeId(next[key]);
+    if (!minor) return; // 'system'/cleared → leave the level as the user has it
+    const lvl = snapToLevels(minor, supported);
+    if (lvl) { levels = writeLanguageLevel(levels, key, lvl); changed = true; }
+  };
+  sync('php', PHP_LEVELS);
+  sync('python', PYTHON_LEVELS);
+  return changed ? (levels ?? undefined) : undefined;
 }
 
 const VALID_SEARCH_MODES: ReadonlySet<string> = new Set(['fts', 'vector', 'hybrid']);
@@ -84,6 +132,25 @@ export class UpdateProjectService {
     if (patch.runner_shell !== undefined) {
       // Opaque shell id resolved at spawn time; empty string → system default.
       updates.runner_shell = patch.runner_shell || null;
+    }
+
+    if (patch.runtime_versions !== undefined) {
+      // Opaque per-language runtime ids (JSON) resolved at spawn time; empty → null.
+      updates.runtime_versions = patch.runtime_versions || null;
+      // Keep the editor's LSP language level in step with a CHANGED runtime
+      // (per-key diff so a manual language-level pin isn't clobbered).
+      const synced = syncLanguageLevels(
+        updates.runtime_versions ?? null,
+        project.runtime_versions ?? null,
+        project.language_levels,
+      );
+      if (synced !== undefined) updates.language_levels = synced;
+    }
+
+    if (patch.package_managers !== undefined) {
+      // Opaque per-language manager prefs (JSON) consumed by the runner's
+      // detect override + the dependency assistant; empty → null (auto-detect).
+      updates.package_managers = patch.package_managers || null;
     }
 
     if (patch.memory_enabled !== undefined) {

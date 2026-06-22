@@ -51,14 +51,55 @@ export default definePlugin({
 });
 `;
 
-export const PANEL_HTML = `<!doctype html>
+/**
+ * Webview entry is a `*.template.html`: `mcp-plugin build` bundles `./src/main.ts`
+ * (and any relative <link>) inline into a self-contained `ui/panel.html` (the
+ * artifact the tool window's `entry` points at). The `.mcp-*` kit CSS is injected
+ * by the host at runtime — never vendor it.
+ */
+export const PANEL_TEMPLATE_HTML = `<!doctype html>
 <html>
-  <head><meta charset="utf-8" /><title>Hello</title></head>
-  <body style="font-family: sans-serif; padding: 12px;">
-    <h3>Hello from a plugin webview</h3>
-    <p>This iframe is sandboxed. Talk to the host via the injected bridge.</p>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root" class="mcp-app"></div>
+    <script src="./src/main.ts"></script>
   </body>
 </html>
 `;
 
-export const GITIGNORE = 'dist/\nnode_modules/\n';
+export const UI_MAIN_TS = `import { mcp, pageHeader, state } from '@mcp/plugin-sdk/ui';
+
+/**
+ * Starter panel. Build your UI with the @mcp/plugin-sdk/ui primitives —
+ * masterDetail, navRail, dataTable, status, pageHeader, icon, … — over the
+ * host-injected .mcp-* kit. window.mcp talks to the host (invokeTool, ui, …).
+ */
+const root = document.getElementById('root');
+if (root) {
+  root.append(
+    pageHeader({
+      title: 'Hello',
+      subtitle: 'A starter plugin panel.',
+      primary: { label: 'Echo', icon: 'sparkles', onClick: () => void echo() },
+    }),
+    state({
+      icon: 'sparkles',
+      title: 'Welcome',
+      message: 'Edit ui/src/main.ts to build your panel.',
+    }),
+  );
+}
+
+async function echo(): Promise<void> {
+  const r = await mcp.invokeTool('echo', { text: 'Hello from the panel' });
+  void mcp.ui.toast({ kind: 'success', message: r.content });
+}
+`;
+
+// Generated build artifacts are not committed (the template + src are the source).
+export const GITIGNORE = 'dist/\nnode_modules/\n.app.json\nui/panel.html\n';

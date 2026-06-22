@@ -1,11 +1,13 @@
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Activity,
+  ALargeSmall,
   AlertTriangle,
   AppWindow,
   Blocks,
   BookOpen,
+  ChevronRight,
   Languages,
   Database,
   Gauge,
@@ -20,10 +22,10 @@ import {
   Settings2,
   Wand2,
   Wrench,
-  type LucideIcon,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
-import { cn } from '../../lib/utils.js';
+import { SettingsRail } from './SettingsRail.js';
+import type { GroupDef, SectionDef, SectionId } from './settings-types.js';
 import { BedrockCredentialsDialog } from './BedrockCredentialsDialog.js';
 import { ChatgptConnectionDialog } from './ChatgptConnectionDialog.js';
 import { ClaudeCodeConnectionDialog } from './ClaudeCodeConnectionDialog.js';
@@ -45,6 +47,7 @@ import { HygienePanel } from './HygienePanel.js';
 import { LspServersPanel } from './LspServersPanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
+import { AppearancePanel } from './AppearancePanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
 import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { VerdaccioPanel } from './VerdaccioPanel.js';
@@ -55,38 +58,6 @@ import PerfMonitorPanel from './perf/PerfMonitorPanel.js';
 // below is the only one that stays here.
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
-
-type SectionId =
-  | 'providers'
-  | 'capabilities'
-  | 'app-settings'
-  | 'storage'
-  | 'hygiene'
-  | 'search'
-  | 'tools'
-  | 'mcp-servers'
-  | 'mcp-http'
-  | 'skills'
-  | 'plugins'
-  | 'ai-geral'
-  | 'chrome-service'
-  | 'verdaccio'
-  | 'pipeline-bindings'
-  | 'perf'
-  | 'auth';
-
-type GroupId = 'models' | 'knowledge' | 'extensions' | 'services' | 'system';
-
-interface SectionDef {
-  id: SectionId;
-  label: string;
-  icon: LucideIcon;
-  /** Which rail group this section is filed under (see `groups`). */
-  group: GroupId;
-  /** Optional descriptor — surfaces as muted-fg sub-text under each rail
-   *  row so the user knows what the section covers without clicking. */
-  hint?: string;
-}
 
 export default function Admin() {
   const { t } = useTranslation(['admin', 'common']);
@@ -154,7 +125,7 @@ export default function Admin() {
   // drives header order (top → bottom: everyday model/AI tuning down to
   // system/infra); each section declares its `group` and the render
   // filters by it, so within-group order follows the `sections` array.
-  const groups: { id: GroupId; label: string }[] = [
+  const groups: GroupDef[] = [
     { id: 'models',     label: t('admin:tabs.group.models') },
     { id: 'knowledge',  label: t('admin:tabs.group.knowledge') },
     { id: 'extensions', label: t('admin:tabs.group.extensions') },
@@ -204,106 +175,45 @@ export default function Admin() {
       hint: t('admin:perf.hint') },
     { id: 'auth',              label: t('admin:tabs.auth'),       icon: KeyRound,      group: 'system',
       hint: 'OAuth 2.1, API tokens, audit log' },
+    { id: 'appearance',        label: t('admin:tabs.appearance'), icon: ALargeSmall,   group: 'system',
+      hint: t('admin:appearance.subtitle') },
   ];
 
   const active = sections.find((s) => s.id === section) ?? sections[0];
 
-  // One rail row. Extracted so the grouped render can reuse it per group
-  // without duplicating the button JSX.
-  const renderRow = (def: SectionDef) => {
-    const Icon = def.icon;
-    const isActive = section === def.id;
-    return (
-      <button
-        key={def.id}
-        type="button"
-        onClick={() => setSection(def.id)}
-        aria-current={isActive ? 'page' : undefined}
-        title={def.hint}
-        className={cn(
-          'relative text-left rounded-sm px-2 py-1.5 transition-colors flex items-center gap-2',
-          isActive
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-        )}
-      >
-        {/* Active accent bar — flush against the rail edge. */}
-        {isActive && (
-          <span
-            aria-hidden
-            className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-primary"
-          />
-        )}
-        <Icon
-          className={cn(
-            'h-3.5 w-3.5 shrink-0',
-            isActive ? 'text-primary' : 'text-muted-foreground/70',
-          )}
-        />
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-[12.5px] font-medium',
-            isActive ? 'text-foreground' : '',
-          )}
-        >
-          {def.label}
-        </span>
-      </button>
-    );
-  };
-
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">{t('admin:title')}</h1>
-        <p className="text-sm text-muted-foreground">
-          {t('admin:description')}
-        </p>
-      </div>
-
-      <div className="flex gap-6">
-        {/* Left rail — list of settings sections. Each row is a single
-            line: icon + label + (when active) accent bar. The section
-            hint moved to a `title` tooltip + a strip above the content
-            area, so the rail itself stays compact. Sticky so the rail
-            stays in view when the content area scrolls (large panels
-            like Providers can be tall). */}
-        <aside className="w-52 shrink-0">
-          <nav
-            aria-label="Settings sections"
-            className="sticky top-0 flex flex-col gap-0.5 border rounded-md bg-card/40 p-1"
-          >
-            {groups.map((g, gi) => (
-              <Fragment key={g.id}>
-                <div
-                  className={cn(
-                    'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60',
-                    gi === 0 ? 'pt-1' : 'pt-2.5',
-                  )}
-                >
-                  {g.label}
-                </div>
-                {sections.filter((s) => s.group === g.id).map(renderRow)}
-              </Fragment>
-            ))}
-          </nav>
+    // Full-height IDE-style shell: rail + content scroll independently.
+    // `/admin` opts out of AppShell's outer scroll+padding (see AppShell),
+    // so this owns the height and padding. `min-h-0` on flex children is
+    // load-bearing — without it the inner `overflow-y-auto` never engages.
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-1 min-h-0">
+        {/* Left rail — searchable, collapsible settings tree. Scrolls
+            independently of the content pane. */}
+        <aside className="w-56 shrink-0 border-r overflow-y-auto bg-card/40">
+          <SettingsRail
+            sections={sections}
+            groups={groups}
+            activeId={section}
+            onSelect={setSection}
+          />
         </aside>
 
-        {/* Content pane — renders the active section. The header strip
-            inside shows the section label so the user has a visible
-            anchor after they leave the rail (helps when the rail
-            scrolls out of view on small screens / narrow windows). */}
-        <section className="flex-1 min-w-0 space-y-4">
-          <div className="flex items-center gap-2 pb-2 border-b">
-            <active.icon className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">{active.label}</h2>
+        {/* Content pane — fixed breadcrumb header + scrolling body. */}
+        <section className="flex-1 min-w-0 flex flex-col min-h-0">
+          <div className="flex items-center gap-1.5 px-6 py-3 border-b shrink-0 text-sm">
+            <span className="text-muted-foreground">{t('admin:title')}</span>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
+            <active.icon className="h-4 w-4 text-primary shrink-0" />
+            <span className="font-semibold truncate">{active.label}</span>
             {active.hint && (
-              <span className="text-[11.5px] text-muted-foreground hidden sm:inline">
+              <span className="text-[11.5px] text-muted-foreground hidden md:inline truncate">
                 · {active.hint}
               </span>
             )}
           </div>
 
+          <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-4">
           {section === 'providers' && (
             <div className="space-y-4">
               <div className="flex items-center justify-end gap-2 flex-wrap">
@@ -447,6 +357,8 @@ export default function Admin() {
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
           {section === 'perf'              && <PerfMonitorPanel />}
           {section === 'auth'              && <AuthPanel />}
+          {section === 'appearance'        && <AppearancePanel />}
+          </div>
         </section>
       </div>
 

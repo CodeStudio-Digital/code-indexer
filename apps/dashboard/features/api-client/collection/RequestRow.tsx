@@ -4,6 +4,7 @@
  * right-click context menu (open / duplicate / move to folder / delete).
  */
 import { memo, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Circle, Trash2, Copy, ExternalLink, FolderInput, Plus } from 'lucide-react';
 import { useContextMenu, type ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { cn } from '../../../lib/utils.js';
@@ -28,26 +29,27 @@ interface Props {
 }
 
 function RequestRowImpl(p: Props) {
+  const { t } = useTranslation('apiClient');
   const r = p.request;
   const ran = r.last_status != null;
   const tone = statusColor(r.last_status);
-  const dotTitle = ran ? `last status ${r.last_status}` : (r.verified ? 'verified (not run yet)' : 'not sent yet');
+  const dotTitle = ran ? t('row.lastStatus', { status: r.last_status }) : (r.verified ? t('row.verifiedNotRun') : t('row.notSent'));
 
   // Rebuild the menu only when the row's folder, the folder list, or a handler
   // changes — not on every parent re-render (typing/drag re-renders the list).
   const items = useMemo<ContextMenuItem[]>(() => [
-    { id: 'open', label: 'Open', icon: ExternalLink, onSelect: () => p.onOpen(r.id) },
-    { id: 'dup', label: 'Duplicate', icon: Copy, onSelect: () => p.onDuplicate(r.id) },
+    { id: 'open', label: t('row.open'), icon: ExternalLink, onSelect: () => p.onOpen(r.id) },
+    { id: 'dup', label: t('row.duplicate'), icon: Copy, onSelect: () => p.onDuplicate(r.id) },
     {
-      id: 'move', label: 'Move to', icon: FolderInput, separatorBefore: true,
+      id: 'move', label: t('row.moveTo'), icon: FolderInput, separatorBefore: true,
       submenu: [
-        { id: 'move-top', label: 'Top level', onSelect: () => p.onMove(r.id, null) },
+        { id: 'move-top', label: t('row.topLevel'), onSelect: () => p.onMove(r.id, null) },
         ...p.folders.filter((f) => f !== (r.folder ?? '')).map((f) => ({ id: `move-${f}`, label: f, onSelect: () => p.onMove(r.id, f) })),
-        { id: 'move-new', label: 'New folder…', icon: Plus, separatorBefore: true, onSelect: () => p.onMoveToNew(r.id) },
+        { id: 'move-new', label: t('row.newFolder'), icon: Plus, separatorBefore: true, onSelect: () => p.onMoveToNew(r.id) },
       ],
     },
-    { id: 'del', label: 'Delete', icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => p.onDelete(r.id) },
-  ], [r.id, r.folder, p.folders, p.onOpen, p.onDuplicate, p.onMove, p.onMoveToNew, p.onDelete]);
+    { id: 'del', label: t('row.delete'), icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => p.onDelete(r.id) },
+  ], [r.id, r.folder, p.folders, p.onOpen, p.onDuplicate, p.onMove, p.onMoveToNew, p.onDelete, t]);
   const { triggerProps, Menu } = useContextMenu(items);
 
   return (
@@ -82,7 +84,7 @@ function RequestRowImpl(p: Props) {
       </div>
       {!p.selectMode && (
         <button className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 mt-0.5"
-          title="Delete request" onClick={(e) => { e.stopPropagation(); p.onDelete(r.id); }}>
+          title={t('row.deleteRequest')} onClick={(e) => { e.stopPropagation(); p.onDelete(r.id); }}>
           <Trash2 className="h-3 w-3" />
         </button>
       )}

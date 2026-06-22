@@ -3,10 +3,11 @@
  * Carrega status + mergeState, agrupa arquivos por stage, e expõe as ações
  * (stage/unstage/discard/showDiff/reload). O shell (GitWindow.tsx) só consome.
  */
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { GitMergeState } from '@mcp/api-bus';
 import { apiCall } from '../../../../../lib/api-client.js';
+import { startRouteSpan } from '../../../../../lib/perf/route-startup-metrics.js';
 import { useWorkspaceStore } from '../../../../../state/workspace.js';
 import { useGitRevision } from '../../../../../state/git-revision.js';
 import { confirm, toast } from '../../../../../components/ui/prompt-dialog.js';
@@ -24,7 +25,7 @@ export interface GitStatus {
   upstream: string | null;
   ahead: number;
   behind: number;
-  files: GitStatusFile[];
+  files?: GitStatusFile[];
   repoRoot: string | null;
   notARepo: boolean;
 }
@@ -57,7 +58,7 @@ export interface GitWindowModel {
 // the Conflicts tab on every return mid-merge. Module scope survives remounts.
 const autoSwitchedKind = new Map<number, GitMergeState['kind']>();
 
-export function useGitWindow(projectId: number): GitWindowModel {
+export function useGitWindow(projectId: number, active: boolean): GitWindowModel {
   const { t } = useTranslation('workspace');
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,6 +67,15 @@ export function useGitWindow(projectId: number): GitWindowModel {
   const [tab, setTab] = useState<GitTab>('changes');
   const [mergeState, setMergeState] = useState<GitMergeState | null>(null);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
+  const staleWhileHidden = useRef(false);
+
+  useEffect(() => {
+    staleWhileHidden.current = false;
+    setStatus(null);
+    setMergeState(null);
+    setError(null);
+    setLoading(true);
+  }, [projectId]);
 
   const showDiff = useCallback(
     async (file: GitStatusFile) => {
@@ -98,14 +108,42 @@ export function useGitWindow(projectId: number): GitWindowModel {
   // refreshes driven by the git-meta watcher (a commit/fetch shouldn't blink the
   // spinner); the initial load and explicit user refresh stay non-silent.
   const reload = useCallback(async (silent = false) => {
+    if (!active) {
+      staleWhileHidden.current = true;
+      return;
+    }
+    const includeFiles = tab === 'changes';
     if (!silent) setLoading(true);
+    const finishStatusSpan = startRouteSpan('GitWindow:status', {
+      projectId,
+      tab: 'git',
+      detail: includeFiles ? 'full' : 'summary',
+    });
+    const finishMergeSpan = startRouteSpan('GitWindow:mergeState', { projectId, tab: 'git' });
     try {
       const [s, ms] = await Promise.all([
-        apiCall<GitStatus>('projectGit.status', { projectId }),
-        apiCall<GitMergeState>('projectGit.mergeState', { projectId }),
+        apiCall<GitStatus>('projectGit.status', { projectId, includeFiles })
+          .then((value) => {
+            finishStatusSpan({ status: 'ok' });
+            return value;
+          })
+          .catch((err) => {
+            finishStatusSpan({ status: 'error', error: err instanceof Error ? err.message : String(err) });
+            throw err;
+          }),
+        apiCall<GitMergeState>('projectGit.mergeState', { projectId })
+          .then((value) => {
+            finishMergeSpan({ status: 'ok' });
+            return value;
+          })
+          .catch((err) => {
+            finishMergeSpan({ status: 'error', error: err instanceof Error ? err.message : String(err) });
+            throw err;
+          }),
       ]);
       setStatus(s);
       setMergeState(ms);
+      staleWhileHidden.current = false;
       // Feed the editor's conflict registry so open files light up inline.
       if (ms.kind) setConflicts(projectId, ms.conflictedFiles);
       else clearConflicts(projectId);
@@ -113,19 +151,19 @@ export function useGitWindow(projectId: number): GitWindowModel {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
-  }, [projectId]);
+  }, [active, projectId, tab]);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (active) void reload(staleWhileHidden.current);
+  }, [active, reload]);
 
   // The git-meta watcher bumps this on any .git change (incl. external
   // checkout) — reload status + mergeState so the window never goes stale.
   const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
   useEffect(() => {
-    if (gitRev) void reload(true); // silent — no spinner flicker on commit/fetch
+    if (gitRev) void reload(true); // hidden windows only mark stale; visible windows refresh silently
     // eslint-disable-next-line react-hooks/exhaustive-deps -- bump on revision only
   }, [gitRev]);
 

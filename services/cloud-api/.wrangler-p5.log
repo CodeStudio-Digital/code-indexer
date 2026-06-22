@@ -1,0 +1,55 @@
+
+> @cloudstudio/cloud-api@0.0.0 dev D:\MCP\services\cloud-api
+> wrangler dev
+
+
+ ⛅️ wrangler 4.100.0 (update available 4.103.0)
+───────────────────────────────────────────────
+Using secrets defined in .dev.vars
+Your Worker has access to the following bindings:
+Binding                                                                                     Resource                  Mode
+env.LOGIN_THROTTLE (LoginThrottleDO)                                                        Durable Object            local
+env.RATE_LIMIT (RateLimitDO)                                                                Durable Object            local
+env.CACHE (5a33b2b91d004648b0a72a70d69bf1a4)                                                KV Namespace              local
+env.EMAIL (unrestricted - senders: no-reply@public.codestudio.digital)                      Send Email                local
+env.DB (codestudio-cloud)                                                                   D1 Database               local
+env.ASSETS (codestudio-cloud-assets)                                                        R2 Bucket                 local
+env.ENVIRONMENT ("(hidden)")                                                                Environment Variable      local
+env.APP_BASE_URL ("https://app.codestudio.dev")                                             Environment Variable      local
+env.SHARE_BASE_URL ("https://share.codestudio.dev")                                         Environment Variable      local
+env.EMAIL_FROM ("no-reply@public.codestudio.digital")                                       Environment Variable      local
+env.ALLOWED_ORIGINS ("https://share.codestudio.dev,https://...")                            Environment Variable      local
+env.ACCESS_SIGNING_SECRET ("(hidden)")                                                      Environment Variable      local
+env.SHARE_SIGNING_PRIVKEY ("(hidden)")                                                      Environment Variable      local
+env.IP_HASH_SALT ("(hidden)")                                                               Environment Variable      local
+env.EMAIL_DEBUG_LOG_BODY ("(hidden)")                                                       Environment Variable      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://127.0.0.1:8787
+[wrangler:info] GET /v1/health 200 OK (9ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p5_owner_1500820178@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-c77e77e3162098e516e36d5652f9278f\email\email-text\8cb5f9f7-0d56-4e41-b8ee-efaea4cd4801.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-c77e77e3162098e516e36d5652f9278f\email\email-html\8345ec54-758b-4d84-b37d-d59ae6bffdd2.html
+[wrangler:info] POST /v1/auth/signup 201 Created (484ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p5_member_353336284@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-c77e77e3162098e516e36d5652f9278f\email\email-text\00245a30-118c-4fd3-9678-fc59a3d8c992.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-c77e77e3162098e516e36d5652f9278f\email\email-html\ba790941-2a1d-44f1-b994-2c123e3b59a2.html
+[wrangler:info] POST /v1/auth/signup 201 Created (348ms)
+[wrangler:info] POST /v1/orgs 201 Created (367ms)
+[wrangler:info] POST /v1/orgs/156a6455-c1d3-4fcc-b5f4-44cc1d9dd262/invites 201 Created (135ms)
+[wrangler:info] POST /v1/orgs/invites/accept 200 OK (250ms)
+[wrangler:info] GET /v1/orgs/156a6455-c1d3-4fcc-b5f4-44cc1d9dd262/audit 200 OK (130ms)
+[wrangler:info] GET /v1/orgs/156a6455-c1d3-4fcc-b5f4-44cc1d9dd262/audit 403 Forbidden (96ms)
+[wrangler:info] POST /v1/auth/signup 429 Too Many Requests (75ms)
+[wrangler:info] GET /v1/orgs/156a6455-c1d3-4fcc-b5f4-44cc1d9dd262/audit 401 Unauthorized (2ms)
+D:\MCP\services\cloud-api:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @cloudstudio/cloud-api@0.0.0 dev: `wrangler dev`
+Exit status 4294967295

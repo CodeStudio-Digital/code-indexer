@@ -22,6 +22,34 @@ export function securityHeaders(): MiddlewareHandler<{ Bindings: Env }> {
   });
 }
 
+/**
+ * Relaxed-but-scoped headers for the hosted-docs viewer (`/d/*`) — the ONE HTML
+ * surface of this otherwise JSON-only API. It loads Swagger-UI from jsdelivr and
+ * fetches the same-origin spec; the strict `default-src 'none'` would block all
+ * of it. The page renders only our own redacted spec (Swagger-UI shows values as
+ * text, never executes them), so a CDN script-src + 'unsafe-inline' init is an
+ * acceptable, narrow surface. Framing is still denied.
+ */
+export function docsSecurityHeaders(): MiddlewareHandler<{ Bindings: Env }> {
+  const CDN = 'https://cdn.jsdelivr.net';
+  return secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", CDN],
+      styleSrc: ["'self'", "'unsafe-inline'", CDN],
+      imgSrc: ["'self'", 'data:', CDN],
+      fontSrc: ["'self'", CDN],
+      connectSrc: ["'self'"],
+      workerSrc: ["'self'", 'blob:'],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+    },
+    referrerPolicy: 'no-referrer',
+    xContentTypeOptions: 'nosniff',
+    strictTransportSecurity: 'max-age=31536000; includeSubDomains',
+  });
+}
+
 export function corsAllowlist(): MiddlewareHandler<{ Bindings: Env }> {
   return cors({
     origin: (origin, c) => {

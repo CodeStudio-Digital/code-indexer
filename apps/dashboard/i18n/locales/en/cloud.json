@@ -1,0 +1,122 @@
+{
+  "title": "CodeStudio Cloud",
+  "subtitle": "Optional account for subscription, conversation sharing and feedback. The IDE works fully offline without it.",
+  "tab": { "signIn": "Sign in", "signUp": "Create account" },
+  "field": {
+    "email": "Email",
+    "password": "Password",
+    "passwordConfirm": "Confirm password",
+    "code": "Authentication code"
+  },
+  "action": {
+    "signIn": "Sign in",
+    "signUp": "Create account",
+    "verify": "Verify",
+    "signOut": "Sign out",
+    "retry": "Try again",
+    "back": "Back"
+  },
+  "twofa": {
+    "title": "Two-factor authentication",
+    "hint": "Enter the 6-digit code from your authenticator app, or a recovery code."
+  },
+  "account": {
+    "signedInAs": "Signed in as",
+    "plan": "Plan",
+    "status": "Status",
+    "emailUnverified": "Email not verified — check your inbox.",
+    "trialing": "Pro trial active"
+  },
+  "tierName": { "free": "Free", "pro": "Pro", "team": "Team", "enterprise": "Enterprise" },
+  "menu": { "twofa": "Configure 2FA", "subscription": "Manage subscription", "feedback": "Send feedback", "sessions": "Sessions", "teams": "Teams" },
+  "teams": {
+    "title": "Teams",
+    "subtitle": "Create a team to share API workspaces and a knowledge base. Members inherit the team plan.",
+    "create": "Create team",
+    "namePlaceholder": "Team name",
+    "empty": "You're not in any team yet.",
+    "members": "Members",
+    "noMembers": "No members.",
+    "you": "you",
+    "invite": "Invite",
+    "inviteLinkCreated": "Invite link created — share it:",
+    "copy": "Copy",
+    "copied": "Copied",
+    "remove": "Remove",
+    "manageBilling": "Manage billing",
+    "upgrade": "Buy seats",
+    "removeConfirmTitle": "Remove this member?",
+    "removeConfirmBody": "They lose access to the team's shared workspaces.",
+    "role": { "owner": "Owner", "admin": "Admin", "member": "Member", "viewer": "Viewer" }
+  },
+  "turnstile": { "required": "Complete the verification to continue." },
+  "gate": {
+    "welcome": "Welcome to CodeStudio",
+    "signInToContinue": "Sign in to start your free 14-day trial and use CodeStudio.",
+    "signInOAuth": "Sign in to use CodeStudio. Your local workspace is always free.",
+    "continueWith": "Continue with {{provider}}",
+    "signingIn": "Opening your browser… complete sign-in there.",
+    "oauthFailed": "Sign-in didn't complete. Please try again.",
+    "portalHint": "Prefer email & password, or want to manage your account?",
+    "openPortal": "Open the web portal",
+    "trialOverTitle": "Your trial has ended",
+    "subscribeToContinue": "Subscribe to keep using CodeStudio.",
+    "refresh": "I've subscribed — refresh",
+    "checking": "Checking your account…"
+  },
+  "error": {
+    "mismatch": "Passwords do not match.",
+    "offline": "You appear to be offline.",
+    "generic": "Something went wrong. Please try again."
+  },
+  "loading": "Working…",
+  "link": { "forgot": "Forgot your password?", "haveToken": "I have a reset code" },
+  "reset": {
+    "requestTitle": "Reset your password",
+    "requestHint": "We'll email a reset link if the account exists.",
+    "send": "Send reset email",
+    "sent": "If that email exists, a reset link is on its way.",
+    "title": "Set a new password",
+    "tokenHint": "Paste the code from the reset email.",
+    "token": "Reset code",
+    "newPassword": "New password",
+    "submit": "Update password",
+    "done": "Password updated — you can sign in now."
+  },
+  "verify": {
+    "resend": "Resend verification email",
+    "sent": "Verification email sent (if email delivery is configured)."
+  },
+  "twofaManage": {
+    "title": "Two-factor authentication",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "enroll": "Enable 2FA",
+    "scanHint": "Add this secret to your authenticator app, then enter a code to confirm.",
+    "secret": "Secret",
+    "confirm": "Confirm",
+    "recoveryTitle": "Recovery codes",
+    "recoveryHint": "Save these — each works once, and they're shown only now.",
+    "disableTitle": "Disable 2FA",
+    "disable": "Disable",
+    "currentPassword": "Current password"
+  },
+  "sessions": {
+    "title": "Active sessions",
+    "thisDevice": "This device",
+    "revokeAll": "Sign out everywhere"
+  },
+  "subscription": {
+    "title": "Subscription",
+    "upgrade": "Upgrade to Pro",
+    "manage": "Manage subscription"
+  },
+  "feedback": {
+    "title": "Send feedback",
+    "kind": { "bug": "Bug", "idea": "Idea", "other": "Other" },
+    "message": "Describe it…",
+    "submit": "Send",
+    "sent": "Thanks — your feedback was sent.",
+    "cooldown": "Please wait {{seconds}}s before sending again."
+  }
+}

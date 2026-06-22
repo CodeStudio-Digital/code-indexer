@@ -148,6 +148,8 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
           reasoningEffort={s.reasoningEffort}
           setReasoningEffort={s.setReasoningEffort}
           reasoningLevels={s.reasoningLevels}
+          planDepth={s.planDepth}
+          setPlanDepth={s.setPlanDepth}
           getModelsForProvider={s.getModelsForProvider}
           queueable={s.selectedId != null}
           onQueue={s.handleQueue}

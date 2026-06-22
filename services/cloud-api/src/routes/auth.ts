@@ -7,8 +7,8 @@
  */
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { asAccountId } from '@cloudstudio/cloud-kernel';
-import { identityHttpStatus } from '@cloudstudio/cloud-identity';
+import { asAccountId, asSessionId } from '@cloudstudio/cloud-kernel';
+import { identityHttpStatus, type DeviceInfo } from '@cloudstudio/cloud-identity';
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { hashPii } from '../infra/sha256.js';
@@ -28,6 +28,7 @@ const signupSchema = credsSchema.extend({
   passwordConfirm: z.string().min(1).max(512).optional(),
   turnstileToken: z.string().max(4096).optional(),
 });
+const loginSchema = credsSchema.extend({ turnstileToken: z.string().max(4096).optional() });
 const refreshSchema = z.object({ refreshToken: z.string().min(1).max(4096) });
 
 const invalidInput = (c: Ctx, details: unknown) =>
@@ -36,6 +37,18 @@ const invalidInput = (c: Ctx, details: unknown) =>
 async function reqCtx(c: Ctx): Promise<{ ua: string | null; ipHash: string | null }> {
   const ip = c.req.header('cf-connecting-ip') ?? null;
   return { ua: c.req.header('user-agent') ?? null, ipHash: ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null };
+}
+
+/** Real device identity from the desktop's headers + Cloudflare geo (coarse). The
+ *  raw IP is never stored (only ip_hash). Display-only — set best-effort. */
+function deviceInfo(c: Ctx): DeviceInfo {
+  const cf = (c.req.raw as unknown as { cf?: { country?: string; city?: string } }).cf;
+  return {
+    deviceName: c.req.header('x-cs-device-name') ?? null,
+    osRelease: c.req.header('x-cs-os-release') ?? null,
+    geoCountry: cf?.country ?? null,
+    geoCity: cf?.city ?? null,
+  };
 }
 
 export function authRouter(): Hono<{ Bindings: Env }> {
@@ -74,14 +87,25 @@ export function authRouter(): Hono<{ Bindings: Env }> {
       /* ignore */
     }
     recordAudit(c, 'signup', 201, { accountId: r.value.account.id });
+    c.executionCtx.waitUntil(bundle.sessions.setDeviceInfo(asSessionId(r.value.session.sessionId), deviceInfo(c)).catch(() => {}));
     return c.json(r.value, 201);
   });
 
   app.post('/login', async (c) => {
-    const parsed = credsSchema.safeParse(await c.req.json().catch(() => ({})));
+    const parsed = loginSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return invalidInput(c, parsed.error.flatten());
     const { ua, ipHash } = await reqCtx(c);
-    const r = await createIdentityBundle(c.env).login.execute({
+    // Bot check (active only once TURNSTILE_SECRET is set; no-op otherwise).
+    const bot = createBotVerifier(c.env.TURNSTILE_SECRET);
+    if (bot.enabled) {
+      const ip = c.req.header('cf-connecting-ip') ?? null;
+      if (!parsed.data.turnstileToken || !(await bot.verify(parsed.data.turnstileToken, ip))) {
+        recordAudit(c, 'login_fail', 403, { reason: 'turnstile_failed' });
+        return c.json({ code: 'turnstile_failed', message: 'Bot verification failed.' }, 403);
+      }
+    }
+    const bundle = createIdentityBundle(c.env);
+    const r = await bundle.login.execute({
       emailRaw: parsed.data.email,
       passwordRaw: parsed.data.password,
       userAgent: ua,
@@ -89,6 +113,7 @@ export function authRouter(): Hono<{ Bindings: Env }> {
     });
     if (r.ok) {
       recordAudit(c, 'login_ok', 200, { accountId: r.value.account.id });
+      c.executionCtx.waitUntil(bundle.sessions.setDeviceInfo(asSessionId(r.value.session.sessionId), deviceInfo(c)).catch(() => {}));
       return c.json(r.value, 200);
     }
     recordAudit(c, 'login_fail', identityHttpStatus(r.error), { reason: r.error.code });

@@ -12,11 +12,12 @@ import { buildCodegenRequest, generate, isCodegenTarget, languageFor, type Codeg
  * a `containsSecrets` flag to warn before copying).
  */
 export function mountApiCodegenRoute(app: Hono, deps: ServerDeps): void {
-  const store = deps.apiClientStore;
+  // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 
   app.post(`${base}/requests/:rid/codegen`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const rid = parseIdParam(c, 'rid');
     // Ownership guard: a stale rid/envId from a previous project must not let
     // codegen embed another project's request — and with resolve=true, its
@@ -55,7 +56,11 @@ function hasSecret(cg: CodegenRequest, variablesJson: string | null | undefined)
   } catch { return false; }
   if (!secrets.length) return false;
   const hay = [cg.url, ...cg.headers.map((h) => h.value), codegenBodyText(cg.body)].join('\n');
-  return secrets.some((s) => hay.includes(s));
+  // Match the raw value AND its URL-encoded form: query params are
+  // encodeURIComponent'd into cg.url, so a secret containing +, /, = (JWTs,
+  // base64 keys, apikey-in-query) would otherwise evade detection and the user
+  // would be told the snippet is clean while it embeds a live credential.
+  return secrets.some((s) => hay.includes(s) || hay.includes(encodeURIComponent(s)));
 }
 
 function codegenBodyText(b: CodegenRequest['body']): string {

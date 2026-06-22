@@ -99,8 +99,10 @@ export interface FilesApi {
   /** Recursive file tree for the IDE sidebar. */
   tree(input: { projectId: number; maxDepth?: number; root?: string }, ctx: ApiContext): Promise<FileTreeNode>;
 
-  symbol(input: { id: number }, ctx: ApiContext): Promise<unknown>;
-  symbolMembers(input: { id: number }, ctx: ApiContext): Promise<unknown[]>;
+  // `projectId` (optional) routes the surrogate-id lookup to that project's DB
+  // when per-project DBs are split; absent → central (pre-split behavior).
+  symbol(input: { id: number; projectId?: number }, ctx: ApiContext): Promise<unknown>;
+  symbolMembers(input: { id: number; projectId?: number }, ctx: ApiContext): Promise<unknown[]>;
 
   listConcepts(input: { projectId: number }, ctx: ApiContext): Promise<Array<{ concept: string; count: number }>>;
   conceptFiles(input: { projectId: number; concept: string }, ctx: ApiContext): Promise<unknown[]>;

@@ -15,12 +15,14 @@ export function exportOpenApi(title: string, requests: ExportRequest[]): unknown
     const method = (r.method || 'GET').toLowerCase();
     const folder = (r.folder ?? '').trim();
     if (folder) tagSet.add(folder);
+    const docs = parseParamDocs(r.param_docs_json);
     (paths[path] ??= {})[method] = {
       summary: r.name,
+      description: r.description || undefined,
       tags: folder ? [folder] : undefined,
       parameters: [
-        ...normalizeKvList(r.query_json).filter((q) => q.enabled && q.key).map((q) => ({ name: q.key, in: 'query', schema: { type: 'string' }, example: q.value || undefined })),
-        ...normalizeKvList(r.headers_json).filter((h) => h.enabled && h.key).map((h) => ({ name: h.key, in: 'header', schema: { type: 'string' }, example: h.value || undefined })),
+        ...normalizeKvList(r.query_json).filter((q) => q.enabled && q.key).map((q) => ({ name: q.key, in: 'query', description: docs[`query:${q.key}`] || undefined, schema: { type: 'string' }, example: q.value || undefined })),
+        ...normalizeKvList(r.headers_json).filter((h) => h.enabled && h.key).map((h) => ({ name: h.key, in: 'header', description: docs[`header:${h.key}`] || undefined, schema: { type: 'string' }, example: h.value || undefined })),
       ],
       requestBody: bodyOf(r),
       responses: { '200': { description: 'OK' } },
@@ -28,6 +30,17 @@ export function exportOpenApi(title: string, requests: ExportRequest[]): unknown
   }
   const tags = [...tagSet].sort().map((name) => ({ name }));
   return { openapi: '3.1.0', info: { title, version: '1.0.0' }, tags, paths };
+}
+
+/** Parse the per-param docs map (`{ "query:limit": markdown }`); tolerant of junk. */
+function parseParamDocs(json: string | null | undefined): Record<string, string> {
+  if (!json) return {};
+  try {
+    const o = JSON.parse(json) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(o)) if (typeof v === 'string') out[k] = v;
+    return out;
+  } catch { return {}; }
 }
 
 /** Strip protocol+host and query, keep the path; default to '/'. */

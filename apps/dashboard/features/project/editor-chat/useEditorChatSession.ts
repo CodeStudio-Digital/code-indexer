@@ -48,6 +48,7 @@ export function useEditorChatSession(projectId: number) {
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
+  const [planDepth, setPlanDepth] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
   const pendingAutoTitle = useRef<Set<number>>(new Set());
 
@@ -131,6 +132,23 @@ export function useEditorChatSession(projectId: number) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionData?.session?.id]);
+
+  // Hydrate the persisted model-settings overrides from the session row so the
+  // settings dialog opens reflecting the OPEN session instead of blank defaults
+  // (the bug where temperature/effort/plan-depth always reset). Same read
+  // pattern AgentChat uses — these columns flow through the full session
+  // payload (migrations 150/151 + temperature_override). `null`/empty → the
+  // model default. maxTurns is intentionally NOT hydrated: it has no persisted
+  // column, it's a per-send param, so the "50" placeholder is correct.
+  useEffect(() => {
+    const s = sessionData?.session;
+    const tmp = (s as { temperature_override?: number | null } | undefined)?.temperature_override;
+    setTemperature(typeof tmp === 'number' ? tmp : null);
+    const eff = s?.reasoning_effort_override;
+    setReasoningEffort(typeof eff === 'string' && eff.length > 0 ? eff : null);
+    const dep = s?.plan_depth_override;
+    setPlanDepth(typeof dep === 'string' && dep.length > 0 ? dep : null);
+  }, [sessionData?.session]);
 
   // Persist a manual dropdown pick immediately (applies to the next run).
   const handleAgentChange = useCallback((next: AgentId) => {
@@ -252,6 +270,12 @@ export function useEditorChatSession(projectId: number) {
     try { await apiPatch(`/coder/sessions/${selectedId}/reasoning-effort`, { effort: next }); } catch { /* optimistic */ }
   }, [selectedId]);
 
+  const handlePlanDepthChange = useCallback(async (next: string | null) => {
+    setPlanDepth(next);
+    if (!selectedId) return;
+    try { await apiPatch(`/coder/sessions/${selectedId}/plan-depth`, { depth: next }); } catch { /* optimistic */ }
+  }, [selectedId]);
+
   const loadEarlierMessages = useCallback(async (beforeId: number, limit = 40, includeArchived = false): Promise<number> => {
     if (!selectedId) return 0;
     try {
@@ -285,6 +309,7 @@ export function useEditorChatSession(projectId: number) {
     provider, model, setModel, agent, setAgent: handleAgentChange, maxTurns, setMaxTurns,
     temperature, setTemperature: handleTemperatureChange, onSwitchProvider,
     reasoningEffort, setReasoningEffort: handleReasoningEffortChange,
+    planDepth, setPlanDepth: handlePlanDepthChange,
     reasoningLevels: resolveReasoningLevels(provider, providerOptions, model),
     providerOptions, currentProviderModels, getModelsForProvider,
     thinking, setThinking, supportsThinking: providerSupportsThinking(provider, providerOptions, model),

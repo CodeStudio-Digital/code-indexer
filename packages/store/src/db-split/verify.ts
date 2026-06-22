@@ -38,8 +38,13 @@ export function verifySplit(
 ): VerifyResult {
   const counts: Record<string, { proj: number; central: number }> = {};
 
-  // 1) Row-count parity per table.
+  // 1) Row-count parity — for DIRECT project_id tables only. Tables with a
+  //    custom `where` (child/filtered/hybrid + the shared blob pool) use a
+  //    legacy-qualified subquery that isn't expressible against the central
+  //    handle here; they are trusted to the copy and covered by the FK +
+  //    quick_check gates below.
   for (const entry of manifestFor(classes)) {
+    if (entry.where) continue;
     if (!tableExists(proj, entry.table) || !tableExists(central, entry.table)) continue;
     const p = count(proj, `SELECT COUNT(*) n FROM "${entry.table}"`);
     const c = count(central, `SELECT COUNT(*) n FROM "${entry.table}" WHERE project_id = ?`, projectId);

@@ -43,6 +43,7 @@ import {
   type CoderAttachment,
 } from '../../../packages/code-agent/src/index.js';
 import type { CoderRunner } from '../../../packages/code-agent/src/core/runner.js';
+import { resolveAgentRuntimeEnv } from '../../../packages/api-handlers/src/runtime/runtime-resolve.js';
 import { hydrateWorkerCapabilities } from './worker-capabilities.js';
 import {
   setGlobalDocSearch,
@@ -68,6 +69,7 @@ import {
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
 import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
 import { ApiClientStore } from '../../../packages/store/src/api-client-store.js';
+import { routedFeatureDbPath } from '../../../packages/store/src/project-db/routed-path.js';
 import { setApiClientStore } from '../../../packages/code-agent/src/tools/api-client/index.js';
 import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
@@ -272,8 +274,18 @@ setDesignSystemStore(new DesignSystemStore(dbPath));
 setDesignSystemSkillStore(new SkillStore(dbPath));
 // API client store for the `api_*` agent tools (auto-test/auto-fix). Single
 // `api`-agent sessions run in this worker, so the main-thread binding is null
-// here — re-wire a fresh dual-mode instance against the same dbPath.
-setApiClientStore(new ApiClientStore(dbPath));
+// here — re-wire a fresh dual-mode instance. R1: when project-DB routing is on
+// and this session's project has migrated, bind to that project's DB so the
+// agent reads/writes the same `api_*` rows the dashboard does (else they'd
+// diverge); otherwise fall back to the central dbPath (byte-identical to today).
+const apiSessionProjectId = (
+  dbConn.handle.prepare('SELECT project_id AS p FROM coder_sessions WHERE id = ?').get(sessionId) as
+    | { p?: number }
+    | undefined
+)?.p;
+const apiClientDbPath =
+  (apiSessionProjectId != null && routedFeatureDbPath(dbConn.handle, apiSessionProjectId)) || dbPath;
+setApiClientStore(new ApiClientStore(apiClientDbPath));
 setVerdaccioService(new VerdaccioService({ store: new VerdaccioStore(dbPath) }));
 
 // External-MCP proxy. Constructed once per worker; reuses the main
@@ -600,6 +612,8 @@ bridge.handle('runFresh', async (payload) => {
   try {
     const result = await runCoder({
       session: { id: sessionId },
+      // Put the project's PHP/Python (not Node) on PATH for the agent's shell tools.
+      resolveRuntimeEnv: resolveAgentRuntimeEnv,
       userMessage: opts.userMessage,
       attachments: opts.attachments,
       maxTurns: opts.maxTurns,

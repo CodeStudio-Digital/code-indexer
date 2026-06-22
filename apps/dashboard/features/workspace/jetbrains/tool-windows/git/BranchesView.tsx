@@ -1,46 +1,33 @@
 /**
  * Branches view — lists every local + remote branch with current/
- * upstream/ahead/behind info, plus the usual operations the user
- * expects from a JetBrains/VS Code-style git panel:
- *
- *   - click row → open the branch log in the content area
- *   - right-click (or ⋯) → full menu: switch, new-from, rename, merge,
- *     push, delete, copy name
- *   - toolbar: + new branch (from current HEAD, checked out immediately)
- *
- * Filter input on top handles the "I know it exists, just let me type"
- * case once a project grows past a screenful of branches.
- *
- * Operations are best-effort: on conflict / error we surface the
- * stderr from the git CLI in a toast so the user can act on it.
+ * upstream/ahead/behind info. Click a row → open its log; right-click (or
+ * ⋯) → the full IntelliJ action set (checkout / new-from / merge / rebase /
+ * pull / compare / rename / delete / push), built by the shared
+ * `buildBranchActions` + `useBranchOps`. Toolbar: + new branch from HEAD.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Plus, RefreshCw, Search } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Loader2, Plus, RefreshCw, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import type { GitBranch } from '@mcp/api-bus';
 import { apiCall } from '../../../../../lib/api-client.js';
-import { useWorkspaceStore } from '../../../../../state/workspace.js';
+import { useGitRevision } from '../../../../../state/git-revision.js';
 import { Button } from '../../../../../components/ui/button.js';
 import { Input } from '../../../../../components/ui/input.js';
-import { confirm, prompt, toast } from '../../../../../components/ui/prompt-dialog.js';
-import { CollapsibleSection } from './CollapsibleSection.js';
-import { BranchRow, type GitBranch } from './BranchRow.js';
-import { checkoutBranch } from './branch-actions.js';
+import { prompt, toast } from '../../../../../components/ui/prompt-dialog.js';
+import { BranchRow } from './BranchRow.js';
+import { useBranchOps } from './use-branch-ops.js';
 
-interface GitRunResult {
-  command: string;
-  args: string[];
-  ok: boolean;
-  code: number;
-  stdout: string;
-  stderr: string;
-}
+type FlatRow =
+  | { kind: 'header'; key: string; section: 'local' | 'remote'; title: string; open: boolean }
+  | { kind: 'branch'; key: string; b: GitBranch };
 
 interface BranchesViewProps {
   projectId: number;
   /** Called after every operation so the parent can refresh status etc. */
   onMutated: () => void;
-  /** A sequencer op is mid-flight — disable merge. */
+  /** A sequencer op is mid-flight — disable merge/rebase/pull. */
   opInProgress?: boolean;
 }
 
@@ -51,15 +38,14 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [openSections, setOpenSections] = useState({ local: true, remote: true });
-  const openGitLog = useWorkspaceStore((s) => s.openGitLog);
+  // Cache token: the backend memoizes branchesDetailed per (project, rev), so
+  // reopening is instant until a ref actually moves (the watcher bumps gitRev).
+  const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await apiCall<GitBranch[]>('projectGit.branchesDetailed', {
-        projectId,
-        includeRemote: true,
-      });
+      const r = await apiCall<GitBranch[]>('projectGit.branchesDetailed', { projectId, includeRemote: true, rev: gitRev });
       setBranches(r);
       setError(null);
     } catch (e) {
@@ -67,11 +53,20 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, gitRev]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Stable getter so the shared ops hook memo doesn't churn every render.
+  const branchesRef = useRef(branches);
+  branchesRef.current = branches;
+  const actions = useBranchOps({
+    projectId,
+    getBranches: useCallback(() => branchesRef.current, []),
+    onMutated: useCallback(async () => { await reload(); onMutated(); }, [reload, onMutated]),
+  });
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -79,99 +74,6 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
   }, [branches, filter]);
   const local = useMemo(() => filtered.filter((b) => !b.isRemote), [filtered]);
   const remote = useMemo(() => filtered.filter((b) => b.isRemote), [filtered]);
-
-  const openLog = (b: GitBranch) => {
-    openGitLog({
-      kind: 'git-log',
-      projectId,
-      path: `gitlog:${b.name}`,
-      title: `Log: ${b.name}`,
-      branch: b.name,
-      isRemote: b.isRemote,
-    });
-  };
-
-  const switchTo = async (b: GitBranch) => {
-    if (b.isCurrent) return;
-    try {
-      const name = await checkoutBranch(projectId, b.name, b.isRemote);
-      toast.success(`Switched to ${name}`);
-      await reload();
-      onMutated();
-    } catch (e) {
-      toast.error('Checkout failed', {
-        description: e instanceof Error ? e.message : String(e),
-      });
-    }
-  };
-
-  const newBranchFrom = async (b: GitBranch) => {
-    const name = await prompt({
-      title: `New branch from ${b.name}`,
-      description: 'Created from the selected branch and checked out immediately.',
-      placeholder: 'feature/cool-thing',
-    });
-    if (!name?.trim()) return;
-    try {
-      await apiCall('projectGit.branchCreate', {
-        projectId,
-        name: name.trim(),
-        from: b.name,
-        checkout: true,
-      });
-      toast.success(`Created and switched to ${name.trim()}`);
-      await reload();
-      onMutated();
-    } catch (e) {
-      toast.error('Create failed', { description: e instanceof Error ? e.message : String(e) });
-    }
-  };
-
-  const renameBranch = async (b: GitBranch) => {
-    const newName = await prompt({
-      title: `Rename ${b.name}`,
-      description: 'New branch name.',
-      placeholder: b.name,
-      defaultValue: b.name,
-    });
-    if (!newName?.trim() || newName.trim() === b.name) return;
-    try {
-      await apiCall('projectGit.branchRename', { projectId, oldName: b.name, newName: newName.trim() });
-      toast.success(`Renamed to ${newName.trim()}`);
-      await reload();
-      onMutated();
-    } catch (e) {
-      toast.error('Rename failed', { description: e instanceof Error ? e.message : String(e) });
-    }
-  };
-
-  const pushBranch = async (b: GitBranch) => {
-    try {
-      // `git push` needs an explicit remote when a refspec is given —
-      // otherwise the lone positional (`b.name`) is read as the REMOTE
-      // name (`git push -u main` → "main is not a repository"). Derive it
-      // from the upstream (`origin/main` → `origin`); default to origin
-      // for a branch that doesn't track one yet.
-      const remote = b.upstream ? b.upstream.split('/')[0] : 'origin';
-      const r = await apiCall<GitRunResult>('projectGit.push', {
-        projectId,
-        remote,
-        branch: b.name,
-        setUpstream: !b.upstream,
-      });
-      if (r.ok) {
-        toast.success(`Pushed ${b.name}`);
-      } else {
-        toast.error('Push had issues', {
-          description: r.stderr.trim().slice(0, 300) || r.stdout.trim().slice(0, 300),
-        });
-      }
-      await reload();
-      onMutated();
-    } catch (e) {
-      toast.error('Push failed', { description: e instanceof Error ? e.message : String(e) });
-    }
-  };
 
   const createBranch = async () => {
     const name = await prompt({
@@ -181,121 +83,37 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
     });
     if (!name?.trim()) return;
     try {
-      await apiCall('projectGit.branchCreate', {
-        projectId,
-        name: name.trim(),
-        checkout: true,
-      });
+      await apiCall('projectGit.branchCreate', { projectId, name: name.trim(), checkout: true });
       toast.success(`Created and switched to ${name.trim()}`);
       await reload();
       onMutated();
     } catch (e) {
-      toast.error('Create failed', {
-        description: e instanceof Error ? e.message : String(e),
-      });
+      toast.error('Create failed', { description: e instanceof Error ? e.message : String(e) });
     }
   };
 
-  const deleteBranch = async (b: GitBranch) => {
-    if (b.isCurrent) {
-      toast.error('Cannot delete the current branch', {
-        description: 'Switch to a different branch first.',
-      });
-      return;
+  // Flatten sections + rows into one list so a repo with hundreds of remote
+  // branches renders only the visible window (virtualized), not every row.
+  const flat = useMemo<FlatRow[]>(() => {
+    const rows: FlatRow[] = [];
+    if (local.length > 0) {
+      rows.push({ kind: 'header', key: 'h-local', section: 'local', title: t('git.local', { count: local.length }), open: openSections.local });
+      if (openSections.local) for (const b of local) rows.push({ kind: 'branch', key: `l-${b.name}`, b });
     }
-    if (b.isRemote) {
-      toast.message('Remote branches are read-only here', {
-        description: 'Use `git push origin --delete <branch>` from the terminal to remove a remote branch.',
-      });
-      return;
+    if (remote.length > 0) {
+      rows.push({ kind: 'header', key: 'h-remote', section: 'remote', title: t('git.remote', { count: remote.length }), open: openSections.remote });
+      if (openSections.remote) for (const b of remote) rows.push({ kind: 'branch', key: `r-${b.name}`, b });
     }
-    const ok = await confirm({
-      title: `Delete branch ${b.name}?`,
-      description:
-        b.ahead > 0
-          ? `This branch has ${b.ahead} commit(s) NOT in any other branch — they will be lost unless force-deleted.`
-          : 'The branch will be deleted from your local repo only.',
-      confirmLabel: 'Delete',
-      tone: 'destructive',
-    });
-    if (!ok) return;
-    try {
-      // First try a safe delete; if git refuses (unmerged work), fall
-      // back to confirm + force.
-      await apiCall('projectGit.branchDelete', { projectId, name: b.name });
-      toast.success(`Deleted ${b.name}`);
-      await reload();
-      onMutated();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // git emits "not fully merged" when -d refuses. Offer the force path.
-      if (/not fully merged|not yet merged/i.test(msg)) {
-        const force = await confirm({
-          title: `Force-delete ${b.name}?`,
-          description: 'Branch has unmerged commits. Force-delete loses them.',
-          confirmLabel: 'Force delete',
-          tone: 'destructive',
-        });
-        if (!force) return;
-        try {
-          await apiCall('projectGit.branchDelete', { projectId, name: b.name, force: true });
-          toast.success(`Force-deleted ${b.name}`);
-          await reload();
-          onMutated();
-        } catch (e2) {
-          toast.error('Delete failed', {
-            description: e2 instanceof Error ? e2.message : String(e2),
-          });
-        }
-      } else {
-        toast.error('Delete failed', { description: msg });
-      }
-    }
-  };
+    return rows;
+  }, [local, remote, openSections, t]);
 
-  const mergeInto = async (b: GitBranch) => {
-    const current = branches.find((x) => x.isCurrent);
-    if (!current) {
-      toast.error('Merge requires a current branch (detached HEAD)');
-      return;
-    }
-    const ok = await confirm({
-      title: `Merge ${b.name} into ${current.name}?`,
-      description: 'Creates a merge commit if needed. Conflicts are surfaced; resolve them in the editor + finalise with a commit.',
-      confirmLabel: 'Merge',
-    });
-    if (!ok) return;
-    try {
-      const result = await apiCall<GitRunResult>('projectGit.merge', {
-        projectId,
-        branch: b.name,
-      });
-      if (result.ok) {
-        toast.success(`Merged ${b.name} into ${current.name}`);
-      } else {
-        toast.error('Merge had issues', {
-          description: result.stderr.trim().slice(0, 300) || result.stdout.trim().slice(0, 300),
-        });
-      }
-      await reload();
-      onMutated();
-    } catch (e) {
-      toast.error('Merge failed', { description: e instanceof Error ? e.message : String(e) });
-    }
-  };
-
-  const actions = {
-    onOpenLog: openLog,
-    onSwitch: (b: GitBranch) => void switchTo(b),
-    onNewBranchFrom: (b: GitBranch) => void newBranchFrom(b),
-    onRename: (b: GitBranch) => void renameBranch(b),
-    onMerge: (b: GitBranch) => void mergeInto(b),
-    onPush: (b: GitBranch) => void pushBranch(b),
-    onDelete: (b: GitBranch) => void deleteBranch(b),
-  };
-  const renderRow = (b: GitBranch) => (
-    <BranchRow key={`${b.isRemote ? 'r' : 'l'}-${b.name}`} branch={b} actions={actions} opInProgress={opInProgress} />
-  );
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: flat.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => (flat[i].kind === 'header' ? 25 : 26),
+    overscan: 12,
+  });
 
   return (
     <div className="h-full flex flex-col min-h-0">
@@ -309,51 +127,48 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
             className="h-6 text-[11px] pl-6"
           />
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          onClick={() => void reload()}
-          title="Refresh"
-        >
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void reload()} title="Refresh">
           {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          onClick={() => void createBranch()}
-          title="New branch"
-        >
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void createBranch()} title="New branch">
           <Plus className="h-3 w-3" />
         </Button>
       </div>
 
       {error && <div className="px-2 py-1 text-[11px] text-destructive shrink-0">{error}</div>}
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
         {!loading && filtered.length === 0 && (
           <div className="text-center text-[11px] text-muted-foreground p-4">
             {filter ? `No branches match "${filter}".` : 'No branches found.'}
           </div>
         )}
-        {local.length > 0 && (
-          <CollapsibleSection
-            title={t('git.local', { count: local.length })}
-            open={openSections.local}
-            onToggle={() => setOpenSections((s) => ({ ...s, local: !s.local }))}
-          >
-            {local.map(renderRow)}
-          </CollapsibleSection>
-        )}
-        {remote.length > 0 && (
-          <CollapsibleSection
-            title={t('git.remote', { count: remote.length })}
-            open={openSections.remote}
-            onToggle={() => setOpenSections((s) => ({ ...s, remote: !s.remote }))}
-          >
-            {remote.map(renderRow)}
-          </CollapsibleSection>
+        {flat.length > 0 && (
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((v) => {
+              const row = flat[v.index];
+              const base: React.CSSProperties = { position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${v.start}px)` };
+              if (row.kind === 'header') {
+                return (
+                  <div key={row.key} data-index={v.index} ref={virtualizer.measureElement} style={base}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenSections((s) => ({ ...s, [row.section]: !s[row.section] }))}
+                      className="w-full flex items-center gap-1 px-2.5 py-1 bg-card/60 border-b text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
+                    >
+                      {row.open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      <span className="font-semibold">{row.title}</span>
+                    </button>
+                  </div>
+                );
+              }
+              return (
+                <div key={row.key} data-index={v.index} ref={virtualizer.measureElement} style={base}>
+                  <BranchRow branch={row.b} actions={actions} opInProgress={opInProgress} />
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

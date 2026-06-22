@@ -10,19 +10,75 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
-import { ApiError, type RunnerApi, type RunnerTask } from '@mcp/api-bus';
+import { ApiError, type RunnerApi, type RunnerManager, type RunnerTask, snippetRunFor } from '@mcp/api-bus';
+import { parsePackageManagers } from '@mcp/shared/utils/package-managers.js';
 import type { HandlerDeps } from '../types.js';
 import { sharedPtyManager } from '../terminal/pty-manager.js';
 import { resolveShellById } from '../terminal/shells.js';
-import { resolveProjectNodeBinDir } from '../runtime/node-manager.js';
-import { detectRunners } from './detect.js';
+import { resolveProjectRuntimeEnv } from '../runtime/runtime-resolve.js';
+import { detectRunners, type DetectOptions } from './detect.js';
+import { probeManagerStatus } from './manager-status.js';
+
+const VALID_NODE_MANAGERS: ReadonlySet<string> = new Set(['npm', 'yarn', 'pnpm', 'bun']);
+const VALID_PY_MANAGERS: ReadonlySet<string> = new Set(['pip', 'poetry']);
+
+/**
+ * The temp-file path form a snippet interpreter expects. On Windows, Git Bash's
+ * MSYS bash opens a POSIX path (`/c/Users/…`), NOT a Windows `C:/Users/…` one
+ * (that fails with "No such file"); native interpreters (php/python/node) take
+ * the forward-slash Windows path. On POSIX the absolute path is used as-is.
+ * (WSL bash, which would need `/mnt/c/…`, is not handled — uncommon as a runner
+ * shell on this IDE.)
+ */
+function snippetCmdPath(file: string, bin: string): string {
+  if (process.platform !== 'win32') return file;
+  const fwd = file.replace(/\\/g, '/');
+  return bin === 'bash'
+    ? fwd.replace(/^([A-Za-z]):\//, (_m, d: string) => `/${d.toLowerCase()}/`)
+    : fwd;
+}
+
+/** Snippet temp files older than this are crash-orphans, safe to reap. */
+const SNIPPET_STALE_MS = 60 * 60 * 1000; // 1h
+
+/**
+ * Reap STALE snippet temp files (crash-orphans) on startup. Age-aware on
+ * purpose: a blunt recursive wipe would delete a SECOND app instance's
+ * in-flight snippet (the dir is shared across processes); only files untouched
+ * for an hour — long past any live run — are removed.
+ */
+function sweepStaleSnippets(dir: string): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return; // dir doesn't exist yet — nothing to reap
+  }
+  const cutoff = Date.now() - SNIPPET_STALE_MS;
+  for (const name of entries) {
+    const f = join(dir, name);
+    try {
+      if (statSync(f).mtimeMs < cutoff) rmSync(f, { force: true });
+    } catch {
+      /* vanished / locked by another instance — leave it */
+    }
+  }
+}
 
 export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
   const { db } = deps;
   const manager = sharedPtyManager;
   const tasks = new Map<string, RunnerTask>();
   const bus = new TaskBus();
+
+  // Temp files for markdown snippet runs (`runner.runSnippet`). Each is deleted
+  // when its run exits; this startup pass only reaps crash-orphans (age-aware,
+  // so it never deletes a second app instance's in-flight snippet).
+  const snippetsDir = join(ensureDataDir(), 'snippets');
+  sweepStaleSnippets(snippetsDir);
 
   function snapshot(): RunnerTask[] {
     return [...tasks.values()].map((t) => ({ ...t }));
@@ -38,23 +94,33 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     return p;
   }
 
+  /** Resolve a project-relative cwd, confined to the project root (escape → root). */
+  function resolveCwdInRoot(root: string, rel: string | undefined): string {
+    if (!rel) return root;
+    const abs = resolve(root, rel);
+    const r = relative(root, abs);
+    return r.startsWith('..') || isAbsolute(r) ? root : abs;
+  }
+
   function launch(input: {
     projectId: number;
     command: string;
     label: string;
     manager: RunnerTask['manager'];
+    cwd?: string;
   }): RunnerTask {
     const p = project(input.projectId);
-    const nodeBinDir = resolveProjectNodeBinDir(db, input.projectId, ensureDataDir()) ?? undefined;
+    const { pathPrepend, extraEnv } = resolveProjectRuntimeEnv(db, input.projectId, ensureDataDir());
     // Per-project runner shell — resolve the stored id to a spawnable
     // {file,args}; null falls back to the system default shell.
     const shellSel = resolveShellById(p.runner_shell);
     const { id: terminalId } = manager.spawn({
       command: input.command,
-      cwd: p.root_path,
+      cwd: resolveCwdInRoot(p.root_path, input.cwd),
       cols: 80,
       rows: 24,
-      nodeBinDir,
+      pathPrepend,
+      extraEnv,
       shell: shellSel?.file,
       shellArgs: shellSel?.args,
     });
@@ -66,6 +132,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       label: input.label,
       command: input.command,
       manager: input.manager,
+      cwd: input.cwd,
       status: 'running',
       exitCode: null,
       startedAt: Date.now(),
@@ -86,11 +153,56 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
 
   return {
     async detect({ projectId }) {
-      return detectRunners(project(projectId).root_path);
+      const p = project(projectId);
+      // Per-project package-manager override (settings) wins over the lockfile
+      // auto-detect. Allowlist-validate the stored value per key before it
+      // becomes part of a spawnable command (defense-in-depth: the JSON is
+      // opaque in the DB; an unknown value falls back to auto-detect).
+      const pm = parsePackageManagers(p.package_managers);
+      const opts: DetectOptions = {
+        nodeManager: VALID_NODE_MANAGERS.has(pm.node ?? '') ? (pm.node as RunnerManager) : undefined,
+        pythonManager: VALID_PY_MANAGERS.has(pm.python ?? '') ? (pm.python as RunnerManager) : undefined,
+      };
+      return detectRunners(p.root_path, opts);
+    },
+
+    async managerStatus({ projectId, manager }) {
+      // Confirm project exists, then probe `<manager> --version` on the
+      // project's effective PATH (chosen runtimes prepended).
+      project(projectId);
+      const { pathPrepend } = resolveProjectRuntimeEnv(db, projectId, ensureDataDir());
+      return probeManagerStatus(manager, pathPrepend);
     },
 
     async start(input) {
       return launch(input);
+    },
+
+    async runSnippet({ projectId, language, code, label }) {
+      // Validate the project + language BEFORE writing a temp file (so an
+      // unknown language / missing project never orphans one).
+      project(projectId);
+      const run = snippetRunFor(language);
+      if (!run) throw new ApiError('invalid_input', 400, `unsupported snippet language: ${language}`);
+      const file = join(snippetsDir, `${randomUUID()}.${run.ext}`);
+      try {
+        mkdirSync(snippetsDir, { recursive: true });
+        writeFileSync(file, code, 'utf8');
+      } catch (e) {
+        throw new ApiError('internal', 500, `failed to write snippet: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      // Pass the temp path UNQUOTED (the winpty + nested-shell layers mangle
+      // quotes; the snippets dir under the user home is space-free for all
+      // practical users) and in the form THIS interpreter expects (see
+      // snippetCmdPath: Git Bash needs a POSIX /c/… path, native binaries take
+      // the C:/… form).
+      const cmdPath = snippetCmdPath(file, run.bin);
+      const task = launch({ projectId, command: `${run.bin} ${cmdPath}`, label, manager: run.manager });
+      // Delete the temp file once the run exits — by then the interpreter has
+      // read it. (A second onExit hook; the PtyManager keeps a hook Set, so this
+      // doesn't clobber launch()'s status-flip hook.)
+      manager.onExit(task.terminalId, () => { try { rmSync(file, { force: true }); } catch { /* already gone */ } });
+      return task;
     },
 
     async stop({ taskId }) {
@@ -135,6 +247,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
         command: task.command,
         label: task.label,
         manager: task.manager,
+        cwd: task.cwd,
       });
       return next;
     },

@@ -11,6 +11,7 @@
  */
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { isPrivateHost } from './ssrf.js';
 
 /** Hard read ceiling — never buffer more than this from a single response. */
 export const READ_CAP = 512 * 1024;
@@ -76,12 +77,27 @@ export function doRequest(o: {
   timeoutMs: number;
   /** Max bytes to buffer from the response body. Defaults to READ_CAP. */
   maxBytes?: number;
+  /** Refuse private/loopback/link-local/metadata destinations (SSRF guard). */
+  blockPrivateHosts?: boolean;
   signal?: AbortSignal;
 }): Promise<RawResponse> {
   const cap = o.maxBytes ?? READ_CAP;
   return new Promise((resolve, reject) => {
     const isHttps = o.url.protocol === 'https:';
+    // Scheme allowlist — only http/https. Bars file:/gopher:/data: etc. explicitly
+    // (node would reject most, but make the boundary intentional, not implicit).
+    if (!isHttps && o.url.protocol !== 'http:') {
+      reject(new Error(`unsupported URL scheme '${o.url.protocol}' (only http and https are allowed)`));
+      return;
+    }
+    // SSRF guard (opt-in): refuse internal targets when the caller asked for it.
+    if (o.blockPrivateHosts && isPrivateHost(o.url.hostname)) {
+      reject(new Error(`refusing to send to private/loopback host '${o.url.hostname}'`));
+      return;
+    }
     const reqFn = isHttps ? httpsRequest : httpRequest;
+    let settled = false;
+    const fail = (e: Error): void => { if (!settled) { settled = true; reject(e); } };
     const req = reqFn(
       o.url,
       {
@@ -93,19 +109,34 @@ export function doRequest(o: {
       (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
-        res.on('data', (c: Buffer) => { total += c.length; if (total <= cap) chunks.push(c); });
-        res.on('end', () => resolve({
-          status: res.statusCode ?? 0,
-          statusText: res.statusMessage ?? '',
-          headers: res.headers,
-          body: Buffer.concat(chunks).toString('utf8'),
-          size: total,
-          truncated: total > cap,
-        }));
+        const finish = (truncated: boolean): void => {
+          if (settled) return;
+          settled = true;
+          resolve({
+            status: res.statusCode ?? 0,
+            statusText: res.statusMessage ?? '',
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+            size: total,
+            truncated,
+          });
+        };
+        res.on('data', (c: Buffer) => {
+          total += c.length;
+          if (total <= cap) { chunks.push(c); return; }
+          // Cap exceeded — resolve with what we have and TEAR DOWN the transfer
+          // immediately instead of draining a possibly-gigabyte response just to
+          // discard the overflow (bandwidth/socket DoS). Resolve before destroy
+          // so the ensuing close/error is a no-op.
+          finish(true);
+          res.destroy();
+        });
+        res.on('end', () => finish(false));
+        res.on('error', (e: Error) => { if (!settled) fail(e); });
       },
     );
     req.setTimeout(o.timeoutMs, () => req.destroy(new Error(`request timed out after ${o.timeoutMs}ms`)));
-    req.on('error', reject);
+    req.on('error', fail);
     if (o.body != null && o.body.length > 0) req.write(o.body);
     req.end();
   });
@@ -127,6 +158,8 @@ export interface SendOptions {
   maxBytes?: number;
   /** Cookie jar to read prior cookies from and store Set-Cookie into. */
   jar?: CookieJar;
+  /** Refuse private/loopback/link-local/metadata destinations (SSRF guard). */
+  blockPrivateHosts?: boolean;
   signal?: AbortSignal;
 }
 
@@ -160,7 +193,7 @@ export async function sendHttp(o: SendOptions): Promise<RawResponse> {
     }
   }
 
-  const res = await doRequest({ url: o.url, method, headers, body, insecure, timeoutMs, maxBytes: o.maxBytes, signal: o.signal });
+  const res = await doRequest({ url: o.url, method, headers, body, insecure, timeoutMs, maxBytes: o.maxBytes, blockPrivateHosts: o.blockPrivateHosts, signal: o.signal });
   if (o.jar) storeSetCookies(o.jar, o.url.host, res.headers['set-cookie']);
   return res;
 }

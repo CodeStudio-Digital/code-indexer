@@ -9,6 +9,7 @@ interface QuestionPromptViewProps {
   question: {
     id: string;
     question: string;
+    header?: string;
     options?: Array<{ label: string; value: string }>;
     allowFreeform?: boolean;
     resolved?: string;
@@ -30,7 +31,9 @@ export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewPro
         <div className="h-7 w-7 rounded-md bg-info/15 text-info flex items-center justify-center">
           <HelpCircle className="h-4 w-4" />
         </div>
-        <div className="text-xs font-semibold text-info uppercase tracking-wider">{t('chat:question.title')}</div>
+        <div className="text-xs font-semibold text-info uppercase tracking-wider">
+          {question.header?.trim() || t('chat:question.title')}
+        </div>
       </div>
       <div className="text-sm text-foreground mb-3 px-1 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ol:my-1 prose-ul:my-1 prose-li:my-0.5">
         <Markdown text={question.question} />

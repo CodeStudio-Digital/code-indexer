@@ -50,6 +50,10 @@ import type {
 
 export * from './common.js';
 export * from './electron-bridge.js';
+// CodeStudio Cloud API contract (the REMOTE Worker backend) — separate from the
+// in-process api bus; re-exported so consumers import it from the package root.
+export * from './cloud/contract.js';
+export * from './cloud/route-map.js';
 export * from './coder.js';
 export * from './projects.js';
 export * from './files.js';

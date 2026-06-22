@@ -70,6 +70,7 @@ export interface SpecPrompt {
 export interface QuestionPrompt {
   id: string;
   question: string;
+  header?: string;
   options?: Array<{ label: string; value: string }>;
   allowFreeform?: boolean;
   resolved?: string;
@@ -486,17 +487,21 @@ export interface SessionState {
    */
   sidebarRefreshTick: number;
   /**
+   * Monotonic counter bumped only when the task LIST identity or approval
+   * changes (`tasks_posted` + `message_complete`) — NOT on every task status
+   * transition. Keys the dashboard's `/tasks` refetch so the persisted
+   * TaskListReview card reflects the latest submitted/approved list mid-run,
+   * instead of waiting for the run to end (`doneReason`). Kept separate from
+   * `sidebarRefreshTick` (which bumps on every status change) to avoid a fetch
+   * storm during multi-task execution.
+   */
+  tasksRefreshTick: number;
+  /**
    * Monotonic counter bumped on every `session_snapshot_changed` SSE event.
    * The Snapshots panel re-fetches its list/diff whenever this changes,
    * so the user sees new agent edits land in the review UI live.
    */
   snapshotTick: number;
-  /**
-   * Loop-detection interventions delivered by the bus during this run.
-   * Newest first. Cap at 5 — older interventions are dropped to keep the
-   * banner stack manageable. Cleared on next successful user message.
-   */
-  toolLoopInterventions: ToolLoopIntervention[];
   /**
    * PermissionGate approvals waiting for the user's verdict, oldest first.
    * Mirrors the per-block `ToolCallEvent.approvals` so the banner above the
@@ -571,8 +576,8 @@ export const EMPTY_STATE: SessionState = {
   interactionPending: null,
   pipelineRuntime: null,
   sidebarRefreshTick: 0,
+  tasksRefreshTick: 0,
   snapshotTick: 0,
-  toolLoopInterventions: [],
   pendingApprovals: [],
   lastEventAt: null,
   preflight: null,

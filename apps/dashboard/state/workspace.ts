@@ -101,6 +101,37 @@ export function isVirtualTab(f: OpenTab): f is OpenDiff | OpenGitLog | OpenGitSt
   return f.kind === 'diff' || f.kind === 'git-log' || f.kind === 'git-stash' || f.kind === 'merge';
 }
 
+/**
+ * Editor split layout (IntelliJ-style "dividir em dois"). The document POOL
+ * stays in `openFiles`; a thin pane layer on top decides which tabs each
+ * editor area shows and in what order.
+ *
+ * Invariant (single project at a time): every open path lives in EXACTLY ONE
+ * pane — the union of every pane's `order` equals the active project's open
+ * paths. Splitting only ever creates a SECOND, empty pane (the user's choice:
+ * "painel novo nasce vazio"); the user then drags a tab into it or opens a
+ * file with that pane focused.
+ */
+export interface EditorPaneState {
+  /** Session-unique, monotonically minted ("pane-1", "pane-2", …). Never reused. */
+  id: string;
+  /** Tab paths shown in this pane, in display order. Subset of the pool's paths. */
+  order: string[];
+  /** Focused tab in this pane (null only while the pane is empty). */
+  activePath: string | null;
+}
+
+/** `null` ⇔ single pane. 'row' = side-by-side (vertical divider). 'column' = stacked. */
+export type SplitDir = 'row' | 'column' | null;
+
+// Deterministic pane ids (no Math.random / Date.now): a module counter.
+let paneSeq = 0;
+const nextPaneId = (): string => `pane-${++paneSeq}`;
+/** Test hook — reset the pane-id counter so ids are predictable across cases. */
+export function __resetPaneSeqForTests(): void {
+  paneSeq = 0;
+}
+
 interface WorkspaceState {
   openFiles: OpenTab[];
   activeFilePath: string | null;
@@ -112,6 +143,13 @@ interface WorkspaceState {
    */
   activeProjectId: number | null;
 
+  /** Editor panes (1 = single, 2 = split). */
+  panes: EditorPaneState[];
+  /** Split orientation, or null when single-pane. */
+  splitDir: SplitDir;
+  /** Pane that currently has focus — receives new opens, drives `activeFilePath`. */
+  activePaneId: string;
+
   /** Atomic project switch: persist outgoing tabs, drop them, hydrate incoming. */
   setProject: (projectId: number) => void;
   openFile: (file: OpenFile) => void;
@@ -119,13 +157,26 @@ interface WorkspaceState {
   openGitLog: (tab: OpenGitLog) => void;
   openGitStash: (tab: OpenGitStash) => void;
   openMerge: (tab: OpenMerge) => void;
+  /** Close by identity — finds the owning pane (external/back-compat entry point). */
   closeFile: (projectId: number, path: string) => void;
-  /** Close every tab except the given one. Activates the survivor. */
+  /** Close a tab in a SPECIFIC pane (UI entry point — X / middle-click). */
+  closeTabInPane: (paneId: string, projectId: number, path: string) => void;
+  /** Close every tab except the given one, within its pane. Activates the survivor. */
   closeOthers: (projectId: number, keepPath: string) => void;
-  /** Close every tab to the right of the given one. Active stays put. */
+  /** Close every tab to the right of the given one, within its pane. */
   closeToTheRight: (projectId: number, anchorPath: string) => void;
   closeAll: () => void;
   setActive: (path: string | null) => void;
+  /** Focus a pane (and surface its active tab). */
+  setActivePane: (paneId: string) => void;
+  /** Split into two panes (the new pane starts empty) or re-orient an existing split. */
+  splitEditor: (dir: 'row' | 'column') => void;
+  /** Collapse the split, merging the second pane's tabs back into the first. */
+  unsplit: () => void;
+  /** Reorder a tab within its pane — insert `fromPath` before `beforePath` (null = append). */
+  reorderTab: (paneId: string, fromPath: string, beforePath: string | null) => void;
+  /** Move a tab between panes — insert before `beforePath` (null = append). Collapses an emptied source. */
+  moveTabToPane: (fromPaneId: string, toPaneId: string, path: string, beforePath: string | null) => void;
   setContent: (projectId: number, path: string, content: string) => void;
   markClean: (projectId: number, path: string, lastModified: string) => void;
   /** External (disk) content landed on a NON-dirty tab — replace without dirtying. */
@@ -142,6 +193,98 @@ const sameTab = (
   b: { path: string; projectId: number },
 ): boolean => a.path === b.path && a.projectId === b.projectId;
 
+// ─── Pane helpers (pure) ──────────────────────────────────────────
+
+const arraysEqual = (a: string[], b: string[]): boolean =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
+
+/** `activeFilePath` is a mirror of the FOCUSED pane's active tab (back-compat). */
+const focusedActivePath = (panes: EditorPaneState[], activePaneId: string): string | null =>
+  panes.find((p) => p.id === activePaneId)?.activePath ?? null;
+
+/** Insert `item` before `beforePath` (null = append), removing any prior copy. */
+const insertBefore = (order: string[], item: string, beforePath: string | null): string[] => {
+  const base = order.filter((p) => p !== item);
+  if (beforePath === null) return [...base, item];
+  const idx = base.indexOf(beforePath);
+  return idx < 0 ? [...base, item] : [...base.slice(0, idx), item, ...base.slice(idx)];
+};
+
+/** Add `path` to the active pane's order (if absent) and focus it; or focus the pane already holding it. */
+const placePath = (
+  panes: EditorPaneState[],
+  activePaneId: string,
+  path: string,
+): { panes: EditorPaneState[]; activePaneId: string } => {
+  const holder = panes.find((p) => p.order.includes(path));
+  if (holder) {
+    return {
+      panes: panes.map((p) => (p.id === holder.id ? { ...p, activePath: path } : p)),
+      activePaneId: holder.id,
+    };
+  }
+  return {
+    panes: panes.map((p) =>
+      p.id === activePaneId
+        ? { ...p, order: p.order.includes(path) ? p.order : [...p.order, path], activePath: path }
+        : p,
+    ),
+    activePaneId,
+  };
+};
+
+/**
+ * Open/refresh a virtual tab (diff / git-log / git-stash / merge) in the pool +
+ * focus it in the right pane. These tabs are upserted (re-clicking the row in
+ * Git regenerates the payload), unlike regular files which only append.
+ */
+const upsertVirtualTab = (
+  s: WorkspaceState,
+  tab: OpenDiff | OpenGitLog | OpenGitStash | OpenMerge,
+): Partial<WorkspaceState> => {
+  const existing = s.openFiles.findIndex((f) => sameTab(f, tab));
+  const openFiles =
+    existing >= 0 ? s.openFiles.map((f, i) => (i === existing ? tab : f)) : [...s.openFiles, tab];
+  const { panes, activePaneId } = placePath(s.panes, s.activePaneId, tab.path);
+  return { openFiles, panes, activePaneId, activeFilePath: tab.path };
+};
+
+/**
+ * Close a tab: drop the (projectId, path) tuple from the pool and the `path`
+ * from the owning pane (activating its neighbor), then collapse the split if
+ * the closing emptied a pane.
+ */
+const closeTabReducer = (
+  s: WorkspaceState,
+  paneId: string,
+  projectId: number,
+  path: string,
+): Partial<WorkspaceState> => {
+  const poolIdx = s.openFiles.findIndex((f) => sameTab(f, { path, projectId }));
+  const openFiles = poolIdx >= 0 ? s.openFiles.filter((_, i) => i !== poolIdx) : s.openFiles;
+
+  let panes = s.panes.map((p) => {
+    if (p.id !== paneId) return p;
+    const idx = p.order.indexOf(path);
+    if (idx < 0) return p;
+    const order = p.order.filter((_, i) => i !== idx);
+    // Activate the neighbor on close — prefer the right side (VS Code), fall left.
+    const activePath = p.activePath === path ? (order[idx] ?? order[idx - 1] ?? null) : p.activePath;
+    return { ...p, order, activePath };
+  });
+
+  let splitDir = s.splitDir;
+  let activePaneId = s.activePaneId;
+  const mutated = panes.find((p) => p.id === paneId);
+  if (splitDir && panes.length === 2 && mutated && mutated.order.length === 0) {
+    // Closing the last tab of a split pane collapses the split.
+    panes = panes.filter((p) => p.id !== paneId);
+    splitDir = null;
+    activePaneId = panes[0].id;
+  }
+  return { openFiles, panes, splitDir, activePaneId, activeFilePath: focusedActivePath(panes, activePaneId) };
+};
+
 // ─── Tab persistence per project ──────────────────────────────────
 //
 // Restore the user's open file tabs + active selection when re-opening
@@ -152,9 +295,95 @@ const sameTab = (
 
 const TABS_STORAGE_PREFIX = 'mcp-ide:workspace-tabs:';
 
+interface PersistedPane {
+  order: string[];
+  activePath: string | null;
+}
+interface PersistedLayout {
+  splitDir: SplitDir;
+  /** 1 (single) or 2 (split) panes, real-file paths only. */
+  panes: PersistedPane[];
+  /** Index (0|1) of the focused pane — stored as INDEX, not the session-scoped id. */
+  activePaneIndex: number;
+}
 interface PersistedTabs {
   openFiles: Array<{ projectId: number; path: string }>;
   activeFilePath: string | null;
+  /** Optional — absent in legacy payloads, which hydrate as a single pane. */
+  layout?: PersistedLayout;
+}
+
+/**
+ * Serialize the pane layout for persistence — real paths only, empty panes
+ * dropped. Returns `undefined` when there is nothing real to restore (the
+ * legacy `openFiles`/`activeFilePath` fields then drive a single-pane restore).
+ */
+export function serializeLayout(
+  panes: EditorPaneState[],
+  splitDir: SplitDir,
+  activePaneId: string,
+  isRealPath: (path: string) => boolean,
+): PersistedLayout | undefined {
+  // Defesa-em-profundidade: um subscriber do store que chame com `panes`
+  // ausente (ex.: call-site com aridade errada) NUNCA pode estourar dentro
+  // do set() — isso derrubaria todas as mutações. Degrada para "sem layout".
+  if (!Array.isArray(panes)) return undefined;
+  const filtered = panes.map((p) => ({
+    order: p.order.filter(isRealPath),
+    activePath: p.activePath && isRealPath(p.activePath) ? p.activePath : null,
+    origId: p.id,
+  }));
+  const nonEmpty = filtered.filter((p) => p.order.length > 0);
+  if (nonEmpty.length === 0) return undefined;
+  const dir: SplitDir = splitDir && nonEmpty.length === 2 ? splitDir : null;
+  const out = (dir ? nonEmpty : [nonEmpty[0]]).map((p) => ({
+    order: p.order,
+    activePath: p.activePath && p.order.includes(p.activePath) ? p.activePath : (p.order[0] ?? null),
+  }));
+  let activePaneIndex = dir ? nonEmpty.findIndex((p) => p.origId === activePaneId) : 0;
+  if (activePaneIndex < 0 || activePaneIndex >= out.length) activePaneIndex = 0;
+  return { splitDir: dir, panes: out, activePaneIndex };
+}
+
+/**
+ * Rebuild panes from persisted layout, dropping any path not in `validPaths`
+ * (stale tabs from a since-edited project). Falls back to a single pane (in
+ * `validPaths` order) for legacy payloads or when the layout has no survivors.
+ * Mints fresh session-scoped pane ids.
+ */
+export function hydrateLayout(
+  persisted: PersistedTabs,
+  validPaths: string[],
+): { panes: EditorPaneState[]; splitDir: SplitDir; activePaneId: string } {
+  const valid = new Set(validPaths);
+  const layout = persisted.layout;
+  if (layout && Array.isArray(layout.panes) && layout.panes.length >= 1) {
+    const rebuilt = layout.panes
+      .map((p) => ({
+        order: (Array.isArray(p.order) ? p.order : []).filter((x) => valid.has(x)),
+        activePath: typeof p.activePath === 'string' && valid.has(p.activePath) ? p.activePath : null,
+      }))
+      .filter((p) => p.order.length > 0)
+      .map((p) => ({ id: nextPaneId(), order: p.order, activePath: p.activePath ?? p.order[0] ?? null }));
+    if (rebuilt.length === 2 && (layout.splitDir === 'row' || layout.splitDir === 'column')) {
+      const idx = Math.min(Math.max(0, layout.activePaneIndex ?? 0), 1);
+      return { panes: rebuilt, splitDir: layout.splitDir, activePaneId: rebuilt[idx].id };
+    }
+    if (rebuilt.length >= 1) {
+      const merged =
+        rebuilt.length === 1
+          ? rebuilt[0]
+          : { id: rebuilt[0].id, order: [...rebuilt[0].order, ...rebuilt[1].order], activePath: rebuilt[0].activePath };
+      return { panes: [merged], splitDir: null, activePaneId: merged.id };
+    }
+  }
+  // Legacy / no layout → single pane in validPaths order.
+  const id = nextPaneId();
+  const active =
+    persisted.activeFilePath && valid.has(persisted.activeFilePath)
+      ? persisted.activeFilePath
+      : (validPaths[0] ?? null);
+  return { panes: [{ id, order: [...validPaths], activePath: active }], splitDir: null, activePaneId: id };
 }
 
 /**
@@ -174,16 +403,37 @@ export function loadPersistedTabs(projectId: number): PersistedTabs {
     const openFiles = (Array.isArray(parsed.openFiles) ? parsed.openFiles : []).filter(
       (f) => !isIndexerInternalPath(f.path),
     );
+    // Defensive parse of the optional layout: drop indexer paths inside panes too.
+    let layout: PersistedLayout | undefined;
+    const rawLayout = parsed.layout;
+    if (rawLayout && Array.isArray(rawLayout.panes)) {
+      layout = {
+        splitDir: rawLayout.splitDir === 'row' || rawLayout.splitDir === 'column' ? rawLayout.splitDir : null,
+        panes: rawLayout.panes.map((p) => ({
+          order: (Array.isArray(p?.order) ? p.order : []).filter((x) => typeof x === 'string' && !isIndexerInternalPath(x)),
+          activePath: typeof p?.activePath === 'string' ? p.activePath : null,
+        })),
+        activePaneIndex: typeof rawLayout.activePaneIndex === 'number' ? rawLayout.activePaneIndex : 0,
+      };
+    }
     return {
       openFiles,
       activeFilePath: typeof parsed.activeFilePath === 'string' ? parsed.activeFilePath : null,
+      layout,
     };
   } catch {
     return { openFiles: [], activeFilePath: null };
   }
 }
 
-export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activeFilePath: string | null): void {
+export function savePersistedTabs(
+  projectId: number,
+  openFiles: OpenTab[],
+  activeFilePath: string | null,
+  panes: EditorPaneState[],
+  splitDir: SplitDir,
+  activePaneId: string,
+): void {
   if (typeof window === 'undefined') return;
   // Drop transient surfaces (diffs, git-log/git-stash views) — only real files persist.
   // Filter to THIS project (defesa-em-profundidade): even if a caller passes the full
@@ -197,9 +447,11 @@ export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activ
       !isIndexerInternalPath(f.path) &&
       f.projectId === projectId,
   );
+  const realSet = new Set(realFiles.map((f) => f.path));
   const payload: PersistedTabs = {
     openFiles: realFiles.map((f) => ({ projectId: f.projectId, path: f.path })),
     activeFilePath,
+    layout: serializeLayout(panes, splitDir, activePaneId, (p) => realSet.has(p)),
   };
   try {
     window.localStorage.setItem(`${TABS_STORAGE_PREFIX}${projectId}`, JSON.stringify(payload));
@@ -208,10 +460,15 @@ export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activ
   }
 }
 
+const INITIAL_PANE_ID = nextPaneId();
+
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   openFiles: [],
   activeFilePath: null,
   activeProjectId: null,
+  panes: [{ id: INITIAL_PANE_ID, order: [], activePath: null }],
+  splitDir: null,
+  activePaneId: INITIAL_PANE_ID,
 
   setProject: (projectId) =>
     set((s) => {
@@ -225,121 +482,197 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
           s.activeProjectId,
           s.openFiles.filter((f) => f.projectId === s.activeProjectId),
           s.activeFilePath,
+          s.panes,
+          s.splitDir,
+          s.activePaneId,
         );
       }
       const persisted = loadPersistedTabs(projectId);
-      const hydrated: OpenTab[] = persisted.openFiles
+      const validPaths = persisted.openFiles
         .filter((e) => e.projectId === projectId) // guarda de migração p/ chaves contaminadas
-        .map((e) => ({ kind: 'file', projectId, path: e.path, content: null, dirty: false, lastModified: null }));
-      return { activeProjectId: projectId, openFiles: hydrated, activeFilePath: persisted.activeFilePath };
+        .map((e) => e.path);
+      const { panes, splitDir, activePaneId } = hydrateLayout(persisted, validPaths);
+      // Pool = union of pane orders (so pool ⊆ panes, no dangling refs).
+      const poolPaths = Array.from(new Set(panes.flatMap((p) => p.order)));
+      const hydrated: OpenTab[] = poolPaths.map((path) => ({
+        kind: 'file',
+        projectId,
+        path,
+        content: null,
+        dirty: false,
+        lastModified: null,
+      }));
+      return {
+        activeProjectId: projectId,
+        openFiles: hydrated,
+        panes,
+        splitDir,
+        activePaneId,
+        activeFilePath: focusedActivePath(panes, activePaneId),
+      };
     }),
 
   openFile: (file) =>
     set((s) => {
-      const existing = s.openFiles.findIndex((f) => sameTab(f, file));
-      if (existing >= 0) {
-        return { ...s, activeFilePath: file.path, activeProjectId: file.projectId };
-      }
+      const inPool = s.openFiles.some((f) => sameTab(f, file));
+      const openFiles = inPool ? s.openFiles : [...s.openFiles, file];
+      const { panes, activePaneId } = placePath(s.panes, s.activePaneId, file.path);
       return {
-        openFiles: [...s.openFiles, file],
+        openFiles,
+        panes,
+        activePaneId,
         activeFilePath: file.path,
         activeProjectId: file.projectId,
       };
     }),
 
-  openDiff: (diff) =>
-    set((s) => {
-      const existing = s.openFiles.findIndex((f) => f.path === diff.path && f.projectId === diff.projectId);
-      if (existing >= 0) {
-        // Refresh the patch in-place — same diff for the same path means
-        // the user re-clicked the file in the git tool window with new
-        // changes on disk.
-        const next = [...s.openFiles];
-        next[existing] = diff;
-        return { openFiles: next, activeFilePath: diff.path };
-      }
-      return {
-        openFiles: [...s.openFiles, diff],
-        activeFilePath: diff.path,
-      };
-    }),
+  openDiff: (diff) => set((s) => upsertVirtualTab(s, diff)),
 
-  openGitLog: (tab) =>
-    set((s) => {
-      const existing = s.openFiles.findIndex(
-        (f) => f.path === tab.path && f.projectId === tab.projectId,
-      );
-      if (existing >= 0) {
-        const next = [...s.openFiles];
-        next[existing] = tab;
-        return { openFiles: next, activeFilePath: tab.path };
-      }
-      return { openFiles: [...s.openFiles, tab], activeFilePath: tab.path };
-    }),
+  openGitLog: (tab) => set((s) => upsertVirtualTab(s, tab)),
 
-  openGitStash: (tab) =>
-    set((s) => {
-      const existing = s.openFiles.findIndex(
-        (f) => f.path === tab.path && f.projectId === tab.projectId,
-      );
-      if (existing >= 0) {
-        const next = [...s.openFiles];
-        next[existing] = tab;
-        return { openFiles: next, activeFilePath: tab.path };
-      }
-      return { openFiles: [...s.openFiles, tab], activeFilePath: tab.path };
-    }),
+  openGitStash: (tab) => set((s) => upsertVirtualTab(s, tab)),
 
-  openMerge: (tab) =>
-    set((s) => {
-      const existing = s.openFiles.findIndex(
-        (f) => f.path === tab.path && f.projectId === tab.projectId,
-      );
-      if (existing >= 0) {
-        const next = [...s.openFiles];
-        next[existing] = tab;
-        return { openFiles: next, activeFilePath: tab.path };
-      }
-      return { openFiles: [...s.openFiles, tab], activeFilePath: tab.path };
-    }),
+  openMerge: (tab) => set((s) => upsertVirtualTab(s, tab)),
 
   closeFile: (projectId, path) =>
     set((s) => {
-      const idx = s.openFiles.findIndex((f) => sameTab(f, { path, projectId }));
-      if (idx < 0) return s;
-      const next = s.openFiles.filter((_, i) => i !== idx);
-      // Activate the neighbor on close — preferring the right side (matches
-      // VS Code), falling back to the left when closing the rightmost tab.
-      let nextActive = s.activeFilePath;
-      if (s.activeFilePath === path) {
-        nextActive = next[idx]?.path ?? next[idx - 1]?.path ?? null;
-      }
-      return { openFiles: next, activeFilePath: nextActive };
+      const owner = s.panes.find((p) => p.order.includes(path));
+      return closeTabReducer(s, owner?.id ?? s.activePaneId, projectId, path);
     }),
+
+  closeTabInPane: (paneId, projectId, path) => set((s) => closeTabReducer(s, paneId, projectId, path)),
 
   closeOthers: (projectId, keepPath) =>
     set((s) => {
-      const survivor = s.openFiles.find((f) => sameTab(f, { path: keepPath, projectId }));
-      if (!survivor) return s;
-      return { openFiles: [survivor], activeFilePath: keepPath };
+      const pane = s.panes.find((p) => p.order.includes(keepPath));
+      if (!pane) return s;
+      const removed = new Set(pane.order.filter((p) => p !== keepPath));
+      if (removed.size === 0) return s;
+      const openFiles = s.openFiles.filter((f) => !(f.projectId === projectId && removed.has(f.path)));
+      const panes = s.panes.map((p) =>
+        p.id === pane.id ? { ...p, order: [keepPath], activePath: keepPath } : p,
+      );
+      // Keep focus where it was — pruning a non-focused pane's tabs shouldn't
+      // steal focus (matches closeToTheRight). Same-pane case still lands on
+      // keepPath since that pane's activePath was just set to it.
+      return { openFiles, panes, activeFilePath: focusedActivePath(panes, s.activePaneId) };
     }),
 
   closeToTheRight: (projectId, anchorPath) =>
     set((s) => {
-      const anchorIx = s.openFiles.findIndex((f) => sameTab(f, { path: anchorPath, projectId }));
-      if (anchorIx < 0) return s;
-      const next = s.openFiles.slice(0, anchorIx + 1);
-      // If the active tab was on the right side, fall back onto the anchor.
-      let nextActive = s.activeFilePath;
-      if (!next.some((f) => f.path === nextActive)) {
-        nextActive = anchorPath;
-      }
-      return { openFiles: next, activeFilePath: nextActive };
+      const pane = s.panes.find((p) => p.order.includes(anchorPath));
+      if (!pane) return s;
+      const anchorIx = pane.order.indexOf(anchorPath);
+      const keep = pane.order.slice(0, anchorIx + 1);
+      const removed = new Set(pane.order.slice(anchorIx + 1));
+      if (removed.size === 0) return s;
+      const openFiles = s.openFiles.filter((f) => !(f.projectId === projectId && removed.has(f.path)));
+      const activePath = pane.activePath && keep.includes(pane.activePath) ? pane.activePath : anchorPath;
+      const panes = s.panes.map((p) => (p.id === pane.id ? { ...p, order: keep, activePath } : p));
+      return { openFiles, panes, activeFilePath: focusedActivePath(panes, s.activePaneId) };
     }),
 
-  closeAll: () => set({ openFiles: [], activeFilePath: null }),
+  closeAll: () =>
+    set(() => {
+      const id = nextPaneId();
+      return {
+        openFiles: [],
+        activeFilePath: null,
+        panes: [{ id, order: [], activePath: null }],
+        splitDir: null,
+        activePaneId: id,
+      };
+    }),
 
-  setActive: (path) => set({ activeFilePath: path }),
+  setActive: (path) =>
+    set((s) => {
+      if (path === null) return { activeFilePath: null };
+      const holder = s.panes.find((p) => p.order.includes(path));
+      if (!holder) return { activeFilePath: path };
+      const panes = s.panes.map((p) => (p.id === holder.id ? { ...p, activePath: path } : p));
+      return { panes, activePaneId: holder.id, activeFilePath: path };
+    }),
+
+  setActivePane: (paneId) =>
+    set((s) => {
+      if (paneId === s.activePaneId) return s;
+      const pane = s.panes.find((p) => p.id === paneId);
+      if (!pane) return s;
+      return { activePaneId: paneId, activeFilePath: pane.activePath };
+    }),
+
+  splitEditor: (dir) =>
+    set((s) => {
+      if (s.splitDir) {
+        // Already split — re-orient only (we keep exactly two panes).
+        return s.splitDir === dir ? s : { splitDir: dir };
+      }
+      const newPane: EditorPaneState = { id: nextPaneId(), order: [], activePath: null };
+      return { panes: [...s.panes, newPane], splitDir: dir, activePaneId: newPane.id, activeFilePath: null };
+    }),
+
+  unsplit: () =>
+    set((s) => {
+      if (!s.splitDir || s.panes.length < 2) return s;
+      const [a, b] = s.panes;
+      const order = [...a.order, ...b.order.filter((p) => !a.order.includes(p))];
+      // Keep the tab the user was actually looking at (the focused pane's), not
+      // always pane A's.
+      const focused = s.panes.find((p) => p.id === s.activePaneId);
+      const activePath =
+        (focused?.activePath && order.includes(focused.activePath) ? focused.activePath : null) ??
+        a.activePath ??
+        b.activePath ??
+        order[0] ??
+        null;
+      const merged: EditorPaneState = { id: a.id, order, activePath };
+      return { panes: [merged], splitDir: null, activePaneId: merged.id, activeFilePath: activePath };
+    }),
+
+  reorderTab: (paneId, fromPath, beforePath) =>
+    set((s) => {
+      const pane = s.panes.find((p) => p.id === paneId);
+      if (!pane || !pane.order.includes(fromPath)) return s;
+      const order = insertBefore(pane.order, fromPath, beforePath);
+      if (arraysEqual(order, pane.order)) return s; // no-op
+      return { panes: s.panes.map((p) => (p.id === paneId ? { ...p, order } : p)) };
+    }),
+
+  moveTabToPane: (fromPaneId, toPaneId, path, beforePath) =>
+    set((s) => {
+      if (fromPaneId === toPaneId) {
+        const pane = s.panes.find((p) => p.id === fromPaneId);
+        if (!pane || !pane.order.includes(path)) return s;
+        const order = insertBefore(pane.order, path, beforePath);
+        if (arraysEqual(order, pane.order)) return s;
+        return { panes: s.panes.map((p) => (p.id === fromPaneId ? { ...p, order } : p)) };
+      }
+      const from = s.panes.find((p) => p.id === fromPaneId);
+      const to = s.panes.find((p) => p.id === toPaneId);
+      if (!from || !to || !from.order.includes(path)) return s;
+      let panes = s.panes.map((p) => {
+        if (p.id === fromPaneId) {
+          const idx = p.order.indexOf(path);
+          const order = p.order.filter((x) => x !== path);
+          const activePath = p.activePath === path ? (order[idx] ?? order[idx - 1] ?? null) : p.activePath;
+          return { ...p, order, activePath };
+        }
+        if (p.id === toPaneId) {
+          return { ...p, order: insertBefore(p.order, path, beforePath), activePath: path };
+        }
+        return p;
+      });
+      let splitDir = s.splitDir;
+      let activePaneId = toPaneId;
+      const src = panes.find((p) => p.id === fromPaneId);
+      if (splitDir && panes.length === 2 && src && src.order.length === 0) {
+        // Moving the last tab out of a split pane collapses the split.
+        panes = panes.filter((p) => p.id !== fromPaneId);
+        splitDir = null;
+        activePaneId = panes[0].id;
+      }
+      return { panes, splitDir, activePaneId, activeFilePath: focusedActivePath(panes, activePaneId) };
+    }),
 
   setContent: (projectId, path, content) =>
     set((s) => ({

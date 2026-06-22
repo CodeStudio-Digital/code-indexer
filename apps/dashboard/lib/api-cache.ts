@@ -40,6 +40,9 @@ interface CacheEntry {
 
 const inflight = new Map<string, Promise<unknown>>();
 const cache = new Map<string, CacheEntry>();
+/** Separate slot for `dedupeInflight` — collapses concurrent reads WITHOUT
+ *  caching the body (so the next read after settle still revalidates). */
+const inflightOnly = new Map<string, Promise<unknown>>();
 
 /** Fresh cached body for `key`, or undefined (miss/expired). Empty key never hits. */
 export function getCached<T>(key: string): T | undefined {
@@ -75,6 +78,23 @@ export function dedupe<T>(key: string, producer: () => Promise<T>): Promise<T> {
     });
 
   inflight.set(key, p);
+  return p as Promise<T>;
+}
+
+/**
+ * Collapse concurrent identical reads into ONE round-trip WITHOUT caching
+ * the result. The moment the shared promise settles the slot is cleared, so
+ * the next call re-fetches — correct for live reads whose freshness comes
+ * from fs-events (file tree, file content) and must NOT be served stale even
+ * for the 1500ms `dedupe` window. Errors are never retained either.
+ */
+export function dedupeInflight<T>(key: string, producer: () => Promise<T>): Promise<T> {
+  const existing = inflightOnly.get(key);
+  if (existing) return existing as Promise<T>;
+  const p = producer().finally(() => {
+    inflightOnly.delete(key);
+  });
+  inflightOnly.set(key, p);
   return p as Promise<T>;
 }
 

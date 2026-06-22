@@ -5,9 +5,20 @@
  */
 import type { EmailSender, MailMessage } from '@cloudstudio/cloud-identity';
 
+/** Cloudflare Email Sending binding (`env.EMAIL`). The current API takes a
+ *  structured object with `from: { email, name }` and returns `{ messageId }`;
+ *  passing `from` as a bare string (the old assumption) is rejected. */
 export interface EmailServiceBinding {
-  send(message: { to: string; from: string; subject: string; html: string; text: string }): Promise<unknown>;
+  send(message: {
+    to: string;
+    from: { email: string; name?: string };
+    subject: string;
+    html: string;
+    text: string;
+  }): Promise<{ messageId?: string }>;
 }
+
+const FROM_NAME = 'CodeStudio';
 
 export function createEmailSender(
   binding: EmailServiceBinding | undefined,
@@ -19,7 +30,7 @@ export function createEmailSender(
       if (binding) {
         await binding.send({
           to: message.to,
-          from,
+          from: { email: from, name: FROM_NAME },
           subject: message.subject,
           html: message.html,
           text: message.text,

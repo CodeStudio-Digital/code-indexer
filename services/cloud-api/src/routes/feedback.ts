@@ -40,10 +40,16 @@ export function feedbackRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, createIdentityBundle(c.env)); // null ⇒ anonymous
     const ip = c.req.header('cf-connecting-ip') ?? null;
     const ipHash = ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null;
+    // Fail closed: an anonymous request with NO source IP cannot be rate-limited,
+    // so we refuse it rather than let it bypass the per-IP cap (a logged-in caller
+    // is bounded by the per-account key instead).
+    if (!claims && !ipHash) {
+      return c.json({ code: 'feedback_rate_limited', message: 'Could not verify the request source.' }, 429);
+    }
     // Authed: 20/day/account. Anonymous: 3/hour/IP (Turnstile is the primary gate).
     const rule = claims
       ? { key: `feedback:acct:${claims.sub}`, limit: 20, windowMs: DAY }
-      : { key: `feedback:ip:${ipHash ?? 'noip'}`, limit: 3, windowMs: HOUR };
+      : { key: `feedback:ip:${ipHash}`, limit: 3, windowMs: HOUR };
     const limited = await enforceRateLimit(c, [rule]);
     if (limited) return limited;
     const d = parsed.data;

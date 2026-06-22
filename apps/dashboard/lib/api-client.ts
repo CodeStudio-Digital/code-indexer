@@ -15,7 +15,7 @@
  */
 
 import type { Api } from '@mcp/api-bus';
-import { getCached, dedupe, invalidateAll } from './api-cache.js';
+import { getCached, dedupe, dedupeInflight, invalidateAll } from './api-cache.js';
 import {
   recordApiCallCacheHit,
   startApiCallRouteSpan,
@@ -37,12 +37,57 @@ const READ_VERBS = new Set<string>([
   'projects.list',
   'projectGit.status',
   'projectGit.log',
+  'projectGit.mergeState',
+  'projectGit.branchesDetailed',
+  'projectGit.stashList',
+  'projectGit.commitDetail',
+  'projectGit.stashDetail',
+  'projectGit.gitOptimizations',
   'plugins.activeContributions',
+  // Plugin assets are immutable for an installed version — the backend also
+  // keeps a longer-lived LRU keyed by mtime; this collapses co-mounted reads.
+  'plugins.readAsset',
   'snapshots.list',
   'lsp.listServers',
   'lsp.instances',
   'lsp.languageLevels',
 ]);
+
+/**
+ * Live reads that must reflect the latest backend state on every settle, so
+ * they can NOT be TTL-cached — but a BURST of identical concurrent calls (tab
+ * restore firing N reads of the same path, two components expanding the same
+ * dir, chip + install-prompt both polling one server's status) should still
+ * collapse to one round-trip. They share an in-flight promise only
+ * (`dedupeInflight`), never a cached body.
+ *
+ * `lsp.serverStatus` belongs here, NOT in READ_VERBS: the install prompt polls
+ * it in a loop waiting for `starting → ready`, and a TTL cache would serve a
+ * stale snapshot for ~half the polls AND skip the backend's warm-spawn nudge.
+ */
+const INFLIGHT_VERBS = new Set<string>([
+  'files.read',
+  'files.tree',
+  'files.list',
+  'lsp.serverStatus',
+]);
+
+/**
+ * Canonicalize a read verb's input BEFORE keying/caching so callers that
+ * differ only cosmetically collapse to one slot. `projectGit.status`:
+ * `includeFiles:false` (summary) is a strict subset of the default full
+ * status AND costs MORE git spawns (3 vs 1), so every caller is upgraded to
+ * the full read — summary consumers simply ignore the `files` array. Other
+ * fields are PRESERVED so a future status input field still reaches the
+ * backend (don't silently swallow it by reconstructing only projectId).
+ */
+function normalizeReadInput(path: DotPath, input: unknown): unknown {
+  if (path === 'projectGit.status' && input && typeof input === 'object') {
+    // Spread-then-override: keep every field, force includeFiles:true.
+    return { ...(input as Record<string, unknown>), includeFiles: true };
+  }
+  return input;
+}
 
 /**
  * Mutating verbs that change a resource a READ_VERB reads. On success they
@@ -62,6 +107,8 @@ const WRITE_VERBS = new Set<string>([
   'projectGit.unstage',
   'projectGit.discard',
   'projectGit.commit',
+  'projectGit.stageHunk',
+  'projectGit.configureGitOptimizations',
   'lsp.removeServer',
   'lsp.restartServer',
   'lsp.setLanguageLevel',
@@ -325,13 +372,17 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
  */
 export function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
   if (READ_VERBS.has(path)) {
-    const key = callKey(path, input);
+    const normalized = normalizeReadInput(path, input);
+    const key = callKey(path, normalized);
     const hit = getCached<T>(key);
     if (hit !== undefined) {
-      recordApiCallCacheHit(path, input);
+      recordApiCallCacheHit(path, normalized);
       return Promise.resolve(hit);
     }
-    return dedupe<T>(key, () => apiCallRaw<T>(path, input));
+    return dedupe<T>(key, () => apiCallRaw<T>(path, normalized));
+  }
+  if (INFLIGHT_VERBS.has(path)) {
+    return dedupeInflight<T>(callKey(path, input), () => apiCallRaw<T>(path, input));
   }
   if (WRITE_VERBS.has(path)) {
     return apiCallRaw<T>(path, input).then((r) => {

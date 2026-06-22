@@ -124,7 +124,7 @@ function runtime(
       ? idKind
       : `${source}:${version || binDir}`;
   const label = version ? `v${version} (${source})` : `${source} (${binDir})`;
-  return { id, label, version, binDir, source, isManaged };
+  return { kind: 'node', id, label, version, binDir, source, isManaged };
 }
 
 /** Locate the dir holding the node executable within `root`. */

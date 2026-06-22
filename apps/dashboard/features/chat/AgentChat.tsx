@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
-import { Loader2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { useIndexStatus } from '../workspace/jetbrains/status-bar/useIndexStatus.js';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { useIndexBusy } from '../workspace/jetbrains/status-bar/useIndexStatus.js';
+import { IndexingOverlay } from './IndexingOverlay.js';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { usePipelineStream } from '../../hooks/usePipelineStream.js';
@@ -34,7 +35,8 @@ import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
 import { StuckBanner } from './StuckBanner.js';
 import { ApprovalBanner } from './ApprovalBanner.js';
-import { ToolLoopBanner } from './ToolLoopBanner.js';
+import { NotificationBanner } from './notifications/NotificationBanner.js';
+import { useUnreadNotificationCount } from './notifications/session-notifications-store.js';
 // The five ex-modals (Skills/Tools/Metrics/ToolStats/Details) and the
 // WorkerLog/SessionState panels are now routed through `RightPanelHost`
 // — only Snapshots stays as a true Dialog because its diff viewer needs
@@ -210,9 +212,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // agent can search/symbol, so we only block the two in-progress phases — never
   // 'none' (which would deadlock the composer if auto-index is off). Inert for a
   // normal already-indexed project (phase ready) and guarded on selectedId.
-  const idxStatus = useIndexStatus(sessionData?.session.project_id ?? 0);
-  const indexing = !!selectedId
-    && (idxStatus?.phase === 'scanning' || idxStatus?.phase === 'structural_indexing');
+  const projectIndexId = sessionData?.session.project_id ?? 0;
+  // Boolean selector: re-renders this heavy tree only when the busy flag flips,
+  // NOT on every progress frame. The live progress text lives in the isolated
+  // <IndexingOverlay> leaf so the per-frame stream can't drive a full re-render.
+  const indexBusy = useIndexBusy(projectIndexId);
+  const indexing = !!selectedId && indexBusy;
 
   // Global mode: root the right-rail file tree at the selected session's primary
   // linked project; re-derive whenever the session (or its payload) changes.
@@ -273,8 +278,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     contextStatus,
     indexStatus,
     sidebarRefreshTick,
+    tasksRefreshTick,
     snapshotTick,
-    toolLoopInterventions,
     pendingApprovals,
     lastEventAt,
     preflight,
@@ -290,6 +295,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     switchProvider,
   } = stream;
 
+  const unreadNotifications = useUnreadNotificationCount(selectedId ?? 0);
+
   // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
@@ -297,6 +304,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     useAgentChatState({
       selectedId,
       doneReason,
+      tasksRefreshTick,
       sessionData: sessionData ?? null,
       currentTurn,
       provider,
@@ -1336,7 +1344,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-                <ToolLoopBanner interventions={toolLoopInterventions} />
+                {selectedId != null && <NotificationBanner sessionId={selectedId} />}
                 <ApprovalBanner approvals={pendingApprovals} onRespond={respondToToolApproval} />
                 {/* A paused PermissionGate is silence by design — suppress the
                     stall heuristic while approvals are pending. */}
@@ -1362,19 +1370,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 />
               </div>
               <div className="relative">
-              {indexing && (
-                <div
-                  role="status"
-                  aria-busy="true"
-                  className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-card/85 backdrop-blur-sm text-sm text-muted-foreground"
-                >
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>
-                    {t('chat:global.indexing')}
-                    {idxStatus?.progress ? ` (${idxStatus.progress.current}/${idxStatus.progress.total})` : ''}
-                  </span>
-                </div>
-              )}
+              {indexing && <IndexingOverlay projectId={projectIndexId} />}
               <Composer
                 ref={composerRef}
                 filePicks={filePicks}
@@ -1482,6 +1478,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               onSelectPanel={setActiveRightPanelId}
               onOpenSnapshots={() => setSnapshotsOpen(true)}
               pendingSnapshots={snapshotPending}
+              unreadNotifications={unreadNotifications}
               pluginWindows={pluginPanelWindows}
             />
           </div>

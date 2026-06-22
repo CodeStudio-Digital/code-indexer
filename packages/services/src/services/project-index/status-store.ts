@@ -49,6 +49,22 @@ export class ProjectIndexStatusStore {
   }
 
   /**
+   * Live "scanning" liveness — keeps `phase:'scanning'` (the frozen spinner
+   * becomes a moving counter) WITHOUT flipping to structural_indexing the way
+   * setProgress/setActiveRun do. `total` is 0 during the walk; the index phase
+   * supplies real totals via setProgress afterwards.
+   */
+  setScanProgress(projectId: number, scanned: number, total: number): void {
+    const prev = this.entry(projectId).status.activeRun;
+    const startedAt = prev?.kind === 'structural' ? prev.startedAt : Date.now();
+    this.patch(projectId, {
+      phase: 'scanning',
+      activeRun: { kind: 'structural', current: scanned, total, startedAt },
+      progress: { current: scanned, total },
+    });
+  }
+
+  /**
    * Publish the live pass. `progress` is kept in sync as the deprecated alias
    * the StatusBar chip reads. `startedAt` is preserved across frames of the
    * same kind so an elapsed-time readout stays stable.

@@ -15,7 +15,7 @@
  * stays empty and self-heals on the next structural sweep.
  */
 import type { DB } from '../db/types.js';
-import { manifestFor, type SplitClass } from './manifest.js';
+import { manifestFor, entryWhere, type SplitClass } from './manifest.js';
 
 const LEGACY = 'legacy';
 
@@ -67,7 +67,7 @@ export function copyProjectData(
         const list = cols.map((c) => `"${c}"`).join(', ');
         const info = proj.prepare(
           `INSERT INTO "${entry.table}" (${list})
-             SELECT ${list} FROM ${LEGACY}."${entry.table}" WHERE project_id = @pid`,
+             SELECT ${list} FROM ${LEGACY}."${entry.table}" WHERE ${entryWhere(entry)}`,
         ).run({ pid: projectId });
         perTable[entry.table] = info.changes;
         total += info.changes;

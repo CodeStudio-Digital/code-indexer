@@ -108,11 +108,14 @@ export class PtyManager {
      */
     command?: string;
     /**
-     * When set, prepended to PATH so this process (and its children) use a
-     * specific Node toolchain. Drives the per-project Node version — the
-     * project terminal and the runner both pass the resolved bin dir.
+     * Dirs prepended to PATH (highest priority first) so this process and its
+     * children use the project's chosen toolchains. Drives the per-project
+     * Node/PHP/Python versions — the project terminal and runner pass the
+     * resolved bin dirs from `resolveProjectRuntimeEnv`.
      */
-    nodeBinDir?: string;
+    pathPrepend?: string[];
+    /** Extra env merged after the base env (e.g. PHPRC for a managed PHP). */
+    extraEnv?: Record<string, string>;
   }): { id: string; entry: PtyEntry } {
     const pty = loadPty();
     const shell = opts.shell ?? defaultShell();
@@ -130,15 +133,16 @@ export class PtyManager {
     delete baseEnv.ELECTRON_RUN_AS_NODE;
     delete baseEnv.MCP_DEV_HTTP;
     delete baseEnv.MCP_ELECTRON_DEV_URL;
-    const env = { ...baseEnv, ...(opts.env ?? {}) };
-    // Per-project Node: put the chosen toolchain first on PATH so `node`,
-    // `npm`, `npx` resolve to it ahead of the system install. Windows env
-    // keys are case-insensitive but the object may carry `Path` rather
-    // than `PATH`; normalise to `PATH` and drop the stale `Path`.
-    if (opts.nodeBinDir) {
+    const env = { ...baseEnv, ...(opts.env ?? {}), ...(opts.extraEnv ?? {}) };
+    // Per-project runtimes: put the chosen toolchains first on PATH so
+    // `node`/`npm`, `php`, `python`/`pip` resolve to them ahead of the system
+    // install. Windows env keys are case-insensitive but the object may carry
+    // `Path` rather than `PATH`; normalise to `PATH` and drop the stale `Path`.
+    const prepend = (opts.pathPrepend ?? []).filter(Boolean);
+    if (prepend.length > 0) {
       const prev = env.PATH ?? env.Path ?? '';
       delete env.Path;
-      env.PATH = `${opts.nodeBinDir}${delimiter}${prev}`;
+      env.PATH = `${prepend.join(delimiter)}${delimiter}${prev}`;
     }
     // Force WinPTY backend on Windows-under-Electron. ConPTY's
     // `conpty_console_list_agent` helper spawns a child of

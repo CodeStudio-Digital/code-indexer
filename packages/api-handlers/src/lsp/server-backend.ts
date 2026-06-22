@@ -355,11 +355,30 @@ export async function serverReferences(
   }
 }
 
+const _deadlineRaw = Number(process.env.MCP_LSP_CODEACTION_DEADLINE_MS);
+const CODEACTION_DEADLINE_MS = Number.isFinite(_deadlineRaw) ? _deadlineRaw : 600; // NaN-safe
+
 export async function serverCodeActions(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
   range: { start: { line: number; column: number }; end: { line: number; column: number } },
 ): Promise<CodeActionDTO[] | null> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  // A cold server spawn+init is 1-2s; don't let it freeze the lightbulb.
+  // Race `acquire` against a short deadline — on timeout return null (empty
+  // lightbulb) while the spawn keeps running in the background, so the NEXT
+  // invocation hits a warm server. Mirrors completion()'s soft deadline.
+  const acqP = ensureLspManager(db).acquire(projectId, languageId);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const TIMED_OUT = Symbol('lsp-codeaction-deadline');
+  const raced = await Promise.race([
+    acqP,
+    new Promise<typeof TIMED_OUT>((r) => { timer = setTimeout(() => r(TIMED_OUT), CODEACTION_DEADLINE_MS); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (raced === TIMED_OUT) {
+    void acqP.catch(() => undefined); // keep warming; abandon this invocation
+    return null;
+  }
+  const acq = raced;
   if (!acq) return null;
   const abs = relToAbs(root, file);
   const liveDoc = getDoc(projectId, file);

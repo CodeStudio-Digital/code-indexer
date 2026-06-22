@@ -106,6 +106,14 @@ export interface ProjectDbFlags {
   vectors: boolean;
   /** P5 — cross-project reads go through ATTACH/rollups. */
   crossRead: boolean;
+  /**
+   * C2 — trim the per-project DB to project-only tables (drop the ~93 central
+   * tables it inherits from the full schema, recreate the few project tables
+   * that carry a cross-DB FK without it). Defaults ON when the split is enabled
+   * (kill-switch MCP_PROJECT_DB_TRIM=0). Touches ONLY per-project DBs; central
+   * is never trimmed. Reversible: drop the project DB + re-split.
+   */
+  trim: boolean;
   /** Eagerly run all pending backfills at boot instead of on first open. */
   eagerMigrate: boolean;
   /** Force the central-dir fallback for every project DB (tests/read-only roots). */
@@ -133,6 +141,11 @@ const envIntOr = (env: NodeJS.ProcessEnv, name: string, fallback: number): numbe
 export function projectDbFlags(env: NodeJS.ProcessEnv = process.env): ProjectDbFlags {
   const enabled = envBool(env, 'MCP_PROJECT_DB');
   const on = (name: string): boolean => enabled && envBool(env, name);
+  // On unless explicitly disabled — for flags that default ON when the split is
+  // enabled (C2 trim). Kill-switch: set to 0/false/off/no.
+  const offValues = new Set(['0', 'false', 'off', 'no']);
+  const onByDefault = (name: string): boolean =>
+    enabled && !offValues.has(env[name]?.trim().toLowerCase() ?? '');
   return {
     enabled,
     newProjects: on('MCP_PROJECT_DB_NEW'),
@@ -141,6 +154,7 @@ export function projectDbFlags(env: NodeJS.ProcessEnv = process.env): ProjectDbF
     route: on('MCP_PROJECT_DB_ROUTE'),
     vectors: on('MCP_PROJECT_DB_VECTORS'),
     crossRead: on('MCP_PROJECT_DB_XREAD'),
+    trim: onByDefault('MCP_PROJECT_DB_TRIM'),
     eagerMigrate: on('MCP_PROJECT_DB_EAGER_MIGRATE'),
     fallbackAll: envBool(env, 'MCP_PROJECT_DB_FALLBACK_ALL'),
     purgeMode: env.MCP_DB_SPLIT_PURGE?.trim() === 'immediate' ? 'immediate' : 'defer',

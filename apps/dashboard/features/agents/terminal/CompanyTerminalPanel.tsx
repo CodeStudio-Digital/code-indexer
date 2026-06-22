@@ -25,9 +25,10 @@ import {
   type TerminalSession,
   type TerminalSpawnTarget,
 } from '../../../state/terminal-sessions.js';
-import { SingleTerminal } from '../../shared/terminal/SingleTerminal.js';
+import { SingleTerminal, TERMINAL_SURFACE_BG } from '../../shared/terminal/SingleTerminal.js';
 import { TerminalTabBar, type SpawnTargetOption } from '../../shared/terminal/TerminalTabBar.js';
 import { useShellPicker } from '../../shared/terminal/use-shell-picker.js';
+import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 
 interface CompanyTerminalPanelProps {
   companySessionId: number;
@@ -70,6 +71,7 @@ export function CompanyTerminalPanel({
   const { addSession, removeSession, setActive, replaceSessions } = useTerminalSessions.getState();
 
   const hasElectron = !!electronApi();
+  const dark = useIsDark();
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /**
@@ -217,7 +219,7 @@ export function CompanyTerminalPanel({
   }
 
   return (
-    <div className="h-full flex flex-col min-h-0 bg-[#0b0d12]">
+    <div className="h-full flex flex-col min-h-0">
       <TerminalTabBar
         sessions={sessions}
         activeId={activeId}
@@ -238,7 +240,10 @@ export function CompanyTerminalPanel({
           {spawnError}
         </div>
       )}
-      <div className="flex-1 min-h-0 relative">
+      <div
+        className="flex-1 min-h-0 relative"
+        style={{ background: dark ? TERMINAL_SURFACE_BG.dark : TERMINAL_SURFACE_BG.light }}
+      >
         {sessions.length === 0 && !busy && (
           <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground gap-2 px-6 text-center">
             <p>Nenhum terminal aberto.</p>

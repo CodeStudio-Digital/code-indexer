@@ -287,6 +287,18 @@ export interface RunCoderOptions {
    */
   onSnapshotRecorded?: (info: { baselineId: number; filePath: string }) => void;
   /**
+   * Resolve the per-project runtime PATH/env (PHP/Python bin dirs + PHPRC) to
+   * inject into the agent's shell tools, so `php`/`composer`/`python`/`pip`
+   * resolve to the project's chosen runtime. Injected by the HOST (the agent
+   * can't import the resolver without a dep cycle); runCoder calls it once with
+   * its own db + the session's project id. Node is excluded by the host on
+   * purpose. Omit → shell tools inherit the plain system env (today's behaviour).
+   */
+  resolveRuntimeEnv?: (
+    db: import('@mcp/store/db.js').CodeIndexDB,
+    projectId: number,
+  ) => { pathPrepend: string[]; extraEnv: Record<string, string> };
+  /**
    * Optional per-turn tool-list filter (ToolSelectionPipeline runtime hook).
    * Built by `deps.buildToolSelectionFilter()` in the host. Forwarded
    * verbatim to `RunnerOptions.toolSelectionFilter`.

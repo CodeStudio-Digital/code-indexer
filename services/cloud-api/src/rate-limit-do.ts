@@ -20,7 +20,10 @@ export class RateLimitDO {
     const windowMs = Math.max(0, Number(url.searchParams.get('windowMs') ?? '0'));
     const now = Date.now();
 
-    const s = (await this.state.storage.get<State>('s')) ?? { hits: [] };
+    const stored = await this.state.storage.get<State>('s');
+    // Defensive: tolerate a missing/partial stored value (some runtimes hand back
+    // an object without `hits` on first read) — treat it as an empty window.
+    const s: State = { hits: Array.isArray(stored?.hits) ? stored!.hits : [] };
     s.hits = s.hits.filter((t) => now - t < windowMs); // slide: drop expired hits
 
     const allowed = s.hits.length < limit;

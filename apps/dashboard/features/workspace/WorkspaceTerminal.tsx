@@ -21,9 +21,10 @@ import {
   useTerminalSessions,
   type TerminalSession,
 } from '../../state/terminal-sessions.js';
-import { SingleTerminal } from '../shared/terminal/SingleTerminal.js';
+import { SingleTerminal, TERMINAL_SURFACE_BG } from '../shared/terminal/SingleTerminal.js';
 import { TerminalTabBar } from '../shared/terminal/TerminalTabBar.js';
 import { useShellPicker } from '../shared/terminal/use-shell-picker.js';
+import { useIsDark } from '../builder/preview/files/viewer/useIsDark.js';
 
 interface WorkspaceTerminalProps {
   projectId: number;
@@ -53,6 +54,7 @@ export function WorkspaceTerminal({ projectId }: WorkspaceTerminalProps) {
   const { addSession, removeSession, setActive, replaceSessions } = useTerminalSessions.getState();
 
   const hasElectron = !!electronApi();
+  const dark = useIsDark();
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { shells, activeShell, selectShell, addCustomShell } = useShellPicker();
@@ -151,7 +153,7 @@ export function WorkspaceTerminal({ projectId }: WorkspaceTerminalProps) {
   }
 
   return (
-    <div className="h-full flex flex-col min-h-0 bg-[#0b0d12]">
+    <div className="h-full flex flex-col min-h-0">
       <TerminalTabBar
         sessions={sessions}
         activeId={activeId}
@@ -170,7 +172,10 @@ export function WorkspaceTerminal({ projectId }: WorkspaceTerminalProps) {
           {spawnError}
         </div>
       )}
-      <div className="flex-1 min-h-0 relative">
+      <div
+        className="flex-1 min-h-0 relative"
+        style={{ background: dark ? TERMINAL_SURFACE_BG.dark : TERMINAL_SURFACE_BG.light }}
+      >
         {sessions.length === 0 && !busy && (
           <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">
             <button

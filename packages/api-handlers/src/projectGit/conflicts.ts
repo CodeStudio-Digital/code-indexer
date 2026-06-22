@@ -18,7 +18,7 @@ import {
   type MergeKind,
   type GitRunResult,
 } from '@mcp/api-bus';
-import { detectMergeKind, listConflictedFiles } from './sequencer.js';
+import { detectMergeKind, listConflictedFiles, readHead } from './sequencer.js';
 
 interface GitResult {
   code: number;
@@ -40,7 +40,9 @@ export interface ConflictDeps {
     env?: Record<string, string>,
   ): Promise<GitRunResult>;
   requireRoot(projectId: number): string;
-  detectRepo(root: string): Promise<{ repoRoot: string | null; notARepo: boolean }>;
+  detectRepo(
+    root: string,
+  ): Promise<{ repoRoot: string | null; gitDir: string | null; notARepo: boolean }>;
 }
 
 type ConflictApi = Pick<
@@ -79,16 +81,18 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
   return {
     async mergeState({ projectId }) {
       const empty = { kind: null as MergeKind | null, conflictedFiles: [], oursLabel: '', theirsLabel: '' };
-      const { repoRoot, notARepo } = await resolveRepoRoot(projectId);
+      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId);
       if (notARepo || !repoRoot) return empty;
-      const { kind: seqKind, incomingSha } = await detectMergeKind(deps.runGit, repoRoot);
+      const { kind: seqKind, incomingSha } = await detectMergeKind(gitDir, { runGit: deps.runGit, repoRoot });
       const conflictedFiles = await listConflictedFiles(deps.runGit, repoRoot);
       // No sequencer op but unmerged files present → a stash pop/apply (or
       // manual) conflict. Surface it in a generic 'working-tree' mode so the
       // resolver still appears (no Continue — resolving just stages).
       const kind: MergeKind | null = seqKind ?? (conflictedFiles.length > 0 ? 'working-tree' : null);
       if (!kind) return empty;
-      const branch = (await deps.runGit(repoRoot, ['branch', '--show-current'])).stdout.trim();
+      // Pure-fs HEAD read (replaces a `branch --show-current` spawn); '' on
+      // detached HEAD, exactly like the old command, so the fallback below holds.
+      const branch = await readHead(gitDir);
       let incomingSubject: string | undefined;
       if (incomingSha) {
         const s = await deps.runGit(repoRoot, ['show', '-s', '--format=%s', incomingSha]);
@@ -174,9 +178,9 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
     },
 
     async mergeContinue({ projectId }) {
-      const { repoRoot, notARepo } = await resolveRepoRoot(projectId);
+      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId);
       if (notARepo || !repoRoot) throw new ApiError('not_a_repo', 400, 'not a git repository');
-      const { kind } = await detectMergeKind(deps.runGit, repoRoot);
+      const { kind } = await detectMergeKind(gitDir, { runGit: deps.runGit, repoRoot });
       if (!kind) throw new ApiError('no_merge_in_progress', 409, 'no merge/cherry-pick/revert/rebase in progress');
       const remaining = await listConflictedFiles(deps.runGit, repoRoot);
       if (remaining.length > 0) {
@@ -191,9 +195,9 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
     },
 
     async mergeAbort({ projectId }) {
-      const { repoRoot, notARepo } = await resolveRepoRoot(projectId);
+      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId);
       if (notARepo || !repoRoot) throw new ApiError('not_a_repo', 400, 'not a git repository');
-      const { kind } = await detectMergeKind(deps.runGit, repoRoot);
+      const { kind } = await detectMergeKind(gitDir, { runGit: deps.runGit, repoRoot });
       if (kind) return deps.runAsResult(repoRoot, 'git', [kind, '--abort']);
       // No sequencer op (working-tree / stash conflict): there's no `--abort`.
       // Discard the conflicted files back to their HEAD state — the stash, if

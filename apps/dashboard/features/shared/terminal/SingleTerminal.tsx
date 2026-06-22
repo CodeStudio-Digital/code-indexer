@@ -7,15 +7,63 @@
  * spawn/kill; this component only attaches.
  */
 import { useEffect, useRef } from 'react';
-import { Terminal as XTerm } from '@xterm/xterm';
+import { Terminal as XTerm, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { apiCall, apiStream } from '../../../lib/api-client.js';
+import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 
 export interface SingleTerminalProps {
   terminalId: string;
   /** Notified when the underlying PTY process exits (user typed `exit`). */
   onProcessExited: () => void;
+}
+
+/**
+ * Terminal surface background per theme. Exported so the container
+ * (empty-state region + panel) paints the exact same colour as the
+ * xterm canvas — otherwise a seam shows around the terminal in light
+ * mode. Kept in sync with `xtermTheme()` below.
+ */
+export const TERMINAL_SURFACE_BG = { dark: '#0b0d12', light: '#ffffff' } as const;
+
+/**
+ * xterm palette per app theme. The dark palette is xterm's defaults plus
+ * our brand background; the light palette is a GitHub-light ANSI set that
+ * stays legible on white (xterm's dark-tuned defaults wash out there).
+ * Exported so other xterm surfaces (Output, Runners) share one source of truth.
+ */
+export function xtermTheme(dark: boolean): ITheme {
+  if (dark) {
+    return {
+      background: TERMINAL_SURFACE_BG.dark,
+      foreground: '#dadfea',
+      cursor: '#dadfea',
+    };
+  }
+  return {
+    background: TERMINAL_SURFACE_BG.light,
+    foreground: '#24292e',
+    cursor: '#24292e',
+    cursorAccent: '#ffffff',
+    selectionBackground: '#0b0d1226',
+    black: '#24292e',
+    red: '#d73a49',
+    green: '#22863a',
+    yellow: '#b08800',
+    blue: '#005cc5',
+    magenta: '#6f42c1',
+    cyan: '#1b7c83',
+    white: '#6a737d',
+    brightBlack: '#959da5',
+    brightRed: '#cb2431',
+    brightGreen: '#28a745',
+    brightYellow: '#dbab09',
+    brightBlue: '#2188ff',
+    brightMagenta: '#8a63d2',
+    brightCyan: '#3192aa',
+    brightWhite: '#24292e',
+  };
 }
 
 type TerminalOutputChunk =
@@ -24,6 +72,16 @@ type TerminalOutputChunk =
 
 export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<XTerm | null>(null);
+  const dark = useIsDark();
+
+  // Re-apply the xterm theme live when the user flips light/dark — the
+  // terminal is NOT rebuilt (that would wipe the scrollback), only its
+  // palette is swapped. The construction effect below sets the initial
+  // theme from the DOM, so this is a no-op on first mount.
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = xtermTheme(dark);
+  }, [dark]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -35,12 +93,12 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
       cursorBlink: true,
       convertEol: true,
       scrollback: 5000,
-      theme: {
-        background: '#0b0d12',
-        foreground: '#dadfea',
-        cursor: '#dadfea',
-      },
+      // Read the live theme from the DOM (not the `dark` prop) so the very
+      // first paint is correct without listing `dark` as an effect dep —
+      // we don't want a theme flip to tear down + rebuild the terminal.
+      theme: xtermTheme(document.documentElement.classList.contains('dark')),
     });
+    termRef.current = term;
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(containerRef.current);
@@ -197,6 +255,7 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
       void iterator.return?.();
       onDataDisposable.dispose();
       term.dispose();
+      termRef.current = null;
     };
   }, [terminalId, onProcessExited]);
 

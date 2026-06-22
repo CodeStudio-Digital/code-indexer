@@ -17,6 +17,7 @@ const SnapshotEditor = lazy(() => import('../../snapshots/index.js'));
 // Index — aba unificada (Indexed/Runs/Dependencies/Architecture/Diff/Costs).
 const IndexWorkspace = lazy(() => import('./index-workspace/IndexWorkspace.js').then((m) => ({ default: m.IndexWorkspace })));
 const ApiClientTab = lazy(() => import('../../api-client/ApiClientTab.js').then((m) => ({ default: m.ApiClientTab })));
+const DocsStudioView = lazy(() => import('../../api-client/docs-studio/DocsStudioView.js').then((m) => ({ default: m.DocsStudioView })));
 const DiagramsView = lazy(() => import('../diagrams/DiagramsView.js').then((m) => ({ default: m.DiagramsView })));
 
 /** Fallback dos chunks lazy de aba. */
@@ -49,6 +50,11 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
   // API client owns a full-height 3-pane layout.
   if (tab === 'api') {
     return <Suspense fallback={<TabSpinner />}><ApiClientTab projectId={projectId} /></Suspense>;
+  }
+
+  // Docs Studio — author + preview a collection's documentation. Own layout.
+  if (tab === 'docs') {
+    return <Suspense fallback={<TabSpinner />}><DocsStudioView key={projectId} projectId={projectId} /></Suspense>;
   }
 
   // Preview tab — the live dev-server preview, full-width.

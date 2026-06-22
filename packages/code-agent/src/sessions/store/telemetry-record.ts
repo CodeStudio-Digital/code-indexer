@@ -76,8 +76,10 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
           request_thinking_type, request_effort,
           response_status, response_ok, response_request_id,
           response_retry_after, response_x_should_retry,
-          response_rate_limits_json, response_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          response_rate_limits_json, response_path,
+          project_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          (SELECT s.project_id FROM coder_sessions s WHERE s.id = ?))`,
       )
       .run(
         input.session_id, input.run_id, input.turn, input.is_subagent ? 1 : 0,
@@ -113,6 +115,11 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
         response?.x_should_retry ?? null,
         responseRateLimitsJson,
         meta?.path ?? null,
+        // project_id — denormalized for faithful per-project stats once sessions
+        // move to per-project DBs (the JOIN via coder_sessions would break then).
+        // Derived from the central coder_sessions while it's still central; E3
+        // will thread it explicitly when sessions move.
+        input.session_id,
       );
     return Number(r.lastInsertRowid);
   } catch (e) {

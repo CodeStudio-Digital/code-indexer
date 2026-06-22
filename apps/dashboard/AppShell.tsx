@@ -36,7 +36,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './components/ui/dropdown-menu.js';
-import { DensityToggle } from './components/DensityToggle.js';
+import { CloudStatusButton } from './features/account/CloudStatusButton.js';
 import { LanguageSwitcher } from './components/LanguageSwitcher.js';
 import { RunningTasksDropdown } from './components/RunningTasksDropdown.js';
 import { AppMenu } from './components/AppMenu.js';
@@ -294,7 +294,7 @@ export function AppShell() {
             }
           />
           <LanguageSwitcher />
-          <DensityToggle />
+          <CloudStatusButton />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -332,7 +332,12 @@ export function AppShell() {
           view.page === 'project' ||
           view.page === 'agents' ||
           view.page === 'global' ||
-          view.page === 'design-systems'
+          view.page === 'design-systems' ||
+          // Settings (/admin) owns its own padding + a fixed-height,
+          // independently-scrolling rail/content split (IDE-style), so it
+          // opts out of the outer scroll+padding like the other two-pane
+          // surfaces above.
+          view.page === 'admin'
             ? 'flex flex-col overflow-hidden'
             : 'overflow-auto px-6 py-5',
         )}

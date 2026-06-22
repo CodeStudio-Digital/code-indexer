@@ -26,3 +26,4 @@ export {
 } from './attach.js';
 export { fanOutProjects, attachedDbCap, type FanOutOpts } from './attach-batch.js';
 export { ProjectDbUnavailableError, AttachLimitError } from './errors.js';
+export { routedFeatureDbPath } from './routed-path.js';

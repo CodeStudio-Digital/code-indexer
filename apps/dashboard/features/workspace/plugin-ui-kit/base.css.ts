@@ -12,12 +12,16 @@
 export const KIT_BASE = `
 .mcp-app, .mcp-app *, .mcp-app *::before, .mcp-app *::after { box-sizing: border-box; }
 .mcp-app {
+  --mcp-row-h: 32px;
+  --mcp-rail: 184px;
+  --mcp-pad: 12px;
+  --mcp-gap: 8px;
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
   font-family: var(--font-sans, system-ui);
-  font-size: 12px;
+  font-size: var(--ide-ui-font, 13px);
   line-height: 1.45;
   background: var(--background, #fff);
   color: var(--foreground, #111827);

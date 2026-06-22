@@ -16,11 +16,12 @@ import { maskSecrets, mergeSecrets, type EnvVarMap } from '@mcp/services/api-cli
  * logic lives in @mcp/services/api-client/env-secrets (pure + tested).
  */
 export function mountApiEnvironmentRoutes(app: Hono, deps: ServerDeps): void {
-  const store = deps.apiClientStore;
+  // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 
   app.get(`${base}/environments`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const environments = store.listEnvironments(projectId)
       .map((e) => ({ ...e, variables_json: maskSecrets(e.variables_json) }));
     return c.json({ environments });
@@ -29,6 +30,7 @@ export function mountApiEnvironmentRoutes(app: Hono, deps: ServerDeps): void {
   // Upsert (PUT with optional `id` in the body — create when absent).
   app.put(`${base}/environments`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const body = await parseJsonBody<{
       id?: number;
       name: string;
@@ -64,6 +66,7 @@ export function mountApiEnvironmentRoutes(app: Hono, deps: ServerDeps): void {
 
   app.delete(`${base}/environments/:eid`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const eid = parseIdParam(c, 'eid');
     // A stale eid must not delete another project's environment.
     if (!environmentInProject(store, projectId, eid)) return notFound(c, `Environment ${eid} not found`);

@@ -13,6 +13,7 @@
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "cheerio": "^1.2.0",
+    "isolated-vm": "^7.0.0",
     "magic-string": "^0.30.21",
     "officeparser": "^7.2.1",
     "playwright-core": "^1.60.0",

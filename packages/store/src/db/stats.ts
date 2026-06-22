@@ -1,7 +1,13 @@
 import type { DBFile, ProjectStats, Project } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 
-export function projectStats(db: DB, projectId: number, project: Project | undefined): ProjectStats {
+/**
+ * @param db        project-scoped handle (files/symbols live in the project DB
+ *                  when the tiered-hybrid split routes this project).
+ * @param centralDb central handle — `runs` stays CENTRAL (telemetry/stats), so
+ *                  the run count must come from there, not the project DB.
+ */
+export function projectStats(db: DB, centralDb: DB, projectId: number, project: Project | undefined): ProjectStats {
   const fileCounts = db.prepare(`
     SELECT COUNT(*) as file_count, COALESCE(SUM(line_count), 0) as total_lines, COALESCE(SUM(size), 0) as total_size
     FROM files WHERE project_id = ?
@@ -14,7 +20,7 @@ export function projectStats(db: DB, projectId: number, project: Project | undef
     SELECT language, COUNT(*) as cnt FROM files WHERE project_id = ? GROUP BY language ORDER BY cnt DESC
   `).all(projectId) as Array<{ language: string; cnt: number }>;
 
-  const runCount = db.prepare('SELECT COUNT(*) as cnt FROM runs WHERE project_id = ?')
+  const runCount = centralDb.prepare('SELECT COUNT(*) as cnt FROM runs WHERE project_id = ?')
     .get(projectId) as { cnt: number };
 
   const staleSemantic = db.prepare(`

@@ -15,12 +15,30 @@ import { Eraser } from 'lucide-react';
 import type { RunnerTask } from '@mcp/api-bus';
 import { apiStream } from '../../../lib/api-client.js';
 import { useRunningTasks, tasksForProject, isDevServerTask } from '../../../state/running-tasks.js';
+import { xtermTheme, TERMINAL_SURFACE_BG } from '../../shared/terminal/SingleTerminal.js';
+import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 import { Button } from '../../../components/ui/button.js';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../../../components/ui/select.js';
 import { cn } from '../../../lib/utils.js';
 
 type OutputChunk =
   | { type: 'data'; data: string }
   | { type: 'exit'; code: number | null; signal: string | null };
+
+/**
+ * Read-only log palette: the shared terminal theme, but with the cursor
+ * hidden (colour matched to the background) since stdin is disabled here.
+ */
+function outputTheme(dark: boolean): ReturnType<typeof xtermTheme> {
+  const base = xtermTheme(dark);
+  return { ...base, cursor: base.background };
+}
 
 interface OutputPanelProps {
   projectId: number;
@@ -41,6 +59,12 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const terminalId = selected?.terminalId;
+  const dark = useIsDark();
+
+  // Re-theme live on light/dark flip without tearing down the xterm.
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = outputTheme(dark);
+  }, [dark]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -54,7 +78,9 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
       disableStdin: true,
       convertEol: true,
       scrollback: 8000,
-      theme: { background: '#0b0d12', foreground: '#dadfea', cursor: '#0b0d12' },
+      // Read live theme from the DOM so first paint is correct without
+      // re-running this effect (which would rebuild the terminal) on flip.
+      theme: outputTheme(document.documentElement.classList.contains('dark')),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -108,17 +134,18 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
   return (
     <div className="h-full flex flex-col min-h-0">
       <div className="h-7 shrink-0 border-b flex items-center gap-2 px-2">
-        <select
-          value={selected?.taskId ?? ''}
-          onChange={(e) => setSelectedId(e.target.value)}
-          className="bg-transparent text-xs outline-none max-w-[55%] truncate"
-        >
-          {mine.map((t) => (
-            <option key={t.taskId} value={t.taskId}>
-              {(t.label || t.command)} · {t.status}
-            </option>
-          ))}
-        </select>
+        <Select value={selected?.taskId ?? mine[0]?.taskId} onValueChange={setSelectedId}>
+          <SelectTrigger className="h-6 w-64 max-w-[55%] min-w-0 px-2 py-1 text-xs shadow-none">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {mine.map((t) => (
+              <SelectItem key={t.taskId} value={t.taskId} className="text-xs">
+                {(t.label || t.command)} · {t.status}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <span
           className={cn(
             'text-[10px] uppercase tracking-wide shrink-0',
@@ -139,7 +166,10 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
           <Eraser className="h-3 w-3" />
         </Button>
       </div>
-      <div className="relative flex-1 min-h-0">
+      <div
+        className="relative flex-1 min-h-0"
+        style={{ background: dark ? TERMINAL_SURFACE_BG.dark : TERMINAL_SURFACE_BG.light }}
+      >
         <div ref={containerRef} className="absolute inset-0" />
       </div>
     </div>

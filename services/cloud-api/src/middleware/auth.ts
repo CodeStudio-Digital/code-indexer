@@ -32,3 +32,14 @@ export async function requireClaims(
 export function unauthorized(c: Context<{ Bindings: Env }>) {
   return c.json({ code: 'auth_required', message: 'Sign in required.' }, 401);
 }
+
+/** True when the access token's email is verified. Cloud WRITES gate on this
+ *  (reads + the local IDE stay free). The `ev` claim refreshes on token rotation,
+ *  so verifying + the next refresh (≤15 min) unlocks writes. */
+export function isVerified(claims: AccessClaims): boolean {
+  return claims.ev === true;
+}
+
+export function emailNotVerified(c: Context<{ Bindings: Env }>) {
+  return c.json({ code: 'email_not_verified', message: 'Verify your email to publish, share, sync, or create a team.' }, 403);
+}

@@ -4,7 +4,7 @@
  * domains stay available even when the open project isn't a Cloudflare app —
  * that's why this panel surfaces everywhere (no activation rule).
  */
-import { button, clear, div, el, select } from '../core/dom.js';
+import { button, clear, div, el, icon, select } from '../core/dom.js';
 import { mutate } from '../core/api.js';
 import { push, registerView } from '../core/router.js';
 import { fetchAccounts, fetchDetect } from '../core/status.js';
@@ -16,23 +16,24 @@ import { t } from '../core/i18n.js';
 interface DomainEntry {
   labelKey: string;
   metaKey: string;
+  icon: string;
   go(): void;
 }
 
 const DOMAINS: DomainEntry[] = [
-  { labelKey: 'd1.title', metaKey: 'd1.sub', go: () => push('d1') },
-  { labelKey: 'kv.title', metaKey: 'kv.sub', go: () => push('kv') },
-  { labelKey: 'r2.title', metaKey: 'r2.sub', go: () => push('r2') },
-  { labelKey: 'dns.title', metaKey: 'dns.sub', go: () => push('dns') },
-  { labelKey: 'domain.queues', metaKey: 'domain.queuesSub', go: () => push('generic', { domain: 'queues' }) },
-  { labelKey: 'domain.workers', metaKey: 'domain.workersSub', go: () => push('generic', { domain: 'workers' }) },
-  { labelKey: 'domain.pages', metaKey: 'domain.pagesSub', go: () => push('generic', { domain: 'pages' }) },
-  { labelKey: 'domain.vectorize', metaKey: 'domain.vectorizeSub', go: () => push('generic', { domain: 'vectorize' }) },
-  { labelKey: 'domain.do', metaKey: 'domain.doSub', go: () => push('generic', { domain: 'do' }) },
-  { labelKey: 'domain.hyperdrive', metaKey: 'domain.hyperdriveSub', go: () => push('generic', { domain: 'hyperdrive' }) },
-  { labelKey: 'domain.ai', metaKey: 'domain.aiSub', go: () => push('generic', { domain: 'ai' }) },
-  { labelKey: 'logs.title', metaKey: 'logs.sub', go: () => push('logs') },
-  { labelKey: 'assistant.title', metaKey: 'assistant.sub', go: () => push('assistant') },
+  { labelKey: 'd1.title', metaKey: 'd1.sub', icon: 'database', go: () => push('d1') },
+  { labelKey: 'kv.title', metaKey: 'kv.sub', icon: 'layers', go: () => push('kv') },
+  { labelKey: 'r2.title', metaKey: 'r2.sub', icon: 'box', go: () => push('r2') },
+  { labelKey: 'dns.title', metaKey: 'dns.sub', icon: 'network', go: () => push('dns') },
+  { labelKey: 'domain.queues', metaKey: 'domain.queuesSub', icon: 'inbox', go: () => push('generic', { domain: 'queues' }) },
+  { labelKey: 'domain.workers', metaKey: 'domain.workersSub', icon: 'rocket', go: () => push('generic', { domain: 'workers' }) },
+  { labelKey: 'domain.pages', metaKey: 'domain.pagesSub', icon: 'folder', go: () => push('generic', { domain: 'pages' }) },
+  { labelKey: 'domain.vectorize', metaKey: 'domain.vectorizeSub', icon: 'wand-2', go: () => push('generic', { domain: 'vectorize' }) },
+  { labelKey: 'domain.do', metaKey: 'domain.doSub', icon: 'boxes', go: () => push('generic', { domain: 'do' }) },
+  { labelKey: 'domain.hyperdrive', metaKey: 'domain.hyperdriveSub', icon: 'database', go: () => push('generic', { domain: 'hyperdrive' }) },
+  { labelKey: 'domain.ai', metaKey: 'domain.aiSub', icon: 'sparkles', go: () => push('generic', { domain: 'ai' }) },
+  { labelKey: 'logs.title', metaKey: 'logs.sub', icon: 'scroll-text', go: () => push('logs') },
+  { labelKey: 'assistant.title', metaKey: 'assistant.sub', icon: 'wand-2', go: () => push('assistant') },
 ];
 
 function connectionCard(): HTMLElement {
@@ -141,7 +142,10 @@ export function registerHomeView(): void {
       for (const d of DOMAINS) {
         const row = el('button', 'mcp-row');
         row.type = 'button';
+        const ico = el('span', 'mcp-row-ico mcp-muted');
+        ico.appendChild(icon(d.icon, 18));
         row.append(
+          ico,
           div('mcp-row-main',
             el('span', 'mcp-row-title', t(d.labelKey)),
             el('span', 'mcp-row-meta', t(d.metaKey)),

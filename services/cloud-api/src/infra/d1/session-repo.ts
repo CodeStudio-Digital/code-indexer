@@ -23,17 +23,36 @@ export function createSessionRepo(db: DbExecutor): SessionRepo {
     async touch(id: SessionId, atIso) {
       await db.run('UPDATE sessions SET last_seen_at = ? WHERE id = ?', [atIso, id]);
     },
+    async setDeviceInfo(id: SessionId, info) {
+      await db.run(
+        'UPDATE sessions SET device_name = ?, os_release = ?, geo_country = ?, geo_city = ? WHERE id = ?',
+        [info.deviceName, info.osRelease, info.geoCountry, info.geoCity, id],
+      );
+    },
     async revoke(id: SessionId, atIso) {
       await db.run('UPDATE sessions SET revoked_at = ? WHERE id = ?', [atIso, id]);
     },
     async listByAccount(accountId) {
-      const rows = await db.all<{ id: string; user_agent: string | null; created_at: string; last_seen_at: string }>(
-        'SELECT id, user_agent, created_at, last_seen_at FROM sessions WHERE account_id = ? AND revoked_at IS NULL ORDER BY last_seen_at DESC',
+      const rows = await db.all<{
+        id: string;
+        user_agent: string | null;
+        device_name: string | null;
+        os_release: string | null;
+        geo_country: string | null;
+        geo_city: string | null;
+        created_at: string;
+        last_seen_at: string;
+      }>(
+        'SELECT id, user_agent, device_name, os_release, geo_country, geo_city, created_at, last_seen_at FROM sessions WHERE account_id = ? AND revoked_at IS NULL ORDER BY last_seen_at DESC',
         [accountId],
       );
       return rows.map((r) => ({
         id: asSessionId(r.id),
         userAgent: r.user_agent,
+        deviceName: r.device_name,
+        osRelease: r.os_release,
+        geoCountry: r.geo_country,
+        geoCity: r.geo_city,
         createdAt: r.created_at,
         lastSeenAt: r.last_seen_at,
       }));
