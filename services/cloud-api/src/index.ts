@@ -7,19 +7,29 @@ import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { Env } from './env.js';
 import { authRouter } from './routes/auth.js';
+import { oauthRouter } from './routes/oauth.js';
 import { sessionsRouter } from './routes/sessions.js';
 import { twoFactorRouter } from './routes/two-factor.js';
 import { emailRouter } from './routes/email.js';
 import { billingRouter } from './routes/billing.js';
 import { sharingRouter, publicShareRouter } from './routes/sharing.js';
+import { docsRouter, publicDocsRouter } from './routes/docs.js';
+import { syncRouter } from './routes/sync.js';
+import { backupsRouter } from './routes/backups.js';
+import { teamsRouter } from './routes/teams.js';
 import { feedbackRouter } from './routes/feedback.js';
 import { accountRouter } from './routes/account.js';
-import { securityHeaders, corsAllowlist } from './middleware/security.js';
+import { securityHeaders, docsSecurityHeaders, corsAllowlist } from './middleware/security.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
 // Edge security first: strict headers on every response + a CORS origin allowlist.
-app.use('*', securityHeaders());
+// The hosted-docs viewer (/d/*) is the one HTML surface, so it gets a relaxed,
+// scoped CSP instead of the JSON API's `default-src 'none'`.
+app.use('*', (c, next) => {
+  const isDocsViewer = c.req.path === '/d' || c.req.path.startsWith('/d/');
+  return (isDocsViewer ? docsSecurityHeaders() : securityHeaders())(c, next);
+});
 app.use('*', corsAllowlist());
 
 // Body caps are scoped: auth/billing payloads are tiny (anti-amplification),
@@ -43,6 +53,13 @@ app.use('/v1/auth/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 app.use('/v1/billing/*', bodyLimit({ maxSize: 64 * 1024, onError: tooLarge }));
 app.use('/v1/share', bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge }));
 app.use('/v1/share/*', bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge }));
+app.use('/v1/docs', bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge })); // OpenAPI spec
+app.use('/v1/docs/*', bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge }));
+app.use('/v1/sync/*', bodyLimit({ maxSize: 4 * 1024 * 1024, onError: tooLarge })); // a batch of synced docs
+app.use('/v1/backups', bodyLimit({ maxSize: 25 * 1024 * 1024, onError: tooLarge })); // gz metadata bundle
+app.use('/v1/backups/*', bodyLimit({ maxSize: 25 * 1024 * 1024, onError: tooLarge }));
+app.use('/v1/orgs', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
+app.use('/v1/orgs/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 app.use('/v1/feedback', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge })); // submit JSON is small
 app.use('/v1/feedback/*', bodyLimit({ maxSize: 6 * 1024 * 1024, onError: tooLarge })); // attachment ≤ 5 MB
 app.use('/v1/account', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
@@ -58,12 +75,18 @@ app.get('/v1/health', (c) =>
 );
 
 app.route('/v1/auth', authRouter());
+app.route('/v1/auth', oauthRouter());
 app.route('/v1/auth', sessionsRouter());
 app.route('/v1/auth', twoFactorRouter());
 app.route('/v1/auth', emailRouter());
 app.route('/v1/billing', billingRouter());
 app.route('/v1/share', sharingRouter());
 app.route('/s', publicShareRouter()); // public read-only viewer (no auth)
+app.route('/v1/docs', docsRouter());
+app.route('/d', publicDocsRouter()); // public hosted-docs viewer (no auth)
+app.route('/v1/sync', syncRouter());
+app.route('/v1/backups', backupsRouter());
+app.route('/v1/orgs', teamsRouter());
 app.route('/v1/feedback', feedbackRouter());
 app.route('/v1/account', accountRouter());
 

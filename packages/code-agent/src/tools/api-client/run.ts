@@ -8,6 +8,7 @@ import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { executeRequest } from '@mcp/services/api-client/execute-request.js';
 import { runCollection } from '@mcp/services/api-client/regression-runner.js';
+import { apiClientReadCap } from '@mcp/services/api-client/read-cap.js';
 import { resolveApiCtx, jarForProject, resolveEnvFor } from './shared.js';
 
 const BODY_CAP = 4096;
@@ -38,7 +39,12 @@ export const apiRunRequestTool: CoderTool = {
     const { baseUrl, variables } = resolveEnvFor(r.store, r.projectId, args.envId != null ? Number(args.envId) : undefined);
     let res;
     try {
-      res = await executeRequest({ request: req, baseUrl, variables, jar: jarForProject(r.projectId), signal: ctx.signal });
+      // Contain file-backed bodies to the project root — the agent must not be
+      // able to read an arbitrary host file (e.g. ~/.ssh/id_rsa) and POST it out.
+      res = await executeRequest({
+        request: req, baseUrl, variables, jar: jarForProject(r.projectId), signal: ctx.signal,
+        fileRoot: ctx.cwd, allowAbsoluteFiles: false, maxBytes: apiClientReadCap(),
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (/Invalid URL|resolve/i.test(msg) && !/ECONN|timed out|socket/i.test(msg)) {
@@ -52,8 +58,12 @@ export const apiRunRequestTool: CoderTool = {
     const ct = String(res.headers['content-type'] ?? '');
     const tests = [...(res.preScript?.tests ?? []), ...(res.testScript?.tests ?? [])];
     const testLine = tests.length ? `tests: ${tests.filter((t) => t.passed).length}/${tests.length} passed` : '';
+    // Echo origin+path only — res.url is fully resolved (apikey-in-query / {{secret}}
+    // in a param), and this line goes to the AI provider in cleartext.
+    let shownUrl = res.url;
+    try { const u = new URL(res.url); shownUrl = `${u.origin}${u.pathname}`; } catch { shownUrl = res.url.split('?')[0]; }
     return ok([
-      `${req.method} ${res.url} → ${res.status} ${res.statusText} (${res.ms}ms)`,
+      `${req.method} ${shownUrl} → ${res.status} ${res.statusText} (${res.ms}ms)`,
       ct ? `content-type: ${ct}` : '',
       testLine,
       '',
@@ -96,6 +106,7 @@ export const apiRunCollectionTool: CoderTool = {
         jar: jarForProject(r.projectId),
         includeMutating: !!args.includeMutating,
         signal: ctx.signal,
+        fileRoot: ctx.cwd, allowAbsoluteFiles: false, maxBytes: apiClientReadCap(),
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

@@ -111,7 +111,8 @@ export class SqliteVecVectorStore implements VectorStore {
         for (const r of rows) {
           if (r.vid.startsWith('doc_chunk:')) continue; // can't resolve collection → re-ingest
           if (!r.project_name) continue;
-          ins.run(r.vid, r.embedding as Buffer, codeNamespace(r.project_name), r.project_name, r.type, r.ref_id);
+          // '' (not NULL) for absent type/ref_id — vec0 0.1.9+ rejects NULL metadata.
+          ins.run(r.vid, r.embedding as Buffer, codeNamespace(r.project_name), r.project_name, r.type ?? '', r.ref_id ?? '');
         }
       });
       tx();
@@ -158,10 +159,14 @@ export class SqliteVecVectorStore implements VectorStore {
         ins.run(
           r.id,
           new Float32Array(r.values),
-          namespace ?? null,
-          r.metadata.project_name ?? null,
-          r.metadata.type ?? null,
-          r.metadata.ref_id ?? null,
+          // vec0 0.1.9+ REJECTS NULL in TEXT metadata columns ("Expected text
+          // for TEXT metadata column, received NULL"). Bind '' for any absent
+          // field; the read-back below treats '' as absent so the metadata
+          // shape consumers see is unchanged (code vectors always set all three).
+          namespace ?? '',
+          r.metadata.project_name ?? '',
+          r.metadata.type ?? '',
+          r.metadata.ref_id ?? '',
         );
       }
     });
@@ -206,9 +211,11 @@ export class SqliteVecVectorStore implements VectorStore {
 
     return rows.map((r) => {
       const metadata: Record<string, string> = {};
-      if (r.project_name !== null) metadata.project_name = r.project_name;
-      if (r.type !== null) metadata.type = r.type;
-      if (r.ref_id !== null) metadata.ref_id = r.ref_id;
+      // Truthy check (not `!== null`): incomplete-metadata rows now store '' (see
+      // upsert) — omit them so the shape matches the pre-0.1.9 NULL-omit behavior.
+      if (r.project_name) metadata.project_name = r.project_name;
+      if (r.type) metadata.type = r.type;
+      if (r.ref_id) metadata.ref_id = r.ref_id;
       // vec0 returns L2 distance (lower = better); map to higher-is-better so
       // downstream sort/RRF ranking matches the other stores.
       return { id: r.vid, score: 1 / (1 + r.distance), metadata };
@@ -256,5 +263,10 @@ export class SqliteVecVectorStore implements VectorStore {
       ? this.db.prepare(`SELECT vid FROM ${TABLE} WHERE namespace = ?`).all(namespace) as Array<{ vid: string }>
       : this.db.prepare(`SELECT vid FROM ${TABLE}`).all() as Array<{ vid: string }>;
     return rows.map((r) => r.vid);
+  }
+
+  /** Close the underlying connection (per-project stores are pooled + evicted). */
+  close(): void {
+    try { this.db.close(); } catch { /* already closed */ }
   }
 }

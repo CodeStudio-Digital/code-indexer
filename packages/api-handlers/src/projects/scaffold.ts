@@ -28,6 +28,15 @@ import type { HandlerDeps } from '../types.js';
 
 type Emit = (event: ScaffoldStreamEvent) => void;
 
+/** Strip embedded credentials from an http(s) remote (scp-style git@ passes through).
+ *  Mirrors the renderer's sanitizeGitRemote so a cloned remote is never stored with
+ *  a token. */
+function sanitizeRemote(url: string): string | null {
+  const u = url.trim();
+  if (!u) return null;
+  return u.replace(/^(https?:\/\/)[^/@]*@/i, '$1');
+}
+
 export async function runScaffoldStream(
   deps: HandlerDeps,
   input: ScaffoldProjectInput,
@@ -123,7 +132,17 @@ export async function runScaffoldStream(
     if (builderJson) {
       deps.db.updateProject(project.id, { builder_json: builderJson });
     }
-    const finalProject = builderJson ? (deps.db.getProject(project.id) ?? project) : project;
+    // P6-C: a clone's repoUrl IS its origin remote — persist it (creds stripped) so
+    // the project can be published to / restored from the cloud library.
+    let gitRemoteSet = false;
+    if (validated.template === 'git-clone' && validated.repoUrl) {
+      const remote = sanitizeRemote(validated.repoUrl);
+      if (remote) {
+        deps.db.updateProject(project.id, { git_remote: remote });
+        gitRemoteSet = true;
+      }
+    }
+    const finalProject = builderJson || gitRemoteSet ? (deps.db.getProject(project.id) ?? project) : project;
     // Fresh scaffold is small — the structural index lands in <1s, so the
     // project opens already usable for symbols/grep. Fire-and-forget.
     deps.projectIndexService.ensureFresh(finalProject.id, 'scaffold');

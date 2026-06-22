@@ -6,6 +6,7 @@
  * (a fresh send) changes.
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { listRequestHistory } from './api.js';
 import type { ApiRequestHistory } from './types.js';
 import { StatusBadge } from './StatusBadge.js';
@@ -24,6 +25,7 @@ function timePart(ts: string): string {
 }
 
 export function RequestTimeline({ projectId, requestId, refreshToken }: Props) {
+  const { t } = useTranslation('apiClient');
   const [rows, setRows] = useState<ApiRequestHistory[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -40,10 +42,10 @@ export function RequestTimeline({ projectId, requestId, refreshToken }: Props) {
 
   const empty =
     requestId == null
-      ? 'Select a request to see its history.'
+      ? t('timeline.selectRequest')
       : loading
-        ? 'Loading…'
-        : 'No sends recorded yet.';
+        ? t('timeline.loading')
+        : t('timeline.noSends');
 
   if (rows.length === 0) {
     return <div className="h-full flex items-center justify-center text-xs text-muted-foreground px-3 text-center">{empty}</div>;

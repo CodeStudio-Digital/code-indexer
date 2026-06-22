@@ -41,6 +41,9 @@ export function RouteStartupPanel() {
   );
   const emptyPaint = current?.events.find((event) => event.name === 'EmptyChatState:painted');
   const longTasks = current?.vitals.filter((vital) => vital.name === 'longtask') ?? [];
+  const fullGitWhileChat = current?.spans.filter(
+    (span) => span.name === 'projectGit.status(full)' && span.tab === 'chat',
+  ) ?? [];
   const maxLongTask = longTasks.reduce<RouteMetricVital | undefined>(
     (best, row) => (!best || (row.durationMs ?? 0) > (best.durationMs ?? 0) ? row : best),
     undefined,
@@ -93,6 +96,12 @@ export function RouteStartupPanel() {
             <Metric label="CLS" value={current.cls.toFixed(3)} />
             <Metric label={t('perf.route.emptyPaint')} value={formatMs(emptyPaint?.atMs)} muted={!emptyPaint} />
           </div>
+
+          {fullGitWhileChat.length > 0 && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+              {t('perf.route.gitFullInChat', { count: fullGitWhileChat.length })}
+            </div>
+          )}
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.55fr)]">
             <div className="border rounded-md overflow-hidden">

@@ -18,13 +18,15 @@ async function writeAudit(
   opts: { accountId?: string | null; [key: string]: unknown },
 ): Promise<void> {
   const ip = c.req.header('cf-connecting-ip') ?? null;
-  const { accountId = null, ...meta } = opts; // everything except accountId is meta (redacted on write)
+  // accountId + orgId become columns; everything else is meta (redacted on write).
+  const { accountId = null, orgId = null, ...meta } = opts as { accountId?: string | null; orgId?: string | null; [k: string]: unknown };
   try {
     const log = createAuditLog(createD1Executor(c.env.DB), cryptoIdGen, systemClock);
     const e: AuditEvent = {
       event,
       status,
       accountId,
+      orgId,
       ipHash: ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null,
       meta,
     };

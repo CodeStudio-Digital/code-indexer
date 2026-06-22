@@ -95,7 +95,10 @@ async function runCheckpoint(deps: BuilderCheckpointDeps, sessionId: number): Pr
   const head = await git(project.root_path, ['rev-parse', 'HEAD']);
   if (!head.ok) return;
 
-  const row = createBuilderCheckpoint(deps.db.raw(), {
+  // builder_checkpoints is FEATURE-class — write to the project DB when routed
+  // (mirrors the list/restore/diff handlers), else central. The reads above
+  // (coder_sessions/coder_messages) correctly stay central via raw().
+  const row = createBuilderCheckpoint(deps.db.projectScopedDb(project.id), {
     project_id: project.id,
     session_id: sessionId,
     commit_sha: head.stdout.trim(),
@@ -131,7 +134,9 @@ export async function attachThumbnail(
       args: { url: `http://127.0.0.1:${port}/`, outPath },
     })) as { ok?: boolean; path?: string };
     if (res?.ok && res.path) {
-      setBuilderCheckpointScreenshot(deps.db.raw(), checkpointId, res.path);
+      // Same routed DB as the checkpoint row above — else the screenshot path
+      // lands in central while the row + thumbnail route read the project DB.
+      setBuilderCheckpointScreenshot(deps.db.projectScopedDb(projectId), checkpointId, res.path);
     }
   } catch {
     /* dev server down / capture failed — keep null */

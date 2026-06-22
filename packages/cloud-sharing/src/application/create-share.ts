@@ -39,8 +39,6 @@ export class CreateShareUseCase {
 
   async execute(input: CreateShareInput): Promise<Result<CreateShareOutput, ShareError>> {
     if (!input.entitlement.sharing) return err(ShareErrors.notEntitled());
-    const active = await this.repo.countActiveByOwner(input.ownerAccountId);
-    if (active >= input.entitlement.maxActiveShares) return err(ShareErrors.quotaExceeded(input.entitlement.maxActiveShares));
 
     const { value: redacted, redactionCount } = redactSnapshot(input.snapshot, 'standard');
     const canonical = canonicalize(redacted);
@@ -63,7 +61,9 @@ export class CreateShareUseCase {
       expiresAtMs: input.expiresInDays ? now + input.expiresInDays * DAY_MS : null,
       revokedAtMs: null,
     };
-    await this.repo.insert(share, redacted.messages);
+    // Atomic quota+insert: false ⇒ the owner is at their active-share limit.
+    const inserted = await this.repo.insertIfUnderQuota(share, redacted.messages, input.entitlement.maxActiveShares);
+    if (!inserted) return err(ShareErrors.quotaExceeded(input.entitlement.maxActiveShares));
     return ok({ shareId: share.id, slug: share.slug, redactionCount });
   }
 }

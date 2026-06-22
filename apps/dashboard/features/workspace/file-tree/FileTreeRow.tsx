@@ -128,7 +128,7 @@ function FileTreeRowImpl(props: FileTreeRowProps) {
           ) : (
             <FileIcon path={entry.path} className={cn('h-3.5 w-3.5', !active && !selected && 'opacity-90')} />
           )}
-          <span className={cn('truncate', color.text, color.extra)}>{entry.name}</span>
+          <span className={cn('truncate', color.text, !isDir && color.extra)}>{entry.name}</span>
         </span>
       </div>
       {Menu}

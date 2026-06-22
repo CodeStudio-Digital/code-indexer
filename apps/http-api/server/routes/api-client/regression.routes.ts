@@ -2,18 +2,21 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody } from '../_helpers.js';
 import { collectionInProject, resolveScopedEnv } from './_ownership.js';
+import { blockPrivateHosts, projectRoot } from './_net-policy.js';
 import { createJar } from '@mcp/shared/utils/http-engine.js';
 import { parseEnvVariables } from '@mcp/services/api-client/request-builder.js';
 import { runCollection } from '@mcp/services/api-client/regression-runner.js';
 import { importOpenApiInto, importOpenApiContent } from '@mcp/services/api-client/import-openapi.js';
+import { apiClientReadCap } from '@mcp/services/api-client/read-cap.js';
 
 export function mountApiRegressionRoutes(app: Hono, deps: ServerDeps): void {
-  const store = deps.apiClientStore;
+  // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 
   // Run the whole collection (synchronous; returns the full report + runId).
   app.post(`${base}/collections/:cid/run`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const cid = parseIdParam(c, 'cid');
     // Ownership guard: a stale cid must not run another project's whole battery,
     // and a stale envId must not run it against another project's base_url +
@@ -24,6 +27,7 @@ export function mountApiRegressionRoutes(app: Hono, deps: ServerDeps): void {
 
     const requests = store.listRequests(cid);
     const runId = store.createRun(cid, env?.id ?? null, 'manual');
+    const block = blockPrivateHosts();
     try {
       const report = await runCollection({
         requests,
@@ -32,6 +36,10 @@ export function mountApiRegressionRoutes(app: Hono, deps: ServerDeps): void {
         jar: createJar(),
         includeMutating: !!body.includeMutating,
         signal: c.req.raw.signal,
+        blockPrivateHosts: block,
+        fileRoot: projectRoot(deps, projectId),
+        allowAbsoluteFiles: !block,
+        maxBytes: apiClientReadCap(),
       });
       store.finishRun(runId, {
         status: report.status, total: report.total, passed: report.passed,
@@ -58,6 +66,7 @@ export function mountApiRegressionRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get(`${base}/collections/:cid/runs`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const cid = parseIdParam(c, 'cid');
     // A stale cid must not leak another project's run history.
     if (!collectionInProject(store, projectId, cid)) return c.json({ runs: [] });
@@ -67,6 +76,7 @@ export function mountApiRegressionRoutes(app: Hono, deps: ServerDeps): void {
   // Import an OpenAPI/Swagger spec → collection (idempotent by spec path).
   app.post(`${base}/collections/import-openapi`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const body = await parseJsonBody<{ specPath?: string }>(c);
     const project = deps.db.getProject(projectId);
     if (!project?.root_path) return c.json({ error: 'project has no root path on disk' }, 422);
@@ -80,6 +90,7 @@ export function mountApiRegressionRoutes(app: Hono, deps: ServerDeps): void {
   // no project root needed).
   app.post(`${base}/collections/import-openapi-content`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const body = await parseJsonBody<{ content?: string; filename?: string }>(c);
     if (!body.content?.trim()) return c.json({ error: 'no file content provided' }, 400);
     const outcome = await importOpenApiContent(store, { projectId, content: body.content, filename: body.filename });

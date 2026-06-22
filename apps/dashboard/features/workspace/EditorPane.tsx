@@ -1,24 +1,29 @@
 /**
- * Editor pane — Monaco mount + tab bar wired to the Zustand workspace
- * store. Monaco itself is lazy-loaded (Suspense fallback) so the
- * ~5 MB gzipped chunk only lands when the user actually opens a project.
+ * Editor pane host + per-pane view.
  *
- * Empty state is a proper "Welcome to Workspace" surface: brand mark,
- * quick action chips (Quick Open, New File, Toggle Chat), and a hint
- * row showing the most useful shortcuts. Beats a one-line "no file
- * open" placeholder.
+ * `EditorPaneHost` lays out one or two editor panes (IntelliJ-style split):
+ * single → a bare `EditorPaneView`; split → two views in a resizable
+ * `PanelGroup` (row = side-by-side, column = stacked). Each `EditorPaneView`
+ * is a self-contained editor area: its own tab bar + the Monaco mount (or a
+ * diff/git/merge/markdown/drawio surface) for that pane's active tab.
+ *
+ * Monaco itself is lazy-loaded (Suspense fallback) so the ~5 MB gzipped chunk
+ * only lands when the user actually opens a file.
  */
 
-import { Suspense, lazy, useEffect, useReducer } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useReducer } from 'react';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import {
   FileCode2,
   FilePlus2,
   Loader2,
   MessageSquare,
+  MousePointerSquareDashed,
   Search,
   Sparkles,
   TerminalSquare,
 } from 'lucide-react';
+import { cn } from '../../lib/utils.js';
 import { useWorkspaceStore } from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { EditorTabBar } from './EditorTabBar.js';
@@ -59,15 +64,78 @@ function isDrawioPath(path: string): boolean {
   return /\.drawio$/i.test(path);
 }
 
-export function EditorPane() {
-  const openFiles = useWorkspaceStore((s) => s.openFiles);
-  const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
-  const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
-  const activeFile = openFiles.find((f) => f.path === activeFilePath && f.projectId === activeProjectId) ?? null;
+/**
+ * Host: renders a single pane, or two panes in a resizable split. The split
+ * lives entirely inside the editor area — it nests under ProjectView's existing
+ * chat/terminal PanelGroups.
+ */
+export function EditorPaneHost() {
+  const panes = useWorkspaceStore((s) => s.panes);
+  const splitDir = useWorkspaceStore((s) => s.splitDir);
+
+  if (!splitDir || panes.length < 2) {
+    return <EditorPaneView paneId={panes[0]?.id ?? 'pane'} />;
+  }
+
+  const direction = splitDir === 'row' ? 'horizontal' : 'vertical';
+  return (
+    // key by direction so re-orienting cleanly remounts the group (the library
+    // doesn't support changing `direction` on a live instance).
+    <PanelGroup
+      key={direction}
+      direction={direction}
+      autoSaveId={`mcp-editor-split-${direction}`}
+      className="h-full min-h-0"
+    >
+      <Panel id="pane-a" order={1} minSize={20} className="min-w-0 min-h-0">
+        <EditorPaneView key={panes[0].id} paneId={panes[0].id} />
+      </Panel>
+      <PanelResizeHandle
+        className={cn(
+          'bg-border hover:bg-primary/40 transition-colors',
+          direction === 'horizontal' ? 'w-px' : 'h-px',
+        )}
+      />
+      <Panel id="pane-b" order={2} minSize={20} className="min-w-0 min-h-0">
+        <EditorPaneView key={panes[1].id} paneId={panes[1].id} />
+      </Panel>
+    </PanelGroup>
+  );
+}
+
+/** A single editor area — tab bar + the surface for this pane's active tab. */
+function EditorPaneView({ paneId }: { paneId: string }) {
+  const pane = useWorkspaceStore((s) => s.panes.find((p) => p.id === paneId));
+  const isActivePane = useWorkspaceStore((s) => s.activePaneId === paneId);
+  const isSplit = useWorkspaceStore((s) => s.splitDir !== null);
+  const setActivePane = useWorkspaceStore((s) => s.setActivePane);
+
+  // Select THIS pane's active file directly (not the whole pool). `find` returns
+  // the existing object reference, and setContent only clones the EDITED file —
+  // so when the other pane is typed in, this selector returns the same reference
+  // and Zustand's Object.is equality skips re-rendering the idle pane entirely.
+  const activePath = pane?.activePath ?? null;
+  const activeFile = useWorkspaceStore(
+    (s) => s.openFiles.find((f) => f.path === activePath && f.projectId === s.activeProjectId) ?? null,
+  );
+
+  // Stable callback so MonacoMount's handleMount deps / props don't churn.
+  const onFocusPane = useCallback(() => setActivePane(paneId), [setActivePane, paneId]);
 
   return (
-    <div className="h-full flex flex-col bg-background min-h-0">
-      <EditorTabBar />
+    <div
+      className={cn(
+        'h-full flex flex-col bg-background min-h-0 relative',
+        // Focused-pane affordance (only meaningful when split).
+        isSplit && isActivePane && 'ring-1 ring-inset ring-primary/40',
+      )}
+      // mousedown (capture) so the pane focuses before the editor steals focus.
+      onMouseDownCapture={() => {
+        if (!isActivePane) setActivePane(paneId);
+      }}
+      data-pane-id={paneId}
+    >
+      <EditorTabBar paneId={paneId} />
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {activeFile ? (
           <Suspense
@@ -99,13 +167,15 @@ export function EditorPane() {
                   <ExternalChangeBanner projectId={activeFile.projectId} path={activeFile.path} />
                 )}
                 <div className="flex-1 min-h-0 relative">
-                  <MonacoMount file={activeFile} />
+                  <MonacoMount file={activeFile} isActivePane={isActivePane} onFocusPane={onFocusPane} />
                   {/* Consent CTA: language has a tier-1 LSP server not yet installed. */}
                   <LspInstallPrompt projectId={activeFile.projectId} filePath={activeFile.path} />
                 </div>
               </div>
             )}
           </Suspense>
+        ) : isSplit ? (
+          <EmptySplitPane />
         ) : (
           <WelcomeScreen />
         )}
@@ -114,20 +184,29 @@ export function EditorPane() {
   );
 }
 
+/** Placeholder for a freshly-split pane that has no tab yet. */
+function EmptySplitPane() {
+  return (
+    <div className="h-full grid place-items-center px-6 text-center">
+      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+        <MousePointerSquareDashed className="h-6 w-6 opacity-60" />
+        <p className="text-[12px] max-w-[16rem] leading-relaxed">
+          Open a file or drag a tab here to use this split.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /**
- * Welcome card shown when no file is open — sells the "you're in an
- * IDE" feeling without demanding the user remember every shortcut up
- * front.
+ * Welcome card shown when no file is open — sells the "you're in an IDE"
+ * feeling without demanding the user remember every shortcut up front.
  */
 function WelcomeScreen() {
   const terminalOpen = useWorkspaceLayout((s) => s.activeBottom === 'terminal');
 
-  // Drive the cards straight through the keymap command registry — the
-  // same path the dispatcher and Search Everywhere use. Subscribing to the
-  // preset/overrides (and to registry mounts) keeps every label honest: it
-  // shows the binding that is actually live, IntelliJ or VS Code, not a
-  // hardcoded guess. (The previous synthetic-KeyboardEvent hack targeted the
-  // retired Workspace listener and silently did nothing here.)
+  // Drive the cards straight through the keymap command registry — the same
+  // path the dispatcher and Search Everywhere use.
   const preset = useKeymapStore((s) => s.preset);
   const overrides = useKeymapStore((s) => s.overrides);
   void preset;
@@ -230,9 +309,8 @@ function ActionCard({ icon: Icon, label, shortcut, active, onClick }: ActionCard
 }
 
 function KeyHint({ label, binding }: { label: string; binding: string }) {
-  // Unbound under the active preset → drop the hint rather than show a
-  // label with no keys. Split chord sequences ("Ctrl+K Ctrl+S") and combos
-  // ("Ctrl+Shift+S") into individual <kbd> tokens.
+  // Unbound under the active preset → drop the hint rather than show a label
+  // with no keys. Split chord sequences and combos into individual <kbd> tokens.
   if (!binding) return null;
   const keys = binding.split(' ').flatMap((chord) => chord.split('+'));
   return (

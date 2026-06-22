@@ -14,9 +14,21 @@ import {
 } from '@cloudstudio/cloud-billing';
 import { createD1Executor } from './infra/d1/d1-executor.js';
 import { createBillingRepo } from './infra/d1/billing-repo.js';
-import { createStripeGateway } from './infra/stripe-gateway.js';
+import { createStripeGateway, type StripeConfig } from './infra/stripe-gateway.js';
 import { systemClock } from './infra/runtime.js';
 import type { Env } from './env.js';
+
+/** Build the Stripe config from env — shared by the personal gateway and the
+ *  org (per-seat) checkout/portal helpers. */
+export function stripeConfig(env: Env): StripeConfig {
+  return {
+    secretKey: env.STRIPE_SECRET_KEY,
+    webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    proPriceId: env.STRIPE_PRO_PRICE_ID,
+    teamsPriceId: env.STRIPE_TEAMS_PRICE_ID,
+    appBaseUrl: env.APP_BASE_URL,
+  };
+}
 
 export interface BillingBundle {
   getEntitlements: GetEntitlementsUseCase;
@@ -30,12 +42,7 @@ export interface BillingBundle {
 export function createBillingBundle(env: Env): BillingBundle {
   const db = createD1Executor(env.DB);
   const billing = createBillingRepo(db);
-  const gateway = createStripeGateway({
-    secretKey: env.STRIPE_SECRET_KEY,
-    webhookSecret: env.STRIPE_WEBHOOK_SECRET,
-    proPriceId: env.STRIPE_PRO_PRICE_ID,
-    appBaseUrl: env.APP_BASE_URL,
-  });
+  const gateway = createStripeGateway(stripeConfig(env));
   return {
     getEntitlements: new GetEntitlementsUseCase(billing, systemClock),
     handleWebhook: new HandleSubscriptionEventUseCase(billing),

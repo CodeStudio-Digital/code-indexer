@@ -22,6 +22,7 @@ export type IdentityError =
   | (DomainError & { code: 'token_reuse' })
   | (DomainError & { code: 'session_not_found' })
   | (DomainError & { code: 'email_token_invalid' })
+  | (DomainError & { code: 'oauth_no_email' })
   | (DomainError & { code: 'rate_limited'; details?: { retryAfterMs: number } });
 
 type Code = IdentityError['code'];
@@ -42,6 +43,7 @@ const STATUS: Record<Code, number> = {
   token_reuse: 409,
   session_not_found: 404,
   email_token_invalid: 400,
+  oauth_no_email: 400,
   rate_limited: 429,
 };
 
@@ -73,6 +75,11 @@ export const IdentityErrors = {
   tokenReuse: (): IdentityError => ({ code: 'token_reuse', message: 'Session was revoked for security. Sign in again.' }),
   twofaInvalid: (): IdentityError => ({ code: 'twofa_invalid', message: 'Invalid two-factor code.' }),
   emailTokenInvalid: (): IdentityError => ({ code: 'email_token_invalid', message: 'This link is invalid or has expired.' }),
+  accountDeleted: (): IdentityError => ({ code: 'account_deleted', message: 'This account is no longer available.' }),
+  oauthNoEmail: (): IdentityError => ({
+    code: 'oauth_no_email',
+    message: 'Your provider did not share a verified email. Grant email access or sign in on the web portal.',
+  }),
   twofaRequired: (challengeToken: string): IdentityError => ({
     code: 'twofa_required',
     message: 'Two-factor code required.',

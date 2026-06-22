@@ -15,6 +15,7 @@ export * from './application/login.js';
 export * from './application/refresh.js';
 export * from './application/logout.js';
 export * from './application/list-sessions.js';
+export * from './application/oauth-link.js';
 export * from './application/two-factor.js';
 export * from './application/challenge-2fa.js';
 export * from './application/email-verification.js';

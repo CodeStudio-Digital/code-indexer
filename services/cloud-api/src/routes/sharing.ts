@@ -12,7 +12,7 @@ import { shareHttpStatus, isSlug, asSlug, type ShareError } from '@cloudstudio/c
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { createSharingBundle } from '../sharing-composition.js';
-import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { requireClaims, unauthorized, isVerified, emailNotVerified } from '../middleware/auth.js';
 import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
 import { recordAudit } from '../middleware/audit.js';
 
@@ -50,6 +50,7 @@ export function sharingRouter(): Hono<{ Bindings: Env }> {
     if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid snapshot.', details: parsed.error.flatten() }, 400);
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
+    if (!isVerified(claims)) return emailNotVerified(c);
     // Publishing signs + stores a snapshot (CPU + storage) — cap per account.
     const limited = await enforceRateLimit(c, [{ key: `share:acct:${claims.sub}`, limit: 30, windowMs: HOUR }]);
     if (limited) return limited;
@@ -79,6 +80,7 @@ export function sharingRouter(): Hono<{ Bindings: Env }> {
   app.delete('/:id', async (c) => {
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
+    if (!isVerified(claims)) return emailNotVerified(c); // revoke is a cloud WRITE (R3)
     const r = await createSharingBundle(c.env).revoke.execute({ shareId: asShareId(c.req.param('id')), ownerAccountId: asAccountId(claims.sub) });
     if (r.ok) recordAudit(c, 'share_revoked', 200, { accountId: claims.sub, shareId: c.req.param('id') });
     return r.ok ? c.json(r.value, 200) : respondShareError(c, r.error);

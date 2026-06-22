@@ -16,10 +16,27 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
   var seq = 0;
   var pending = {};
   var streams = {};
+  // The host registers this frame (binds it to a namespace) on iframe load, then
+  // posts 'ready'. We BUFFER every outbound message until then so a plugin that
+  // calls a tool during its synchronous boot can't outrun registration and hit
+  // 'frame not registered'. A timeout flushes anyway, so a missed handshake (old
+  // host) degrades to send-immediately rather than hanging.
+  var ready = false;
+  var preReady = [];
+  function flushReady() {
+    if (ready) return;
+    ready = true;
+    var q = preReady; preReady = [];
+    for (var i = 0; i < q.length; i++) { try { q[i](); } catch (_) {} }
+  }
+  function send(fn) { if (ready) fn(); else preReady.push(fn); }
+  setTimeout(flushReady, 2000);
   window.addEventListener('message', function (e) {
     var d = e.data;
     if (!d) return;
-    if (d.__mcpPlugin === 'result') {
+    if (d.__mcpPlugin === 'ready') {
+      flushReady();
+    } else if (d.__mcpPlugin === 'result') {
       var p = pending[d.id];
       if (!p) return;
       delete pending[d.id];
@@ -37,13 +54,13 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
     return new Promise(function (resolve, reject) {
       var id = ++seq;
       pending[id] = { resolve: resolve, reject: reject };
-      parent.postMessage({ __mcpPlugin: 'invoke', id: id, method: method, payload: payload || {} }, '*');
+      send(function () { parent.postMessage({ __mcpPlugin: 'invoke', id: id, method: method, payload: payload || {} }, '*'); });
     });
   }
   function openStream(method, payload, handlers) {
     var id = ++seq;
     streams[id] = handlers || {};
-    parent.postMessage({ __mcpPlugin: 'openStream', id: id, method: method, payload: payload || {} }, '*');
+    send(function () { parent.postMessage({ __mcpPlugin: 'openStream', id: id, method: method, payload: payload || {} }, '*'); });
     return function close() {
       if (streams[id]) { delete streams[id]; parent.postMessage({ __mcpPlugin: 'closeStream', id: id }, '*'); }
     };

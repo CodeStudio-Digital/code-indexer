@@ -10,10 +10,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openRawProjectDb, initProjectSchema } from '../project-db/index.js';
-import {
-  splitProject, backupPathFor, isSplitComplete, markSplitCompleteIfDone, readSplitComplete,
-  pendingProjectCount,
-} from '../db-split/index.js';
+import { splitProject, backupPathFor } from '../db-split/index.js';
 import type { DB } from '../db/types.js';
 
 const dirs: string[] = [];
@@ -129,40 +126,6 @@ describe('splitProject (INDEX backfill)', () => {
       splitProject({ central, centralDbPath: centralPath, projectDbPath: projPath, projectId: 1, openFreshProjectDb: openFresh });
       const again = splitProject({ central, centralDbPath: centralPath, projectDbPath: projPath, projectId: 1, openFreshProjectDb: openFresh });
       expect(again.status).toBe('done');
-    } finally {
-      central.close();
-    }
-  });
-});
-
-describe('split completion / sunset detection', () => {
-  it('fires only when all projects are done AND central is drained', () => {
-    const dir = freshDir();
-    const central = openFresh(join(dir, 'index.db'));
-    try {
-      // Two projects, no index rows yet. id 0 sentinel exists (mig 145) + 'done' (161).
-      central.exec(`
-        INSERT INTO projects (id, name, root_path, db_split_status) VALUES
-          (1,'p1','/p1','done'),
-          (2,'p2','/p2','pending');
-      `);
-      // p2 still pending → not complete.
-      expect(pendingProjectCount(central)).toBe(1);
-      expect(isSplitComplete(central)).toBe(false);
-      expect(markSplitCompleteIfDone(central)).toBe(false);
-
-      // Mark p2 done; central has no project-scoped rows → complete.
-      central.exec(`UPDATE projects SET db_split_status='done' WHERE id=2`);
-      expect(pendingProjectCount(central)).toBe(0);
-      expect(isSplitComplete(central)).toBe(true);
-      expect(markSplitCompleteIfDone(central)).toBe(true);
-      expect(readSplitComplete(central)).toBe(true);
-
-      // A leftover central project row blocks completion (canary).
-      central.exec(`UPDATE projects SET db_split_status='pending' WHERE id=2`);
-      central.prepare(`INSERT INTO files (project_id, path, content_hash) VALUES (1,'x.ts','h')`).run();
-      central.exec(`UPDATE projects SET db_split_status='done' WHERE id=2`);
-      expect(isSplitComplete(central)).toBe(false);
     } finally {
       central.close();
     }

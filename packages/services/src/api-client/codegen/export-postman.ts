@@ -5,7 +5,14 @@
 import { normalizeKvList } from '../request-builder.js';
 import type { ExecRequest } from '../execute-request.js';
 
-export type ExportRequest = ExecRequest & { name: string; folder?: string | null };
+export type ExportRequest = ExecRequest & {
+  name: string;
+  folder?: string | null;
+  /** Docs Studio: per-endpoint markdown (folded into OpenAPI operation.description). */
+  description?: string | null;
+  /** Docs Studio: `{ "query:limit": markdown }` → OpenAPI parameter.description. */
+  param_docs_json?: string | null;
+};
 
 const SCHEMA = 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json';
 

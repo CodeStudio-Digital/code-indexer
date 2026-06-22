@@ -11,6 +11,8 @@ import type {
   ApiCollection, ApiEnvironment, ApiRequest, ApiRegressionRun, ApiRequestHistory,
   ApiRunStatus, ApiRunTrigger, InsertRequestHistoryInput,
   CreateCollectionInput, CreateRequestInput, UpsertEnvironmentInput, RequestPatch,
+  CollectionDocPatch, ApiDocPage, CreateDocPageInput, DocPagePatch,
+  ApiRequestExample, CreateExampleInput, ExamplePatch,
 } from './api-client-types.js';
 
 const require = createRequire(import.meta.url);
@@ -62,15 +64,20 @@ export class ApiClientStore {
     return this.getCollection(Number(info.lastInsertRowid))!;
   }
 
-  updateCollection(id: number, patch: { name?: string; description?: string; spec_source?: string | null; spec_hash?: string | null }): void {
+  updateCollection(id: number, patch: { name?: string; spec_source?: string | null; spec_hash?: string | null } & CollectionDocPatch): void {
     this.applyPatch('api_collections', id, patch);
   }
 
   deleteCollection(id: number): void {
     // Explicit child delete — FK cascade only fires when PRAGMA foreign_keys is ON.
-    this.db.prepare('DELETE FROM api_requests WHERE collection_id = ?').run(id);
-    this.db.prepare('DELETE FROM api_regression_runs WHERE collection_id = ?').run(id);
-    this.db.prepare('DELETE FROM api_collections WHERE id = ?').run(id);
+    // One transaction so a failure can't orphan requests/runs/pages under a gone collection.
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM api_request_examples WHERE request_id IN (SELECT id FROM api_requests WHERE collection_id = ?)').run(id);
+      this.db.prepare('DELETE FROM api_requests WHERE collection_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_regression_runs WHERE collection_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_doc_pages WHERE collection_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_collections WHERE id = ?').run(id);
+    });
   }
 
   // ─── Folders (explicit per-collection list; requests carry a `folder` label) ──
@@ -92,14 +99,29 @@ export class ApiClientStore {
     const t = to.trim();
     if (!t || t === from) return;
     const folders = [...new Set(this.readFolders(collectionId).map((f) => (f === from ? t : f)))];
-    this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(folders) });
-    this.db.prepare("UPDATE api_requests SET folder = ?, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(t, collectionId, from);
+    // Atomic: the folder list and the requests' folder labels must agree.
+    this.transaction(() => {
+      this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(folders) });
+      this.db.prepare("UPDATE api_requests SET folder = ?, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(t, collectionId, from);
+    });
+  }
+
+  /** Effective folder list for a collection: explicit (folders_json) ∪ folders
+   *  actually used by its requests (e.g. OpenAPI tags) — sorted, deduped. */
+  listFolders(collectionId: number): string[] {
+    const explicit = this.readFolders(collectionId);
+    const used = (this.db
+      .prepare("SELECT DISTINCT folder FROM api_requests WHERE collection_id = ? AND folder IS NOT NULL AND folder != ''")
+      .all(collectionId) as { folder: string }[]).map((r) => r.folder);
+    return [...new Set([...explicit, ...used])].sort((a, b) => a.localeCompare(b));
   }
 
   /** Remove a folder; its requests fall back to the top level (folder = NULL). */
   deleteFolder(collectionId: number, name: string): void {
-    this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(this.readFolders(collectionId).filter((f) => f !== name)) });
-    this.db.prepare("UPDATE api_requests SET folder = NULL, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(collectionId, name);
+    this.transaction(() => {
+      this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(this.readFolders(collectionId).filter((f) => f !== name)) });
+      this.db.prepare("UPDATE api_requests SET folder = NULL, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(collectionId, name);
+    });
   }
 
   // ─── Environments ────────────────────────────────────────────────────
@@ -232,9 +254,16 @@ export class ApiClientStore {
   /** Set the order (sort_order = position) of a folder's requests, and pin each
    *  to `folder`, in one transaction. `orderedIds` is the full ordered list of
    *  that folder after a drag-reorder (the dragged row may have just moved in). */
-  reorderRequests(orderedIds: number[], folder: string | null): void {
+  reorderRequests(collectionId: number, orderedIds: number[], folder: string | null): void {
+    // Scope the UPDATE to the collection: a stale/foreign request id (another
+    // project's, possible flag-off in the shared central store) matches 0 rows
+    // and is a no-op — no cross-collection sort_order/folder tampering.
+    const upd = this.db.prepare(
+      `UPDATE api_requests SET sort_order = ?, folder = ?, updated_at = datetime('now')
+         WHERE id = ? AND collection_id = ?`,
+    );
     this.transaction(() => {
-      orderedIds.forEach((id, i) => this.applyPatch('api_requests', id, { sort_order: i, folder }));
+      orderedIds.forEach((id, i) => upd.run(i, folder, id, collectionId));
     });
   }
 
@@ -246,8 +275,11 @@ export class ApiClientStore {
 
   deleteRequest(id: number): void {
     // Explicit child delete — FK cascade only fires when PRAGMA foreign_keys is ON.
-    this.db.prepare('DELETE FROM api_request_history WHERE request_id = ?').run(id);
-    this.db.prepare('DELETE FROM api_requests WHERE id = ?').run(id);
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM api_request_history WHERE request_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_request_examples WHERE request_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_requests WHERE id = ?').run(id);
+    });
   }
 
   // ─── Request history (timeline) ──────────────────────────────────────
@@ -306,6 +338,70 @@ export class ApiClientStore {
     ).run(id);
   }
 
+  // ─── Doc pages (Docs Studio guide pages) ─────────────────────────────
+  listDocPages(collectionId: number): ApiDocPage[] {
+    return this.db.prepare('SELECT * FROM api_doc_pages WHERE collection_id = ? ORDER BY sort_order, id')
+      .all(collectionId) as ApiDocPage[];
+  }
+
+  createDocPage(input: CreateDocPageInput): ApiDocPage {
+    const info = this.db.prepare(
+      `INSERT INTO api_doc_pages (collection_id, slug, title, body_md, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(input.collection_id, input.slug, input.title, input.body_md ?? '', input.sort_order ?? 0);
+    return this.db.prepare('SELECT * FROM api_doc_pages WHERE id = ?').get(Number(info.lastInsertRowid)) as ApiDocPage;
+  }
+
+  updateDocPage(id: number, patch: DocPagePatch): void {
+    this.applyPatch('api_doc_pages', id, patch);
+  }
+
+  deleteDocPage(id: number): void {
+    this.db.prepare('DELETE FROM api_doc_pages WHERE id = ?').run(id);
+  }
+
+  reorderDocPages(collectionId: number, orderedIds: number[]): void {
+    const upd = this.db.prepare(
+      "UPDATE api_doc_pages SET sort_order = ?, updated_at = datetime('now') WHERE id = ? AND collection_id = ?",
+    );
+    this.transaction(() => { orderedIds.forEach((id, i) => upd.run(i, id, collectionId)); });
+  }
+
+  // ─── Request examples (saved real request+response snapshots) ─────────
+  listExamples(requestId: number): ApiRequestExample[] {
+    return this.db.prepare('SELECT * FROM api_request_examples WHERE request_id = ? ORDER BY sort_order, id')
+      .all(requestId) as ApiRequestExample[];
+  }
+
+  createExample(input: CreateExampleInput): ApiRequestExample {
+    const info = this.db.prepare(
+      `INSERT INTO api_request_examples
+        (request_id, name, req_snapshot_json, resp_status, resp_status_text, resp_headers_json, resp_body, resp_content_type, resp_size, redaction_count, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.request_id, input.name, input.req_snapshot_json ?? '{}',
+      input.resp_status ?? null, input.resp_status_text ?? null, input.resp_headers_json ?? null,
+      input.resp_body ?? null, input.resp_content_type ?? null, input.resp_size ?? null,
+      input.redaction_count ?? 0, input.sort_order ?? 0,
+    );
+    return this.db.prepare('SELECT * FROM api_request_examples WHERE id = ?').get(Number(info.lastInsertRowid)) as ApiRequestExample;
+  }
+
+  updateExample(id: number, patch: ExamplePatch): void {
+    this.applyPatch('api_request_examples', id, patch);
+  }
+
+  deleteExample(id: number): void {
+    this.db.prepare('DELETE FROM api_request_examples WHERE id = ?').run(id);
+  }
+
+  reorderExamples(requestId: number, orderedIds: number[]): void {
+    const upd = this.db.prepare(
+      "UPDATE api_request_examples SET sort_order = ?, updated_at = datetime('now') WHERE id = ? AND request_id = ?",
+    );
+    this.transaction(() => { orderedIds.forEach((id, i) => upd.run(i, id, requestId)); });
+  }
+
   // ─── internal ────────────────────────────────────────────────────────
   /**
    * Build a dynamic `SET col = ?` update from a partial; no-op when empty.
@@ -326,12 +422,14 @@ export class ApiClientStore {
 
 /** Columns `applyPatch` may write, per table — guards against key injection. */
 const ALLOWED_COLUMNS: Record<string, ReadonlySet<string>> = {
-  api_collections: new Set(['name', 'description', 'spec_source', 'spec_hash', 'folders_json']),
+  api_collections: new Set(['name', 'description', 'spec_source', 'spec_hash', 'folders_json', 'overview_md', 'branding_json', 'folder_docs_json']),
   api_environments: new Set(['name', 'base_url', 'variables_json', 'is_default']),
   api_requests: new Set([
     'name', 'method', 'path_template', 'headers_json', 'query_json',
     'body_json', 'body_kind', 'body_raw_lang', 'body_form_json', 'body_urlencoded_json',
     'body_graphql_json', 'body_binary_path', 'pre_request_script', 'test_script',
-    'auth_type', 'auth_json', 'folder', 'sort_order', 'last_status', 'last_run_at',
+    'auth_type', 'auth_json', 'folder', 'description', 'param_docs_json', 'sort_order', 'last_status', 'last_run_at',
   ]),
+  api_doc_pages: new Set(['slug', 'title', 'body_md', 'sort_order']),
+  api_request_examples: new Set(['name', 'sort_order']),
 };

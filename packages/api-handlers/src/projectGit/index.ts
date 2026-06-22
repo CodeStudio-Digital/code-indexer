@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process';
 import {
   ApiError,
   type ProjectGitApi,
+  type GitStatus,
   type GitStatusFile,
   type GitCommitFileChange,
   type GitBranch,
@@ -26,11 +27,40 @@ import {
 import type { HandlerDeps } from '../types.js';
 import { callGeneralAiJson } from '../aiJson.js';
 import { createConflictHandlers } from './conflicts.js';
+import { createGitOptimizationHandlers } from './git-optimizations.js';
+import { selectHunks } from './hunk-stage.js';
 
 interface GitResult {
   code: number;
   stdout: string;
   stderr: string;
+}
+
+interface GitRunOptions {
+  stdin?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+}
+
+const GIT_READ_TIMEOUT_MS = Number(process.env.MCP_GIT_READ_TIMEOUT_MS ?? 15_000);
+const GIT_SUMMARY_TIMEOUT_MS = Number(process.env.MCP_GIT_SUMMARY_TIMEOUT_MS ?? 3_000);
+// Bound network ops (fetch/pull) so an unreachable remote can't hang the UI
+// forever — git itself has no default timeout here.
+const GIT_NETWORK_TIMEOUT_MS = Number(process.env.MCP_GIT_NETWORK_TIMEOUT_MS ?? 30_000);
+const GIT_STATUS_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_STATUS_MAX_OUTPUT_BYTES ?? 24 * 1024 * 1024);
+const GIT_LIST_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_LIST_MAX_OUTPUT_BYTES ?? 8 * 1024 * 1024);
+const GIT_DETAIL_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_DETAIL_MAX_OUTPUT_BYTES ?? 32 * 1024 * 1024);
+
+function throwGitReadFailure(operation: string, result: GitResult, fallback: string): never {
+  const message = result.stderr.trim() || fallback;
+  if (/timed out/i.test(message)) {
+    throw new ApiError(`${operation}_timeout`, 504, message);
+  }
+  if (/output exceeded/i.test(message)) {
+    throw new ApiError(`${operation}_output_too_large`, 413, message);
+  }
+  throw new ApiError(`${operation}_failed`, 500, message);
 }
 
 /**
@@ -44,10 +74,15 @@ interface GitResult {
 function runGit(
   cwd: string,
   args: string[],
-  optsOrStdin?: string | { stdin?: string; env?: Record<string, string> },
+  optsOrStdin?: string | GitRunOptions,
 ): Promise<GitResult> {
   const opts = typeof optsOrStdin === 'string' ? { stdin: optsOrStdin } : (optsOrStdin ?? {});
   return new Promise((resolve) => {
+    let settled = false;
+    let timedOut = false;
+    let outputTooLarge = false;
+    let outputBytes = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const child = spawn('git', args, {
       cwd,
       windowsHide: true,
@@ -55,18 +90,49 @@ function runGit(
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
-    child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
-    child.stderr.on('data', (chunk: Buffer) => err.push(chunk));
+    const finish = (result: GitResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
+    const collect = (target: Buffer[], chunk: Buffer) => {
+      if (settled) return;
+      outputBytes += chunk.length;
+      if (opts.maxOutputBytes && outputBytes > opts.maxOutputBytes) {
+        outputTooLarge = true;
+        child.kill();
+        return;
+      }
+      target.push(chunk);
+    };
+    child.stdout.on('data', (chunk: Buffer) => collect(out, chunk));
+    child.stderr.on('data', (chunk: Buffer) => collect(err, chunk));
     child.on('error', (e) => {
-      resolve({ code: -1, stdout: '', stderr: (e as Error).message });
+      finish({ code: -1, stdout: '', stderr: (e as Error).message });
     });
     child.on('close', (code) => {
-      resolve({
+      if (timedOut) {
+        finish({ code: -1, stdout: '', stderr: `git ${args[0] ?? ''} timed out after ${opts.timeoutMs}ms` });
+        return;
+      }
+      if (outputTooLarge) {
+        finish({ code: -1, stdout: '', stderr: `git output exceeded ${opts.maxOutputBytes} bytes` });
+        return;
+      }
+      finish({
         code: code ?? -1,
         stdout: Buffer.concat(out).toString('utf8'),
         stderr: Buffer.concat(err).toString('utf8'),
       });
     });
+    if (opts.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, opts.timeoutMs);
+      timer.unref?.();
+    }
     if (opts.stdin) {
       child.stdin.write(opts.stdin);
       child.stdin.end();
@@ -76,53 +142,74 @@ function runGit(
   });
 }
 
+function interpretStatusChar(c: string): GitStatusFile['state'] | null {
+  switch (c) {
+    case 'M': return 'modified';
+    case 'A': return 'added';
+    case 'D': return 'deleted';
+    case 'R': return 'renamed';
+    case 'C': return 'copied';
+    case '?': return 'untracked';
+    case '!': return 'ignored';
+    case 'U': return 'unmerged';
+    case '.':
+    case ' ': return null;
+    default: return null;
+  }
+}
+
+function appendStatusEntries(entries: GitStatusFile[], xy: string, path: string): void {
+  if (!path) return;
+  const stagedState = interpretStatusChar(xy[0] ?? '.');
+  if (stagedState && stagedState !== 'untracked' && stagedState !== 'ignored') {
+    entries.push({ path, state: stagedState, staged: true });
+  }
+  const wtState = interpretStatusChar(xy[1] ?? '.');
+  if (wtState) {
+    entries.push({ path, state: wtState, staged: false });
+  }
+}
+
 /**
- * Parse the `XY path` lines of `git status --porcelain=v1 -z`. The two
- * status chars are independent: X = staged, Y = working-tree. We collapse
- * to one entry per path with `staged: boolean` and a coarse `state`.
+ * Parse `git status --porcelain=v2 --branch -z` once for both branch
+ * headers and file rows. V2 avoids the old two-command v1+v2 split and
+ * keeps rename/copy paths unquoted under `-z`.
  */
-function parsePorcelainStatus(out: string): GitStatusFile[] {
-  if (!out) return [];
-  const entries: GitStatusFile[] = [];
-  // `-z` separates records with NUL. Rename entries take the next NUL too.
+function parsePorcelainV2Status(out: string): {
+  head: { branch: string | null; upstream: string | null; ahead: number; behind: number };
+  files: GitStatusFile[];
+} {
+  const files: GitStatusFile[] = [];
   const records = out.split('\0');
   for (let i = 0; i < records.length; i++) {
     const r = records[i];
     if (!r) continue;
-    const xy = r.slice(0, 2);
-    const rest = r.slice(3); // skip "XY "
-    if (!rest) continue;
-    let path = rest;
-    if (xy[0] === 'R' || xy[1] === 'R') {
-      // Renames: next record is the old path; we keep the new path.
-      i += 1;
+    if (r.startsWith('# branch.')) continue;
+    if (r.startsWith('1 ')) {
+      const parts = r.split(' ');
+      appendStatusEntries(files, parts[1] ?? '..', parts.slice(8).join(' '));
+      continue;
     }
-    const stagedChar = xy[0];
-    const wtChar = xy[1];
-    const interpret = (c: string): GitStatusFile['state'] | null => {
-      switch (c) {
-        case 'M': return 'modified';
-        case 'A': return 'added';
-        case 'D': return 'deleted';
-        case 'R': return 'renamed';
-        case 'C': return 'copied';
-        case '?': return 'untracked';
-        case '!': return 'ignored';
-        case 'U': return 'unmerged';
-        case ' ': return null;
-        default: return null;
-      }
-    };
-    const stagedState = interpret(stagedChar);
-    if (stagedState && stagedState !== 'untracked' && stagedState !== 'ignored') {
-      entries.push({ path, state: stagedState, staged: true });
+    if (r.startsWith('2 ')) {
+      const parts = r.split(' ');
+      appendStatusEntries(files, parts[1] ?? '..', parts.slice(9).join(' '));
+      i += 1; // old path for rename/copy
+      continue;
     }
-    const wtState = interpret(wtChar);
-    if (wtState) {
-      entries.push({ path, state: wtState, staged: false });
+    if (r.startsWith('u ')) {
+      const parts = r.split(' ');
+      appendStatusEntries(files, parts[1] ?? 'UU', parts.slice(10).join(' '));
+      continue;
+    }
+    if (r.startsWith('? ')) {
+      files.push({ path: r.slice(2), state: 'untracked', staged: false });
+      continue;
+    }
+    if (r.startsWith('! ')) {
+      files.push({ path: r.slice(2), state: 'ignored', staged: false });
     }
   }
-  return entries;
+  return { head: parseHeadBranchInfo(out), files };
 }
 
 function parseHeadBranchInfo(out: string): {
@@ -164,14 +251,21 @@ async function readHeadSummary(cwd: string): Promise<{
   ahead: number;
   behind: number;
 }> {
-  const branchRes = await runGit(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  // branch + upstream are independent lookups — fire both at once, then the
+  // ahead/behind rev-list (which needs the upstream ref) runs only if present.
+  const [branchRes, upstreamRes] = await Promise.all([
+    runGit(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { timeoutMs: GIT_SUMMARY_TIMEOUT_MS }),
+    runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], {
+      timeoutMs: GIT_SUMMARY_TIMEOUT_MS,
+    }),
+  ]);
   const branch = branchRes.code === 0 ? branchRes.stdout.trim() || null : null;
-
-  const upstreamRes = await runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
   const upstream = upstreamRes.code === 0 ? upstreamRes.stdout.trim() || null : null;
   if (!upstream) return { branch, upstream: null, ahead: 0, behind: 0 };
 
-  const abRes = await runGit(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']);
+  const abRes = await runGit(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], {
+    timeoutMs: GIT_SUMMARY_TIMEOUT_MS,
+  });
   if (abRes.code !== 0) return { branch, upstream, ahead: 0, behind: 0 };
   const [aheadRaw, behindRaw] = abRes.stdout.trim().split(/\s+/);
   return {
@@ -207,7 +301,13 @@ async function collectChangedFiles(
     return 'modified'; // M, T (typechange), and anything unexpected
   };
 
-  const numstat = await runGit(cwd, argsWith('--numstat'));
+  const numstat = await runGit(cwd, argsWith('--numstat'), {
+    timeoutMs: GIT_READ_TIMEOUT_MS,
+    maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+  });
+  if (numstat.code !== 0) {
+    throwGitReadFailure('git_changed_files', numstat, 'git changed files failed');
+  }
   const counts = new Map<string, { additions: number; deletions: number }>();
   for (const line of numstat.stdout.split('\n')) {
     if (!line.trim()) continue;
@@ -220,7 +320,13 @@ async function collectChangedFiles(
     });
   }
 
-  const nameStatus = await runGit(cwd, argsWith('--name-status'));
+  const nameStatus = await runGit(cwd, argsWith('--name-status'), {
+    timeoutMs: GIT_READ_TIMEOUT_MS,
+    maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+  });
+  if (nameStatus.code !== 0) {
+    throwGitReadFailure('git_changed_files', nameStatus, 'git changed files failed');
+  }
   const files: GitCommitFileChange[] = [];
   for (const line of nameStatus.stdout.split('\n')) {
     if (!line.trim()) continue;
@@ -245,6 +351,7 @@ async function collectChangedFiles(
 
 export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   const { db } = deps;
+  const statusInflight = new Map<string, Promise<GitStatus>>();
 
   function requireRoot(projectId: number): string {
     const project = db.getProject(projectId);
@@ -252,52 +359,125 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     return project.root_path;
   }
 
-  async function detectRepo(root: string): Promise<{ repoRoot: string | null; notARepo: boolean }> {
-    const r = await runGit(root, ['rev-parse', '--show-toplevel']);
-    if (r.code !== 0) return { repoRoot: null, notARepo: true };
-    return { repoRoot: r.stdout.trim(), notARepo: false };
+  // repoRoot + absolute gitDir are stable for a fixed root_path across a
+  // session (branch checkout / commit don't move them), yet resolving them
+  // costs a ~8-10s git spawn on heavy repos — a tax EVERY method paid first.
+  // Cache positives with a short TTL so a burst of reloads shares one lookup
+  // while bounding staleness against the rare external `.git` swap; negatives
+  // are never cached so a later `git init` is still picked up.
+  const REPO_CACHE_MS = Number(process.env.MCP_GIT_REPO_CACHE_MS ?? 30_000);
+  const repoRootCache = new Map<string, { repoRoot: string; gitDir: string; at: number }>();
+  // branchesDetailed is the heavy one on big repos (for-each-ref over 100s of
+  // refs + per-ref ahead/behind). Cache its result per (project, includeRemote,
+  // git-revision) so reopening the branch list is instant; a ref change bumps
+  // the caller's gitRev and recomputes. One live entry per (project,scope).
+  const branchesCache = new Map<string, GitBranch[]>();
+
+  async function detectRepo(
+    root: string,
+  ): Promise<{ repoRoot: string | null; gitDir: string | null; notARepo: boolean }> {
+    const cached = repoRootCache.get(root);
+    if (cached && Date.now() - cached.at < REPO_CACHE_MS) {
+      return { repoRoot: cached.repoRoot, gitDir: cached.gitDir, notARepo: false };
+    }
+    // One spawn yields BOTH the worktree root and the resolved absolute gitdir.
+    // --absolute-git-dir follows the `.git` FILE of linked worktrees/submodules,
+    // which is what lets the sequencer detection read state files via pure fs.
+    const r = await runGit(root, ['rev-parse', '--show-toplevel', '--absolute-git-dir'], {
+      timeoutMs: GIT_READ_TIMEOUT_MS,
+    });
+    if (r.code !== 0) return { repoRoot: null, gitDir: null, notARepo: true };
+    const [repoRoot = '', gitDir = ''] = r.stdout.split('\n').map((s) => s.trim());
+    if (!repoRoot) return { repoRoot: null, gitDir: null, notARepo: true };
+    repoRootCache.set(root, { repoRoot, gitDir, at: Date.now() });
+    return { repoRoot, gitDir, notARepo: false };
+  }
+
+  async function readStatus(projectId: number, includeFiles: boolean): Promise<GitStatus> {
+    const root = requireRoot(projectId);
+    const { repoRoot, notARepo } = await detectRepo(root);
+    if (notARepo) {
+      return {
+        branch: null,
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+        ...(includeFiles ? { files: [] } : {}),
+        repoRoot: null,
+        notARepo: true,
+      };
+    }
+    const cwd = repoRoot ?? root;
+    if (!includeFiles) {
+      return {
+        ...(await readHeadSummary(cwd)),
+        repoRoot: cwd,
+        notARepo: false,
+      };
+    }
+    const statusRes = await runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z'], {
+      timeoutMs: GIT_READ_TIMEOUT_MS,
+      maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
+    });
+    if (statusRes.code !== 0) {
+      throwGitReadFailure('git_status', statusRes, 'git status failed');
+    }
+    const { head, files } = parsePorcelainV2Status(statusRes.stdout);
+    return {
+      ...head,
+      files,
+      repoRoot: cwd,
+      notARepo: false,
+    };
+  }
+
+  function statusSingleFlight(projectId: number, includeFiles: boolean): Promise<GitStatus> {
+    const key = `${projectId}:${includeFiles ? 'full' : 'summary'}`;
+    const existing = statusInflight.get(key);
+    if (existing) return existing;
+    const promise = readStatus(projectId, includeFiles).finally(() => {
+      statusInflight.delete(key);
+    });
+    statusInflight.set(key, promise);
+    return promise;
   }
 
   const base: Omit<
     ProjectGitApi,
-    'mergeState' | 'conflictFile' | 'resolveConflict' | 'mergeContinue' | 'mergeAbort'
+    | 'mergeState'
+    | 'conflictFile'
+    | 'resolveConflict'
+    | 'mergeContinue'
+    | 'mergeAbort'
+    | 'gitOptimizations'
+    | 'configureGitOptimizations'
   > = {
     async status({ projectId, includeFiles = true }) {
+      return statusSingleFlight(projectId, includeFiles !== false);
+    },
+
+    async detectRemote({ projectId }) {
       const root = requireRoot(projectId);
       const { repoRoot, notARepo } = await detectRepo(root);
-      if (notARepo) {
-        return {
-          branch: null,
-          upstream: null,
-          ahead: 0,
-          behind: 0,
-          files: [],
-          repoRoot: null,
-          notARepo: true,
-        };
-      }
+      if (notARepo) return { gitRemote: null, defaultBranch: null };
       const cwd = repoRoot ?? root;
-      if (includeFiles === false) {
-        return {
-          ...(await readHeadSummary(cwd)),
-          files: [],
-          repoRoot: cwd,
-          notARepo: false,
-        };
+      const remoteRes = await runGit(cwd, ['remote', 'get-url', 'origin'], { timeoutMs: GIT_SUMMARY_TIMEOUT_MS });
+      const gitRemote = remoteRes.code === 0 ? remoteRes.stdout.trim() || null : null;
+      // origin/HEAD ("origin/main") is set on clone; fall back to the current branch.
+      let defaultBranch: string | null = null;
+      const headRes = await runGit(cwd, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { timeoutMs: GIT_SUMMARY_TIMEOUT_MS });
+      if (headRes.code === 0) {
+        const v = headRes.stdout.trim();
+        defaultBranch = v.includes('/') ? v.split('/').slice(1).join('/') : v || null;
       }
-      // Combined porcelain v1 (files) + branch headers from v2 in one go
-      // would be cleanest, but v1 doesn't emit headers; cheaper to make
-      // two short calls.
-      const filesRes = await runGit(cwd, ['status', '--porcelain=v1', '-z']);
-      const headerRes = await runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z']);
-      const files = parsePorcelainStatus(filesRes.stdout);
-      const head = parseHeadBranchInfo(headerRes.stdout);
-      return {
-        ...head,
-        files,
-        repoRoot: cwd,
-        notARepo: false,
-      };
+      if (!defaultBranch) {
+        const curRes = await runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: GIT_SUMMARY_TIMEOUT_MS });
+        if (curRes.code === 0) {
+          const b = curRes.stdout.trim();
+          if (b && b !== 'HEAD') defaultBranch = b;
+        }
+      }
+      return { gitRemote, defaultBranch };
     },
 
     async diff({ projectId, path, staged }) {
@@ -305,9 +485,71 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const args = ['diff', '--no-color'];
       if (staged) args.push('--cached');
       if (path) args.push('--', path);
-      const r = await runGit(root, args);
+      const r = await runGit(root, args, {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
       if (r.code !== 0 && !r.stdout) {
-        throw new ApiError('git_diff_failed', 500, r.stderr.trim() || 'git diff failed');
+        throwGitReadFailure('git_diff', r, 'git diff failed');
+      }
+      return { patch: r.stdout };
+    },
+
+    async baseline({ projectId, path }) {
+      const root = requireRoot(projectId);
+      // Distinguish "not a repo" (no markers) from "new file in a repo" (whole
+      // file is added). detectRepo is cached, so this is cheap.
+      const { notARepo } = await detectRepo(root);
+      if (notARepo) return { content: null, isRepo: false };
+      // `HEAD:./<path>` resolves the path relative to cwd, so a project nested
+      // below the repo root still reads the right blob. Non-zero → the file
+      // isn't at HEAD yet (new / untracked) → empty baseline (all added).
+      const r = await runGit(root, ['show', `HEAD:./${path}`], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
+      if (r.code !== 0) return { content: null, isRepo: true };
+      return { content: r.stdout, isRepo: true };
+    },
+
+    async stageHunk({ projectId, path, newStart, newEnd }) {
+      const root = requireRoot(projectId);
+      // Diff the on-disk working tree against the index; the caller flushes the
+      // buffer first so the new side matches the editor. `--recount` lets git
+      // re-derive line numbers after we drop the non-overlapping hunks.
+      const diffRes = await runGit(root, ['diff', '--no-color', '-U3', '--', path], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
+      if (diffRes.code !== 0 && !diffRes.stdout) {
+        throwGitReadFailure('git_diff', diffRes, 'git diff failed');
+      }
+      const patch = selectHunks(diffRes.stdout, newStart, newEnd);
+      if (!patch) throw new ApiError('stage_hunk_empty', 409, 'no stageable changes in this block');
+      const applyRes = await runGit(root, ['apply', '--cached', '--recount', '--whitespace=nowarn'], {
+        stdin: patch,
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+      });
+      if (applyRes.code !== 0) {
+        throw new ApiError('stage_hunk_failed', 409, applyRes.stderr.trim() || 'git apply failed');
+      }
+      return { ok: true as const };
+    },
+
+    async branchDiff({ projectId, branch, worktree }) {
+      const root = requireRoot(projectId);
+      // worktree → branch vs the working tree ("Show diff with working tree");
+      // else the symmetric three-dot diff from the merge-base ("Compare with
+      // current"), so it shows exactly what `branch` carries relative to HEAD.
+      const args = worktree
+        ? ['diff', '--no-color', branch]
+        : ['diff', '--no-color', `HEAD...${branch}`];
+      const r = await runGit(root, args, {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
+      if (r.code !== 0 && !r.stdout) {
+        throwGitReadFailure('git_branch_diff', r, 'git diff failed');
       }
       return { patch: r.stdout };
     },
@@ -322,9 +564,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       // expansion (which would also let users `git log --all` here).
       if (branch) args.push(branch);
       if (path) args.push('--', path);
-      const r = await runGit(root, args);
+      const r = await runGit(root, args, {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+      });
       if (r.code !== 0) {
-        throw new ApiError('git_log_failed', 500, r.stderr.trim() || 'git log failed');
+        throwGitReadFailure('git_log', r, 'git log failed');
       }
       return r.stdout
         .split('\n')
@@ -341,13 +586,23 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       // (body) can contain anything including our separator, so it's
       // fetched in a second `-s` call where it's the whole output.
       const metaFmt = '%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%s';
-      const meta = await runGit(root, ['show', '-s', `--format=${metaFmt}`, '--date=iso-strict', sha]);
+      const meta = await runGit(root, ['show', '-s', `--format=${metaFmt}`, '--date=iso-strict', sha], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+      });
       if (meta.code !== 0) {
-        throw new ApiError('git_show_failed', 500, meta.stderr.trim() || 'git show failed');
+        throwGitReadFailure('git_show', meta, 'git show failed');
       }
       const [fullSha, shortSha, author, authorEmail, date, parentStr, subject] =
         meta.stdout.trim().split('\x1f');
-      const body = (await runGit(root, ['show', '-s', '--format=%b', sha])).stdout.replace(/\s+$/, '');
+      const bodyRes = await runGit(root, ['show', '-s', '--format=%b', sha], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
+      if (bodyRes.code !== 0) {
+        throwGitReadFailure('git_show', bodyRes, 'git show failed');
+      }
+      const body = bodyRes.stdout.replace(/\s+$/, '');
       const files = await collectChangedFiles(root, (flag) => ['show', flag, '--format=', sha]);
       return {
         sha: fullSha,
@@ -366,9 +621,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const root = requireRoot(projectId);
       // Empty `--format=` strips the commit header so we return only the
       // unified patch — matches the shape `diff` returns.
-      const r = await runGit(root, ['show', '--no-color', '--format=', sha, '--', path]);
+      const r = await runGit(root, ['show', '--no-color', '--format=', sha, '--', path], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
       if (r.code !== 0 && !r.stdout) {
-        throw new ApiError('git_show_failed', 500, r.stderr.trim() || 'git show failed');
+        throwGitReadFailure('git_show', r, 'git show failed');
       }
       return { patch: r.stdout };
     },
@@ -438,7 +696,14 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     },
 
     // ─── Branches (rich) ─────────────────────────────────────────
-    async branchesDetailed({ projectId, includeRemote }) {
+    async branchesDetailed({ projectId, includeRemote, rev }) {
+      const withRemote = includeRemote !== false;
+      // Serve from cache when the caller pins a git-revision and nothing moved.
+      const cacheKey = rev !== undefined ? `${projectId}:${withRemote}:${rev}` : null;
+      if (cacheKey) {
+        const hit = branchesCache.get(cacheKey);
+        if (hit) return hit;
+      }
       const root = requireRoot(projectId);
       // `git for-each-ref` with a tab-separated format is the cheap
       // single-call alternative to running `git branch -vv` and parsing
@@ -453,12 +718,18 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         '%(contents:subject)',               // 5
       ].join('%09');
       const refs = ['refs/heads'];
-      if (includeRemote !== false) refs.push('refs/remotes');
-      const r = await runGit(root, ['for-each-ref', `--format=${fmt}`, ...refs]);
+      if (withRemote) refs.push('refs/remotes');
+      const r = await runGit(root, ['for-each-ref', `--format=${fmt}`, ...refs], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+      });
       if (r.code !== 0) {
-        throw new ApiError('git_branch_list_failed', 500, r.stderr.trim() || 'for-each-ref failed');
+        throwGitReadFailure('git_branch_list', r, 'for-each-ref failed');
       }
-      const cur = (await runGit(root, ['branch', '--show-current'])).stdout.trim();
+      // No separate `branch --show-current` spawn: for-each-ref already marks
+      // the checked-out branch with %(HEAD)='*' (field 1). On detached HEAD no
+      // ref carries '*', so every branch is correctly non-current — identical
+      // to what the removed command returned.
       const branches: GitBranch[] = [];
       for (const line of r.stdout.split('\n').filter(Boolean)) {
         const [name, head, refname, upstream, track, subject] = line.split('\t');
@@ -475,7 +746,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         }
         branches.push({
           name,
-          isCurrent: name === cur || head === '*',
+          isCurrent: head === '*',
           isRemote: !!refname?.startsWith('refs/remotes/'),
           upstream: upstream || null,
           ahead,
@@ -489,6 +760,13 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         if (a.isRemote !== b.isRemote) return a.isRemote ? 1 : -1;
         return a.name.localeCompare(b.name);
       });
+      if (cacheKey) {
+        branchesCache.set(cacheKey, branches);
+        // Keep only the latest rev per (project, scope) — older revs are stale.
+        for (const k of branchesCache.keys()) {
+          if (k !== cacheKey && k.startsWith(`${projectId}:${withRemote}:`)) branchesCache.delete(k);
+        }
+      }
       return branches;
     },
 
@@ -563,6 +841,18 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args);
     },
 
+    async rebase({ projectId, onto }) {
+      const root = requireRoot(projectId);
+      // Non-interactive: suppress the editor (todo list + commit message) so a
+      // rebase can never block on it. A conflict stops the rebase and is picked
+      // up by mergeState (kind 'rebase') — the resolver + continue/abort flow
+      // already handle it, exactly like a conflicting cherry-pick.
+      return runAsResult(root, 'git', ['-c', 'core.editor=true', 'rebase', onto], {
+        GIT_EDITOR: 'true',
+        GIT_SEQUENCE_EDITOR: 'true',
+      });
+    },
+
     // ─── Remote sync (push / fetch / pull) ───────────────────────
     // These all surface as GitRunResult instead of throwing so the UI
     // can render "non-zero exit but here's the helpful stderr" — git's
@@ -589,7 +879,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       // No remote arg → `git fetch` fetches the current branch's upstream
       // (or all configured remotes when there's no upstream). Matches
       // JetBrains "Update Project" intuition.
-      return runAsResult(root, 'git', args);
+      return runAsResult(root, 'git', args, undefined, GIT_NETWORK_TIMEOUT_MS);
     },
 
     async pull({ projectId, remote, branch, rebase }) {
@@ -598,7 +888,28 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       if (rebase) args.push('--rebase');
       if (remote) args.push(remote);
       if (branch) args.push(branch);
-      return runAsResult(root, 'git', args);
+      return runAsResult(root, 'git', args, undefined, GIT_NETWORK_TIMEOUT_MS);
+    },
+
+    async updateBranch({ projectId, branch }) {
+      const root = requireRoot(projectId);
+      // The branch's configured upstream, e.g. "origin/feature/x".
+      const up = await runGit(root, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+      });
+      const upstream = up.code === 0 ? up.stdout.trim() : '';
+      const slash = upstream.indexOf('/');
+      if (slash < 0) {
+        return {
+          command: 'git', args: ['fetch'], ok: false, code: 1, stdout: '',
+          stderr: `'${branch}' has no remote-tracking upstream to update from.`,
+        };
+      }
+      const remote = upstream.slice(0, slash); // origin
+      const src = upstream.slice(slash + 1); //   feature/x
+      // Fast-forward the LOCAL ref from its upstream without `+`, so git refuses
+      // a diverged (non-fast-forward) update instead of clobbering local commits.
+      return runAsResult(root, 'git', ['fetch', remote, `${src}:${branch}`], undefined, GIT_NETWORK_TIMEOUT_MS);
     },
 
     // ─── Stash (list / save / pop / apply / drop / show) ─────────
@@ -611,13 +922,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       // %gd = stash ref (stash@{0}), %h = short sha, %gs = full message,
       // %cI = committer date (iso-strict). \x1f as field separator.
       const fmt = '%gd%x1f%h%x1f%cI%x1f%gs';
-      const r = await runGit(root, ['stash', 'list', `--format=${fmt}`]);
+      const r = await runGit(root, ['stash', 'list', `--format=${fmt}`], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+      });
       if (r.code !== 0) {
-        throw new ApiError(
-          'git_stash_list_failed',
-          500,
-          r.stderr.trim() || 'git stash list failed',
-        );
+        throwGitReadFailure('git_stash_list', r, 'git stash list failed');
       }
       const entries: GitStashEntry[] = [];
       for (const line of r.stdout.split('\n').filter(Boolean)) {
@@ -682,13 +992,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const root = requireRoot(projectId);
       // `-p` emits a unified diff. Skips the index-summary at the top
       // that the default `stash show` produces.
-      const r = await runGit(root, ['stash', 'show', '-p', '--no-color', ref]);
+      const r = await runGit(root, ['stash', 'show', '-p', '--no-color', ref], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
       if (r.code !== 0 && !r.stdout) {
-        throw new ApiError(
-          'git_stash_show_failed',
-          500,
-          r.stderr.trim() || 'git stash show failed',
-        );
+        throwGitReadFailure('git_stash_show', r, 'git stash show failed');
       }
       return { patch: r.stdout };
     },
@@ -698,9 +1007,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const root = requireRoot(projectId);
       // A stash IS a commit object, so `git show -s` reads its metadata.
       // %s is the stash subject ("WIP on <branch>: <sha> <subject>").
-      const meta = await runGit(root, ['show', '-s', '--format=%h%x1f%cI%x1f%s', '--date=iso-strict', ref]);
+      const meta = await runGit(root, ['show', '-s', '--format=%h%x1f%cI%x1f%s', '--date=iso-strict', ref], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+      });
       if (meta.code !== 0) {
-        throw new ApiError('git_stash_show_failed', 500, meta.stderr.trim() || 'git show failed');
+        throwGitReadFailure('git_stash_show', meta, 'git show failed');
       }
       const [shortSha, date, message] = meta.stdout.trim().split('\x1f');
       const m = message?.match(/^(?:WIP on|On)\s+([^:]+):/);
@@ -722,9 +1034,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       // revisions"). A stash IS a commit whose first parent is the base
       // it was taken from, so diffing base→stash for one path gives the
       // same per-file patch `stash show` would, but path-scoped.
-      const r = await runGit(root, ['diff', '--no-color', `${ref}^1`, ref, '--', path]);
+      const r = await runGit(root, ['diff', '--no-color', `${ref}^1`, ref, '--', path], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+      });
       if (r.code !== 0 && !r.stdout) {
-        throw new ApiError('git_stash_show_failed', 500, r.stderr.trim() || 'git diff failed');
+        throwGitReadFailure('git_stash_show', r, 'git diff failed');
       }
       return { patch: r.stdout };
     },
@@ -848,6 +1163,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   return {
     ...base,
     ...createConflictHandlers({ runGit, runAsResult, requireRoot, detectRepo }),
+    ...createGitOptimizationHandlers({ runGit, requireRoot }),
   };
 }
 
@@ -863,8 +1179,11 @@ async function runAsResult(
   _cmd: 'git',
   args: string[],
   env?: Record<string, string>,
+  timeoutMs?: number,
 ): Promise<GitRunResult> {
   return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const child = spawn('git', args, {
       cwd,
       windowsHide: true,
@@ -872,24 +1191,39 @@ async function runAsResult(
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
+    const finish = (r: GitRunResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(r);
+    };
+    // Optional wall-clock bound (network ops): kill the child and surface a
+    // timeout as a non-zero GitRunResult instead of hanging forever.
+    if (timeoutMs && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        child.kill();
+        finish({
+          command: 'git', args, ok: false, code: -1,
+          stdout: Buffer.concat(out).toString('utf8'),
+          stderr: `git ${args[0] ?? ''} timed out after ${timeoutMs}ms`,
+        });
+      }, timeoutMs);
+    }
     child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => err.push(chunk));
-    child.on('error', (e) => {
-      resolve({
-        command: 'git', args, ok: false, code: -1, stdout: '',
-        stderr: (e as Error).message,
-      });
-    });
-    child.on('close', (code) => {
-      resolve({
+    child.on('error', (e) =>
+      finish({ command: 'git', args, ok: false, code: -1, stdout: '', stderr: (e as Error).message }),
+    );
+    child.on('close', (code) =>
+      finish({
         command: 'git',
         args,
         ok: code === 0,
         code: code ?? -1,
         stdout: Buffer.concat(out).toString('utf8'),
         stderr: Buffer.concat(err).toString('utf8'),
-      });
-    });
+      }),
+    );
     child.stdin.end();
   });
 }

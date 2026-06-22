@@ -8,7 +8,8 @@
  * shows its files + message and clicking a file opens its diff.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { ArrowRightLeft, GitBranch, Loader2, RefreshCw } from 'lucide-react';
 import { apiCall } from '../../../../../lib/api-client.js';
@@ -73,6 +74,14 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
   useEffect(() => onGitReloadRequest(() => void reload()), [reload]);
 
   const isCurrent = !isRemote && currentBranch === branch;
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: commits.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 44,
+    overscan: 12,
+  });
 
   const switchTo = async () => {
     try {
@@ -175,22 +184,35 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
 
       <PanelGroup direction="horizontal" autoSaveId="mcp-git-log-split" className="flex-1 min-h-0">
         <Panel defaultSize={56} minSize={30}>
-          <div className="h-full overflow-y-auto">
+          <div ref={scrollRef} className="h-full overflow-y-auto">
             {!loading && commits.length === 0 && !error && (
               <div className="text-center text-[11px] text-muted-foreground p-4">No commits.</div>
             )}
-            {commits.map((c) => (
-              <CommitRow
-                key={c.sha}
-                commit={c}
-                selected={selected === c.sha}
-                disabled={opInProgress}
-                onSelect={() => setSelected(c.sha)}
-                onCherryPick={() => void runOp('Cherry-pick', 'projectGit.cherryPick', { commits: [c.sha] })}
-                onRevert={() => void revert(c)}
-                onReset={(mode) => void reset(c, mode)}
-              />
-            ))}
+            {commits.length > 0 && (
+              <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+                {virtualizer.getVirtualItems().map((v) => {
+                  const c = commits[v.index];
+                  return (
+                    <div
+                      key={c.sha}
+                      data-index={v.index}
+                      ref={virtualizer.measureElement}
+                      style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${v.start}px)` }}
+                    >
+                      <CommitRow
+                        commit={c}
+                        selected={selected === c.sha}
+                        disabled={opInProgress}
+                        onSelect={() => setSelected(c.sha)}
+                        onCherryPick={() => void runOp('Cherry-pick', 'projectGit.cherryPick', { commits: [c.sha] })}
+                        onRevert={() => void revert(c)}
+                        onReset={(mode) => void reset(c, mode)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </Panel>
         <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />

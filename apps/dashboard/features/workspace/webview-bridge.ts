@@ -15,6 +15,12 @@
 import { apiCall, apiStream } from '../../lib/api-client.js';
 import { confirm as hostConfirm, prompt as hostPrompt, toast } from '../../components/ui/prompt-dialog.js';
 import i18n from '../../i18n/index.js';
+import { registerPluginFrame, resolveFrame, unregisterPluginFrame } from './webview-frame-registry.js';
+
+// Frame identity lives in webview-frame-registry; re-exported so existing
+// importers (WebviewWindow) keep a single import surface.
+export { registerPluginFrame, unregisterPluginFrame };
+export type { PluginFrameInfo } from './webview-frame-registry.js';
 
 const READ_ONLY = new Set<string>([
   'plugins.list',
@@ -40,22 +46,6 @@ const NS_BOUND_STREAM = new Set<string>(['plugins.execStream', 'plugins.assistan
 
 /** AbortControllers for live iframe streams, per source frame then stream id. */
 const liveStreams = new WeakMap<MessageEventSource, Map<number, AbortController>>();
-
-export interface PluginFrameInfo {
-  namespace: string;
-  projectId?: number;
-}
-
-/** Identity per live plugin iframe, keyed by its `contentWindow`. */
-const frames = new Map<MessageEventSource, PluginFrameInfo>();
-
-export function registerPluginFrame(win: MessageEventSource, info: PluginFrameInfo): void {
-  frames.set(win, info);
-}
-
-export function unregisterPluginFrame(win: MessageEventSource): void {
-  frames.delete(win);
-}
 
 interface InvokeMessage {
   __mcpPlugin: 'invoke';
@@ -101,7 +91,7 @@ async function runStream(source: WindowProxy, msg: StreamMessage): Promise<void>
     post({ event: 'error', error: i18n.t('plugins:bridge.streamMethodNotAllowed', { method }) });
     return;
   }
-  const frame = frames.get(source);
+  const frame = await resolveFrame(source);
   if (!frame) {
     post({ event: 'error', error: i18n.t('plugins:bridge.frameNotRegistered') });
     return;
@@ -207,7 +197,7 @@ export function installWebviewBridge(): () => void {
       if (method.startsWith('plugins.ui.')) {
         result = await handlePluginUi(method, payload);
       } else if (NS_BOUND.has(method)) {
-        const frame = frames.get(source);
+        const frame = await resolveFrame(source);
         if (!frame) {
           reply({ ok: false, error: i18n.t('plugins:bridge.frameNotRegistered') });
           return;

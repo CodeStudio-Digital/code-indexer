@@ -1,7 +1,7 @@
 /** ShareRepo over a DbExecutor (public_shares + public_share_messages).
  *  Insert is atomic via .batch(); the public viewer reads only the denormalized
  *  messages. Timestamps are epoch ms. */
-import type { DbExecutor, SqlStatement } from '@cloudstudio/cloud-kernel';
+import type { DbExecutor } from '@cloudstudio/cloud-kernel';
 import { asAccountId, asShareId, type AccountId, type ShareId } from '@cloudstudio/cloud-kernel';
 import {
   asSlug,
@@ -33,21 +33,29 @@ const COLS =
 
 export function createShareRepo(db: DbExecutor): ShareRepo {
   return {
-    async insert(share: PublicShare, messages: ShareMessage[]) {
-      const stmts: SqlStatement[] = [
-        {
-          sql: `INSERT INTO public_shares (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          params: [
-            share.id, share.slug, share.ownerAccountId, share.title, share.model, share.visibility, share.status,
-            share.snapshotSha256, share.snapshotSignature, share.messageCount, share.createdAtMs, share.expiresAtMs, share.revokedAtMs,
-          ],
-        },
-        ...messages.map((m) => ({
-          sql: 'INSERT INTO public_share_messages (share_id, idx, role, blocks_json) VALUES (?, ?, ?, ?)',
-          params: [share.id, m.idx, m.role, JSON.stringify(m.blocks)] as const,
-        })),
-      ];
-      await db.batch(stmts);
+    async insertIfUnderQuota(share: PublicShare, messages: ShareMessage[], maxActiveShares: number) {
+      // Conditional insert: the COUNT subquery + INSERT run as ONE serialized D1
+      // statement, so the quota can't be raced. rowsAffected === 0 ⇒ quota full.
+      const res = await db.run(
+        `INSERT INTO public_shares (${COLS})
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE (SELECT COUNT(*) FROM public_shares WHERE owner_account_id = ? AND status = 'active') < ?`,
+        [
+          share.id, share.slug, share.ownerAccountId, share.title, share.model, share.visibility, share.status,
+          share.snapshotSha256, share.snapshotSignature, share.messageCount, share.createdAtMs, share.expiresAtMs, share.revokedAtMs,
+          share.ownerAccountId, maxActiveShares,
+        ],
+      );
+      if (res.rowsAffected === 0) return false;
+      if (messages.length) {
+        await db.batch(
+          messages.map((m) => ({
+            sql: 'INSERT INTO public_share_messages (share_id, idx, role, blocks_json) VALUES (?, ?, ?, ?)',
+            params: [share.id, m.idx, m.role, JSON.stringify(m.blocks)],
+          })),
+        );
+      }
+      return true;
     },
 
     async findBySlug(slug) {
@@ -61,14 +69,6 @@ export function createShareRepo(db: DbExecutor): ShareRepo {
         [id],
       );
       return rows.map((r) => ({ idx: r.idx, role: r.role as ShareMessage['role'], blocks: JSON.parse(r.blocks_json) }));
-    },
-
-    async countActiveByOwner(owner: AccountId) {
-      const row = await db.first<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM public_shares WHERE owner_account_id = ? AND status = 'active'",
-        [owner],
-      );
-      return row?.n ?? 0;
     },
 
     async listByOwner(owner: AccountId) {

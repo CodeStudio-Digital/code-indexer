@@ -48,7 +48,10 @@ export interface LoginThrottle {
 export interface TotpPort {
   generateSecret(): string; // base32
   keyUri(secret: string, accountLabel: string): string; // otpauth://…
-  verify(secret: string, code: string): Promise<boolean>; // current ±1 step
+  /** Returns the matched absolute time-step (counter) within the ±1 window, or
+   *  null if the code is invalid. The step lets callers enforce single-use
+   *  (reject a code at a step already consumed). */
+  verify(secret: string, code: string): Promise<number | null>;
 }
 
 /** One-time recovery (backup) codes for 2FA. */
@@ -58,10 +61,12 @@ export interface RecoveryCodeService {
 }
 
 export interface TwoFactorRepo {
-  getSecret(accountId: AccountId): Promise<{ secret: string; enabled: boolean } | null>;
+  getSecret(accountId: AccountId): Promise<{ secret: string; enabled: boolean; lastStep: number | null } | null>;
   upsertPending(accountId: AccountId, secret: string): Promise<void>;
   enable(accountId: AccountId): Promise<void>;
   disable(accountId: AccountId): Promise<void>;
+  /** Record the last TOTP step consumed, so a replay within the window is rejected. */
+  markStep(accountId: AccountId, step: number): Promise<void>;
   addRecoveryCodes(accountId: AccountId, hashes: string[]): Promise<void>;
   /** Consume an unused recovery code by hash; true if it existed and was unused. */
   consumeRecoveryCode(accountId: AccountId, hash: string): Promise<boolean>;
@@ -123,14 +128,40 @@ export interface NewAccount {
   emailCanonical: string;
   passwordHash: string;
 }
+/** A password-less account created from an OAuth identity. The infra layer stores
+ *  a sentinel password hash that no password can verify against. */
+export interface NewOAuthAccount {
+  id: AccountId;
+  email: string;
+  emailCanonical: string;
+  /** ISO timestamp if the provider asserted the email is verified, else null. */
+  emailVerifiedAt: string | null;
+}
 export interface AccountRepo {
   findByCanonical(canonical: string): Promise<Account | null>;
   findById(id: AccountId): Promise<Account | null>;
   /** Login credential read — carries the hash; kept off the entity path. */
   findCredentialByCanonical(canonical: string): Promise<{ account: Account; passwordHash: string } | null>;
   insert(a: NewAccount): Promise<void>;
+  /** Create a password-less account from a verified OAuth identity. */
+  insertOAuth(a: NewOAuthAccount): Promise<void>;
   updatePasswordHash(id: AccountId, phc: string): Promise<void>;
   markEmailVerified(id: AccountId, atIso: string): Promise<void>;
+}
+
+/** Links a provider identity (Google/GitHub/Microsoft) to an account. The
+ *  (provider, providerUserId) pair is the IMMUTABLE join key — never the email. */
+export interface NewOAuthIdentity {
+  id: string;
+  provider: string;
+  providerUserId: string;
+  accountId: AccountId;
+  /** The email seen at link time (audit only; not a trust signal afterward). */
+  emailAtLink: string | null;
+}
+export interface OAuthIdentityRepo {
+  findByProviderUser(provider: string, providerUserId: string): Promise<{ accountId: AccountId } | null>;
+  link(identity: NewOAuthIdentity): Promise<void>;
 }
 
 export interface NewSession {
@@ -139,9 +170,21 @@ export interface NewSession {
   userAgent: string | null;
   ipHash: string | null;
 }
+/** Real device identity for the devices list (set after a session is created,
+ *  from the desktop's x-cs-device-* headers + Cloudflare geo). */
+export interface DeviceInfo {
+  deviceName: string | null;
+  osRelease: string | null;
+  geoCountry: string | null;
+  geoCity: string | null;
+}
 export interface SessionInfo {
   id: SessionId;
   userAgent: string | null;
+  deviceName: string | null;
+  osRelease: string | null;
+  geoCountry: string | null;
+  geoCity: string | null;
   createdAt: string;
   lastSeenAt: string;
 }
@@ -150,6 +193,8 @@ export interface SessionRepo {
   findActive(id: SessionId): Promise<{ id: SessionId; accountId: AccountId } | null>;
   touch(id: SessionId, atIso: string): Promise<void>;
   revoke(id: SessionId, atIso: string): Promise<void>;
+  /** Attach device identity to a freshly-created session (best-effort, display-only). */
+  setDeviceInfo(id: SessionId, info: DeviceInfo): Promise<void>;
   listByAccount(accountId: AccountId): Promise<SessionInfo[]>;
   revokeAllForAccount(accountId: AccountId, atIso: string): Promise<void>;
 }

@@ -8,7 +8,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import { KeyedMutex } from '../project-mutex.js';
 import { DirtyQueue } from '../dirty-queue.js';
 import { ProjectIndexService } from '../service.js';
-import type { ProjectIndexSettings, StructuralExecutor } from '../types.js';
+import type { ProjectIndexSettings, StructuralExecutor, StructuralProgressFrame } from '../types.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -37,11 +37,17 @@ class FakeExecutor implements StructuralExecutor {
   abortEmptyScan = false;
   lastRunOpts: { maxFiles?: number; allowEmptyWipe?: boolean } | null = null;
   onRun?: () => void;
-  async runStructuralIndex(_projectId: number, opts: { maxFiles?: number; allowEmptyWipe?: boolean }) {
+  /** Frames emitted via onProgress during the run (scan/index liveness). */
+  progressFrames: StructuralProgressFrame[] = [];
+  async runStructuralIndex(
+    _projectId: number,
+    opts: { maxFiles?: number; allowEmptyWipe?: boolean; onProgress?: (p: StructuralProgressFrame) => void },
+  ) {
     this.runs++;
     this.lastRunOpts = opts;
     if (this.delayMs) await sleep(this.delayMs);
     this.onRun?.();
+    for (const f of this.progressFrames) opts.onProgress?.(f);
     if (this.abortTooLarge) {
       return { totalFiles: 99999, indexed: 0, removed: 0, skipped: 0, errorCount: 0, durationMs: 1, aborted: 'too_large' as const };
     }
@@ -179,6 +185,28 @@ describe('ProjectIndexService', () => {
     await sleep(50);
     expect(svc.getStatus(1).phase).toBe('structural_ready');
     expect(svc.getStatus(1).lastStructuralAt).toBeTruthy();
+    await svc.dispose();
+  });
+
+  it('scan-phase progress keeps phase=scanning with a live count; index frames flip to structural_indexing', async () => {
+    const exec = new FakeExecutor();
+    // First call always clears the 150ms throttle (lastProgressAt unset); the
+    // index frame is a "done" frame (current===total) so it flushes too — no
+    // sleeps needed to observe both transitions.
+    exec.progressFrames = [
+      { phase: 'scanning', current: 750, total: 0, currentFile: '' },
+      { phase: 'indexing', current: 4, total: 4, currentFile: 'a.ts' },
+    ];
+    const svc = makeService(exec);
+    const frames: Array<{ phase: string; current?: number; total?: number }> = [];
+    svc.subscribe(1, (s) => frames.push({ phase: s.phase, current: s.progress?.current, total: s.progress?.total }));
+    svc.ensureFresh(1, 'open');
+    await sleep(40);
+
+    // Scan frame routed to setScanProgress: phase stays 'scanning', count shown.
+    expect(frames.some((f) => f.phase === 'scanning' && f.current === 750)).toBe(true);
+    // Index frame routed to setProgress: phase becomes 'structural_indexing' with real total.
+    expect(frames.some((f) => f.phase === 'structural_indexing' && f.total === 4)).toBe(true);
     await svc.dispose();
   });
 

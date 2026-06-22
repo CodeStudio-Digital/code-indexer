@@ -12,11 +12,12 @@ import type { CreateRequestInput } from '@mcp/store/api-client-types.js';
  * v2.1 / OpenAPI 3.1 JSON. OpenAPI *spec* import stays in regression.routes.ts.
  */
 export function mountApiImportRoutes(app: Hono, deps: ServerDeps): void {
-  const store = deps.apiClientStore;
+  // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 
   app.post(`${base}/collections/:cid/import-curl`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const cid = parseIdParam(c, 'cid');
     if (!collectionInProject(store, projectId, cid)) return notFound(c, `Collection ${cid} not found`);
     const body = await parseJsonBody<{ text?: string }>(c);
@@ -40,6 +41,7 @@ export function mountApiImportRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get(`${base}/collections/:cid/export`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const cid = parseIdParam(c, 'cid');
     // A stale cid must not export another project's full request set.
     const col = collectionInProject(store, projectId, cid);

@@ -3,7 +3,7 @@
  * Pure module — no React/DOM. Time is controlled by spying on Date.now.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getCached, dedupe, writeThrough, invalidateAll } from '../api-cache.js';
+import { getCached, dedupe, dedupeInflight, writeThrough, invalidateAll } from '../api-cache.js';
 
 const BASE = 1_000_000;
 let now = BASE;
@@ -47,6 +47,44 @@ describe('dedupe', () => {
     expect(getCached('e')).toBeUndefined();
     // in-flight slot cleared → a subsequent call re-invokes the producer
     await expect(dedupe('e', bad)).rejects.toThrow('boom');
+    expect(calls).toBe(2);
+  });
+});
+
+describe('dedupeInflight', () => {
+  it('collapses concurrent identical calls into one producer invocation', async () => {
+    let calls = 0;
+    const producer = () => {
+      calls++;
+      return Promise.resolve('v');
+    };
+    const p1 = dedupeInflight('k', producer);
+    const p2 = dedupeInflight('k', producer); // joins the live promise
+    expect(calls).toBe(1);
+    expect(await p1).toBe('v');
+    expect(await p2).toBe('v');
+  });
+
+  it('does NOT cache the body — the next call after settle re-fetches', async () => {
+    let calls = 0;
+    const producer = () => {
+      calls++;
+      return Promise.resolve('v');
+    };
+    await dedupeInflight('k', producer);
+    expect(getCached('k')).toBeUndefined(); // never written to the TTL cache
+    await dedupeInflight('k', producer); // slot cleared on settle → re-invokes
+    expect(calls).toBe(2);
+  });
+
+  it('clears the in-flight slot on rejection (retry works)', async () => {
+    let calls = 0;
+    const bad = () => {
+      calls++;
+      return Promise.reject(new Error('boom'));
+    };
+    await expect(dedupeInflight('e', bad)).rejects.toThrow('boom');
+    await expect(dedupeInflight('e', bad)).rejects.toThrow('boom');
     expect(calls).toBe(2);
   });
 });

@@ -122,6 +122,23 @@ const PersistedMessages = React.memo(function PersistedMessages({
     [sessionData],
   );
 
+  // The session keeps ONE coder_tasks_state row (latest submit_tasks wins), so
+  // only the most recent submit_tasks tool_use block may overlay the live
+  // `tasksState`. Older/superseded cards render their own frozen snapshot.
+  // Gated on a non-empty row: after `archive_task_list` clears it there is no
+  // active card and every card falls back to its frozen input.
+  const activeTasksToolUseId = useMemo<string | null>(() => {
+    if (!tasksState?.tasks?.length) return null;
+    let last: string | null = null;
+    for (const msg of sessionData.messages) {
+      if (msg.role !== 'assistant') continue;
+      for (const b of msg.content) {
+        if (b.type === 'tool_use' && b.name === 'submit_tasks' && b.id) last = b.id;
+      }
+    }
+    return last;
+  }, [sessionData, tasksState]);
+
   // During streaming with many groups, only render the tail to keep DOM light.
   const [renderCap, setRenderCap] = useState<number | null>(null);
   const sessionIdRef = useRef(sessionData.session.id);
@@ -330,6 +347,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
               onFork={handlers.onFork}
               onRollback={handlers.onRollback}
               tasksState={tasksState}
+              activeTasksToolUseId={activeTasksToolUseId}
             />
           );
         }
@@ -343,6 +361,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
             providerId={providerId}
             handlers={handlers}
             tasksState={tasksState}
+            activeTasksToolUseId={activeTasksToolUseId}
           />
         );
       })}

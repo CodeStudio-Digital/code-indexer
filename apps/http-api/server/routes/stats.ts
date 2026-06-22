@@ -3,6 +3,7 @@ import { NullVectorStore } from '@mcp/store/vectors.js';
 import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
+import { timeSection } from '../perf/breakdown.js';
 
 export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
   const { db, embeddingService, vectorStore, embeddingKind, vectorStoreKind } = deps;
@@ -11,29 +12,41 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
     return c.json(db.getStats(parseIdParam(c)));
   });
 
-  /** Embedding diagnostics for the debug panel. */
+  /**
+   * Embedding diagnostics for the debug panel — the FAST half: indexed
+   * coverage counts (now index-only via idx_files_project_embedding),
+   * vector-id stats, fingerprint, health. The expensive `ORDER BY RANDOM()`
+   * file samples moved to `/embeddings/samples` (loaded lazily by the panel)
+   * so opening the panel no longer waits on two full-table random scans.
+   *
+   * NOT cached: several callers (EmbeddingsCard, useEmbeddingRetry) refetch
+   * this immediately after a reindex/retry to show the NEW coverage, so a TTL
+   * cache here would make those refreshes look like no-ops. The composite
+   * index already makes the counts cheap.
+   */
   app.get('/api/projects/:id/embeddings/stats', async (c) => {
     const projectId = parseIdParam(c);
     const project = db.getProject(projectId);
     if (!project) return notFound(c);
 
-    const coverage = db.getEmbeddingCoverage(projectId);
-    const vectorIds = db.getVectorIdStats(projectId);
+    const coverage = timeSection('embeddings.stats', 'coverage', () => db.getEmbeddingCoverage(projectId));
+    const vectorIds = timeSection('embeddings.stats', 'vectorIds', () => db.getVectorIdStats(projectId));
 
     let vectorStoreAvailable = false;
     try {
       if (!(vectorStore instanceof NullVectorStore)) {
-        vectorStoreAvailable = await vectorStore.isAvailable();
+        vectorStoreAvailable = await timeSection('embeddings.stats', 'vectorStore.isAvailable', () =>
+          vectorStore.isAvailable(),
+        );
       }
     } catch { /* unavailable */ }
-
-    const sampleEmbedded = db.sampleEmbeddedFiles(projectId, 5);
-    const sampleNotEmbedded = db.sampleNotEmbeddedFiles(projectId, 5);
 
     // Stored = what the project's vectors were built with; live = what the
     // configured service produces now. A mismatch means the next index run
     // will clear hashes and re-embed the whole project.
-    const storedFingerprint = db.getProjectEmbeddingFingerprint(projectId);
+    const storedFingerprint = timeSection('embeddings.stats', 'fingerprint', () =>
+      db.getProjectEmbeddingFingerprint(projectId),
+    );
     const liveFingerprint = embeddingService.fingerprint?.() ?? null;
 
     return c.json({
@@ -49,6 +62,24 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
         vectorStore: vectorStoreKind,
         vectorStoreAvailable,
       },
+    });
+  });
+
+  /** Random file samples (embedded / not embedded) — the slow scans, split
+   *  out so the panel can defer them after the headline coverage renders. */
+  app.get('/api/projects/:id/embeddings/samples', (c) => {
+    const projectId = parseIdParam(c);
+    const project = db.getProject(projectId);
+    if (!project) return notFound(c);
+
+    const sampleEmbedded = timeSection('embeddings.samples', 'sampleEmbedded', () =>
+      db.sampleEmbeddedFiles(projectId, 5),
+    );
+    const sampleNotEmbedded = timeSection('embeddings.samples', 'sampleNotEmbedded', () =>
+      db.sampleNotEmbeddedFiles(projectId, 5),
+    );
+
+    return c.json({
       sampleEmbedded: sampleEmbedded.map((f) => ({
         type: 'file' as const,
         path: f.path,
@@ -126,7 +157,9 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
           const refId = m.metadata.ref_id ? parseInt(m.metadata.ref_id, 10) : 0;
           if (!refId) { notFound++; continue; }
 
-          const record = isFile ? db.getFileById(refId) : db.getSymbolById(refId);
+          // Route the surrogate-id lookup to THIS project's DB (post-split the id
+          // is unique only within the project DB; central when the flag is off).
+          const record = isFile ? db.getFileById(refId, project.id) : db.getSymbolById(refId, project.id);
           if (record) {
             found++;
             matches.push({

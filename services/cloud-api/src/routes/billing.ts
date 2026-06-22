@@ -10,7 +10,10 @@ import { billingHttpStatus, type BillingError } from '@cloudstudio/cloud-billing
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { createBillingBundle } from '../billing-composition.js';
-import { WebhookSignatureError } from '../infra/stripe-gateway.js';
+import { resolveEntitlements } from '../entitlements.js';
+import { WebhookSignatureError, mapOrgEvent, type StripeEvent } from '../infra/stripe-gateway.js';
+import { createTeamsRepo } from '../infra/d1/teams-repo.js';
+import { createD1Executor } from '../infra/d1/d1-executor.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
 import { recordAudit } from '../middleware/audit.js';
 
@@ -21,12 +24,12 @@ function respondBillingError(c: Context<{ Bindings: Env }>, error: BillingError)
 export function billingRouter(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
-  // Current entitlements (auto-grants the one-shot trial on first cloud touch).
+  // Effective entitlements = personal (auto-grants the one-shot trial) ∪ orgs.
   app.get('/entitlements', async (c) => {
     const identity = createIdentityBundle(c.env);
     const claims = await requireClaims(c, identity);
     if (!claims) return unauthorized(c);
-    const ent = await createBillingBundle(c.env).getEntitlements.execute({ accountId: asAccountId(claims.sub) });
+    const ent = await resolveEntitlements(c.env, claims.sub);
     return c.json(ent, 200);
   });
 
@@ -67,7 +70,28 @@ export function billingRouter(): Hono<{ Bindings: Env }> {
       console.error('[billing] webhook parse failed', e);
       return c.json({ code: 'internal', message: 'Webhook error' }, 500);
     }
-    if (!event) return c.json({ received: true, ignored: true }, 200); // event we don't project
+    if (!event) {
+      // Not a personal event — it may be an ORG (per-seat) subscription event.
+      // The signature was already verified above (parseWebhook didn't throw), so
+      // re-reading the same raw payload for the org projection is safe.
+      const orgEvent = mapOrgEvent(JSON.parse(raw) as StripeEvent, c.env.STRIPE_TEAMS_PRICE_ID);
+      if (!orgEvent) return c.json({ received: true, ignored: true }, 200);
+      const first = await bundle.billing.recordWebhookEvent(orgEvent.eventId); // shared idempotency table
+      if (first) {
+        await createTeamsRepo(createD1Executor(c.env.DB)).upsertSubscription({
+          orgId: orgEvent.orgId,
+          plan: orgEvent.plan,
+          status: orgEvent.status,
+          periodEndMs: orgEvent.periodEndMs,
+          seats: orgEvent.seats,
+          trialUsed: true,
+          stripeCustomerId: orgEvent.stripeCustomerId,
+          stripeSubscriptionId: orgEvent.stripeSubscriptionId,
+        });
+        recordAudit(c, 'org_billing_webhook_applied', 200, { orgId: orgEvent.orgId, status: orgEvent.status, seats: orgEvent.seats });
+      }
+      return c.json({ received: true, applied: first }, 200);
+    }
     const r = await bundle.handleWebhook.execute(event);
     if (r.applied) recordAudit(c, 'billing_webhook_applied', 200, { accountId: event.accountId, status: event.status, plan: event.plan });
     return c.json({ received: true, applied: r.applied }, 200);

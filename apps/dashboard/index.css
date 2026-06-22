@@ -5,6 +5,10 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  /* Render native controls (select popups, scrollbars, inputs) in the right
+     theme — without this, a dark-styled <select> opens a white popup with
+     light, near-invisible option text. */
+  color-scheme: light;
   /* ===== Brand palette (provided) ===== */
   --primary-base: #195ab4;
   --primary-extended-10: #d2e5ff;
@@ -81,6 +85,8 @@ html[data-density="large"] {
 }
 
 .dark {
+  /* Dark native controls (select dropdowns, scrollbars) — see :root note. */
+  color-scheme: dark;
   /* Deep premium dark — inspired by Zed / Linear / Raycast. */
   --background: #0b0d12;
   --foreground: #e6e8ee;
@@ -299,3 +305,93 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .merge-arrow-right::before { content: '»'; color: var(--primary); }
 .merge-arrow-left::before  { content: '«'; color: var(--success); }
 .merge-arrow-right:hover::before, .merge-arrow-left:hover::before { color: var(--foreground); }
+/* IntelliJ-style run ▶ in the glyph margin (package.json/composer scripts, py __main__). */
+.mcp-run-glyph { cursor: pointer; text-align: center; }
+.mcp-run-glyph::before { content: '\25B6'; color: var(--success); font-size: 10px; opacity: 0.85; }
+.mcp-run-glyph:hover::before { color: var(--foreground); opacity: 1; }
+
+/* IntelliJ-style git change markers in the lines-decorations gutter. A thin
+   vertical bar marks added (green) / modified (blue) lines vs the file's HEAD
+   baseline; a small triangle marks the spot where lines were deleted. Clicking
+   a marker opens the change toolbar (rollback / diff / stage). */
+.mcp-change-added,
+.mcp-change-modified,
+.mcp-change-deleted { cursor: pointer; }
+.mcp-change-added    { border-left: 3px solid var(--success); }
+.mcp-change-modified { border-left: 3px solid var(--primary); }
+.mcp-change-added:hover    { border-left-color: color-mix(in srgb, var(--success) 70%, var(--foreground)); }
+.mcp-change-modified:hover { border-left-color: color-mix(in srgb, var(--primary) 70%, var(--foreground)); }
+.mcp-change-deleted { position: relative; }
+.mcp-change-deleted::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -4px;
+  border-left: 6px solid var(--muted-foreground);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+.mcp-change-deleted:hover::before { border-left-color: var(--foreground); }
+
+/* Change-marker toolbar (Monaco content widget). IntelliJ-style floating bar
+   with rollback / copy / navigate / stage / commit, plus an original-text
+   preview and an inline commit field. */
+.mcp-change-tb-host { z-index: 30; }
+.mcp-change-tb {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--popover);
+  color: var(--popover-foreground, var(--foreground));
+  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+  font-family: var(--font-sans, system-ui), sans-serif;
+}
+.mcp-change-tb-row { display: flex; align-items: center; gap: 1px; }
+.mcp-change-tb-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--border); }
+.mcp-change-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mcp-change-tb-btn:hover { background: var(--accent, color-mix(in srgb, var(--foreground) 10%, transparent)); color: var(--foreground); }
+.mcp-change-tb-btn.is-active { color: var(--primary); }
+.mcp-change-tb-commit { display: flex; align-items: center; gap: 3px; padding: 0 2px 2px; }
+.mcp-change-tb-input {
+  width: 220px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--input, var(--border));
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+.mcp-change-tb-input:focus { outline: none; border-color: var(--ring, var(--primary)); }
+.mcp-change-tb-original {
+  max-width: 520px;
+  max-height: 180px;
+  margin: 0 2px 2px;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted-foreground) 10%, transparent);
+  color: var(--foreground);
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+  tab-size: 2;
+}

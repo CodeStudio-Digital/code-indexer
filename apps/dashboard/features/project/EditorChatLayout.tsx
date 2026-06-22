@@ -12,7 +12,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { PanelRightOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
-import { EditorPane } from '../workspace/EditorPane.js';
+import { EditorPaneHost } from '../workspace/EditorPane.js';
 import { EditorChatRail } from './editor-chat/EditorChatRail.js';
 
 interface Props {
@@ -30,7 +30,7 @@ export function EditorChatLayout({ projectId, projectName }: Props) {
     <div className="flex h-full min-h-0">
       <PanelGroup direction="horizontal" autoSaveId="mcp-project-editor-chat" className="flex-1 min-w-0">
         <Panel id="editor" order={1} minSize={30}>
-          <EditorPane />
+          <EditorPaneHost />
         </Panel>
         {chatOpen && (
           <>

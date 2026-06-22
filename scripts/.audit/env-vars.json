@@ -1,5 +1,5 @@
 {
-  "generatedFrom": 2227,
+  "generatedFrom": 2616,
   "report": [
     {
       "key": "ALL_PROXY",
@@ -601,6 +601,18 @@
       "tier": "review"
     },
     {
+      "key": "CODER_COMPACT_SPILL_HEAD_CHARS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/compaction/spill-oversized.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "CODER_COMPACT_STUCK_TURN_CAP",
       "prefix": "CODER",
       "inferred_type": "int",
@@ -659,6 +671,18 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
+    },
+    {
+      "key": "CODER_CONTEXT_SPILL_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/compaction/threshold.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
     },
     {
       "key": "CODER_DISABLE_SUBAGENTS",
@@ -967,7 +991,7 @@
       "prefix": "CODER",
       "inferred_type": "int",
       "enums": [],
-      "usage_count": 1,
+      "usage_count": 2,
       "files": [
         "packages/code-agent/src/core/runner/nodes/executing.ts"
       ],
@@ -1842,6 +1866,19 @@
       "tier": "cataloged"
     },
     {
+      "key": "CODESTUDIO_CLOUD_URL",
+      "prefix": "CODESTUDIO",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/dashboard/vite.config.ts",
+        "apps/electron/src/cloud/cloud-config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "CODESTUDIO_DEBUG_DEVTOOLS",
       "prefix": "CODESTUDIO",
       "inferred_type": "bool",
@@ -2235,8 +2272,9 @@
       "prefix": "LOCALAPPDATA",
       "inferred_type": "string",
       "enums": [],
-      "usage_count": 1,
+      "usage_count": 2,
       "files": [
+        "packages/api-handlers/src/runtime/detect-python.ts",
         "packages/api-handlers/src/terminal/shells.ts"
       ],
       "in_catalog": false,
@@ -2265,6 +2303,30 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
+    },
+    {
+      "key": "MCP_API_CLIENT_BLOCK_PRIVATE_HOSTS",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/api-client/_net-policy.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_API_CLIENT_READ_CAP",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/api-client/read-cap.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
     },
     {
       "key": "MCP_API_PORT",
@@ -2501,6 +2563,18 @@
       "tier": "review"
     },
     {
+      "key": "MCP_DB_LIST_CACHE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/store/src/db.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "MCP_DB_PATH",
       "prefix": "MCP",
       "inferred_type": "string",
@@ -2508,6 +2582,18 @@
       "usage_count": 1,
       "files": [
         "packages/orchestrator-host/src/DbConnection.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_DB_STATS_CACHE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/store/src/db.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -2545,6 +2631,18 @@
       "usage_count": 1,
       "files": [
         "apps/electron/src/dev-http.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_DRAWIO_DIR",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/server/routes/drawio-static.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -2635,6 +2733,42 @@
       "tier": "review"
     },
     {
+      "key": "MCP_FREEZE_BUSY_FRACTION",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/perf/freeze-log.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_FREEZE_THRESHOLD_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/perf/freeze-log.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_FREEZE_WATCHDOG_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/perf/freeze-log.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "MCP_FTS_CONTENT_GREP",
       "prefix": "MCP",
       "inferred_type": "bool",
@@ -2654,6 +2788,90 @@
       "usage_count": 1,
       "files": [
         "packages/indexer/src/search/hybrid.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_GIT_DETAIL_MAX_OUTPUT_BYTES",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/projectGit/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_GIT_LIST_MAX_OUTPUT_BYTES",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/projectGit/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_GIT_NETWORK_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/projectGit/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_GIT_READ_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/projectGit/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_GIT_REPO_CACHE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/projectGit/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_GIT_STATUS_MAX_OUTPUT_BYTES",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/projectGit/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_GIT_SUMMARY_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/projectGit/index.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -2931,6 +3149,42 @@
       "tier": "review"
     },
     {
+      "key": "MCP_LOCAL_HISTORY_MAX_AGE_DAYS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/files/local-history.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LOCAL_HISTORY_MAX_BYTES",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/files/local-history.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LOCAL_HISTORY_MAX_PER_FILE",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/files/local-history.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "MCP_LSH_DIM",
       "prefix": "MCP",
       "inferred_type": "string",
@@ -2967,6 +3221,31 @@
       "tier": "cataloged"
     },
     {
+      "key": "MCP_LSP_CODEACTION_DEADLINE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/lsp/server-backend.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LSP_DEBUG",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/api-handlers/src/lsp/index.ts",
+        "packages/api-handlers/src/lsp/server-backend.ts"
+      ],
+      "in_catalog": false,
+      "tier": "tier3-debug"
+    },
+    {
       "key": "MCP_LSP_ENABLED",
       "prefix": "MCP",
       "inferred_type": "bool",
@@ -2989,6 +3268,42 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
+    },
+    {
+      "key": "MCP_LSP_LANGUAGE_LEVEL",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/lsp/server-backend.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LSP_SOFT_DEADLINE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/lsp/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LSP_WARM_ON_OPEN",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/lsp/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
     },
     {
       "key": "MCP_LSP_WORKER",
@@ -3350,6 +3665,30 @@
       "usage_count": 1,
       "files": [
         "packages/indexer/src/search/onnx-idle.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PERF_BREAKDOWN",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/perf/breakdown.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PERF_CURRENT_TTL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/admin/perf.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3736,6 +4075,18 @@
       "usage_count": 1,
       "files": [
         "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_RENDERER_HEAP_MB",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/electron/main.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -4130,6 +4481,18 @@
       "tier": "review"
     },
     {
+      "key": "MCP_TREE_DIR_CACHE",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/files/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "MCP_TS_IDLE_TTL_MS",
       "prefix": "MCP",
       "inferred_type": "int",
@@ -4233,8 +4596,9 @@
       "prefix": "OPENAI",
       "inferred_type": "string",
       "enums": [],
-      "usage_count": 2,
+      "usage_count": 3,
       "files": [
+        "apps/http-api/server/audio-transcriber-impl.ts",
         "packages/code-agent/src/providers/openai.ts",
         "packages/indexer/src/indexer/providers/openai.ts"
       ],
@@ -4294,9 +4658,11 @@
       "prefix": "PATH",
       "inferred_type": "string",
       "enums": [],
-      "usage_count": 2,
+      "usage_count": 4,
       "files": [
+        "packages/api-handlers/src/runner/manager-status.ts",
         "packages/api-handlers/src/runtime/detect-node.ts",
+        "packages/api-handlers/src/runtime/detect-shared.ts",
         "packages/api-handlers/src/terminal/shells.ts"
       ],
       "in_catalog": false,

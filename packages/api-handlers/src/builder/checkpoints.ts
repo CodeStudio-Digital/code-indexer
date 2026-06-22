@@ -41,7 +41,7 @@ function requireBuilderProject(deps: HandlerDeps, projectId: number) {
 
 export function listCheckpoints(deps: HandlerDeps, projectId: number): BuilderCheckpoint[] {
   requireBuilderProject(deps, projectId);
-  return listBuilderCheckpoints(deps.db.raw(), projectId);
+  return listBuilderCheckpoints(deps.db.projectScopedDb(projectId), projectId);
 }
 
 export interface CreateCheckpointInput {
@@ -69,7 +69,7 @@ export async function createCheckpointNow(
   const head = await git(root, ['rev-parse', 'HEAD']);
   if (!head.ok) throw new ApiError('git_failed', 500, 'git rev-parse failed');
 
-  const checkpoint = createBuilderCheckpoint(deps.db.raw(), {
+  const checkpoint = createBuilderCheckpoint(deps.db.projectScopedDb(projectId), {
     project_id: projectId,
     commit_sha: head.stdout.trim(),
     label,
@@ -91,7 +91,7 @@ export async function restoreCheckpoint(
   checkpointId: number,
 ): Promise<RestoreResult> {
   const project = requireBuilderProject(deps, projectId);
-  const row = getBuilderCheckpoint(deps.db.raw(), checkpointId);
+  const row = getBuilderCheckpoint(deps.db.projectScopedDb(projectId), checkpointId);
   if (!row || row.project_id !== projectId) {
     throw new ApiError('not_found', 404, 'checkpoint not found');
   }
@@ -107,7 +107,7 @@ export async function restoreCheckpoint(
     if (commit && commit.ok) {
       const head = await git(root, ['rev-parse', 'HEAD']);
       if (head.ok) {
-        preRestore = createBuilderCheckpoint(deps.db.raw(), {
+        preRestore = createBuilderCheckpoint(deps.db.projectScopedDb(projectId), {
           project_id: projectId,
           commit_sha: head.stdout.trim(),
           label: 'Before restore',
@@ -129,7 +129,7 @@ export async function restoreCheckpoint(
   const head = await git(root, ['rev-parse', 'HEAD']);
   if (!head.ok) throw new ApiError('git_failed', 500, 'git rev-parse failed after restore');
 
-  const restored = createBuilderCheckpoint(deps.db.raw(), {
+  const restored = createBuilderCheckpoint(deps.db.projectScopedDb(projectId), {
     project_id: projectId,
     session_id: row.session_id,
     commit_sha: head.stdout.trim(),
@@ -157,11 +157,11 @@ export async function checkpointDiff(
   fromId?: number,
 ): Promise<CheckpointDiffResult> {
   const project = requireBuilderProject(deps, projectId);
-  const to = getBuilderCheckpoint(deps.db.raw(), toId);
+  const to = getBuilderCheckpoint(deps.db.projectScopedDb(projectId), toId);
   if (!to || to.project_id !== projectId) throw new ApiError('not_found', 404, 'checkpoint not found');
   let fromSha: string | null = null;
   if (fromId != null) {
-    const from = getBuilderCheckpoint(deps.db.raw(), fromId);
+    const from = getBuilderCheckpoint(deps.db.projectScopedDb(projectId), fromId);
     if (!from || from.project_id !== projectId) throw new ApiError('not_found', 404, 'checkpoint not found');
     fromSha = from.commit_sha;
   }

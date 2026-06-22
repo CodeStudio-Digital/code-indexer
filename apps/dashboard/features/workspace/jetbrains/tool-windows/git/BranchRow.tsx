@@ -2,103 +2,23 @@
  * One branch row in the Branches tab. Clicking the row OPENS the branch
  * log in the content area (it no longer checks out — that was a footgun:
  * an accidental click switched your branch). Every action lives behind a
- * right-click context menu (or the hover "⋯" button), JetBrains-style.
+ * right-click context menu (or the hover "⋯" button), JetBrains-style —
+ * the item set comes from the shared `buildBranchActions` builder.
  */
 
 import { GitBranch as GitBranchIcon, MoreHorizontal } from 'lucide-react';
-import {
-  ClipboardCopy,
-  GitBranchPlus,
-  GitMerge,
-  Pencil,
-  Trash2,
-  Upload,
-} from 'lucide-react';
-import { useContextMenu, type ContextMenuItem } from '../../../../../components/ui/context-menu.js';
+import type { GitBranch } from '@mcp/api-bus';
+import { useContextMenu } from '../../../../../components/ui/context-menu.js';
 import { cn } from '../../../../../lib/utils.js';
-
-export interface GitBranch {
-  name: string;
-  isCurrent: boolean;
-  isRemote: boolean;
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-  tipSubject: string;
-}
-
-export interface BranchRowActions {
-  onOpenLog: (b: GitBranch) => void;
-  onSwitch: (b: GitBranch) => void;
-  onNewBranchFrom: (b: GitBranch) => void;
-  onRename: (b: GitBranch) => void;
-  onMerge: (b: GitBranch) => void;
-  onPush: (b: GitBranch) => void;
-  onDelete: (b: GitBranch) => void;
-}
+import { buildBranchActions } from './branch-menu.js';
+import type { BranchActions } from './use-branch-ops.js';
 
 export function BranchRow({
   branch: b,
   actions,
   opInProgress,
-}: { branch: GitBranch; actions: BranchRowActions; opInProgress?: boolean }) {
-  const items: ContextMenuItem[] = [];
-  // Switch / checkout — primary action, disabled on the current branch.
-  items.push({
-    id: 'switch',
-    label: b.isRemote ? 'Checkout as local branch' : 'Switch to this branch',
-    disabled: b.isCurrent,
-    onSelect: () => actions.onSwitch(b),
-  });
-  items.push({ id: 'open-log', label: 'Open in log', onSelect: () => actions.onOpenLog(b) });
-  items.push({
-    id: 'new-from',
-    separatorBefore: true,
-    label: 'New branch from here…',
-    icon: GitBranchPlus,
-    onSelect: () => actions.onNewBranchFrom(b),
-  });
-  if (!b.isRemote) {
-    items.push({ id: 'rename', label: 'Rename…', icon: Pencil, onSelect: () => actions.onRename(b) });
-  }
-  if (!b.isRemote && !b.isCurrent) {
-    items.push({
-      id: 'merge',
-      separatorBefore: true,
-      label: 'Merge into current branch',
-      icon: GitMerge,
-      disabled: opInProgress,
-      onSelect: () => actions.onMerge(b),
-    });
-  }
-  if (!b.isRemote) {
-    items.push({
-      id: 'push',
-      separatorBefore: true,
-      label: b.upstream ? 'Push' : 'Push (set upstream)',
-      icon: Upload,
-      onSelect: () => actions.onPush(b),
-    });
-  }
-  if (!b.isRemote && !b.isCurrent) {
-    items.push({
-      id: 'delete',
-      separatorBefore: true,
-      label: 'Delete branch',
-      icon: Trash2,
-      destructive: true,
-      onSelect: () => actions.onDelete(b),
-    });
-  }
-  items.push({
-    id: 'copy-name',
-    separatorBefore: true,
-    label: 'Copy name',
-    icon: ClipboardCopy,
-    onSelect: () => void navigator.clipboard.writeText(b.name).catch(() => undefined),
-  });
-
-  const { triggerProps, Menu } = useContextMenu(items);
+}: { branch: GitBranch; actions: BranchActions; opInProgress?: boolean }) {
+  const { triggerProps, Menu } = useContextMenu(buildBranchActions(b, actions, { opInProgress }));
 
   return (
     <>

@@ -13,7 +13,9 @@ export function createBaseTables(db: DB): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_indexed TEXT,
       file_count INTEGER NOT NULL DEFAULT 0,
-      symbol_count INTEGER NOT NULL DEFAULT 0
+      symbol_count INTEGER NOT NULL DEFAULT 0,
+      git_remote TEXT,
+      default_branch TEXT
     );
 
     CREATE TABLE IF NOT EXISTS files (
@@ -187,6 +189,9 @@ export function createBaseTables(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
     CREATE INDEX IF NOT EXISTS idx_files_project_path ON files(project_id, path);
     CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);
+    -- Embedding coverage COUNT(*)/COUNT(embedding_hash) per project becomes an
+    -- index-only scan (no table row reads) — see embeddings.coverage().
+    CREATE INDEX IF NOT EXISTS idx_files_project_embedding ON files(project_id, embedding_hash);
     CREATE INDEX IF NOT EXISTS idx_symbols_project ON symbols(project_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);

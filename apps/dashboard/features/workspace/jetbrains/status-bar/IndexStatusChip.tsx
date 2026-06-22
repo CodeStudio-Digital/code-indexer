@@ -14,8 +14,17 @@ function compact(n: number): string {
 
 function chipFor(s: ProjectIndexStatus): { label: string; tone: string; busy: boolean; warn?: boolean } {
   switch (s.phase) {
-    case 'scanning':
-      return { label: 'Scanning…', tone: 'text-sky-400', busy: true };
+    case 'scanning': {
+      // Live count keeps the chip alive during the (otherwise silent) tree
+      // walk. `total` is 0 until the walk finishes, so show a bare count then.
+      const p = s.progress;
+      const label = p && p.current > 0
+        ? p.total > 0
+          ? `Scanning ${compact(p.current)}/${compact(p.total)}`
+          : `Scanning ${compact(p.current)}…`
+        : 'Scanning…';
+      return { label, tone: 'text-sky-400', busy: true };
+    }
     case 'structural_indexing': {
       const p = s.progress;
       return {
@@ -62,8 +71,13 @@ export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null 
           ) : (
             <Database className="h-2.5 w-2.5" />
           )}
-          <span className="truncate max-w-[200px]">{chip.label}</span>
-          {status.dirtyPending > 0 && <span className="text-sky-400">●{compact(status.dirtyPending)}</span>}
+          <span className="truncate max-w-[200px] tabular-nums">{chip.label}</span>
+          {/* tabular-nums + right-aligned min-width: during a scan dirtyPending
+              updates ~6×/s; without this the changing digit count reflows the
+              whole right section every tick (recurring CLS). */}
+          {status.dirtyPending > 0 && (
+            <span className="text-sky-400 tabular-nums inline-flex justify-end min-w-[4ch]">●{compact(status.dirtyPending)}</span>
+          )}
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-[300px]">

@@ -74,6 +74,7 @@ class FakeAccountRepo implements AccountRepo {
   async insert(a: NewAccount) {
     this.store.set(a.id, { id: a.id, email: a.email, canon: a.emailCanonical, hash: a.passwordHash, verifiedAt: null });
   }
+  async insertOAuth() {}
   async updatePasswordHash(id: AccountId, phc: string) {
     const r = this.store.get(id);
     if (r) r.hash = phc;

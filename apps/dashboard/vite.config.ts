@@ -16,6 +16,12 @@ const dashboardPort = Number(process.env.MCP_DASHBOARD_PORT ?? 7317);
 const apiPort = Number(process.env.MCP_INDEX_PORT ?? 7333);
 const apiTarget = `http://localhost:${apiPort}`;
 
+// The CodeStudio Cloud Worker is a SEPARATE service from the in-process backend.
+// Proxy /v1 → the Worker so the dev cloud bridge can issue same-origin (relative)
+// requests and dodge CORS. Override with CODESTUDIO_CLOUD_URL (e.g.
+// http://localhost:8787 for a local `wrangler dev`).
+const cloudTarget = process.env.CODESTUDIO_CLOUD_URL ?? 'https://codestudio-cloud-api.maiconspo6792.workers.dev';
+
 function pkgAliases(name: string, dir: string) {
   const base = resolve(repoRoot, 'packages', dir, 'src');
   return [
@@ -32,6 +38,7 @@ export default defineConfig({
   },
   resolve: {
     alias: [
+      ...pkgAliases('@mcp/api-bus', 'api-bus'),
       ...pkgAliases('@mcp/shared', 'shared'),
       ...pkgAliases('@mcp/store', 'store'),
       ...pkgAliases('@mcp/services', 'services'),
@@ -54,6 +61,12 @@ export default defineConfig({
     // chosen port is taken (e.g. a second dashboard on the same machine).
     strictPort: false,
     proxy: {
+      // CodeStudio Cloud Worker (auth/billing/sharing/feedback) — dev bridge only.
+      '/v1': {
+        target: cloudTarget,
+        changeOrigin: true,
+        secure: true,
+      },
       '/api': {
         target: apiTarget,
         changeOrigin: true,

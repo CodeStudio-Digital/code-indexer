@@ -46,7 +46,7 @@ export class Confirm2faUseCase {
     if (!tf) return err(IdentityErrors.twofaInvalid());
     // Already enabled → don't re-confirm (would rotate/invalidate live recovery codes).
     if (tf.enabled) return err(IdentityErrors.twofaInvalid());
-    if (!(await this.totp.verify(tf.secret, input.code))) {
+    if ((await this.totp.verify(tf.secret, input.code)) === null) {
       await this.throttle.recordFailure(key);
       return err(IdentityErrors.twofaInvalid());
     }
@@ -80,7 +80,8 @@ export class Disable2faUseCase {
     const account = await this.accounts.findById(input.accountId);
     const cred = account ? await this.accounts.findCredentialByCanonical(account.emailCanonical) : null;
     const passwordOk = cred ? await this.hasher.verify(input.password, cred.passwordHash) : false;
-    const codeOk = await this.totp.verify(tf.secret, input.code);
+    const step = await this.totp.verify(tf.secret, input.code);
+    const codeOk = step !== null && step > (tf.lastStep ?? -1); // reject a replayed code
     if (!passwordOk || !codeOk) {
       await this.throttle.recordFailure(key);
       return err(IdentityErrors.twofaInvalid());

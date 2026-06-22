@@ -829,10 +829,15 @@ export class HybridSearch {
           // Snapshots are now chunked, so several matches can share a ref_id.
           // Over-fetch (×4) and keep the first (best-scored) chunk per
           // snapshot — dedup here keeps RRF ranks one-per-snapshot.
+          // Snapshot vectors are upserted WITHOUT a namespace (they live wholly
+          // on the central store), so scope them by the project_name metadata —
+          // NOT the code: namespace. The old `namespace: code:<name>` never
+          // matched (stored namespace is '') so semantic snapshot recall silently
+          // returned nothing (FTS masked it); under per-project vector routing it
+          // would also wrongly target the project store, which holds no snapshots.
           const matches = await this.vectorStore.search(vector, {
             topK: limit * 4,
-            filter: { type: 'snapshot' },
-            namespace: codeNamespace(projectName),
+            filter: { type: 'snapshot', project_name: projectName },
           });
           const seen = new Set<number>();
           for (const m of matches) {

@@ -283,6 +283,13 @@ export interface ApiClientDeps {
    * workers (module globals don't cross worker_threads) for the `api_*` tools.
    */
   apiClientStore: ApiClientStore;
+  /**
+   * R1 — project-scoped API-client store. Flag-off returns the central
+   * `apiClientStore` (byte-identical to today); flag-on returns a store backed
+   * by the project's own DB handle, cached per projectId. Routes resolve this
+   * per-request from the `:projectId` URL param.
+   */
+  apiClientFor: (projectId: number) => ApiClientStore;
 }
 
 export interface PipelineDeps {
@@ -675,10 +682,14 @@ export function createDeps(): ServerDeps {
     topK: 5,
     log: (event, data) => console.debug(`[memory] retriever ${event}`, data),
   });
-  const sessionStore = new SessionStore(config.dbPath);
-  const companyStore = new CompanyStore(config.dbPath);
   // Share the same underlying better-sqlite3 handle that CodeIndexDB
-  // opened — re-opening the file would create lock contention.
+  // opened — re-opening the file (the old `new XStore(config.dbPath)`) added
+  // extra writers on the central file and serialized every session/company
+  // read behind WAL lock contention, blocking the main-thread event loop
+  // (and thus IPC for all windows). These two were the last stragglers; the
+  // sibling stores below already shared the handle.
+  const sessionStore = new SessionStore(db.raw());
+  const companyStore = new CompanyStore(db.raw());
   const companySandboxStore = new CompanySandboxStore(db.raw());
   const companySandboxServicesStore = new CompanySandboxServicesStore(db.raw());
   const companySessionEnvStore = new CompanySessionEnvStore(db.raw());
@@ -691,6 +702,20 @@ export function createDeps(): ServerDeps {
   const chromeServiceStore = new ChromeServiceStore(db.raw());
   const designSystemStore = new DesignSystemStore(db.raw());
   const apiClientStore = new ApiClientStore(db.raw());
+  // R1 — per-project feature stores. Flag-off (`useProjectDb` false) hands back
+  // the central instance so behaviour is byte-identical to today; flag-on builds
+  // a store on the project's own DB handle, cached per projectId so the whole
+  // project feature graph lives in one connection.
+  const apiClientStoreByProject = new Map<number, ApiClientStore>();
+  const apiClientFor = (projectId: number): ApiClientStore => {
+    if (!db.useProjectDb(projectId)) return apiClientStore;
+    let s = apiClientStoreByProject.get(projectId);
+    if (!s) {
+      s = new ApiClientStore(db.projectScopedDb(projectId));
+      apiClientStoreByProject.set(projectId, s);
+    }
+    return s;
+  };
   const verdaccioStore = new VerdaccioStore(db.raw());
   // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
   // EARLIER (before createSearchBundle) so the V2 search path can emit
@@ -1140,6 +1165,7 @@ export function createDeps(): ServerDeps {
     chromeServiceStore,
     designSystemStore,
     apiClientStore,
+    apiClientFor,
     verdaccioStore,
     pipelineTelemetryStore,
     pipelineBindingsStore,

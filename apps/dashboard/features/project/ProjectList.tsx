@@ -24,7 +24,7 @@ import { Skeleton } from '../../components/ui/skeleton.js';
 import { useApi } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
 import ProjectCreateDialog from './ProjectCreateDialog.js';
-import ProjectEditDialog from './ProjectEditDialog.js';
+import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
 import { NewProjectWizard } from './new-project/index.js';
 import { ProjectCard, type ProjectCardData } from './list/ProjectCard.js';
 import { ProjectRow } from './list/ProjectRow.js';
@@ -336,10 +336,11 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
       )}
 
       {editing && (
-        <ProjectEditDialog
-          project={editing}
+        <ProjectSettingsModal
+          project={editing as unknown as Parameters<typeof ProjectSettingsModal>[0]['project']}
           open={!!editing}
           onOpenChange={(open) => { if (!open) setEditing(null); }}
+          initialSection="general"
           onSaved={refetch}
           onDeleted={refetch}
           existingGroups={existingGroups}

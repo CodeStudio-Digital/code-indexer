@@ -63,6 +63,10 @@ export function startDocumentSync(monaco: Monaco, projectId: number): DocumentSy
   // Per-file "drena o didChange pendente AGORA" — deixa a completion esvaziar o
   // batch de 16ms antes de consultar o server (ver DocumentSync.flush).
   const flushers = new Map<string, () => void>();
+  // Per-file "cancela o timer de batch pendente" — permite que dispose() (troca de
+  // projeto) limpe os setTimeout em voo dos modelos ainda vivos, em vez de deixá-los
+  // disparar uma vez (no-op via `stopped`) e só então liberar a closure.
+  const timerCancellers = new Map<string, () => void>();
   let stopped = false;
 
   const enqueue = (rel: string, task: () => Promise<void>): void => {
@@ -108,11 +112,18 @@ export function startDocumentSync(monaco: Monaco, projectId: number): DocumentSy
       });
     };
 
+    // Cancela o batch de 16ms pendente sem drenar. Registrado em timerCancellers
+    // p/ que dispose() limpe os setTimeout em voo na teardown (troca de projeto).
+    const cancelTimer = (): void => {
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
+    timerCancellers.set(rel, cancelTimer);
+
     // Forçador externo (DocumentSync.flush): cancela o timer do batch e drena o
     // pending AGORA. O `flush` interno zera `timer` mas não faz clearTimeout, então
     // cancelamos aqui para não deixar um 2º disparo agendado.
     const forceFlush = (): void => {
-      if (timer) { clearTimeout(timer); timer = null; }
+      cancelTimer();
       flush();
     };
     flushers.set(rel, forceFlush);
@@ -133,7 +144,8 @@ export function startDocumentSync(monaco: Monaco, projectId: number): DocumentSy
         if (!timer) timer = setTimeout(flush, FLUSH_MS);
       }),
       model.onWillDispose(() => {
-        if (timer) { clearTimeout(timer); timer = null; }
+        cancelTimer();
+        timerCancellers.delete(rel);
         pending = [];
         perModel.get(rel)?.forEach((d) => d.dispose());
         perModel.delete(rel);
@@ -155,6 +167,11 @@ export function startDocumentSync(monaco: Monaco, projectId: number): DocumentSy
     dispose() {
       stopped = true;
       createSub.dispose();
+      // Cancela qualquer batch de 16ms em voo dos modelos ainda vivos (eles não
+      // disparam onWillDispose nesta teardown — os modelos sobrevivem à troca de
+      // projeto, só param de ser sincronizados).
+      for (const cancel of timerCancellers.values()) cancel();
+      timerCancellers.clear();
       for (const disposers of perModel.values()) disposers.forEach((d) => d.dispose());
       perModel.clear();
       flushers.clear();

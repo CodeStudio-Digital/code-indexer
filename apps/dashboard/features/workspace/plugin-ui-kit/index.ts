@@ -11,5 +11,6 @@
 import { KIT_BASE } from './base.css.js';
 import { KIT_CONTROLS } from './controls.css.js';
 import { KIT_LAYOUT } from './layout.css.js';
+import { KIT_DATA } from './data.css.js';
 
-export const PLUGIN_UI_KIT_CSS = [KIT_BASE, KIT_CONTROLS, KIT_LAYOUT].join('\n');
+export const PLUGIN_UI_KIT_CSS = [KIT_BASE, KIT_CONTROLS, KIT_LAYOUT, KIT_DATA].join('\n');

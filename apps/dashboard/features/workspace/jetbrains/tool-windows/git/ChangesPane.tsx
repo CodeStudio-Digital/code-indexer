@@ -8,6 +8,7 @@
 import { useTranslation } from 'react-i18next';
 import { Check, Loader2, Minus, Plus, Trash2, Undo2 } from 'lucide-react';
 import { cn } from '../../../../../lib/utils.js';
+import { HoverLabelButton } from '../../../../../components/ui/hover-label-button.js';
 import { CollapsibleSection } from './CollapsibleSection.js';
 import { CommitBox } from './CommitBox.js';
 import { fileKind } from './file-kind.js';
@@ -80,14 +81,11 @@ export function ChangesPane({
           open={openSections.staged}
           onToggle={() => setOpenSections((s) => ({ ...s, staged: !s.staged }))}
           actions={
-            <button
-              type="button"
+            <HoverLabelButton
+              icon={Minus}
+              label={t('git.unstageAll')}
               onClick={() => void onUnstage(groups.staged.map((f) => f.path))}
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-              title={t('git.unstageAll')}
-            >
-              {t('git.unstageAll')}
-            </button>
+            />
           }
         >
           {groups.staged.map((f) => (
@@ -113,23 +111,18 @@ export function ChangesPane({
           open={openSections.unstaged}
           onToggle={() => setOpenSections((s) => ({ ...s, unstaged: !s.unstaged }))}
           actions={
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
+            <div className="flex items-center gap-1">
+              <HoverLabelButton
+                icon={Undo2}
+                label={t('git.discardAll')}
+                tone="destructive"
                 onClick={() => void onDiscard(groups.unstaged.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-destructive"
-                title={t('git.discardAllUnstaged')}
-              >
-                {t('git.discardAll')}
-              </button>
-              <button
-                type="button"
+              />
+              <HoverLabelButton
+                icon={Plus}
+                label={t('git.stageAll')}
                 onClick={() => void onStage(groups.unstaged.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-                title={t('git.stageAll')}
-              >
-                {t('git.stageAll')}
-              </button>
+              />
             </div>
           }
         >
@@ -166,23 +159,18 @@ export function ChangesPane({
             setOpenSections((s) => ({ ...s, untracked: !s.untracked }))
           }
           actions={
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
+            <div className="flex items-center gap-1">
+              <HoverLabelButton
+                icon={Trash2}
+                label={t('git.deleteAll')}
+                tone="destructive"
                 onClick={() => void onDiscard(groups.untracked.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-destructive"
-                title={t('git.deleteAllUntracked')}
-              >
-                {t('git.deleteAll')}
-              </button>
-              <button
-                type="button"
+              />
+              <HoverLabelButton
+                icon={Plus}
+                label={t('git.stageAll')}
                 onClick={() => void onStage(groups.untracked.map((f) => f.path))}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-                title={t('git.stageAllUntracked')}
-              >
-                {t('git.stageAll')}
-              </button>
+              />
             </div>
           }
         >

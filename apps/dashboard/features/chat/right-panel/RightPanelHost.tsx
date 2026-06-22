@@ -13,6 +13,7 @@
  */
 import {
   BarChart3,
+  Bell,
   ClipboardList,
   Compass,
   Gauge,
@@ -35,6 +36,7 @@ import { PlansPanel } from './PlansPanel.js';
 import { TasksPanel } from './TasksPanel.js';
 import { DiagramPanel } from './diagram/DiagramPanel.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
+import { NotificationsPanel } from '../notifications/NotificationsPanel.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
@@ -147,6 +149,12 @@ export function RightPanelHost(props: RightPanelHostProps) {
       return (
         <PanelChrome title={t('chat:rightRail.tasks', 'Tasks')} icon={ListChecks} onClose={onClose}>
           <TasksPanel sessionId={sessionId} active />
+        </PanelChrome>
+      );
+    case 'notifications':
+      return (
+        <PanelChrome title={t('chat:rightRail.notifications', 'Notifications')} icon={Bell} onClose={onClose}>
+          <NotificationsPanel sessionId={sessionId} />
         </PanelChrome>
       );
     case 'worker-log':

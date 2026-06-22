@@ -78,7 +78,7 @@ export function mountBuilderCheckpointRoutes(app: Hono, deps: ServerDeps): void 
   app.get('/api/projects/:id/checkpoints/:cid/thumbnail', (c) => {
     try {
       const projectId = parseIdParam(c);
-      const row = getBuilderCheckpoint(deps.db.raw(), parseCid(c));
+      const row = getBuilderCheckpoint(deps.db.projectScopedDb(projectId), parseCid(c));
       if (!row || row.project_id !== projectId || !row.screenshot_path) return notFound(c);
       const bytes = readFileSync(row.screenshot_path);
       return c.body(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, 200, {

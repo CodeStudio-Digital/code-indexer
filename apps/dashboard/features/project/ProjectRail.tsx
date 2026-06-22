@@ -2,11 +2,16 @@
  * Activity rail vertical do ProjectView — ícones core/analytics/plugins + toggle de
  * terminal. Extraído do ProjectView (W4 decompose). A config das abas vem do tabs-config.
  */
-import { TerminalSquare } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Settings2, TerminalSquare } from 'lucide-react';
+import type { Project } from '@mcp/shared/types.js';
 import { cn } from '../../lib/utils.js';
+import { apiCall } from '../../lib/api-client.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
+import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
 import { TABS, type ProjectTabId, type TabDef } from './tabs-config.js';
 
 interface ProjectRailProps {
@@ -20,9 +25,22 @@ interface ProjectRailProps {
 }
 
 export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs, extraCoreTabs = [] }: ProjectRailProps) {
+  const { t } = useTranslation(['projects']);
   const core = TABS.filter((t) => t.group === 'core');
   const analytics = TABS.filter((t) => t.group === 'analytics');
+  const [project, setProject] = useState<Project | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void apiCall<Project>('projects.get', { id: projectId })
+      .then((p) => { if (alive) setProject(p); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [projectId]);
+
   return (
+    <>
     <nav
       className="flex flex-col w-10 shrink-0 border-r bg-card/40 py-1 gap-0.5 items-center"
       aria-label="Project sections"
@@ -46,6 +64,22 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
             non-builder projects). Lives in the rail footer since the old
             ProjectTopBar that hosted it was removed. */}
         <LinkDesignSystemDialog projectId={projectId} />
+        {/* Project settings — opens the full settings modal (runtimes,
+            terminal, general, etc.). Above the terminal toggle. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              disabled={!project}
+              aria-label={t('settings.open')}
+              className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40"
+            >
+              <Settings2 className="h-4 w-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">{t('settings.open')}</TooltipContent>
+        </Tooltip>
         {/* Terminal toggle — sits at the bottom of the rail mirroring
             VS Code / JetBrains conventions. Active state reflects
             whether the bottom panel is currently open. */}
@@ -76,6 +110,16 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
         </Tooltip>
       </div>
     </nav>
+    {project && (
+      <ProjectSettingsModal
+        project={project}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        initialSection="general"
+        onSaved={() => void apiCall<Project>('projects.get', { id: projectId }).then(setProject).catch(() => undefined)}
+      />
+    )}
+    </>
   );
 }
 

@@ -262,7 +262,14 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   useEffect(() => {
     const unsubscribe = useWorkspaceStore.subscribe((state) => {
       if (state.activeProjectId === projectId) {
-        savePersistedTabs(projectId, state.openFiles, state.activeFilePath);
+        savePersistedTabs(
+          projectId,
+          state.openFiles,
+          state.activeFilePath,
+          state.panes,
+          state.splitDir,
+          state.activePaneId,
+        );
       }
     });
     return () => unsubscribe();

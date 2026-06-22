@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import { resolve } from 'node:path';
 import { loadConfig } from '@mcp/shared/utils/config.js';
+import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { getDB, promptStdin } from '../helpers.js';
 
 export function register(program: Command): void {
@@ -106,6 +107,7 @@ export function register(program: Command): void {
 
       const handle = await runCoder({
         session: sessionArg,
+        resolveRuntimeEnv: resolveAgentRuntimeEnv,
         userMessage: task,
         maxTurns: opts.maxTurns,
         planMode: opts.plan,

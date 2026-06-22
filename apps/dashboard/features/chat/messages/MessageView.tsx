@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, RotateCcw, Sparkles, User } from 'lucide-react';
-import type { AgentsGroup, ToolCallEvent } from '../../../hooks/useAgentStream.js';
+import type { AgentsGroup, StreamTask, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
 import { providerAccent } from '../constants.js';
@@ -24,6 +24,7 @@ import { ToolCallBlock } from './ToolCallBlock.js';
 import { TodoWriteBlock } from './TodoWriteBlock.js';
 import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
+import { deriveTaskCardState } from './task-card-state.js';
 
 interface MessageViewProps {
   message: PersistedMessage;
@@ -43,6 +44,9 @@ interface MessageViewProps {
   /** Persisted task list state from coder_tasks_state — used to overlay live
    *  task statuses on top of the frozen tool_use input snapshot. */
   tasksState?: PersistedTasksState | null;
+  /** tool_use id of the session's CURRENT task list. Only the card with this
+   *  id overlays `tasksState`; superseded cards render their frozen snapshot. */
+  activeTasksToolUseId?: string | null;
 }
 
 export const MessageView = React.memo(MessageViewInner, (prev, next) => {
@@ -56,6 +60,7 @@ export const MessageView = React.memo(MessageViewInner, (prev, next) => {
     prev.usage === next.usage &&
     prev.toolResultsById === next.toolResultsById &&
     prev.tasksState === next.tasksState &&
+    prev.activeTasksToolUseId === next.activeTasksToolUseId &&
     prev.providerId === next.providerId &&
     prev.onAnswer === next.onAnswer &&
     prev.onPlanResponse === next.onPlanResponse &&
@@ -78,6 +83,7 @@ function MessageViewInner({
   onFork,
   onRollback,
   tasksState,
+  activeTasksToolUseId,
 }: MessageViewProps) {
   const { t } = useTranslation('chat');
   const cacheRead = usage?.cache_read_tokens ?? 0;
@@ -127,7 +133,14 @@ function MessageViewInner({
         </div>
         <div className="rounded-2xl rounded-tl-sm border bg-card px-4 py-3 shadow-sm max-h-[60vh] overflow-y-auto">
           {message.content.map((b, i) =>
-            renderAssistantBlock(b, i, { onAnswer, onPlanResponse, onTasksResponse }, toolResultsById, tasksState),
+            renderAssistantBlock(
+              b,
+              i,
+              { onAnswer, onPlanResponse, onTasksResponse },
+              toolResultsById,
+              tasksState,
+              activeTasksToolUseId,
+            ),
           )}
         </div>
       </div>
@@ -437,6 +450,7 @@ export function renderAssistantBlock(
   handlers: PromptHandlers,
   toolResultsById: Map<string, { content: string; isError: boolean; image?: { mediaType: string; base64: string } }>,
   tasksState: PersistedTasksState | null | undefined,
+  activeTasksToolUseId?: string | null,
 ) {
   if (b.type === 'thinking') {
     return <ThinkingBlockView key={`think-${i}`} text={b.text ?? ''} />;
@@ -502,41 +516,39 @@ export function renderAssistantBlock(
     // readable list. This avoids dumping a giant raw JSON tool_use block on
     // the user when they reopen an old session.
     //
-    // We prefer the live coder_tasks_state row (passed via the tasksState
-    // prop) for runtime task statuses; fallback to the frozen tool_use.input
-    // snapshot when the row isn't loaded yet.
+    // The session keeps ONE coder_tasks_state row (latest submit_tasks wins),
+    // so only the ACTIVE card (matching activeTasksToolUseId) overlays the live
+    // `tasksState` for runtime status; superseded cards render their own frozen
+    // tool_use.input snapshot. See deriveTaskCardState for the resolved logic.
     const inp = (b.input ?? {}) as { summary?: string; tasks?: Array<Record<string, unknown>> };
-    const tasks = tasksState?.tasks
-      ? tasksState.tasks
-      : (Array.isArray(inp.tasks) ? inp.tasks : []).map((t, ti) => ({
-          id: String(t.id ?? `alias_${ti + 1}`),
-          title: String(t.title ?? ''),
-          description: String(t.description ?? ''),
-          files: Array.isArray(t.files) ? (t.files as string[]) : [],
-          references: Array.isArray(t.references)
-            ? (t.references as Array<{ type: string; value: string }>)
-            : [],
-          depends_on: Array.isArray(t.depends_on) ? (t.depends_on as string[]) : [],
-          suggested_mode: (t.suggested_mode === 'subagent' ? 'subagent' : 'inline') as 'inline' | 'subagent',
-          estimated_complexity: (['small', 'medium', 'large'].includes(String(t.estimated_complexity))
-            ? t.estimated_complexity
-            : 'medium') as 'small' | 'medium' | 'large',
-          status: 'pending' as const,
-        }));
-    // Detect approval/rejection from the tool_result text. The submit_tasks
-    // handler always returns one of the two formatTasks*Result shapes (or an
-    // err()) so we can pattern-match.
-    const resolvedStatus: 'approved' | 'rejected' | undefined = result
-      ? result.content.startsWith('Task list approved')
-        ? 'approved'
-        : 'rejected'
-      : undefined;
+    const frozenTasks: StreamTask[] = (Array.isArray(inp.tasks) ? inp.tasks : []).map((t, ti) => ({
+      id: String(t.id ?? `alias_${ti + 1}`),
+      title: String(t.title ?? ''),
+      description: String(t.description ?? ''),
+      files: Array.isArray(t.files) ? (t.files as string[]) : [],
+      references: Array.isArray(t.references)
+        ? (t.references as Array<{ type: string; value: string }>)
+        : [],
+      depends_on: Array.isArray(t.depends_on) ? (t.depends_on as string[]) : [],
+      suggested_mode: (t.suggested_mode === 'subagent' ? 'subagent' : 'inline') as 'inline' | 'subagent',
+      estimated_complexity: (['small', 'medium', 'large'].includes(String(t.estimated_complexity))
+        ? t.estimated_complexity
+        : 'medium') as 'small' | 'medium' | 'large',
+      status: 'pending' as const,
+    }));
+    const isActiveTaskCard = !!activeTasksToolUseId && b.id === activeTasksToolUseId;
+    const { tasks, resolved: resolvedStatus } = deriveTaskCardState({
+      isActive: isActiveTaskCard,
+      frozenTasks,
+      tasksState,
+      result,
+    });
     return (
       <TaskListReview
         key={`tl-${b.id}-${i}`}
         prompt={{
           tool_use_id: b.id ?? `tl-${i}`,
-          summary: tasksState?.summary || String(inp.summary ?? ''),
+          summary: (isActiveTaskCard && tasksState?.summary) || String(inp.summary ?? ''),
           tasks,
           version: 1,
           resolved: resolvedStatus,
@@ -549,6 +561,7 @@ export function renderAssistantBlock(
   if (b.name === 'ask_user') {
     const inp = (b.input ?? {}) as {
       question?: string;
+      header?: string;
       options?: Array<{ label: string; value: string }>;
       allow_freeform?: boolean;
     };
@@ -559,6 +572,7 @@ export function renderAssistantBlock(
           question={{
             id: b.id ?? `q-${i}`,
             question: String(inp.question ?? ''),
+            header: inp.header,
             options: inp.options,
             allowFreeform: Boolean(inp.allow_freeform),
           }}
@@ -581,6 +595,7 @@ export function renderAssistantBlock(
           question={{
             id: b.id ?? `q-${i}`,
             question: String(inp.question ?? ''),
+            header: inp.header,
             options: inp.options,
             allowFreeform: Boolean(inp.allow_freeform),
             resolved: answer,

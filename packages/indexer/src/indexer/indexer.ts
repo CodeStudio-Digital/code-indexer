@@ -300,8 +300,10 @@ export class IndexAgent {
       console.error('[indexer] Orphan sweep failed:', err);
     }
 
-    // Update project counters + finish run.
-    const stats = this.db.getStats(project.id);
+    // Update project counters + finish run. `fresh` bypasses the stats read
+    // cache — we're about to PERSIST these counts, so a stale cached read would
+    // write a wrong file_count/symbol_count to the projects row.
+    const stats = this.db.getStats(project.id, { fresh: true });
     this.db.updateProject(project.id, { file_count: stats.file_count, symbol_count: stats.symbol_count, last_indexed: new Date().toISOString() });
     const totalErrors = errorCount + pipelineErrorCount;
     const status: RunStatus = errorCount > toIndex.length / 2

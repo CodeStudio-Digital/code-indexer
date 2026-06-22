@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import { runCoder } from '@mcp/code-agent/index.js';
+import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
@@ -588,6 +589,7 @@ export function mountCoderStreamRoutes(
         }
         const handle = await runCoder({
           session: { id },
+          resolveRuntimeEnv: resolveAgentRuntimeEnv,
           userMessage: body.content,
           attachments: body.attachments,
           maxTurns: body.max_turns,
@@ -720,6 +722,7 @@ export function mountCoderStreamRoutes(
         }
         const handle = await runCoder({
           session: { id },
+          resolveRuntimeEnv: resolveAgentRuntimeEnv,
           userMessage: '',
           maxTurns: body.max_turns,
           planMode: body.plan_mode,

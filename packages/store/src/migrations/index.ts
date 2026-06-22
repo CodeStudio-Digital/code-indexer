@@ -175,6 +175,16 @@ import { apiRequestFolder158 } from './158_api_request_folder.js';
 import { apiCollectionFolders159 } from './159_api_collection_folders.js';
 import { fileLocalHistory160 } from './160_file_local_history.js';
 import { projectDbSplit161 } from './161_project_db_split.js';
+import { telemetryProjectId162 } from './162_telemetry_project_id.js';
+import { dropSessionSplitScaffolding164 } from './164_drop_session_split_scaffolding.js';
+import { vectorsSplit165 } from './165_vectors_split.js';
+import { dbPurgedAt166 } from './166_db_purged_at.js';
+import { projectRuntimeVersions167 } from './167_project_runtime_versions.js';
+import { projectRuntimeConfig168 } from './168_project_runtime_config.js';
+import { projectPackageManagers169 } from './169_project_package_managers.js';
+import { projectGitRemote170 } from './170_project_git_remote.js';
+import { apiDocFields171 } from './171_api_doc_fields.js';
+import { apiDocPagesExamples172 } from './172_api_doc_pages_examples.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -366,6 +376,16 @@ export const MIGRATIONS: Migration[] = [
   apiCollectionFolders159,
   fileLocalHistory160,
   projectDbSplit161,
+  telemetryProjectId162,
+  dropSessionSplitScaffolding164,
+  vectorsSplit165,
+  dbPurgedAt166,
+  projectRuntimeVersions167,
+  projectRuntimeConfig168,
+  projectPackageManagers169,
+  projectGitRemote170,
+  apiDocFields171,
+  apiDocPagesExamples172,
 ];
 
 /**

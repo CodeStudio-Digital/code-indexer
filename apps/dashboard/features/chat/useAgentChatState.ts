@@ -14,6 +14,9 @@ import { getCurrentTurnText, getPersistedAssistantText } from './utils.js';
 interface UseAgentChatStateArgs {
   selectedId: number | null;
   doneReason: string | null;
+  /** Bumped on `tasks_posted` + `message_complete` so the persisted task card
+   *  refetches the latest list/approval mid-run, not only on run end. */
+  tasksRefreshTick: number;
   sessionData: SessionData | null;
   currentTurn: AssistantTurn | null;
   setProvider: (p: string) => void;
@@ -31,6 +34,7 @@ interface UseAgentChatStateArgs {
 export function useAgentChatState({
   selectedId,
   doneReason,
+  tasksRefreshTick,
   sessionData,
   currentTurn,
   setProvider,
@@ -61,8 +65,10 @@ export function useAgentChatState({
     };
   }, []);
 
-  // Persisted task list state — refetched on session select and on every run
-  // completion so MessageView can display live runtime status on old sessions.
+  // Persisted task list state — refetched on session select, on every run
+  // completion, AND whenever the task list identity/approval changes mid-run
+  // (tasksRefreshTick) so the TaskListReview card never shows a stale list or
+  // lingering Approve buttons after the user approves a fresh proposal.
   useEffect(() => {
     if (!selectedId) {
       setTasksState(null);
@@ -80,7 +86,7 @@ export function useAgentChatState({
     return () => {
       cancelled = true;
     };
-  }, [selectedId, doneReason]);
+  }, [selectedId, doneReason, tasksRefreshTick]);
 
   // Aggregate session stats — fetched on session select and on every run completion.
   useEffect(() => {

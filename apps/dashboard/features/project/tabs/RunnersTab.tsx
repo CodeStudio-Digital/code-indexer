@@ -4,21 +4,23 @@
  * as long-lived PTYs that survive navigation. Left: detected commands +
  * active runs; right: live output of the selected run.
  *
- * Runs and their output live in the main process (shared PtyManager), so
- * leaving and returning to this tab re-attaches to the same processes.
+ * Runtime/shell selection + management lives in the Project Settings modal
+ * (the gear button in the header), not inline chips.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Settings2 } from 'lucide-react';
 import type { DetectedRunners } from '@mcp/api-bus';
+import type { Project } from '@mcp/shared/types.js';
 import { apiCall } from '../../../lib/api-client.js';
 import { useRunningTasks, tasksForProject } from '../../../state/running-tasks.js';
 import { DetectedList } from './runners/DetectedList.js';
 import { ActiveList } from './runners/ActiveList.js';
 import { RunnerOutput } from './runners/RunnerOutput.js';
-import { NodeChip } from './runners/NodeChip.js';
-import { RunnerShellChip } from './runners/RunnerShellChip.js';
+import { ProjectSettingsModal } from '../settings/ProjectSettingsModal.js';
+import { TERMINAL_SURFACE_BG } from '../../shared/terminal/SingleTerminal.js';
+import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 
 interface RunnersTabProps {
   projectId: number;
@@ -26,13 +28,24 @@ interface RunnersTabProps {
 
 export function RunnersTab({ projectId }: RunnersTabProps) {
   const { t } = useTranslation(['projects', 'common']);
+  const dark = useIsDark();
   const [detected, setDetected] = useState<DetectedRunners | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const allTasks = useRunningTasks((s) => s.tasks);
   const tasks = tasksForProject(allTasks, projectId);
+
+  useEffect(() => {
+    let alive = true;
+    void apiCall<Project>('projects.get', { id: projectId })
+      .then((p) => { if (alive) setProject(p); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [projectId]);
 
   const detect = useCallback(async () => {
     setLoading(true);
@@ -62,9 +75,9 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
   return (
     <div className="h-full flex min-h-0">
       <div className="w-80 shrink-0 border-r flex flex-col min-h-0 overflow-auto">
-        <div className="px-3 py-2 border-b space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold">{t('runners.title')}</span>
+        <div className="px-3 py-2 border-b flex items-center justify-between">
+          <span className="text-xs font-semibold">{t('runners.title')}</span>
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => void detect()}
@@ -74,9 +87,17 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
             >
               <RefreshCw className="h-3.5 w-3.5" />
             </button>
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              disabled={!project}
+              className="text-muted-foreground hover:text-foreground disabled:opacity-40"
+              aria-label={t('settings.open')}
+              title={t('settings.open')}
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+            </button>
           </div>
-          <NodeChip projectId={projectId} />
-          <RunnerShellChip projectId={projectId} />
         </div>
         <ActiveList tasks={tasks} selectedId={selectedId} onSelect={setSelectedId} />
         <DetectedList
@@ -87,7 +108,10 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
           onStarted={setSelectedId}
         />
       </div>
-      <div className="flex-1 min-w-0 relative bg-[#0b0d12]">
+      <div
+        className="flex-1 min-w-0 relative"
+        style={{ background: dark ? TERMINAL_SURFACE_BG.dark : TERMINAL_SURFACE_BG.light }}
+      >
         {selected ? (
           <RunnerOutput key={selected.taskId} task={selected} />
         ) : (
@@ -96,6 +120,15 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
           </div>
         )}
       </div>
+      {project && (
+        <ProjectSettingsModal
+          project={project}
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          initialSection="node"
+          onSaved={() => void apiCall<Project>('projects.get', { id: projectId }).then(setProject).catch(() => undefined)}
+        />
+      )}
     </div>
   );
 }

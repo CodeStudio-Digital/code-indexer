@@ -6,6 +6,8 @@ import { mountApiSendRoute } from './send.routes.js';
 import { mountApiRegressionRoutes } from './regression.routes.js';
 import { mountApiCodegenRoute } from './codegen.routes.js';
 import { mountApiImportRoutes } from './import.routes.js';
+import { mountApiScriptAssistRoute } from './script-assist.routes.js';
+import { mountApiDocRoutes } from './docs.routes.js';
 
 /**
  * API client (in-app Postman) routes — collections/requests/environments CRUD,
@@ -19,4 +21,6 @@ export function mountApiClientRoutes(app: Hono, deps: ServerDeps): void {
   mountApiRegressionRoutes(app, deps);
   mountApiCodegenRoute(app, deps);
   mountApiImportRoutes(app, deps);
+  mountApiScriptAssistRoute(app, deps);
+  mountApiDocRoutes(app, deps);
 }

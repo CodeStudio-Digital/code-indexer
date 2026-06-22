@@ -1,0 +1,111 @@
+
+> @cloudstudio/cloud-api@0.0.0 dev D:\MCP\services\cloud-api
+> wrangler dev
+
+
+ ⛅️ wrangler 4.100.0 (update available 4.103.0)
+───────────────────────────────────────────────
+Using secrets defined in .dev.vars
+Your Worker has access to the following bindings:
+Binding                                                                                     Resource                  Mode
+env.LOGIN_THROTTLE (LoginThrottleDO)                                                        Durable Object            local
+env.RATE_LIMIT (RateLimitDO)                                                                Durable Object            local
+env.CACHE (5a33b2b91d004648b0a72a70d69bf1a4)                                                KV Namespace              local
+env.EMAIL (unrestricted - senders: no-reply@public.codestudio.digital)                      Send Email                local
+env.DB (codestudio-cloud)                                                                   D1 Database               local
+env.ASSETS (codestudio-cloud-assets)                                                        R2 Bucket                 local
+env.ENVIRONMENT ("(hidden)")                                                                Environment Variable      local
+env.APP_BASE_URL ("https://app.codestudio.dev")                                             Environment Variable      local
+env.SHARE_BASE_URL ("https://share.codestudio.dev")                                         Environment Variable      local
+env.EMAIL_FROM ("no-reply@public.codestudio.digital")                                       Environment Variable      local
+env.ALLOWED_ORIGINS ("https://share.codestudio.dev,https://...")                            Environment Variable      local
+env.ACCESS_SIGNING_SECRET ("(hidden)")                                                      Environment Variable      local
+env.SHARE_SIGNING_PRIVKEY ("(hidden)")                                                      Environment Variable      local
+env.IP_HASH_SALT ("(hidden)")                                                               Environment Variable      local
+env.EMAIL_DEBUG_LOG_BODY ("(hidden)")                                                       Environment Variable      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://127.0.0.1:8787
+[wrangler:info] GET /v1/health 200 OK (9ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_owner_1692262060@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\3844e7a7-795b-494c-be14-29e390c39921.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\6409bf13-e6e5-41e7-a1f8-2b54090db6ce.html
+[wrangler:info] POST /v1/auth/signup 201 Created (544ms)
+[wrangler:info] POST /v1/orgs 201 Created (317ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_m1_1555319633@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\e2b9213f-feb4-43f5-b7c6-d9b524e44bce.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\87b8bb29-7eeb-463c-a327-70e7df1083b1.html
+[wrangler:info] POST /v1/auth/signup 201 Created (463ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/invites 201 Created (116ms)
+[wrangler:info] POST /v1/orgs/invites/accept 200 OK (635ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_m2_1680344644@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\4c8cb815-ba8b-4c25-9c30-5d67ce5a4031.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\984a68d5-8eb8-4f0e-8865-4d603fa9f382.html
+[wrangler:info] POST /v1/auth/signup 201 Created (371ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/invites 201 Created (69ms)
+[wrangler:info] POST /v1/orgs/invites/accept 200 OK (232ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_m3_1296191136@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\8c1977e0-dbc0-4c7a-89b4-b9cd34f8d75e.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\add091b9-54d1-4b60-9ed1-3ca3bc03f8f9.html
+[wrangler:info] POST /v1/auth/signup 201 Created (357ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/invites 201 Created (146ms)
+[wrangler:info] POST /v1/orgs/invites/accept 200 OK (216ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_m4_1080970386@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\ddab2a94-e5bb-477f-ba7c-df632ced087e.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\9a68a10a-5b81-4d9a-ac17-0d27dd1ef07e.html
+[wrangler:info] POST /v1/auth/signup 201 Created (356ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/invites 201 Created (70ms)
+[wrangler:info] POST /v1/orgs/invites/accept 200 OK (148ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_m5_1215611200@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\72ecf1b0-c17f-406c-8e19-7d52230ab19c.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\ec07e56f-09db-48e9-986c-44c4c0987459.html
+[wrangler:info] POST /v1/auth/signup 201 Created (336ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/invites 201 Created (99ms)
+[wrangler:info] POST /v1/orgs/invites/accept 402 Payment Required (187ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_viewer_1510245905@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\d08d7024-ac35-43eb-8c5e-546b102ed45e.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\2bf2514c-19cc-4883-9248-f6fe8a82bdc8.html
+[wrangler:info] POST /v1/auth/signup 201 Created (335ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/invites 201 Created (100ms)
+[wrangler:info] POST /v1/orgs/invites/accept 200 OK (157ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/billing/checkout 501 Not Implemented (77ms)
+[34msend_email binding called with MessageBuilder:[39m
+From: "CodeStudio" <no-reply@public.codestudio.digital>
+To: p4b_rando_1015202075@example.com
+Subject: Confirm your CodeStudio email
+
+Text: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-text\d3e50272-3ee6-41e6-8cf4-4d26bb963270.txt
+HTML: C:\Users\maico\AppData\Local\Temp\miniflare-8e52d674b32a4b2a786403a337bc91d0\email\email-html\7d3a7eda-1ff5-4c27-b631-db9352880885.html
+[wrangler:info] POST /v1/auth/signup 201 Created (334ms)
+[wrangler:info] POST /v1/orgs/8c9aacdf-db8c-4970-a15b-b5aceb4a8c3b/billing/checkout 403 Forbidden (89ms)
+D:\MCP\services\cloud-api:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @cloudstudio/cloud-api@0.0.0 dev: `wrangler dev`
+Exit status 4294967295

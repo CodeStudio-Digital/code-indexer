@@ -9,14 +9,14 @@
  * (set by AppShell's theme toggle). Language inference is by extension —
  * Monaco's own registry handles 80+ languages out of the box.
  *
- * Day 7 wiring:
+ * Editor wiring:
  *   - onChange pushes content into the workspace store, flagging dirty
- *   - Ctrl/Cmd+S calls files.write and clears the dirty flag
  *   - Tab switches re-create the model (Monaco keeps undo history per
  *     model — the editor instance is reused, the model swaps)
+ *   (Save is dispatched via the keymap command registry — see 'file.save'.)
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as MonacoNs from 'monaco-editor';
 import { Loader2 } from 'lucide-react';
@@ -25,8 +25,9 @@ import { Loader2 } from 'lucide-react';
 import { languageIdForPath as inferLanguage } from '@mcp/shared/utils/language-id.js';
 import { useWorkspaceStore, type OpenFile } from '../../../state/workspace.js';
 import { useUiDensity } from '../../../state/ui-density.js';
-import { registerLspProviders } from './lspProvider.js';
+import { registerLspProviders, unregisterLspProviders } from './lspProvider.js';
 import {
+  getActiveEditor,
   initEditorModels,
   restoreViewStateFor,
   saveViewStateFor,
@@ -38,6 +39,9 @@ import { consumePendingReveal } from './pending-reveal.js';
 import { registerChatActions } from './chat-actions.js';
 import { useEnsureFileContent } from './useEnsureFileContent.js';
 import { useConflictMarkers } from './useConflictMarkers.js';
+import { useChangeMarkers } from './useChangeMarkers.js';
+import { useRunGutter } from './run/useRunGutter.js';
+import { registerRunActions } from './run/run-actions.js';
 import { applyMonacoKeymap } from './monaco-keymap.js';
 import { useKeymapStore } from '../../../keymap/keymap-store.js';
 
@@ -48,9 +52,17 @@ function detectDarkMode(): boolean {
 
 interface MonacoMountProps {
   file: OpenFile;
+  /** Called when this editor gains focus — lets the split layout track the active pane. */
+  onFocusPane?: () => void;
+  /**
+   * Whether this pane is the focused one. Gates the mount-time
+   * `setActiveEditor` so a restored split doesn't let mount ORDER (rather than
+   * focus) decide the global active editor. Defaults true (single-pane case).
+   */
+  isActivePane?: boolean;
 }
 
-export function MonacoMount({ file }: MonacoMountProps) {
+export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMountProps) {
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
   // Chave do modelo Monaco namespaced por projectId (W1b): keia o `path` da URI e as
   // chaves de view-state/LRU. O backend LSP continua recebendo o relpath limpo
@@ -71,6 +83,12 @@ export function MonacoMount({ file }: MonacoMountProps) {
   // Inline conflict-marker decorations + Accept CodeLens, when this file is
   // a conflicted working-tree file (gated inside the hook).
   useConflictMarkers(file, editorInstance, monacoInstance);
+  // IntelliJ-style git change markers: green/blue/triangle gutter bars vs the
+  // file's HEAD baseline, live as you type (gated to git repos inside the hook).
+  useChangeMarkers(file, editorInstance, monacoInstance);
+  // IntelliJ-style ▶ run gutter for package.json/composer.json scripts and
+  // Python __main__ (gated inside the hook to the relevant files).
+  useRunGutter(file, editorInstance, monacoInstance);
 
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
@@ -78,28 +96,57 @@ export function MonacoMount({ file }: MonacoMountProps) {
       setEditorInstance(editor);
       setMonacoInstance(monaco);
       initEditorModels(monaco);
-      setActiveEditor(editor);
+      // Split-safe active-editor tracking: with two panes mounted, the global
+      // active editor (commands: go-to-line, format, add-to-chat) must follow
+      // FOCUS, not mount order. Set it on mount only for the active pane so a
+      // restored split is deterministic; subsequent clicks update it via the
+      // focus listener. Also notify the layout so the file tree / Quick Open
+      // open into the focused pane.
+      if (isActivePane) setActiveEditor(editor);
+      editor.onDidFocusEditorText(() => {
+        setActiveEditor(editor);
+        onFocusPane?.();
+      });
       // Editor-level keymap (Ctrl+D duplicate, Ctrl+B declaration, …) per
       // the active preset — IntelliJ by default.
       applyMonacoKeymap(monaco, useKeymapStore.getState().preset);
-      // Wire LSP providers on first mount for this project. The registry
-      // is idempotent per projectId, so re-mounts (tab switches) are
-      // cheap. Switching project tears the previous set down.
-      registerLspProviders(monaco, file.projectId);
+      // NB: LSP providers are NOT wired here. Their lifetime is owned by the
+      // project-scoped effect below (register on mount / projectId change,
+      // unregister on cleanup) so switching or closing a project tears the
+      // previous project's providers down instead of leaking them.
       // Copilot-rail actions: "Add Selection to Chat" (Ctrl/Cmd+I) and
       // "Add File to Chat" in the context menu. They read the active file
       // from the workspace store at run time, so registering once is safe.
       registerChatActions(editor, monaco);
+      // "Run File" (Shift+F10) — runs the active file with its runtime.
+      registerRunActions(editor, monaco);
       // Cursor/scroll/selection across UNMOUNTS (diff/welcome detours) —
       // while mounted, the wrapper handles per-path swaps itself.
       restoreViewStateFor(modelKey, editor);
     },
-    [file.projectId, file.path, modelKey],
+    [modelKey, onFocusPane, isActivePane],
   );
 
-  // Release the active-editor handle on unmount (commands no-op cleanly).
+  // LSP providers are project-scoped and live on the singleton Monaco namespace.
+  // Tie their lifetime to this mount so switching/closing a project tears the
+  // previous project's providers (documentSync listeners, diagnostics stream,
+  // completion/nav providers) down — otherwise they accumulate on every switch.
+  // Keyed on projectId (NOT path): within-project tab switches keep the same
+  // registration; a project switch swaps it; unmount (Welcome/diff/markdown,
+  // closing the last tab) tears it down. `monacoInstance` is the global Monaco
+  // namespace (stable identity), so this re-runs only when monaco first loads
+  // or the project changes — not on every keystroke or tab swap.
+  useEffect(() => {
+    if (!monacoInstance) return;
+    registerLspProviders(monacoInstance, file.projectId);
+    return () => unregisterLspProviders(file.projectId);
+  }, [monacoInstance, file.projectId]);
+
+  // Release the active-editor handle on unmount — but only if WE are the active
+  // one. With a split, the other pane may currently hold focus; nulling it here
+  // would break its commands.
   useEffect(() => () => {
-    if (editorRef.current) setActiveEditor(null);
+    if (editorRef.current && getActiveEditor() === editorRef.current) setActiveEditor(null);
   }, []);
 
   // Track the active path: save view state when leaving a file (or
@@ -147,6 +194,98 @@ export function MonacoMount({ file }: MonacoMountProps) {
   const language = inferLanguage(file.path);
   const dark = detectDarkMode();
 
+  // Stable options reference: @monaco-editor/react re-applies editor.updateOptions
+  // whenever this object's identity changes, and MonacoMount re-renders on every
+  // keystroke (setContent). Memoizing on the only dynamic value (font size) means
+  // updateOptions fires on density change, not per keystroke — and with a split
+  // that's two editors saved from the per-keystroke churn. (Theme is a separate prop.)
+  const editorOptions = useMemo<MonacoNs.editor.IStandaloneEditorConstructionOptions>(
+    () => ({
+      // ResizeObserver-driven relayout. Load-bearing for tab keep-alive
+      // (MCP_TAB_KEEPALIVE): the editor stays mounted while hidden, so it
+      // must re-measure itself on reveal / window-resize instead of relying
+      // on a remount. Modern Monaco uses a ResizeObserver here (cheap).
+      automaticLayout: true,
+      // Glyph margin hosts the run ▶ (and conflict/merge gutters). Explicit
+      // so the run gutter always has a column to paint into.
+      glyphMargin: true,
+      fontSize: editorFontPx,
+      fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, "Liberation Mono", Menlo, monospace',
+      fontLigatures: true,
+      fontWeight: '400',
+      lineHeight: 1.55,
+      letterSpacing: 0,
+      // Bracket pair colorization (Monaco ≥0.36) — JetBrains-style depth coloring.
+      bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: true },
+      guides: {
+        bracketPairs: 'active',
+        bracketPairsHorizontal: true,
+        indentation: true,
+      },
+      // Minimap: subtle, small, no rendering of overview ruler so it
+      // doesn't fight the gutter.
+      minimap: {
+        enabled: true,
+        renderCharacters: false,
+        maxColumn: 100,
+        scale: 1,
+        showSlider: 'mouseover',
+      },
+      scrollBeyondLastLine: false,
+      smoothScrolling: true,
+      cursorBlinking: 'smooth',
+      cursorSmoothCaretAnimation: 'on',
+      wordWrap: 'off',
+      tabSize: 2,
+      renderLineHighlight: 'gutter',
+      renderWhitespace: 'selection',
+      stickyScroll: { enabled: true, defaultModel: 'outlineModel' },
+      formatOnPaste: true,
+      formatOnType: false,
+      // Padding around the content area — keeps the first line off
+      // the topbar shadow.
+      padding: { top: 8, bottom: 8 },
+      scrollbar: {
+        verticalScrollbarSize: 10,
+        horizontalScrollbarSize: 10,
+        useShadows: false,
+      },
+      // The default scrollbars are okay; we hide the rulers since most
+      // projects don't have a single shared line-length convention.
+      rulers: [],
+      // Acessory features that punch above their weight.
+      folding: true,
+      foldingHighlight: true,
+      showFoldingControls: 'mouseover',
+      unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
+      // IntelliJ-style completion widget: no generic word-soup (`abc`),
+      // namespace/signature columns, locality bonus on top of our sortText.
+      suggest: {
+        showStatusBar: true,
+        showWords: false, // kill `abc php`/`abc public` word completions
+        showInlineDetails: true, // signature inline after the label
+        localityBonus: true, // nearby symbols float up (additive to sortText)
+      },
+      wordBasedSuggestions: 'off',
+      inlayHints: { enabled: 'onUnlessPressed' },
+      // Navigation behaviour for Ctrl+Click on a symbol.
+      //   - definitions/type definitions: `'goto'` jumps to the first result
+      //     immediately; the default `'peek'` popup doesn't fire our editor
+      //     opener consistently on double-click, so it reads as broken.
+      //   - implementations: keep `'gotoAndPeek'` — usually 1, but the peek
+      //     list is useful when N>1.
+      //   - references: `'gotoAndPeek'` for the same reason.
+      gotoLocation: {
+        multipleDefinitions: 'goto',
+        multipleTypeDefinitions: 'goto',
+        multipleImplementations: 'gotoAndPeek',
+        multipleReferences: 'gotoAndPeek',
+        multipleDeclarations: 'goto',
+      },
+    }),
+    [editorFontPx],
+  );
+
   if (file.content === null) {
     return (
       <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground gap-2">
@@ -173,99 +312,7 @@ export function MonacoMount({ file }: MonacoMountProps) {
       theme={dark ? 'vs-dark' : 'vs'}
       onMount={handleMount}
       onChange={handleChange}
-      options={{
-        // ResizeObserver-driven relayout. Load-bearing for tab keep-alive
-        // (MCP_TAB_KEEPALIVE): the editor stays mounted while hidden, so it
-        // must re-measure itself on reveal / window-resize instead of relying
-        // on a remount. Modern Monaco uses a ResizeObserver here (cheap).
-        automaticLayout: true,
-        fontSize: editorFontPx,
-        fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, "Liberation Mono", Menlo, monospace',
-        fontLigatures: true,
-        fontWeight: '400',
-        lineHeight: 1.55,
-        letterSpacing: 0,
-        // Bracket pair colorization (Monaco ≥0.36) — JetBrains-style depth coloring.
-        bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: true },
-        guides: {
-          bracketPairs: 'active',
-          bracketPairsHorizontal: true,
-          indentation: true,
-        },
-        // Minimap: subtle, small, no rendering of overview ruler so it
-        // doesn't fight the gutter.
-        minimap: {
-          enabled: true,
-          renderCharacters: false,
-          maxColumn: 100,
-          scale: 1,
-          showSlider: 'mouseover',
-        },
-        scrollBeyondLastLine: false,
-        smoothScrolling: true,
-        cursorBlinking: 'smooth',
-        cursorSmoothCaretAnimation: 'on',
-        wordWrap: 'off',
-        tabSize: 2,
-        renderLineHighlight: 'gutter',
-        renderWhitespace: 'selection',
-        stickyScroll: { enabled: true, defaultModel: 'outlineModel' },
-        formatOnPaste: true,
-        formatOnType: false,
-        // Padding around the content area — keeps the first line off
-        // the topbar shadow.
-        padding: { top: 8, bottom: 8 },
-        scrollbar: {
-          verticalScrollbarSize: 10,
-          horizontalScrollbarSize: 10,
-          useShadows: false,
-        },
-        // The default scrollbars are okay; we hide the rulers since most
-        // projects don't have a single shared line-length convention.
-        rulers: [],
-        // Acessory features that punch above their weight.
-        folding: true,
-        foldingHighlight: true,
-        showFoldingControls: 'mouseover',
-        unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
-        // IntelliJ-style completion widget: no generic word-soup (`abc`),
-        // namespace/signature columns, locality bonus on top of our sortText.
-        suggest: {
-          showStatusBar: true,
-          showWords: false,        // kill `abc php`/`abc public` word completions
-          showInlineDetails: true, // signature inline after the label
-          localityBonus: true,     // nearby symbols float up (additive to sortText)
-        },
-        wordBasedSuggestions: 'off',
-        inlayHints: { enabled: 'onUnlessPressed' },
-        // Navigation behaviour for Ctrl+Click on a symbol.
-        //   - definitions:        goto first result immediately. The
-        //                         default `'peek'` shows an inline popup
-        //                         and double-click on a row is supposed
-        //                         to open the file — that round-trip
-        //                         through Monaco's reference search
-        //                         widget doesn't fire our editor opener
-        //                         consistently, so the user perceives
-        //                         the navigation as broken. `'goto'`
-        //                         skips the popup entirely and our
-        //                         opener fires every time.
-        //   - type definitions:   same reasoning.
-        //   - implementations:    keep `'gotoAndPeek'` — usually 1, but
-        //                         when N>1 the peek list is useful.
-        //   - references:         `'view'` opens the references view
-        //                         instead of inline peek (still a popup
-        //                         but a more reliable widget on
-        //                         double-click). If we wire a dedicated
-        //                         References pane later, switch to a
-        //                         custom action.
-        gotoLocation: {
-          multipleDefinitions: 'goto',
-          multipleTypeDefinitions: 'goto',
-          multipleImplementations: 'gotoAndPeek',
-          multipleReferences: 'gotoAndPeek',
-          multipleDeclarations: 'goto',
-        },
-      }}
+      options={editorOptions}
     />
   );
 }

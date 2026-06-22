@@ -10,6 +10,7 @@
 import {
   ArrowRight,
   Check,
+  ChevronRight,
   Loader2,
 } from 'lucide-react';
 import { cn } from '../../../../lib/utils.js';
@@ -50,14 +51,6 @@ export function ActionRow({ icon: Icon, label, hint, busy, onClick, filter }: Ac
   );
 }
 
-export function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="px-2.5 py-1 text-[9.5px] uppercase tracking-[0.08em] text-muted-foreground border-t bg-card/40">
-      <span className="font-semibold">{children}</span>
-    </div>
-  );
-}
-
 export interface BranchRowData {
   name: string;
   isCurrent: boolean;
@@ -72,17 +65,21 @@ export interface BranchRowProps {
   branch: BranchRowData;
   busy: boolean;
   onClick: () => void;
+  /** Trailing `>` signalling that clicking opens an actions panel. */
+  chevron?: boolean;
+  /** Highlight as the row whose actions are currently shown beside the list. */
+  selected?: boolean;
 }
 
-export function BranchRow({ branch, busy, onClick }: BranchRowProps) {
+export function BranchRow({ branch, busy, onClick, chevron, selected }: BranchRowProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={busy}
       className={cn(
-        'w-full flex items-center gap-1.5 px-2.5 py-1 text-left transition-colors',
-        'hover:bg-muted/40 disabled:opacity-60',
+        'group/br w-full flex items-center gap-1.5 px-2.5 py-1 text-left transition-colors disabled:opacity-60',
+        selected ? 'bg-muted' : 'hover:bg-muted/40',
       )}
       title={branch.tipSubject ? `${branch.name}\n${branch.tipSubject}` : branch.name}
     >
@@ -106,6 +103,9 @@ export function BranchRow({ branch, busy, onClick }: BranchRowProps) {
       <span className="ml-auto flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
         {branch.ahead > 0 && <span className="text-emerald-400">↑{branch.ahead}</span>}
         {branch.behind > 0 && <span className="text-sky-400">↓{branch.behind}</span>}
+        {chevron && (
+          <ChevronRight className={cn('h-3 w-3 text-muted-foreground/50', selected && 'text-foreground')} />
+        )}
       </span>
     </button>
   );

@@ -9,16 +9,31 @@
  * it is fully unit-testable without the Stripe SDK or a live account.
  */
 import { asAccountId } from '@cloudstudio/cloud-kernel';
-import type { PaymentGateway, PlanId, SubStatus, SubscriptionEvent } from '@cloudstudio/cloud-billing';
+import type { CheckoutSession, PaymentGateway, PlanId, SubStatus, SubscriptionEvent } from '@cloudstudio/cloud-billing';
 
 export interface StripeConfig {
   secretKey?: string;
   webhookSecret?: string;
   /** Stripe Price id for the Pro plan; required for live checkout. */
   proPriceId?: string;
+  /** Stripe Price id for the per-seat Teams plan (quantity = writer seats). */
+  teamsPriceId?: string;
   appBaseUrl: string;
   /** Tolerance for the webhook timestamp, ms. Default 5 min (Stripe's window). */
   toleranceMs?: number;
+}
+
+/** A verified org subscription change parsed from a Stripe webhook (the per-seat
+ *  parallel to the personal `SubscriptionEvent`). */
+export interface OrgSubscriptionEvent {
+  eventId: string;
+  orgId: string;
+  plan: PlanId;
+  status: SubStatus;
+  seats: number;
+  periodEndMs: number | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
 }
 
 const STRIPE_API = 'https://api.stripe.com/v1';
@@ -73,8 +88,65 @@ export class WebhookSignatureError extends Error {
   }
 }
 
+// ── Org (per-seat Teams) billing — parallel to the personal port, kept here so
+// all Stripe specifics live in one adapter. Reuses stripePost + the signature
+// verifier. The org webhook is dispatched by the billing route after the personal
+// parse returns null (the signature is verified there). ──────────────────────
+export async function orgCheckout(
+  cfg: StripeConfig,
+  input: { orgId: string; email: string; seats: number; stripeCustomerId?: string | null },
+): Promise<CheckoutSession> {
+  const body = new URLSearchParams({
+    mode: 'subscription',
+    'line_items[0][price]': cfg.teamsPriceId ?? '',
+    'line_items[0][quantity]': String(Math.max(1, input.seats)),
+    client_reference_id: input.orgId,
+    'subscription_data[metadata][orgId]': input.orgId,
+    'metadata[orgId]': input.orgId,
+    success_url: `${cfg.appBaseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${cfg.appBaseUrl}/billing/cancel`,
+  });
+  if (input.stripeCustomerId) body.set('customer', input.stripeCustomerId);
+  else body.set('customer_email', input.email);
+  const session = await stripePost(cfg.secretKey!, '/checkout/sessions', body);
+  return { url: String(session.url) };
+}
+
+export async function orgPortal(cfg: StripeConfig, stripeCustomerId: string): Promise<CheckoutSession> {
+  const body = new URLSearchParams({ customer: stripeCustomerId, return_url: `${cfg.appBaseUrl}/billing` });
+  const session = await stripePost(cfg.secretKey!, '/billing_portal/sessions', body);
+  return { url: String(session.url) };
+}
+
+/** Map a (signature-verified) Stripe subscription event to an org change. Returns
+ *  null unless it's a `customer.subscription.*` carrying `metadata.orgId`. Tier is
+ *  read from the line-item price; seats from its quantity. */
+export function mapOrgEvent(event: StripeEvent, teamsPriceId?: string): OrgSubscriptionEvent | null {
+  if (!event.type.startsWith('customer.subscription.')) return null;
+  const obj = event.data.object;
+  const orgId = (obj.metadata as Record<string, string> | undefined)?.orgId;
+  if (!orgId) return null;
+  const status = mapStatus(String(obj.status ?? ''), event.type);
+  const item = ((obj.items as { data?: Array<Record<string, unknown>> } | undefined)?.data ?? [])[0];
+  const seats = item && typeof item.quantity === 'number' ? item.quantity : 1;
+  // Today the only org price is Teams; an enterprise price id would branch here.
+  void teamsPriceId;
+  const plan: PlanId = status === 'active' || status === 'trialing' ? 'team' : 'free';
+  const periodEnd = obj.current_period_end;
+  return {
+    eventId: event.id,
+    orgId,
+    plan,
+    status,
+    seats: Math.max(1, seats),
+    periodEndMs: typeof periodEnd === 'number' ? periodEnd * 1000 : null,
+    stripeCustomerId: typeof obj.customer === 'string' ? obj.customer : null,
+    stripeSubscriptionId: typeof obj.id === 'string' ? obj.id : null,
+  };
+}
+
 // ── Stripe REST (form-encoded; Bearer secret) ──────────────────────────────
-async function stripePost(secret: string, path: string, body: URLSearchParams): Promise<Record<string, unknown>> {
+export async function stripePost(secret: string, path: string, body: URLSearchParams): Promise<Record<string, unknown>> {
   const res = await fetch(`${STRIPE_API}${path}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/x-www-form-urlencoded' },
@@ -132,7 +204,7 @@ function timingSafeEqualHex(a: string, b: string): boolean {
 }
 
 // ── Event → provider-neutral SubscriptionEvent ─────────────────────────────
-interface StripeEvent {
+export interface StripeEvent {
   id: string;
   type: string;
   data: { object: Record<string, unknown> };

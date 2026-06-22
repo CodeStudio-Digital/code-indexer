@@ -1,8 +1,10 @@
 /** Response headers table + copy-all. */
 import { Copy } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
 
 export function ResponseHeaders({ headers }: { headers: Record<string, string | string[] | undefined> }) {
+  const { t } = useTranslation('apiClient');
   const entries = Object.entries(headers);
   const copyAll = () => {
     const text = entries.map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v ?? ''}`).join('\n');
@@ -12,7 +14,7 @@ export function ResponseHeaders({ headers }: { headers: Record<string, string | 
     <div className="p-2">
       <div className="flex justify-end">
         <Button type="button" variant="ghost" size="sm" className="h-6 gap-1 text-[11px] text-muted-foreground" onClick={copyAll}>
-          <Copy className="h-3 w-3" /> Copy all
+          <Copy className="h-3 w-3" /> {t('responseHeaders.copyAll')}
         </Button>
       </div>
       <table className="text-xs font-mono w-full">

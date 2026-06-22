@@ -9,6 +9,7 @@ import {
   FilePlus2,
   FolderPlus,
   History,
+  Play,
   Trash2,
 } from 'lucide-react';
 import { apiCall } from '../../../lib/api-client.js';
@@ -16,7 +17,12 @@ import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import type { TreeEntry } from '../../../state/file-tree.js';
 import { useLocalHistory } from '../../../state/local-history-store.js';
+import { fileRunCommand, runnableForFile, type FileRuntime } from '../../../lib/run-target.js';
+import { launchRun } from '../../../state/run-launch.js';
 import { deleteSelection } from './delete-selection.js';
+
+/** Display name for the "Run with <runtime>" menu label. */
+const RUNTIME_LABEL: Record<FileRuntime, string> = { node: 'Node', php: 'PHP', python: 'Python' };
 
 /** Seleção viva (count para o rótulo; getPaths lido no clique). */
 export interface MenuSelection {
@@ -132,6 +138,24 @@ export function buildContextItems(
     ];
   }
 
+  // "Run with <runtime>" — only for files whose extension we can run.
+  const run = isDir ? null : runnableForFile(entry.path);
+  const runItem: ContextMenuItem[] = run
+    ? [{
+        id: 'run-with',
+        label: `Run with ${RUNTIME_LABEL[run.runtime]}`,
+        icon: Play,
+        separatorBefore: true,
+        onSelect: () =>
+          void launchRun({
+            projectId,
+            command: fileRunCommand(entry.path, run.runtime),
+            label: `Run ${posixBasename(entry.path)}`,
+            manager: run.manager,
+          }),
+      }]
+    : [];
+
   return [
     { id: 'new-file', label: 'New file', icon: FilePlus2, onSelect: () => void promptCreate('file') },
     { id: 'new-folder', label: 'New folder', icon: FolderPlus, onSelect: () => void promptCreate('folder') },
@@ -141,6 +165,7 @@ export function buildContextItems(
     ...(!isDir
       ? [{ id: 'history', label: 'Local History', icon: History, onSelect: () => useLocalHistory.getState().open(projectId, entry.path) } as ContextMenuItem]
       : []),
+    ...runItem,
     { id: 'delete', label: 'Delete', icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => void doDelete() },
   ];
 }

@@ -149,5 +149,25 @@ export function registerProjectCommands(deps: ProjectCommandDeps): () => void {
       defaultKeys: { intellij: 'Ctrl+Alt+S', vscode: 'Ctrl+K Ctrl+S' },
       run: () => se().setKeymapOpen(true),
     },
+    // Editor split — no default keys (bindable in Keymap settings); the tab-bar
+    // split button + tab context menu are the primary affordances.
+    {
+      id: 'view.splitEditorRight',
+      title: 'Split Editor Right',
+      category: 'View',
+      run: () => useWorkspaceStore.getState().splitEditor('row'),
+    },
+    {
+      id: 'view.splitEditorDown',
+      title: 'Split Editor Down',
+      category: 'View',
+      run: () => useWorkspaceStore.getState().splitEditor('column'),
+    },
+    {
+      id: 'view.unsplitEditor',
+      title: 'Unsplit Editor',
+      category: 'View',
+      run: () => useWorkspaceStore.getState().unsplit(),
+    },
   ]);
 }

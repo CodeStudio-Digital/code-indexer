@@ -1,10 +1,16 @@
 /**
- * Compact composer action bar for the editor Copilot rail. No markdown
- * formatting toolbar; the pickers (agent / provider / model / max-turns /
- * temperature / fallback) collapse behind a settings dialog; the Think
- * toggle is a prominent labelled pill; the session action icons
- * (attach / describe / cap / permission) stay inline via the shared
- * `ComposerActionIcons`. Send/Stop on the right.
+ * Compact composer action bar for the editor Copilot rail. Mirrors the full
+ * chat composer's layout in two thin rows so the rail isn't a stripped-down
+ * surface:
+ *   • top strip — session action icons (attach / describe / cap / permission /
+ *     mic) + the provider·model chip that opens the model settings dialog.
+ *   • bottom row — the agent/mode picker (Explore / Plan / Build / …), the
+ *     reasoning-effort + plan-depth selectors (same inline placement the full
+ *     composer uses), a prominent Think pill, and Send/Stop.
+ *
+ * Deeper model config (provider / model / max-turns / temperature / fallback)
+ * stays behind the chip's dialog so the narrow rail isn't crowded; the dialog
+ * runs with `showAgent={false}` since the agent picker is inline here.
  *
  * The textarea, attachments, slash-commands and send logic all live in the
  * parent `Composer` — this is layout only, so every function stays in sync
@@ -17,12 +23,13 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Network, Send, Settings2, Square } from 'lucide-react';
+import { Brain, Gauge, Layers, Network, Send, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
+import { AgentPicker } from './AgentPicker.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
-import { ModelSettingsDialog } from './ModelSettingsDialog.js';
+import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
@@ -85,84 +92,146 @@ export function RailComposerBar(props: RailComposerBarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
-    <div className="flex items-center gap-1 px-2 pb-2 pt-1">
-      {/* Settings dialog — agent + provider + model + turns + temperature + fallback. */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            aria-label={t('chat:toolbar.modelSettings')}
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="top">{t('chat:toolbar.modelSettings')}</TooltipContent>
-      </Tooltip>
-
-      {/* Prominent Think pill. */}
-      {props.setThinking && (
+    <div className="flex flex-col gap-1 px-2 pb-2 pt-1">
+      {/* Top strip: shared session action icons (attach / describe / cap /
+          permission / mic) + the provider·model chip that opens the model
+          settings dialog — mirrors the full composer's action row. */}
+      <div className="flex items-center gap-0.5">
+        <ComposerActionIcons
+          streaming={props.streaming}
+          handleFiles={props.handleFiles}
+          thinking={props.thinking}
+          setThinking={props.setThinking}
+          describeImages={props.describeImages}
+          setDescribeImages={props.setDescribeImages}
+          outputCapLevel={props.outputCapLevel}
+          setOutputCapLevel={props.setOutputCapLevel}
+          toolPermissionMode={props.toolPermissionMode}
+          setToolPermissionMode={props.setToolPermissionMode}
+          sessionId={props.sessionId}
+          selectedPipelineId={props.selectedPipelineId}
+          setSelectedPipelineId={props.setSelectedPipelineId}
+          showThink={false}
+          onTranscript={props.onTranscript}
+        />
         <button
           type="button"
-          onClick={() => props.setThinking?.(!props.thinking)}
-          aria-pressed={props.thinking ?? false}
-          className={`inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11px] font-medium transition-colors ${
-            props.thinking
-              ? 'bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-          }`}
-          title={t('chat:toolbar.thinking', { defaultValue: 'Extended thinking' })}
+          onClick={() => setSettingsOpen(true)}
+          className="ml-auto inline-flex items-center max-w-[55%] h-7 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          title={t('chat:toolbar.modelSettings')}
         >
-          <Brain className="h-3.5 w-3.5" />
-          <span>{t('composer.think', { defaultValue: 'Think' })}</span>
-        </button>
-      )}
-
-      {/* Shared session action icons (attach / describe / cap / permission). */}
-      <ComposerActionIcons
-        streaming={props.streaming}
-        handleFiles={props.handleFiles}
-        thinking={props.thinking}
-        setThinking={props.setThinking}
-        describeImages={props.describeImages}
-        setDescribeImages={props.setDescribeImages}
-        outputCapLevel={props.outputCapLevel}
-        setOutputCapLevel={props.setOutputCapLevel}
-        toolPermissionMode={props.toolPermissionMode}
-        setToolPermissionMode={props.setToolPermissionMode}
-        sessionId={props.sessionId}
-        selectedPipelineId={props.selectedPipelineId}
-        setSelectedPipelineId={props.setSelectedPipelineId}
-        showThink={false}
-        onTranscript={props.onTranscript}
-      />
-
-      <div className="ml-auto flex items-center gap-1">
-        {props.streaming ? (
-          <>
-            {props.queueable && props.onQueueSend && (
-              <QueueSplitButton hasInput={props.hasInput} onQueue={props.onQueueSend} compact />
+          <span className="truncate font-mono">
+            {modelSettingsLabel(
+              props.providerOptions,
+              props.provider,
+              props.model,
+              t('composer.selectModel', { defaultValue: 'Select a model' }),
             )}
-            <Button onClick={props.onAbort} variant="destructive" size="sm" className="h-7">
-              <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
-            </Button>
-          </>
-        ) : props.selectedPipelineId != null ? (
-          <Button onClick={props.onSend} disabled={!props.hasInput} size="sm" variant="default" className="h-7">
-            <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
-          </Button>
-        ) : (
-          <Button onClick={props.onSend} disabled={!props.hasInput} size="sm" className="h-7">
-            <Send className="h-3.5 w-3.5" /> {t('common:actions.send')}
-          </Button>
+          </span>
+        </button>
+      </div>
+
+      {/* Bottom row: agent/mode picker + reasoning effort + plan depth + Think
+          pill + Send/Stop — same inline controls as the full composer's
+          toolbar so the rail exposes the mode at a glance. */}
+      <div className="flex items-center gap-1 flex-wrap">
+        <AgentPicker value={props.agent} onChange={props.setAgent} autoSuggestFor={props.autoSuggestText} />
+
+        {/* Reasoning effort — only when the model exposes discrete effort levels. */}
+        {props.setReasoningEffort && props.reasoningLevels && props.reasoningLevels.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1 text-muted-foreground">
+                <Gauge className="h-3.5 w-3.5 shrink-0" />
+                <select
+                  aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
+                  className="h-7 rounded border bg-background px-1.5 text-xs"
+                  value={props.reasoningEffort ?? ''}
+                  onChange={(e) => props.setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
+                >
+                  <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
+                  {props.reasoningLevels.map((lv) => (
+                    <option key={lv} value={lv}>
+                      {lv}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[260px]">
+              {t('chat:toolbar.effortHint', { defaultValue: 'Reasoning effort (auto = model default)' })}
+            </TooltipContent>
+          </Tooltip>
         )}
+
+        {/* Plan depth — only while the `plan` agent is active. */}
+        {props.agent === 'plan' && props.setPlanDepth && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1 text-muted-foreground">
+                <Layers className="h-3.5 w-3.5 shrink-0" />
+                <select
+                  aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
+                  className="h-7 rounded border bg-background px-1.5 text-xs"
+                  value={props.planDepth ?? 'normal'}
+                  onChange={(e) => props.setPlanDepth?.(e.target.value)}
+                >
+                  <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
+                  <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
+                  <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
+                </select>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[260px]">
+              {t('chat:toolbar.planDepthHint', { defaultValue: 'Plan depth — how deep the planning agent goes' })}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {/* Prominent Think pill. */}
+        {props.setThinking && (
+          <button
+            type="button"
+            onClick={() => props.setThinking?.(!props.thinking)}
+            aria-pressed={props.thinking ?? false}
+            className={`inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11px] font-medium transition-colors ${
+              props.thinking
+                ? 'bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+            }`}
+            title={t('chat:toolbar.thinking', { defaultValue: 'Extended thinking' })}
+          >
+            <Brain className="h-3.5 w-3.5" />
+            <span>{t('composer.think', { defaultValue: 'Think' })}</span>
+          </button>
+        )}
+
+        <div className="ml-auto flex items-center gap-1">
+          {props.streaming ? (
+            <>
+              {props.queueable && props.onQueueSend && (
+                <QueueSplitButton hasInput={props.hasInput} onQueue={props.onQueueSend} compact />
+              )}
+              <Button onClick={props.onAbort} variant="destructive" size="sm" className="h-7">
+                <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
+              </Button>
+            </>
+          ) : props.selectedPipelineId != null ? (
+            <Button onClick={props.onSend} disabled={!props.hasInput} size="sm" variant="default" className="h-7">
+              <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
+            </Button>
+          ) : (
+            <Button onClick={props.onSend} disabled={!props.hasInput} size="sm" className="h-7">
+              <Send className="h-3.5 w-3.5" /> {t('common:actions.send')}
+            </Button>
+          )}
+        </div>
       </div>
 
       <ModelSettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        showAgent
+        showAgent={false}
         agent={props.agent}
         setAgent={props.setAgent}
         autoSuggestText={props.autoSuggestText}

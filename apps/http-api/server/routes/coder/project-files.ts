@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 
@@ -25,6 +26,11 @@ const IGNORE_TTL_MS = 30_000;
 const ALWAYS_IGNORE = ['.git/', 'node_modules/'];
 
 const cache = new Map<string, IgnoreCacheEntry>();
+
+interface ClassifiedEntry {
+  type: 'file' | 'dir';
+  size: number | null;
+}
 
 async function statMtime(p: string): Promise<number | null> {
   try {
@@ -91,6 +97,45 @@ function toPosix(rel: string): string {
   return rel.split(path.sep).join('/');
 }
 
+function realPathKey(absPath: string): string {
+  const resolved = path.resolve(absPath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+async function resolvedDirKey(absDir: string): Promise<string> {
+  try {
+    return realPathKey(await fs.realpath(absDir));
+  } catch {
+    return realPathKey(absDir);
+  }
+}
+
+async function classifyEntry(absDir: string, entry: Dirent): Promise<ClassifiedEntry | null> {
+  const absPath = path.join(absDir, entry.name);
+  if (entry.isDirectory()) {
+    return { type: 'dir', size: null };
+  }
+  if (entry.isFile()) {
+    try {
+      const st = await fs.stat(absPath);
+      return { type: 'file', size: st.size };
+    } catch {
+      return { type: 'file', size: null };
+    }
+  }
+  if (!entry.isSymbolicLink()) {
+    return null;
+  }
+  try {
+    const st = await fs.stat(absPath);
+    if (st.isDirectory()) return { type: 'dir', size: null };
+    if (st.isFile()) return { type: 'file', size: st.size };
+  } catch {
+    /* dangling link */
+  }
+  return null;
+}
+
 /**
  * One-level listing of `relDir` under `rootAbs`, filtered by .gitignore +
  * .mcpignore. Hidden dotfiles (other than the ignore files themselves) are
@@ -105,26 +150,18 @@ export async function listDirFiltered(
   const entries = await fs.readdir(absDir, { withFileTypes: true });
   const out: ProjectTreeEntry[] = [];
   for (const e of entries) {
-    if (!e.isFile() && !e.isDirectory()) continue;
     if (e.name.startsWith('.') && e.name !== '.gitignore' && e.name !== '.mcpignore') continue;
+    const classified = await classifyEntry(absDir, e);
+    if (!classified) continue;
     const relPath = toPosix(relDir === '.' ? e.name : path.join(relDir, e.name));
     // `ignore` package needs a trailing slash for directories to match dir rules.
-    const probe = e.isDirectory() ? `${relPath}/` : relPath;
+    const probe = classified.type === 'dir' ? `${relPath}/` : relPath;
     if (ig.ignores(probe)) continue;
-    let size: number | null = null;
-    if (e.isFile()) {
-      try {
-        const st = await fs.stat(path.join(absDir, e.name));
-        size = st.size;
-      } catch {
-        size = null;
-      }
-    }
     out.push({
       name: e.name,
       path: relPath,
-      type: e.isDirectory() ? 'dir' : 'file',
-      size,
+      type: classified.type,
+      size: classified.size,
     });
   }
   out.sort((a, b) => {
@@ -161,17 +198,20 @@ export async function listFilesRecursive(
   const files: string[] = [];
   let visited = 0;
   let truncated = false;
+  const visitedDirs = new Set<string>();
 
   async function walk(dirRel: string): Promise<void> {
     if (files.length >= maxFiles || visited >= maxEntries) {
       truncated = true;
       return;
     }
-    let entries: import('node:fs').Dirent[];
+    const absDir = path.resolve(rootAbs, dirRel === '.' ? '' : dirRel);
+    const dirKey = await resolvedDirKey(absDir);
+    if (visitedDirs.has(dirKey)) return;
+    visitedDirs.add(dirKey);
+    let entries: Dirent[];
     try {
-      entries = await fs.readdir(path.resolve(rootAbs, dirRel === '.' ? '' : dirRel), {
-        withFileTypes: true,
-      });
+      entries = await fs.readdir(absDir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -181,12 +221,13 @@ export async function listFilesRecursive(
         truncated = true;
         return;
       }
-      if (!e.isFile() && !e.isDirectory()) continue;
       if (e.name.startsWith('.') && e.name !== '.gitignore' && e.name !== '.mcpignore') continue;
+      const classified = await classifyEntry(absDir, e);
+      if (!classified) continue;
       const relPath = toPosix(dirRel === '.' ? e.name : path.join(dirRel, e.name));
-      const probe = e.isDirectory() ? `${relPath}/` : relPath;
+      const probe = classified.type === 'dir' ? `${relPath}/` : relPath;
       if (ig.ignores(probe)) continue;
-      if (e.isFile()) {
+      if (classified.type === 'file') {
         files.push(relPath);
         if (files.length >= maxFiles) {
           truncated = true;
@@ -222,6 +263,7 @@ export async function searchFiles(
   const results: ProjectSearchResult[] = [];
   let visited = 0;
   let truncated = false;
+  const visitedDirs = new Set<string>();
 
   async function walk(relDir: string, depth: number): Promise<void> {
     if (depth > maxDepth) return;
@@ -229,11 +271,13 @@ export async function searchFiles(
       truncated = true;
       return;
     }
-    let entries: import('node:fs').Dirent[];
+    const absDir = path.resolve(rootAbs, relDir === '.' ? '' : relDir);
+    const dirKey = await resolvedDirKey(absDir);
+    if (visitedDirs.has(dirKey)) return;
+    visitedDirs.add(dirKey);
+    let entries: Dirent[];
     try {
-      entries = await fs.readdir(path.resolve(rootAbs, relDir === '.' ? '' : relDir), {
-        withFileTypes: true,
-      });
+      entries = await fs.readdir(absDir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -243,19 +287,20 @@ export async function searchFiles(
         truncated = true;
         return;
       }
-      if (!e.isFile() && !e.isDirectory()) continue;
       if (e.name.startsWith('.') && e.name !== '.gitignore' && e.name !== '.mcpignore') continue;
+      const classified = await classifyEntry(absDir, e);
+      if (!classified) continue;
       const relPath = toPosix(relDir === '.' ? e.name : path.join(relDir, e.name));
-      const probe = e.isDirectory() ? `${relPath}/` : relPath;
+      const probe = classified.type === 'dir' ? `${relPath}/` : relPath;
       if (ig.ignores(probe)) continue;
       if (e.name.toLowerCase().includes(needle) || relPath.toLowerCase().includes(needle)) {
-        results.push({ path: relPath, type: e.isDirectory() ? 'dir' : 'file' });
+        results.push({ path: relPath, type: classified.type });
         if (results.length >= maxResults) {
           truncated = true;
           return;
         }
       }
-      if (e.isDirectory()) {
+      if (classified.type === 'dir') {
         await walk(relPath, depth + 1);
         if (results.length >= maxResults || visited >= maxEntries) return;
       }

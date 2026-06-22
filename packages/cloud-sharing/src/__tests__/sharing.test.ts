@@ -34,9 +34,12 @@ function snapshot(text = 'hello world'): ShareSnapshot {
 class FakeShareRepo implements ShareRepo {
   shares = new Map<string, PublicShare>(); // by id
   msgs = new Map<string, ShareMessage[]>();
-  async insert(share: PublicShare, messages: ShareMessage[]) {
+  async insertIfUnderQuota(share: PublicShare, messages: ShareMessage[], maxActiveShares: number) {
+    const active = [...this.shares.values()].filter((s) => s.ownerAccountId === share.ownerAccountId && s.status === 'active').length;
+    if (active >= maxActiveShares) return false;
     this.shares.set(share.id, share);
     this.msgs.set(share.id, messages);
+    return true;
   }
   async findBySlug(slug: string) {
     for (const s of this.shares.values()) if (s.slug === slug) return s;
@@ -44,9 +47,6 @@ class FakeShareRepo implements ShareRepo {
   }
   async loadMessages(id: ShareId) {
     return this.msgs.get(id) ?? [];
-  }
-  async countActiveByOwner(owner: AccountId) {
-    return [...this.shares.values()].filter((s) => s.ownerAccountId === owner && s.status === 'active').length;
   }
   async listByOwner(owner: AccountId) {
     return [...this.shares.values()].filter((s) => s.ownerAccountId === owner);

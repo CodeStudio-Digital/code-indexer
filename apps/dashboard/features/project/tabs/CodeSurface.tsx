@@ -13,13 +13,15 @@ import { EditorChatLayout } from '../EditorChatLayout.js';
 export interface CodeSurfaceProps {
   /** Qual painel esquerdo mostrar — a aba ativa (ou a última, quando escondida). */
   mode: 'files' | 'git';
+  /** False when the keep-alive pane is mounted but hidden behind another tab. */
+  visible: boolean;
   projectId: number;
   projectName: string;
   activeFilePath: string | null;
   onOpenFile: (path: string) => void;
 }
 
-export function CodeSurface({ mode, projectId, projectName, activeFilePath, onOpenFile }: CodeSurfaceProps) {
+export function CodeSurface({ mode, visible, projectId, projectName, activeFilePath, onOpenFile }: CodeSurfaceProps) {
   // autoSaveId único (não por-modo) de propósito: a coluna do editor é a mesma
   // entre Files e Git, então a largura do painel esquerdo persiste através da troca
   // — comportamento mais previsível que dois tamanhos concorrentes.
@@ -28,9 +30,9 @@ export function CodeSurface({ mode, projectId, projectName, activeFilePath, onOp
       <Panel defaultSize={22} minSize={12} maxSize={50}>
         <div className="h-full border-r overflow-hidden">
           {mode === 'git' ? (
-            <GitWindow projectId={projectId} />
+            <GitWindow projectId={projectId} active={visible && mode === 'git'} />
           ) : (
-            <FileTreeView projectId={projectId} activePath={activeFilePath} onOpen={onOpenFile} />
+            <FileTreeView projectId={projectId} active={visible && mode === 'files'} activePath={activeFilePath} onOpen={onOpenFile} />
           )}
         </div>
       </Panel>

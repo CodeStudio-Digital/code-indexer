@@ -27,6 +27,10 @@ export interface ApiCollection {
   spec_source: string | null;
   spec_hash: string | null;
   folders_json: string;
+  /** Docs Studio (mig 171). */
+  overview_md?: string | null;
+  branding_json?: string | null;
+  folder_docs_json?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +65,9 @@ export interface ApiRequest {
   test_script: string | null;
   auth_type: ApiAuthType | null;
   auth_json: string | null;
+  /** Docs Studio (mig 171). */
+  description?: string | null;
+  param_docs_json?: string | null;
   folder: string | null;
   verified: boolean;
   expected_status: number | null;
@@ -69,6 +76,36 @@ export interface ApiRequest {
   last_run_at: string | null;
   sort_order: number;
   source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Docs Studio: a guide/MDX page belonging to a collection (mig 172). */
+export interface ApiDocPage {
+  id: number;
+  collection_id: number;
+  slug: string;
+  title: string;
+  body_md: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Docs Studio: a saved (redacted) request+response example for an endpoint. */
+export interface ApiRequestExample {
+  id: number;
+  request_id: number;
+  name: string;
+  req_snapshot_json: string;
+  resp_status: number | null;
+  resp_status_text: string | null;
+  resp_headers_json: string | null;
+  resp_body: string | null;
+  resp_content_type: string | null;
+  resp_size: number | null;
+  redaction_count: number;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }

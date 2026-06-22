@@ -190,7 +190,11 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/symbols/:id', async (c) => {
     try {
-      return c.json(await h.symbol({ id: parseIdParam(c) }, createContext()));
+      // Optional ?projectId routes the surrogate-id lookup to that project's DB
+      // (post-split the id is unique only there); absent → central, as before.
+      const pid = c.req.query('projectId');
+      const projectId = pid ? Number(pid) : undefined;
+      return c.json(await h.symbol({ id: parseIdParam(c), projectId }, createContext()));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
       return mapApiError(c, err);
@@ -199,7 +203,9 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/symbols/:id/members', async (c) => {
     try {
-      return c.json(await h.symbolMembers({ id: parseIdParam(c) }, createContext()));
+      const pid = c.req.query('projectId');
+      const projectId = pid ? Number(pid) : undefined;
+      return c.json(await h.symbolMembers({ id: parseIdParam(c), projectId }, createContext()));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
       return mapApiError(c, err);

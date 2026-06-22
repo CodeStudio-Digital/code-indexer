@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { createStripeGateway, verifyStripeSignature, WebhookSignatureError } from '../infra/stripe-gateway.js';
+import { createStripeGateway, verifyStripeSignature, WebhookSignatureError, mapOrgEvent, type StripeEvent } from '../infra/stripe-gateway.js';
 
 const SECRET = 'whsec_test_secret';
 const sign = (t: number, payload: string) => createHmac('sha256', SECRET).update(`${t}.${payload}`).digest('hex');
@@ -43,6 +43,20 @@ describe('verifyStripeSignature', () => {
     const payload = subEvent();
     const bad = `t=${t},v1=${'0'.repeat(64)}`;
     expect(await verifyStripeSignature(payload, bad, SECRET, 5 * 60 * 1000)).toBe(false);
+  });
+  it('accepts when ANY of multiple v1 signatures matches (key rotation)', async () => {
+    const t = Math.floor(Date.now() / 1000);
+    const payload = subEvent();
+    // Stripe emits several v1 during a secret rotation; one of them is ours.
+    const multi = `t=${t},v1=${'0'.repeat(64)},v1=${sign(t, payload)}`;
+    expect(await verifyStripeSignature(payload, multi, SECRET, 5 * 60 * 1000)).toBe(true);
+  });
+  it('does not truncate a scheme containing extra "=" segments', async () => {
+    const t = Math.floor(Date.now() / 1000);
+    const payload = subEvent();
+    // A future scheme value with '=' must not break the split-on-first-'=' parse.
+    const withEq = `t=${t},v0=ab=cd,v1=${sign(t, payload)}`;
+    expect(await verifyStripeSignature(payload, withEq, SECRET, 5 * 60 * 1000)).toBe(true);
   });
   it('rejects a stale timestamp outside tolerance', async () => {
     const t = Math.floor(Date.now() / 1000) - 3600; // 1h old
@@ -89,6 +103,44 @@ describe('parseWebhook (mapping + guards)', () => {
     const event = await gateway().parseWebhook(payload, header(t, payload));
     expect(event!.status).toBe('canceled');
     expect(event!.plan).toBe('free');
+  });
+});
+
+describe('mapOrgEvent (per-seat org projection)', () => {
+  const orgEvt = (over: Record<string, unknown> = {}): StripeEvent => ({
+    id: 'evt_org_1',
+    type: 'customer.subscription.created',
+    data: {
+      object: {
+        status: 'active',
+        current_period_end: 1_800_000_000,
+        customer: 'cus_org',
+        id: 'sub_org',
+        metadata: { orgId: 'org-1' },
+        items: { data: [{ price: { id: 'price_teams' }, quantity: 7 }] },
+        ...over,
+      },
+    },
+  });
+  it('maps an org subscription with seats from the line-item quantity', () => {
+    const e = mapOrgEvent(orgEvt(), 'price_teams')!;
+    expect(e.orgId).toBe('org-1');
+    expect(e.plan).toBe('team');
+    expect(e.seats).toBe(7);
+    expect(e.status).toBe('active');
+    expect(e.stripeSubscriptionId).toBe('sub_org');
+    expect(e.periodEndMs).toBe(1_800_000_000 * 1000);
+  });
+  it('returns null for a personal event (no orgId)', () => {
+    expect(mapOrgEvent({ id: 'e', type: 'customer.subscription.created', data: { object: { metadata: { accountId: 'a' } } } })).toBeNull();
+  });
+  it('returns null for non-subscription events', () => {
+    expect(mapOrgEvent({ id: 'e', type: 'invoice.paid', data: { object: { metadata: { orgId: 'org-1' } } } })).toBeNull();
+  });
+  it('canceled subscription → free', () => {
+    const e = mapOrgEvent(orgEvt({ status: 'canceled' }) as StripeEvent)!;
+    expect(e.plan).toBe('free');
+    expect(e.status).toBe('canceled');
   });
 });
 

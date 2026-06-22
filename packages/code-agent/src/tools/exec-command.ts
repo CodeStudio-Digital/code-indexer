@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve as resolvePath, isAbsolute } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { applyRuntimeEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
 
 // ─── Tunables ──────────────────────────────────────────────────────
 
@@ -215,7 +216,10 @@ async function spawnSession(opts: {
   cols: number;
   rows: number;
   maxChars: number;
+  /** Per-project PHP/Python (not Node) to put on PATH for the session. */
+  runtimeEnv?: AgentRuntimeEnv;
 }): Promise<SessionRecord> {
+  const env = applyRuntimeEnv(cleanEnv(), opts.runtimeEnv);
   const id = randomUUID().slice(0, 8);
   let proc: ChildProcess | NodePtyProcess;
   let resolveExit!: () => void;
@@ -239,14 +243,14 @@ async function spawnSession(opts: {
       cols: opts.cols,
       rows: opts.rows,
       cwd: opts.cwd,
-      env: cleanEnv(),
+      env,
       ...(isWindows && isElectron ? { useConpty: false } : {}),
     });
   } else {
     const isWindows = process.platform === 'win32';
     proc = nodeSpawn(isWindows ? 'cmd.exe' : '/bin/sh', isWindows ? ['/d', '/s', '/c', opts.cmd] : ['-c', opts.cmd], {
       cwd: opts.cwd,
-      env: cleanEnv(),
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
       // detached:false (default) — kill propagates to children on dispose.
     });
@@ -415,7 +419,7 @@ export const execCommand: CoderTool = {
 
     let rec: SessionRecord;
     try {
-      rec = await spawnSession({ cmd, cwd, mode, cols, rows, maxChars });
+      rec = await spawnSession({ cmd, cwd, mode, cols, rows, maxChars, runtimeEnv: ctx.runtimeEnv });
     } catch (e) {
       return err(`exec_command: spawn failed — ${e instanceof Error ? e.message : String(e)}`);
     }

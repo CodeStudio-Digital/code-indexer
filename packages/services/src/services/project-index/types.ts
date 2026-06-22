@@ -91,6 +91,13 @@ export interface StructuralProgressFrame {
   current: number;
   total: number;
   currentFile: string;
+  /**
+   * Which sub-phase emitted this frame. 'scanning' frames flow during the
+   * (otherwise silent) tree walk — `total` may be 0 until the walk finishes.
+   * Omitted/'indexing' = the per-file tree-sitter pass. Lets the UI keep the
+   * "Scanning…" chip alive instead of showing a frozen spinner.
+   */
+  phase?: 'scanning' | 'indexing';
 }
 
 /**

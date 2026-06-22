@@ -19,9 +19,12 @@ export function register(program: Command): void {
     db.close();
   });
 
-  program.command('symbol <id>').description('Show symbol details').action((id: string) => {
+  program.command('symbol <id>').description('Show symbol details').option('-p, --project <name>', 'Project name (needed when per-project DBs are split)').action((id: string, opts: { project?: string }) => {
     const db = getDB();
-    const sym = db.getSymbolById(parseInt(id, 10));
+    // Post-split the surrogate id is unique only within a project DB; --project
+    // routes the lookup there. Absent → central (pre-split behavior).
+    const project = opts.project ? db.getProjectByName(opts.project) : undefined;
+    const sym = db.getSymbolById(parseInt(id, 10), project?.id);
     if (!sym) { console.error('Symbol not found'); process.exit(1); }
     console.log(`Name: ${sym.name}\nKind: ${sym.kind}\nSignature: ${sym.signature}`);
     console.log(`File: ${sym.file_path}:${sym.line ?? '?'}\nParent: ${sym.parent ?? '-'}`);

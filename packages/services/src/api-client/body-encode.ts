@@ -8,8 +8,36 @@
  * `body_kind === 'form'` (pre-mig-156) is treated as 'urlencoded'.
  */
 import { readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { normalizeKvList, resolveTemplate, type KvRow } from './request-builder.js';
+
+/** Options controlling where file-backed bodies (binary / form-data) may read from. */
+export interface FilePolicy {
+  /** Project root that file paths must stay within (when not allowing absolute). */
+  fileRoot?: string;
+  /** Trusted local caller — allow absolute / out-of-root paths (e.g. a file picker). */
+  allowAbsoluteFiles?: boolean;
+}
+
+/**
+ * Resolve a request-attached file path under the file policy. A path is
+ * attacker/agent-influenceable (stored request, imported curl `-F @file`, agent
+ * patch), so unless the caller is the trusted local user (`allowAbsoluteFiles`)
+ * the path MUST resolve inside the project root — otherwise this is an
+ * arbitrary-file-read-then-POST exfiltration primitive.
+ */
+function resolveFilePath(p: string, policy?: FilePolicy): string {
+  if (policy?.allowAbsoluteFiles) return p;
+  const root = policy?.fileRoot;
+  if (!root) throw new Error('file-backed request bodies are not permitted here');
+  const rootAbs = resolve(root);
+  const abs = resolve(rootAbs, p);
+  const rel = relative(rootAbs, abs);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('attached file path escapes the project root');
+  }
+  return abs;
+}
 
 export interface BodyLike {
   body_kind: string;
@@ -42,7 +70,7 @@ function rows(json: string | null | undefined): KvRow[] {
 export async function encodeBody(
   req: BodyLike,
   vars: Record<string, string>,
-  opts?: { boundary?: string },
+  opts?: { boundary?: string } & FilePolicy,
 ): Promise<EncodedBody> {
   const kind = req.body_kind === 'form' ? 'urlencoded' : req.body_kind;
   switch (kind) {
@@ -79,13 +107,13 @@ export async function encodeBody(
     }
 
     case 'form-data':
-      return encodeMultipart(rows(req.body_form_json), vars, opts?.boundary ?? defaultBoundary());
+      return encodeMultipart(rows(req.body_form_json), vars, opts?.boundary ?? defaultBoundary(), opts);
 
     case 'binary': {
       const path = req.body_binary_path;
       if (!path) return {};
       // Async read so a large cold file upload never blocks the http-api event loop.
-      return { body: await readFile(path), contentType: 'application/octet-stream' };
+      return { body: await readFile(resolveFilePath(path, opts)), contentType: 'application/octet-stream' };
     }
 
     default:
@@ -97,15 +125,25 @@ function defaultBoundary(): string {
   return `----McpApiClient${Math.random().toString(36).slice(2)}`;
 }
 
-async function encodeMultipart(parts: KvRow[], vars: Record<string, string>, boundary: string): Promise<EncodedBody> {
+/**
+ * Escape a multipart Content-Disposition param value. Field names/filenames are
+ * user/agent/import-controlled, so an embedded CR/LF or quote could inject extra
+ * part headers (or whole parts). Strip CR/LF and percent-encode the quote, as
+ * undici/WHATWG FormData does.
+ */
+function dispoParam(s: string): string {
+  return s.replace(/[\r\n]/g, '').replace(/"/g, '%22');
+}
+
+async function encodeMultipart(parts: KvRow[], vars: Record<string, string>, boundary: string, policy?: FilePolicy): Promise<EncodedBody> {
   const chunks: Buffer[] = [];
   const CRLF = '\r\n';
   for (const p of parts) {
-    const name = resolveTemplate(p.key, vars);
+    const name = dispoParam(resolveTemplate(p.key, vars));
     if (p.src) {
-      const file = await readFile(p.src);
+      const file = await readFile(resolveFilePath(p.src, policy));
       chunks.push(Buffer.from(
-        `--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"; filename="${basename(p.src)}"${CRLF}`
+        `--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"; filename="${dispoParam(basename(p.src))}"${CRLF}`
         + `Content-Type: application/octet-stream${CRLF}${CRLF}`,
       ));
       chunks.push(file, Buffer.from(CRLF));

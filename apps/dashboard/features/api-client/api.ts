@@ -44,6 +44,19 @@ export const renameFolder = (p: number, cid: number, from: string, to: string) =
   req<ApiCollection>(`${root(p)}/collections/${cid}/folders`, { method: 'PATCH', body: JSON.stringify({ from, to }) });
 export const deleteFolder = (p: number, cid: number, name: string) =>
   req<ApiCollection>(`${root(p)}/collections/${cid}/folders/${encodeURIComponent(name)}`, { method: 'DELETE' });
+export const listFolders = (p: number, cid: number) =>
+  req<{ folders: string[] }>(`${root(p)}/collections/${cid}/folders`).then((r) => r.folders);
+
+// ─── AI script assistant ───────────────────────────────────────────────
+export interface ScriptAssistPayload {
+  target: 'pre' | 'test';
+  intent: string;
+  request: { method: string; url: string; headerNames: string[]; bodyKind: string; bodySample?: string };
+  responseShape?: string;
+  existing?: string;
+}
+export const scriptAssist = (p: number, payload: ScriptAssistPayload) =>
+  req<{ script: string; explanation: string }>(`${root(p)}/script-assist`, j(payload));
 
 // ─── Requests ──────────────────────────────────────────────────────────
 export const listRequests = (p: number, cid: number) =>
@@ -60,6 +73,9 @@ export const reorderRequests = (p: number, cid: number, orderedIds: number[], fo
   req<{ ok: true }>(`${root(p)}/collections/${cid}/reorder`, j({ orderedIds, folder }));
 export const sendRequest = (p: number, rid: number, envId?: number) =>
   req<SendResponse>(`${root(p)}/requests/${rid}/send`, j({ envId }));
+/** Send an unsaved draft request (no DB row) — posts the full request fields. */
+export const sendAdhoc = (p: number, request: Partial<ApiRequest>, envId?: number) =>
+  req<SendResponse>(`${root(p)}/send-adhoc`, j({ request, envId }));
 export const verifyRequest = (p: number, rid: number, expectedStatus: number, assert?: unknown) =>
   req<ApiRequest>(`${root(p)}/requests/${rid}/verify`, j({ expectedStatus, assert }));
 export const listRequestHistory = (p: number, rid: number, limit = 50) =>

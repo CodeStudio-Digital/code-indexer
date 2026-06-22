@@ -14,9 +14,11 @@
  * cursor); explicit "Load more" button it is.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { apiCall } from '../../../../../lib/api-client.js';
+import { useGitRevision } from '../../../../../state/git-revision.js';
 import { Button } from '../../../../../components/ui/button.js';
 import {
   Select,
@@ -59,12 +61,13 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
   const [limit, setLimit] = useState<number>(60);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       const [bs, cs] = await Promise.all([
-        apiCall<GitBranchSummary[]>('projectGit.branchesDetailed', { projectId, includeRemote: true }),
+        apiCall<GitBranchSummary[]>('projectGit.branchesDetailed', { projectId, includeRemote: true, rev: gitRev }),
         apiCall<Commit[]>('projectGit.log', { projectId, limit, branch: branch || undefined }),
       ]);
       setBranches(bs);
@@ -75,7 +78,7 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
     } finally {
       setLoading(false);
     }
-  }, [projectId, limit, branch]);
+  }, [projectId, limit, branch, gitRev]);
 
   useEffect(() => {
     void reload();
@@ -85,6 +88,14 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
     () => branches.find((b) => b.isCurrent)?.name ?? null,
     [branches],
   );
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: commits.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 44,
+    overscan: 12,
+  });
 
   const cherryPick = async (c: Commit) => {
     try {
@@ -200,20 +211,33 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
 
       {error && <div className="px-2 py-1 text-[11px] text-destructive shrink-0">{error}</div>}
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
         {!loading && commits.length === 0 && !error && (
           <div className="text-center text-[11px] text-muted-foreground p-4">No commits.</div>
         )}
-        {commits.map((c) => (
-          <CommitRow
-            key={c.sha}
-            commit={c}
-            disabled={opInProgress}
-            onCherryPick={() => void cherryPick(c)}
-            onRevert={() => void revert(c)}
-            onReset={(mode) => void reset(c, mode)}
-          />
-        ))}
+        {commits.length > 0 && (
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((v) => {
+              const c = commits[v.index];
+              return (
+                <div
+                  key={c.sha}
+                  data-index={v.index}
+                  ref={virtualizer.measureElement}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${v.start}px)` }}
+                >
+                  <CommitRow
+                    commit={c}
+                    disabled={opInProgress}
+                    onCherryPick={() => void cherryPick(c)}
+                    onRevert={() => void revert(c)}
+                    onReset={(mode) => void reset(c, mode)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

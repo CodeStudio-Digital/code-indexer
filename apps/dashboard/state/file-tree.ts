@@ -20,12 +20,24 @@ interface TreeNodeDTO extends TreeEntry { children?: TreeNodeDTO[] }
 export interface FsEventDTO { path: string; kind: 'upsert' | 'delete'; isDir: boolean }
 
 const PERSIST_PREFIX = 'mcp-ide:file-tree:';
-// 200 dirs expandidos já é um power-user extremo; com a fila bounded (cap 5) e a
+// 200 dirs expandidos já é um power-user extremo; com a fila bounded e a
 // ordenação por profundidade, os visíveis chegam nas 1ªs waves.
 const MAX_PERSISTED = 200;
 
+// Concorrência do restore da árvore. O cap antigo (5) era margem de 2022; kernels
+// modernos absorvem ~12 readdirs paralelos sem travar. Ajustável em runtime via
+// `window.__MCP_TREE_QUEUE_CONCURRENCY__` para medir (espelha __MCP_API_BASE__).
+// Identical concurrent dir loads já colapsam no `dedupeInflight` de files.tree.
+function treeQueueConcurrency(): number {
+  const override =
+    typeof window !== 'undefined'
+      ? (window as unknown as { __MCP_TREE_QUEUE_CONCURRENCY__?: number }).__MCP_TREE_QUEUE_CONCURRENCY__
+      : undefined;
+  return typeof override === 'number' && override > 0 ? override : 12;
+}
+
 // Fila ÚNICA do restore da árvore (W2): cap de concorrência mata o thundering herd.
-const loaderQueue = createBoundedQueue(5);
+const loaderQueue = createBoundedQueue(treeQueueConcurrency());
 
 /** Enfileira o restore (root + dirs persistidos, rasos primeiro) na fila bounded. */
 function queueTreeRestore(expanded: Set<string>, load: (dir: string) => Promise<void>): void {

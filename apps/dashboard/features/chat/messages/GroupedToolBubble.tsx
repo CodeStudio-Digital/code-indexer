@@ -23,6 +23,9 @@ interface GroupedToolBubbleProps {
   providerId: string;
   handlers: PromptHandlers;
   tasksState: PersistedTasksState | null | undefined;
+  /** tool_use id of the session's current task list — only that card overlays
+   *  the live `tasksState`; see deriveTaskCardState. */
+  activeTasksToolUseId: string | null;
 }
 
 function aggregateUsage(usages: (MessageRow | undefined)[]): {
@@ -48,6 +51,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
   providerId,
   handlers,
   tasksState,
+  activeTasksToolUseId,
 }: GroupedToolBubbleProps) {
   const { t } = useTranslation('chat');
   const agg = aggregateUsage(group.usages);
@@ -104,6 +108,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
                 { onAnswer: handlers.onAnswer, onPlanResponse: handlers.onPlanResponse, onTasksResponse: handlers.onTasksResponse },
                 toolResultsById,
                 tasksState,
+                activeTasksToolUseId,
               ),
             ),
           )}

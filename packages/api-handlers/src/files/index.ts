@@ -276,14 +276,16 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       return walk(startAbs, startRel, 0);
     },
 
-    async symbol({ id }) {
-      const sym = db.getSymbolById(id);
+    async symbol({ id, projectId }) {
+      // Surrogate id is unique only within a project DB post-split; `projectId`
+      // routes the lookup there (central fallback = pre-split behavior).
+      const sym = db.getSymbolById(id, projectId);
       if (!sym) throw new ApiError('not_found', 404, 'symbol not found');
       return sym;
     },
 
-    async symbolMembers({ id }) {
-      const sym = db.getSymbolById(id);
+    async symbolMembers({ id, projectId }) {
+      const sym = db.getSymbolById(id, projectId);
       if (!sym) throw new ApiError('not_found', 404, 'symbol not found');
       return db.getClassMembers(sym.name, sym.project_id);
     },

@@ -153,6 +153,20 @@ export class IndexerWorkerClient implements StructuralExecutor {
 }
 
 /**
+ * Observable signal for the structural worker → in-process fallback. When the
+ * worker can't run (packaging gap, repeated crash) the pipeline runs on the
+ * Electron MAIN thread, which is the worst case for large-project freezes. A
+ * module-level counter (readable by the admin perf surface) + a prominent log
+ * make "is this happening in production?" answerable instead of a silent warn.
+ */
+export const indexerFallbackStats = {
+  count: 0,
+  lastOp: '',
+  lastError: '',
+  lastAt: 0,
+};
+
+/**
  * Build the production executor: worker-backed when the worker file
  * resolves (and the kill switch is off), with per-call fallback to the
  * given in-process executor on worker errors. Returns the fallback alone
@@ -179,7 +193,15 @@ export function createIndexerExecutor(
     try {
       return await workerFn(...args);
     } catch (err) {
-      console.warn(`[indexer-worker] ${name} failed (${err instanceof Error ? err.message : err}) — falling back in-process`);
+      indexerFallbackStats.count++;
+      indexerFallbackStats.lastOp = name;
+      indexerFallbackStats.lastError = err instanceof Error ? err.message : String(err);
+      indexerFallbackStats.lastAt = Date.now();
+      console.error(
+        `[indexer-worker] FALLBACK → in-process for "${name}" (${indexerFallbackStats.lastError}) — ` +
+        `the Electron main thread now runs the structural pipeline; large projects may stutter ` +
+        `(fallback #${indexerFallbackStats.count}). Investigate why the worker won't spawn.`,
+      );
       return fallbackFn(...args);
     }
   };

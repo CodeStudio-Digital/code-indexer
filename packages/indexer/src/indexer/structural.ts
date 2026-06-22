@@ -30,6 +30,8 @@ export interface StructuralProgress {
   current: number;
   total: number;
   currentFile: string;
+  /** 'scanning' (silent tree walk, total may be 0) vs 'indexing' (per-file pass). */
+  phase?: 'scanning' | 'indexing';
 }
 
 export interface StructuralIndexOptions {
@@ -80,7 +82,12 @@ export async function runStructuralIndex(
   }
 
   const scanner = new FileScanner(project.root_path, opts.ignorePatterns ?? [], opts.maxFileSizeKB ?? 200);
-  const scan = await scanner.scan(db, projectId, { maxFiles: opts.maxFiles });
+  const scan = await scanner.scan(db, projectId, {
+    maxFiles: opts.maxFiles,
+    // Keep the "Scanning…" chip alive during the walk (total unknown → 0).
+    onScanProgress: (scanned, total) =>
+      opts.onProgress?.({ phase: 'scanning', current: scanned, total, currentFile: '' }),
+  });
   const totalFiles = scan.totalFiles ?? scan.toIndex.length + scan.unchanged.length;
 
   if (scan.aborted === 'too_large' || (opts.maxFiles && totalFiles > opts.maxFiles)) {
@@ -133,7 +140,7 @@ export async function runStructuralIndex(
         console.error(`[structural] Error processing ${file.relativePath}:`, err);
       }
       const current = ++completed;
-      opts.onProgress?.({ current, total: scan.toIndex.length, currentFile: file.relativePath });
+      opts.onProgress?.({ phase: 'indexing', current, total: scan.toIndex.length, currentFile: file.relativePath });
       if (current % STRUCTURAL_YIELD_EVERY === 0) await yieldToEventLoop();
     }, opts.concurrency ?? 5);
 
@@ -154,8 +161,9 @@ export async function runStructuralIndex(
 
   // Counters always reflect reality; the READY stamp only lands when the run
   // actually succeeded over a non-empty project — a failed/empty run must
-  // never flip the status chip to "Symbols ready".
-  const stats = db.getStats(projectId);
+  // never flip the status chip to "Symbols ready". `fresh` bypasses the stats
+  // read cache so the PERSISTED counts are never a stale cached value.
+  const stats = db.getStats(projectId, { fresh: true });
   db.updateProject(projectId, {
     file_count: stats.file_count,
     symbol_count: stats.symbol_count,

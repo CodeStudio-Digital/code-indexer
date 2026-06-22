@@ -3,6 +3,7 @@
  * guard. Falls back to raw text if the body isn't valid JSON.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 
@@ -15,6 +16,7 @@ export function JsonTree({ body }: { body: string }) {
 const PAGE = 100; // children rendered per node before a "show more" — bounds huge arrays/objects
 
 function Node({ name, value, depth }: { name?: string; value: unknown; depth: number }) {
+  const { t } = useTranslation('apiClient');
   const [open, setOpen] = useState(depth < 2);
   const [shown, setShown] = useState(PAGE);
   const isArr = Array.isArray(value);
@@ -45,7 +47,7 @@ function Node({ name, value, depth }: { name?: string; value: unknown; depth: nu
           {entries.length > shown && (
             <button style={{ paddingLeft: (depth + 1) * 12 }} className="text-sky-500 hover:underline leading-5"
               onClick={() => setShown((n) => n + PAGE * 5)}>
-              … show {Math.min(PAGE * 5, entries.length - shown)} more ({entries.length - shown} hidden)
+              {t('jsonTree.showMore', { count: Math.min(PAGE * 5, entries.length - shown), hidden: entries.length - shown })}
             </button>
           )}
           <div style={{ paddingLeft: 12 }} className="text-muted-foreground">{bracket[1]}</div>

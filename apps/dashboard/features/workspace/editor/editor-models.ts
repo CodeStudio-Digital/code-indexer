@@ -98,13 +98,26 @@ export function restoreViewStateFor(path: string, editor: MonacoNs.editor.IStand
 export function touchModel(activeKey: string): void {
   mru = [activeKey, ...mru.filter((p) => p !== activeKey)];
   if (mru.length <= MAX_INACTIVE_MODELS + 1) return;
+  const survivors = mru.slice(0, MAX_INACTIVE_MODELS + 1);
   for (const key of mru.slice(MAX_INACTIVE_MODELS + 1)) {
-    if (key === activeKey) continue;
+    if (key === activeKey) {
+      survivors.push(key);
+      continue;
+    }
+    const model = modelByUriKey(key);
+    // Never evict a model a live editor is currently rendering — in a split
+    // the OTHER pane shows a different model, and disposing it under a live
+    // editor blanks that pane + tears down its LSP buffer (documentSync
+    // didClose). Keep it tracked so it's reconsidered once it's detached.
+    if (model && model.isAttachedToEditor()) {
+      survivors.push(key);
+      continue;
+    }
     // Keep the view state — re-opening restores cursor/scroll even though
     // the undo stack is gone (the price of bounded memory).
-    modelByUriKey(key)?.dispose();
+    model?.dispose();
   }
-  mru = mru.slice(0, MAX_INACTIVE_MODELS + 1);
+  mru = survivors;
 }
 
 /** Perf-monitor introspection: live Monaco models + total buffered chars. */

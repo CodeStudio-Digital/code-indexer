@@ -12,6 +12,8 @@
         "apps/electron/dev.ts",
         "apps/dashboard/main.tsx",
         "apps/dashboard/vite.config.ts",
+        "apps/account-portal/main.tsx",
+        "apps/account-portal/vite.config.ts",
         "scripts/**/*.{ts,mjs}",
         "src/benchmarks/**/*.ts"
       ],

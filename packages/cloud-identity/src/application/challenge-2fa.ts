@@ -51,7 +51,11 @@ export class Challenge2faUseCase {
     const tf = await this.twoFactor.getSecret(claim.accountId);
     if (!tf || !tf.enabled) return err(IdentityErrors.twofaInvalid());
 
-    let valid = await this.totp.verify(tf.secret, input.code);
+    // TOTP single-use: a code is valid only at a step AFTER the last consumed one,
+    // so a replayed code (captured + reused within the ~90s window) is rejected.
+    const step = await this.totp.verify(tf.secret, input.code);
+    const totpOk = step !== null && step > (tf.lastStep ?? -1);
+    let valid = totpOk;
     if (!valid) {
       const hash = await this.recovery.hashOf(input.code);
       valid = await this.twoFactor.consumeRecoveryCode(claim.accountId, hash);
@@ -63,6 +67,7 @@ export class Challenge2faUseCase {
 
     // Single-use the challenge token (replay protection); lose the race ⇒ reject.
     if (!(await this.challengeTokens.consume(input.challengeToken))) return err(IdentityErrors.twofaInvalid());
+    if (totpOk) await this.twoFactor.markStep(claim.accountId, step as number);
     await this.throttle.recordSuccess(key);
 
     const account = await this.accounts.findById(claim.accountId);

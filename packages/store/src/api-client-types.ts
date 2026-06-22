@@ -21,6 +21,12 @@ export interface ApiCollection {
   spec_hash: string | null;
   /** Explicit ordered folder names (JSON string[]) — lets empty folders persist. */
   folders_json: string;
+  /** Docs Studio (mig 171): collection landing page markdown. */
+  overview_md: string | null;
+  /** Docs Studio (mig 171): `{ name, logoDataUri, accent, faviconDataUri, links }` JSON. */
+  branding_json: string | null;
+  /** Docs Studio (mig 171): `{ [folderName]: markdown }` JSON of folder descriptions. */
+  folder_docs_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -64,6 +70,10 @@ export interface ApiRequest {
   auth_type: ApiAuthType | null;
   /** Per-type auth config JSON; shape depends on auth_type. */
   auth_json: string | null;
+  /** Docs Studio (mig 171): per-endpoint markdown documentation. */
+  description: string | null;
+  /** Docs Studio (mig 171): `{ "query:limit": markdown, "header:X-Api-Key": markdown }`. */
+  param_docs_json: string | null;
   /** Single-level group label (OpenAPI tag / first path segment). '' = top level. */
   folder: string | null;
   verified: boolean;
@@ -162,6 +172,70 @@ export type RequestPatch = Partial<
     | 'body_json' | 'body_kind' | 'body_raw_lang' | 'body_form_json'
     | 'body_urlencoded_json' | 'body_graphql_json' | 'body_binary_path'
     | 'pre_request_script' | 'test_script' | 'auth_type' | 'auth_json' | 'folder'
+    | 'description' | 'param_docs_json'
     | 'sort_order' | 'last_status' | 'last_run_at'
   >
 >;
+
+/** Patch for collection-level doc fields (Docs Studio). */
+export type CollectionDocPatch = Partial<
+  Pick<ApiCollection, 'name' | 'description' | 'overview_md' | 'branding_json' | 'folder_docs_json'>
+>;
+
+// ─── Docs Studio: guide pages + saved examples (migration 172) ──────────────
+/** An ordered markdown/MDX guide page belonging to a collection. */
+export interface ApiDocPage {
+  id: number;
+  collection_id: number;
+  slug: string;
+  title: string;
+  body_md: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDocPageInput {
+  collection_id: number;
+  slug: string;
+  title: string;
+  body_md?: string;
+  sort_order?: number;
+}
+
+export type DocPagePatch = Partial<Pick<ApiDocPage, 'slug' | 'title' | 'body_md' | 'sort_order'>>;
+
+/** A saved real request+response snapshot for an endpoint (already redacted). */
+export interface ApiRequestExample {
+  id: number;
+  request_id: number;
+  name: string;
+  /** Captured request: `{ method, url, headers, body, bodyKind }` (redacted). */
+  req_snapshot_json: string;
+  resp_status: number | null;
+  resp_status_text: string | null;
+  resp_headers_json: string | null;
+  resp_body: string | null;
+  resp_content_type: string | null;
+  resp_size: number | null;
+  redaction_count: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateExampleInput {
+  request_id: number;
+  name: string;
+  req_snapshot_json?: string;
+  resp_status?: number | null;
+  resp_status_text?: string | null;
+  resp_headers_json?: string | null;
+  resp_body?: string | null;
+  resp_content_type?: string | null;
+  resp_size?: number | null;
+  redaction_count?: number;
+  sort_order?: number;
+}
+
+export type ExamplePatch = Partial<Pick<ApiRequestExample, 'name' | 'sort_order'>>;

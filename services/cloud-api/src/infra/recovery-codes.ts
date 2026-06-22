@@ -12,10 +12,13 @@ function normalize(code: string): string {
 }
 
 function generateCode(): string {
+  // Deliberate ~64-bit budget: 8 CSPRNG bytes → 13 base32 chars, NO truncation
+  // (the old `.slice(0,10)` silently threw away ~14 bits, leaving only ~50).
+  // Displayed as XXXXX-XXXXX-XXX; the hyphens are stripped by `normalize`.
   const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
-  const s = base32Encode(bytes).slice(0, 10);
-  return `${s.slice(0, 5)}-${s.slice(5, 10)}`;
+  const s = base32Encode(bytes).replace(/=+$/, '');
+  return `${s.slice(0, 5)}-${s.slice(5, 10)}-${s.slice(10)}`;
 }
 
 export const recoveryCodes: RecoveryCodeService = {

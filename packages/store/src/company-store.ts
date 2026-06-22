@@ -42,14 +42,28 @@ type DB = InstanceType<typeof Database>;
 
 export class CompanyStore {
   private db: DB;
+  /** True only when this store opened the file itself (string ctor). A
+   *  SHARED handle is owned by CodeIndexDB — closing it here would yank the
+   *  connection out from under every sibling store. */
+  private readonly ownsHandle: boolean;
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
+  constructor(dbPathOrHandle: string | DB) {
+    if (typeof dbPathOrHandle === 'string') {
+      this.db = new Database(dbPathOrHandle);
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('foreign_keys = ON');
+      this.ownsHandle = true;
+    } else {
+      // Shared handle (CodeIndexDB.raw()): pragmas (WAL + foreign_keys=ON)
+      // are already set by the owner. Re-opening the file — what this ctor
+      // used to do unconditionally — created a 3rd writer on the same file
+      // and serialized company reads behind WAL lock contention.
+      this.db = dbPathOrHandle;
+      this.ownsHandle = false;
+    }
   }
 
-  close(): void { this.db.close(); }
+  close(): void { if (this.ownsHandle) this.db.close(); }
 
   // ─── Templates ─────────────────────────────────────────────────
   createTemplate(name: string, description: string, roles: CompanyRoleConfig[]): CompanyTemplate { return templatesDomain.createTemplate(this.db, name, description, roles); }

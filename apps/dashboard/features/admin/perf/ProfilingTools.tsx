@@ -1,13 +1,14 @@
 /**
- * Profiling tools section: on-demand CPU profile (downloads .cpuprofile),
- * heap snapshot (confirm-gated — blocks the main process), slow-IPC top
- * list and renderer long-task list.
+ * Profiling tools: on-demand CPU profile (main OR renderer), full-app trace
+ * (contentTracing → Perfetto), heap snapshot, the slow-IPC percentile table,
+ * and a unified "Freezes" panel merging main-thread stalls (attributed to the
+ * in-flight IPC handler) with renderer Long-Animation-Frame script attribution.
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
 import { apiBaseUrl } from '../../../lib/api-client.js';
-import { ensureRendererVitals, getLongTasks, type LongTaskRow } from './renderer-vitals.js';
+import { ensureRendererVitals, getLongTasks, clearLongTasks } from './renderer-vitals.js';
 import { RouteStartupPanel } from './RouteStartupPanel.js';
 
 interface SlowCallRow {
@@ -16,16 +17,31 @@ interface SlowCallRow {
   totalMs: number;
   maxMs: number;
   lastAt: number;
+  p50: number;
+  p95: number;
+  p99: number;
 }
+
+interface FreezeRow {
+  at: number;
+  source: 'handler' | 'event-loop' | 'renderer' | 'starved';
+  durationMs: number;
+  culprit: string;
+}
+
+type CpuTarget = 'main' | 'renderer';
 
 export function ProfilingTools() {
   const { t } = useTranslation('admin');
   const [profiling, setProfiling] = useState(false);
+  const [cpuTarget, setCpuTarget] = useState<CpuTarget>('main');
   const [durationS, setDurationS] = useState(10);
   const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const [tracing, setTracing] = useState(false);
+  const [tracePath, setTracePath] = useState<string | null>(null);
   const [slowCalls, setSlowCalls] = useState<SlowCallRow[]>([]);
-  const [longTasks, setLongTasks] = useState<LongTaskRow[]>([]);
+  const [freezes, setFreezes] = useState<FreezeRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const loadSlowCalls = async () => {
@@ -35,15 +51,42 @@ export function ProfilingTools() {
     } catch { /* transient */ }
   };
 
+  // Merge main-process freezes (attributed to the in-flight IPC handler) with
+  // renderer LoAF rows (attributed to the blocking script) into one list.
+  const loadFreezes = async () => {
+    let mainRows: FreezeRow[] = [];
+    try {
+      const r = await fetch(`${apiBaseUrl()}/api/admin/perf/freezes`);
+      if (r.ok) {
+        const body = (await r.json()) as {
+          events: Array<{ source: 'handler' | 'event-loop' | 'starved'; channel?: string; durationMs: number; at: number; detail?: string; count?: number }>;
+        };
+        mainRows = body.events.map((e) => ({
+          at: e.at,
+          source: e.source,
+          durationMs: e.durationMs,
+          culprit: (e.channel ?? e.detail ?? '—') + (e.count && e.count > 1 ? ` ×${e.count}` : ''),
+        }));
+      }
+    } catch { /* transient */ }
+    const rendererRows: FreezeRow[] = getLongTasks().map((r) => ({
+      at: r.at,
+      source: 'renderer',
+      durationMs: r.durationMs,
+      culprit: r.script ?? r.name,
+    }));
+    setFreezes([...mainRows, ...rendererRows].sort((a, b) => b.at - a.at).slice(0, 25));
+  };
+
   useEffect(() => {
     ensureRendererVitals();
     void loadSlowCalls();
+    void loadFreezes();
     const timer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       void loadSlowCalls();
-      setLongTasks(getLongTasks());
-    }, 5_000);
-    setLongTasks(getLongTasks());
+      void loadFreezes();
+    }, 10_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -51,22 +94,43 @@ export function ProfilingTools() {
     setProfiling(true);
     setError(null);
     try {
-      const r = await fetch(`${apiBaseUrl()}/api/admin/perf/cpu-profile`, {
+      const route = cpuTarget === 'renderer' ? 'renderer-profile' : 'cpu-profile';
+      const r = await fetch(`${apiBaseUrl()}/api/admin/perf/${route}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ durationMs: durationS * 1000 }),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})) as { error?: string }).error ?? `HTTP ${r.status}`);
       const blob = new Blob([await r.text()], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `main-${Date.now()}.cpuprofile`;
+      a.download = `${cpuTarget}-${Date.now()}.cpuprofile`;
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setProfiling(false);
+    }
+  };
+
+  const runFullTrace = async () => {
+    setTracing(true);
+    setError(null);
+    setTracePath(null);
+    try {
+      const r = await fetch(`${apiBaseUrl()}/api/admin/perf/full-trace`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationMs: durationS * 1000 }),
+      });
+      const body = (await r.json()) as { path?: string; error?: string };
+      if (!r.ok || !body.path) throw new Error(body.error ?? `HTTP ${r.status}`);
+      setTracePath(body.path);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTracing(false);
     }
   };
 
@@ -98,14 +162,30 @@ export function ProfilingTools() {
           <option value={10}>{'10s'}</option>
           <option value={30}>{'30s'}</option>
         </select>
+        <select
+          className="h-8 rounded-md border bg-background px-2 text-xs"
+          value={cpuTarget}
+          onChange={(e) => setCpuTarget(e.target.value as CpuTarget)}
+        >
+          <option value="main">{t('perf.tools.cpuTargetMain')}</option>
+          <option value="renderer">{t('perf.tools.cpuTargetRenderer')}</option>
+        </select>
         <Button size="sm" variant="outline" disabled={profiling} onClick={() => void runCpuProfile()}>
           {profiling ? t('perf.tools.cpuProfileRunning') : t('perf.tools.cpuProfile')}
+        </Button>
+        <Button size="sm" variant="outline" disabled={tracing} onClick={() => void runFullTrace()}>
+          {tracing ? t('perf.tools.fullTraceRunning') : t('perf.tools.fullTrace')}
         </Button>
         <Button size="sm" variant="outline" disabled={snapshotBusy} onClick={() => void runHeapSnapshot()}>
           {snapshotBusy ? t('perf.tools.heapSnapshotRunning') : t('perf.tools.heapSnapshot')}
         </Button>
         <span className="text-[11px] text-muted-foreground">{t('perf.tools.cpuProfileHint')}</span>
       </div>
+      {tracePath && (
+        <div className="text-xs border rounded-md p-2 bg-muted/30 font-mono break-all">
+          {t('perf.tools.fullTraceSaved')}: {tracePath}
+        </div>
+      )}
       {snapshotPath && (
         <div className="text-xs border rounded-md p-2 bg-muted/30 font-mono break-all">
           {t('perf.tools.heapSnapshotSaved')}: {snapshotPath}
@@ -114,6 +194,47 @@ export function ProfilingTools() {
       {error && <div className="text-xs text-destructive">{error}</div>}
 
       <RouteStartupPanel />
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-medium">{t('perf.tools.freezesTitle')}</h3>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void fetch(`${apiBaseUrl()}/api/admin/perf/freezes/reset`, { method: 'POST' })
+                .then(() => { clearLongTasks(); return loadFreezes(); });
+            }}
+          >
+            {t('perf.tools.reset')}
+          </Button>
+        </div>
+        <div className="border rounded-md overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/50 text-muted-foreground">
+              <tr>
+                <th className="py-1.5 px-2 text-left">{t('perf.tools.when')}</th>
+                <th className="px-2 text-left">{t('perf.tools.source')}</th>
+                <th className="px-2 text-right">{t('perf.tools.durationMs')}</th>
+                <th className="px-2 text-left">{t('perf.tools.culprit')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {freezes.map((r, i) => (
+                <tr key={`${r.at}-${i}`}>
+                  <td className="py-1 px-2 whitespace-nowrap">{new Date(r.at).toLocaleTimeString()}</td>
+                  <td className="px-2">{r.source}</td>
+                  <td className="px-2 text-right tabular-nums">{r.durationMs}</td>
+                  <td className="px-2 font-mono break-all">{r.culprit}</td>
+                </tr>
+              ))}
+              {freezes.length === 0 && (
+                <tr><td colSpan={4} className="py-2 px-2 text-muted-foreground">{t('perf.tools.freezesEmpty')}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -135,6 +256,9 @@ export function ProfilingTools() {
                 <th className="py-1.5 px-2 text-left">{t('perf.tools.channel')}</th>
                 <th className="px-2 text-right">{t('perf.tools.calls')}</th>
                 <th className="px-2 text-right">{t('perf.tools.totalMs')}</th>
+                <th className="px-2 text-right">{t('perf.tools.p50')}</th>
+                <th className="px-2 text-right">{t('perf.tools.p95')}</th>
+                <th className="px-2 text-right">{t('perf.tools.p99')}</th>
                 <th className="px-2 text-right">{t('perf.tools.maxMs')}</th>
               </tr>
             </thead>
@@ -142,40 +266,16 @@ export function ProfilingTools() {
               {slowCalls.map((r) => (
                 <tr key={r.channel}>
                   <td className="py-1 px-2 font-mono">{r.channel}</td>
-                  <td className="px-2 text-right">{r.count}</td>
-                  <td className="px-2 text-right">{r.totalMs}</td>
-                  <td className="px-2 text-right">{r.maxMs}</td>
+                  <td className="px-2 text-right tabular-nums">{r.count}</td>
+                  <td className="px-2 text-right tabular-nums">{r.totalMs}</td>
+                  <td className="px-2 text-right tabular-nums">{r.p50}</td>
+                  <td className="px-2 text-right tabular-nums">{r.p95}</td>
+                  <td className="px-2 text-right tabular-nums">{r.p99}</td>
+                  <td className="px-2 text-right tabular-nums">{r.maxMs}</td>
                 </tr>
               ))}
               {slowCalls.length === 0 && (
-                <tr><td colSpan={4} className="py-2 px-2 text-muted-foreground">{t('perf.tools.slowIpcEmpty')}</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-sm font-medium mb-2">{t('perf.tools.longTasksTitle')}</h3>
-        <div className="border rounded-md overflow-hidden">
-          <table className="w-full text-xs">
-            <thead className="bg-muted/50 text-muted-foreground">
-              <tr>
-                <th className="py-1.5 px-2 text-left">{t('perf.tools.when')}</th>
-                <th className="px-2 text-right">{t('perf.tools.durationMs')}</th>
-                <th className="px-2 text-left">{t('perf.tools.attribution')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {longTasks.slice(0, 15).map((r, i) => (
-                <tr key={`${r.at}-${i}`}>
-                  <td className="py-1 px-2">{new Date(r.at).toLocaleTimeString()}</td>
-                  <td className="px-2 text-right">{r.durationMs}</td>
-                  <td className="px-2 font-mono">{r.name}</td>
-                </tr>
-              ))}
-              {longTasks.length === 0 && (
-                <tr><td colSpan={3} className="py-2 px-2 text-muted-foreground">{t('perf.tools.longTasksEmpty')}</td></tr>
+                <tr><td colSpan={7} className="py-2 px-2 text-muted-foreground">{t('perf.tools.slowIpcEmpty')}</td></tr>
               )}
             </tbody>
           </table>

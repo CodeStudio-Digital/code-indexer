@@ -34,6 +34,10 @@ import {
   type OperationPayload,
   type ProviderCallPayload,
 } from './activity-blocks.js';
+import {
+  isNotifiableLoopIntervention,
+  pushNotification,
+} from '../../features/chat/notifications/session-notifications-store.js';
 
 interface HandlerContext {
   sid: number;
@@ -289,12 +293,13 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const d = data as {
         id: string;
         question: string;
+        header?: string;
         options?: Array<{ label: string; value: string }>;
         allowFreeform?: boolean;
       };
       blocks.push({
         type: 'question',
-        question: { id: d.id, question: d.question, options: d.options, allowFreeform: d.allowFreeform },
+        question: { id: d.id, question: d.question, header: d.header, options: d.options, allowFreeform: d.allowFreeform },
       });
       flush();
     },
@@ -306,8 +311,13 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         tasks: { tool_use_id: d.tool_use_id, summary: d.summary, tasks: d.tasks, version: d.version },
       });
       // Bump the sidebar tick so the SessionStateSidebar refetches state-summary
-      // immediately, instead of waiting for the per-turn refresh.
-      updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+      // immediately, instead of waiting for the per-turn refresh. Also bump the
+      // tasks tick so the persisted TaskListReview card refetches the new list
+      // (the previous coder_tasks_state row is now stale).
+      updateSession(sid, (cur) => ({
+        sidebarRefreshTick: cur.sidebarRefreshTick + 1,
+        tasksRefreshTick: cur.tasksRefreshTick + 1,
+      }));
       flush();
     },
 
@@ -615,13 +625,14 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     tool_loop_intervention: (data) => {
-      // Server-emitted when any of the four loop-detection guards fired.
-      // Prepend so the most recent intervention shows first; cap at 5 to
-      // avoid an unbounded banner stack on pathological sessions.
-      const event = { ...(data as ToolLoopIntervention), receivedAt: Date.now() };
-      updateSession(sid, (cur) => ({
-        toolLoopInterventions: [event, ...cur.toolLoopInterventions].slice(0, 5),
-      }));
+      // Server-emitted when a loop-detection guard / failure-streak fired.
+      // Routed into the session notification center (banner + history rail).
+      // dup-result-marker INFORMATIONAL tiers are content-delivery hints, not
+      // failures — skip them so they don't pollute the notification history
+      // (matches the old banner's `shouldRenderInBanner` filter).
+      const iv = data as ToolLoopIntervention;
+      if (!isNotifiableLoopIntervention(iv)) return;
+      pushNotification(sid, { kind: 'tool-loop', intervention: iv });
     },
 
     message_complete: (data) => {
@@ -653,9 +664,15 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       blocks.length = 0;
       toolIndex.clear();
       // Cancel any pending rAF flush and commit the cleared state synchronously
-      // so the UI transition is atomic with onMessageComplete.
+      // so the UI transition is atomic with onMessageComplete. Bump the tasks
+      // tick too: the turn just persisted may have approved the list (or run a
+      // task), so the persisted TaskListReview card must refetch the row to pick
+      // up `approved`/runtime status instead of waiting for the whole run to end.
       flushNow();
-      updateSession(sid, { currentTurn: { blocks: [] } });
+      updateSession(sid, (cur) => ({
+        currentTurn: { blocks: [] },
+        tasksRefreshTick: cur.tasksRefreshTick + 1,
+      }));
       onMessageComplete?.();
     },
 
@@ -675,6 +692,11 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         // No run → no resolvable approvals (abort/interrupt denied them).
         pendingApprovals: [],
       });
+      pushNotification(sid, {
+        kind: 'run-done',
+        reason: String(d.reason ?? 'completed'),
+        ...(d.error ? { error: d.error } : {}),
+      });
     },
 
     error: (data) => {
@@ -683,6 +705,26 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flushNow();
       dispatchAgentPreview(sid, false);
       updateSession(sid, { error: message });
+      pushNotification(sid, { kind: 'run-error', message });
+    },
+
+    quality_watchdog_alert: (data) => {
+      // Fire-and-forget classifier verdict. Emitted for every verdict
+      // (including 'ok'); only surface the non-ok ones as notifications.
+      const d = data as {
+        verdict?: 'ok' | 'warn' | 'flagged' | 'error';
+        suspectTool?: string;
+        reason?: string;
+        turn?: number;
+      };
+      if (!d.verdict || d.verdict === 'ok') return;
+      pushNotification(sid, {
+        kind: 'quality-alert',
+        verdict: d.verdict,
+        suspectTool: String(d.suspectTool ?? ''),
+        reason: String(d.reason ?? ''),
+        turn: Number(d.turn ?? 0),
+      });
     },
   };
 }

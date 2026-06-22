@@ -34,6 +34,38 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { delimiter } from 'node:path';
+
+/**
+ * Per-project runtime PATH/env to inject into agent-spawned processes — the
+ * project's chosen PHP/Python (and future runtimes), resolved by the HOST and
+ * passed down (the agent can't import the resolver without a dep cycle). Node
+ * is deliberately excluded upstream.
+ */
+export interface AgentRuntimeEnv {
+  pathPrepend: string[];
+  extraEnv: Record<string, string>;
+}
+
+/**
+ * Merge a runtime env into a base env: prepend its bin dirs to PATH (highest
+ * priority first) and add its extra vars (e.g. PHPRC). Windows env keys may be
+ * `Path`; normalise to `PATH`. No-op when `runtimeEnv` is undefined/empty.
+ */
+export function applyRuntimeEnv(
+  base: NodeJS.ProcessEnv,
+  runtimeEnv?: AgentRuntimeEnv,
+): NodeJS.ProcessEnv {
+  if (!runtimeEnv) return base;
+  const env: NodeJS.ProcessEnv = { ...base, ...runtimeEnv.extraEnv };
+  const prepend = (runtimeEnv.pathPrepend ?? []).filter(Boolean);
+  if (prepend.length > 0) {
+    const prev = env.PATH ?? env.Path ?? '';
+    delete env.Path;
+    env.PATH = `${prepend.join(delimiter)}${delimiter}${prev}`;
+  }
+  return env;
+}
 
 export interface ShellExecResult {
   stdout: string;
@@ -51,6 +83,8 @@ export interface ShellExecOptions {
   maxOutputBytes?: number;
   /** Optional env override. Defaults to `process.env` in the local adapter. */
   env?: NodeJS.ProcessEnv;
+  /** Per-project runtime to inject (PHP/Python bin dirs + PHPRC). Ignored when `env` is set. */
+  runtimeEnv?: AgentRuntimeEnv;
   /**
    * Optional payload written to the child's stdin before the stream is
    * closed. Use this to feed multi-line code to interpreters (e.g.
@@ -68,6 +102,8 @@ export interface ShellRunOptions {
   cwd: string;
   /** Optional env override. Defaults to `process.env` in the local adapter. */
   env?: NodeJS.ProcessEnv;
+  /** Per-project runtime to inject (PHP/Python bin dirs + PHPRC). Ignored when `env` is set. */
+  runtimeEnv?: AgentRuntimeEnv;
   /** Encoding for stdout/stderr. Defaults to `'utf-8'`. */
   encoding?: BufferEncoding;
 }
@@ -133,7 +169,7 @@ export class LocalShellAdapter implements IShellPort {
     const child = spawn(command, {
       cwd,
       shell: isWin ? true : '/bin/bash',
-      env: env ?? cleanProcessEnv(),
+      env: env ?? applyRuntimeEnv(cleanProcessEnv(), options.runtimeEnv),
     });
     writeStdin(child, options.stdin);
     return this.collectStreaming(child, options);
@@ -147,7 +183,7 @@ export class LocalShellAdapter implements IShellPort {
     const { cwd, env } = options;
     const child = spawn(program, args, {
       cwd,
-      env: env ?? cleanProcessEnv(),
+      env: env ?? applyRuntimeEnv(cleanProcessEnv(), options.runtimeEnv),
     });
     writeStdin(child, options.stdin);
     return this.collectStreaming(child, options);
@@ -204,7 +240,7 @@ export class LocalShellAdapter implements IShellPort {
 
   async run(program: string, args: string[], options: ShellRunOptions): Promise<ShellExecResult> {
     const { cwd, env, encoding = 'utf-8' } = options;
-    const r = spawnSync(program, args, { cwd, encoding, env: env ?? cleanProcessEnv() });
+    const r = spawnSync(program, args, { cwd, encoding, env: env ?? applyRuntimeEnv(cleanProcessEnv(), options.runtimeEnv) });
     if (r.error) {
       return {
         stdout: '',

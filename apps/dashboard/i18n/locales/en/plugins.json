@@ -15,6 +15,7 @@
   "panel.refresh": "Refresh",
   "panel.installSourcePlaceholder": "Install from a folder path or owner/repo",
   "panel.install": "Install",
+  "panel.installed": "Installed",
   "panel.noInstalled": "No plugins installed.",
   "panel.permissionTitle": "Granted at install — uninstall to revoke",
   "panel.enabled": "enabled",
@@ -23,5 +24,18 @@
   "panel.noResults": "No results. The hosted Market requires",
   "panel.fsPermission": "fs: {{reads}} read{{writesText}}",
   "panel.fsWrites": ", {{writes}} write",
-  "panel.storage": "storage"
+  "panel.storage": "storage",
+  "panel.searchPlaceholder": "Filter installed…",
+  "panel.marketPrompt": "Search the market to discover plugins.",
+  "panel.disabledTag": "disabled",
+  "panel.update": "Update",
+  "panel.updateAvailable": "Update available → v{{version}}",
+  "panel.detail.selectPrompt": "Select a plugin to see details.",
+  "panel.detail.version": "v{{version}}",
+  "panel.detail.vendor": "Vendor",
+  "panel.detail.category": "Category",
+  "panel.detail.downloads": "Downloads",
+  "panel.detail.source": "Source",
+  "panel.detail.permissions": "Permissions",
+  "panel.detail.readme": "Readme"
 }

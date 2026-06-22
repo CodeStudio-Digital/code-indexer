@@ -79,8 +79,20 @@ export async function startTask(input: {
   command: string;
   label: string;
   manager: RunnerTask['manager'];
+  /** Project-relative working dir (defaults to project root); for nested manifests. */
+  cwd?: string;
 }): Promise<RunnerTask> {
   return apiCall<RunnerTask>('runner.start', input);
+}
+
+/** Run a markdown fenced code block (materialised + run by the backend). */
+export async function startSnippet(input: {
+  projectId: number;
+  language: string;
+  code: string;
+  label: string;
+}): Promise<RunnerTask> {
+  return apiCall<RunnerTask>('runner.runSnippet', input);
 }
 
 export async function stopTask(taskId: string): Promise<void> {

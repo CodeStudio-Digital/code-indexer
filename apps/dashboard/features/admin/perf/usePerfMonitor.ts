@@ -1,8 +1,8 @@
 /**
  * Polling hook for the admin perf panel.
  *
- * Polls `GET /api/admin/perf/current` every 5s while the tab is visible
- * (the endpoint forces a fresh backend sample) and `/history` every 30s
+ * Polls `GET /api/admin/perf/current` every 10s while the tab is visible
+ * (the endpoint serves a ≤2.5s-cached backend sample) and `/history` every 30s
  * for the sparkline. Also collects renderer-local metrics that only this
  * process can see: Chromium's `performance.memory` and the Monaco model
  * registry (count + buffered chars).
@@ -84,7 +84,10 @@ function readRendererStats(): RendererStats {
   };
 }
 
-const CURRENT_MS = 5_000;
+// 10s (was 5s): a fresh sample fans out to 3 worker-pool RPCs; 10s is still
+// responsive for a diagnostics panel and halves the panel's own footprint
+// (the backend also caches the sample for ~2.5s).
+const CURRENT_MS = 10_000;
 const HISTORY_MS = 30_000;
 
 export function usePerfMonitor(): {

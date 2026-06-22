@@ -5,14 +5,15 @@
  */
 import { useMemo } from 'react';
 import { History, RotateCcw, Tag } from 'lucide-react';
-import { cn } from '../../../lib/utils.js';
 import { Dialog, DialogContent, DialogTitle } from '../../../components/ui/dialog.js';
 import { Button } from '../../../components/ui/button.js';
 import { confirm, prompt } from '../../../components/ui/prompt-dialog.js';
 import { useLocalHistory } from '../../../state/local-history-store.js';
+import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
 import { RevisionRow } from './RevisionRow.js';
 import { useHistoryData } from './useHistoryData.js';
 import { lineDiff, diffStat } from './line-diff.js';
+import { LazyHistoryDiff } from './LazyHistoryDiff.js';
 
 function basename(p: string): string {
   const ix = p.lastIndexOf('/');
@@ -88,7 +89,7 @@ function Inner({ projectId, path, onClose }: { projectId: number; path: string; 
                 </span>
               )}
             </div>
-            <div className="flex-1 min-h-0 overflow-auto font-mono text-[11.5px] leading-[1.5]">
+            <div className="flex-1 min-h-0">
               {d.selected?.oversized === 1 ? (
                 <Placeholder text="Preview unavailable — binary or oversized revision." />
               ) : d.selected?.existed_before === 0 ? (
@@ -98,22 +99,7 @@ function Inner({ projectId, path, onClose }: { projectId: number; path: string; 
               ) : diff.length === 0 ? (
                 <Placeholder text="This version is identical to the current file." />
               ) : (
-                diff.map((l, idx) => (
-                  <div
-                    key={idx}
-                    className={cn(
-                      'px-2 whitespace-pre-wrap break-all',
-                      l.type === 'add' && 'bg-emerald-500/10 text-emerald-300',
-                      l.type === 'del' && 'bg-rose-500/10 text-rose-300',
-                      l.type === 'ctx' && 'text-muted-foreground',
-                    )}
-                  >
-                    <span className="select-none opacity-40 mr-2 inline-block w-2">
-                      {l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' '}
-                    </span>
-                    {l.text || ' '}
-                  </div>
-                ))
+                <LazyHistoryDiff original={d.oldContent ?? ''} modified={d.currentContent} language={languageIdForPath(path)} />
               )}
             </div>
           </div>

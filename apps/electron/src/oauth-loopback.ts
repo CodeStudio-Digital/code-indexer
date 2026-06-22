@@ -27,10 +27,26 @@ const AUTO_STOP_MS = 10 * 60 * 1000;
 /** Only the OAuth callback is forwarded; nothing else is reachable. */
 const CALLBACK_PATH = /^\/api\/admin\/mcp-servers\/[^/]+\/oauth\/callback$/;
 
+/** A tiny self-contained page shown after the browser-login handoff lands. */
+const RETURN_HTML =
+  '<!doctype html><html><head><meta charset="utf-8"><title>CodeStudio</title></head><body><h2>You are signed in</h2><p>You can close this tab and return to CodeStudio.</p></body></html>';
+
 type LoopbackServer = ReturnType<(typeof import('@hono/node-server'))['serve']>;
 
 let server: LoopbackServer | null = null;
 let autoStop: NodeJS.Timeout | null = null;
+/** Shared with the running server's fetch closure so either flow (MCP callback or
+ *  browser-login /cb) works regardless of which one started the listener. */
+let currentHonoApp: Hono | null = null;
+let authCapture: ((handoff: string) => void) | null = null;
+
+/** Arm a one-shot capture for the next `/cb?handoff=` hit (browser OAuth login). */
+export function registerAuthCapture(cb: (handoff: string) => void): void {
+  authCapture = cb;
+}
+export function clearAuthCapture(): void {
+  authCapture = null;
+}
 
 export interface LoopbackResult {
   ok: boolean;
@@ -42,7 +58,8 @@ export interface LoopbackResult {
  * Start (or reuse) the loopback listener. Idempotent: calling it again while
  * already running just re-arms the safety timer and returns the port.
  */
-export async function startOAuthLoopback(honoApp: Hono): Promise<LoopbackResult> {
+export async function startOAuthLoopback(honoApp?: Hono): Promise<LoopbackResult> {
+  if (honoApp) currentHonoApp = honoApp; // update the shared ref even when reusing
   rearmAutoStop();
   if (server) return { ok: true, port: OAUTH_LOOPBACK_PORT };
 
@@ -52,8 +69,19 @@ export async function startOAuthLoopback(honoApp: Hono): Promise<LoopbackResult>
     const s = serve(
       {
         fetch: (req: Request) => {
-          const { pathname } = new URL(req.url);
-          if (CALLBACK_PATH.test(pathname)) return honoApp.fetch(req);
+          const url = new URL(req.url);
+          // Browser-login handoff (P7-B): one-shot capture of ?handoff=, then a
+          // friendly page. No honoApp needed for this path.
+          if (url.pathname === '/cb') {
+            const handoff = url.searchParams.get('handoff');
+            if (handoff && authCapture) {
+              const cb = authCapture;
+              authCapture = null; // one-shot
+              cb(handoff);
+            }
+            return new Response(RETURN_HTML, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+          }
+          if (CALLBACK_PATH.test(url.pathname) && currentHonoApp) return currentHonoApp.fetch(req);
           return new Response('Not found', { status: 404 });
         },
         port: OAUTH_LOOPBACK_PORT,
@@ -83,6 +111,7 @@ export async function startOAuthLoopback(honoApp: Hono): Promise<LoopbackResult>
 
 export function stopOAuthLoopback(): void {
   clearAutoStop();
+  authCapture = null;
   if (!server) return;
   server.close();
   server = null;

@@ -126,6 +126,7 @@ import {
 } from './sse/coderWorkerPoolSingleton.js';
 import { createIndexerExecutor } from './sse/IndexerWorkerClient.js';
 import { startPerfSampler } from './server/perf/perf-sampler.js';
+import { startFreezeWatchdog } from './server/perf/freeze-log.js';
 import { getMemoryLedger } from './server/perf/memory-ledger.js';
 import { mountPerfRoutes } from './server/routes/admin/perf.js';
 import { createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
@@ -886,6 +887,11 @@ export function createApp() {
     },
     indexerMemStats: async () => indexer.client?.memStats() ?? null,
   });
+
+  // Main-loop freeze watchdog — feeds /api/admin/perf/freezes. Detects real
+  // event-loop stalls (whole-app "trava todas as telas") and attributes them
+  // to the in-flight IPC handler. Cheap interval; unref'd.
+  startFreezeWatchdog();
 
   // Agent LSP nav (lsp_definition/references/hover beyond TS) — ONE router
   // instance feeds three consumers: in-process coder runs (global backend),

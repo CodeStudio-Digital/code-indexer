@@ -84,7 +84,10 @@ export function LanguageLevelChip({ projectId, activeFilePath }: { projectId: nu
           )}
         >
           {LABEL[key]}: {current}
-          {source === 'detected' && <span className="opacity-60 text-[10px]">auto</span>}
+          {/* CLS-safe: reserve the badge width always (invisible when not
+              auto-detected) so it doesn't appear after async detection and
+              shove the right-aligned chips. */}
+          <span className={cn('opacity-60 text-[10px]', source !== 'detected' && 'invisible')}>auto</span>
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-44 p-1">

@@ -2,19 +2,41 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody } from '../_helpers.js';
 import { requestInProject, resolveScopedEnv } from './_ownership.js';
+import { blockPrivateHosts, projectRoot } from './_net-policy.js';
 import { type CookieJar, createJar, jarSnapshot } from '@mcp/shared/utils/http-engine.js';
 import { parseEnvVariables } from '@mcp/services/api-client/request-builder.js';
-import { executeRequest } from '@mcp/services/api-client/execute-request.js';
+import { executeRequest, type ExecRequest, type ExecuteResult } from '@mcp/services/api-client/execute-request.js';
 import { UNSET } from '@mcp/services/api-client/script-runtime/types.js';
+import { apiClientReadCap } from '@mcp/services/api-client/read-cap.js';
 
-/** Response read cap for the API client (override via MCP_API_CLIENT_READ_CAP). */
-const READ_CAP = Math.max(64 * 1024, Number(process.env.MCP_API_CLIENT_READ_CAP) || 5 * 1024 * 1024);
+/** Response read cap for the API client (shared with the regression runner + agent). */
+const READ_CAP = apiClientReadCap();
 
 /** Map script variableUpdates (UNSET → null) for ApiClientStore.applyEnvVarUpdates. */
 function toEnvUpdates(updates: Record<string, string>): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const [k, v] of Object.entries(updates)) out[k] = v === UNSET ? null : v;
   return out;
+}
+
+/** The JSON the client expects from /send and /send-adhoc (shared shape). */
+function sendPayload(res: ExecuteResult, jar: CookieJar, envUpdated: boolean, varKeys: string[]): Record<string, unknown> {
+  return {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+    body: res.body,
+    ms: res.ms,
+    url: res.url,
+    size: res.size,
+    truncated: res.truncated,
+    tests: [...(res.preScript?.tests ?? []), ...(res.testScript?.tests ?? [])],
+    consoleLogs: [...(res.preScript?.consoleLogs ?? []), ...(res.testScript?.consoleLogs ?? [])],
+    scriptError: res.preScript?.error ?? res.testScript?.error,
+    cookies: jarSnapshot(jar, new URL(res.url).host),
+    envUpdated,
+    updatedVars: envUpdated ? varKeys : undefined,
+  };
 }
 
 /**
@@ -37,6 +59,16 @@ function jarFor(projectId: number, collectionId: number): CookieJar {
 
 /** Keep the timeline bounded — newest N sends per request. */
 const HISTORY_KEEP = 50;
+
+/**
+ * Drop the query string before persisting a URL to the timeline. `res.url` is the
+ * FULLY RESOLVED url (template-substituted {{secret}} + apikey-in-query auth), so
+ * storing it verbatim would persist secrets at rest and serve them back via the
+ * history route — bypassing the env masking. Origin+path is enough for the UI.
+ */
+function redactUrl(url: string): string {
+  try { const u = new URL(url); return `${u.origin}${u.pathname}`; } catch { return url.split('?')[0]; }
+}
 
 /** Structural slice of ApiClientStore the send route needs for the timeline. */
 interface HistoryStore {
@@ -65,10 +97,11 @@ function recordHistory(
 }
 
 export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
-  const store = deps.apiClientStore;
+  // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
 
   app.post('/api/projects/:projectId/api-client/requests/:rid/send', async (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const rid = parseIdParam(c, 'rid');
     // Cross-project isolation: a stale request id from the previous project
     // (project switch leaves the client holding it) must not resolve here.
@@ -87,9 +120,13 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
     const jar = jarFor(projectId, req.collection_id);
 
     const t0 = Date.now();
+    const block = blockPrivateHosts();
     let res;
     try {
-      res = await executeRequest({ request: req, baseUrl, variables: vars, jar, maxBytes: READ_CAP });
+      res = await executeRequest({
+        request: req, baseUrl, variables: vars, jar, maxBytes: READ_CAP,
+        blockPrivateHosts: block, fileRoot: projectRoot(deps, projectId), allowAbsoluteFiles: !block,
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // An unresolvable URL (no base URL set) is a config error, not a 502.
@@ -101,7 +138,7 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
     }
 
     store.updateRequest(rid, { last_status: res.status, last_run_at: new Date().toISOString() });
-    recordHistory(store, rid, { status: res.status, ok: res.status < 400, duration_ms: res.ms, url: res.url });
+    recordHistory(store, rid, { status: res.status, ok: res.status < 400, duration_ms: res.ms, url: redactUrl(res.url) });
 
     // Persist script var updates back to the env (default on for manual sends).
     const varKeys = Object.keys(res.variableUpdates);
@@ -110,28 +147,50 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
       try { store.applyEnvVarUpdates(env.id, toEnvUpdates(res.variableUpdates)); envUpdated = true; } catch { /* non-fatal */ }
     }
 
-    return c.json({
-      status: res.status,
-      statusText: res.statusText,
-      headers: res.headers,
-      body: res.body,
-      ms: res.ms,
-      url: res.url,
-      size: res.size,
-      truncated: res.truncated,
-      tests: [...(res.preScript?.tests ?? []), ...(res.testScript?.tests ?? [])],
-      consoleLogs: [...(res.preScript?.consoleLogs ?? []), ...(res.testScript?.consoleLogs ?? [])],
-      scriptError: res.preScript?.error ?? res.testScript?.error,
-      cookies: jarSnapshot(jar, new URL(res.url).host),
-      // Which env vars a script wrote, so the UI can refresh + show feedback.
-      envUpdated,
-      updatedVars: envUpdated ? varKeys : undefined,
-    });
+    return c.json(sendPayload(res, jar, envUpdated, varKeys));
+  });
+
+  // Ad-hoc send for an UNSAVED draft request — runs the request from the posted
+  // body (no DB row). Mirrors /send but reads the request fields from the client
+  // and uses a scratch jar. Script var-sets still persist to the selected env.
+  app.post('/api/projects/:projectId/api-client/send-adhoc', async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
+    const body = await parseJsonBody<{ request?: ExecRequest; envId?: number; persistVars?: boolean }>(c);
+    if (!body.request) return c.json({ error: 'request is required' }, 400);
+
+    const env = resolveScopedEnv(store, projectId, body.envId);
+    const vars = parseEnvVariables(env?.variables_json);
+    const baseUrl = env?.base_url ?? '';
+    const jar = jarFor(projectId, 0); // scratch jar — isolates ad-hoc cookies from collections
+
+    const block = blockPrivateHosts();
+    let res;
+    try {
+      res = await executeRequest({
+        request: body.request, baseUrl, variables: vars, jar, maxBytes: READ_CAP,
+        blockPrivateHosts: block, fileRoot: projectRoot(deps, projectId), allowAbsoluteFiles: !block,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/Invalid URL|could not|resolve/i.test(msg) && !/ECONN|timed out|socket/i.test(msg)) {
+        return c.json({ error: `Could not resolve URL from base '${baseUrl}' + path '${body.request.path_template}'. Set a base URL in the environment.` }, 422);
+      }
+      return c.json({ error: msg, url: body.request.path_template }, 502);
+    }
+
+    const varKeys = Object.keys(res.variableUpdates);
+    let envUpdated = false;
+    if (body.persistVars !== false && env && varKeys.length) {
+      try { store.applyEnvVarUpdates(env.id, toEnvUpdates(res.variableUpdates)); envUpdated = true; } catch { /* non-fatal */ }
+    }
+    return c.json(sendPayload(res, jar, envUpdated, varKeys));
   });
 
   // Per-request timeline — newest first, capped by HISTORY_KEEP on write.
   app.get('/api/projects/:projectId/api-client/requests/:rid/history', (c) => {
     const projectId = parseIdParam(c, 'projectId');
+    const store = deps.apiClientFor(projectId);
     const rid = parseIdParam(c, 'rid');
     // A stale rid from another project must not leak its send timeline (urls,
     // statuses, error blobs) under this project's route.

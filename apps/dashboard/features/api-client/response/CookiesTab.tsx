@@ -1,7 +1,10 @@
+import { useTranslation } from 'react-i18next';
+
 /** Cookies in the per-collection jar for the response host. */
 export function CookiesTab({ cookies = [] }: { cookies?: { name: string; value: string }[] }) {
+  const { t } = useTranslation('apiClient');
   if (!cookies.length) {
-    return <div className="h-full flex items-center justify-center text-xs text-muted-foreground p-4 text-center">No cookies stored for this host.</div>;
+    return <div className="h-full flex items-center justify-center text-xs text-muted-foreground p-4 text-center">{t('cookies.emptyState')}</div>;
   }
   return (
     <table className="text-xs font-mono w-full p-2">

@@ -34,12 +34,12 @@ export const totp: TotpPort = {
   },
   async verify(secret, code) {
     const clean = (code ?? '').replace(/\s/g, '');
-    if (!/^\d{6}$/.test(clean)) return false;
+    if (!/^\d{6}$/.test(clean)) return null;
     const key = base32Decode(secret);
     const counter = Math.floor(Date.now() / 1000 / STEP);
     for (const w of [-1, 0, 1]) {
-      if ((await hotp(key, counter + w)) === clean) return true;
+      if ((await hotp(key, counter + w)) === clean) return counter + w; // matched absolute step
     }
-    return false;
+    return null;
   },
 };

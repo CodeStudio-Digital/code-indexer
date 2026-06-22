@@ -214,6 +214,8 @@ const runCommandTool: CoderTool = {
       signal: ctx.signal,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       stdin,
+      // Put the project's PHP/Python (not Node) on PATH for this command.
+      runtimeEnv: ctx.runtimeEnv,
     });
 
     const lines: string[] = [];

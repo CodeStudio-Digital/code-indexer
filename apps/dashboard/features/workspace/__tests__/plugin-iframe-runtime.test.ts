@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { injectIntoHtml } from '../plugin-iframe-runtime.js';
 import { PLUGIN_UI_KIT_CSS } from '../plugin-ui-kit/index.js';
+import { KIT } from '@mcp/plugin-sdk/ui/classes.js';
 
 const CTX = { namespace: 'test', locale: 'en' };
 const TOKENS = { '--background': '#fff' };
@@ -84,5 +85,35 @@ describe('PLUGIN_UI_KIT_CSS hygiene', () => {
   it('has no leftover unsupported at-rules (only @keyframes)', () => {
     const atRules = topLevelSelectors(PLUGIN_UI_KIT_CSS).filter((s) => s.startsWith('@'));
     for (const rule of atRules) expect(rule).toMatch(/^@keyframes mcp-/);
+  });
+
+  it('ships the enriched data-layer primitives', () => {
+    for (const cls of [
+      '.mcp-dtable',
+      '.mcp-status',
+      '.mcp-shell',
+      '.mcp-rail',
+      '.mcp-nav',
+      '.mcp-page-head',
+      '.mcp-stat',
+      '.mcp-state',
+    ]) {
+      expect(PLUGIN_UI_KIT_CSS).toContain(`${cls} `);
+    }
+  });
+});
+
+/**
+ * Cross-package contract guard: the SDK's `KIT` class-name constants are only
+ * the NAMES — the CSS bodies live solely in the host kit, injected at runtime.
+ * If the SDK references a class the host doesn't ship, plugins built against it
+ * render unstyled. This asserts every constant resolves to a real kit rule.
+ */
+describe('SDK KIT class names ⊆ host kit', () => {
+  it('every @mcp/plugin-sdk/ui KIT constant has a matching .mcp-* rule', () => {
+    const offenders = Object.values(KIT).filter(
+      (cls) => !new RegExp(`\\.${cls}(?![\\w-])`).test(PLUGIN_UI_KIT_CSS),
+    );
+    expect(offenders).toEqual([]);
   });
 });
