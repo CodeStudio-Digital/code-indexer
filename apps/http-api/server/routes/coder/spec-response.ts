@@ -1,0 +1,112 @@
+import type { Hono } from 'hono';
+import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import { formatSpecResult } from '@mcp/code-agent/tools/spec/index.js';
+import type { ServerDeps } from '../../deps.js';
+import type { CoderRuntime } from './state.js';
+import { parseIdParam } from '../_helpers.js';
+import {
+  coderWorkerEnabled,
+  getCoderWorkerPool,
+} from '../../../sse/coderWorkerPoolSingleton.js';
+import { emitWorkerLog } from '../../../coder-bus.js';
+
+interface SpecResponseBody {
+  approved: boolean;
+  requested_changes?: string;
+  spec_path?: string;
+}
+
+/**
+ * SDD mode counterpart of `/plan-response`. Routes the human verdict on a
+ * `submit_spec` (or `submit_specification_to_master`) submission back to the
+ * paused runner. Mirrors the worker / in-process / resume-path fallthrough
+ * sequence used by `/plan-response`.
+ *
+ * Kept as a sibling route file instead of inflating `interaction.ts`.
+ */
+export function mountCoderSpecResponseRoute(
+  app: Hono,
+  deps: ServerDeps,
+  runtime: CoderRuntime,
+): void {
+  const { sessionStore } = deps;
+  const { activeRuns, findPendingInteraction } = runtime;
+
+  app.post('/api/coder/sessions/:id/spec-response', async (c) => {
+    const id = parseIdParam(c);
+    const body = await c.req.json<SpecResponseBody>();
+    const approved = !!body.approved;
+    const requested = body.requested_changes;
+    const inWorkerMode = coderWorkerEnabled();
+
+    const bus = inWorkerMode ? getCoderWorkerPool().getBus(id) : activeRuns.get(id);
+    emitWorkerLog(bus, 'info', 'route', `POST /spec-response`, {
+      approved,
+      has_feedback: !!requested,
+    });
+
+    const payload = JSON.stringify({ approved, requested_changes: requested });
+
+    if (inWorkerMode) {
+      try {
+        const ok = await getCoderWorkerPool().provideUserInput(id, payload);
+        if (ok) return c.json({ ok: true });
+      } catch (err) {
+        console.warn(
+          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const entry = activeRuns.get(id);
+    if (entry?.runner) {
+      const ok = entry.runner.provideUserInput(payload);
+      if (ok) return c.json({ ok });
+    }
+
+    const pending = findPendingInteraction(id);
+    if (!pending || (pending.name !== 'submit_spec' && pending.name !== 'submit_specification_to_master')) {
+      return c.json({ error: 'no pending spec' }, 404);
+    }
+
+    const specPath = body.spec_path ?? '.mcp/specs/<unknown>.md';
+    const toolMsg: AgentMessage = {
+      role: 'tool',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: pending.toolUseId,
+        content: formatSpecResult(approved, specPath, requested),
+      }],
+    };
+    sessionStore.appendMessage(id, toolMsg);
+
+    if (approved) {
+      const session = sessionStore.getSession(id);
+      if (session?.agent === 'spec') {
+        try {
+          sessionStore.setSessionAgent(id, 'build');
+          const reminder: AgentMessage = {
+            role: 'user',
+            content: [{
+              type: 'text',
+              text:
+                `<system-reminder>Mode transition: Spec → Build. The spec at ${specPath} was approved. ` +
+                `Derive tasks from its "## Implementation Plan" via submit_tasks, then execute each per task scope.</system-reminder>`,
+            }],
+          };
+          sessionStore.appendMessage(id, reminder);
+        } catch (e) {
+          console.warn(
+            `[coder] spec→build transition (offline path) failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+    }
+
+    return c.json(
+      inWorkerMode
+        ? { ok: true, resumed_via_worker: true }
+        : { ok: true, resumed: true },
+    );
+  });
+}

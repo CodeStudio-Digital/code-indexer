@@ -1,0 +1,17 @@
+{
+  "name": "@mcp/plugin-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ui": "./src/ui/index.ts",
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "cli": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "@mcp/provider-sdk": "workspace:*"
+  }
+}

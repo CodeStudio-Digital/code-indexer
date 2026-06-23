@@ -1,0 +1,35 @@
+import type {
+  ContributedTool,
+  ContributedToolWindow,
+  ContributedCommand,
+  ContributedTheme,
+  PluginModule,
+} from './contributions/types.js';
+import type { PluginPermissions } from './contributions/capabilities.js';
+import type { ProviderSpec } from '@mcp/provider-sdk';
+
+export interface DefinePluginSpec {
+  tools?: ContributedTool[];
+  toolWindows?: ContributedToolWindow[];
+  commands?: ContributedCommand[];
+  themes?: ContributedTheme[];
+  permissions?: PluginPermissions;
+  /** LLM providers this plugin contributes, each a declarative `ProviderSpec` (DATA). */
+  providers?: ProviderSpec[];
+}
+
+/**
+ * Collect a plugin's contributions into the `PluginModule` the worker entry
+ * default-exports. The CLI `build` step also reads this to extract the
+ * declarative `.app.json` (everything except tool handlers).
+ */
+export function definePlugin(spec: DefinePluginSpec): PluginModule {
+  return {
+    tools: spec.tools ?? [],
+    toolWindows: spec.toolWindows ?? [],
+    commands: spec.commands ?? [],
+    themes: spec.themes ?? [],
+    ...(spec.permissions ? { permissions: spec.permissions } : {}),
+    ...(spec.providers && spec.providers.length ? { providers: spec.providers } : {}),
+  };
+}

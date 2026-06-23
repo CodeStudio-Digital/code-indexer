@@ -1,0 +1,52 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createSubagentMonitor } from '../subagent-monitor.js';
+
+describe('SubagentMonitor', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('times out an awaiting provider heartbeat that never emits a delta', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const failures: string[] = [];
+    const monitor = createSubagentMonitor({
+      limits: { timeoutMs: 600_000, stallMs: 300_000 },
+      startedAt: Date.now(),
+      getToolCallCount: () => 0,
+      getTurn: () => 1,
+      getLastToolName: () => undefined,
+      onFail: (message) => failures.push(message),
+    });
+    monitor.promise.catch(() => undefined);
+
+    monitor.recordProviderCall('zai', 'glm-5');
+    vi.advanceTimersByTime(121_000);
+    await Promise.resolve();
+
+    expect(failures[0]).toContain('provider timeout');
+    monitor.cleanup();
+  });
+
+  it('does not treat provider heartbeat tool_progress as semantic progress', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const failures: string[] = [];
+    const monitor = createSubagentMonitor({
+      limits: { timeoutMs: 600_000, stallMs: 1_000 },
+      startedAt: Date.now(),
+      getToolCallCount: () => 0,
+      getTurn: () => 1,
+      getLastToolName: () => 'provider.chat',
+      onFail: (message) => failures.push(message),
+    });
+    monitor.promise.catch(() => undefined);
+
+    monitor.recordToolProgress('provider.chat', 'awaiting zai:glm-5');
+    vi.advanceTimersByTime(1_001);
+    await Promise.resolve();
+
+    expect(failures[0]).toContain('subagent stalled');
+    monitor.cleanup();
+  });
+});

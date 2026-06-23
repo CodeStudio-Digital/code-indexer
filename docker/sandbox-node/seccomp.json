@@ -1,0 +1,73 @@
+{
+  "_comment": "MCP sandbox seccomp profile. Starts from Docker's upstream default (deny-by-default with a large allow list) and adds explicit deny actions for syscalls that Node 20 + Vite + npm install have no business calling. Wire via `--security-opt seccomp=<this-file>` (CliOciDriver does this when isolation.seccompProfile is set). Tested on Linux kernel 5.15+; older kernels will still load it but some denied syscalls may be unknown and get silently dropped — that's fine because the goal is defense-in-depth, not a precise whitelist.",
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_X86", "SCMP_ARCH_X32", "SCMP_ARCH_AARCH64"],
+  "syscalls": [
+    {
+      "_comment": "Filesystem-layer mounts — the sandbox has no legitimate reason to mount anything. Blocks container escape via bind-mount tricks.",
+      "names": ["mount", "umount", "umount2", "pivot_root", "chroot"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "Namespace manipulation — creating new namespaces from inside the container is a classic escalation vector (user namespaces give effective root inside the new ns).",
+      "names": ["unshare", "setns"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "Kernel module / kexec — never needed from userspace apps, always a privilege escalation or boot-integrity attack surface.",
+      "names": ["init_module", "finit_module", "delete_module", "kexec_load", "kexec_file_load"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "Reboot / power-state control. No, the LLM does not get to reboot the host.",
+      "names": ["reboot"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "eBPF + perf — powerful kernel introspection / patching. Vite doesn't need them; blocking them removes a large kernel-surface attack vector.",
+      "names": ["bpf", "perf_event_open"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "ptrace — used by debuggers and by escape exploits to hijack neighbour processes. npm install doesn't use it; `node --inspect` uses a TCP port, not ptrace.",
+      "names": ["ptrace", "process_vm_readv", "process_vm_writev"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "Legacy system call suite — rarely used by modern glibc/musl, occasionally used by rootkits.",
+      "names": ["uselib", "acct", "add_key", "request_key", "keyctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "Time-of-day tampering — a guest that can set clock forward breaks HMAC expiry checks and could desync logs.",
+      "names": ["adjtimex", "clock_adjtime", "clock_settime", "settimeofday", "stime"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "Quota / device-node controls — need CAP_SYS_ADMIN which we already dropped, but belt + suspenders.",
+      "names": ["quotactl", "lookup_dcookie", "open_by_handle_at", "name_to_handle_at"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "I/O port access — x86-only, used to talk directly to hardware. Nothing in Node touches this.",
+      "names": ["iopl", "ioperm"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "_comment": "Obscure process-personality flags (swapping personalities can bypass ASLR / hide exploits).",
+      "names": ["personality"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    }
+  ]
+}

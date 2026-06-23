@@ -1,0 +1,435 @@
+/**
+ * ApiClientStore — CRUD for the in-app Postman tables (migration 147):
+ * collections, environments, requests (verification folded in) and
+ * regression-run history. Project-scoped.
+ *
+ * Dual-mode constructor (path | shared DB handle), same as DesignSystemStore.
+ */
+import { createRequire } from 'node:module';
+import type DatabaseConstructor from 'better-sqlite3';
+import type {
+  ApiCollection, ApiEnvironment, ApiRequest, ApiRegressionRun, ApiRequestHistory,
+  ApiRunStatus, ApiRunTrigger, InsertRequestHistoryInput,
+  CreateCollectionInput, CreateRequestInput, UpsertEnvironmentInput, RequestPatch,
+  CollectionDocPatch, ApiDocPage, CreateDocPageInput, DocPagePatch,
+  ApiRequestExample, CreateExampleInput, ExamplePatch,
+} from './api-client-types.js';
+
+const require = createRequire(import.meta.url);
+const Database = require('better-sqlite3') as typeof DatabaseConstructor;
+type DB = InstanceType<typeof Database>;
+
+type Row = Record<string, unknown>;
+const hydrateCollection = (r: Row): ApiCollection => r as unknown as ApiCollection;
+const hydrateEnv = (r: Row): ApiEnvironment => ({ ...(r as object), is_default: !!r.is_default } as ApiEnvironment);
+const hydrateRequest = (r: Row): ApiRequest => ({ ...(r as object), verified: !!r.verified } as ApiRequest);
+const hydrateRun = (r: Row): ApiRegressionRun => r as unknown as ApiRegressionRun;
+const hydrateHistory = (r: Row): ApiRequestHistory => ({ ...(r as object), ok: !!r.ok } as ApiRequestHistory);
+
+export class ApiClientStore {
+  private db: DB;
+
+  constructor(dbOrPath: DB | string) {
+    this.db = typeof dbOrPath === 'string' ? new Database(dbOrPath) : dbOrPath;
+  }
+
+  /** Run `fn` in a single transaction — collapses N writes into one commit
+   *  (e.g. importing a large OpenAPI spec row-by-row). `fn` must be synchronous. */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
+  // ─── Collections ─────────────────────────────────────────────────────
+  listCollections(projectId: number): ApiCollection[] {
+    return (this.db.prepare('SELECT * FROM api_collections WHERE project_id = ? ORDER BY id DESC')
+      .all(projectId) as Row[]).map(hydrateCollection);
+  }
+
+  getCollection(id: number): ApiCollection | null {
+    const r = this.db.prepare('SELECT * FROM api_collections WHERE id = ?').get(id) as Row | undefined;
+    return r ? hydrateCollection(r) : null;
+  }
+
+  findCollectionBySpecHash(projectId: number, specHash: string): ApiCollection | null {
+    const r = this.db.prepare('SELECT * FROM api_collections WHERE project_id = ? AND spec_hash = ? LIMIT 1')
+      .get(projectId, specHash) as Row | undefined;
+    return r ? hydrateCollection(r) : null;
+  }
+
+  createCollection(input: CreateCollectionInput): ApiCollection {
+    const info = this.db.prepare(
+      `INSERT INTO api_collections (project_id, name, description, spec_source, spec_hash)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(input.project_id, input.name, input.description ?? '', input.spec_source ?? null, input.spec_hash ?? null);
+    return this.getCollection(Number(info.lastInsertRowid))!;
+  }
+
+  updateCollection(id: number, patch: { name?: string; spec_source?: string | null; spec_hash?: string | null } & CollectionDocPatch): void {
+    this.applyPatch('api_collections', id, patch);
+  }
+
+  deleteCollection(id: number): void {
+    // Explicit child delete — FK cascade only fires when PRAGMA foreign_keys is ON.
+    // One transaction so a failure can't orphan requests/runs/pages under a gone collection.
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM api_request_examples WHERE request_id IN (SELECT id FROM api_requests WHERE collection_id = ?)').run(id);
+      this.db.prepare('DELETE FROM api_requests WHERE collection_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_regression_runs WHERE collection_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_doc_pages WHERE collection_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_collections WHERE id = ?').run(id);
+    });
+  }
+
+  // ─── Folders (explicit per-collection list; requests carry a `folder` label) ──
+  private readFolders(collectionId: number): string[] {
+    const c = this.getCollection(collectionId);
+    try { return c?.folders_json ? (JSON.parse(c.folders_json) as string[]) : []; } catch { return []; }
+  }
+
+  /** Add an empty folder (idempotent). */
+  addFolder(collectionId: number, name: string): void {
+    const n = name.trim();
+    if (!n) return;
+    const folders = this.readFolders(collectionId);
+    if (!folders.includes(n)) this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify([...folders, n]) });
+  }
+
+  /** Rename a folder in the list AND on every request that used it. */
+  renameFolder(collectionId: number, from: string, to: string): void {
+    const t = to.trim();
+    if (!t || t === from) return;
+    const folders = [...new Set(this.readFolders(collectionId).map((f) => (f === from ? t : f)))];
+    // Atomic: the folder list and the requests' folder labels must agree.
+    this.transaction(() => {
+      this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(folders) });
+      this.db.prepare("UPDATE api_requests SET folder = ?, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(t, collectionId, from);
+    });
+  }
+
+  /** Effective folder list for a collection: explicit (folders_json) ∪ folders
+   *  actually used by its requests (e.g. OpenAPI tags) — sorted, deduped. */
+  listFolders(collectionId: number): string[] {
+    const explicit = this.readFolders(collectionId);
+    const used = (this.db
+      .prepare("SELECT DISTINCT folder FROM api_requests WHERE collection_id = ? AND folder IS NOT NULL AND folder != ''")
+      .all(collectionId) as { folder: string }[]).map((r) => r.folder);
+    return [...new Set([...explicit, ...used])].sort((a, b) => a.localeCompare(b));
+  }
+
+  /** Remove a folder; its requests fall back to the top level (folder = NULL). */
+  deleteFolder(collectionId: number, name: string): void {
+    this.transaction(() => {
+      this.applyPatch('api_collections', collectionId, { folders_json: JSON.stringify(this.readFolders(collectionId).filter((f) => f !== name)) });
+      this.db.prepare("UPDATE api_requests SET folder = NULL, updated_at = datetime('now') WHERE collection_id = ? AND folder = ?").run(collectionId, name);
+    });
+  }
+
+  // ─── Environments ────────────────────────────────────────────────────
+  listEnvironments(projectId: number): ApiEnvironment[] {
+    return (this.db.prepare('SELECT * FROM api_environments WHERE project_id = ? ORDER BY is_default DESC, id ASC')
+      .all(projectId) as Row[]).map(hydrateEnv);
+  }
+
+  getEnvironment(id: number): ApiEnvironment | null {
+    const r = this.db.prepare('SELECT * FROM api_environments WHERE id = ?').get(id) as Row | undefined;
+    return r ? hydrateEnv(r) : null;
+  }
+
+  getDefaultEnvironment(projectId: number): ApiEnvironment | null {
+    const r = this.db.prepare('SELECT * FROM api_environments WHERE project_id = ? ORDER BY is_default DESC, id ASC LIMIT 1')
+      .get(projectId) as Row | undefined;
+    return r ? hydrateEnv(r) : null;
+  }
+
+  upsertEnvironment(input: UpsertEnvironmentInput): ApiEnvironment {
+    if (input.is_default) {
+      this.db.prepare('UPDATE api_environments SET is_default = 0 WHERE project_id = ?').run(input.project_id);
+    }
+    if (input.id) {
+      this.applyPatch('api_environments', input.id, {
+        name: input.name, base_url: input.base_url, variables_json: input.variables_json,
+        // Only touch is_default when the caller actually sent it — a name-only
+        // update must not silently un-default the environment.
+        is_default: input.is_default === undefined ? undefined : (input.is_default ? 1 : 0),
+      });
+      return this.getEnvironment(input.id)!;
+    }
+    const info = this.db.prepare(
+      `INSERT INTO api_environments (project_id, name, base_url, variables_json, is_default)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(input.project_id, input.name, input.base_url ?? '', input.variables_json ?? '{}', input.is_default ? 1 : 0);
+    return this.getEnvironment(Number(info.lastInsertRowid))!;
+  }
+
+  deleteEnvironment(id: number): void {
+    this.db.prepare('DELETE FROM api_environments WHERE id = ?').run(id);
+  }
+
+  /**
+   * Apply variable updates produced by a request script (`pm.environment.set/unset`)
+   * to an environment's variables_json. A `null` value deletes the key (the route
+   * maps the script's UNSET sentinel → null). Preserves the `{value,secret}` shape
+   * and an existing `secret:true` flag; new keys default to non-secret. No-op when
+   * there are no updates. Never writes the secret mask (script values are cleartext).
+   */
+  applyEnvVarUpdates(envId: number, updates: Record<string, string | null>): void {
+    const keys = Object.keys(updates);
+    if (keys.length === 0) return;
+    const env = this.getEnvironment(envId);
+    if (!env) return;
+    let vars: Record<string, { value?: string; secret?: boolean } | string> = {};
+    try { vars = JSON.parse(env.variables_json || '{}'); } catch { vars = {}; }
+    for (const k of keys) {
+      const v = updates[k];
+      if (v === null) { delete vars[k]; continue; }
+      const prev = vars[k];
+      const secret = prev && typeof prev === 'object' ? !!prev.secret : false;
+      vars[k] = { value: v, secret };
+    }
+    this.applyPatch('api_environments', envId, { variables_json: JSON.stringify(vars) });
+  }
+
+  // ─── Requests ────────────────────────────────────────────────────────
+  listRequests(collectionId: number): ApiRequest[] {
+    return (this.db.prepare('SELECT * FROM api_requests WHERE collection_id = ? ORDER BY sort_order ASC, id ASC')
+      .all(collectionId) as Row[]).map(hydrateRequest);
+  }
+
+  getRequest(id: number): ApiRequest | null {
+    const r = this.db.prepare('SELECT * FROM api_requests WHERE id = ?').get(id) as Row | undefined;
+    return r ? hydrateRequest(r) : null;
+  }
+
+  createRequest(input: CreateRequestInput): ApiRequest {
+    const info = this.db.prepare(
+      `INSERT INTO api_requests
+         (collection_id, name, method, path_template, headers_json, query_json, body_json, body_kind,
+          body_raw_lang, body_form_json, body_urlencoded_json, body_graphql_json, body_binary_path,
+          pre_request_script, test_script, auth_type, auth_json, folder, sort_order, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.collection_id, input.name, input.method ?? 'GET', input.path_template ?? '',
+      input.headers_json ?? '[]', input.query_json ?? '[]', input.body_json ?? null,
+      input.body_kind ?? 'none', input.body_raw_lang ?? null, input.body_form_json ?? '[]',
+      input.body_urlencoded_json ?? '[]', input.body_graphql_json ?? null, input.body_binary_path ?? null,
+      input.pre_request_script ?? null, input.test_script ?? null, input.auth_type ?? null,
+      input.auth_json ?? null, input.folder ?? null, input.sort_order ?? 0, input.source ?? 'manual',
+    );
+    return this.getRequest(Number(info.lastInsertRowid))!;
+  }
+
+  updateRequest(id: number, patch: RequestPatch): void {
+    this.applyPatch('api_requests', id, patch);
+  }
+
+  /** Deep-copy a request (all fields incl. body kinds/scripts/auth) as a new
+   *  manual request in the same collection + folder. Verification is NOT copied. */
+  duplicateRequest(id: number): ApiRequest | null {
+    const r = this.getRequest(id);
+    if (!r) return null;
+    return this.createRequest({
+      collection_id: r.collection_id,
+      name: `${r.name} copy`,
+      method: r.method,
+      path_template: r.path_template,
+      headers_json: r.headers_json,
+      query_json: r.query_json,
+      body_json: r.body_json,
+      body_kind: r.body_kind,
+      body_raw_lang: r.body_raw_lang,
+      body_form_json: r.body_form_json,
+      body_urlencoded_json: r.body_urlencoded_json,
+      body_graphql_json: r.body_graphql_json,
+      body_binary_path: r.body_binary_path,
+      pre_request_script: r.pre_request_script,
+      test_script: r.test_script,
+      auth_type: r.auth_type,
+      auth_json: r.auth_json,
+      folder: r.folder,
+      sort_order: r.sort_order + 1,
+      source: 'manual',
+    });
+  }
+
+  /** Set the order (sort_order = position) of a folder's requests, and pin each
+   *  to `folder`, in one transaction. `orderedIds` is the full ordered list of
+   *  that folder after a drag-reorder (the dragged row may have just moved in). */
+  reorderRequests(collectionId: number, orderedIds: number[], folder: string | null): void {
+    // Scope the UPDATE to the collection: a stale/foreign request id (another
+    // project's, possible flag-off in the shared central store) matches 0 rows
+    // and is a no-op — no cross-collection sort_order/folder tampering.
+    const upd = this.db.prepare(
+      `UPDATE api_requests SET sort_order = ?, folder = ?, updated_at = datetime('now')
+         WHERE id = ? AND collection_id = ?`,
+    );
+    this.transaction(() => {
+      orderedIds.forEach((id, i) => upd.run(i, folder, id, collectionId));
+    });
+  }
+
+  markVerified(id: number, expectedStatus: number, assertJson?: string | null): void {
+    this.db.prepare(
+      `UPDATE api_requests SET verified = 1, expected_status = ?, assert_json = ?, updated_at = datetime('now') WHERE id = ?`,
+    ).run(expectedStatus, assertJson ?? null, id);
+  }
+
+  deleteRequest(id: number): void {
+    // Explicit child delete — FK cascade only fires when PRAGMA foreign_keys is ON.
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM api_request_history WHERE request_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_request_examples WHERE request_id = ?').run(id);
+      this.db.prepare('DELETE FROM api_requests WHERE id = ?').run(id);
+    });
+  }
+
+  // ─── Request history (timeline) ──────────────────────────────────────
+  /** Record one send. Caller should prune afterwards to bound growth. */
+  insertRequestHistory(input: InsertRequestHistoryInput): void {
+    this.db.prepare(
+      `INSERT INTO api_request_history (request_id, status, ok, duration_ms, url, error, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.request_id, input.status ?? null, input.ok ? 1 : 0,
+      input.duration_ms ?? null, input.url ?? null, input.error ?? null, input.source ?? 'manual',
+    );
+  }
+
+  listRequestHistory(requestId: number, limit = 50): ApiRequestHistory[] {
+    return (this.db.prepare('SELECT * FROM api_request_history WHERE request_id = ? ORDER BY id DESC LIMIT ?')
+      .all(requestId, limit) as Row[]).map(hydrateHistory);
+  }
+
+  /** Keep only the newest `keep` rows for a request; returns rows pruned. */
+  pruneRequestHistory(requestId: number, keep = 50): number {
+    const info = this.db.prepare(
+      `DELETE FROM api_request_history
+        WHERE request_id = ?
+          AND id NOT IN (
+            SELECT id FROM api_request_history WHERE request_id = ? ORDER BY id DESC LIMIT ?
+          )`,
+    ).run(requestId, requestId, keep);
+    return info.changes;
+  }
+
+  // ─── Regression runs ─────────────────────────────────────────────────
+  createRun(collectionId: number, envId: number | null, trigger: ApiRunTrigger): number {
+    const info = this.db.prepare(
+      'INSERT INTO api_regression_runs (collection_id, env_id, trigger) VALUES (?, ?, ?)',
+    ).run(collectionId, envId, trigger);
+    return Number(info.lastInsertRowid);
+  }
+
+  finishRun(id: number, r: { status: ApiRunStatus; total: number; passed: number; failed: number; results_json: string }): void {
+    this.db.prepare(
+      `UPDATE api_regression_runs SET status = ?, total = ?, passed = ?, failed = ?, results_json = ?, finished_at = datetime('now') WHERE id = ?`,
+    ).run(r.status, r.total, r.passed, r.failed, r.results_json, id);
+  }
+
+  listRuns(collectionId: number, limit = 20): ApiRegressionRun[] {
+    return (this.db.prepare('SELECT * FROM api_regression_runs WHERE collection_id = ? ORDER BY id DESC LIMIT ?')
+      .all(collectionId, limit) as Row[]).map(hydrateRun);
+  }
+
+  /** Drop a request from the regression battery (renamed/removed in a re-import,
+   *  or expectedStatus cleared from the UI). Keeps the row + any manual edits. */
+  unverifyRequest(id: number): void {
+    this.db.prepare(
+      `UPDATE api_requests SET verified = 0, expected_status = NULL, assert_json = NULL, updated_at = datetime('now') WHERE id = ?`,
+    ).run(id);
+  }
+
+  // ─── Doc pages (Docs Studio guide pages) ─────────────────────────────
+  listDocPages(collectionId: number): ApiDocPage[] {
+    return this.db.prepare('SELECT * FROM api_doc_pages WHERE collection_id = ? ORDER BY sort_order, id')
+      .all(collectionId) as ApiDocPage[];
+  }
+
+  createDocPage(input: CreateDocPageInput): ApiDocPage {
+    const info = this.db.prepare(
+      `INSERT INTO api_doc_pages (collection_id, slug, title, body_md, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(input.collection_id, input.slug, input.title, input.body_md ?? '', input.sort_order ?? 0);
+    return this.db.prepare('SELECT * FROM api_doc_pages WHERE id = ?').get(Number(info.lastInsertRowid)) as ApiDocPage;
+  }
+
+  updateDocPage(id: number, patch: DocPagePatch): void {
+    this.applyPatch('api_doc_pages', id, patch);
+  }
+
+  deleteDocPage(id: number): void {
+    this.db.prepare('DELETE FROM api_doc_pages WHERE id = ?').run(id);
+  }
+
+  reorderDocPages(collectionId: number, orderedIds: number[]): void {
+    const upd = this.db.prepare(
+      "UPDATE api_doc_pages SET sort_order = ?, updated_at = datetime('now') WHERE id = ? AND collection_id = ?",
+    );
+    this.transaction(() => { orderedIds.forEach((id, i) => upd.run(i, id, collectionId)); });
+  }
+
+  // ─── Request examples (saved real request+response snapshots) ─────────
+  listExamples(requestId: number): ApiRequestExample[] {
+    return this.db.prepare('SELECT * FROM api_request_examples WHERE request_id = ? ORDER BY sort_order, id')
+      .all(requestId) as ApiRequestExample[];
+  }
+
+  createExample(input: CreateExampleInput): ApiRequestExample {
+    const info = this.db.prepare(
+      `INSERT INTO api_request_examples
+        (request_id, name, req_snapshot_json, resp_status, resp_status_text, resp_headers_json, resp_body, resp_content_type, resp_size, redaction_count, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.request_id, input.name, input.req_snapshot_json ?? '{}',
+      input.resp_status ?? null, input.resp_status_text ?? null, input.resp_headers_json ?? null,
+      input.resp_body ?? null, input.resp_content_type ?? null, input.resp_size ?? null,
+      input.redaction_count ?? 0, input.sort_order ?? 0,
+    );
+    return this.db.prepare('SELECT * FROM api_request_examples WHERE id = ?').get(Number(info.lastInsertRowid)) as ApiRequestExample;
+  }
+
+  updateExample(id: number, patch: ExamplePatch): void {
+    this.applyPatch('api_request_examples', id, patch);
+  }
+
+  deleteExample(id: number): void {
+    this.db.prepare('DELETE FROM api_request_examples WHERE id = ?').run(id);
+  }
+
+  reorderExamples(requestId: number, orderedIds: number[]): void {
+    const upd = this.db.prepare(
+      "UPDATE api_request_examples SET sort_order = ?, updated_at = datetime('now') WHERE id = ? AND request_id = ?",
+    );
+    this.transaction(() => { orderedIds.forEach((id, i) => upd.run(i, id, requestId)); });
+  }
+
+  // ─── internal ────────────────────────────────────────────────────────
+  /**
+   * Build a dynamic `SET col = ?` update from a partial; no-op when empty.
+   * Column names are validated against a per-table allowlist so an
+   * untrusted patch (e.g. the PATCH /requests/:rid body) can never inject
+   * SQL through an object key.
+   */
+  private applyPatch(table: string, id: number, patch: Record<string, unknown>): void {
+    const allowed = ALLOWED_COLUMNS[table];
+    if (!allowed) throw new Error(`applyPatch: unknown table '${table}'`);
+    const keys = Object.keys(patch).filter((k) => patch[k] !== undefined && allowed.has(k));
+    if (keys.length === 0) return;
+    const set = keys.map((k) => `${k} = ?`).join(', ');
+    const values = keys.map((k) => patch[k] as never);
+    this.db.prepare(`UPDATE ${table} SET ${set}, updated_at = datetime('now') WHERE id = ?`).run(...values, id);
+  }
+}
+
+/** Columns `applyPatch` may write, per table — guards against key injection. */
+const ALLOWED_COLUMNS: Record<string, ReadonlySet<string>> = {
+  api_collections: new Set(['name', 'description', 'spec_source', 'spec_hash', 'folders_json', 'overview_md', 'branding_json', 'folder_docs_json']),
+  api_environments: new Set(['name', 'base_url', 'variables_json', 'is_default']),
+  api_requests: new Set([
+    'name', 'method', 'path_template', 'headers_json', 'query_json',
+    'body_json', 'body_kind', 'body_raw_lang', 'body_form_json', 'body_urlencoded_json',
+    'body_graphql_json', 'body_binary_path', 'pre_request_script', 'test_script',
+    'auth_type', 'auth_json', 'folder', 'description', 'param_docs_json', 'sort_order', 'last_status', 'last_run_at',
+  ]),
+  api_doc_pages: new Set(['slug', 'title', 'body_md', 'sort_order']),
+  api_request_examples: new Set(['name', 'sort_order']),
+};

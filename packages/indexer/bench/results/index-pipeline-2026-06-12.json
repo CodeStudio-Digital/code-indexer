@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-06-12T06:58:50.183Z",
+  "node": "v22.20.0",
+  "file_count": 30,
+  "concurrency": 5,
+  "embeddings": true,
+  "results": [
+    {
+      "scenario": "cold",
+      "workers": "on",
+      "duration_ms": 245,
+      "files_per_sec": 123,
+      "indexed": 0,
+      "skipped": 0,
+      "errors": 30,
+      "rss_start_mb": 157,
+      "rss_peak_mb": 364,
+      "rss_delta_mb": 207
+    },
+    {
+      "scenario": "warm_nochange",
+      "workers": "on",
+      "duration_ms": 7,
+      "files_per_sec": 4513,
+      "indexed": 0,
+      "skipped": 0,
+      "errors": 30,
+      "rss_start_mb": 165,
+      "rss_peak_mb": 165,
+      "rss_delta_mb": 0
+    },
+    {
+      "scenario": "touch_all",
+      "workers": "on",
+      "duration_ms": 8,
+      "files_per_sec": 3861,
+      "indexed": 0,
+      "skipped": 0,
+      "errors": 30,
+      "rss_start_mb": 165,
+      "rss_peak_mb": 165,
+      "rss_delta_mb": 0
+    },
+    {
+      "scenario": "change_10pct",
+      "workers": "on",
+      "duration_ms": 6,
+      "files_per_sec": 4789,
+      "indexed": 0,
+      "skipped": 0,
+      "errors": 30,
+      "rss_start_mb": 165,
+      "rss_peak_mb": 166,
+      "rss_delta_mb": 1
+    }
+  ]
+}

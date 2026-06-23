@@ -3,8 +3,8 @@ import {
   enterWorktree,
   exitWorktree,
   createProjectWorktree,
-} from '../core/coder/tools/worktree.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+} from '@mcp/code-agent/tools/worktree.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

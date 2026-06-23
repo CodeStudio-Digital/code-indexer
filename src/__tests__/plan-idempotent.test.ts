@@ -1,0 +1,148 @@
+import { describe, it, expect } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { submitPlan } from '@mcp/code-agent/tools/plan.js';
+import { tasksTools } from '@mcp/code-agent/tools/tasks.js';
+import { askUser, formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+
+const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks')!;
+
+/**
+ * Minimal fake runner that satisfies the bits the interactive tools touch:
+ *  - waitForUserInput() resolves to the next queued response
+ *  - emit() is a no-op aside from event-emitter wiring (tests inspect via spy)
+ *  - approvePlan() flips a flag we expose for assertions
+ */
+class FakeRunner extends EventEmitter {
+  private queue: string[] = [];
+  approved = false;
+  enqueue(response: string) {
+    this.queue.push(response);
+  }
+  waitForUserInput(): Promise<string> {
+    const next = this.queue.shift();
+    if (next === undefined) return Promise.reject(new Error('no input queued'));
+    return Promise.resolve(next);
+  }
+  approvePlan() { this.approved = true; }
+}
+
+function ctx(runner: FakeRunner): ToolContext {
+  return {
+    cwd: '/tmp',
+    projectName: 'test',
+    runner: runner as unknown as ToolContext['runner'],
+  };
+}
+
+describe('submit_plan idempotency', () => {
+  it('rejects re-submission of the same plan after the user rejected it', async () => {
+    const runner = new FakeRunner();
+
+    runner.enqueue(JSON.stringify({ approved: false, feedback: 'no' }));
+    const r1 = await submitPlan.handler({ plan: '1. Touch foo.ts\n2. Run tests' }, ctx(runner));
+    expect(r1.isError).toBeFalsy();
+    expect(r1.content).toContain('Plan rejected');
+
+    // No new input queued: re-submission should short-circuit before pausing
+    const r2 = await submitPlan.handler({ plan: '1. Touch foo.ts\n2. Run tests' }, ctx(runner));
+    expect(r2.isError).toBe(true);
+    expect(r2.content).toContain('already rejected');
+  });
+
+  it('clears the rejection ledger after a plan is approved', async () => {
+    const runner = new FakeRunner();
+    runner.enqueue(JSON.stringify({ approved: false }));
+    runner.enqueue(JSON.stringify({ approved: true }));
+    runner.enqueue(JSON.stringify({ approved: true }));
+
+    await submitPlan.handler({ plan: 'A' }, ctx(runner));    // rejected
+    await submitPlan.handler({ plan: 'B' }, ctx(runner));    // approved → clears ledger
+    const r = await submitPlan.handler({ plan: 'A' }, ctx(runner)); // accepts again
+    expect(r.isError).toBeFalsy();
+    expect(runner.approved).toBe(true);
+  });
+
+  it('whitespace-normalises the hash so trivial reformat reuses the rejection', async () => {
+    const runner = new FakeRunner();
+    runner.enqueue(JSON.stringify({ approved: false }));
+    await submitPlan.handler({ plan: '1. Step\n2. Step' }, ctx(runner));
+    const r = await submitPlan.handler({ plan: '1.  Step\n  2. Step' }, ctx(runner));
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('already rejected');
+  });
+
+  it('returns interrupted envelope when waitForUserInput resolves with interrupted', async () => {
+    const runner = new FakeRunner();
+    runner.enqueue(JSON.stringify({ interrupted: true, kind: 'question', agentRunId: 7, role: 'qa' }));
+    const r = await submitPlan.handler({ plan: 'X' }, ctx(runner));
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('answer_subordinate_question');
+    expect(r.content).toContain('agent_run_id');
+  });
+});
+
+describe('submit_tasks validation', () => {
+  it('rejects a single-task list and points to submit_plan', async () => {
+    const runner = new FakeRunner();
+    const r = await submitTasks.handler(
+      {
+        summary: 'one thing',
+        tasks: [
+          { id: 't1', title: 'a', description: 'b', files: [], references: [] },
+        ],
+      },
+      ctx(runner),
+    );
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('2+ independent tasks');
+    expect(r.content).toContain('submit_plan');
+  });
+});
+
+describe('formatInterruptedResult', () => {
+  it('produces a JSON envelope with next_action and a human-readable hint', () => {
+    const out = formatInterruptedResult('ask_user', { kind: 'plan', agentRunId: 42, role: 'frontend' });
+    const [envelope, hint] = out.split('\n');
+    const parsed = JSON.parse(envelope);
+    expect(parsed.interrupted).toBe(true);
+    expect(parsed.interrupted_tool).toBe('ask_user');
+    expect(parsed.next_action).toBe('approve_subordinate_plan');
+    expect(parsed.agent_run_id).toBe(42);
+    expect(parsed.role).toBe('frontend');
+    expect(hint).toContain('approve_subordinate_plan');
+    expect(hint).toContain('frontend');
+  });
+
+  it('routes question kind to answer_subordinate_question', () => {
+    const out = formatInterruptedResult('submit_plan', { kind: 'question', agentRunId: 1, role: 'r' });
+    const parsed = JSON.parse(out.split('\n')[0]);
+    expect(parsed.next_action).toBe('answer_subordinate_question');
+  });
+
+  it('routes tasks kind to approve_subordinate_tasks', () => {
+    const out = formatInterruptedResult('submit_plan', { kind: 'tasks', agentRunId: 1, role: 'r' });
+    const parsed = JSON.parse(out.split('\n')[0]);
+    expect(parsed.next_action).toBe('approve_subordinate_tasks');
+  });
+
+  it('passes through with null next_action when kind is missing', () => {
+    const out = formatInterruptedResult('ask_user', {});
+    const parsed = JSON.parse(out.split('\n')[0]);
+    expect(parsed.next_action).toBeNull();
+  });
+});
+
+describe('ask_user — interrupted path', () => {
+  it('returns structured envelope on interrupt', async () => {
+    const runner = new FakeRunner();
+    runner.enqueue(JSON.stringify({ interrupted: true, kind: 'tasks', agentRunId: 9, role: 'be' }));
+    const r = await askUser.handler({ question: 'x?' }, ctx(runner));
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('approve_subordinate_tasks');
+    const envelope = JSON.parse(r.content.split('\n')[0]);
+    expect(envelope.interrupted).toBe(true);
+    expect(envelope.next_action).toBe('approve_subordinate_tasks');
+    expect(envelope.agent_run_id).toBe(9);
+  });
+});

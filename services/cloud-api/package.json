@@ -1,0 +1,27 @@
+{
+  "name": "@cloudstudio/cloud-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate:local": "wrangler d1 migrations apply codestudio-cloud --local",
+    "migrate:remote": "wrangler d1 migrations apply codestudio-cloud --remote"
+  },
+  "dependencies": {
+    "@cloudstudio/cloud-billing": "workspace:*",
+    "@cloudstudio/cloud-feedback": "workspace:*",
+    "@cloudstudio/cloud-identity": "workspace:*",
+    "@cloudstudio/cloud-kernel": "workspace:*",
+    "@cloudstudio/cloud-sharing": "workspace:*",
+    "hono": "^4.7.5",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250327.0",
+    "typescript": "^5.8.2",
+    "wrangler": "^4.14.4"
+  }
+}

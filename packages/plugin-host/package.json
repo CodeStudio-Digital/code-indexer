@@ -1,0 +1,19 @@
+{
+  "name": "@mcp/plugin-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@mcp/shared": "workspace:*",
+    "@mcp/store": "workspace:*",
+    "@mcp/code-agent": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/provider-engine": "workspace:*",
+    "@mcp/plugin-sdk": "workspace:*",
+    "@mcp/plugin-market-client": "workspace:*"
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAnalysisResponse } from '../core/indexer/providers/base.js';
+import { parseAnalysisResponse } from '@mcp/indexer/indexer/providers/base.js';
 
 const MINIMAL_VALID = {
   summary: 'A test file',

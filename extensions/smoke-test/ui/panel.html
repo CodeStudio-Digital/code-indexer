@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      /* The host injects its theme CSS vars into :root before this loads. */
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: var(--font-sans, system-ui);
+        background: var(--background, #fff);
+        color: var(--foreground, #111);
+      }
+      h3 { margin: 0 0 4px; }
+      .muted { color: var(--muted-foreground, #777); font-size: 12px; margin: 0 0 12px; }
+      .row { display: flex; gap: 8px; margin-bottom: 8px; }
+      input {
+        flex: 1; padding: 6px 8px; font: inherit;
+        border: 1px solid var(--border, #ccc); border-radius: var(--radius, 6px);
+        background: var(--card, #fff); color: inherit;
+      }
+      button {
+        padding: 6px 12px; font: inherit; cursor: pointer;
+        border: 0; border-radius: var(--radius, 6px);
+        background: var(--primary, #2563eb); color: var(--primary-foreground, #fff);
+      }
+      button.secondary { background: var(--secondary, #eee); color: var(--secondary-foreground, #111); }
+      pre {
+        background: var(--muted, #f3f3f3); padding: 10px; border-radius: var(--radius, 6px);
+        font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap; margin: 8px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h3 id="title"></h3>
+    <p class="muted" id="ctx"></p>
+
+    <div class="row">
+      <input id="text" />
+      <button id="echo"></button>
+      <button id="save" class="secondary"></button>
+      <button id="read" class="secondary"></button>
+    </div>
+    <pre id="out"></pre>
+
+    <script>
+      var mcp = window.mcp || {};
+      var t = (mcp.i18n && mcp.i18n.translator) ? mcp.i18n.translator({
+        en: {
+          title: 'Plugin smoke test',
+          context: 'context: {value}',
+          placeholder: 'type something…',
+          defaultText: 'hello capabilities',
+          echo: 'echo',
+          save: 'save note',
+          read: 'read note',
+          ready: 'ready.'
+        },
+        'pt-BR': {
+          title: 'Teste smoke do plugin',
+          context: 'contexto: {value}',
+          placeholder: 'digite algo…',
+          defaultText: 'olá capabilities',
+          echo: 'echo',
+          save: 'salvar nota',
+          read: 'ler nota',
+          ready: 'pronto.'
+        }
+      }) : function (k) { return k; };
+      var out = document.getElementById('out');
+      document.getElementById('title').textContent = t('title');
+      document.getElementById('text').placeholder = t('placeholder');
+      document.getElementById('text').value = t('defaultText');
+      document.getElementById('echo').textContent = t('echo');
+      document.getElementById('save').textContent = t('save');
+      document.getElementById('read').textContent = t('read');
+      out.textContent = t('ready');
+      function show(label, v) {
+        out.textContent = label + '\n' + (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
+      }
+      function fail(label, e) { show(label + ' FAILED', String(e && e.message || e)); }
+
+      // window.mcp + window.__pluginContext are injected by the host.
+      document.getElementById('ctx').textContent =
+        t('context', { value: JSON.stringify((window.mcp && window.mcp.context) || {}) });
+
+      document.getElementById('echo').onclick = function () {
+        window.mcp.invokeTool('echo', { text: document.getElementById('text').value })
+          .then(function (r) { show('echo →', r); })
+          .catch(function (e) { fail('echo', e); });
+      };
+      document.getElementById('save').onclick = function () {
+        window.mcp.invokeTool('save_note', { text: document.getElementById('text').value })
+          .then(function (r) { show('save_note →', r); })
+          .catch(function (e) { fail('save_note', e); });
+      };
+      document.getElementById('read').onclick = function () {
+        window.mcp.invokeTool('read_note', {})
+          .then(function (r) { show('read_note →', r); })
+          .catch(function (e) { fail('read_note', e); });
+      };
+    </script>
+  </body>
+</html>

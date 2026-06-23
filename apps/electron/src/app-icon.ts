@@ -1,0 +1,22 @@
+import { app } from 'electron';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export const APP_DISPLAY_NAME = 'CodeStudio';
+export const APP_USER_MODEL_ID = APP_DISPLAY_NAME;
+
+export function resolveAppIconPath(): string | undefined {
+  const electronRoot = path.resolve(__dirname, '..');
+  const candidates = [
+    app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : undefined,
+    path.join(electronRoot, 'build', 'icon.png'),
+    path.join(electronRoot, 'icon.png'),
+    path.resolve(__dirname, '../../../../apps/electron/build/icon.png'),
+  ].filter((candidate): candidate is string => !!candidate);
+
+  return candidates.find((candidate) => existsSync(candidate));
+}

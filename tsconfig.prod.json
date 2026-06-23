@@ -1,0 +1,12 @@
+{
+  "//": "Production build config for `pnpm electron:build` (scripts/build-electron.mjs).",
+  "//2": "Extends the normal root config but strips all map/declaration emit so",
+  "//3": "no .js.map / .d.ts / .d.ts.map ever reaches the packaged ASAR. Dev builds",
+  "//4": "(`pnpm build`) keep using tsconfig.json with sourceMap on for DX.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "sourceMap": false,
+    "declaration": false,
+    "declarationMap": false
+  }
+}

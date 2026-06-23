@@ -1,0 +1,50 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "apps/cli/index.ts",
+        "apps/mcp-server/index.ts",
+        "apps/http-api/server.ts",
+        "apps/http-api/workers/*.{ts,mjs}",
+        "apps/electron/main.ts",
+        "apps/electron/preload.ts",
+        "apps/electron/dev.ts",
+        "apps/dashboard/main.tsx",
+        "apps/dashboard/vite.config.ts",
+        "apps/account-portal/main.tsx",
+        "apps/account-portal/vite.config.ts",
+        "scripts/**/*.{ts,mjs}",
+        "src/benchmarks/**/*.ts"
+      ],
+      "project": ["src/**/*.ts", "apps/**/*.{ts,tsx}"]
+    },
+    "packages/*": {
+      "entry": ["src/index.ts", "bench/**/*.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "services/*": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    }
+  },
+  "ignore": ["**/dist/**", "**/*.d.ts", "worker/**", "worker-market/**", "extensions/**", "sidecars/**"],
+  "ignoreDependencies": [
+    "better-sqlite3",
+    "node-pty",
+    "@mcp/.+",
+    "@cloudstudio/.+",
+    "tw-animate-css",
+    "@tailwindcss/typography",
+    "autoprefixer",
+    "tailwindcss",
+    "postcss",
+    "electron-builder",
+    "@aws-sdk/client-bedrock",
+    "@aws-sdk/client-bedrock-runtime",
+    "cheerio",
+    "unpdf",
+    "tree-sitter-wasms"
+  ],
+  "ignoreWorkspaces": ["worker", "worker-market"]
+}

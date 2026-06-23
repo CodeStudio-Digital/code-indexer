@@ -1,0 +1,105 @@
+/**
+ * Wires a composer's local `input`/`attachments` state to the module-level
+ * `composer-draft-store`, so a draft survives the chat view unmounting on
+ * navigation and is isolated per session. Shared by the full chat Composer,
+ * the editor Copilot rail, and the company MasterComposer.
+ *
+ * Returns a synchronous `clearDraft` to call at send time — the debounced
+ * save alone would let a pre-send draft "resurrect" if the user sends and
+ * navigates away within the debounce window.
+ */
+import { useCallback, useEffect, useRef } from 'react';
+import type { AgentAttachment } from '../../../hooks/agent-stream/types.js';
+import {
+  clearDraft as storeClearDraft,
+  getDraft,
+  hydrateFromStorageOnce,
+  setDraft,
+  subscribeDraft,
+} from './composer-draft-store.js';
+
+const SAVE_DEBOUNCE_MS = 250;
+
+interface Params {
+  /** Namespaced draft key (`coder:<id>` / `company:<id>`); null disables persistence. */
+  draftKey: string | null;
+  input: string;
+  setInput: (v: string) => void;
+  attachments: AgentAttachment[];
+  setAttachments: (a: AgentAttachment[]) => void;
+}
+
+export function useComposerDraft({
+  draftKey,
+  input,
+  setInput,
+  attachments,
+  setAttachments,
+}: Params): { clearDraft: () => void } {
+  // Which key the local state currently represents — drives the switch flush.
+  const keyRef = useRef<string | null>(null);
+  // Latest local values, read by the flush in the hydrate effect without
+  // making it depend on (and re-run for) every keystroke.
+  const latest = useRef({ input, attachments });
+  latest.current = { input, attachments };
+
+  // Hydrate on key change: flush the OUTGOING key's draft, then LOAD the
+  // incoming key's draft into local state. Depends only on draftKey so it
+  // never fires mid-typing.
+  useEffect(() => {
+    const prev = keyRef.current;
+    if (prev === draftKey) return;
+    if (prev != null) setDraft(prev, { text: latest.current.input, attachments: latest.current.attachments });
+    if (draftKey != null) {
+      hydrateFromStorageOnce(draftKey);
+      const d = getDraft(draftKey);
+      setInput(d.text);
+      setAttachments(d.attachments);
+    } else {
+      setInput('');
+      setAttachments([]);
+    }
+    keyRef.current = draftKey;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  // Debounced save. Suppressed while a switch is in flight (keyRef not yet
+  // caught up) so the outgoing key's text can't be written under the new key.
+  useEffect(() => {
+    if (draftKey == null || keyRef.current !== draftKey) return;
+    const h = setTimeout(() => setDraft(draftKey, { text: input, attachments }), SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(h);
+  }, [draftKey, input, attachments]);
+
+  // Cross-instance sync: keep the full chat tab and the editor rail (both
+  // mountable for the same session) in lockstep. Adopting an identical value
+  // is a React no-op, and the store's identity short-circuit prevents storms.
+  useEffect(() => {
+    if (draftKey == null) return;
+    return subscribeDraft(draftKey, () => {
+      if (keyRef.current !== draftKey) return;
+      const d = getDraft(draftKey);
+      setInput(d.text);
+      setAttachments(d.attachments);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  // Flush the latest draft synchronously on unmount. The debounced save above
+  // would otherwise drop the final <250ms of typing in the exact case this
+  // feature targets: type, then immediately navigate away (the component
+  // unmounts and the pending debounce timer is cancelled).
+  useEffect(() => {
+    return () => {
+      const k = keyRef.current;
+      if (k != null) setDraft(k, { text: latest.current.input, attachments: latest.current.attachments });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const clearDraft = useCallback(() => {
+    if (draftKey != null) storeClearDraft(draftKey);
+  }, [draftKey]);
+
+  return { clearDraft };
+}

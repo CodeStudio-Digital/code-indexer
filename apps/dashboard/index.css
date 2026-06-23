@@ -1,0 +1,397 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Render native controls (select popups, scrollbars, inputs) in the right
+     theme — without this, a dark-styled <select> opens a white popup with
+     light, near-invisible option text. */
+  color-scheme: light;
+  /* ===== Brand palette (provided) ===== */
+  --primary-base: #195ab4;
+  --primary-extended-10: #d2e5ff;
+  --primary-extended-20: #b1d2ff;
+  --primary-extended-30: #87baff;
+  --primary-extended-40: #6baaff;
+  --primary-extended-50: #549cff;
+  --primary-extended-60: #307ae0;
+  --primary-extended-70: #195ab4;
+  --primary-extended-80: #10408d;
+  --primary-extended-90: #0b2859;
+  --primary-extended-100: #05132a;
+
+  --neutral-extended-10: #ffffff;
+  --neutral-extended-20: #f5f6f9;
+  --neutral-extended-30: #d7dbdf;
+  --neutral-extended-40: #b8bec4;
+  --neutral-extended-50: #959ca2;
+  --neutral-extended-60: #61686e;
+  --neutral-extended-70: #464c51;
+  --neutral-extended-80: #34383c;
+  --neutral-extended-90: #272a2e;
+  --neutral-extended-100: #1b1e20;
+
+  --status-success: #159e5c;
+  --status-warning: #f05800;
+  --status-error: #eb3d47;
+  --status-info: #1f7dff;
+
+  /* ===== shadcn tokens (light) — refreshed for IDE density ===== */
+  --background: #fafafb;
+  --foreground: #0b0d12;
+  --card: #ffffff;
+  --card-foreground: #0b0d12;
+  --popover: #ffffff;
+  --popover-foreground: #0b0d12;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f3f6;
+  --secondary-foreground: #0b0d12;
+  --muted: #f1f3f6;
+  --muted-foreground: #5b6470;
+  --accent: #e6efff;
+  --accent-foreground: #1d4ed8;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #16a34a;
+  --warning: #d97706;
+  --info: #2563eb;
+  --border: #e4e7ec;
+  --input: #e4e7ec;
+  --ring: #4d8cff;
+  --radius: 0.375rem;
+  /* Premium IDE typography — Inter variable + JetBrains Mono via the
+     Google Fonts link in index.html. System fallbacks cover offline. */
+  --font-sans: "Inter", "InterVariable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
+  /* IDE density (Feature 4) — defaults = "comfortable" (um passo acima do
+     legado 13/22). Overridden por html[data-density] via state/ui-density.ts. */
+  --ide-ui-font: 13px;
+  --ide-tree-font: 12.5px;
+  --ide-tree-row: 24px;
+}
+
+html[data-density="compact"] {
+  --ide-ui-font: 12px;
+  --ide-tree-font: 11.5px;
+  --ide-tree-row: 22px;
+}
+html[data-density="large"] {
+  --ide-ui-font: 14px;
+  --ide-tree-font: 13.5px;
+  --ide-tree-row: 28px;
+}
+
+.dark {
+  /* Dark native controls (select dropdowns, scrollbars) — see :root note. */
+  color-scheme: dark;
+  /* Deep premium dark — inspired by Zed / Linear / Raycast. */
+  --background: #0b0d12;
+  --foreground: #e6e8ee;
+  --card: #14171f;
+  --card-foreground: #e6e8ee;
+  --popover: #1a1d27;
+  --popover-foreground: #e6e8ee;
+  --primary: #4d8cff;
+  --primary-foreground: #ffffff;
+  --secondary: #1a1d27;
+  --secondary-foreground: #c0c7d6;
+  --muted: #1a1d27;
+  --muted-foreground: #8a92a6;
+  --accent: #2a3550;
+  --accent-foreground: #b8c4dd;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --info: #4d8cff;
+  --border: #20242e;
+  --input: #20242e;
+  --ring: #4d8cff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1, "ss03" 1, "cv11" 1;
+  font-size: var(--ide-ui-font, 13px);
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+  font-feature-settings: "calt" 0;
+}
+
+/* Tight, IDE-density defaults for headings — feature pages can override
+   via Tailwind utilities. */
+h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1.05rem; font-weight: 600; letter-spacing: -0.005em; }
+h3 { font-size: 0.95rem; font-weight: 600; }
+h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-foreground); }
+
+/* Electron frameless title bar: `.drag` makes a region move the OS window;
+   `.no-drag` carves interactive children (buttons, inputs) back out so a
+   click isn't swallowed as a window drag. No-op in the browser. */
+.drag { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+
+/* Subtle scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 25%, transparent);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  background-clip: padding-box;
+}
+
+/* Pulse dot animation for streaming */
+@keyframes pulse-dot {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+.dot-pulse > span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 2px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse-dot 1.4s infinite ease-in-out both;
+}
+.dot-pulse > span:nth-child(1) { animation-delay: -0.32s; }
+.dot-pulse > span:nth-child(2) { animation-delay: -0.16s; }
+
+.chat-scroll > div > div{
+  display: block !important;
+}
+
+/* Indeterminate progress bar (shimmer) */
+@keyframes progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(300%); }
+}
+
+/* ── Shiki code viewer ───────────────────────────────
+   Shiki emits `<pre class="shiki ..."><code><span class="line">…</span>…`.
+   We override the outer `<pre>` so it fills the scroll area and defer
+   text colors entirely to Shiki's inline styles. Line numbers use a
+   CSS counter so the gutter isn't part of the DOM text (copy-paste
+   produces clean code without numbers). */
+.shiki-viewer { padding: 0; }
+.shiki-viewer pre.shiki {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: transparent !important;
+  min-height: 100%;
+}
+.shiki-viewer pre.shiki code {
+  counter-reset: shiki-line;
+  font: inherit;
+  display: block;
+}
+/* Line numbers: push the code text right via padding on <code>, then the
+   ::before on each .line hangs into that padding with a negative margin.
+   The .line span itself stays inline so Shiki's trailing `\n` produces
+   the natural line break (no double-spacing). */
+.shiki-viewer.viewer-lineno pre.shiki code { padding-left: 3.25rem; }
+.shiki-viewer.viewer-lineno pre.shiki .line::before {
+  counter-increment: shiki-line;
+  content: counter(shiki-line);
+  display: inline-block;
+  width: 2.5rem;
+  margin-left: -3rem;
+  margin-right: 0.5rem;
+  text-align: right;
+  color: color-mix(in oklab, currentColor 40%, transparent);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.shiki-viewer.viewer-wrap pre.shiki { white-space: pre-wrap; word-break: break-word; }
+.shiki-viewer:not(.viewer-wrap) pre.shiki { white-space: pre; }
+
+/* ── react-diff-view theme overrides ─────────────────
+   The default palette uses light pastel pinks/greens that clash with
+   the dashboard theme. Remap via the component's CSS variables so the
+   diff reads correctly in both light and dark modes. */
+.diff-block {
+  --diff-background-color: transparent;
+  --diff-text-color: var(--foreground);
+  --diff-font-family: inherit;
+  --diff-gutter-insert-background-color: color-mix(in srgb, var(--success) 18%, transparent);
+  --diff-gutter-insert-text-color: var(--success);
+  --diff-gutter-delete-background-color: color-mix(in srgb, var(--destructive) 18%, transparent);
+  --diff-gutter-delete-text-color: var(--destructive);
+  --diff-code-insert-background-color: color-mix(in srgb, var(--success) 10%, transparent);
+  --diff-code-insert-text-color: var(--foreground);
+  --diff-code-delete-background-color: color-mix(in srgb, var(--destructive) 10%, transparent);
+  --diff-code-delete-text-color: var(--foreground);
+  --diff-code-insert-edit-background-color: color-mix(in srgb, var(--success) 30%, transparent);
+  --diff-code-delete-edit-background-color: color-mix(in srgb, var(--destructive) 30%, transparent);
+  --diff-selection-background-color: color-mix(in srgb, var(--primary) 25%, transparent);
+  --diff-omit-gutter-line-color: var(--muted-foreground);
+}
+.diff-block .diff { table-layout: auto; }
+.diff-block .diff-line { line-height: 1.45; }
+.diff-block .diff-code { padding: 0 0 0 0.5em; }
+.diff-block .diff-gutter { min-width: 3ch; }
+.diff-block .diff-gutter-col { width: 3.5ch; }
+
+/* Conflict-marker highlighting inside Monaco (inline resolver + 3-pane
+   Result). Whole-line tints for the "current"/"incoming" hunks plus a thin
+   gutter accent, themed off the design-system success/destructive vars. */
+.conflict-current { background: color-mix(in srgb, var(--success) 12%, transparent); }
+.conflict-incoming { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.conflict-current-gutter { border-left: 3px solid var(--success); }
+.conflict-incoming-gutter { border-left: 3px solid var(--primary); }
+
+/* 3-way merge editor (IntelliJ-style, marker-free). Blue=ours, green=theirs,
+   amber=conflict. Whole-line tints in the side + Result panes; clickable
+   gutter arrows push a side into the Result. */
+.merge-ours      { background: color-mix(in srgb, var(--primary) 13%, transparent); }
+.merge-theirs    { background: color-mix(in srgb, var(--success) 13%, transparent); }
+.merge-both      { background: color-mix(in srgb, var(--muted-foreground) 8%, transparent); }
+.merge-conflict  { background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent); }
+.merge-accepted  { background: color-mix(in srgb, var(--success) 14%, transparent); }
+.merge-resolved  { opacity: 0.5; text-decoration: line-through;
+                   text-decoration-color: color-mix(in srgb, var(--muted-foreground) 60%, transparent); }
+.merge-arrow-right, .merge-arrow-left { cursor: pointer; font-weight: 700; text-align: center; }
+.merge-arrow-right::before { content: '»'; color: var(--primary); }
+.merge-arrow-left::before  { content: '«'; color: var(--success); }
+.merge-arrow-right:hover::before, .merge-arrow-left:hover::before { color: var(--foreground); }
+/* IntelliJ-style run ▶ in the glyph margin (package.json/composer scripts, py __main__). */
+.mcp-run-glyph { cursor: pointer; text-align: center; }
+.mcp-run-glyph::before { content: '\25B6'; color: var(--success); font-size: 10px; opacity: 0.85; }
+.mcp-run-glyph:hover::before { color: var(--foreground); opacity: 1; }
+
+/* IntelliJ-style git change markers in the lines-decorations gutter. A thin
+   vertical bar marks added (green) / modified (blue) lines vs the file's HEAD
+   baseline; a small triangle marks the spot where lines were deleted. Clicking
+   a marker opens the change toolbar (rollback / diff / stage). */
+.mcp-change-added,
+.mcp-change-modified,
+.mcp-change-deleted { cursor: pointer; }
+.mcp-change-added    { border-left: 3px solid var(--success); }
+.mcp-change-modified { border-left: 3px solid var(--primary); }
+.mcp-change-added:hover    { border-left-color: color-mix(in srgb, var(--success) 70%, var(--foreground)); }
+.mcp-change-modified:hover { border-left-color: color-mix(in srgb, var(--primary) 70%, var(--foreground)); }
+.mcp-change-deleted { position: relative; }
+.mcp-change-deleted::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -4px;
+  border-left: 6px solid var(--muted-foreground);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+.mcp-change-deleted:hover::before { border-left-color: var(--foreground); }
+
+/* Change-marker toolbar (Monaco content widget). IntelliJ-style floating bar
+   with rollback / copy / navigate / stage / commit, plus an original-text
+   preview and an inline commit field. */
+.mcp-change-tb-host { z-index: 30; }
+.mcp-change-tb {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--popover);
+  color: var(--popover-foreground, var(--foreground));
+  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+  font-family: var(--font-sans, system-ui), sans-serif;
+}
+.mcp-change-tb-row { display: flex; align-items: center; gap: 1px; }
+.mcp-change-tb-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--border); }
+.mcp-change-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mcp-change-tb-btn:hover { background: var(--accent, color-mix(in srgb, var(--foreground) 10%, transparent)); color: var(--foreground); }
+.mcp-change-tb-btn.is-active { color: var(--primary); }
+.mcp-change-tb-commit { display: flex; align-items: center; gap: 3px; padding: 0 2px 2px; }
+.mcp-change-tb-input {
+  width: 220px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--input, var(--border));
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+.mcp-change-tb-input:focus { outline: none; border-color: var(--ring, var(--primary)); }
+.mcp-change-tb-original {
+  max-width: 520px;
+  max-height: 180px;
+  margin: 0 2px 2px;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted-foreground) 10%, transparent);
+  color: var(--foreground);
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+  tab-size: 2;
+}

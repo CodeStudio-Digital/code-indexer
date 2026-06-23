@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { computeStableId } from '../store/migrations/002_symbol_stable_id.js';
-import type { LLMSymbol } from '../types.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { computeStableId } from '@mcp/store/migrations/002_symbol_stable_id.js';
+import type { LLMSymbol } from '@mcp/shared/types.js';
 
 function mkSym(overrides: Partial<LLMSymbol> = {}): LLMSymbol {
   return {
@@ -57,14 +57,37 @@ describe('CodeIndexDB', () => {
 
   describe('migrations', () => {
     it('applies all migrations on a fresh DB', () => {
-      expect(db.getSchemaVersion()).toBe(13);
+      expect(db.getSchemaVersion()).toBe(95);
     });
 
     it('re-opening an existing DB does not re-apply migrations', () => {
       db.close();
       const db2 = new CodeIndexDB(dbPath);
-      expect(db2.getSchemaVersion()).toBe(13);
+      expect(db2.getSchemaVersion()).toBe(95);
       db2.close();
+    });
+
+    it('coder_messages has is_meta column from migration 075 (PR-4)', () => {
+      // @ts-expect-error - accessing internal for test
+      const cols = db.db.prepare("PRAGMA table_info(coder_messages)").all() as {
+        name: string;
+      }[];
+      const names = cols.map((c) => c.name);
+      expect(names).toContain('is_meta');
+    });
+
+    it('coder_sessions has goal_* columns from migration 068', () => {
+      // @ts-expect-error - accessing internal for test
+      const cols = db.db.prepare("PRAGMA table_info(coder_sessions)").all() as {
+        name: string;
+      }[];
+      const names = new Set(cols.map((c) => c.name));
+      expect(names.has('goal_text')).toBe(true);
+      expect(names.has('goal_status')).toBe(true);
+      expect(names.has('goal_budget_tokens')).toBe(true);
+      expect(names.has('goal_completion_note')).toBe(true);
+      expect(names.has('goal_created_at')).toBe(true);
+      expect(names.has('goal_updated_at')).toBe(true);
     });
 
     it('symbols.stable_id column exists', () => {
@@ -79,6 +102,24 @@ describe('CodeIndexDB', () => {
       // @ts-expect-error - accessing internal for test
       const info = db.db.prepare("PRAGMA table_info(snapshot_files)").all();
       expect((info as unknown[]).length).toBeGreaterThan(0);
+    });
+
+    it('migration 067 drops `front_id` columns and `company_fronts` table', () => {
+      // @ts-expect-error - accessing internal for test
+      const inner = db.db as InstanceType<typeof import('better-sqlite3')>;
+      const tables = inner
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .all() as Array<{ name: string }>;
+      const tableNames = new Set(tables.map((t) => t.name));
+      expect(tableNames.has('company_fronts')).toBe(false);
+
+      for (const table of ['company_agent_runs', 'company_board', 'company_master_prompts', 'agent_inbox']) {
+        const cols = inner.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+        expect(cols.some((c) => c.name === 'front_id')).toBe(false);
+      }
+
+      const sessionCols = inner.prepare(`PRAGMA table_info(company_sessions)`).all() as Array<{ name: string }>;
+      expect(sessionCols.some((c) => c.name === 'parent_session_id')).toBe(true);
     });
   });
 

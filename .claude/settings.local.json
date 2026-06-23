@@ -27,7 +27,18 @@
       "Bash(npm ls:*)",
       "Bash(npx --prefix \"D:/MCP\" tsc --noEmit --skipLibCheck --project \"D:/MCP/tsconfig.json\")",
       "Bash(node node_modules/typescript/bin/tsc --noEmit)",
-      "Bash(ls D:/MCP/node_modules/.bin/tsc*)"
+      "Bash(ls D:/MCP/node_modules/.bin/tsc*)",
+      "Bash(grep -E \"\\\\.ts$|\\\\.test\\\\.ts$\")",
+      "Bash(echo \"---EXIT:$?---\")",
+      "Bash(pnpm tsc *)",
+      "Bash(pnpm test *)",
+      "Bash(dir \"D:\\\\MCP\\\\apps\\\\electron\")",
+      "Bash(dir \"D:\\\\MCP\" /B)",
+      "Bash(git ls-tree *)",
+      "WebFetch(domain:theia-ide.org)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "PowerShell(head -20)"
     ]
   }
 }

@@ -1,0 +1,326 @@
+/**
+ * Task-preflight unit tests — no SQLite, no real LLM. The resolver is a
+ * stub object and the provider call is intercepted via `fetchFn`, so the
+ * suite runs ABI-free.
+ */
+import { describe, expect, it } from 'vitest';
+import type { PipelineProviderResolver, ResolvedBinding } from '../../../pipelines/index.js';
+import { TaskPreflightService, type TaskPreflightDeps } from '../preflight-pipeline.js';
+import { buildPreflightMessages, parsePreflightOutput } from '../preflight-prompt.js';
+
+const CATALOG = [
+  { name: 'read_file', tier: 'bootstrap', description: 'Read file contents' },
+  { name: 'edit_file', tier: 'navigate', description: 'Find/replace edit' },
+  { name: 'mcp__search', tier: 'bootstrap', description: 'Hybrid search' },
+  { name: 'git_commit', tier: 'admin' },
+  { name: 'ext_srv__do_thing', tier: 'srv', description: 'External integration call' },
+];
+const MEMORY = [
+  { title: 'Auth token refresh gotcha', category: 'gotcha', excerpt: 'refresh expires in 25min' },
+  { title: 'API error envelope', category: 'convention' },
+];
+const SKILLS = [
+  { id: 'api-collection', description: 'Build or import an HTTP API client collection', namespace: 'builtin' },
+  { id: 'qa-playwright', description: 'Author Playwright E2E tests', namespace: 'builtin' },
+  { id: 'ds-docs', description: 'Generate design-system docs', namespace: 'builtin' },
+  { id: 'init', description: 'Initialize a CLAUDE.md for the repo', namespace: 'builtin' },
+];
+const PARSE_CTX = {
+  toolNames: new Set(CATALOG.map((t) => t.name)),
+  memoryTitles: MEMORY.map((m) => m.title),
+  skillIds: new Set(SKILLS.map((s) => s.id)),
+  maxTools: 3,
+  maxMemories: 2,
+  maxSkills: 2,
+};
+
+function makeBinding(provider: Record<string, unknown> = {}): ResolvedBinding {
+  return {
+    pipelineName: 'code-agent',
+    bindingRole: 'preflight',
+    provider: {
+      id: 'cf-1',
+      name: 'Cloudflare',
+      kind: 'cloudflare',
+      api_key: 'tok',
+      base_url: null,
+      enabled: 1,
+      extra: { account_id: 'acc' },
+      ...provider,
+    },
+    modelId: '@cf/meta/llama-3.1-8b-instruct',
+    modelMode: '',
+    config: { temperature: 0, max_tokens: 700 },
+    resolvedFrom: 'global',
+    bindingId: 1,
+  } as unknown as ResolvedBinding;
+}
+
+function makeResolver(binding: ResolvedBinding | null): PipelineProviderResolver {
+  return { resolveOrNull: async () => binding } as unknown as PipelineProviderResolver;
+}
+
+function makeService(binding: ResolvedBinding | null, extra: Partial<TaskPreflightDeps> = {}): TaskPreflightService {
+  return new TaskPreflightService({
+    resolver: makeResolver(binding),
+    getToolCatalog: () => CATALOG,
+    getMemoryIndex: () => MEMORY,
+    getSkillCatalog: () => SKILLS,
+    ...extra,
+  });
+}
+
+function okFetch(content: string): typeof fetch {
+  return (async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as unknown as typeof fetch;
+}
+
+const VALID_OUTPUT = JSON.stringify({
+  task_kind: 'bugfix',
+  profile: 'navigate',
+  tools: [{ name: 'read_file', why: 'inspect' }, { name: 'edit_file', why: 'fix' }],
+  memories: [{ title: 'auth token refresh GOTCHA', why: 'same login flow' }],
+});
+
+describe('parsePreflightOutput', () => {
+  it('parses clean JSON and canonicalizes memory titles case-insensitively', () => {
+    const seed = parsePreflightOutput(VALID_OUTPUT, PARSE_CTX);
+    expect(seed).toEqual({
+      profile: 'navigate',
+      taskKind: 'bugfix',
+      pinTools: ['read_file', 'edit_file'],
+      memories: [{ title: 'Auth token refresh gotcha', reason: 'same login flow' }],
+    });
+  });
+
+  it('parses fenced and prose-wrapped JSON', () => {
+    expect(parsePreflightOutput('```json\n' + VALID_OUTPUT + '\n```', PARSE_CTX)).not.toBeNull();
+    expect(parsePreflightOutput(`Sure! Here you go: ${VALID_OUTPUT} hope it helps`, PARSE_CTX)).not.toBeNull();
+  });
+
+  it('drops hallucinated tool names and clamps to maxTools', () => {
+    const raw = JSON.stringify({
+      profile: 'bootstrap',
+      tools: [
+        { name: 'made_up_tool' },
+        { name: 'read_file' },
+        { name: 'read_file' }, // duplicate
+        { name: 'edit_file' },
+        { name: 'mcp__search' },
+        { name: 'git_commit' }, // over the cap of 3
+      ],
+    });
+    const seed = parsePreflightOutput(raw, PARSE_CTX);
+    expect(seed?.pinTools).toEqual(['read_file', 'edit_file', 'mcp__search']);
+  });
+
+  it('pins an external MCP tool when the catalog lists it', () => {
+    const raw = JSON.stringify({ tools: [{ name: 'ext_srv__do_thing', why: 'call the API' }] });
+    const seed = parsePreflightOutput(raw, PARSE_CTX);
+    expect(seed?.pinTools).toEqual(['ext_srv__do_thing']);
+  });
+
+  it('parses skill suggestions, accepts string entries, drops unknown ids', () => {
+    const raw = JSON.stringify({
+      skills: [
+        { id: 'api-collection', why: 'task builds an API client' },
+        { id: 'made-up-skill', why: 'x' },
+        'qa-playwright',
+      ],
+    });
+    const seed = parsePreflightOutput(raw, PARSE_CTX);
+    expect(seed?.suggestedSkills).toEqual([
+      { id: 'api-collection', reason: 'task builds an API client' },
+      { id: 'qa-playwright', reason: '' },
+    ]);
+  });
+
+  it('clamps skills to maxSkills and dedups', () => {
+    const raw = JSON.stringify({
+      skills: ['api-collection', 'api-collection', 'qa-playwright', 'ds-docs'],
+    });
+    const seed = parsePreflightOutput(raw, PARSE_CTX);
+    expect(seed?.suggestedSkills?.map((s) => s.id)).toEqual(['api-collection', 'qa-playwright']);
+  });
+
+  it('clamps skills to the shipped cap (3) when more valid ids are returned', () => {
+    // Pins the production MAX_SKILLS=3 (preflight-pipeline.ts) end of the clamp.
+    const ctx3 = { ...PARSE_CTX, maxSkills: 3 };
+    const raw = JSON.stringify({ skills: ['api-collection', 'qa-playwright', 'ds-docs', 'init'] });
+    const seed = parsePreflightOutput(raw, ctx3);
+    expect(seed?.suggestedSkills?.map((s) => s.id)).toEqual(['api-collection', 'qa-playwright', 'ds-docs']);
+  });
+
+  it('a skills-only seed is usable (not null)', () => {
+    const seed = parsePreflightOutput(JSON.stringify({ skills: ['api-collection'] }), PARSE_CTX);
+    expect(seed).not.toBeNull();
+    expect(seed?.suggestedSkills?.[0]?.id).toBe('api-collection');
+    expect(seed?.pinTools).toBeUndefined();
+  });
+
+  it('accepts plain-string tool entries and drops unknown memory titles', () => {
+    const raw = JSON.stringify({
+      tools: ['read_file'],
+      memories: [{ title: 'Invented memory', why: 'x' }],
+    });
+    const seed = parsePreflightOutput(raw, PARSE_CTX);
+    expect(seed?.pinTools).toEqual(['read_file']);
+    expect(seed?.memories).toBeUndefined();
+  });
+
+  it('invalid profile/task_kind fail independently without killing the seed', () => {
+    const raw = JSON.stringify({ profile: 'god-mode', task_kind: 'wat', tools: ['edit_file'] });
+    const seed = parsePreflightOutput(raw, PARSE_CTX);
+    expect(seed?.profile).toBeUndefined();
+    expect(seed?.taskKind).toBeUndefined();
+    expect(seed?.pinTools).toEqual(['edit_file']);
+  });
+
+  it('returns null for garbage, arrays, and empty-after-validation outputs', () => {
+    expect(parsePreflightOutput('not json at all', PARSE_CTX)).toBeNull();
+    expect(parsePreflightOutput('[1,2,3]', PARSE_CTX)).toBeNull();
+    expect(parsePreflightOutput(JSON.stringify({ tools: [{ name: 'nope' }] }), PARSE_CTX)).toBeNull();
+    expect(parsePreflightOutput(JSON.stringify({ skills: ['nope'] }), PARSE_CTX)).toBeNull();
+  });
+});
+
+describe('buildPreflightMessages', () => {
+  it('includes task + catalog, omits skill/memory blocks when empty, truncates long tasks', () => {
+    const long = 'x'.repeat(2500);
+    const messages = buildPreflightMessages({
+      userMessage: long,
+      toolCatalog: CATALOG,
+      memoryIndex: [],
+      skillCatalog: [],
+      maxTools: 12,
+      maxMemories: 5,
+      maxSkills: 3,
+    });
+    expect(messages[0]!.role).toBe('system');
+    expect(messages[0]!.content).toContain('AT MOST 12 tools');
+    expect(messages[0]!.content).toContain('AT MOST 3 skills');
+    const user = messages[1]!.content;
+    expect(user).toContain('<task>');
+    expect(user).toContain('...[truncated]');
+    expect(user).toContain('read_file [bootstrap] Read file contents');
+    expect(user).not.toContain('<memory_index>');
+    expect(user).not.toContain('<skill_catalog>');
+  });
+
+  it('renders the memory index and skill catalog when present', () => {
+    const user = buildPreflightMessages({
+      userMessage: 'fix login',
+      toolCatalog: CATALOG,
+      memoryIndex: MEMORY,
+      skillCatalog: SKILLS,
+      maxTools: 12,
+      maxMemories: 5,
+      maxSkills: 3,
+    })[1]!.content;
+    expect(user).toContain('<memory_index>');
+    expect(user).toContain('- [gotcha] Auth token refresh gotcha — "refresh expires in 25min"');
+    expect(user).toContain('<skill_catalog>');
+    expect(user).toContain('- api-collection [builtin] — Build or import an HTTP API client collection');
+  });
+});
+
+describe('TaskPreflightService.run', () => {
+  const INPUT = { sessionId: 1, projectId: 7, userMessage: 'corrija o bug de login' };
+
+  it('returns unconfigured when no binding resolves and no fallback is set', async () => {
+    const result = await makeService(null).run(INPUT);
+    expect(result.status).toBe('unconfigured');
+    expect(result.seed).toBeUndefined();
+  });
+
+  it('runs zero-config: resolves via the general-default fallback when no binding row exists', async () => {
+    const binding = makeBinding();
+    // Resolver mirrors PipelineProviderResolver: returns a binding ONLY when a
+    // fallbackDefault is supplied (no DB row otherwise).
+    const resolver = {
+      resolveOrNull: async (_p: string, _r: string, _ctx: unknown, fallback?: unknown) =>
+        (fallback ? binding : null),
+    } as unknown as PipelineProviderResolver;
+    const service = new TaskPreflightService({
+      resolver,
+      getToolCatalog: () => CATALOG,
+      getMemoryIndex: () => MEMORY,
+      getSkillCatalog: () => SKILLS,
+      getFallbackDefault: () => ({ providerId: 'cf-1', modelId: 'm', mode: '' }) as never,
+    });
+    const result = await service.run({ ...INPUT, fetchFn: okFetch(VALID_OUTPUT) });
+    expect(result.status).toBe('ok');
+    expect(result.seed?.profile).toBe('navigate');
+  });
+
+  it('runs with getSkillCatalog omitted (skill catalog falls back to empty)', async () => {
+    const service = new TaskPreflightService({
+      resolver: makeResolver(makeBinding()),
+      getToolCatalog: () => CATALOG,
+      getMemoryIndex: () => MEMORY,
+      // getSkillCatalog intentionally omitted — exercises the optional-dep false branch
+    });
+    const result = await service.run({ ...INPUT, fetchFn: okFetch(VALID_OUTPUT) });
+    expect(result.status).toBe('ok');
+    expect(result.seed?.suggestedSkills).toBeUndefined();
+  });
+
+  it('returns ok with a validated seed (incl. suggested skills) on a clean response', async () => {
+    const output = JSON.stringify({
+      profile: 'navigate',
+      tools: [{ name: 'read_file' }, { name: 'ext_srv__do_thing' }],
+      skills: [{ id: 'api-collection', why: 'builds a client' }],
+    });
+    const result = await makeService(makeBinding()).run({ ...INPUT, fetchFn: okFetch(output) });
+    expect(result.status).toBe('ok');
+    expect(result.seed?.pinTools).toContain('ext_srv__do_thing');
+    expect(result.seed?.suggestedSkills?.[0]?.id).toBe('api-collection');
+  });
+
+  it('returns provider_error on a non-2xx response', async () => {
+    const fetchFn = (async () => new Response('boom', { status: 500 })) as unknown as typeof fetch;
+    const result = await makeService(makeBinding()).run({ ...INPUT, fetchFn });
+    expect(result.status).toBe('provider_error');
+    expect(result.error).toContain('boom');
+  });
+
+  it('returns provider_error when the binding is missing credentials', async () => {
+    const result = await makeService(makeBinding({ extra: {} })).run(INPUT);
+    expect(result.status).toBe('provider_error');
+    expect(result.error).toMatch(/account_id/);
+  });
+
+  it('returns timeout when the provider hangs (and never throws)', async () => {
+    const hangingFetch = (() => new Promise(() => undefined)) as unknown as typeof fetch;
+    const result = await makeService(makeBinding()).run({
+      ...INPUT,
+      fetchFn: hangingFetch,
+      timeoutMs: 30,
+    });
+    expect(result.status).toBe('timeout');
+    expect(result.error).toContain('30ms');
+  });
+
+  it('returns parse_fail (with raw preserved) on unparseable output', async () => {
+    const result = await makeService(makeBinding()).run({
+      ...INPUT,
+      fetchFn: okFetch('I cannot help with that.'),
+    });
+    expect(result.status).toBe('parse_fail');
+    expect(result.raw).toContain('I cannot help');
+  });
+
+  it('never throws even when the resolver itself blows up', async () => {
+    const service = new TaskPreflightService({
+      resolver: { resolveOrNull: async () => { throw new Error('db locked'); } } as unknown as PipelineProviderResolver,
+      getToolCatalog: () => CATALOG,
+      getMemoryIndex: () => MEMORY,
+    });
+    const result = await service.run(INPUT);
+    expect(result.status).toBe('provider_error');
+    expect(result.error).toContain('db locked');
+  });
+});

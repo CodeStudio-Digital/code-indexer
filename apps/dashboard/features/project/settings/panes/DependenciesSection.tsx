@@ -1,0 +1,153 @@
+/**
+ * Dependency assistant for one runtime (Node/PHP/Python) inside the RuntimePane:
+ * pick the package manager (Node: npm/yarn/pnpm/bun · Python: pip/Poetry · PHP:
+ * composer, fixed), see whether deps + the tool are present, and install/update
+ * with one click. The chosen manager is persisted (package_managers) and the
+ * backend `runner.detect` honours it — so the editor gutter + Runners banner
+ * follow suit. Runs reveal the Runners tab via `launchRun`.
+ */
+
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { AlertTriangle, CheckCircle2, Download, RefreshCw } from 'lucide-react';
+import type { DetectedGroup, DetectedRunners, ManagerStatus, RuntimeKind } from '@mcp/api-bus';
+import type { Project } from '@mcp/shared/types.js';
+import { readPackageManager, writePackageManager } from '@mcp/shared/utils/package-managers.js';
+import { Button } from '../../../../components/ui/button.js';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../../../../components/ui/select.js';
+import { apiCall } from '../../../../lib/api-client.js';
+import { launchRun } from '../../../../state/run-launch.js';
+import { MANAGER_KEY, MANAGER_OPTIONS, MANAGERS_FOR_KIND, updateCommand } from '../../../../lib/pkg-manager-cmds.js';
+import type { PatchFn } from '../ProjectSettingsModal.js';
+
+export function DependenciesSection({ kind, project, patch }: { kind: RuntimeKind; project: Project; patch: PatchFn }) {
+  const { t } = useTranslation(['projects', 'common']);
+  const [group, setGroup] = useState<DetectedGroup | null>(null);
+  const [status, setStatus] = useState<ManagerStatus | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  // Bumped AFTER a manager change persists — `runner.detect` reads the stored
+  // override server-side, so re-detecting only on the optimistic prop change
+  // could race ahead of the PATCH write and report the old manager.
+  const [tick, setTick] = useState(0);
+
+  const key = MANAGER_KEY[kind];
+  const selected = (key ? readPackageManager(project.package_managers, key) : undefined) ?? 'auto';
+
+  // Detect the group for this runtime. Keyed on `tick` (bumped AFTER a manager
+  // change persists), NOT on the optimistic project.package_managers — detect
+  // reads the stored override server-side, so re-running on the optimistic prop
+  // would fire a wasted pre-persist fetch that reads the old value.
+  useEffect(() => {
+    let alive = true;
+    setLoaded(false);
+    void apiCall<DetectedRunners>('runner.detect', { projectId: project.id })
+      .then((d) => {
+        if (!alive) return;
+        setGroup(d.groups.find((g) => MANAGERS_FOR_KIND[kind].includes(g.manager)) ?? null);
+        setLoaded(true);
+      })
+      .catch(() => { if (alive) { setGroup(null); setLoaded(true); } });
+    return () => { alive = false; };
+  }, [kind, project.id, tick]);
+
+  // Is the chosen manager actually on PATH? (warn before an install would fail.)
+  useEffect(() => {
+    if (!group) { setStatus(null); return; }
+    let alive = true;
+    setStatus(null);
+    void apiCall<ManagerStatus>('runner.managerStatus', { projectId: project.id, manager: group.manager })
+      .then((s) => { if (alive) setStatus(s); })
+      .catch(() => { if (alive) setStatus(null); });
+    return () => { alive = false; };
+  }, [group?.manager, project.id]);
+
+  async function changeManager(next: string): Promise<void> {
+    if (!key) return;
+    await patch({ package_managers: writePackageManager(project.package_managers, key, next) });
+    setTick((n) => n + 1); // re-detect once the new override is persisted
+  }
+  function install(): void {
+    if (group?.installCommand) {
+      void launchRun({ projectId: project.id, command: group.installCommand, label: t('runtime.deps.install'), manager: group.manager });
+    }
+  }
+  function update(): void {
+    if (group) {
+      void launchRun({ projectId: project.id, command: updateCommand(group.manager), label: t('runtime.deps.update'), manager: group.manager });
+    }
+  }
+
+  return (
+    <div className="border-t pt-4 space-y-2.5">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('runtime.deps.title')}</h4>
+
+      {!loaded ? null : !group ? (
+        <p className="text-[11px] text-muted-foreground">{t('runtime.deps.noManifest')}</p>
+      ) : (
+        <>
+          {/* Manager picker (Node/Python) or fixed composer label (PHP). */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">{t('runtime.deps.manager')}</label>
+            {key ? (
+              <Select value={selected} onValueChange={(v) => void changeManager(v)}>
+                <SelectTrigger className="h-8 w-full text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MANAGER_OPTIONS[kind].map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m === 'auto' ? t('runtime.deps.auto') : m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="font-mono text-xs capitalize">{group.manager}</p>
+            )}
+          </div>
+
+          {/* Status: deps present + tool availability. */}
+          <div className="space-y-1 text-[11px]">
+            <span className="flex items-center gap-1.5">
+              {group.installNeeded ? (
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+              )}
+              <span className="text-muted-foreground">
+                {group.installNeeded ? t('runtime.deps.missing') : t('runtime.deps.installed')}
+              </span>
+            </span>
+            {status && !status.found && (
+              <span className="flex items-center gap-1.5 text-destructive">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                {t('runtime.deps.notFound', { manager: group.manager })}
+              </span>
+            )}
+          </div>
+
+          {/* Actions — gated when the manager is confirmed missing from PATH
+              (a run would just fail with "command not found"; the warning above
+              explains why). `status === null` = still probing → stay enabled. */}
+          <div className="flex items-center gap-2">
+            <Button type="button" size="sm" onClick={install} disabled={!group.installCommand || (!!status && !status.found)}>
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              {t('runtime.deps.install')}
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={update} disabled={!!status && !status.found}>
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              {t('runtime.deps.update')}
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('runtime.deps.hint')}</p>
+        </>
+      )}
+    </div>
+  );
+}

@@ -9,26 +9,36 @@
  * Usage:
  *   tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl]
  *   tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase --modes fts,hybrid,expanded
+ *   tsx src/benchmarks/search-quality.ts --project foo --min-recall 0.7   # CI gate
  *
  * Input format (JSONL, one query per line):
  *   {"query": "how does the indexer handle incremental reindex",
  *    "relevant_files": ["src/core/indexer/indexer.ts"],
  *    "relevant_symbols": ["processEmbeddings"]}
  *
- * If --file is omitted, a minimal synthetic set is used so the script is
- * runnable out of the box on any project — the numbers won't be scientific
- * but they are reproducible and let you spot regressions.
+ * If --file is omitted, the script auto-loads `evals/queries.jsonl` from the
+ * current working directory when it exists. Otherwise a minimal synthetic
+ * set is used so the script is runnable out of the box on any project — the
+ * numbers won't be scientific but they are reproducible and let you spot
+ * regressions.
+ *
+ * When --min-recall is set, the process exits with code 1 if the best
+ * recall@10 across the selected modes drops below the threshold. Use this
+ * in CI to gate retrieval regressions.
  */
 import { parseArgs } from 'node:util';
-import { readFileSync, existsSync } from 'node:fs';
-import { loadConfig } from '../utils/config.js';
-import { CodeIndexDB } from '../store/db.js';
-import { ProviderStore } from '../store/provider-store.js';
-import { createEmbeddingService } from '../core/search/embeddings.js';
-import { createVectorStore, NullVectorStore } from '../store/vectors.js';
-import { HybridSearch } from '../core/search/hybrid.js';
-import { HyDEService } from '../core/search/hyde.js';
-import type { HybridSearchResult, SearchMode } from '../types.js';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadConfig } from '@mcp/shared/utils/config.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { ProviderStore } from '@mcp/store/provider-store.js';
+import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { createVectorStore, NullVectorStore } from '@mcp/store/vectors.js';
+import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
+import { HyDEService } from '@mcp/indexer/search/hyde.js';
+import { createReranker, NullReranker } from '@mcp/indexer/search/reranker.js';
+import type { HybridSearchResult, SearchMode } from '@mcp/shared/types.js';
 
 interface EvalQuery {
   query: string;
@@ -69,12 +79,29 @@ const BUILTIN_QUERIES: EvalQuery[] = [
   },
 ];
 
-function loadQueries(path?: string): EvalQuery[] {
-  if (!path) return BUILTIN_QUERIES;
-  if (!existsSync(path)) {
-    console.error(`[bench] query file not found: ${path}, falling back to builtin set`);
-    return BUILTIN_QUERIES;
+/**
+ * Default JSONL gold set checked into the repo. Picked up when --file is
+ * omitted and the file exists at CWD — keeps `npm run eval` zero-config.
+ */
+const DEFAULT_QUERIES_PATH = 'evals/queries.jsonl';
+
+function loadQueries(path?: string): { queries: EvalQuery[]; source: string } {
+  // Explicit path always wins.
+  if (path) {
+    if (!existsSync(path)) {
+      console.error(`[bench] query file not found: ${path}, falling back to builtin set`);
+      return { queries: BUILTIN_QUERIES, source: 'builtin (file not found)' };
+    }
+    return { queries: parseJsonl(path), source: path };
   }
+  // No --file: try the checked-in default at CWD.
+  if (existsSync(DEFAULT_QUERIES_PATH)) {
+    return { queries: parseJsonl(DEFAULT_QUERIES_PATH), source: DEFAULT_QUERIES_PATH };
+  }
+  return { queries: BUILTIN_QUERIES, source: 'builtin' };
+}
+
+function parseJsonl(path: string): EvalQuery[] {
   const text = readFileSync(path, 'utf-8');
   const out: EvalQuery[] = [];
   for (const line of text.split(/\r?\n/)) {
@@ -194,12 +221,23 @@ async function main(): Promise<void> {
       file: { type: 'string' },
       modes: { type: 'string' },
       'no-hyde': { type: 'boolean' },
+      // Force the passthrough reranker (RRF order) — for A/B against the
+      // production default resolved from the provider store.
+      'no-rerank': { type: 'boolean' },
+      'min-recall': { type: 'string' },
+      // Which mode the --min-recall gate applies to. Default: best across
+      // the run modes (legacy behavior, lets fts mask a hybrid regression).
+      'gate-mode': { type: 'string' },
+      // Optional: write results JSON to disk for diffing against future runs.
+      // Used by the baseline workflow. Default: do not write a file (legacy behavior).
+      output: { type: 'string' },
+      'save-baseline': { type: 'boolean' },
     },
   });
 
   if (!values.project) {
     console.error(
-      'Usage: tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl] [--modes fts,vector,hybrid,expanded] [--no-hyde]'
+      'Usage: tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl] [--modes fts,vector,hybrid,expanded] [--no-hyde] [--no-rerank] [--min-recall 0.7] [--gate-mode hybrid]'
     );
     process.exit(1);
   }
@@ -209,6 +247,13 @@ async function main(): Promise<void> {
     'hybrid',
     'expanded',
   ];
+
+  const minRecallRaw = values['min-recall'];
+  const minRecall = minRecallRaw !== undefined ? Number(minRecallRaw) : NaN;
+  if (minRecallRaw !== undefined && (!Number.isFinite(minRecall) || minRecall < 0 || minRecall > 1)) {
+    console.error(`[bench] --min-recall must be a number in [0, 1], got: ${minRecallRaw}`);
+    process.exit(1);
+  }
 
   const config = loadConfig();
   const db = new CodeIndexDB(config.dbPath);
@@ -220,10 +265,15 @@ async function main(): Promise<void> {
   const vectorStore = createVectorStore(providerStore);
   const searchable = vectorStore instanceof NullVectorStore ? null : vectorStore;
   const hyde = values['no-hyde'] ? null : new HyDEService(providerStore);
-  const search = new HybridSearch(db, searchable, embeddingService, hyde);
+  // Match production wiring (deps.ts, mcp-server): resolve the admin-managed
+  // default from the provider store — after `seedFromEnvIfEmpty()` that is
+  // LocalReranker, NOT NullReranker. Passing no store here would silently
+  // benchmark a reranker-less stack production never runs.
+  const reranker = values['no-rerank'] ? new NullReranker() : createReranker(providerStore);
+  const search = new HybridSearch(db, searchable, embeddingService, hyde, reranker);
 
-  const queries = loadQueries(values.file);
-  console.log(`\n[bench] project=${project.name} queries=${queries.length} hyde=${hyde ? 'real' : 'off'}`);
+  const { queries, source } = loadQueries(values.file);
+  console.log(`\n[bench] project=${project.name} queries=${queries.length} source=${source} hyde=${hyde ? 'real' : 'off'} reranker=${reranker.name}`);
   console.log(`[bench] modes: ${modes.join(', ')}\n`);
 
   const results: ModeResult[] = [];
@@ -255,7 +305,57 @@ async function main(): Promise<void> {
     );
   }
 
+  // Optional persistence — only when --output or --save-baseline is set.
+  // Legacy invocations (CI gate without --save-baseline) keep writing nothing.
+  if (values.output || values['save-baseline']) {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const repoRoot = resolve(__dirname, '..', '..');
+    const outDir = join(repoRoot, 'bench', 'results');
+    if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+    const day = new Date().toISOString().slice(0, 10);
+    const outPath = values.output ?? join(outDir, `search-baseline-${day}.json`);
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      project: project.name,
+      projectId: project.id,
+      querySource: source,
+      queryCount: queries.length,
+      hyde: hyde ? 'real' : 'off',
+      modes,
+      results,
+    };
+    writeFileSync(outPath, JSON.stringify(payload, null, 2));
+    console.log(`[bench] results written to ${outPath}`);
+  }
+
   db.close();
+
+  // CI gate: if --min-recall set, fail when recall@10 is under the threshold.
+  // By default "best across run modes" (legacy — at least one mode hits the
+  // bar). With --gate-mode the gate pins a single mode, so e.g. fts can no
+  // longer mask a hybrid regression.
+  if (Number.isFinite(minRecall)) {
+    const gateMode = values['gate-mode'];
+    const gated = gateMode ? results.filter((r) => r.mode === gateMode) : results;
+    if (gated.length === 0) {
+      console.error(
+        gateMode
+          ? `\n[bench] FAIL: --gate-mode ${gateMode} did not run (modes: ${results.map((r) => r.mode).join(', ') || 'none'})`
+          : '\n[bench] FAIL: no mode produced results'
+      );
+      process.exit(1);
+    }
+    const label = gateMode ? `${gateMode} recall@10` : 'best recall@10';
+    const bestRecall = Math.max(...gated.map((r) => r.recall_at_10));
+    if (bestRecall < minRecall) {
+      console.error(
+        `\n[bench] FAIL: ${label} ${bestRecall.toFixed(3)} < threshold ${minRecall.toFixed(3)}`
+      );
+      process.exit(1);
+    }
+    console.log(`\n[bench] PASS: ${label} ${bestRecall.toFixed(3)} >= threshold ${minRecall.toFixed(3)}`);
+  }
 }
 
 void main().catch((e) => {

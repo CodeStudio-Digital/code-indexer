@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toolCallsSignature } from '../core/coder/core/runner.js';
+import { toolCallsSignature } from '@mcp/code-agent/core/runner.js';
 
 describe('toolCallsSignature', () => {
   it('is empty for zero tool calls', () => {

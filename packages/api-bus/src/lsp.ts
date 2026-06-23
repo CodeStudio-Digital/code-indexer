@@ -1,0 +1,326 @@
+import type { ApiContext, AsyncStream } from './common.js';
+
+/**
+ * LSP-style operations backed by the TypeScript Compiler API in-process.
+ * Source: packages/code-agent/src/lsp/ts-service.ts. Delegates to the
+ * lsp-worker (kind='lsp' in the worker pool) when the IDE editor calls
+ * one of these on every keystroke (debounced).
+ *
+ * MVP: only .ts / .tsx / .js / .jsx are fully supported. Other languages
+ * get Monaco built-in syntax highlight but no completion/hover/etc.
+ *
+ * Routes mapped: NEW — apps/http-api/server/routes/lsp/lsp.routes.ts
+ * (created in Dia 10).
+ */
+
+export interface Position {
+  /** 1-based, matching ts-service.ts contract. */
+  line: number;
+  column: number;
+}
+
+export interface LspLocation {
+  file: string;
+  range: { start: Position; end: Position };
+}
+
+export interface TextEditDTO {
+  range: { start: Position; end: Position };
+  newText: string;
+}
+
+export interface WorkspaceEditDTO {
+  /** Absolute file paths for backend/provider edits; ranges remain 1-based. */
+  changes: Record<string, TextEditDTO[]>;
+}
+
+export interface CodeActionDTO {
+  title: string;
+  kind: string;
+  isPreferred?: boolean;
+  edit?: WorkspaceEditDTO;
+}
+
+export interface CompletionItem {
+  label: string;
+  kind: string;
+  detail?: string;
+  documentation?: string;
+  insertText?: string;
+  /**
+   * Auto-import edits (the `use`/`import` statement), 1-based ranges.
+   * Present immediately when the server eager-fills them; otherwise the
+   * client lazily fetches them via `resolveCompletion` using `raw`.
+   */
+  additionalTextEdits?: Array<{ range: { start: Position; end: Position }; newText: string }>;
+  /** Opaque original LSP item — echo back in resolveCompletion. */
+  raw?: unknown;
+  // ── PHPStorm-grade fidelity (all optional; each producer fills what it
+  //    has — TS service, external LSP server, or the index fallback). ──
+  /** Server relevance order — Monaco MUST honor this or it re-sorts A→Z. */
+  sortText?: string;
+  /** String Monaco filters against (CamelCase etc.); defaults to label. */
+  filterText?: string;
+  /** 1 = plain text, 2 = snippet (`${1:..}` placeholders / paren insertion). */
+  insertTextFormat?: 1 | 2;
+  /** Mark the best match pre-selected in the widget. */
+  preselect?: boolean;
+  /** Secondary label columns (type/namespace), PHPStorm-style. */
+  labelDetails?: { detail?: string; description?: string };
+  /** Characters that auto-accept the item (`.`, `(`, …). */
+  commitCharacters?: string[];
+  /** Server-chosen replace range (1-based) — authoritative for `::`/`->`. */
+  textEdit?: { range: { start: Position; end: Position }; newText: string };
+}
+
+export interface HoverInfo {
+  contents: string;
+  range?: { start: Position; end: Position };
+}
+
+export interface DiagnosticItem {
+  file: string;
+  range: { start: Position; end: Position };
+  severity: 'error' | 'warning' | 'info' | 'hint';
+  message: string;
+  source?: string;
+  code?: string | number;
+}
+
+// ─── Stateful document sync (IDE-grade, replaces content-per-call) ──
+
+/**
+ * One Monaco content change. `range` is 1-based (this contract);
+ * `rangeOffset`/`rangeLength` are absolute offsets into the PRE-change
+ * buffer — the backend applies deltas by offset, no line math.
+ */
+export interface DocChange {
+  range: { start: Position; end: Position };
+  rangeOffset: number;
+  rangeLength: number;
+  text: string;
+}
+
+/** Per-file diagnostics push frame. `diagnostics: []` clears the file. */
+export interface DiagnosticsFrame {
+  /** Project-relative forward-slash path (the editor's model key). */
+  file: string;
+  source: 'ts' | `lsp:${string}` | 'index' | 'syntax';
+  diagnostics: DiagnosticItem[];
+}
+
+// ─── External LSP servers (tier 1: PHP / Python / JSON-CSS-HTML) ───
+
+export type LspServerState = 'no-server' | 'not-installed' | 'starting' | 'ready' | 'failed' | 'disabled';
+
+export interface LspServerStatus {
+  state: LspServerState;
+  server?: { id: string; label: string; version: string; sizeLabel: string };
+  /** MCP_LSP_AUTO_PROMPT — whether the editor should offer the install banner. */
+  autoPrompt?: boolean;
+  /** Short human-readable cause when state==='failed' (stderr tail / timeout). */
+  reason?: string;
+}
+
+/**
+ * Live server-status transition for one language, pushed over
+ * `serverStatusStream`. The chip hook filters a project's stream by its
+ * own languageId.
+ */
+export interface LspServerStatusFrame {
+  languageId: string;
+  state: LspServerState;
+  server?: { id: string; label: string; version: string; sizeLabel: string };
+  reason?: string;
+}
+
+export interface LspServerInfo {
+  id: string;
+  label: string;
+  languages: string[];
+  version: string;
+  installed: boolean;
+  sizeLabel: string;
+}
+
+export type LspInstallFrame =
+  | { phase: 'start'; serverId: string; version: string; targetDir: string }
+  | { phase: 'log'; line: string }
+  | { phase: 'done'; installDir: string }
+  | { phase: 'error'; message: string };
+
+/**
+ * All position-based LSP calls accept an optional `content` carrying the
+ * EDITOR'S live model text. When present, the backend snapshots it into
+ * the TS Compiler API's host BEFORE computing — without this, completion
+ * / hover / diagnostics read the on-disk version and miss whatever the
+ * user just typed (the canonical bug: typing `this.router.` produced no
+ * suggestions because the dot wasn't saved yet). The renderer should
+ * pass `model.getValue()` for the file it's querying. Other files'
+ * snapshots stay disk-backed and only refresh when their tab is active
+ * and queried.
+ */
+export interface LspApi {
+  /**
+   * Open/refresh a document buffer on the backend. From here on the
+   * position-based calls need only `{file, position}` — the backend serves
+   * the live buffer to the TS service / LSP servers / index fallback.
+   */
+  didOpen(
+    input: { projectId: number; file: string; languageId: string; version: number; content: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+
+  /**
+   * Incremental deltas (Monaco's onDidChangeContent shape). `{resync: true}`
+   * means the backend lost track of versions — re-send a full didOpen.
+   */
+  didChange(
+    input: { projectId: number; file: string; version: number; changes: DocChange[] },
+    ctx: ApiContext,
+  ): Promise<{ ok: true } | { resync: true }>;
+
+  didClose(
+    input: { projectId: number; file: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+
+  /**
+   * Push diagnostics — one frame per (file, source) update, coalesced per
+   * file. Replaces the renderer's 1s polling loop. The `Stream` suffix is
+   * load-bearing (auto MessagePort on Electron; SSE route on Hono).
+   */
+  diagnosticsStream(
+    input: { projectId: number },
+    ctx: ApiContext,
+  ): AsyncStream<DiagnosticsFrame>;
+
+  completion(
+    input: {
+      projectId: number; file: string; position: Position; content?: string;
+      /** Monaco CompletionContext — drives the server's trigger-aware ranking. */
+      context?: { triggerKind: number; triggerCharacter?: string };
+    },
+    ctx: ApiContext,
+  ): Promise<CompletionItem[]>;
+
+  /**
+   * Lazy `completionItem/resolve` — servers (Intelephense/Pyright) only
+   * attach `additionalTextEdits` (the auto-import statement) here. `item`
+   * is the opaque `raw` from a completion() result. Null = nothing extra
+   * (TS service / index fallback items resolve client-side as-is).
+   */
+  resolveCompletion(
+    input: { projectId: number; file: string; item: unknown },
+    ctx: ApiContext,
+  ): Promise<CompletionItem | null>;
+
+  hover(
+    input: { projectId: number; file: string; position: Position; content?: string },
+    ctx: ApiContext,
+  ): Promise<HoverInfo | null>;
+
+  definition(
+    input: { projectId: number; file: string; position: Position; content?: string },
+    ctx: ApiContext,
+  ): Promise<LspLocation[]>;
+
+  references(
+    input: { projectId: number; file: string; position: Position; content?: string },
+    ctx: ApiContext,
+  ): Promise<LspLocation[]>;
+
+  diagnostics(
+    input: { projectId: number; file?: string; content?: string },
+    ctx: ApiContext,
+  ): Promise<DiagnosticItem[]>;
+
+  /**
+   * Semantic-token classifications for syntax highlighting. The TS
+   * Compiler API tags every identifier in the file as class /
+   * interface / property / method / parameter / etc. — the renderer
+   * maps those to Monaco's semantic-token registry so themes can colour
+   * them distinctly (e.g. `this.router` reads as a property, not as
+   * a plain identifier).
+   *
+   * Returned `data` is the LSP-style delta-encoded array Monaco
+   * consumes via `registerDocumentSemanticTokensProvider`:
+   *   [ deltaLine, deltaStart, length, tokenType, tokenModifiers,
+   *     deltaLine, deltaStart, length, tokenType, tokenModifiers, … ]
+   *
+   * Token type / modifier indices reference the legend the renderer
+   * declares on registration — see `lspProvider.ts`.
+   */
+  semanticTokens(
+    input: { projectId: number; file: string; content?: string },
+    ctx: ApiContext,
+  ): Promise<{ data: number[]; resultId?: string }>;
+
+  /** Is there a (tier-1) server for this language, and is it installed/running? */
+  serverStatus(
+    input: { projectId: number; languageId: string },
+    ctx: ApiContext,
+  ): Promise<LspServerStatus>;
+
+  /**
+   * Live status transitions for ALL languages of a project (one stream per
+   * project; the chip filters by its languageId). `Stream` suffix →
+   * MessagePort on Electron, SSE route for browser dev. Makes the chip flip
+   * green the moment a late-spawning server becomes ready instead of staying
+   * stale on the one-shot serverStatus poll.
+   */
+  serverStatusStream(
+    input: { projectId: number },
+    ctx: ApiContext,
+  ): AsyncIterable<LspServerStatusFrame>;
+
+  /** Catalog + installed flags for the admin panel / editor CTA. */
+  listServers(input: void, ctx: ApiContext): Promise<LspServerInfo[]>;
+
+  /** Live server instances (per project) for the admin panel + LSP Doctor. */
+  instances(input: void, ctx: ApiContext): Promise<Array<{
+    projectId: number;
+    serverId: string;
+    state: string;
+    /** Last failure reason (stderr tail / timeout) when the server crashed. */
+    lastExitReason?: string;
+    /** Tail of the server's stderr ring — surfaced in the Doctor for P2 diagnosis. */
+    stderrTail?: string;
+  }>>;
+
+  /** Consent-gated npm install with streamed progress (log tail). */
+  installServerStream(input: { serverId: string }, ctx: ApiContext): AsyncStream<LspInstallFrame>;
+
+  removeServer(input: { serverId: string }, ctx: ApiContext): Promise<{ ok: boolean }>;
+
+  restartServer(input: { projectId: number; serverId: string }, ctx: ApiContext): Promise<{ ok: true }>;
+
+  /**
+   * Define a versão da linguagem (language level) do projeto e reinicia o server
+   * que a serve (intelephense/pyright) para reler a config. Entregue ao server via
+   * `workspace/configuration` + `initializationOptions`.
+   */
+  setLanguageLevel(
+    input: { projectId: number; languageId: 'php' | 'python'; level: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+
+  /**
+   * Versão EFETIVA por linguagem para o chip: escolha explícita, senão auto-detect do
+   * manifesto (composer.json/pyproject.toml), senão o default. `source` distingue a origem.
+   */
+  languageLevels(
+    input: { projectId: number },
+    ctx: ApiContext,
+  ): Promise<Record<'php' | 'python', { level: string; source: 'explicit' | 'detected' | 'default' }>>;
+
+  rename(
+    input: { projectId: number; file: string; position: Position; newName: string },
+    ctx: ApiContext,
+  ): Promise<{ edits: Array<{ file: string; range: { start: Position; end: Position }; newText: string }> }>;
+
+  codeActions(
+    input: { projectId: number; file: string; range: { start: Position; end: Position } },
+    ctx: ApiContext,
+  ): Promise<CodeActionDTO[]>;
+}

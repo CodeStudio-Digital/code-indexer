@@ -1,0 +1,15 @@
+# Doc-RAG eval gold-set (JSONL, one query per line). Lines starting with # are ignored.
+# Copy this, replace with queries + relevant sources from YOUR indexed corpus, then:
+#   pnpm eval:docs --file <this-file>     (needs a populated corpus + pnpm node:rebuild)
+#
+# "relevant" is a list of DISTINCT expected documents. Each entry identifies ONE
+# doc by substring of its source_uri and/or heading_path (both ANDed when present).
+# Use precise, NON-OVERLAPPING entries (prefer source_uri_contains). For a single
+# expected doc, give ONE entry — not two matchers for the same page (that would
+# count as two relevant docs and cap recall at 0.5).
+{"query":"How does Rigidbody.AddForce apply force?","doc_type":"api_reference","collection":"unity-docs","relevant":[{"source_uri_contains":"ScriptReference/Rigidbody.AddForce"}]}
+{"query":"ignore collision between two colliders","doc_type":"api_reference","collection":"unity-docs","relevant":[{"source_uri_contains":"Physics.IgnoreCollision"}]}
+{"query":"useEffect cleanup function timing","doc_type":"api_reference","collection":"react-docs","relevant":[{"source_uri_contains":"reference/react/useEffect"}]}
+{"query":"how to set up routing","doc_type":"guide","collection":"react-docs","relevant":[{"source_uri_contains":"/routing"}]}
+{"query":"what is server-side rendering and why use it","doc_type":"conceptual","collection":"nextjs-docs","relevant":[{"source_uri_contains":"/rendering/server-components"}]}
+{"query":"breaking changes in the latest major version","doc_type":"changelog","collection":"nextjs-docs","relevant":[{"heading_contains":"breaking"}]}

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { SnapshotService } from '../core/services/snapshots.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { SnapshotService } from '@mcp/services/services/snapshots.js';
 
 function mkFileData(path: string, hash: string) {
   return {
@@ -43,8 +43,8 @@ describe('Snapshot staleness', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('snapshot with no referenced files is never stale', () => {
-    const snap = svc.create(projectId, {
+  it('snapshot with no referenced files is never stale', async () => {
+    const { snap } = await svc.create(projectId, {
       title: 'Arch decision',
       category: 'decision',
       content: 'Use event sourcing',
@@ -54,8 +54,8 @@ describe('Snapshot staleness', () => {
     expect(annotated.stale_files).toBeUndefined();
   });
 
-  it('snapshot is not stale when referenced files are unchanged', () => {
-    const snap = svc.create(projectId, {
+  it('snapshot is not stale when referenced files are unchanged', async () => {
+    const { snap } = await svc.create(projectId, {
       title: 'Uses src/a.ts',
       category: 'note',
       content: 'Refers to a.ts',
@@ -65,8 +65,8 @@ describe('Snapshot staleness', () => {
     expect(annotated.stale).toBeUndefined();
   });
 
-  it('snapshot becomes stale when a referenced file changes', () => {
-    const snap = svc.create(projectId, {
+  it('snapshot becomes stale when a referenced file changes', async () => {
+    const { snap } = await svc.create(projectId, {
       title: 'Uses src/a.ts',
       category: 'note',
       content: 'Refers to a.ts',
@@ -79,8 +79,8 @@ describe('Snapshot staleness', () => {
     expect(annotated.stale_files).toEqual(['src/a.ts']);
   });
 
-  it('partial staleness lists only divergent files', () => {
-    const snap = svc.create(projectId, {
+  it('partial staleness lists only divergent files', async () => {
+    const { snap } = await svc.create(projectId, {
       title: 'Uses a and b',
       category: 'note',
       content: 'Refers to both',
@@ -92,8 +92,8 @@ describe('Snapshot staleness', () => {
     expect(annotated.stale_files).toEqual(['src/b.ts']);
   });
 
-  it('files that disappear from the index count as stale', () => {
-    const snap = svc.create(projectId, {
+  it('files that disappear from the index count as stale', async () => {
+    const { snap } = await svc.create(projectId, {
       title: 'Uses a',
       category: 'note',
       content: 'Refers to a.ts',
@@ -107,5 +107,15 @@ describe('Snapshot staleness', () => {
     const annotated = svc.annotateStale(projectId, snap);
     expect(annotated.stale).toBe(true);
     expect(annotated.stale_files).toEqual(['src/a.ts']);
+  });
+
+  it('referenced files not yet indexed are reported as skipped', async () => {
+    const { skippedFiles } = await svc.create(projectId, {
+      title: 'Refs unindexed',
+      category: 'note',
+      content: 'Should warn',
+      referencedFiles: ['src/a.ts', 'src/never-indexed.ts'],
+    });
+    expect(skippedFiles).toEqual(['src/never-indexed.ts']);
   });
 });

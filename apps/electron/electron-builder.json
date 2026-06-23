@@ -1,0 +1,59 @@
+{
+  "appId": "studio.codestudio.app",
+  "productName": "CodeStudio",
+  "directories": {
+    "output": "dist/electron-builder",
+    "buildResources": "apps/electron/build"
+  },
+  "files": [
+    "dist/apps/electron/**/*",
+    "dist/apps/http-api/**/*",
+    "dist/dashboard/**/*",
+    "dist/packages/**/*",
+    "package.json",
+    "!**/*.map"
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "node_modules/better-sqlite3/**/*",
+    "node_modules/node-pty/**/*",
+    "node_modules/sqlite-vec/**/*",
+    "node_modules/sqlite-vec-*/**/*",
+    "node_modules/@huggingface/**/*",
+    "node_modules/onnxruntime-node/**/*",
+    "node_modules/onnxruntime-web/**/*",
+    "node_modules/sharp/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "apps/electron/build/icon.png",
+      "to": "icon.png"
+    },
+    {
+      "from": "apps/http-api/vendor/drawio",
+      "to": "drawio"
+    }
+  ],
+  "win": {
+    "target": ["nsis"],
+    "icon": "apps/electron/build/icon.ico"
+  },
+  "mac": {
+    "target": ["dmg"],
+    "icon": "apps/electron/build/icon.icns",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "O CodeStudio usa o microfone para ditado de voz no compositor de mensagens."
+    }
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "icon": "apps/electron/build/icon.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  },
+  "publish": [
+    { "provider": "github" }
+  ]
+}

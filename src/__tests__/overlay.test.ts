@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SessionOverlay } from '../core/coder/overlay/session-overlay.js';
-import { getOverlayHandler } from '../core/coder/overlay/overlay-handlers.js';
+import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
+import { getOverlayHandler } from '@mcp/code-agent/overlay/overlay-handlers.js';
 
 describe('SessionOverlay', () => {
   it('normalizes Windows paths and "./" prefix', () => {

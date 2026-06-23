@@ -1,0 +1,7 @@
+{
+  "name": "smoke-test",
+  "version": "0.1.0",
+  "description": "Smoke test for the plugin capability + webview bridge layer",
+  "author": { "name": "mcp" },
+  "apps": ".app.json"
+}

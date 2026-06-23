@@ -1,0 +1,9 @@
+{
+  "src/types.ts": "@mcp/shared/types.js",
+  "src/version.ts": "@mcp/shared/version.js",
+  "src/utils/config.ts": "@mcp/shared/utils/config.js",
+  "src/utils/token-budget.ts": "@mcp/shared/utils/token-budget.js",
+  "src/shared/sse/SSEFramer.ts": "@mcp/shared/sse/SSEFramer.js",
+  "src/shared/sse/BackoffStrategy.ts": "@mcp/shared/sse/BackoffStrategy.js",
+  "src/shared/sse/ReconnectingSSEClient.ts": "@mcp/shared/sse/ReconnectingSSEClient.js"
+}

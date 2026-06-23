@@ -1,0 +1,13 @@
+{
+  "name": "@mcp/store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@mcp/shared": "workspace:*"
+  }
+}
