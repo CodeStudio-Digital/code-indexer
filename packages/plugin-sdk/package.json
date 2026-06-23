@@ -10,5 +10,8 @@
   },
   "scripts": {
     "cli": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "@mcp/provider-sdk": "workspace:*"
   }
 }

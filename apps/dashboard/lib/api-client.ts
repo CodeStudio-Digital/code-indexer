@@ -398,12 +398,18 @@ async function apiCallRaw<T>(path: DotPath, input?: unknown): Promise<T> {
   try {
     const invoke = electronInvoke();
     if (invoke) {
-      const wrapped = (await invoke(path, input)) as { ok: boolean; value?: T; error?: { message: string; code?: string; status?: number } };
+      const wrapped = (await invoke(path, input)) as {
+        ok: boolean;
+        value?: T;
+        error?: { message: string; code?: string; status?: number; details?: Record<string, unknown> };
+      };
       if (!wrapped.ok) {
         const err = wrapped.error ?? { message: 'unknown ipc error' };
-        const e = new Error(err.message) as Error & { code?: string; status?: number };
+        const e = new Error(err.message) as Error & { code?: string; status?: number; details?: Record<string, unknown> };
         if (err.code) e.code = err.code;
         if (err.status) e.status = err.status;
+        // Preserve structured metadata (e.g. SSH host-key fingerprint) for callers that branch on it.
+        if (err.details) e.details = err.details;
         throw e;
       }
       finishSpan({ status: 'ok' });

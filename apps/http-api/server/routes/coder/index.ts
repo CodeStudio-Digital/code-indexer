@@ -16,6 +16,8 @@ import { mountCoderSummarizeClearRoute } from './summarize-clear.js';
 import { mountCoderRollbackRoute } from './rollback.js';
 import { mountCoderTranscribeRoutes } from './transcribe.js';
 import { mountApiClientRoutes } from '../api-client/index.js';
+import { mountSshRoutes } from '../ssh/index.js';
+import { mountDbClientRoutes } from '../db-client/index.js';
 import { mountCompanyRoutes } from '../company/index.js';
 
 export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
@@ -35,5 +37,7 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderRollbackRoute(app, deps, runtime);
   mountCoderTranscribeRoutes(app, deps);
   mountApiClientRoutes(app, deps);
+  mountSshRoutes(app, deps);
+  mountDbClientRoutes(app, deps);
   mountCompanyRoutes(app, deps);
 }

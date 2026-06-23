@@ -15,7 +15,7 @@ import {
 } from '@mcp/services/services/oauth/google.js';
 import { createAuthClient, setupCloudCode, retrieveUserQuota } from '@mcp/services/services/cloudcode.js';
 import { refreshIfExpired } from '@mcp/services/services/oauth/google.js';
-import { discoverGoogleOAuth } from './model-discovery/google-oauth.js';
+import { discoverModels } from './model-discovery/index.js';
 
 export function googleOAuthRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -101,7 +101,7 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
       // Discover models live. Fall back to seed list on error.
       let models: UpsertModelInput[] = [];
       try {
-        models = await discoverGoogleOAuth(store, store.getProvider(providerId)!);
+        models = (await discoverModels(store, store.getProvider(providerId)!)).models;
       } catch { /* ignore */ }
       if (models.length === 0) {
         models = GOOGLE_SEED_MODELS.map((m) => ({

@@ -52,18 +52,27 @@ export function FileTreeView({ projectId, active, activePath, onOpen }: FileTree
   const [gitStatus, setGitStatus] = useState<Map<string, GitFileStatus>>(() => new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Load the tree only once the Files pane is actually shown. It is a keep-alive
+  // pane that mounts hidden when the project opens to the default chat tab —
+  // firing init() here unconditionally replayed the persisted-expansion restore
+  // (a storm of cold `readdir`s, seconds each on a large/Defender-scanned repo)
+  // for a tree nobody was looking at, starving the backend on open. The git
+  // poll below is already `active`-gated; this mirrors it.
   useEffect(() => {
+    if (!active) return;
     if (storeProjectId !== projectId) init(projectId);
     useSelectionStore.getState().init(projectId); // reset seleção na troca de projeto (idempotente)
     setGitStatus(new Map());
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- init on project switch only
-  }, [projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init on project switch / first activation
+  }, [projectId, active]);
 
-  // Auto-reveal the active file (IntelliJ "Always Select Opened File").
+  // Auto-reveal the active file (IntelliJ "Always Select Opened File") — only
+  // once the tree is loaded (pane active), else reveal would force the lazy
+  // ancestors to load while the pane is hidden.
   useEffect(() => {
-    if (activePath) void reveal(activePath);
+    if (active && activePath) void reveal(activePath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePath]);
+  }, [activePath, active]);
 
   // Git status poll (30s base) → file colors + dir severity bubbling. Also
   // keyed on the git-revision: a branch switch / commit (incl. external `git

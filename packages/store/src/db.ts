@@ -54,6 +54,18 @@ const numEnv = (name: string, fallback: number): number => {
 const STATS_CACHE_TTL_MS = numEnv('MCP_DB_STATS_CACHE_MS', 2000);
 const LIST_CACHE_TTL_MS = numEnv('MCP_DB_LIST_CACHE_MS', 3000);
 
+/**
+ * Real constituent of a SYNTHETIC union project (global session). Lightweight
+ * mirror of code-agent's `LinkedProject` (kept local because @mcp/store must
+ * not depend on @mcp/code-agent).
+ */
+export interface UnionProjectLink {
+  project_id: number;
+  name: string;
+  root_path: string;
+  is_primary: boolean;
+}
+
 export class CodeIndexDB {
   private db: DB;
   /** Central DB file path (for ATTACH + backup during the split). */
@@ -93,6 +105,15 @@ export class CodeIndexDB {
       maxOpen: this.pdbFlags.maxOpen,
       idleTtlMs: this.pdbFlags.idleMs,
       resolve: (projectId) => ({ dbPath: this.resolveProjectDbPath(projectId) }),
+      // When a project's DB handle is LRU/idle-evicted, drop the sibling
+      // per-project caches keyed by the same id so they don't linger for
+      // projects beyond the pool's cap (each rebuilds lazily on next access;
+      // the active project is MRU so it is never the one evicted).
+      onEvict: (projectId) => {
+        this.evictCodeVectorStore(projectId);
+        this.aliasCache.delete(projectId);
+        this.routeCache.delete(projectId);
+      },
     });
   }
 
@@ -402,6 +423,58 @@ export class CodeIndexDB {
   }
   /** Synthetic global-session union projects (hidden from listProjects). */
   listSyntheticProjects(): Project[] { return projects.listSynthetic(this.db); }
+  /**
+   * Real constituent projects of a SYNTHETIC union project (global session),
+   * deduped from the `coder_session_projects` junction rows of ANY session on
+   * it, primary first. Mirrors `listUnionProjects` in code-agent's sessions
+   * store; lives here so the runtime resolver and the host memory adapters can
+   * expand a union from just its project id (all tables are central). Empty
+   * when no session references the union.
+   */
+  listUnionProjectIds(syntheticProjectId: number): UnionProjectLink[] {
+    const rows = this.db
+      .prepare(
+        `SELECT csp.project_id      AS project_id,
+                p.name              AS name,
+                p.root_path         AS root_path,
+                MAX(csp.is_primary) AS is_primary
+           FROM coder_session_projects csp
+           JOIN coder_sessions s ON s.id = csp.coder_session_id
+           JOIN projects p       ON p.id = csp.project_id
+          WHERE s.project_id = ?
+          GROUP BY csp.project_id
+          ORDER BY is_primary DESC, csp.project_id ASC`,
+      )
+      .all(syntheticProjectId) as Array<{
+        project_id: number;
+        name: string;
+        root_path: string;
+        is_primary: number;
+      }>;
+    return rows.map((r) => ({
+      project_id: r.project_id,
+      name: r.name,
+      root_path: r.root_path,
+      is_primary: !!r.is_primary,
+    }));
+  }
+  /**
+   * Memory WRITE target for a project id: for a SYNTHETIC union project, its
+   * PRIMARY real constituent (deterministic, persists past the ephemeral union
+   * directory that gets swept when orphaned); for an ordinary project, itself.
+   * Used by the host memory adapters so distill/save_note in a global session
+   * land on the primary, never on the throwaway synthetic project.
+   */
+  resolveMemoryWriteProject(projectId: number): { id: number; name: string } {
+    const project = this.getProject(projectId);
+    if (!project) return { id: projectId, name: '' };
+    if (!project.is_synthetic) return { id: project.id, name: project.name };
+    const links = this.listUnionProjectIds(projectId);
+    const primary = links.find((l) => l.is_primary) ?? links[0];
+    return primary
+      ? { id: primary.project_id, name: primary.name }
+      : { id: project.id, name: project.name };
+  }
   updateProject(id: number, updates: Parameters<typeof projects.update>[2]): void {
     // Runtime/shell config (node_version/runtime_versions/runner_shell/
     // package_managers) lives in the routed `project_runtime_config` table

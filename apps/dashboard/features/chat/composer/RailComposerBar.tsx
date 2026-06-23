@@ -139,53 +139,45 @@ export function RailComposerBar(props: RailComposerBarProps) {
 
         {/* Reasoning effort — only when the model exposes discrete effort levels. */}
         {props.setReasoningEffort && props.reasoningLevels && props.reasoningLevels.length > 0 && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1 text-muted-foreground">
-                <Gauge className="h-3.5 w-3.5 shrink-0" />
-                <select
-                  aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
-                  className="h-7 rounded border bg-background px-1.5 text-xs"
-                  value={props.reasoningEffort ?? ''}
-                  onChange={(e) => props.setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
-                >
-                  <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
-                  {props.reasoningLevels.map((lv) => (
-                    <option key={lv} value={lv}>
-                      {lv}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[260px]">
-              {t('chat:toolbar.effortHint', { defaultValue: 'Reasoning effort (auto = model default)' })}
-            </TooltipContent>
-          </Tooltip>
+          <div
+            className="flex items-center gap-1 text-muted-foreground"
+            title={t('chat:toolbar.effortHint', { defaultValue: 'Reasoning effort (auto = model default)' })}
+          >
+            <Gauge className="h-3.5 w-3.5 shrink-0" />
+            <select
+              aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
+              className="h-7 rounded border bg-background px-1.5 text-xs"
+              value={props.reasoningEffort ?? ''}
+              onChange={(e) => props.setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
+            >
+              <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
+              {props.reasoningLevels.map((lv) => (
+                <option key={lv} value={lv}>
+                  {lv}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
 
         {/* Plan depth — only while the `plan` agent is active. */}
         {props.agent === 'plan' && props.setPlanDepth && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1 text-muted-foreground">
-                <Layers className="h-3.5 w-3.5 shrink-0" />
-                <select
-                  aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
-                  className="h-7 rounded border bg-background px-1.5 text-xs"
-                  value={props.planDepth ?? 'normal'}
-                  onChange={(e) => props.setPlanDepth?.(e.target.value)}
-                >
-                  <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
-                  <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
-                  <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
-                </select>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[260px]">
-              {t('chat:toolbar.planDepthHint', { defaultValue: 'Plan depth — how deep the planning agent goes' })}
-            </TooltipContent>
-          </Tooltip>
+          <div
+            className="flex items-center gap-1 text-muted-foreground"
+            title={t('chat:toolbar.planDepthHint', { defaultValue: 'Plan depth — how deep the planning agent goes' })}
+          >
+            <Layers className="h-3.5 w-3.5 shrink-0" />
+            <select
+              aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
+              className="h-7 rounded border bg-background px-1.5 text-xs"
+              value={props.planDepth ?? 'normal'}
+              onChange={(e) => props.setPlanDepth?.(e.target.value)}
+            >
+              <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
+              <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
+              <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
+            </select>
+          </div>
         )}
 
         {/* Prominent Think pill. */}

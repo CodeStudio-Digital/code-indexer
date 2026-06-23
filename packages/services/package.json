@@ -10,6 +10,8 @@
   "dependencies": {
     "@babel/parser": "^7.29.7",
     "@mcp/candidate-pipeline": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/provider-engine": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "cheerio": "^1.2.0",

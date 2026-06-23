@@ -87,6 +87,8 @@ import { mergeDBCapabilities } from '@mcp/code-agent/providers/capabilities.js';
 import { mergeDBPricing } from '@mcp/code-agent/providers/pricing-cache.js';
 import { hardcodedPriceSeed } from '@mcp/code-agent/providers/pricing.js';
 import { startProviderRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-refresh.js';
+import { loadPluginProviders } from '@mcp/plugin-host';
+import { upsertProvider } from '@mcp/services/providers/registry.js';
 import { startModelPricingRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-pricing-refresh.js';
 import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js';
 import { ensureBuiltinSkills } from '@mcp/indexer/bootstrap/ensure-builtin-skills.js';
@@ -437,6 +439,38 @@ export function createApp() {
 
   // Start background model refresh (populates context_window in DB from APIs).
   startProviderRefreshScheduler(deps.providerStore);
+
+  // Register LLM providers contributed by TRUSTED enabled plugins. Their
+  // adapters run in-process on the agent hot path, so this is gated by an
+  // explicit namespace allowlist (MCP_TRUSTED_PROVIDER_PLUGINS) — empty by
+  // default, so nothing untrusted ever runs in-process. (Pinned first-party
+  // key signature auto-trust is a follow-up.) NOTE: the provider-resolving
+  // workers (coder/company) need the same call at their boot for plugin
+  // providers to be usable by the agent — pending E2E hardening.
+  const trustedProviderPlugins = new Set(
+    (process.env.MCP_TRUSTED_PROVIDER_PLUGINS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  if (trustedProviderPlugins.size > 0) {
+    void loadPluginProviders({
+      register: upsertProvider,
+      trust: (ref) => trustedProviderPlugins.has(ref.namespace),
+      onError: (ns, err) =>
+        console.warn(
+          `[provider-plugin] ${ns} failed to load: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+    }).then((r) => {
+      if (r.loaded.length) {
+        console.log(
+          `[provider-plugin] registered: ${r.loaded
+            .map((l) => `${l.namespace}(${l.kinds.join(',')})`)
+            .join(', ')}`,
+        );
+      }
+    });
+  }
 
   // Seed the offline hardcoded price table into model_prices (idempotent) and
   // hydrate the in-memory price cache so estimateCost() is accurate from the

@@ -71,7 +71,7 @@ export function useEditorChatSession(projectId: number) {
   const stream = useAgentStream(selectedId, notificationContext);
   const {
     streaming, currentTurn, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn,
-    answerQuestion, respondToPlan, respondToTasks, respondToToolApproval, switchProvider,
+    answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider,
   } = stream;
 
   const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, liveTurnDuplicatedInHistory } =
@@ -298,8 +298,9 @@ export function useEditorChatSession(projectId: number) {
     onAnswer: (answer) => answerQuestion(answer),
     onPlanResponse: (verdict) => respondToPlan(verdict),
     onTasksResponse: (verdict) => respondToTasks(verdict),
+    onDecide: (answers) => decideGate(answers),
     onToolApproval: (toolUseId, verdict) => respondToToolApproval(toolUseId, verdict),
-  }), [answerQuestion, respondToPlan, respondToTasks, respondToToolApproval]);
+  }), [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval]);
 
   return {
     sessions: sessions ?? null, refetchSessions, selectedId, setSelectedId, createSession, creating,

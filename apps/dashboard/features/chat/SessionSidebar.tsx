@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Archive,
@@ -73,7 +73,13 @@ interface SessionSidebarProps {
 
 const UNGROUPED_KEY = '__ungrouped__';
 
-export function SessionSidebar({
+// React.memo: the parent (AgentChat) re-renders on every click / stream frame,
+// but the sidebar only depends on the session list + stable handlers. With all
+// handler props now useCallback-stabilized in AgentChat (and `sessions`/`groups`
+// being useApi state refs), this memo holds across the click-storm — the inner
+// SessionRow memo was previously defeated by the unstable handlers flowing
+// through here.
+export const SessionSidebar = memo(function SessionSidebar({
   sessions,
   groups,
   selectedId,
@@ -113,14 +119,15 @@ export function SessionSidebar({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  const toggleSelected = (id: number) => {
+  // Stable so `memo(SessionRow)` isn't defeated — passed straight to every row.
+  const toggleSelected = useCallback((id: number) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  };
+  }, []);
 
   const exitSelectMode = () => {
     setSelectMode(false);
@@ -161,6 +168,9 @@ export function SessionSidebar({
   const selectedCount = selectedIds.size;
   const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
   const isArchivedView = view === 'archived';
+  // Stable array identity for the rows' move-to-group submenu (was `groups ?? []`
+  // recreated inline per render, which defeated the row memo).
+  const rowGroups = useMemo(() => groups ?? [], [groups]);
 
   return (
     <>
@@ -440,16 +450,16 @@ export function SessionSidebar({
                       selected={selectedId === s.id}
                       selectMode={selectMode}
                       checked={selectedIds.has(s.id)}
-                      onToggle={() => toggleSelected(s.id)}
-                      onSelect={() => onSelect(s.id)}
-                      onDelete={() => onDelete(s.id)}
-                      onRename={() => onRename(s.id, s.title)}
-                      onDuplicate={() => onDuplicate(s.id)}
-                      onArchive={() => onArchive(s.id, !isArchivedView)}
-                      onFavorite={() => onFavorite(s.id, !s.is_favorite)}
+                      onToggle={toggleSelected}
+                      onSelect={onSelect}
+                      onDelete={onDelete}
+                      onRename={onRename}
+                      onDuplicate={onDuplicate}
+                      onArchive={onArchive}
+                      onFavorite={onFavorite}
                       isArchivedView={isArchivedView}
-                      groups={groups ?? []}
-                      onMoveToGroup={(gid) => onMoveToGroup(s.id, gid)}
+                      groups={rowGroups}
+                      onMoveToGroup={onMoveToGroup}
                     />
                   ))}
               </div>
@@ -460,9 +470,9 @@ export function SessionSidebar({
       </aside>
     </>
   );
-}
+});
 
-function SessionRow({
+const SessionRow = memo(function SessionRow({
   session: s,
   selected,
   selectMode,
@@ -482,22 +492,24 @@ function SessionRow({
   selected: boolean;
   selectMode: boolean;
   checked: boolean;
-  onToggle: () => void;
-  onSelect: () => void;
-  onDelete: () => void;
-  onRename: () => void;
-  onDuplicate: () => void;
-  onArchive: () => void;
-  onFavorite: () => void;
+  // Stable parent callbacks (id-taking) — the row binds its own session.id, so
+  // the parent never allocates a per-row closure and the memo holds.
+  onToggle: (id: number) => void;
+  onSelect: (id: number) => void;
+  onDelete: (id: number) => void;
+  onRename: (id: number, currentTitle: string) => void;
+  onDuplicate: (id: number) => Promise<void> | void;
+  onArchive: (id: number, archived: boolean) => Promise<void> | void;
+  onFavorite: (id: number, favorite: boolean) => Promise<void> | void;
   isArchivedView: boolean;
   groups: CoderSessionGroup[];
-  onMoveToGroup: (groupId: number | null) => void;
+  onMoveToGroup: (id: number, groupId: number | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   const tokens = s.total_input_tokens + s.total_output_tokens;
   const handleClick = () => {
-    if (selectMode) onToggle();
-    else onSelect();
+    if (selectMode) onToggle(s.id);
+    else onSelect(s.id);
   };
   return (
     <div
@@ -528,14 +540,11 @@ function SessionRow({
           </div>
         )}
         <div className="flex-1 min-w-0 overflow-hidden">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="font-medium text-xs truncate">{s.title}</div>
-            </TooltipTrigger>
-            <TooltipContent side="right" className="max-w-xs break-words">
-              {s.title}
-            </TooltipContent>
-          </Tooltip>
+          {/* Native title (was a per-row Radix Tooltip wrapping the static
+              title) — removes N tooltip providers/portals from a long list. */}
+          <div className="font-medium text-xs truncate" title={s.title}>
+            {s.title}
+          </div>
           <div className="text-[10px] text-muted-foreground truncate font-mono mt-0.5">{s.model}</div>
           <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
             <span className="tabular-nums">{tokens.toLocaleString()} tok</span>
@@ -549,7 +558,7 @@ function SessionRow({
             aria-label={s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
             onClick={(e) => {
               e.stopPropagation();
-              onFavorite();
+              onFavorite(s.id, !s.is_favorite);
             }}
             className={cn(
               'shrink-0 rounded p-1 transition-colors',
@@ -572,16 +581,16 @@ function SessionRow({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-              <DropdownMenuItem onClick={onRename}>
+              <DropdownMenuItem onClick={() => onRename(s.id, s.title)}>
                 <Pencil className="h-3.5 w-3.5" /> {t('chat:sidebar.rename')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={onFavorite}>
+              <DropdownMenuItem onClick={() => onFavorite(s.id, !s.is_favorite)}>
                 <Star
                   className={cn('h-3.5 w-3.5', s.is_favorite && 'fill-current text-yellow-500')}
                 />
                 {s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={onArchive}>
+              <DropdownMenuItem onClick={() => onArchive(s.id, !isArchivedView)}>
                 {isArchivedView ? (
                   <>
                     <ArchiveRestore className="h-3.5 w-3.5" /> {t('chat:sidebar.unarchive')}
@@ -597,22 +606,22 @@ function SessionRow({
                   <FolderPlus className="h-3.5 w-3.5" /> {t('chat:sidebar.moveToGroup')}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
-                  <DropdownMenuItem onClick={() => onMoveToGroup(null)}>
+                  <DropdownMenuItem onClick={() => onMoveToGroup(s.id, null)}>
                     {t('chat:sidebar.noGroup')}
                   </DropdownMenuItem>
                   {groups.length > 0 && <DropdownMenuSeparator />}
                   {groups.map((g) => (
-                    <DropdownMenuItem key={g.id} onClick={() => onMoveToGroup(g.id)}>
+                    <DropdownMenuItem key={g.id} onClick={() => onMoveToGroup(s.id, g.id)}>
                       {g.name}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-              <DropdownMenuItem onClick={onDuplicate}>
+              <DropdownMenuItem onClick={() => onDuplicate(s.id)}>
                 <Copy className="h-3.5 w-3.5" /> {t('chat:sidebar.duplicate')}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={onDelete} className="text-destructive">
+              <DropdownMenuItem onClick={() => onDelete(s.id)} className="text-destructive">
                 <Trash2 className="h-3.5 w-3.5" /> {t('common:actions.delete')}
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -621,4 +630,4 @@ function SessionRow({
       </div>
     </div>
   );
-}
+});

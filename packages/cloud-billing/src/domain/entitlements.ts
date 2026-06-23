@@ -35,6 +35,10 @@ export interface EntitlementFeatures {
   sso: boolean;
   /** Org-wide audit log export. */
   auditExport: boolean;
+  /** End-to-end encrypted SSH credential vault synced across the user's devices. */
+  sshVault: boolean;
+  /** Share an SSH host vault with an org (zero-knowledge, per-member key wrapping). */
+  teamSshVault: boolean;
 }
 
 export interface EntitlementLimits {
@@ -71,6 +75,8 @@ const FREE_FEATURES: EntitlementFeatures = {
   teamTemplates: false,
   sso: false,
   auditExport: false,
+  sshVault: false,
+  teamSshVault: false,
 };
 const PRO_FEATURES: EntitlementFeatures = {
   ...FREE_FEATURES,
@@ -79,12 +85,14 @@ const PRO_FEATURES: EntitlementFeatures = {
   prioritySupport: true,
   apiDocs: true,
   backup: true,
+  sshVault: true,
 };
 const TEAM_FEATURES: EntitlementFeatures = {
   ...PRO_FEATURES,
   teamApis: true,
   teamMemory: true,
   teamTemplates: true,
+  teamSshVault: true,
 };
 const ENTERPRISE_FEATURES: EntitlementFeatures = {
   ...TEAM_FEATURES,

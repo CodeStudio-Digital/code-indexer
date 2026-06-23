@@ -32,6 +32,9 @@ import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.j
 import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
 import { DesignSystemStore } from '@mcp/store/design-system-store.js';
 import { ApiClientStore } from '@mcp/store/api-client-store.js';
+import { SshStore } from '@mcp/store/ssh-store.js';
+import { DbClientStore } from '@mcp/store/db-client-store.js';
+import { sharedDbConnectionManager } from '@mcp/db-drivers';
 import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
 import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
@@ -290,6 +293,12 @@ export interface ApiClientDeps {
    * per-request from the `:projectId` URL param.
    */
   apiClientFor: (projectId: number) => ApiClientStore;
+  /** Embedded SSH client store (saved hosts + identities). Project-scoped like apiClientFor. */
+  sshStore: SshStore;
+  sshStoreFor: (projectId: number) => SshStore;
+  /** Embedded database client store (saved connections + history + saved queries). Project-scoped. */
+  dbClientStore: DbClientStore;
+  dbClientFor: (projectId: number) => DbClientStore;
 }
 
 export interface PipelineDeps {
@@ -669,6 +678,9 @@ export function createDeps(): ServerDeps {
     }),
   );
   registerShutdownTask('project-index-dispose', () => projectIndexService.dispose());
+  // Embedded database-client connection pools (shared with the db_* agent
+  // tools) — drain open TCP sockets / sqlite handles on quit.
+  registerShutdownTask('db-client-pools', () => sharedDbConnectionManager().closeAll());
   // External LSP servers (intelephense/pyright/...) — graceful shutdown +
   // exit + SIGKILL fallback. The manager is lazy (wired on first LSP call);
   // a never-wired manager is just a null here.
@@ -716,6 +728,28 @@ export function createDeps(): ServerDeps {
     }
     return s;
   };
+  const sshStore = new SshStore(db.raw());
+  const sshStoreByProject = new Map<number, SshStore>();
+  const sshStoreFor = (projectId: number): SshStore => {
+    if (!db.useProjectDb(projectId)) return sshStore;
+    let s = sshStoreByProject.get(projectId);
+    if (!s) {
+      s = new SshStore(db.projectScopedDb(projectId));
+      sshStoreByProject.set(projectId, s);
+    }
+    return s;
+  };
+  const dbClientStore = new DbClientStore(db.raw());
+  const dbClientStoreByProject = new Map<number, DbClientStore>();
+  const dbClientFor = (projectId: number): DbClientStore => {
+    if (!db.useProjectDb(projectId)) return dbClientStore;
+    let s = dbClientStoreByProject.get(projectId);
+    if (!s) {
+      s = new DbClientStore(db.projectScopedDb(projectId));
+      dbClientStoreByProject.set(projectId, s);
+    }
+    return s;
+  };
   const verdaccioStore = new VerdaccioStore(db.raw());
   // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
   // EARLIER (before createSearchBundle) so the V2 search path can emit
@@ -751,7 +785,7 @@ export function createDeps(): ServerDeps {
   // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
   // `memory_extraction` binding; when no binding is set it falls back to the
   // general default AI model (zero-config). Passed into runCoder as `runEndMemory`.
-  const runEndMemory = createRunEndMemory({
+  const runEndMemoryRaw = createRunEndMemory({
     writer: snapshotService,
     search: hybridSearch,
     resolver: pipelineProviderResolver,
@@ -762,6 +796,21 @@ export function createDeps(): ServerDeps {
       try { db.insertMemoryDistillLog(projectId, entry); } catch { /* best-effort */ }
     },
   });
+  // Global-session WRITE redirect: a SYNTHETIC union project (mig 155) has no
+  // durable home — its directory is swept when orphaned — so map its id to the
+  // PRIMARY real constituent before persisting. This single chokepoint covers
+  // every distill moment that flows through the port (compaction harvest,
+  // Resumir&limpar, idle sweeper) AND the worker path (the main-side bridge
+  // handler calls THIS instance). Inert for ordinary projects (id unchanged).
+  const runEndMemory: RunEndMemory = {
+    isConfigured: () => runEndMemoryRaw.isConfigured(),
+    extractAndPersist: (projectId, projectName, input) => {
+      const tgt = db.resolveMemoryWriteProject(projectId);
+      return tgt.id === projectId
+        ? runEndMemoryRaw.extractAndPersist(projectId, projectName, input)
+        : runEndMemoryRaw.extractAndPersist(tgt.id, tgt.name, input);
+    },
+  };
 
   // Direct agent ports for project memory (save_note scope 'project' +
   // recall_memory). The write path reuses the distillers' MemoryExtractor
@@ -772,6 +821,11 @@ export function createDeps(): ServerDeps {
   ]);
   const projectMemory: SearchDeps['projectMemory'] = {
     save: async (projectId, projectName, entry) => {
+      // Same synthetic→primary redirect as runEndMemory: a global session's
+      // save_note must persist on a real project, not the throwaway union.
+      // Inert for ordinary projects and for user memory (id 0 → id unchanged).
+      const tgt = db.resolveMemoryWriteProject(projectId);
+      if (tgt.id !== projectId) { projectId = tgt.id; projectName = tgt.name; }
       const category = VALID_MEMORY_CATEGORIES.has(entry.category) ? entry.category : 'note';
       const candidate = {
         title: entry.title,
@@ -1166,6 +1220,10 @@ export function createDeps(): ServerDeps {
     designSystemStore,
     apiClientStore,
     apiClientFor,
+    sshStore,
+    sshStoreFor,
+    dbClientStore,
+    dbClientFor,
     verdaccioStore,
     pipelineTelemetryStore,
     pipelineBindingsStore,

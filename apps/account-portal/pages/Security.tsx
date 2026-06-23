@@ -31,9 +31,36 @@ export function SecurityPage() {
       <EmailCard verified={!!account?.emailVerified} onVerified={reload} />
       <PasswordCard email={account?.email ?? null} />
       <TwoFactorCard />
+      <VaultInfoCard />
       <DataCard />
       <DangerZoneCard />
     </div>
+  );
+}
+
+/** Informational: how the zero-knowledge SSH vault works + the unrecoverable-passphrase warning. */
+function VaultInfoCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" /> SSH vault
+        </CardTitle>
+        <CardDescription>End-to-end encrypted sync of your SSH hosts across devices.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm text-muted-foreground">
+        <p>
+          Your hosts are encrypted on your device with a key derived from your <strong>vault passphrase</strong>. The
+          server only ever stores ciphertext — it can never read your credentials.
+        </p>
+        <Alert>
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          We cannot reset your vault passphrase. If you lose it, the vault is <strong>unrecoverable</strong> — keep it
+          somewhere safe.
+        </Alert>
+        <p>Set up and manage the vault from the desktop app (SSH panel → the shield button).</p>
+      </CardContent>
+    </Card>
   );
 }
 

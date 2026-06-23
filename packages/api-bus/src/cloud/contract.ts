@@ -46,6 +46,8 @@ export interface Entitlements {
     teamTemplates: boolean;
     sso: boolean;
     auditExport: boolean;
+    sshVault: boolean;
+    teamSshVault: boolean;
   };
   limits: { maxActiveShares: number; maxApiDocs: number; maxSeats: number };
 }
@@ -64,7 +66,16 @@ export interface CloudSessionInfo {
 }
 
 /** Personal-sync wire types (mirror `services/cloud-api/src/sync/types.ts`). */
-export type SyncKind = 'collection' | 'environment' | 'memory' | 'note' | 'project';
+export type SyncKind =
+  | 'collection'
+  | 'environment'
+  | 'memory'
+  | 'note'
+  | 'project'
+  // SSH credential vault (E2E-encrypted client-side).
+  | 'ssh_host'
+  | 'ssh_identity'
+  | 'vault_meta';
 export interface SyncPushItem {
   kind: SyncKind;
   clientDocId: string;
@@ -87,6 +98,19 @@ export interface SyncPullItem {
   version: number;
   deleted: boolean;
   body: unknown | null;
+}
+
+/** A Team Vault Key wrapped to one member (mirror `services/cloud-api/src/infra/d1/vault-keys-repo.ts`).
+ *  `granterSigPub` + `signature` authenticate the grant: the recipient verifies the
+ *  signature (over tvkId+recipientPub+wrappedKey) against the granter's PINNED signing key,
+ *  so a malicious server can neither forge a grant nor substitute a key undetected. */
+export interface VaultGrantWire {
+  accountId: string;
+  wrappedKey: string;
+  granterPub: string;
+  tvkId: string;
+  granterSigPub: string;
+  signature: string;
 }
 
 /** Teams (organizations) wire types (mirror `services/cloud-api/src/teams`). */
@@ -159,6 +183,14 @@ export interface CloudContract {
   'orgs.billingPortal': { input: { orgId: string }; output: { url: string } };
   // Org audit log (admin+) — Teams activity log; Enterprise builds bulk export on top.
   'orgs.audit': { input: { orgId: string }; output: { events: unknown[] } };
+  // Shared SSH vault — zero-knowledge key distribution + encrypted host sync.
+  'account.vaultKeyPut': { input: { publicSpki: string }; output: { ok: true } };
+  'orgs.vaultMembers': { input: { orgId: string }; output: { members: { accountId: string; publicSpki: string }[] } };
+  'orgs.vaultGrantsPut': { input: { orgId: string; projectWorkspaceId: string; grants: VaultGrantWire[] }; output: { ok: true } };
+  'orgs.vaultGrantsMine': { input: { orgId: string; projectWorkspaceId: string }; output: { grant: VaultGrantWire | null } };
+  'orgs.vaultRotate': { input: { orgId: string; projectWorkspaceId: string }; output: { ok: true } };
+  'orgs.vaultPush': { input: { orgId: string; documents: SyncPushItem[] }; output: { results: SyncPushResult[]; cursor: number } };
+  'orgs.vaultPull': { input: { orgId: string; kinds?: SyncKind[]; sinceVersion: number }; output: { documents: SyncPullItem[]; cursor: number } };
   'feedback.submit': { input: { kind: 'bug' | 'idea' | 'other'; message: string; appVersion?: string; os?: string }; output: { publicId: string } };
   'feedback.list': { input: void; output: { items: unknown[] } };
 }

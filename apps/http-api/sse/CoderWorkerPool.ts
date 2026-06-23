@@ -398,6 +398,12 @@ export class CoderWorkerPool {
     await entry.host.requireBridge().request('abort', {});
   }
 
+  /** True while a run is in flight for this session (drives the "busy" guard on
+   *  routes that must not mutate a live session, e.g. attach/detach project). */
+  isRunning(sessionId: number): boolean {
+    return this.entries.get(sessionId)?.runInProgress === true;
+  }
+
   async evict(sessionId: number): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;

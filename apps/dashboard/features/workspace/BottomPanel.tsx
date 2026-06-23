@@ -19,6 +19,7 @@ import {
   ChevronUp,
   X,
   Puzzle,
+  Server,
 } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
@@ -38,10 +39,14 @@ const RunnersTab = lazy(() =>
   import('../project/tabs/RunnersTab.js').then((m) => ({ default: m.RunnersTab })),
 );
 
-type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'find' | 'runners';
+// SSH é uma aba pesada (xterm + ssh2): LAZY, baixada só quando aberta.
+const SshPanel = lazy(() => import('../ssh/SshPanel.js').then((m) => ({ default: m.SshPanel })));
+
+type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'find' | 'runners' | 'ssh';
 
 const TABS: Array<{ id: BuiltinTabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'terminal', label: 'Terminal', icon: TerminalSquare },
+  { id: 'ssh', label: 'SSH', icon: Server },
   { id: 'runners', label: 'Runners', icon: Play },
   { id: 'problems', label: 'Problems', icon: AlertCircle },
   { id: 'output', label: 'Output', icon: FileText },
@@ -179,6 +184,17 @@ export function BottomPanel({
               switching tabs clears a stuck error. */}
           <ErrorBoundary label={tab} resetKey={tab}>
             {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
+            {tab === 'ssh' && !activePlugin && (
+              <Suspense
+                fallback={
+                  <div className="h-full grid place-items-center">
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  </div>
+                }
+              >
+                <SshPanel projectId={projectId} />
+              </Suspense>
+            )}
             {tab === 'runners' && !activePlugin && (
               <Suspense
                 fallback={

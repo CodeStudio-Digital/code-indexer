@@ -150,7 +150,13 @@ interface ComposerProps {
   queuedStrip?: React.ReactNode;
 }
 
-export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
+// React.memo wraps the forwardRef so AgentChat's per-click / per-stream-frame
+// re-renders don't cascade into this heavy subtree. The memo only holds if
+// EVERY prop is referentially stable across those renders — AgentChat now
+// useCallback-wraps all handler props and useMemo's the two inline-computed
+// props (reasoningLevels, queuedStrip); providerOptions/currentProviderModels/
+// getModelsForProvider are memoized at their source in useAgentChatState.
+const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
   function Composer(props, ref) {
     const { t } = useTranslation('chat');
     const { streaming } = props;
@@ -701,3 +707,5 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     );
   },
 );
+
+export const Composer = React.memo(ComposerImpl);

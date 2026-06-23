@@ -23,6 +23,13 @@ export interface ProjectDbPoolOpts {
   readonly?: boolean;
   now?: NowFn;
   openOpts?: OpenProjectDbOpts;
+  /**
+   * Called after a project's handle is dropped (LRU over-cap or idle sweep) so
+   * the owner can release sibling per-project state it keyed by the same id
+   * (vector-store connections, alias/route caches). Not called on `closeAll`
+   * (process shutdown). Must not re-enter the pool.
+   */
+  onEvict?: (projectId: number) => void;
 }
 
 export class ProjectDbPool {
@@ -62,16 +69,14 @@ export class ProjectDbPool {
   evict(projectId: number): void {
     const pdb = this.entries.get(projectId);
     if (!pdb) return;
-    this.entries.delete(projectId);
-    pdb.checkpointAndClose();
+    this.dropEntry(projectId, pdb);
   }
 
   /** Evict every handle idle longer than the TTL. */
   sweepIdle(): void {
     for (const [id, pdb] of [...this.entries]) {
       if (pdb.idleMs > this.opts.idleTtlMs) {
-        this.entries.delete(id);
-        pdb.checkpointAndClose();
+        this.dropEntry(id, pdb);
       }
     }
   }
@@ -104,13 +109,18 @@ export class ProjectDbPool {
     this.entries.set(id, e);
   }
 
+  /** Drop one handle (checkpoint TRUNCATE + close) and notify `onEvict`. */
+  private dropEntry(projectId: number, pdb: ProjectDb): void {
+    this.entries.delete(projectId);
+    pdb.checkpointAndClose();
+    this.opts.onEvict?.(projectId);
+  }
+
   private evictOverCap(): void {
     while (this.entries.size > this.opts.maxOpen) {
       const oldest = this.entries.keys().next().value as number | undefined;
       if (oldest === undefined) break;
-      const pdb = this.entries.get(oldest)!;
-      this.entries.delete(oldest);
-      pdb.checkpointAndClose();
+      this.dropEntry(oldest, this.entries.get(oldest)!);
     }
   }
 }

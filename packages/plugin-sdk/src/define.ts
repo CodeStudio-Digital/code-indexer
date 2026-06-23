@@ -15,5 +15,6 @@ export { contributeTool } from './contributions/tool.js';
 export { contributeToolWindow } from './contributions/tool-window.js';
 export { contributeCommand } from './contributions/command.js';
 export { contributeTheme } from './contributions/theme.js';
+export { contributeProvider } from './contributions/provider.js';
 export { definePlugin } from './define-plugin.js';
 export type { DefinePluginSpec } from './define-plugin.js';

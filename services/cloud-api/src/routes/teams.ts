@@ -18,6 +18,7 @@ import { isAtLeast } from '../teams/roles.js';
 import { resolveOrgEntitlements } from '../entitlements.js';
 import { SyncService } from '../sync/service.js';
 import { createOrgSyncRepo } from '../infra/d1/org-sync-repo.js';
+import { createVaultKeysRepo } from '../infra/d1/vault-keys-repo.js';
 import { SYNC_KINDS } from '../sync/types.js';
 import { createD1Executor } from '../infra/d1/d1-executor.js';
 import { listOrgAudit } from '../infra/audit.js';
@@ -46,10 +47,50 @@ const wsPushSchema = z.object({
 const wsPullSchema = z.object({ kinds: z.array(wsKind).nonempty().optional(), sinceVersion: z.number().int().nonnegative().default(0) });
 const checkoutSchema = z.object({ seats: z.number().int().min(1).max(1000).optional() });
 
+// Shared SSH vault: zero-knowledge key grants + encrypted host docs.
+const vaultKind = z.enum(['ssh_host', 'ssh_identity']);
+const vaultGrantSchema = z.object({
+  projectWorkspaceId: z.string().min(1).max(128),
+  grants: z
+    .array(
+      z.object({
+        accountId: z.string().min(1).max(128),
+        wrappedKey: z.string().min(1).max(4096),
+        granterPub: z.string().min(1).max(2048),
+        tvkId: z.string().min(1).max(128),
+        granterSigPub: z.string().min(1).max(2048),
+        signature: z.string().min(1).max(2048),
+      }),
+    )
+    .max(500),
+});
+const rotateSchema = z.object({ projectWorkspaceId: z.string().min(1).max(128) });
+const vaultPushSchema = z.object({
+  documents: z
+    .array(
+      z.object({
+        kind: vaultKind,
+        clientDocId: z.string().min(1).max(128),
+        baseVersion: z.number().int().nonnegative().default(0),
+        updatedAtMs: z.number().int().nonnegative(),
+        deleted: z.boolean().optional(),
+        body: z.unknown().optional(),
+      }),
+    )
+    .max(500),
+});
+const vaultPullSchema = z.object({ kinds: z.array(vaultKind).nonempty().optional(), sinceVersion: z.number().int().nonnegative().default(0) });
+
 /** A shared-workspace sync service scoped to one org (reuses the personal SyncService). */
 function orgSyncService(env: Env, orgId: string): SyncService {
   return new SyncService(createOrgSyncRepo(createD1Executor(env.DB), orgId, cryptoIdGen, systemClock), sha256Hex);
 }
+
+function vaultKeysRepo(env: Env) {
+  return createVaultKeysRepo(createD1Executor(env.DB));
+}
+
+const VAULT_PULL_KINDS = ['ssh_host', 'ssh_identity'] as const;
 
 function respondTeamError(c: Context<{ Bindings: Env }>, error: TeamError) {
   return c.json(toErrorBody(error), teamHttpStatus(error) as ContentfulStatusCode);
@@ -130,6 +171,9 @@ export function teamsRouter(): Hono<{ Bindings: Env }> {
     if (!isVerified(claims)) return emailNotVerified(c); // mutating org membership is a cloud WRITE (R3)
     const r = await createTeamsBundle(c.env).service.removeMember({ orgId: c.req.param('id'), actorAccountId: claims.sub, targetAccountId: c.req.param('accountId') });
     if (!r.ok) return respondTeamError(c, r.error);
+    // Revoke the removed member's vault grants immediately (admin should still
+    // rotate the TVK + the host credentials — see the forward-only caveat).
+    await vaultKeysRepo(c.env).deleteGrantsForAccount(c.req.param('id'), c.req.param('accountId'));
     recordAudit(c, 'org_member_removed', 200, { accountId: claims.sub, orgId: c.req.param('id'), target: c.req.param('accountId') });
     return c.json(r.value, 200);
   });
@@ -216,6 +260,99 @@ export function teamsRouter(): Hono<{ Bindings: Env }> {
     const ent = await resolveOrgEntitlements(c.env, orgId);
     if (!ent.features.teamApis) return c.json({ code: 'team_workspace_not_entitled', message: 'Shared workspaces require a Team plan.' }, 402);
     const out = await orgSyncService(c.env, orgId).pull(parsed.data.kinds ?? SYNC_KINDS, parsed.data.sinceVersion);
+    return c.json(out, 200);
+  });
+
+  // ─── Shared SSH vault (zero-knowledge: per-member TVK grants + encrypted host docs) ──
+  const requireVaultEntitled = async (c: Context<{ Bindings: Env }>, orgId: string) => {
+    const ent = await resolveOrgEntitlements(c.env, orgId);
+    return ent.features.teamSshVault ? null : c.json({ code: 'team_vault_not_entitled', message: 'The shared SSH vault requires a Team plan.' }, 402);
+  };
+
+  app.get('/:id/vault/members', async (c) => {
+    const claims = await requireClaims(c, createIdentityBundle(c.env));
+    if (!claims) return unauthorized(c);
+    const orgId = c.req.param('id');
+    const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
+    if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
+    return c.json({ members: await vaultKeysRepo(c.env).listOrgMemberKeys(orgId) }, 200);
+  });
+
+  app.post('/:id/vault/grants', async (c) => {
+    const parsed = vaultGrantSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid grants.', details: parsed.error.flatten() }, 400);
+    const claims = await requireClaims(c, createIdentityBundle(c.env));
+    if (!claims) return unauthorized(c);
+    if (!isVerified(claims)) return emailNotVerified(c);
+    const orgId = c.req.param('id');
+    const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
+    if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
+    if (!isAtLeast(member.role, 'admin')) return respondTeamError(c, TeamErrors.forbidden());
+    const gate = await requireVaultEntitled(c, orgId);
+    if (gate) return gate;
+    // Only grant to current org members who actually published a key — drop any
+    // client-supplied accountId that isn't a real, key-bearing member (no orphan rows).
+    const repo = vaultKeysRepo(c.env);
+    const eligible = new Set((await repo.listOrgMemberKeys(orgId)).map((m) => m.accountId));
+    const grants = parsed.data.grants.filter((g) => eligible.has(g.accountId));
+    await repo.putGrants(orgId, parsed.data.projectWorkspaceId, grants, Date.now());
+    recordAudit(c, 'org_vault_granted', 200, { accountId: claims.sub, orgId, count: grants.length });
+    return c.json({ ok: true }, 200);
+  });
+
+  app.get('/:id/vault/grants/me', async (c) => {
+    const claims = await requireClaims(c, createIdentityBundle(c.env));
+    if (!claims) return unauthorized(c);
+    const orgId = c.req.param('id');
+    const pwid = c.req.query('projectWorkspaceId');
+    if (!pwid) return c.json({ code: 'validation_failed', message: 'projectWorkspaceId required.' }, 400);
+    const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
+    if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
+    return c.json({ grant: await vaultKeysRepo(c.env).getMyGrant(orgId, pwid, claims.sub) }, 200);
+  });
+
+  app.post('/:id/vault/rotate', async (c) => {
+    const parsed = rotateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid payload.', details: parsed.error.flatten() }, 400);
+    const claims = await requireClaims(c, createIdentityBundle(c.env));
+    if (!claims) return unauthorized(c);
+    if (!isVerified(claims)) return emailNotVerified(c);
+    const orgId = c.req.param('id');
+    const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
+    if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
+    if (!isAtLeast(member.role, 'admin')) return respondTeamError(c, TeamErrors.forbidden());
+    await vaultKeysRepo(c.env).deleteGrants(orgId, parsed.data.projectWorkspaceId);
+    recordAudit(c, 'org_vault_rotated', 200, { accountId: claims.sub, orgId });
+    return c.json({ ok: true }, 200);
+  });
+
+  app.post('/:id/vault/push', async (c) => {
+    const parsed = vaultPushSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid push.', details: parsed.error.flatten() }, 400);
+    const claims = await requireClaims(c, createIdentityBundle(c.env));
+    if (!claims) return unauthorized(c);
+    if (!isVerified(claims)) return emailNotVerified(c);
+    const orgId = c.req.param('id');
+    const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
+    if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
+    if (!isAtLeast(member.role, 'member')) return respondTeamError(c, TeamErrors.forbidden()); // viewers read-only
+    const gate = await requireVaultEntitled(c, orgId);
+    if (gate) return gate;
+    const out = await orgSyncService(c.env, orgId).push(parsed.data.documents);
+    return c.json(out, 200);
+  });
+
+  app.post('/:id/vault/pull', async (c) => {
+    const parsed = vaultPullSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid pull.', details: parsed.error.flatten() }, 400);
+    const claims = await requireClaims(c, createIdentityBundle(c.env));
+    if (!claims) return unauthorized(c);
+    const orgId = c.req.param('id');
+    const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
+    if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
+    const gate = await requireVaultEntitled(c, orgId);
+    if (gate) return gate;
+    const out = await orgSyncService(c.env, orgId).pull(parsed.data.kinds ?? VAULT_PULL_KINDS, parsed.data.sinceVersion);
     return c.json(out, 200);
   });
 

@@ -125,9 +125,9 @@ describe('zai.createCoder — URL switching', () => {
     else delete process.env.ZAI_BASE_URL;
   });
 
-  it('routes glm-5.1 (no mode) to the coding URL (heuristic)', () => {
+  it('routes glm-5.1 (no mode) to the general URL (coding is opt-in only)', () => {
     zai.createCoder!(creds, 'glm-5.1');
-    expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/coding/paas/v4/');
+    expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/paas/v4/');
   });
 
   it('routes glm-4-air (no mode, not in coding set) to the general URL', () => {
@@ -145,11 +145,11 @@ describe('zai.createCoder — URL switching', () => {
     expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/paas/v4/');
   });
 
-  it('ignores creds.baseURL and forces the coding URL for coding-capable models (legacy parity)', () => {
-    // Legacy factory always overrode cfg.base_url with the heuristic for the
-    // coder path. A stale cfg.base_url pointing at the general URL would
-    // otherwise break glm-5.1::coding sessions after a DB seed from v3.7.
-    zai.createCoder!({ ...creds, baseURL: 'https://api.z.ai/api/paas/v4' }, 'glm-5.1');
+  it('routes "glm-5.1::coding" to the coding URL, overriding creds.baseURL (explicit opt-in wins)', () => {
+    // Coding is now opt-in only: an explicit `::coding` suffix is the single
+    // way to reach the coding endpoint, and it beats a cfg.base_url pointing
+    // at the general URL so opt-in sessions are never silently downgraded.
+    zai.createCoder!({ ...creds, baseURL: 'https://api.z.ai/api/paas/v4' }, 'glm-5.1::coding');
     expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/coding/paas/v4/');
   });
 

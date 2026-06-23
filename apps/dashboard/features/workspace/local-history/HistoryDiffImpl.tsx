@@ -44,6 +44,11 @@ export default function HistoryDiffImpl({ original, modified, language }: Histor
       options={{
         readOnly: true,
         renderSideBySide: true,
+        // Não deixar o Monaco colapsar o side-by-side para inline quando a
+        // largura cai abaixo do breakpoint interno (~900px) — a divisão de
+        // duas colunas deve aparecer sempre (na janela popout há espaço de
+        // sobra; isto blinda contra o colapso).
+        useInlineViewWhenSpaceIsLimited: false,
         minimap: { enabled: false },
         lineNumbers: 'on',
         glyphMargin: true,

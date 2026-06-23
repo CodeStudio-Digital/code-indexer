@@ -132,4 +132,56 @@ describe('global sessions (virtual union)', () => {
 
     expect(snap.listActiveBaselineIds('coder', sessionId).sort()).toEqual([a.baseline.id, b.baseline.id].sort());
   });
+
+  it('ATTACH/DETACH: link/unlink mutate an existing global session\'s linked set', () => {
+    // The "anexar outro projeto numa sessão que já rodou" path — the route layer
+    // wraps these store primitives, then rebuilds junctions + re-indexes.
+    const projC = db.createProject('proj-c', join(workDir, 'c')).id;
+    const s = store.createGlobalSession({
+      project_id: synthetic,
+      title: 'attach target',
+      provider: 'anthropic',
+      model: 'sonnet',
+      realProjects: [{ projectId: projA, isPrimary: true }, { projectId: projB }],
+    });
+
+    store.linkSessionProject(s.id, projC, { isPrimary: false });
+    expect(store.getSessionProjects(s.id).map((l) => l.project_id).sort())
+      .toEqual([projA, projB, projC].sort());
+
+    // Idempotent: re-linking the same project is a no-op (INSERT OR IGNORE).
+    store.linkSessionProject(s.id, projC, { isPrimary: false });
+    expect(store.getSessionProjects(s.id).filter((l) => l.project_id === projC)).toHaveLength(1);
+
+    store.unlinkSessionProject(s.id, projC);
+    expect(store.getSessionProjects(s.id).map((l) => l.project_id)).not.toContain(projC);
+
+    store.deleteSession(s.id);
+  });
+
+  it('UNION: listUnionProjects aggregates the set across every session on the union', () => {
+    // ensureGlobalWorkspaceLinks rebuilds the junction dir from THIS aggregate, so
+    // a project linked by ANY sibling session is part of the virtual workspace
+    // (refcount semantics) — and stays put no matter which session opens next.
+    const projD = db.createProject('proj-d', join(workDir, 'd')).id;
+    const s1 = store.createGlobalSession({
+      project_id: synthetic, title: 'u1', provider: 'anthropic', model: 'sonnet',
+      realProjects: [{ projectId: projA, isPrimary: true }],
+    });
+    const s2 = store.createGlobalSession({
+      project_id: synthetic, title: 'u2', provider: 'anthropic', model: 'sonnet',
+      realProjects: [{ projectId: projA, isPrimary: true }],
+    });
+
+    // Only s2 links projD → the UNION still includes it.
+    store.linkSessionProject(s2.id, projD, { isPrimary: false });
+    const union = store.listUnionProjects(synthetic).map((l) => l.project_id);
+    expect(union).toContain(projA);
+    expect(union).toContain(projD);
+    // ...but s1's own slice does not (per-session read is unchanged).
+    expect(store.getSessionProjects(s1.id).map((l) => l.project_id)).not.toContain(projD);
+
+    store.deleteSession(s1.id);
+    store.deleteSession(s2.id);
+  });
 });

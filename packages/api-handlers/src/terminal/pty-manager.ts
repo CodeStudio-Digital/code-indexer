@@ -162,6 +162,17 @@ export class PtyManager {
       ...(isWindows && inElectron ? { useConpty: false } : {}),
     });
 
+    return this.register(child);
+  }
+
+  /**
+   * Wire an `IPty` into the registry: build its buffered fan-out entry, attach
+   * the output coalescer + exit handling, and return its opaque id. The
+   * one place that knows how a live PTY becomes a streamable `PtyEntry`, so
+   * both `spawn` (node-pty) and `registerExternalPty` (e.g. an SSH channel)
+   * share identical buffering/exit/reap semantics.
+   */
+  private register(child: IPty): { id: string; entry: PtyEntry } {
     const entry: PtyEntry = {
       pty: child,
       buffer: [],
@@ -205,6 +216,18 @@ export class PtyManager {
     });
 
     return { id, entry };
+  }
+
+  /**
+   * Register an already-built `IPty` that did NOT come from node-pty — e.g. an
+   * SSH shell channel adapted to the `IPty` interface. Once registered it is
+   * indistinguishable from a local PTY: `terminal.output(id)` streams it, the
+   * session store tracks it, and closing the tab kills it. The adapter is
+   * responsible for mapping its transport (channel data/close/resize) onto the
+   * `IPty` surface; this just plugs it into the shared buffered fan-out.
+   */
+  registerExternalPty(pty: IPty): { id: string; entry: PtyEntry } {
+    return this.register(pty);
   }
 
   get(id: string): PtyEntry {

@@ -34,6 +34,7 @@ interface LoafEntry extends PerformanceEntry {
 const MAX_ROWS = 50;
 const longTasks: LongTaskRow[] = [];
 let started = false;
+let activeObserver: PerformanceObserver | undefined;
 
 function pushRow(row: LongTaskRow): void {
   longTasks.push(row);
@@ -75,6 +76,7 @@ export function ensureRendererVitals(): void {
         }
       });
       obs.observe({ entryTypes: ['longtask'] });
+      activeObserver = obs;
     } catch {
       // Neither API supported — panel shows an empty list.
     }
@@ -90,9 +92,25 @@ export function ensureRendererVitals(): void {
       for (const entry of list.getEntries()) pushRow(loafToRow(entry as LoafEntry));
     });
     obs.observe({ type: 'long-animation-frame', buffered: true } as PerformanceObserverInit);
+    activeObserver = obs;
   } catch {
     observeLongtask();
   }
+}
+
+/** Disconnect the renderer-vitals observer (best-effort). Lets a fresh
+ *  `ensureRendererVitals()` re-observe on the next panel mount; the bounded
+ *  `longTasks` ring is kept so prior history survives a close/reopen. */
+export function stopRendererVitals(): void {
+  if (activeObserver) {
+    try {
+      activeObserver.disconnect();
+    } catch {
+      // disconnect is best-effort.
+    }
+    activeObserver = undefined;
+  }
+  started = false;
 }
 
 export function getLongTasks(): LongTaskRow[] {

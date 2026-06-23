@@ -1,5 +1,6 @@
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Info, Loader2, PanelLeft, Scissors, Workflow } from 'lucide-react';
+import { AlertTriangle, Bot, Boxes, Info, Loader2, PanelLeft, Scissors, Workflow } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -52,9 +53,14 @@ interface ChatHeaderProps {
   workerLogOpen?: boolean;
   /** Toggle the Worker Log panel. Hides the button if undefined. */
   onToggleWorkerLog?: () => void;
+  /** Global sessions only: count of linked projects in the virtual workspace.
+   *  Renders the "N projects" chip when paired with `onManageProjects`. */
+  linkedCount?: number;
+  /** Open the "manage workspace projects" dialog (attach/remove). Global only. */
+  onManageProjects?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas }: ChatHeaderProps) {
+export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas, linkedCount, onManageProjects }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -108,18 +114,26 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
             {providerLabel(session.provider)}
           </Badge>
           <span className="font-mono">{session.model}</span>
+          {linkedCount != null && onManageProjects && (
+            <button
+              type="button"
+              onClick={onManageProjects}
+              title={t('chat:global.manageTitle')}
+              className="inline-flex items-center gap-1 rounded border px-1.5 h-4 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Boxes className="h-3 w-3" />
+              {t('chat:global.projectsChip', { count: linkedCount })}
+            </button>
+          )}
           {indexStatus && !indexStatus.mcpAvailable && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="outline" className="h-4 gap-1 text-amber-500 border-amber-500/30 cursor-help">
-                  <AlertTriangle className="h-3 w-3" />
-                  {t('common:status.notIndexed')}
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent>
-                {t('chat:header.notIndexedTooltip')}
-              </TooltipContent>
-            </Tooltip>
+            <Badge
+              variant="outline"
+              title={t('chat:header.notIndexedTooltip')}
+              className="h-4 gap-1 text-amber-500 border-amber-500/30 cursor-help"
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {t('common:status.notIndexed')}
+            </Badge>
           )}
           {streaming && (
             <span className="ml-1 inline-flex items-center gap-1 text-success">
@@ -171,69 +185,57 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
             Lives in the header so the live canvas is openable even where the
             40px activity rail is hidden (narrow/split mounts). */}
         {showCanvasToggle && onToggleCanvas && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('chat:header.toggleCanvas')}
-                aria-pressed={canvasActive}
-                onClick={onToggleCanvas}
-                className={cn(
-                  'p-1.5 rounded-md transition-colors',
-                  canvasActive
-                    ? 'bg-accent text-accent-foreground'
-                    : 'hover:bg-muted text-muted-foreground hover:text-foreground',
-                )}
-              >
-                <Workflow className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{t('chat:header.toggleCanvas')}</TooltipContent>
-          </Tooltip>
+          <button
+            type="button"
+            aria-label={t('chat:header.toggleCanvas')}
+            title={t('chat:header.toggleCanvas')}
+            aria-pressed={canvasActive}
+            onClick={onToggleCanvas}
+            className={cn(
+              'p-1.5 rounded-md transition-colors',
+              canvasActive
+                ? 'bg-accent text-accent-foreground'
+                : 'hover:bg-muted text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Workflow className="h-4 w-4" />
+          </button>
         )}
         {/* Manual "summarize & clear" — sits next to the context gauge so the
             user can act on context pressure they just saw. Disabled mid-run
             (the backend also refuses with 409). */}
         {onSummarizeClear && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('chat:header.summarizeClear')}
-                onClick={onSummarizeClear}
-                disabled={streaming || summarizing}
-                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {summarizing
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : <Scissors className="h-4 w-4" />}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{t('chat:header.summarizeClearTooltip')}</TooltipContent>
-          </Tooltip>
+          <button
+            type="button"
+            aria-label={t('chat:header.summarizeClear')}
+            title={t('chat:header.summarizeClearTooltip')}
+            onClick={onSummarizeClear}
+            disabled={streaming || summarizing}
+            className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {summarizing
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Scissors className="h-4 w-4" />}
+          </button>
         )}
         {/* Session-details is still on the header as a fallback affordance —
             the activity rail also has a Details panel, but power users still
             expect a clickable "i" in the title bar. The other tool toggles
             (Skills/Tools/Metrics/ToolStats/WorkerLog/Meta/Snapshots) moved
             to the right activity rail. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={t('chat:header.sessionDetails')}
-              onClick={onOpenDetails}
-              className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <Info className="h-4 w-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>{t('chat:header.sessionDetails')}</TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          aria-label={t('chat:header.sessionDetails')}
+          title={t('chat:header.sessionDetails')}
+          onClick={onOpenDetails}
+          className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Info className="h-4 w-4" />
+        </button>
       </div>
     </div>
   );
-}
+});
 
 function StatsTooltip({
   session,

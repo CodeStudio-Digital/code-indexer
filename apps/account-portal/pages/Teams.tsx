@@ -1,7 +1,7 @@
 /** Teams — organizations the user belongs to, with members, invites, and role
  *  management. Owners/admins can invite (emailed or link) and remove members. */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Users } from 'lucide-react';
+import { Users, ShieldCheck } from 'lucide-react';
 import type { OrgMemberPublic, OrgPublic, OrgRolePublic } from '@mcp/api-bus';
 import { api, ApiError } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
@@ -184,8 +184,64 @@ function OrgCard({
         )}
 
         {canManage ? <InviteForm orgId={org.id} /> : null}
+        {canManage ? <VaultSection orgId={org.id} /> : null}
       </CardContent>
     </Card>
+  );
+}
+
+/** SSH vault management (admin): grant-ready member count + key rotation. The portal
+ *  manages distribution metadata only — it never sees vault contents or keys. */
+function VaultSection({ orgId }: { orgId: string }) {
+  const [keyed, setKeyed] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setKeyed((await api.vaultMembers(orgId)).members.length);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Could not load vault status.');
+    }
+  }, [orgId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const rotate = async () => {
+    if (!confirm('Rotate the team vault key? Everyone must pull again, and anyone removed loses access to future changes. Re-share from the desktop app to re-grant members.')) return;
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      await api.vaultRotate(orgId, `org:${orgId}`);
+      setMsg('Vault key rotated. Re-share from the desktop app to re-grant the remaining members.');
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Could not rotate the vault key.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <ShieldCheck className="h-4 w-4 shrink-0 text-muted-foreground" /> SSH vault
+      </div>
+      {error ? <Alert>{error}</Alert> : null}
+      <p className="text-xs text-muted-foreground">
+        {keyed == null ? 'Checking…' : `${keyed} member${keyed === 1 ? '' : 's'} published a vault key (grant-ready).`}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Zero-knowledge: the server never sees vault contents. Rotating the key revokes access for anyone without a fresh grant — do this after removing a member.
+      </p>
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => void rotate()}>
+        {busy ? 'Rotating…' : 'Rotate vault key'}
+      </Button>
+      {msg ? <p className="text-xs text-emerald-600">{msg}</p> : null}
+    </div>
   );
 }
 

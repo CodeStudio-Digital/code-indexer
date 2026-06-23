@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronRight,
@@ -62,6 +62,15 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
   const [grouped, setGrouped] = useState(true);
   const [layout, setLayout] = useState<LayoutMode>(readStoredLayout);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  // Stable row handlers so `React.memo(ProjectRow)` actually dedupes — the
+  // compact list can be 40+ rows and per-row inline arrows would re-render
+  // every row on any parent update.
+  const handleSelectProject = useCallback(
+    (p: Project) => onSelectProject(p.id, p.name),
+    [onSelectProject],
+  );
+  const handleEditProject = useCallback((p: Project) => setEditing(p), []);
 
   // Persist layout choice; tiny enough that a debounce would be noise.
   useEffect(() => {
@@ -212,8 +221,8 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             <ProjectRow
               key={p.id}
               project={p}
-              onSelect={() => onSelectProject(p.id, p.name)}
-              onEdit={() => setEditing(p)}
+              onSelect={handleSelectProject}
+              onEdit={handleEditProject}
             />
           ))}
         </div>

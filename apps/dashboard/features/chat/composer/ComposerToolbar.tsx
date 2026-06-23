@@ -9,7 +9,6 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Gauge, Layers, Network, Send, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { AgentPicker } from './AgentPicker.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
@@ -66,53 +65,45 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
 
       {/* Reasoning effort — only when the model exposes discrete effort levels. */}
       {setReasoningEffort && reasoningLevels && reasoningLevels.length > 0 && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <Gauge className="h-3.5 w-3.5 shrink-0" />
-              <select
-                aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
-                className="h-7 rounded border bg-background px-1.5 text-xs"
-                value={reasoningEffort ?? ''}
-                onChange={(e) => setReasoningEffort(e.target.value === '' ? null : e.target.value)}
-              >
-                <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
-                {reasoningLevels.map((lv) => (
-                  <option key={lv} value={lv}>
-                    {lv}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-[260px]">
-            {t('chat:toolbar.effortHint', { defaultValue: 'Reasoning effort (auto = model default)' })}
-          </TooltipContent>
-        </Tooltip>
+        <div
+          className="flex items-center gap-1 text-muted-foreground"
+          title={t('chat:toolbar.effortHint', { defaultValue: 'Reasoning effort (auto = model default)' })}
+        >
+          <Gauge className="h-3.5 w-3.5 shrink-0" />
+          <select
+            aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
+            className="h-7 rounded border bg-background px-1.5 text-xs"
+            value={reasoningEffort ?? ''}
+            onChange={(e) => setReasoningEffort(e.target.value === '' ? null : e.target.value)}
+          >
+            <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
+            {reasoningLevels.map((lv) => (
+              <option key={lv} value={lv}>
+                {lv}
+              </option>
+            ))}
+          </select>
+        </div>
       )}
 
       {/* Plan depth — only while the `plan` agent is active. */}
       {agent === 'plan' && setPlanDepth && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <Layers className="h-3.5 w-3.5 shrink-0" />
-              <select
-                aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
-                className="h-7 rounded border bg-background px-1.5 text-xs"
-                value={planDepth ?? 'normal'}
-                onChange={(e) => setPlanDepth(e.target.value)}
-              >
-                <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
-                <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
-                <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
-              </select>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-[260px]">
-            {t('chat:toolbar.planDepthHint', { defaultValue: 'Plan depth — how deep the planning agent goes' })}
-          </TooltipContent>
-        </Tooltip>
+        <div
+          className="flex items-center gap-1 text-muted-foreground"
+          title={t('chat:toolbar.planDepthHint', { defaultValue: 'Plan depth — how deep the planning agent goes' })}
+        >
+          <Layers className="h-3.5 w-3.5 shrink-0" />
+          <select
+            aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
+            className="h-7 rounded border bg-background px-1.5 text-xs"
+            value={planDepth ?? 'normal'}
+            onChange={(e) => setPlanDepth(e.target.value)}
+          >
+            <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
+            <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
+            <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
+          </select>
+        </div>
       )}
 
       <div className="ml-auto flex items-center gap-2">

@@ -20,6 +20,7 @@ import { OpenAIChatProvider } from '@mcp/code-agent/providers/openai.js';
 export const copilot = defineProvider({
   kind: 'copilot',
   displayName: 'GitHub Copilot',
+  visual: { icon: 'Code2', fg: 'text-purple-500', bg: 'bg-purple-500/15' },
   credKind: 'oauth',
   envVars: [],
   defaultModels: ['gpt-4o', 'gpt-4o-mini', 'claude-3.5-sonnet', 'o1-mini'],
@@ -40,4 +41,13 @@ export const copilot = defineProvider({
       model: model ?? 'gpt-4o',
       defaultHeaders: creds.extraHeaders,
     }),
+  testConnection: async ({ creds }) => {
+    // `resolveCopilotCreds` already refreshed the 25-min token and resolved
+    // baseURL + editor headers (Authorization stripped); add the Bearer here.
+    const base = (creds.baseURL ?? 'https://api.githubcopilot.com').replace(/\/$/, '');
+    const r = await fetch(`${base}/models`, {
+      headers: { Authorization: `Bearer ${creds.apiKey ?? ''}`, ...creds.extraHeaders },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  },
 });

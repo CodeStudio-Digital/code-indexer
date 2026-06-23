@@ -6,6 +6,7 @@ import type {
   PluginModule,
 } from './contributions/types.js';
 import type { PluginPermissions } from './contributions/capabilities.js';
+import type { ProviderDefinition } from '@mcp/provider-sdk';
 
 export interface DefinePluginSpec {
   tools?: ContributedTool[];
@@ -13,6 +14,8 @@ export interface DefinePluginSpec {
   commands?: ContributedCommand[];
   themes?: ContributedTheme[];
   permissions?: PluginPermissions;
+  /** LLM providers this plugin contributes (see `contributeProvider`). */
+  providers?: ProviderDefinition[];
 }
 
 /**
@@ -27,5 +30,6 @@ export function definePlugin(spec: DefinePluginSpec): PluginModule {
     commands: spec.commands ?? [],
     themes: spec.themes ?? [],
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
+    ...(spec.providers && spec.providers.length ? { providers: spec.providers } : {}),
   };
 }

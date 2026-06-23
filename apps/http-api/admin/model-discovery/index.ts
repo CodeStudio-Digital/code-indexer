@@ -1,37 +1,24 @@
 /**
  * Live model discovery dispatcher.
  *
- * Per-kind fetchers are split into sibling files; this module picks the right
- * one based on `cfg.kind` and returns a {@link DiscoveryResult} the caller
- * stores via `ProviderStore.replaceModelsFromSource(..., 'live', ...)`.
+ * Spec-driven: resolves the provider's `ProviderSpec` by kind and delegates to
+ * `@mcp/provider-engine`'s `discoverModels`, which implements every format
+ * (HTTP `/models`, the ChatGPT/Codex ETag path, and the OAuth/sdk fetchers). The
+ * per-kind `discoverX` sibling modules are now the equivalence-test reference for
+ * the engine builders and are removed in the cleanup phase.
  *
- * Most providers don't expose an ETag, so they return `etag: null` and
- * `notModified: false`. The ChatGPT/Codex backend is the exception: its
- * `/models` endpoint returns an `ETag` that we replay via `If-None-Match`
- * to skip unchanged refreshes.
+ * `ENGINE_DISCOVERY_KINDS` is the allow-list of kinds that had a live-discovery
+ * case before the cutover. deepseek/zai are intentionally EXCLUDED — they never
+ * had an admin case (live discovery happens only in the indexer), so they keep
+ * throwing here; routing their `openai-models` spec through the engine would
+ * newly enable live discovery for them (a behavior change).
  *
- * Intentionally not unified with src/agent/providers/model-discovery.ts —
- * that class is scoped to the agent indexer and carries DiscoveredModel
- * typing that doesn't quite match UpsertModelInput. A later slice can merge
- * them.
+ * The {@link DiscoveryResult} shape and the `(store, cfg, previousEtag?)`
+ * signature are unchanged, so all callers (refresh route, scheduler, the OAuth
+ * post-auth seeds) are untouched.
  */
-import type {
-  ProviderStore,
-  ProviderConfig,
-  UpsertModelInput,
-} from '@mcp/store/provider-store.js';
-import { discoverChatgpt } from './chatgpt.js';
-import { discoverCopilot } from './copilot.js';
-import { discoverOpenai } from './openai.js';
-import { discoverAnthropic } from './anthropic.js';
-import { discoverClaudeCode } from './claude-code.js';
-import { discoverGemini } from './gemini.js';
-import { discoverBedrock } from './bedrock.js';
-import { discoverGoogleOAuth } from './google-oauth.js';
-import { discoverKimiCode } from './kimi-code.js';
-import { discoverCloudflare } from './cloudflare.js';
-import { discoverMoonshot } from './moonshot.js';
-import { discoverOpenrouter } from './openrouter.js';
+import type { ProviderStore, ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
+import { getSpecByKind, discoverModels as engineDiscoverModels } from '@mcp/provider-engine';
 
 export interface DiscoveryResult {
   models: UpsertModelInput[];
@@ -44,41 +31,29 @@ export interface DiscoveryResult {
   notModified: boolean;
 }
 
+const ENGINE_DISCOVERY_KINDS = new Set<string>([
+  'chatgpt',
+  'copilot',
+  'openai',
+  'anthropic',
+  'claude-code',
+  'gemini',
+  'bedrock',
+  'google-oauth',
+  'kimi-code',
+  'cloudflare',
+  'moonshot',
+  'openrouter',
+]);
+
 export async function discoverModels(
   store: ProviderStore,
   cfg: ProviderConfig,
   previousEtag?: string | null,
 ): Promise<DiscoveryResult> {
-  switch (cfg.kind) {
-    case 'chatgpt':
-      return discoverChatgpt(cfg, previousEtag ?? null);
-    case 'copilot':
-      return wrap(await discoverCopilot(store, cfg));
-    case 'openai':
-      return wrap(await discoverOpenai(cfg));
-    case 'anthropic':
-      return wrap(await discoverAnthropic(cfg));
-    case 'claude-code':
-      return wrap(await discoverClaudeCode(store, cfg));
-    case 'gemini':
-      return wrap(await discoverGemini(cfg));
-    case 'bedrock':
-      return wrap(await discoverBedrock(store, cfg));
-    case 'google-oauth':
-      return wrap(await discoverGoogleOAuth(store, cfg));
-    case 'kimi-code':
-      return wrap(await discoverKimiCode(store, cfg));
-    case 'cloudflare':
-      return wrap(await discoverCloudflare(cfg));
-    case 'moonshot':
-      return wrap(await discoverMoonshot(cfg));
-    case 'openrouter':
-      return wrap(await discoverOpenrouter(cfg));
-    default:
-      throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
+  if (ENGINE_DISCOVERY_KINDS.has(cfg.kind)) {
+    const spec = getSpecByKind(cfg.kind);
+    if (spec) return engineDiscoverModels(spec, cfg, store, previousEtag ?? null);
   }
-}
-
-function wrap(models: UpsertModelInput[]): DiscoveryResult {
-  return { models, etag: null, notModified: false };
+  throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
 }

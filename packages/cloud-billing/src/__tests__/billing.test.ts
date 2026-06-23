@@ -98,22 +98,28 @@ describe('deriveEntitlements (tier ladder + feature flags)', () => {
     const ent = deriveEntitlements(null, NOW);
     expect(ent.features.apiDocs).toBe(false);
     expect(ent.features.backup).toBe(false);
+    expect(ent.features.sshVault).toBe(false);
+    expect(ent.features.teamSshVault).toBe(false);
     expect(ent.limits).toEqual({ maxActiveShares: 1, maxApiDocs: 1, maxSeats: 1 });
   });
-  it('pro unlocks apiDocs + backup + sync but no team features', () => {
+  it('pro unlocks apiDocs + backup + sync + sshVault but no team features', () => {
     const ent = deriveEntitlements(sub({ plan: 'pro', status: 'active' }), NOW);
     expect(ent.features.apiDocs).toBe(true);
     expect(ent.features.backup).toBe(true);
+    expect(ent.features.sshVault).toBe(true);
     expect(ent.features.teamApis).toBe(false);
     expect(ent.features.teamMemory).toBe(false);
+    expect(ent.features.teamSshVault).toBe(false);
     expect(ent.limits.maxApiDocs).toBe(100);
   });
-  it('team plan → team tier with shared features, no SSO', () => {
+  it('team plan → team tier with shared features (incl. teamSshVault), no SSO', () => {
     const ent = deriveEntitlements(sub({ plan: 'team', status: 'active' }), NOW);
     expect(ent.tier).toBe('team');
     expect(ent.features.teamApis).toBe(true);
     expect(ent.features.teamMemory).toBe(true);
     expect(ent.features.teamTemplates).toBe(true);
+    expect(ent.features.sshVault).toBe(true);
+    expect(ent.features.teamSshVault).toBe(true);
     expect(ent.features.sso).toBe(false);
   });
   it('enterprise plan → SSO + audit export, unlimited shares', () => {

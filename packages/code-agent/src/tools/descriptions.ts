@@ -140,7 +140,16 @@ export const ASK_USER_DESC =
   "DON'T: ask things you can verify yourself (file existence, type signatures, config values — READ them).\n" +
   "DON'T: ask for confirmation of obvious next steps ('should I now run the tests?'). Just do it.\n" +
   "DON'T: ask multiple small questions in sequence. Batch them into one question with options or a multi-line prompt.\n" +
-  "DON'T: pass 1 option (just take that path) or 9+ (the question is too broad — split into a coarser top-level question, then drill down).";
+  "DON'T: pass 1 option (just take that path) or 9+ (the question is too broad — split into a coarser top-level question, then drill down).\n" +
+  'USE: for a SINGLE quick fork. For 2+ alternative APPROACHES at the plan-finalization gate (each with its own tradeoffs), use `decision_gate` instead.';
+
+export const DECISION_GATE_DESC =
+  'Present the user a questionnaire of genuine forks (alternative approaches) and wait for their choices. Each option carries a one-line summary + tradeoffs so the user chooses with eyes open.\n' +
+  'USE: in plan mode, AFTER investigation and BEFORE submit_plan, when the task has 2+ viable approaches whose choice is a real human preference (architecture, scope, build-vs-reuse, migration strategy, UX behavior).\n' +
+  'USE: batch independent forks as separate questions in ONE card (1–4 questions, 2–4 options each). Set `multi_select` on a question only when several options can legitimately be combined.\n' +
+  "DON'T: use for a single quick decision — use `ask_user`.\n" +
+  "DON'T: ask anything you can verify yourself (READ it), or invent a fork to look thorough — a shallow either/or you could resolve yourself is worse than no question.\n" +
+  "DON'T: put more than ~4 options on a question — if you reach for more, the question is too broad; split it.";
 
 // ---------- plan (src/core/coder/tools/plan.ts) ----------
 

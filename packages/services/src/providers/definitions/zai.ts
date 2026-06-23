@@ -48,6 +48,7 @@ function resolveZaiCoderBaseURL(
 export const zai = defineProvider({
   kind: 'zai',
   displayName: 'Z.AI / GLM',
+  visual: { icon: 'Sparkles', fg: 'text-violet-500', bg: 'bg-violet-500/15' },
   credKind: 'api-key',
   envVars: ['ZAI_API_KEY'],
   defaultBaseURL: 'https://api.z.ai/api/paas/v4',

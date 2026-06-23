@@ -55,6 +55,9 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   runner.on('question_posted', (block) => {
     publish(bus, 'question', block);
   });
+  runner.on('decision_posted', (payload) => {
+    publish(bus, 'decision', payload);
+  });
   // PermissionGate — a write/execute/admin tool call paused awaiting the
   // user's verdict (modes 'ask'/'auto'). Resolved by POST /tool-approval.
   runner.on('tool_approval_request', (payload) => {

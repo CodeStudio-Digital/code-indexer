@@ -18,7 +18,6 @@ import {
   DialogTitle,
 } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
-import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { ChatHeader } from './ChatHeader.js';
 import { ChatRightRail } from './right-panel/ChatRightRail.js';
 import { RightPanelHost } from './right-panel/RightPanelHost.js';
@@ -43,6 +42,7 @@ import { useUnreadNotificationCount } from './notifications/session-notification
 // the full viewport width.
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
 import { GlobalNewSessionDialog } from './global/GlobalNewSessionDialog.js';
+import { ManageGlobalProjectsDialog } from './global/ManageGlobalProjectsDialog.js';
 import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
 import { fetchSnapshotList } from '../snapshots/api.js';
 import type {
@@ -148,6 +148,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const [newSessionTitle, setNewSessionTitle] = useState('');
   // Global mode: the multi-project create dialog (project multi-select).
   const [globalNewOpen, setGlobalNewOpen] = useState(false);
+  // Global mode: the "manage workspace projects" dialog (attach/remove after create).
+  const [manageProjectsOpen, setManageProjectsOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [renameGroupTarget, setRenameGroupTarget] = useState<CoderSessionGroup | null>(null);
@@ -289,6 +291,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     clearCurrentTurn,
     answerQuestion,
     respondToPlan,
+    decideGate,
     respondToTasks,
     respondToSpec,
     respondToToolApproval,
@@ -496,7 +499,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setSkillPicks([]);
   }, [selectedId]);
 
-  const createSession = async (title?: string) => {
+  const createSession = useCallback(async (title?: string) => {
     const created = await apiPost<CoderSession>('/coder/sessions', {
       project_id: projectId,
       title: (title ?? 'Nova sessão').slice(0, 80),
@@ -508,7 +511,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setSelectedId(created.id);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
     return created;
-  };
+  }, [projectId, provider, model, refetchSessions]);
 
   const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseProjectId?: number }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
@@ -526,7 +529,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     return created;
   };
 
-  const handleNewSession = () => {
+  const handleNewSession = useCallback(() => {
     // Global mode opens the project multi-select dialog instead of an
     // immediate single-project create.
     if (isGlobal) {
@@ -534,7 +537,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       return;
     }
     void createSession();
-  };
+  }, [isGlobal, createSession]);
 
   const confirmNewSession = async () => {
     const title = newSessionTitle.trim();
@@ -676,15 +679,22 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
   }, [selectedId, updateSessionData]);
 
-  const handleSwitchProvider = async (newProvider: string, newModel: string) => {
+  // Mirror sessionData into a ref so handleSwitchProvider can read its current
+  // value in the guard WITHOUT listing `sessionData` (which changes on every
+  // refetch) as a dep — that would re-create the callback constantly and defeat
+  // the <Composer> memo. `streaming` stays a real dep (it's also a Composer prop,
+  // so a flip re-renders the composer regardless).
+  const sessionDataRef = useRef(sessionData);
+  sessionDataRef.current = sessionData;
+  const handleSwitchProvider = useCallback(async (newProvider: string, newModel: string) => {
     setProvider(newProvider);
     setModel(newModel);
-    if (selectedId && (streaming || sessionData)) {
+    if (selectedId && (streaming || sessionDataRef.current)) {
       await switchProvider(newProvider, newModel || undefined);
       refetchSession();
       refetchSessions();
     }
-  };
+  }, [selectedId, streaming, switchProvider, refetchSession, refetchSessions]);
 
   // Fallback: load from session when selected, save when changed
   useEffect(() => {
@@ -765,12 +775,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Persist a manual dropdown pick immediately so leaving WITHOUT sending still
   // remembers it. Applies to the NEXT run (agent identity is baked into the
   // runner at construction; mid-run transitions are runner-driven).
-  const handleAgentChange = (next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram') => {
+  const handleAgentChange = useCallback((next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram') => {
     setAgent(next);
     if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
-  };
+  }, [selectedId]);
 
-  const handleTemperatureChange = async (next: number | null) => {
+  const handleTemperatureChange = useCallback(async (next: number | null) => {
     setSessionTemperature(next);
     if (!selectedId) return;
     try {
@@ -778,9 +788,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
-  };
+  }, [selectedId]);
 
-  const handleReasoningEffortChange = async (next: string | null) => {
+  const handleReasoningEffortChange = useCallback(async (next: string | null) => {
     setReasoningEffort(next);
     if (!selectedId) return;
     try {
@@ -788,9 +798,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
-  };
+  }, [selectedId]);
 
-  const handlePlanDepthChange = async (next: string | null) => {
+  const handlePlanDepthChange = useCallback(async (next: string | null) => {
     setPlanDepth(next);
     if (!selectedId) return;
     try {
@@ -798,9 +808,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
-  };
+  }, [selectedId]);
 
-  const handleOutputCapLevelChange = async (next: OutputCapLevel) => {
+  const handleOutputCapLevelChange = useCallback(async (next: OutputCapLevel) => {
     setOutputCapLevel(next);
     if (!selectedId) return;
     try {
@@ -808,9 +818,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
-  };
+  }, [selectedId]);
 
-  const handleToolPermissionModeChange = async (next: 'ask' | 'auto' | 'unrestricted') => {
+  const handleToolPermissionModeChange = useCallback(async (next: 'ask' | 'auto' | 'unrestricted') => {
     setToolPermissionMode(next);
     if (!selectedId) return;
     try {
@@ -818,9 +828,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
-  };
+  }, [selectedId]);
 
-  const handleFallbackChange = async (fbProvider: string | null, fbModel: string | null) => {
+  const handleFallbackChange = useCallback(async (fbProvider: string | null, fbModel: string | null) => {
     setFallbackProvider(fbProvider);
     setFallbackModel(fbModel);
     if (selectedId) {
@@ -830,9 +840,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         body: JSON.stringify({ provider: fbProvider, model: fbModel }),
       });
     }
-  };
+  }, [selectedId]);
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = useCallback(async (id: number) => {
     const ok = await confirm({
       title: t('chat:deleteSession'),
       description: t('chat:deleteSessionDescription'),
@@ -843,7 +853,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     await apiDelete(`/coder/sessions/${id}`);
     if (selectedId === id) setSelectedId(null);
     refetchSessions();
-  };
+  }, [confirm, t, selectedId, refetchSessions]);
 
   /**
    * Manual "summarize & clear": the backend summarizes the visible transcript
@@ -852,7 +862,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
    * we just refetch — the GET respects the new boundary, so the chat collapses
    * to the summary card on its own.
    */
-  const handleSummarizeClear = async () => {
+  const handleSummarizeClear = useCallback(async () => {
     if (selectedId == null || summarizing) return;
     const ok = await confirm({
       title: t('chat:header.summarizeClear'),
@@ -874,9 +884,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     } finally {
       setSummarizing(false);
     }
-  };
+  }, [selectedId, summarizing, confirm, refetchSession, refetchSessions, t]);
 
-  const handleBatchDelete = async (ids: number[]) => {
+  const handleBatchDelete = useCallback(async (ids: number[]) => {
     if (ids.length === 0) return;
     const ok = await confirm({
       title: t('chat:deleteSessions', { count: ids.length }),
@@ -888,9 +898,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     await apiPost('/coder/sessions/batch-delete', { ids });
     if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
     refetchSessions();
-  };
+  }, [confirm, t, selectedId, refetchSessions]);
 
-  const handleDeleteAll = async () => {
+  const handleDeleteAll = useCallback(async () => {
     const ids = (sessions ?? []).map((s) => s.id);
     if (ids.length === 0) return;
     const ok = await confirm({
@@ -905,26 +915,26 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     await apiPost('/coder/sessions/batch-delete', { ids });
     if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
     refetchSessions();
-  };
+  }, [sessions, confirm, t, view, selectedId, refetchSessions]);
 
-  const handleArchive = async (id: number, archived: boolean) => {
+  const handleArchive = useCallback(async (id: number, archived: boolean) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
     // Session leaves the current view — drop selection.
     if (selectedId === id) setSelectedId(null);
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
-  };
+  }, [selectedId, refetchSessions]);
 
-  const handleFavorite = async (id: number, favorite: boolean) => {
+  const handleFavorite = useCallback(async (id: number, favorite: boolean) => {
     await apiPatch(`/coder/sessions/${id}/favorite`, { favorite });
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
-  };
+  }, [refetchSessions]);
 
-  const handleRenameSession = (id: number, currentTitle: string) => {
+  const handleRenameSession = useCallback((id: number, currentTitle: string) => {
     setRenameSessionTarget({ id, title: currentTitle });
     setRenameSessionTitle(currentTitle);
-  };
+  }, []);
 
   const confirmRenameSession = async () => {
     if (!renameSessionTarget) return;
@@ -939,12 +949,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   };
 
-  const handleDuplicate = async (id: number) => {
+  const handleDuplicate = useCallback(async (id: number) => {
     const res = await apiPost<{ session: CoderSession }>(`/coder/sessions/${id}/duplicate`, {});
     await refetchSessions();
     setSelectedId(res.session.id);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
-  };
+  }, [refetchSessions]);
 
   const handleFork = async (messageId: number) => {
     if (!selectedId) return;
@@ -991,29 +1001,29 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
   };
 
-  const handleBatchArchive = async (ids: number[], archived: boolean) => {
+  const handleBatchArchive = useCallback(async (ids: number[], archived: boolean) => {
     await Promise.all(ids.map((id) => apiPatch(`/coder/sessions/${id}/archive`, { archived })));
     if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
     refetchSessions();
-  };
+  }, [selectedId, refetchSessions]);
 
-  const handleMoveToGroup = async (id: number, groupId: number | null) => {
+  const handleMoveToGroup = useCallback(async (id: number, groupId: number | null) => {
     await apiPatch(`/coder/sessions/${id}/group`, { group_id: groupId });
     refetchSessions();
-  };
+  }, [refetchSessions]);
 
-  const handleBatchMoveToGroup = async (ids: number[], groupId: number | null) => {
+  const handleBatchMoveToGroup = useCallback(async (ids: number[], groupId: number | null) => {
     await Promise.all(
       ids.map((id) => apiPatch(`/coder/sessions/${id}/group`, { group_id: groupId })),
     );
     refetchSessions();
-  };
+  }, [refetchSessions]);
 
-  const handleCreateGroup = async () => {
+  const handleCreateGroup = useCallback(async () => {
     if (isGlobal) return; // groups are per-project; not available in global mode
     setNewGroupName('');
     setNewGroupOpen(true);
-  };
+  }, [isGlobal]);
 
   const confirmCreateGroup = async () => {
     const name = newGroupName.trim();
@@ -1027,10 +1037,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     refetchGroups();
   };
 
-  const handleRenameGroup = async (group: CoderSessionGroup) => {
+  const handleRenameGroup = useCallback(async (group: CoderSessionGroup) => {
     setRenameGroupTarget(group);
     setRenameGroupName(group.name);
-  };
+  }, []);
 
   const confirmRenameGroup = async () => {
     if (!renameGroupTarget) return;
@@ -1044,7 +1054,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     refetchGroups();
   };
 
-  const handleDeleteGroup = async (group: CoderSessionGroup) => {
+  const handleDeleteGroup = useCallback(async (group: CoderSessionGroup) => {
     const ok = await confirm({
       title: t('chat:deleteGroup', { name: group.name }),
       description: t('chat:deleteGroupDescription'),
@@ -1055,7 +1065,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     await apiDelete(`/coder/groups/${group.id}`);
     refetchGroups();
     refetchSessions();
-  };
+  }, [confirm, t, refetchGroups, refetchSessions]);
 
   // Stable handlers reference so the memoized <PersistedMessages /> inside
   // MessageList doesn't re-render on every parent render. Deps are the three
@@ -1088,6 +1098,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         }
       },
       onTasksResponse: (verdict) => respondToTasks(verdict),
+      onDecide: (answers) => decideGate(answers),
       onSpecResponse: async (approved, spec_path, requested_changes) => {
         await respondToSpec(approved, spec_path, requested_changes);
         // After approval the backend transitions agent 'spec' → 'build'. Refresh
@@ -1116,11 +1127,46 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }),
     // handleFork / handleRollback depend on selectedId — re-create on switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answerQuestion, respondToPlan, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent],
+    [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent],
+  );
+
+  // Stable handlers for the memoized children (ChatHeader / ChatRightRail) and
+  // the sidebar — all are pure setState calls (deps []), so a composer or
+  // right-panel click no longer allocates a fresh arrow per child each render.
+  const openDetailsPanel = useCallback(() => setActiveRightPanelId('details'), []);
+  const openMobileSidebar = useCallback(() => setMobileSidebarOpen(true), []);
+  const toggleCanvasPanel = useCallback(
+    () => setActiveRightPanelId((p) => (p === 'diagram' ? null : 'diagram')),
+    [],
+  );
+  const openSnapshots = useCallback(() => setSnapshotsOpen(true), []);
+  const handleViewChange = useCallback((v: 'active' | 'archived') => {
+    setView(v);
+    setSelectedId(null);
+  }, []);
+  const handleSelectSession = useCallback((id: number) => {
+    setSelectedId(id);
+    setMobileSidebarOpen(false);
+  }, []);
+  const closeMobileSidebar = useCallback(() => setMobileSidebarOpen(false), []);
+
+  // Stabilize the two inline-computed <Composer> props. Without these, each
+  // parent render would allocate a fresh array / React element and bust the
+  // Composer memo even though nothing the composer cares about changed.
+  const reasoningLevels = useMemo(
+    () => resolveReasoningLevels(provider, providerOptions, model),
+    [provider, providerOptions, model],
+  );
+  const queuedStrip = useMemo(
+    () => <QueuedMessages items={queue.items} onPromote={queue.promote} onRemove={queue.remove} />,
+    [queue.items, queue.promote, queue.remove],
   );
 
   return (
-    <TooltipProvider delayDuration={300}>
+    // Tooltips use the single root <TooltipProvider> in App.tsx — a nested one
+    // here was redundant (extra Radix context layer re-rendering on every chat
+    // state change). Removed; the remaining rich Radix tooltips still work.
+    <>
       <Dialog open={newSessionOpen} onOpenChange={setNewSessionOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -1149,6 +1195,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           open={globalNewOpen}
           onOpenChange={setGlobalNewOpen}
           onCreate={createGlobalSession}
+        />
+      )}
+      {isGlobal && selectedId != null && (
+        <ManageGlobalProjectsDialog
+          open={manageProjectsOpen}
+          onOpenChange={setManageProjectsOpen}
+          sessionId={selectedId}
+          linkedProjects={sessionData?.linked_projects ?? []}
+          streaming={streaming}
+          onChanged={() => { void refetchSession(); }}
         />
       )}
       <Dialog open={newGroupOpen} onOpenChange={setNewGroupOpen}>
@@ -1262,17 +1318,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           sessions={sessions ?? null}
           groups={groups ?? null}
           view={view}
-          onViewChange={(v) => {
-            setView(v);
-            setSelectedId(null);
-          }}
+          onViewChange={handleViewChange}
           selectedId={selectedId}
-          onSelect={(id) => {
-            setSelectedId(id);
-            setMobileSidebarOpen(false);
-          }}
+          onSelect={handleSelectSession}
           mobileOpen={mobileSidebarOpen}
-          onMobileClose={() => setMobileSidebarOpen(false)}
+          onMobileClose={closeMobileSidebar}
           onNew={handleNewSession}
           onDelete={handleDelete}
           onRename={handleRenameSession}
@@ -1328,19 +1378,21 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   // rail now — the header only handles mobile sidebar toggle
                   // and the tokens widget. The activity rail (rendered next
                   // to the right panel) owns those buttons.
-                  onOpenDetails={() => setActiveRightPanelId('details')}
+                  onOpenDetails={openDetailsPanel}
                   onSummarizeClear={handleSummarizeClear}
                   summarizing={summarizing}
-                  onOpenSidebar={() => setMobileSidebarOpen(true)}
+                  onOpenSidebar={openMobileSidebar}
                   pendingSnapshots={snapshotPending}
                   // Builder-style canvas toggle — shown for diagram sessions so
                   // the live draw.io canvas is openable even where the 40px
                   // activity rail is hidden (split/narrow mounts).
                   showCanvasToggle={agent === 'diagram' || getDiagram(selectedId ?? 0) != null}
                   canvasActive={activeRightPanelId === 'diagram'}
-                  onToggleCanvas={() =>
-                    setActiveRightPanelId(activeRightPanelId === 'diagram' ? null : 'diagram')
-                  }
+                  onToggleCanvas={toggleCanvasPanel}
+                  // Global sessions: "N projects" chip → manage the virtual
+                  // workspace (attach/remove projects after creation).
+                  linkedCount={isGlobal ? (sessionData?.linked_projects?.length ?? sessionData?.session.linked_count ?? 0) : undefined}
+                  onManageProjects={isGlobal ? () => setManageProjectsOpen(true) : undefined}
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -1405,7 +1457,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 setTemperature={handleTemperatureChange}
                 reasoningEffort={reasoningEffort}
                 setReasoningEffort={handleReasoningEffortChange}
-                reasoningLevels={resolveReasoningLevels(provider, providerOptions, model)}
+                reasoningLevels={reasoningLevels}
                 planDepth={planDepth}
                 setPlanDepth={handlePlanDepthChange}
                 outputCapLevel={outputCapLevel}
@@ -1418,7 +1470,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 onRunPipeline={handleRunPipeline}
                 queueable={!!selectedId && selectedPipelineId == null}
                 onQueue={handleQueue}
-                queuedStrip={<QueuedMessages items={queue.items} onPromote={queue.promote} onRemove={queue.remove} />}
+                queuedStrip={queuedStrip}
               />
               </div>
             </main>
@@ -1476,7 +1528,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             <ChatRightRail
               activePanelId={activeRightPanelId}
               onSelectPanel={setActiveRightPanelId}
-              onOpenSnapshots={() => setSnapshotsOpen(true)}
+              onOpenSnapshots={openSnapshots}
               pendingSnapshots={snapshotPending}
               unreadNotifications={unreadNotifications}
               pluginWindows={pluginPanelWindows}
@@ -1506,6 +1558,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           </DialogContent>
         </Dialog>
       )}
-    </TooltipProvider>
+    </>
   );
 }

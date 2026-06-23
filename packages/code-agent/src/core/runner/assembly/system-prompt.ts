@@ -44,7 +44,11 @@
 // e novo bloco de calibração por profundidade (## Plan depth, simple/normal/
 // complex) injetado na seção de plan mode. Static prefix mudou → invalida
 // fingerprints stale.
-export const SYSTEM_PROMPT_VERSION = '20260616.1';
+// 2026-06-22.1 bump — decision gate: plan.txt step 5 now runs a `decision_gate`
+// questionnaire over genuine forks before the plan, the depth block gates it
+// per simple/normal/complex, and the plan document gains a **Decisions**
+// section. Static prefix mudou → invalida fingerprints stale.
+export const SYSTEM_PROMPT_VERSION = '20260622.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

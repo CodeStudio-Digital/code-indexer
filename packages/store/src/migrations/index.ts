@@ -185,6 +185,8 @@ import { projectPackageManagers169 } from './169_project_package_managers.js';
 import { projectGitRemote170 } from './170_project_git_remote.js';
 import { apiDocFields171 } from './171_api_doc_fields.js';
 import { apiDocPagesExamples172 } from './172_api_doc_pages_examples.js';
+import { sshHosts173 } from './173_ssh_hosts.js';
+import { dbClient174 } from './174_db_client.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -386,6 +388,8 @@ export const MIGRATIONS: Migration[] = [
   projectGitRemote170,
   apiDocFields171,
   apiDocPagesExamples172,
+  sshHosts173,
+  dbClient174,
 ];
 
 /**

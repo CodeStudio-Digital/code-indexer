@@ -24,7 +24,12 @@ export interface CoderRuntime {
   wireRunnerToBus(runner: CoderRunner, bus: CoderRunBus): void;
   findPendingInteraction(
     sessionId: number,
-  ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' } | null;
+  ): {
+    toolUseId: string;
+    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
+    /** Original tool_use input — the decision_gate resume path needs the questions. */
+    input?: Record<string, unknown>;
+  } | null;
   /** Dangling tool_use lookup by id (any tool name) — POST /tool-approval dead-runner fallback. */
   findDanglingToolUse(
     sessionId: number,
@@ -101,7 +106,11 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
    */
   function findPendingInteraction(
     sessionId: number,
-  ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' } | null {
+  ): {
+    toolUseId: string;
+    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
+    input?: Record<string, unknown>;
+  } | null {
     const data = sessionStore.loadSessionWithMessages(sessionId);
     if (!data) return null;
     const seenResults = new Set<string>();
@@ -125,11 +134,15 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
           && b.name !== 'submit_tasks'
           && b.name !== 'submit_spec'
           && b.name !== 'submit_specification_to_master'
+          && b.name !== 'decision_gate'
         ) continue;
         if (seenResults.has(b.id)) continue;
         return {
           toolUseId: b.id,
-          name: b.name as 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master',
+          name: b.name as 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate',
+          // decision_gate's resume path needs the original questions (carried
+          // in the tool_use input) to map chosen values back to labels.
+          input: b.input as Record<string, unknown> | undefined,
         };
       }
     }

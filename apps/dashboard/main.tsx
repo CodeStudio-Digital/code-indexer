@@ -4,10 +4,7 @@ import App from './App.js';
 import './index.css';
 import { installFetchBase } from './lib/install-fetch-base.js';
 import { setupMonaco } from './lib/monaco-setup.js';
-import {
-  ensureRouteStartupMetrics,
-  startInitialProjectRouteFromLocation,
-} from './lib/perf/route-startup-metrics.js';
+import { startUserTimingBufferGuard } from './lib/perf/user-timing-guard.js';
 
 // Rewrites `/api/*` and `/ws/*` to the absolute backend URL when running
 // inside Electron. No-op in browser dev. Must run before any component
@@ -19,8 +16,11 @@ installFetchBase();
 // services container that gets disposed by React's double-mount in dev,
 // throwing "InstantiationService has been disposed" on the second mount.
 setupMonaco();
-ensureRouteStartupMetrics();
-startInitialProjectRouteFromLocation();
+
+// Route-startup telemetry is OFF by default now — it ref-counts on only while
+// an admin perf panel is mounted (see acquireRouteMetricsCollection). We do keep
+// a low-frequency guard that bounds the User Timing buffer in long sessions.
+startUserTimingBufferGuard();
 
 // React.StrictMode intentionally omitted: it double-invokes effects in
 // dev to catch ordering bugs, but Monaco's editor instance keeps a

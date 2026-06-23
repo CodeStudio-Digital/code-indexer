@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, RotateCcw, Sparkles, User } from 'lucide-react';
-import type { AgentsGroup, StreamTask, ToolCallEvent } from '../../../hooks/useAgentStream.js';
+import type { AgentsGroup, DecisionAnswers, DecisionQuestion, StreamTask, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
 import { providerAccent } from '../constants.js';
 import { PlanPromptView } from '../prompts/PlanPromptView.js';
 import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
+import { DecisionGateView } from '../prompts/DecisionGateView.js';
 import { SpecPromptView } from '../prompts/SpecPromptView.js';
 import { TaskListReview } from '../prompts/TaskListReview.js';
 import type {
@@ -39,6 +40,7 @@ interface MessageViewProps {
   onAnswer: PromptHandlers['onAnswer'];
   onPlanResponse: PromptHandlers['onPlanResponse'];
   onTasksResponse: PromptHandlers['onTasksResponse'];
+  onDecide?: PromptHandlers['onDecide'];
   onFork?: PromptHandlers['onFork'];
   onRollback?: PromptHandlers['onRollback'];
   /** Persisted task list state from coder_tasks_state — used to overlay live
@@ -80,6 +82,7 @@ function MessageViewInner({
   onAnswer,
   onPlanResponse,
   onTasksResponse,
+  onDecide,
   onFork,
   onRollback,
   tasksState,
@@ -136,7 +139,7 @@ function MessageViewInner({
             renderAssistantBlock(
               b,
               i,
-              { onAnswer, onPlanResponse, onTasksResponse },
+              { onAnswer, onPlanResponse, onTasksResponse, onDecide },
               toolResultsById,
               tasksState,
               activeTasksToolUseId,
@@ -443,6 +446,36 @@ function AttachmentDoc({
 const noopPlanResponse = async (): Promise<void> => {};
 const noopAnswer = async (): Promise<void> => {};
 const noopSpecResponse = async (): Promise<void> => {};
+const noopDecide = async (): Promise<void> => {};
+
+/**
+ * Best-effort reconstruction of the chosen option values from a resolved
+ * decision_gate's tool_result text (`formatDecisionGateResult` output) so the
+ * history card can highlight what was picked. Matches each question's decided
+ * line by header/id, then maps the printed labels back to option values. Falls
+ * back to no highlight when a label can't be matched — the line text still
+ * conveys the decision.
+ */
+function reconstructDecisionAnswers(resultText: string, questions: DecisionQuestion[]): DecisionAnswers {
+  const answers: DecisionAnswers = {};
+  // formatDecisionGateResult emits exactly one "- ..." line per question, in
+  // question order. Match positionally — NOT by header text — so two questions
+  // sharing a header don't both resolve to the first line.
+  const itemLines = resultText.split('\n').filter((l) => l.startsWith('- '));
+  questions.forEach((q, i) => {
+    const line = itemLines[i];
+    if (!line) { answers[q.id] = { selected: [] }; return; }
+    // Strip the "- <label>:" prefix (label is q.header || q.id); fall back to a
+    // generic prefix strip if the label doesn't line up.
+    const prefix = `- ${(q.header?.trim() || q.id)}:`;
+    const rest = line.startsWith(prefix) ? line.slice(prefix.length) : line.replace(/^- [^:]*:/, '');
+    const [choicePart, notePart] = rest.split(' — note: ');
+    const chosenLabels = choicePart.split(',').map((s) => s.trim());
+    const selected = q.options.filter((o) => chosenLabels.includes(o.label)).map((o) => o.value);
+    answers[q.id] = { selected, ...(notePart ? { freeform: notePart.trim() } : {}) };
+  });
+  return answers;
+}
 
 export function renderAssistantBlock(
   b: ContentBlock,
@@ -602,6 +635,55 @@ export function renderAssistantBlock(
           }}
           onAnswer={noopAnswer}
         />
+      </ToolCallBlock>
+    );
+  }
+
+  if (b.name === 'decision_gate') {
+    const inp = (b.input ?? {}) as {
+      header?: string;
+      questions?: Array<{
+        id?: string;
+        header?: string;
+        question?: string;
+        multi_select?: boolean;
+        options?: Array<{ label?: string; value?: string; summary?: string; tradeoffs?: string }>;
+      }>;
+      allow_freeform?: boolean;
+    };
+    const questions: DecisionQuestion[] = (Array.isArray(inp.questions) ? inp.questions : []).map((q, qi) => ({
+      id: String(q.id ?? `q_${qi}`),
+      header: q.header,
+      question: String(q.question ?? ''),
+      multiSelect: Boolean(q.multi_select),
+      options: (Array.isArray(q.options) ? q.options : []).map((o) => ({
+        label: String(o.label ?? ''),
+        value: String(o.value ?? ''),
+        summary: o.summary,
+        tradeoffs: o.tradeoffs,
+      })),
+    }));
+    const base = { id: b.id ?? `dg-${i}`, header: inp.header, questions, allowFreeform: Boolean(inp.allow_freeform) };
+    if (!result) {
+      return (
+        <DecisionGateView
+          key={`dg-${b.id}-${i}`}
+          decision={base}
+          onConfirm={handlers.onDecide ?? noopDecide}
+        />
+      );
+    }
+    const resolved = reconstructDecisionAnswers(result.content, questions);
+    const tc: ToolCallEvent = {
+      id: b.id ?? '',
+      name: b.name ?? '',
+      input: b.input,
+      result: { content: result.content, isError: result.isError },
+      status: result.isError ? 'error' : 'done',
+    };
+    return (
+      <ToolCallBlock key={`dg-${b.id}-${i}`} call={tc}>
+        <DecisionGateView decision={{ ...base, resolved }} onConfirm={noopDecide} />
       </ToolCallBlock>
     );
   }

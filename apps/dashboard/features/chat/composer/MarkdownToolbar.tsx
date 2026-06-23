@@ -15,7 +15,6 @@ import {
   Minus,
 } from 'lucide-react';
 import { Separator } from '../../../components/ui/separator.js';
-import { Tooltip, TooltipTrigger, TooltipContent } from '../../../components/ui/tooltip.js';
 import type { MarkdownAction } from './useMarkdownShortcuts.js';
 
 interface ToolbarItem {
@@ -74,25 +73,20 @@ export const MarkdownToolbar = React.memo(function MarkdownToolbar({ onAction, d
             const label = t(item.labelKey);
             const tip = item.shortcut ? `${label} (${item.shortcut})` : label;
             return (
-              <Tooltip key={item.action}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={label}
-                    disabled={disabled}
-                    onMouseDown={(e) => {
-                      e.preventDefault(); // keep textarea focused
-                      onAction(item.action);
-                    }}
-                    className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:pointer-events-none"
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  <p>{tip}</p>
-                </TooltipContent>
-              </Tooltip>
+              <button
+                key={item.action}
+                type="button"
+                aria-label={label}
+                title={tip}
+                disabled={disabled}
+                onMouseDown={(e) => {
+                  e.preventDefault(); // keep textarea focused
+                  onAction(item.action);
+                }}
+                className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
             );
           })}
         </div>

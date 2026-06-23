@@ -45,6 +45,9 @@ interface GitRunOptions {
 
 const GIT_READ_TIMEOUT_MS = Number(process.env.MCP_GIT_READ_TIMEOUT_MS ?? 15_000);
 const GIT_SUMMARY_TIMEOUT_MS = Number(process.env.MCP_GIT_SUMMARY_TIMEOUT_MS ?? 3_000);
+// Only auto-enable git fsmonitor/untrackedCache for repos whose `git status`
+// took longer than this — fast/small repos never get a persistent daemon.
+const GIT_AUTO_OPTIMIZE_SLOW_MS = Number(process.env.MCP_GIT_AUTO_OPTIMIZE_SLOW_MS ?? 3_000);
 // Bound network ops (fetch/pull) so an unreachable remote can't hang the UI
 // forever — git itself has no default timeout here.
 const GIT_NETWORK_TIMEOUT_MS = Number(process.env.MCP_GIT_NETWORK_TIMEOUT_MS ?? 30_000);
@@ -393,6 +396,10 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     return { repoRoot, gitDir, notARepo: false };
   }
 
+  // Git accelerators (fsmonitor/untrackedCache). Created once so `readStatus`
+  // can also auto-enable them per repo on first status (ensureAutoOptimized).
+  const gitOpt = createGitOptimizationHandlers({ runGit, requireRoot });
+
   async function readStatus(projectId: number, includeFiles: boolean): Promise<GitStatus> {
     const root = requireRoot(projectId);
     const { repoRoot, notARepo } = await detectRepo(root);
@@ -415,6 +422,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         notARepo: false,
       };
     }
+    const startedAt = Date.now();
     const statusRes = await runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z'], {
       timeoutMs: GIT_READ_TIMEOUT_MS,
       maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
@@ -422,6 +430,10 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     if (statusRes.code !== 0) {
       throwGitReadFailure('git_status', statusRes, 'git status failed');
     }
+    // Warm fsmonitor/untrackedCache only for repos whose status was actually
+    // slow (large / cold) so small repos never get a persistent daemon.
+    // Fire-and-forget — never adds latency; once-per-repo guarded inside.
+    if (Date.now() - startedAt > GIT_AUTO_OPTIMIZE_SLOW_MS) void gitOpt.ensureAutoOptimized(cwd);
     const { head, files } = parsePorcelainV2Status(statusRes.stdout);
     return {
       ...head,
@@ -1163,7 +1175,10 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   return {
     ...base,
     ...createConflictHandlers({ runGit, runAsResult, requireRoot, detectRepo }),
-    ...createGitOptimizationHandlers({ runGit, requireRoot }),
+    // Only the two public methods reach the IPC surface — `ensureAutoOptimized`
+    // stays internal (called fire-and-forget from readStatus).
+    gitOptimizations: gitOpt.gitOptimizations,
+    configureGitOptimizations: gitOpt.configureGitOptimizations,
   };
 }
 

@@ -1,13 +1,16 @@
 /**
  * Admin perf monitor routes — memory + profiling diagnostics.
  *
- *   GET  /api/admin/perf/current  — fresh sample (process tree, worker
- *                                   heaps, subsystem ledger, loop lag)
+ *   GET  /api/admin/perf/current  — latest background sample (process tree,
+ *                                   worker heaps, subsystem ledger, loop lag)
  *   GET  /api/admin/perf/history  — ring buffer (~60 min of points)
  *
- * The panel polls `current` every 5–10s; that call forces a fresh sample
- * so the user always sees live numbers, while the sampler's own 15s tick
- * keeps the history populated even with the panel closed.
+ * The panel polls `current` every 5–10s. It serves the sampler's latest
+ * background sample (refreshed on its own 15s tick) rather than forcing a
+ * fresh collect — a fresh sample fans out to 3 worker-pool RPCs (2s timeout
+ * each), which was both slow (~4s) AND parked the server loop in `await`,
+ * surfacing as a phantom `starved` freeze every poll. ≤15s-stale numbers are
+ * fine for a memory panel; only a cold open (before the first tick) pays once.
  *
  * Mounted by server.ts next to `mountWorkersDiagnosticRoute`.
  */
@@ -33,22 +36,16 @@ async function captureCpuProfileFor(target: string, durationMs: number): Promise
 }
 
 export function mountPerfRoutes(app: Hono): void {
-  // A fresh sample fans out to 3 worker-pool RPCs (2s timeout each), so two
-  // panel polls landing close together each pay the full cost. Cache the
-  // sample for a couple seconds — well under the panel's 10s poll, and the
-  // 15s background sampler keeps history live regardless.
-  const ttlRaw = Number(process.env.MCP_PERF_CURRENT_TTL_MS);
-  const CURRENT_TTL_MS = Number.isFinite(ttlRaw) ? ttlRaw : 2500; // NaN-safe
-  let currentCache: { sample: unknown; at: number } | null = null;
-
   app.get('/api/admin/perf/current', async (c) => {
     const sampler = getPerfSampler();
     if (!sampler) return c.json({ error: 'perf sampler not started' }, 503);
-    if (currentCache && Date.now() - currentCache.at < CURRENT_TTL_MS) {
-      return c.json(currentCache.sample);
-    }
-    const sample = await sampler.sampleNow();
-    currentCache = { sample, at: Date.now() };
+    // Serve the latest background sample (refreshed on the sampler's own 15s
+    // tick) — cheap and never blocks the loop. Forcing a fresh `sampleNow()`
+    // fans out to 3 worker-pool RPCs (2s timeout each ≈ 4s) and showed up both
+    // as a slow IPC call AND a `starved` main-loop freeze (the loop parked in
+    // await on every poll). Only a cold open before the first tick pays for one
+    // `sampleNow()` so the panel isn't empty.
+    const sample = sampler.getCurrent() ?? (await sampler.sampleNow());
     return c.json(sample);
   });
 

@@ -3,6 +3,7 @@ import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { SUBMIT_PLAN_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
+import { maybeDecisionGateNudge } from '@mcp/code-agent/core/runner/nodes/executing-plan-gate.js';
 
 /**
  * Per-runner short-lived ledger of plans the user already rejected. Stops
@@ -118,6 +119,24 @@ export const submitPlan: CoderTool = {
           `Read the feedback in the prior submit_plan tool_result and submit a materially different plan ` +
           `that addresses it — do not re-submit with cosmetic tweaks.`,
       );
+    }
+
+    // Soft-mandatory decision gate: if the plan prose exposes an unasked fork
+    // and the user wasn't consulted this run, nudge ONCE to run `decision_gate`
+    // before pausing for approval. Returning err (not a pause) keeps it
+    // one-shot and deadlock-free — the model re-submits and proceeds. Skipped
+    // for simple-depth tasks and when the user was already consulted.
+    const decisionNudge = maybeDecisionGateNudge({
+      planMode: runner.isPlanMode(),
+      planDepth: runner.planDepth,
+      enabled: process.env.CODER_DECISION_GATE !== 'off',
+      decisionAsks: runner.decisionAskCount,
+      decisionGateNudges: runner.decisionGateNudgeCount,
+      planText: plan,
+    });
+    if (decisionNudge) {
+      runner.noteDecisionGateNudge();
+      return err(decisionNudge);
     }
 
     // No auto-approve shortcut: every plan, informational or not, pauses

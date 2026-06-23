@@ -22,6 +22,32 @@ export interface RuntimeEnv {
   extraEnv: Record<string, string>;
 }
 
+/**
+ * Merge per-project runtime envs (caller passes them PRIMARY FIRST): dedupe
+ * PATH dirs keeping the first occurrence (so the primary's bins win), and
+ * first-writer-wins for `extraEnv` — a clash means two union projects picked
+ * different versions of the same runtime, and only one can be active. Pure, so
+ * the union behaviour is testable without fs/sqlite.
+ */
+export function mergeRuntimeEnvs(envs: RuntimeEnv[]): RuntimeEnv {
+  const merged: RuntimeEnv = { pathPrepend: [], extraEnv: {} };
+  for (const env of envs) {
+    for (const dir of env.pathPrepend) {
+      if (!merged.pathPrepend.includes(dir)) merged.pathPrepend.push(dir);
+    }
+    for (const [k, v] of Object.entries(env.extraEnv)) {
+      if (k in merged.extraEnv) {
+        if (merged.extraEnv[k] !== v) {
+          console.debug(`[runtime] union ${k}: keeping primary "${merged.extraEnv[k]}", ignoring "${v}"`);
+        }
+        continue;
+      }
+      merged.extraEnv[k] = v;
+    }
+  }
+  return merged;
+}
+
 export interface RuntimeEnvOptions {
   /**
    * Include the project's chosen Node on PATH. Default true (terminal/runner).
@@ -44,6 +70,18 @@ export function resolveProjectRuntimeEnv(
 
   const project = db.getProject(projectId);
   if (!project) return { pathPrepend, extraEnv };
+
+  // Global (multi-project) session: the session runs over a SYNTHETIC union
+  // project (mig 155) whose own `runtime_versions` is empty. Resolve the
+  // runtimes of every REAL constituent and merge them, primary first so its
+  // bins take PATH precedence. Inert for ordinary projects (no `is_synthetic`).
+  if (project.is_synthetic) {
+    return mergeRuntimeEnvs(
+      db.listUnionProjectIds(projectId).map((link) =>
+        resolveProjectRuntimeEnv(db, link.project_id, managedDir, opts),
+      ),
+    );
+  }
 
   // Node — dedicated column (unchanged behaviour); skipped for the agent.
   if (includeNode) {

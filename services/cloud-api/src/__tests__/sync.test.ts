@@ -107,6 +107,29 @@ describe('SyncService.push', () => {
     expect(repo.archive.find((a) => a.reason === 'conflict_loser')).toBeTruthy();
   });
 
+  it('vault_meta is create-once: a fresh mint cannot overwrite an existing head', async () => {
+    const repo = new FakeSyncRepo();
+    const svc = new SyncService(repo, hash);
+    // Device A mints the singleton meta → head v1.
+    await svc.push([item({ kind: 'vault_meta', clientDocId: 'vault:meta', body: { vdkId: 'A' }, updatedAtMs: 1000 })]);
+    // Device B races with a DIFFERENT mint (baseVersion 0) and a LATER edit time —
+    // plain LWW would let it win, but create-once must keep A's meta.
+    const r = await svc.push([item({ kind: 'vault_meta', clientDocId: 'vault:meta', baseVersion: 0, body: { vdkId: 'B' }, updatedAtMs: 9999 })]);
+    expect(r.results[0].status).toBe('conflict');
+    expect(r.results[0].winner).toBe('existing');
+    expect(repo.heads.get(refKey('vault_meta', 'vault:meta'))!.bodyJson).toBe(stableStringify({ vdkId: 'A' }));
+  });
+
+  it('vault_meta legit update (correct baseVersion) still applies', async () => {
+    const repo = new FakeSyncRepo();
+    const svc = new SyncService(repo, hash);
+    await svc.push([item({ kind: 'vault_meta', clientDocId: 'vault:meta', body: { vdkId: 'A' } })]); // v1
+    // Adding identity keys later pushes with the REAL baseVersion, not 0.
+    const r = await svc.push([item({ kind: 'vault_meta', clientDocId: 'vault:meta', baseVersion: 1, body: { vdkId: 'A', sigPub: 'k' }, updatedAtMs: 2000 })]);
+    expect(r.results[0].status).toBe('applied');
+    expect(r.results[0].version).toBe(2);
+  });
+
   it('delete writes a tombstone', async () => {
     const repo = new FakeSyncRepo();
     const svc = new SyncService(repo, hash);

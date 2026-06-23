@@ -1680,6 +1680,38 @@ export class CoderRunner extends EventEmitter {
     return this.planApproved;
   }
 
+  // ─── Decision-gate accounting (plan mode) ──────────────────────────
+  // Per-run counters backing the soft-mandatory decision-gate nudge (see
+  // executing-plan-gate.ts `maybeDecisionGateNudge`, fired from the
+  // submit_plan handler). Stored on the runner — not RunContext — because the
+  // tool handlers reach the runner via `ctx.runner`, not the machine context.
+  private decisionAsks = 0;
+  private decisionGateNudges = 0;
+  /**
+   * Record that a genuine decision was put to the user this run — a
+   * `decision_gate` call, or an `ask_user` with options. Suppresses the
+   * one-shot decision-gate nudge so well-behaved runs never see it.
+   */
+  noteDecisionAsk(): void {
+    this.decisionAsks += 1;
+  }
+  /** How many genuine decisions were put to the user this run. */
+  get decisionAskCount(): number {
+    return this.decisionAsks;
+  }
+  /** Record that the one-shot decision-gate nudge fired (caps it at one). */
+  noteDecisionGateNudge(): void {
+    this.decisionGateNudges += 1;
+  }
+  /** How many times the decision-gate nudge fired this run (0 or 1). */
+  get decisionGateNudgeCount(): number {
+    return this.decisionGateNudges;
+  }
+  /** Plan depth (simple|normal|complex) — drives depth-aware gating. */
+  get planDepth(): string {
+    return this.opts.planDepth ?? 'normal';
+  }
+
   /** Marks the latest spec as approved so mutating tools become unblocked.
    *  `path` is the repo-relative location the runner persisted the body at. */
   approveSpec(path: string): void {

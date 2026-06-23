@@ -7,7 +7,7 @@
  * Copilot rail (`RailComposerBar`) render the EXACT same controls from one
  * source of truth — anything wired here is available in both surfaces.
  */
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Brain, Eye, Paperclip, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
@@ -40,7 +40,7 @@ interface ComposerActionIconsProps {
   showMic?: boolean;
 }
 
-export function ComposerActionIcons({
+export const ComposerActionIcons = memo(function ComposerActionIcons({
   streaming,
   handleFiles,
   thinking,
@@ -78,33 +78,29 @@ export function ComposerActionIcons({
   };
   return (
     <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <label className="cursor-pointer">
-            <input
-              type="file"
-              multiple
-              accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
-              className="hidden"
-              onChange={(e) => {
-                handleFiles(e.target.files);
-                e.target.value = '';
-              }}
-              disabled={streaming}
-            />
-            <span
-              className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-                streaming
-                  ? 'text-muted-foreground/40 cursor-not-allowed'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-              }`}
-            >
-              <Paperclip className="h-3.5 w-3.5" />
-            </span>
-          </label>
-        </TooltipTrigger>
-        <TooltipContent side="top">{t('composer.attach', { defaultValue: 'Anexar arquivos' })}</TooltipContent>
-      </Tooltip>
+      <label className="cursor-pointer" title={t('composer.attach', { defaultValue: 'Anexar arquivos' })}>
+        <input
+          type="file"
+          multiple
+          accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
+          className="hidden"
+          onChange={(e) => {
+            handleFiles(e.target.files);
+            e.target.value = '';
+          }}
+          disabled={streaming}
+        />
+        <span
+          aria-label={t('composer.attach', { defaultValue: 'Anexar arquivos' })}
+          className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+            streaming
+              ? 'text-muted-foreground/40 cursor-not-allowed'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+          }`}
+        >
+          <Paperclip className="h-3.5 w-3.5" />
+        </span>
+      </label>
 
       {showMic && onTranscript && (
         <span className="inline-flex items-center">
@@ -123,25 +119,23 @@ export function ComposerActionIcons({
       )}
 
       {showThink && setThinking && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setThinking?.(!thinking)}
-              aria-pressed={thinking ?? false}
-              className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                thinking
-                  ? 'bg-purple-500/15 text-purple-500 hover:bg-purple-500/25'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-              }`}
-            >
-              <Brain className="h-3.5 w-3.5" />
-              {thinking && (
-                <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-purple-500" />
-              )}
-            </button>
-          </TooltipTrigger>
-        </Tooltip>
+        <button
+          type="button"
+          onClick={() => setThinking?.(!thinking)}
+          aria-pressed={thinking ?? false}
+          aria-label={t('composer.thinkingToggle', { defaultValue: 'Extended thinking' })}
+          title={t('composer.thinkingToggle', { defaultValue: 'Extended thinking' })}
+          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+            thinking
+              ? 'bg-purple-500/15 text-purple-500 hover:bg-purple-500/25'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+          }`}
+        >
+          <Brain className="h-3.5 w-3.5" />
+          {thinking && (
+            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-purple-500" />
+          )}
+        </button>
       )}
 
       {setDescribeImages && (
@@ -236,4 +230,4 @@ export function ComposerActionIcons({
       )}
     </>
   );
-}
+});

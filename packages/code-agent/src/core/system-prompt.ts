@@ -70,6 +70,29 @@ export type ProviderFamily =
   | 'kimi-code'
   | 'generic';
 
+const PROVIDER_FAMILIES: ReadonlySet<string> = new Set<ProviderFamily>([
+  'anthropic',
+  'claude-code',
+  'openai',
+  'openrouter',
+  'zai',
+  'gemini',
+  'deepseek',
+  'kimi-code',
+  'generic',
+]);
+
+/**
+ * Map an open provider KIND (any built-in or plugin kind, e.g. `copilot`,
+ * `chatgpt`, `bedrock`, `cloudflare`, or a third-party kind) to the closed set
+ * of prompt families. Kinds without a dedicated family fall back to `generic`
+ * — the same behaviour the call site previously got by passing the raw kind
+ * string through to the family switch.
+ */
+export function normalizeProviderFamily(kind: string | undefined): ProviderFamily {
+  return kind && PROVIDER_FAMILIES.has(kind) ? (kind as ProviderFamily) : 'generic';
+}
+
 export interface PromptContext {
   projectName: string;
   projectRoot: string;
@@ -396,11 +419,11 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
 function buildPlanDepthBlock(depth: string): string {
   const body = {
     simple:
-      'Target a lean, direct plan (~50–150 lines of markdown). Investigate just enough to be correct: localize the change and its immediate call-sites, then plan.',
+      'Target a lean, direct plan (~50–150 lines of markdown). Investigate just enough to be correct: localize the change and its immediate call-sites, then plan. Decision gate: skip it — a simple task rarely has a genuine fork.',
     normal:
-      'Target a complete plan (~300–1000 lines of markdown). Investigate the affected areas thoroughly: dependencies, call-sites, reusable prior art, and the verification path.',
+      'Target a complete plan (~300–1000 lines of markdown). Investigate the affected areas thoroughly: dependencies, call-sites, reusable prior art, and the verification path. Decision gate: when investigation surfaces a genuine fork (2+ viable approaches the user owns), run `decision_gate` before writing the plan.',
     complex:
-      'Target a meticulous plan (2000+ lines of markdown). Investigate exhaustively: map the full dependency graph, edge cases, migrations, and a concrete end-to-end verification plan. Decompose with `submit_tasks` when the work has 2+ independent parts.',
+      'Target a meticulous plan (2000+ lines of markdown). Investigate exhaustively: map the full dependency graph, edge cases, migrations, and a concrete end-to-end verification plan. Decision gate: surface EVERY genuine fork (architecture, scope, migration strategy, UX behavior) via `decision_gate` before finalizing. Decompose with `submit_tasks` when the work has 2+ independent parts.',
   } as const;
   // Normalize at the single rendering chokepoint: callers reach here via a
   // type cast over the persisted column (index.ts), so a value corrupted by

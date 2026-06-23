@@ -1,0 +1,17 @@
+{
+  "name": "@mcp/provider-engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/shared": "workspace:*",
+    "@mcp/store": "workspace:*",
+    "@mcp/code-agent": "workspace:*",
+    "@mcp/indexer": "workspace:*"
+  }
+}

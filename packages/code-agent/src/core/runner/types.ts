@@ -68,6 +68,12 @@ export interface RunnerOptions {
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
   /**
+   * Plan depth (simple|normal|complex) — surfaced on the runner so the
+   * soft-mandatory decision-gate nudge can skip trivial (`simple`) tasks.
+   * Resolved by runCoder from opts/session; defaults to 'normal'.
+   */
+  planDepth?: 'simple' | 'normal' | 'complex';
+  /**
    * Spec mode: agent must call `submit_spec` and get human approval before
    * mutating tools. Set by `runCoder` when `agentId === 'spec'`.
    */

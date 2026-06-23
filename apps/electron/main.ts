@@ -32,6 +32,7 @@ import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
 import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
+import { mountSecretsIpc } from './src/secrets-ipc.js';
 import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
@@ -211,6 +212,7 @@ async function bootstrap() {
   // in-process — same routes, zero port. See hono-dispatch.ts.
   const handlers = mountIpcHandlers(deps, honoApp);
   mountTerminalIpc(deps);
+  mountSecretsIpc();
   registerNativeIpc();
   registerWindowIpc();
   registerWindowControlsIpc();
@@ -519,6 +521,18 @@ function registerNativeIpc() {
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
+  });
+
+  // SFTP upload source — pick one or more local files to push to the remote.
+  ipcMain.handle('dialog:openFiles', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });
+    return result.canceled ? [] : result.filePaths;
+  });
+
+  // SFTP download target — pick where to save a remote file locally.
+  ipcMain.handle('dialog:saveFile', async (_e, defaultName?: string) => {
+    const result = await dialog.showSaveDialog(defaultName ? { defaultPath: defaultName } : {});
+    return result.canceled || !result.filePath ? null : result.filePath;
   });
 
   ipcMain.on('shell:openExternal', (_event, url: string) => {

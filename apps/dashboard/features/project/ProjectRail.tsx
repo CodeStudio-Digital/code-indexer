@@ -2,13 +2,12 @@
  * Activity rail vertical do ProjectView — ícones core/analytics/plugins + toggle de
  * terminal. Extraído do ProjectView (W4 decompose). A config das abas vem do tabs-config.
  */
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Settings2, TerminalSquare } from 'lucide-react';
 import type { Project } from '@mcp/shared/types.js';
 import { cn } from '../../lib/utils.js';
 import { apiCall } from '../../lib/api-client.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
@@ -66,48 +65,40 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
         <LinkDesignSystemDialog projectId={projectId} />
         {/* Project settings — opens the full settings modal (runtimes,
             terminal, general, etc.). Above the terminal toggle. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              disabled={!project}
-              aria-label={t('settings.open')}
-              className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40"
-            >
-              <Settings2 className="h-4 w-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">{t('settings.open')}</TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          disabled={!project}
+          aria-label={t('settings.open')}
+          title={t('settings.open')}
+          className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40"
+        >
+          <Settings2 className="h-4 w-4" />
+        </button>
         {/* Terminal toggle — sits at the bottom of the rail mirroring
             VS Code / JetBrains conventions. Active state reflects
             whether the bottom panel is currently open. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => layout.setActiveBottom(layout.activeBottom ? null : 'terminal')}
-              aria-label="Toggle terminal"
-              aria-pressed={layout.activeBottom !== null}
-              className={cn(
-                'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-                layout.activeBottom
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <TerminalSquare className="h-4 w-4" />
-              {layout.activeBottom && (
-                <span
-                  aria-hidden
-                  className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-                />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Terminal (Ctrl+J)</TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          onClick={() => layout.setActiveBottom(layout.activeBottom ? null : 'terminal')}
+          aria-label="Toggle terminal"
+          title="Terminal (Ctrl+J)"
+          aria-pressed={layout.activeBottom !== null}
+          className={cn(
+            'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
+            layout.activeBottom
+              ? 'bg-accent text-accent-foreground'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+          )}
+        >
+          <TerminalSquare className="h-4 w-4" />
+          {layout.activeBottom && (
+            <span
+              aria-hidden
+              className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
+            />
+          )}
+        </button>
       </div>
     </nav>
     {project && (
@@ -123,7 +114,7 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
   );
 }
 
-function RailButton({
+const RailButton = memo(function RailButton({
   def,
   active,
   onSelect,
@@ -134,30 +125,26 @@ function RailButton({
 }) {
   const Icon = def.icon;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={() => onSelect(def.id)}
-          aria-label={def.label}
-          aria-current={active ? 'page' : undefined}
-          className={cn(
-            'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-            active
-              ? 'bg-accent text-accent-foreground'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-          )}
-        >
-          <Icon className="h-4 w-4" />
-          {active && (
-            <span
-              aria-hidden
-              className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-            />
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="right">{def.label}</TooltipContent>
-    </Tooltip>
+    <button
+      type="button"
+      onClick={() => onSelect(def.id)}
+      aria-label={def.label}
+      title={def.label}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
+        active
+          ? 'bg-accent text-accent-foreground'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      <Icon className="h-4 w-4" />
+      {active && (
+        <span
+          aria-hidden
+          className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
+        />
+      )}
+    </button>
   );
-}
+});

@@ -17,6 +17,7 @@ const SnapshotEditor = lazy(() => import('../../snapshots/index.js'));
 // Index — aba unificada (Indexed/Runs/Dependencies/Architecture/Diff/Costs).
 const IndexWorkspace = lazy(() => import('./index-workspace/IndexWorkspace.js').then((m) => ({ default: m.IndexWorkspace })));
 const ApiClientTab = lazy(() => import('../../api-client/ApiClientTab.js').then((m) => ({ default: m.ApiClientTab })));
+const DbClientTab = lazy(() => import('../../db-client/DbClientTab.js').then((m) => ({ default: m.DbClientTab })));
 const DocsStudioView = lazy(() => import('../../api-client/docs-studio/DocsStudioView.js').then((m) => ({ default: m.DocsStudioView })));
 const DiagramsView = lazy(() => import('../diagrams/DiagramsView.js').then((m) => ({ default: m.DiagramsView })));
 
@@ -50,6 +51,12 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
   // API client owns a full-height 3-pane layout.
   if (tab === 'api') {
     return <Suspense fallback={<TabSpinner />}><ApiClientTab projectId={projectId} /></Suspense>;
+  }
+
+  // Database client — DataGrip × phpMyAdmin. key={projectId} → remount per
+  // project so a live connection session never bleeds across projects.
+  if (tab === 'databases') {
+    return <Suspense fallback={<TabSpinner />}><DbClientTab key={projectId} projectId={projectId} /></Suspense>;
   }
 
   // Docs Studio — author + preview a collection's documentation. Own layout.
