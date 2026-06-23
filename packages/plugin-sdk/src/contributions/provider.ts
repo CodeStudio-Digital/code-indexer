@@ -1,21 +1,18 @@
-import type { ProviderDefinition } from '@mcp/provider-sdk';
+import type { ProviderSpec } from '@mcp/provider-sdk';
+import { defineProviderSpec } from '@mcp/provider-sdk';
 
 /**
- * Declare an LLM provider contributed by a plugin.
+ * Declare an LLM provider contributed by a plugin, as a declarative
+ * `@mcp/provider-sdk` `ProviderSpec` — PURE DATA (no adapter functions).
  *
- * Identity helper over the `@mcp/provider-sdk` contract — a contributed
- * provider IS a `ProviderDefinition`, the exact shape built-ins use, so once
- * registered it dispatches identically (CLI wizard, admin picker, model
- * discovery, cost lookup, both factories, the `/test` badge).
- *
- * Unlike a tool (which runs sandboxed in the plugin worker), a provider's
- * adapter runs IN-PROCESS on the agent's hot path and handles real
- * credentials. The provider-host loader therefore only registers providers
- * from bundles that pass install-time trust verification (first-party /
- * pinned-key signed). See the loader for the trust gate.
+ * Identity helper (alias of `defineProviderSpec`). The CLI `build` writes the
+ * spec verbatim into `.app.json`; the host turns it into a runtime definition
+ * via `buildProviderDefinition` (the engine, the same path built-ins take), so
+ * NO plugin code runs in-process. A plugin may only use the 6 known wires +
+ * RFC-declarative auth; a new wire/auth is a first-party engine change.
  */
-export function contributeProvider(provider: ProviderDefinition): ProviderDefinition {
-  return provider;
+export function contributeProvider(spec: ProviderSpec): ProviderSpec {
+  return defineProviderSpec(spec);
 }
 
-export type { ProviderDefinition } from '@mcp/provider-sdk';
+export type { ProviderSpec } from '@mcp/provider-sdk';

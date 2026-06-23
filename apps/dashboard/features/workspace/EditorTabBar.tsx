@@ -24,6 +24,7 @@ import {
   Play,
   Rows2,
   Search,
+  Server,
   SplitSquareHorizontal,
   X,
 } from 'lucide-react';
@@ -49,6 +50,7 @@ function TabIcon({ file, className }: { file: OpenTab; className?: string }) {
   if (file.kind === 'git-log') return <GitBranch className={cn('shrink-0 text-primary', className)} />;
   if (file.kind === 'git-stash') return <Archive className={cn('shrink-0 text-amber-400', className)} />;
   if (file.kind === 'diff') return <GitCompare className={cn('shrink-0 text-amber-300', className)} />;
+  if (file.kind === 'sftp') return <Server className={cn('shrink-0 text-sky-400', className)} />;
   return <FileIcon path={file.path} className={className} />;
 }
 
@@ -224,7 +226,8 @@ export function EditorTabBar({ paneId }: EditorTabBarProps) {
 /** ▶ Run button for the active file — only shown when its extension is runnable. */
 function RunFileButton({ file }: { file: OpenTab | undefined }) {
   const { t } = useTranslation('workspace');
-  if (!file || isVirtualTab(file)) return null;
+  // Remote (sftp) tabs have no local file to run — the path is synthetic.
+  if (!file || isVirtualTab(file) || file.kind === 'sftp') return null;
   const target = runnableForFile(file.path);
   if (!target) return null;
   const base = file.path.split('/').pop() ?? file.path;
@@ -337,6 +340,8 @@ function TabChip({
   onUnsplit,
 }: TabChipProps) {
   const isVirtual = isVirtualTab(file);
+  // Local on-disk file: only these support reload-from-disk / copy-real-path.
+  const isLocalFile = file.kind === undefined || file.kind === 'file';
   const display = isVirtual ? file.title : (file.path.split('/').pop() ?? file.path);
   const dirty = !isVirtual && file.dirty;
   // Disk changed under unsaved edits (or the file was deleted) — fs-events
@@ -366,10 +371,12 @@ function TabChip({
       separatorBefore: true,
       onSelect: () => {
         if (isVirtual) return;
-        void navigator.clipboard.writeText(file.path).catch(() => undefined);
+        // sftp tabs copy the REAL remote path, not the synthetic tab id.
+        const value = file.kind === 'sftp' ? file.remotePath : file.path;
+        void navigator.clipboard.writeText(value).catch(() => undefined);
       },
     },
-    ...(!isVirtual
+    ...(isLocalFile
       ? [
           {
             id: 'reload-disk',
@@ -419,7 +426,7 @@ function TabChip({
         }}
         onDrop={onDropChip}
         {...triggerProps}
-        title={isVirtual ? file.title : file.path}
+        title={file.kind === 'sftp' ? `SFTP · ${file.hostLabel}:${file.remotePath}` : isVirtual ? file.title : file.path}
       >
         {/* Insertion line — vertical primary bar at the edge the drop lands on. */}
         {dropEdge === 'left' && <span aria-hidden className="absolute left-0 inset-y-0 w-0.5 bg-primary z-10" />}

@@ -16,6 +16,7 @@
  */
 
 import { create } from 'zustand';
+import type { SshConnectSpec } from '@mcp/api-bus';
 
 export interface OpenFile {
   /** Discriminator — regular editable file. */
@@ -90,7 +91,32 @@ export interface OpenMerge {
   file: string;
 }
 
-export type OpenTab = OpenFile | OpenDiff | OpenGitLog | OpenGitStash | OpenMerge;
+/**
+ * A remote file opened from the SFTP browser for in-editor editing. Unlike a
+ * regular `OpenFile`, its bytes never touch the project filesystem: the Monaco
+ * model holds the content in memory, `save` re-uploads over SFTP, and closing
+ * the tab simply disposes the model (nothing to clean up on disk). It is
+ * editable (carries `dirty`), so it is NOT an `isVirtualTab`, but it has its
+ * own mount + save/close lifecycle (see SftpEditMount / sftp-edit-session).
+ */
+export interface OpenSftpFile {
+  kind: 'sftp';
+  projectId: number;
+  /** Synthetic tab identity: `sftp:<hostId>:<remotePath>`. Its basename drives the tab label + file icon. */
+  path: string;
+  /** Absolute remote path being edited. */
+  remotePath: string;
+  /** Live connect spec (in-memory only — never persisted to localStorage). */
+  spec: SshConnectSpec;
+  /** Host label for the tab tooltip. */
+  hostLabel: string;
+  /** Last-saved content — seeds the Monaco model and resets on save. */
+  content: string;
+  /** Unsaved-edits flag (drives the tab dot). */
+  dirty: boolean;
+}
+
+export type OpenTab = OpenFile | OpenDiff | OpenGitLog | OpenGitStash | OpenMerge | OpenSftpFile;
 
 /**
  * Virtual tabs (diff / git-log / git-stash / merge) carry a `title` and
@@ -157,6 +183,12 @@ interface WorkspaceState {
   openGitLog: (tab: OpenGitLog) => void;
   openGitStash: (tab: OpenGitStash) => void;
   openMerge: (tab: OpenMerge) => void;
+  /** Open (or focus, if already open) a remote file from SFTP for in-editor editing. */
+  openSftpFile: (tab: OpenSftpFile) => void;
+  /** Flip the unsaved-edits dot on an open SFTP tab. */
+  setSftpDirty: (projectId: number, path: string, dirty: boolean) => void;
+  /** A remote save landed — sync the tab's last-saved content + clear dirty. */
+  markSftpSaved: (projectId: number, path: string, content: string) => void;
   /** Close by identity — finds the owning pane (external/back-compat entry point). */
   closeFile: (projectId: number, path: string) => void;
   /** Close a tab in a SPECIFIC pane (UI entry point — X / middle-click). */
@@ -444,6 +476,7 @@ export function savePersistedTabs(
       f.kind !== 'git-log' &&
       f.kind !== 'git-stash' &&
       f.kind !== 'merge' &&
+      f.kind !== 'sftp' && // remote edits are in-memory only — never persist/restore
       !isIndexerInternalPath(f.path) &&
       f.projectId === projectId,
   );
@@ -533,6 +566,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   openGitStash: (tab) => set((s) => upsertVirtualTab(s, tab)),
 
   openMerge: (tab) => set((s) => upsertVirtualTab(s, tab)),
+
+  openSftpFile: (tab) =>
+    set((s) => {
+      // Already open (same host+remote path) → focus it, KEEPING any in-progress
+      // edits rather than re-downloading over them.
+      const idx = s.openFiles.findIndex((f) => sameTab(f, tab));
+      const openFiles = idx >= 0 ? s.openFiles : [...s.openFiles, tab];
+      const { panes, activePaneId } = placePath(s.panes, s.activePaneId, tab.path);
+      return { openFiles, panes, activePaneId, activeFilePath: tab.path, activeProjectId: tab.projectId };
+    }),
+
+  setSftpDirty: (projectId, path, dirty) =>
+    set((s) => ({
+      openFiles: s.openFiles.map((f) =>
+        f.kind === 'sftp' && sameTab(f, { path, projectId })
+          ? (f.dirty === dirty ? f : { ...f, dirty }) // skip churn when unchanged
+          : f,
+      ),
+    })),
+
+  markSftpSaved: (projectId, path, content) =>
+    set((s) => ({
+      openFiles: s.openFiles.map((f) =>
+        f.kind === 'sftp' && sameTab(f, { path, projectId }) ? { ...f, content, dirty: false } : f,
+      ),
+    })),
 
   closeFile: (projectId, path) =>
     set((s) => {

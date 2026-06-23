@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from './api.js';
 import { engineLabel } from './engines.js';
-import type { DbConnection, DbConnectionStatus, DbTreeNode } from './types.js';
+import type { DbConnection, DbConnectionStatus, DbTreeNode, WorkTab } from './types.js';
 
 export interface UseDbClient {
   connections: DbConnection[];
@@ -29,6 +29,25 @@ export interface UseDbClient {
   toggleExpand: (node: DbTreeNode) => Promise<void>;
   selectConnection: (connectionId: number) => void;
   removeConnection: (conn: DbConnection) => Promise<void>;
+  /** Open a table's data tab (double-click); connects the owning connection if needed. */
+  openTableData: (node: DbTreeNode) => Promise<void>;
+  /** Open a table's structure editor tab. */
+  openStructureTab: (node: DbTreeNode) => Promise<void>;
+  /** Open a blank "create table" structure tab for a connection/schema. */
+  openNewTable: (connectionId: number, schema?: string) => Promise<void>;
+  /** Refetch a node's children (after DDL/DML changed the schema). */
+  refreshNode: (nodeId: string) => void;
+  /** Invalidate cached tables under a connection/schema after a DDL change. */
+  invalidateTables: (connectionId: number, schema?: string) => void;
+  /** Bare table + column names already loaded for a connection — feeds SQL autocomplete. */
+  treeSuggestions: (connectionId: number) => string[];
+  // ─── Work-area tabs ──────────────────────────────────────────────────
+  workTabs: WorkTab[];
+  activeTabId: string | null;
+  openQueryTab: (connectionId: number, schema?: string) => void;
+  activateTab: (id: string) => void;
+  closeTab: (id: string) => void;
+  reorderTab: (id: string, beforeId: string | null) => void;
 }
 
 function connNode(conn: DbConnection): DbTreeNode {
@@ -51,8 +70,11 @@ export function useDbClient(projectId: number): UseDbClient {
   const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set());
   const [childrenById, setChildrenById] = useState<Record<string, DbTreeNode[]>>({});
   const [activeConnectionId, setActiveConnectionId] = useState<number | null>(null);
+  const [workTabs, setWorkTabs] = useState<WorkTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   const connectedRef = useRef<Set<number>>(new Set());
+  const querySeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -160,6 +182,7 @@ export function useDbClient(projectId: number): UseDbClient {
         id: `${node.id}/table:${t.name}`,
         kind: t.kind === 'view' ? ('view' as const) : ('table' as const),
         label: t.name,
+        name: t.name,
         connectionId: node.connectionId,
         database: node.database,
         schema: t.schema,
@@ -174,6 +197,7 @@ export function useDbClient(projectId: number): UseDbClient {
         id: `${node.id}/col:${c.name}`,
         kind: 'column' as const,
         label: `${c.name} : ${c.dataType}${c.isPrimaryKey ? ' [PK]' : ''}${c.nullable ? '' : ' *'}`,
+        name: c.name,
         connectionId: node.connectionId,
         database: node.database,
         schema: node.schema,
@@ -227,12 +251,181 @@ export function useDbClient(projectId: number): UseDbClient {
       connectedRef.current.delete(conn.id);
       await api.deleteConnection(projectId, conn.id);
       if (activeConnectionId === conn.id) setActiveConnectionId(null);
+      // Drop any open work tabs belonging to this connection.
+      setWorkTabs((tabs) => {
+        const next = tabs.filter((t) => t.connectionId !== conn.id);
+        setActiveTabId((cur) => (next.some((t) => t.id === cur) ? cur : (next[next.length - 1]?.id ?? null)));
+        return next;
+      });
       await refresh();
     },
     [projectId, activeConnectionId, refresh],
   );
 
   const selectConnection = useCallback((id: number) => setActiveConnectionId(id), []);
+
+  // ─── Work-area tabs ────────────────────────────────────────────────────
+  const activateTab = useCallback((id: string) => {
+    setActiveTabId(id);
+    setWorkTabs((tabs) => {
+      const tab = tabs.find((t) => t.id === id);
+      if (tab) setActiveConnectionId(tab.connectionId);
+      return tabs;
+    });
+  }, []);
+
+  const openQueryTab = useCallback((connectionId: number, schema?: string) => {
+    querySeqRef.current += 1;
+    const id = `query:${connectionId}:${querySeqRef.current}:${Date.now()}`;
+    const tab: WorkTab = { id, kind: 'query', title: '', connectionId, schema, seq: querySeqRef.current };
+    setWorkTabs((tabs) => [...tabs, tab]);
+    setActiveTabId(id);
+    setActiveConnectionId(connectionId);
+  }, []);
+
+  const openTableData = useCallback(
+    async (node: DbTreeNode) => {
+      if (node.kind !== 'table' && node.kind !== 'view') return;
+      const conn = connections.find((c) => c.id === node.connectionId);
+      if (conn && !connectedRef.current.has(conn.id)) {
+        try {
+          await connectConn(conn);
+        } catch {
+          return;
+        }
+      }
+      const id = `data:${node.connectionId}:${node.schema ?? ''}:${node.table ?? ''}`;
+      setWorkTabs((tabs) => {
+        if (tabs.some((t) => t.id === id)) return tabs;
+        return [
+          ...tabs,
+          {
+            id,
+            kind: 'data',
+            title: node.table ?? node.label,
+            connectionId: node.connectionId,
+            schema: node.schema,
+            table: node.table,
+          },
+        ];
+      });
+      setActiveTabId(id);
+      setActiveConnectionId(node.connectionId);
+    },
+    [connections, connectConn],
+  );
+
+  const ensureConnected = useCallback(
+    async (connectionId: number): Promise<boolean> => {
+      const conn = connections.find((c) => c.id === connectionId);
+      if (conn && !connectedRef.current.has(conn.id)) {
+        try {
+          await connectConn(conn);
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    },
+    [connections, connectConn],
+  );
+
+  const openStructureTab = useCallback(
+    async (node: DbTreeNode) => {
+      if (node.kind !== 'table' && node.kind !== 'view') return;
+      if (!(await ensureConnected(node.connectionId))) return;
+      const id = `structure:${node.connectionId}:${node.schema ?? ''}:${node.table ?? ''}`;
+      setWorkTabs((tabs) => {
+        if (tabs.some((t) => t.id === id)) return tabs;
+        return [
+          ...tabs,
+          { id, kind: 'structure', title: node.table ?? node.label, connectionId: node.connectionId, schema: node.schema, table: node.table },
+        ];
+      });
+      setActiveTabId(id);
+      setActiveConnectionId(node.connectionId);
+    },
+    [ensureConnected],
+  );
+
+  const openNewTable = useCallback(
+    async (connectionId: number, schema?: string) => {
+      if (!(await ensureConnected(connectionId))) return;
+      const id = `structure:new:${connectionId}:${schema ?? ''}:${Date.now()}`;
+      setWorkTabs((tabs) => [
+        ...tabs,
+        { id, kind: 'structure', title: '', connectionId, schema, table: '' },
+      ]);
+      setActiveTabId(id);
+      setActiveConnectionId(connectionId);
+    },
+    [ensureConnected],
+  );
+
+  const refreshNode = useCallback((nodeId: string) => {
+    setChildrenById((prev) => {
+      const next = { ...prev };
+      // Drop the node's cached children + everything under it so the next
+      // expand refetches (used after a DDL/DML change).
+      for (const k of Object.keys(next)) if (k === nodeId || k.startsWith(`${nodeId}/`)) delete next[k];
+      return next;
+    });
+    setExpanded((prev) => new Set([...prev].filter((k) => k !== nodeId && !k.startsWith(`${nodeId}/`))));
+  }, []);
+
+  const treeSuggestions = useCallback(
+    (connectionId: number): string[] => {
+      const names = new Set<string>();
+      for (const kids of Object.values(childrenById)) {
+        for (const n of kids) {
+          if (n.connectionId === connectionId && n.name && (n.kind === 'table' || n.kind === 'view' || n.kind === 'column')) {
+            names.add(n.name);
+          }
+        }
+      }
+      return [...names].sort();
+    },
+    [childrenById],
+  );
+
+  const invalidateTables = useCallback((connectionId: number, schema?: string) => {
+    const match = (k: string): boolean =>
+      k.startsWith(`conn:${connectionId}`) && (!schema || k.endsWith(`schema:${schema}`));
+    setChildrenById((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) if (match(k)) delete next[k];
+      return next;
+    });
+    // Collapse the affected schema node(s) so a re-expand refetches the table list.
+    setExpanded((prev) => new Set([...prev].filter((k) => !match(k))));
+  }, []);
+
+  const closeTab = useCallback((id: string) => {
+    setWorkTabs((tabs) => {
+      const idx = tabs.findIndex((t) => t.id === id);
+      if (idx < 0) return tabs;
+      const next = tabs.filter((t) => t.id !== id);
+      setActiveTabId((cur) => {
+        if (cur !== id) return cur;
+        // Activate the neighbour (VS Code semantics): prefer the right, else left.
+        const neighbour = next[idx] ?? next[idx - 1] ?? null;
+        return neighbour?.id ?? null;
+      });
+      return next;
+    });
+  }, []);
+
+  const reorderTab = useCallback((id: string, beforeId: string | null) => {
+    setWorkTabs((tabs) => {
+      const moving = tabs.find((t) => t.id === id);
+      if (!moving) return tabs;
+      const without = tabs.filter((t) => t.id !== id);
+      if (beforeId == null) return [...without, moving];
+      const at = without.findIndex((t) => t.id === beforeId);
+      if (at < 0) return [...without, moving];
+      return [...without.slice(0, at), moving, ...without.slice(at)];
+    });
+  }, []);
 
   // Flatten roots + expanded children into ordered rows.
   const treeRows: DbTreeNode[] = [];
@@ -264,5 +457,17 @@ export function useDbClient(projectId: number): UseDbClient {
     toggleExpand,
     selectConnection,
     removeConnection,
+    openTableData,
+    openStructureTab,
+    openNewTable,
+    refreshNode,
+    invalidateTables,
+    treeSuggestions,
+    workTabs,
+    activeTabId,
+    openQueryTab,
+    activateTab,
+    closeTab,
+    reorderTab,
   };
 }

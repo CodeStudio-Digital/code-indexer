@@ -12,7 +12,8 @@
     "edit": "Editar",
     "delete": "Excluir",
     "deleteConfirm": "Excluir o host \"{{label}}\"?",
-    "ungrouped": "Sem grupo"
+    "ungrouped": "Sem grupo",
+    "exited": "Concluído — saída mantida (feche para dispensar)"
   },
   "dialog": {
     "titleNew": "Novo host SSH",
@@ -73,6 +74,7 @@
     "newFolder": "Nova pasta",
     "upload": "Enviar",
     "download": "Baixar",
+    "edit": "Editar no editor",
     "rename": "Renomear",
     "delete": "Excluir",
     "empty": "Diretório vazio",
@@ -80,7 +82,17 @@
     "newFolderPrompt": "Nome da pasta:",
     "renamePrompt": "Novo nome:",
     "transfers": "Transferências",
-    "loadError": "Não foi possível listar: {{reason}}"
+    "loadError": "Não foi possível listar: {{reason}}",
+    "editError": "Não foi possível abrir {{name}}: {{reason}}",
+    "actionError": "Falha na operação: {{reason}}",
+    "folderCreated": "Pasta \"{{name}}\" criada",
+    "renamed": "Renomeado para \"{{name}}\"",
+    "deleted": "Excluído \"{{name}}\"",
+    "uploaded": "Enviado {{name}}",
+    "downloaded": "Baixado {{name}}",
+    "editSaved": "Enviado {{name}}",
+    "editSaveFailed": "Falha ao enviar para o servidor",
+    "editHint": "Ctrl/⌘S salva no servidor"
   },
   "snippets": {
     "title": "Snippets",
@@ -93,6 +105,8 @@
     "runOn": "Rodar em",
     "run": "Rodar",
     "save": "Salvar",
+    "update": "Atualizar",
+    "multilineHint": "Cada linha roda como um comando separado (executa como um script de shell).",
     "selectHost": "Selecione um host",
     "runError": "Não foi possível rodar o snippet: {{reason}}"
   },

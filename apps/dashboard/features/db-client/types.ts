@@ -22,6 +22,15 @@ export type {
   DbTableInfo,
   DbQueryResult,
   DbIntrospectResult,
+  DbRowChangeKind,
+  DbColumnSpec,
+  DbCreateTableSpec,
+  DbAlterAction,
+  DbAlterTableSpec,
+  DbDropTableSpec,
+  DbDdlOp,
+  DbDdlSpec,
+  DbEditResult,
 } from '@mcp/api-bus';
 
 /** A node in the connection tree (lazy-expanded). */
@@ -32,6 +41,8 @@ export interface DbTreeNode {
   id: string;
   kind: DbTreeKind;
   label: string;
+  /** Bare identifier (table or column name) for autocomplete — distinct from the display label. */
+  name?: string;
   /** Owning connection row id. */
   connectionId: number;
   database?: string;
@@ -43,3 +54,19 @@ export interface DbTreeNode {
 }
 
 export type DbConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
+
+/** A tab in the center work area (like the editor's file tabs). */
+export type WorkTabKind = 'query' | 'data' | 'structure';
+
+export interface WorkTab {
+  id: string;
+  kind: WorkTabKind;
+  /** Display title — for data/structure it's the table; for query it's empty (the bar shows "Query N"). */
+  title: string;
+  connectionId: number;
+  schema?: string;
+  table?: string;
+  /** Sequence number for unnamed query tabs. */
+  seq?: number;
+  dirty?: boolean;
+}

@@ -1,51 +1,44 @@
 /**
- * Provider-host loader — registers LLM providers contributed by enabled
- * plugins into the core provider registry.
+ * Provider-host loader — registers LLM providers contributed DECLARATIVELY by
+ * enabled plugins into the core provider registry.
  *
- * Unlike tools (sandboxed plugin worker, one-shot), a provider's adapter runs
- * IN-PROCESS on the agent's hot path and handles real credentials. So this
- * loader:
- *   1. discovers which enabled plugins contribute providers from the stored
- *      `.app.json` snapshot — WITHOUT importing any bundle;
- *   2. imports a bundle in-process ONLY when it passes the injected `trust`
- *      gate (first-party / pinned-key-signed — see the composition root);
- *   3. registers each `ProviderDefinition` via the injected `register`
- *      callback (e.g. `upsertProvider` from `@mcp/services`), so plugin-host
- *      stays decoupled from the provider registry.
+ * A plugin authors a `ProviderSpec` as DATA in its `.app.json` (importing only
+ * `@mcp/plugin-sdk`); NO plugin JS runs in-process. This loader:
+ *   1. reads the declared `ProviderSpec[]` from the stored snapshot (no import);
+ *   2. validates each against `thirdPartyProviderSpecSchema` — rejecting the
+ *      host-only capabilities a third party must not claim (auth.hooks, the
+ *      `sdk:*`/`chatgpt-models` discovery/test formats, unknown wires);
+ *   3. turns the spec into a `ProviderDefinition` via the INJECTED
+ *      `buildDefinition` (the host's `@mcp/provider-engine.buildProviderDefinition`),
+ *      so plugin-host never imports the engine; and
+ *   4. registers it via the injected `register` (e.g. `upsertProvider`).
  *
- * Adapter base classes (OpenAIChatProvider, …) are expected to be EXTERNAL in
- * a provider-plugin bundle and resolved from the host process at load time —
- * the host already depends on `@mcp/code-agent`, so an externalized import
- * binds to the host's module, not a second copy.
+ * Because no bundle is executed, the old MCP_TRUSTED_PROVIDER_PLUGINS code-exec
+ * gate is gone. What remains is a SOFT gate: an optional `trust` predicate and a
+ * `reservedKinds` set so a plugin cannot shadow a built-in kind (e.g. spoof
+ * 'anthropic' to point its baseURL/discovery at a hostile host). The wire is
+ * constrained to the 6 known wires by the schema + `buildDefinition` (which
+ * throws on an unknown wire) — the escape hatch is enforced fail-closed.
  */
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
-import type { ProviderDefinition } from '@mcp/provider-sdk';
-import type { PluginModule } from '@mcp/plugin-sdk';
-import { pluginDir } from './paths.js';
+import type { ProviderDefinition, ProviderSpec } from '@mcp/provider-sdk';
+import { thirdPartyProviderSpecSchema } from '@mcp/provider-sdk';
 
 export interface ProviderPluginRef {
   namespace: string;
-  /** Absolute path to the built worker bundle (default ESM export). */
-  bundleFile: string;
-  /** Provider kinds declared in the `.app.json` snapshot (cheap, pre-import). */
-  providerKinds: string[];
+  /** Declarative provider specs from the `.app.json` snapshot (DATA, pre-validation). */
+  specs: unknown[];
   /** Ed25519 signature recorded at install (null when unsigned/local). */
   signature: string | null;
   /** Install source — 'market' | 'github' | 'local' | 'bundled' | … */
   source: string;
 }
 
-interface SnapshotProvider {
-  kind: string;
-}
-
 /**
- * Enumerate enabled plugins that contribute at least one provider. Reads only
- * the stored snapshot — no bundle is imported, so this is safe to call before
- * any trust decision.
+ * Enumerate enabled plugins that contribute at least one provider spec. Reads
+ * only the stored snapshot — no bundle, no worker requirement (a declarative
+ * provider plugin ships no worker).
  */
 export function listProviderPlugins(): ProviderPluginRef[] {
   const { dbPath } = loadConfig();
@@ -53,19 +46,10 @@ export function listProviderPlugins(): ProviderPluginRef[] {
   const out: ProviderPluginRef[] = [];
   try {
     for (const p of store.list({ enabled: true })) {
-      const contrib = (p.contributions ?? {}) as {
-        providers?: SnapshotProvider[];
-        worker?: string | null;
-      };
-      const providers = Array.isArray(contrib.providers) ? contrib.providers : [];
-      if (providers.length === 0 || !contrib.worker) continue;
-      out.push({
-        namespace: p.namespace,
-        bundleFile: join(pluginDir(p.namespace), contrib.worker),
-        providerKinds: providers.map((x) => x.kind),
-        signature: p.signature,
-        source: p.source,
-      });
+      const contrib = (p.contributions ?? {}) as { providers?: unknown[] };
+      const specs = Array.isArray(contrib.providers) ? contrib.providers : [];
+      if (specs.length === 0) continue;
+      out.push({ namespace: p.namespace, specs, signature: p.signature, source: p.source });
     }
   } finally {
     store.close();
@@ -74,63 +58,67 @@ export function listProviderPlugins(): ProviderPluginRef[] {
 }
 
 export interface LoadPluginProvidersOptions {
-  /** Register a contributed provider into the core registry (e.g. upsertProvider). */
+  /** Register a built provider into the core registry (e.g. upsertProvider). */
   register: (def: ProviderDefinition) => void;
-  /**
-   * Trust gate. A provider adapter runs in-process with real credentials, so
-   * only return true for bundles you trust (first-party / pinned-key signed).
-   * Called per ref BEFORE its bundle is imported.
-   */
-  trust: (ref: ProviderPluginRef) => boolean;
+  /** Build a ProviderDefinition from a validated spec (provider-engine's buildProviderDefinition). */
+  buildDefinition: (spec: ProviderSpec) => ProviderDefinition;
+  /** Optional soft allow/deny per plugin (default: allow all). */
+  trust?: (ref: ProviderPluginRef) => boolean;
+  /** Built-in kinds a plugin must NOT shadow. A spec whose kind is reserved is skipped. */
+  reservedKinds?: ReadonlySet<string>;
   /** Override the discovery (tests). Defaults to {@link listProviderPlugins}. */
   refs?: ProviderPluginRef[];
-  /** Override bundle import (tests). Defaults to a dynamic `import()`. */
-  importBundle?: (file: string) => Promise<{ default?: PluginModule }>;
-  /** Per-plugin error sink — a bad bundle skips that plugin, never throws. */
+  /** Per-spec error sink — a bad/invalid/reserved spec skips that provider, never throws. */
   onError?: (namespace: string, err: unknown) => void;
 }
 
 export interface LoadPluginProvidersResult {
   loaded: Array<{ namespace: string; kinds: string[] }>;
-  /** Namespaces skipped — untrusted, or failed to import. */
+  /** Namespaces with at least one spec skipped (untrusted / invalid / reserved). */
   skipped: string[];
 }
 
-const defaultImportBundle = (file: string) =>
-  import(pathToFileURL(file).href) as Promise<{ default?: PluginModule }>;
-
 /**
- * Load + register providers contributed by trusted enabled plugins. Resilient:
- * an untrusted or broken plugin is skipped, never throws — a bad third-party
- * bundle must not take down provider resolution for the rest of the app.
+ * Validate + build + register providers contributed by enabled plugins. Pure
+ * DATA → buildDefinition → register; no bundle import, so it is synchronous and
+ * cannot execute plugin code. Resilient: an invalid spec, a reserved-kind clash,
+ * or a buildDefinition throw skips that provider and records the namespace —
+ * never takes down provider resolution for the rest of the app.
  */
-export async function loadPluginProviders(
-  opts: LoadPluginProvidersOptions,
-): Promise<LoadPluginProvidersResult> {
+export function loadPluginProviders(opts: LoadPluginProvidersOptions): LoadPluginProvidersResult {
   const refs = opts.refs ?? listProviderPlugins();
-  const importBundle = opts.importBundle ?? defaultImportBundle;
   const loaded: Array<{ namespace: string; kinds: string[] }> = [];
-  const skipped: string[] = [];
+  const skipped = new Set<string>();
 
   for (const ref of refs) {
-    if (!opts.trust(ref)) {
-      skipped.push(ref.namespace);
+    if (opts.trust && !opts.trust(ref)) {
+      skipped.add(ref.namespace);
       continue;
     }
-    try {
-      const mod = await importBundle(ref.bundleFile);
-      const providers = mod.default?.providers ?? [];
-      const kinds: string[] = [];
-      for (const def of providers) {
-        opts.register(def);
-        kinds.push(def.kind);
+    const kinds: string[] = [];
+    for (const raw of ref.specs) {
+      const parsed = thirdPartyProviderSpecSchema.safeParse(raw);
+      if (!parsed.success) {
+        opts.onError?.(ref.namespace, parsed.error);
+        skipped.add(ref.namespace);
+        continue;
       }
-      loaded.push({ namespace: ref.namespace, kinds });
-    } catch (err) {
-      opts.onError?.(ref.namespace, err);
-      skipped.push(ref.namespace);
+      const spec = parsed.data as ProviderSpec;
+      if (opts.reservedKinds?.has(spec.kind)) {
+        opts.onError?.(ref.namespace, new Error(`provider kind '${spec.kind}' is reserved by a built-in`));
+        skipped.add(ref.namespace);
+        continue;
+      }
+      try {
+        opts.register(opts.buildDefinition(spec));
+        kinds.push(spec.kind);
+      } catch (err) {
+        opts.onError?.(ref.namespace, err);
+        skipped.add(ref.namespace);
+      }
     }
+    if (kinds.length > 0) loaded.push({ namespace: ref.namespace, kinds });
   }
 
-  return { loaded, skipped };
+  return { loaded, skipped: [...skipped] };
 }

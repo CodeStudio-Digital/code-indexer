@@ -25,6 +25,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { buildSync } from 'esbuild';
+import { brandDevBinary } from './brand-dev-binary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,6 +62,11 @@ buildSync({
 // 2) `electron` ships a CLI at the path returned by `require('electron')`.
 //    We spawn it directly so stdout/stderr stream through the parent.
 const electronBin: string = nodeRequire('electron');
+
+// 3) On Windows, stamp the prebuilt electron.exe so Task Manager shows
+//    "CodeStudio" instead of "Electron" (idempotent + fail-open). Must run
+//    before the spawn below, otherwise the launched process locks the binary.
+await brandDevBinary(electronBin);
 
 const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
   stdio: 'inherit',

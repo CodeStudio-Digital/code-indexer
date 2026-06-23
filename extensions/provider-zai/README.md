@@ -1,67 +1,52 @@
-# provider-zai — reference provider plugin
+# provider-zai — reference declarative provider plugin
 
-Z.AI / GLM packaged as a **provider plugin**, demonstrating the `providers`
-contribution point (Fase C/E of the provider-SDK extraction). It is the
-template for migrating the OAuth providers (Kimi, Copilot, Codex, Gemini).
+Z.AI / GLM packaged as a **provider plugin**, demonstrating that a third party
+can add an LLM provider as **pure DATA** through the plugin SDK — the same way
+Podman/Cloudflare plugins declare tools. No adapter code, no flags, no trust
+allowlist, no externals.
 
 ## How it works
 
-`src/plugin.ts` authors a `ProviderDefinition` with `defineProvider(...)` (from
-`@mcp/provider-sdk`) and contributes it via `definePlugin({ providers: [...] })`.
-Because a contributed provider **is** a `ProviderDefinition`, once registered it
-dispatches identically to a built-in (CLI wizard, admin picker, model discovery,
-cost lookup, both factories, the `/test` badge).
+`src/plugin.ts` authors a declarative **`ProviderSpec`** with `defineProviderSpec(...)`
+(importing only `@mcp/plugin-sdk` + `@mcp/provider-sdk` — **no** adapter classes,
+**no** `@mcp/code-agent`/`@mcp/indexer`/`@mcp/services`) and contributes it via
+`definePlugin({ providers: [...] })`.
 
-Provider adapters run **in-process** on the agent hot path (unlike sandboxed
-tool plugins), so the provider-host loader (`@mcp/plugin-host/provider-loader`)
-imports the bundle in-process and registers each provider via `upsertProvider`
-— but **only for bundles that pass the trust gate**.
+The CLI `build` writes the spec **verbatim** into `.app.json`. The host validates
+it against `thirdPartyProviderSpecSchema` (which rejects host-only capabilities)
+and turns it into a runtime definition via `@mcp/provider-engine`'s
+`buildProviderDefinition` — the **same engine the built-ins use**. So **no plugin
+code runs in-process**; the provider dispatches identically to a built-in (admin
+picker, model discovery, cost lookup, both factories, the `/test` badge).
 
-## Build (IMPORTANT: externalize the host packages)
+The wire (`openai-compat`) + `wireOpts.modelModes` (`::coding`/`::general` baseURL
+routing + the `ZAI_BASE_URL` env override) + `discovery: { from: 'openai-models' }`
+(live `/models`) express everything the old hand-written adapter did, as data. A
+genuinely new wire/auth would be a first-party change in `@mcp/provider-engine`,
+never plugin data — `buildProviderDefinition` throws fail-closed on an unknown wire.
 
-The adapter bases (`OpenAIChatProvider`, `ZAIProvider`) and the SDK live in the
-**host**. They must be `external` in the bundle so it binds to the host's single
-copy at load time (bundling `@mcp/code-agent` would pull in its whole native dep
-tree and break). The default CLI `build` does **not** externalize them yet — a
-provider-plugin build must pass:
-
-```
-esbuild src/plugin.ts --bundle --format=esm --platform=node --outfile=dist/plugin.js \
-  --external:@mcp/provider-sdk --external:@mcp/code-agent --external:@mcp/indexer \
-  --external:@mcp/services --external:@mcp/shared --external:@mcp/store --external:@mcp/plugin-sdk
-```
-
-TODO (Fase E): teach `@mcp/plugin-sdk` CLI `build` to apply these externals
-automatically when a plugin contributes `providers` (and confirm it does not
-regress existing tool-only plugin bundles, whose worker resolves `@mcp/plugin-sdk`
-inline today).
-
-## Enable + trust
-
-The loader only loads providers from **trusted** plugins. Today the gate is an
-explicit namespace allowlist:
+## Build + install + test
 
 ```
-MCP_TRUSTED_PROVIDER_PLUGINS=provider-zai
+# 1. Build — emits .app.json (pure data, no worker needed, no externals)
+npx tsx packages/plugin-sdk/src/cli/index.ts build extensions/provider-zai
+
+# 2. Install + enable it from the running app:
+#    Admin → Plugins → "Instalar de uma pasta" → path: extensions/provider-zai
+#    (or via the plugins API with source { source: 'local', path: 'extensions/provider-zai' })
 ```
 
-TODO (Fase E hardening): derive trust from a verified Ed25519 signature against a
-**pinned first-party key** (stricter than the general market key); `trustTier`
-derived from the verifying key, never declared by the manifest.
+That's it — **no env var, no flag**. On install/enable the host registers the
+provider live (no restart). In **Admin → Providers** you'll see **"Z.AI / GLM
+(plugin)"** (it overrides the built-in `zai`, proving the declarative
+registration took effect). Add a provider instance with a `ZAI_API_KEY`, hit
+**Refresh models** (live discovery from `z.ai/models`), and chat.
 
-## Remaining E2E wiring (needs the running app)
+## Notes
 
-1. **Build** with the externals above; `.app.json` is generated (declarative
-   provider snapshot, adapter functions stripped to `supports*` flags).
-2. **Install** into the IDE (`installPlugin`) and **enable** it.
-3. **Workers**: the main process calls `loadPluginProviders` at boot
-   (`apps/http-api/server.ts`). The provider-resolving **workers** (coder,
-   company) need the same call at their boot for the agent to actually use the
-   provider — pending.
-4. Verify: kind `zai` resolves to this plugin (overriding the built-in via
-   `upsertProvider`); a GLM chat session streams; `::coding`/`::general` routing
-   works; the admin tile shows it.
-
-Once verified end-to-end, delete the built-in
-`packages/services/src/providers/definitions/zai.ts` (and drop it from
-`BUILTIN_DEFINITIONS`) so this plugin is the sole source.
+- `displayName` is suffixed "(plugin)" only so the override is visible in the UI.
+- The coder/company **workers** run the same reconcile at boot, so the agent
+  resolves plugin providers too. (For a kind that is *also* a built-in, like
+  `zai`, the worker would resolve the built-in regardless — same config.)
+- Once a provider is fully migrated to a plugin, delete its built-in spec from
+  `@mcp/provider-engine`'s `BUILTIN_SPECS` so the plugin is the sole source.

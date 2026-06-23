@@ -94,6 +94,7 @@ import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
+import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
 
 interface CoderWorkerData {
   sessionId: number;
@@ -109,6 +110,10 @@ const dbConn = openWorkerDb({ dbPath });
 
 // Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
 hydrateWorkerCapabilities(dbConn.handle, `coder-worker ${sessionId}`);
+
+// Overlay declarative plugin providers into this worker's registry so the agent
+// can resolve a plugin-contributed provider kind (best-effort; built-ins always work).
+registerWorkerPluginProviders();
 
 const bridge = new MessageBridge({
   port: port as unknown as MessageBridgeOpts['port'],

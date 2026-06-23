@@ -6,8 +6,13 @@
 import { apiCall } from '../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 import { modelFor } from './editor-models.js';
+import { saveSftpEdit } from './sftp-edit-session.js';
 
 export async function saveFile(projectId: number, path: string): Promise<boolean> {
+  // Remote (sftp) tabs re-upload over SFTP instead of writing to the project FS.
+  const open = useWorkspaceStore.getState().openFiles.find((f) => f.path === path && f.projectId === projectId);
+  if (open?.kind === 'sftp') return saveSftpEdit(projectId, path);
+
   const tab = useWorkspaceStore.getState().openFiles.find(
     (f) => (f.kind === undefined || f.kind === 'file') && f.path === path && f.projectId === projectId,
   );
@@ -26,10 +31,13 @@ export async function saveFile(projectId: number, path: string): Promise<boolean
   }
 }
 
-/** Save every dirty file tab of the project. Returns how many persisted. */
+/** Save every dirty tab of the project (local files + remote sftp edits). Returns how many persisted. */
 export async function saveAllDirty(projectId: number): Promise<number> {
   const dirty = useWorkspaceStore.getState().openFiles.filter(
-    (f) => (f.kind === undefined || f.kind === 'file') && f.projectId === projectId && f.dirty,
+    (f) =>
+      (f.kind === undefined || f.kind === 'file' || f.kind === 'sftp') &&
+      f.projectId === projectId &&
+      f.dirty,
   );
   let saved = 0;
   for (const f of dirty) {

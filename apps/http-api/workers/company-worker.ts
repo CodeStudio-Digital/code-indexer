@@ -93,6 +93,7 @@ import { setCompanyMemoryPorts } from '../../../packages/company/src/services/me
 import { buildWorkerMemoryShims } from './memory-shims.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
+import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
 
 interface CompanyWorkerData {
@@ -123,6 +124,10 @@ const dbConn = openWorkerDb({ dbPath });
 
 // Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
 hydrateWorkerCapabilities(dbConn.handle, `company-worker ${companySessionId}`);
+
+// Overlay declarative plugin providers into this worker's registry so the agent
+// can resolve a plugin-contributed provider kind (best-effort; built-ins always work).
+registerWorkerPluginProviders();
 
 // The bridge wires its message listener inside the constructor, so
 // any request that races the orchestrator construction will be

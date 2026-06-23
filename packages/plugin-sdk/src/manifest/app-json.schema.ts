@@ -6,6 +6,7 @@
  * are keyed by `name`/`id`.
  */
 import { z } from 'zod';
+import { thirdPartyProviderSpecSchema } from '@mcp/provider-sdk';
 import { CONTRIB_ID_RE, relPath } from './common.js';
 
 const contribId = z.string().regex(CONTRIB_ID_RE, 'id must be kebab/snake-case');
@@ -48,39 +49,10 @@ export const themeDeclSchema = z.object({
   tokens: z.record(z.string()),
 });
 
-const pricingEntrySchema = z
-  .object({ inputPer1M: z.number(), outputPer1M: z.number() })
-  .strict();
-
-const providerVisualSchema = z
-  .object({ icon: z.string().min(1), fg: z.string().min(1), bg: z.string().min(1) })
-  .strict();
-
-/**
- * Declarative description of a plugin-contributed LLM provider. The HOST reads
- * this (no plugin code runs) to list the provider in the admin picker with its
- * metadata + visual. The `supports*` booleans report which roles the bundle's
- * actual functions cover; the provider-host loader imports the bundle in-process
- * to wire those functions when registering the provider.
- */
-export const providerDeclSchema = z
-  .object({
-    kind: z.string().min(1),
-    displayName: z.string().min(1),
-    credKind: z.enum(['api-key', 'oauth', 'aws']),
-    envVars: z.array(z.string()).default([]),
-    defaultBaseURL: z.string().optional(),
-    defaultModels: z.array(z.string()).default([]),
-    defaultModel: z.string().optional(),
-    pricing: z.record(pricingEntrySchema).default({}),
-    capabilities: z.record(z.unknown()).optional(),
-    visual: providerVisualSchema.optional(),
-    supportsCoder: z.boolean().default(false),
-    supportsIndexer: z.boolean().default(false),
-    supportsFetchModels: z.boolean().default(false),
-    supportsTestConnection: z.boolean().default(false),
-  })
-  .strict();
+// A plugin-contributed provider is a full declarative ProviderSpec — validated
+// by `thirdPartyProviderSpecSchema` (from @mcp/provider-sdk) where `providers` is
+// declared on `appManifestSchema` below. The old lossy `providerDeclSchema`
+// (metadata + supports* booleans, bundle-imported adapters) is retired.
 
 /**
  * Capabilities the plugin requires. Validated here so install can surface the
@@ -109,7 +81,10 @@ export const appManifestSchema = z.object({
   commands: z.array(commandDeclSchema).optional(),
   themes: z.array(themeDeclSchema).optional(),
   permissions: permissionsSchema.optional(),
-  providers: z.array(providerDeclSchema).optional(),
+  // A plugin contributes a provider as a full declarative ProviderSpec (DATA).
+  // The third-party variant rejects host-only capabilities (auth.hooks, sdk:*
+  // discovery/test, unknown wires) so a plugin cannot claim them.
+  providers: z.array(thirdPartyProviderSpecSchema).optional(),
 });
 
 export function parseAppManifest(json: unknown) {

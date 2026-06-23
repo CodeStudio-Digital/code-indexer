@@ -148,6 +148,12 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
     sftpUploadStream({ spec, localPath, remotePath }) {
       return sharedSftpManager().upload(spec, localPath, remotePath);
     },
+    async sftpReadFile({ spec, remotePath }) {
+      return sharedSftpManager().readFile(spec, remotePath);
+    },
+    async sftpWriteFile({ spec, remotePath, content }) {
+      return sharedSftpManager().writeFile(spec, remotePath, content);
+    },
   };
 }
 
