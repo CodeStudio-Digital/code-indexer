@@ -50,6 +50,10 @@ export const sftpDownload = (spec: SshConnectSpec, remotePath: string, localPath
   apiStream<SftpProgress>('ssh.sftpDownloadStream', { spec, remotePath, localPath });
 export const sftpUpload = (spec: SshConnectSpec, localPath: string, remotePath: string) =>
   apiStream<SftpProgress>('ssh.sftpUploadStream', { spec, localPath, remotePath });
+export const sftpReadFile = (spec: SshConnectSpec, remotePath: string) =>
+  apiCall<{ content: string; size: number }>('ssh.sftpReadFile', { spec, remotePath });
+export const sftpWriteFile = (spec: SshConnectSpec, remotePath: string, content: string) =>
+  apiCall<{ size: number }>('ssh.sftpWriteFile', { spec, remotePath, content });
 
 /** Open the connection's SFTP root (resolves `.` to the user's home), TOFU-aware. */
 export const sftpListWithTrust = (spec: SshConnectSpec, path: string, onNeedTrust: NeedTrust) =>
@@ -144,6 +148,8 @@ export const listSnippets = (p: number) =>
   req<{ snippets: SshSnippet[] }>(`${root(p)}/snippets`).then((r) => r.snippets);
 export const createSnippet = (p: number, name: string, command: string) =>
   req<SshSnippet>(`${root(p)}/snippets`, j('POST', { name, command }));
+export const patchSnippet = (p: number, sid: number, patch: { name?: string; command?: string }) =>
+  req<SshSnippet>(`${root(p)}/snippets/${sid}`, j('PATCH', patch));
 export const deleteSnippet = (p: number, sid: number) =>
   req<{ ok: true }>(`${root(p)}/snippets/${sid}`, { method: 'DELETE' });
 

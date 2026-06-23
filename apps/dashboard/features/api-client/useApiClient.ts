@@ -46,7 +46,32 @@ function closeTabState(prev: ApiClientState, id: number): ApiClientState {
     openTabIds,
     activeRequestId,
     ...(id < 0 ? { draftRequest: null, draftDirty: false } : {}),
-    ...(activeRequestId == null ? { response: null } : {}),
+    // Active request changed (or went away) → its old response is no longer
+    // relevant; blank it so it can't bleed into the new tab (mirrors selectRequest).
+    ...(activeRequestId !== prev.activeRequestId ? { response: null } : {}),
+  };
+}
+
+/**
+ * Close a SET of tabs at once (the context-menu bulk actions). Keeps `keepActive`
+ * focused if it survives, else falls back to the last remaining tab; clears the
+ * draft if a negative (draft) id is among those removed; blanks the response when
+ * nothing is left open.
+ */
+function removeTabsState(prev: ApiClientState, toRemove: Set<number>, keepActive: number | null): ApiClientState {
+  if (toRemove.size === 0) return prev;
+  const openTabIds = prev.openTabIds.filter((x) => !toRemove.has(x));
+  const closingDraft = prev.draftRequest != null && toRemove.has(prev.draftRequest.id);
+  let activeRequestId = keepActive != null && openTabIds.includes(keepActive)
+    ? keepActive
+    : (prev.activeRequestId != null && openTabIds.includes(prev.activeRequestId) ? prev.activeRequestId : null);
+  if (activeRequestId == null) activeRequestId = openTabIds[openTabIds.length - 1] ?? null;
+  return {
+    ...prev,
+    openTabIds,
+    activeRequestId,
+    ...(closingDraft ? { draftRequest: null, draftDirty: false } : {}),
+    ...(activeRequestId !== prev.activeRequestId ? { response: null } : {}),
   };
 }
 
@@ -205,6 +230,21 @@ export function useApiClient(projectId: number) {
   const selectEnv = useCallback((id: number) => patch({ selectedEnvId: id }), [patch]);
   /** Close a request/draft tab (X / middle-click), activating the neighbor. */
   const closeTab = useCallback((id: number) => set((prev) => closeTabState(prev, id)), []);
+  /** Context-menu bulk closes — keep `id` focused (it survives), close the rest in scope. */
+  const closeOtherTabs = useCallback((id: number) =>
+    set((prev) => removeTabsState(prev, new Set(prev.openTabIds.filter((x) => x !== id)), id)), []);
+  const closeTabsToRight = useCallback((id: number) =>
+    set((prev) => {
+      const idx = prev.openTabIds.indexOf(id);
+      return idx < 0 ? prev : removeTabsState(prev, new Set(prev.openTabIds.slice(idx + 1)), id);
+    }), []);
+  const closeTabsToLeft = useCallback((id: number) =>
+    set((prev) => {
+      const idx = prev.openTabIds.indexOf(id);
+      return idx < 0 ? prev : removeTabsState(prev, new Set(prev.openTabIds.slice(0, idx)), id);
+    }), []);
+  const closeAllTabs = useCallback(() =>
+    set((prev) => removeTabsState(prev, new Set(prev.openTabIds), null)), []);
 
   // ─── Draft (unsaved Untitled request) — it is just another tab ────────
   const newDraft = useCallback(() => set((prev) => {
@@ -305,7 +345,7 @@ export function useApiClient(projectId: number) {
       const openTabIds = prev.openTabIds.filter((id) => !gone.has(id));
       let activeRequestId = prev.activeRequestId;
       if (activeRequestId != null && gone.has(activeRequestId)) activeRequestId = openTabIds[0] ?? null;
-      return { ...prev, openTabIds, activeRequestId, ...(activeRequestId == null ? { response: null } : {}) };
+      return { ...prev, openTabIds, activeRequestId, ...(activeRequestId !== prev.activeRequestId ? { response: null } : {}) };
     });
     if (s.activeCollectionId != null) await refreshRequests(s.activeCollectionId);
   }, [projectId, s.activeCollectionId, refreshRequests]);
@@ -394,6 +434,7 @@ export function useApiClient(projectId: number) {
     state: s,
     refreshEnvironments, refreshCollections, reloadRequests, removeEnvironment,
     selectCollection, selectRequest, selectEnv, closeTab,
+    closeOtherTabs, closeTabsToRight, closeTabsToLeft, closeAllTabs,
     addCollection, renameCollection, removeCollection,
     addRequest, saveRequest, removeRequest, verifyRequest,
     addFolder, renameFolder, removeFolder, moveRequest,

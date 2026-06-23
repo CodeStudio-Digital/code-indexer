@@ -75,6 +75,15 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
   const termRef = useRef<XTerm | null>(null);
   const dark = useIsDark();
 
+  // Latest-callback ref: keep `onProcessExited` reachable WITHOUT listing it as
+  // an effect dep. A parent that passes a fresh inline callback on every render
+  // (the common case) would otherwise re-run the construction effect, disposing
+  // the xterm and wiping its scrollback. This is load-bearing now that a snippet
+  // tab STAYS open after exit — markExited re-renders the parent, and a remount
+  // here would blank the very log the user wanted to read.
+  const onExitedRef = useRef(onProcessExited);
+  onExitedRef.current = onProcessExited;
+
   // Re-apply the xterm theme live when the user flips light/dark — the
   // terminal is NOT rebuilt (that would wipe the scrollback), only its
   // palette is swapped. The construction effect below sets the initial
@@ -233,9 +242,9 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
             term.write(value.data);
           } else if (value.type === 'exit') {
             term.write(`\r\n\x1b[2m[process exited code=${value.code ?? '?'}]\x1b[0m\r\n`);
-            // Let the container drop this tab — keeps the panel honest
-            // (no zombie shells hanging around).
-            onProcessExited();
+            // Notify the container (close an interactive shell / keep a snippet
+            // tab). Via ref so a changing callback never remounts this terminal.
+            onExitedRef.current();
             break;
           }
         }
@@ -257,7 +266,9 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
       term.dispose();
       termRef.current = null;
     };
-  }, [terminalId, onProcessExited]);
+    // NB: `onProcessExited` is intentionally NOT a dep — it's read via
+    // onExitedRef so a parent re-render (e.g. markExited) doesn't rebuild xterm.
+  }, [terminalId]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }

@@ -109,6 +109,8 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
           namespace: input.namespace,
           overwrite: input.overwrite,
         });
+        // Register any declarative provider the plugin contributes, live.
+        deps.syncPluginProviders();
         return {
           namespace: r.namespace,
           name: r.name,
@@ -128,11 +130,13 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
 
     async uninstall({ namespace }) {
       const r = await uninstallPlugin(namespace);
+      deps.syncPluginProviders();
       return { ok: true as const, skillsRemoved: r.skillsRemoved, mcpRemoved: r.mcpRemoved };
     },
 
     async setEnabled({ namespace, enabled }) {
       setPluginEnabled(namespace, enabled);
+      deps.syncPluginProviders();
       return { ok: true as const };
     },
 

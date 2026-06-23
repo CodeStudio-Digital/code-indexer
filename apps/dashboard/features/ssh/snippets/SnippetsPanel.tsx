@@ -6,12 +6,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Play, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Play, Pencil, Trash2, Loader2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../../components/ui/select.js';
-import { listSnippets, createSnippet, deleteSnippet } from '../api.js';
+import { listSnippets, createSnippet, patchSnippet, deleteSnippet } from '../api.js';
 import type { SshHost, SshSnippet } from '../types.js';
 
 interface SnippetsPanelProps {
@@ -26,6 +26,8 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
   const [snippets, setSnippets] = useState<SshSnippet[]>([]);
   const [hostId, setHostId] = useState('');
   const [showForm, setShowForm] = useState(false);
+  /** id of the snippet being edited, or null when creating a new one. */
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
   const [busy, setBusy] = useState(false);
@@ -36,14 +38,37 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
 
   useEffect(() => reload(), [reload]);
 
+  const resetForm = useCallback(() => {
+    setEditingId(null);
+    setName('');
+    setCommand('');
+    setShowForm(false);
+  }, []);
+
+  const openNew = useCallback(() => {
+    setEditingId(null);
+    setName('');
+    setCommand('');
+    setShowForm(true);
+  }, []);
+
+  const openEdit = useCallback((sn: SshSnippet) => {
+    setEditingId(sn.id);
+    setName(sn.name);
+    setCommand(sn.command);
+    setShowForm(true);
+  }, []);
+
   async function save(): Promise<void> {
     if (!name.trim() || !command.trim()) return;
     setBusy(true);
     try {
-      await createSnippet(projectId, name.trim(), command);
-      setName('');
-      setCommand('');
-      setShowForm(false);
+      if (editingId != null) {
+        await patchSnippet(projectId, editingId, { name: name.trim(), command });
+      } else {
+        await createSnippet(projectId, name.trim(), command);
+      }
+      resetForm();
       reload();
     } finally {
       setBusy(false);
@@ -68,7 +93,7 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
         </div>
         <button
           type="button"
-          onClick={() => setShowForm((v) => !v)}
+          onClick={() => (showForm && editingId == null ? resetForm() : openNew())}
           className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
         >
           <Plus className="h-3 w-3" />
@@ -79,11 +104,15 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
       {showForm && (
         <div className="border-b p-2 grid gap-2 bg-card/30">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('snippets.namePlaceholder')} className="h-8" />
-          <Textarea value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('snippets.commandPlaceholder')} rows={2} className="font-mono text-xs" />
-          <div className="flex justify-end">
+          <Textarea value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('snippets.commandPlaceholder')} rows={3} className="font-mono text-xs" />
+          <p className="text-[10px] text-muted-foreground">{t('snippets.multilineHint')}</p>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={resetForm} disabled={busy}>
+              {t('dialog.cancel')}
+            </Button>
             <Button size="sm" onClick={save} disabled={busy || !name.trim() || !command.trim()}>
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              {t('snippets.save')}
+              {editingId != null ? t('snippets.update') : t('snippets.save')}
             </Button>
           </div>
         </div>
@@ -97,25 +126,37 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
           </div>
         )}
         {snippets.map((sn) => (
-          <div key={sn.id} className="flex items-center gap-2 px-3 py-2 border-b text-xs group">
+          <div key={sn.id} className="flex items-start gap-2 px-3 py-2 border-b text-xs group">
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium">{sn.name}</div>
-              <div className="truncate font-mono text-[11px] text-muted-foreground">{sn.command}</div>
+              {/* Preserve newlines + clamp: a multi-line snippet runs one command per line. */}
+              <div className="font-mono text-[11px] text-muted-foreground whitespace-pre-wrap line-clamp-3 break-all">{sn.command}</div>
             </div>
             <button
               type="button"
               aria-label={t('snippets.run')}
+              title={t('snippets.run')}
               disabled={!host}
               onClick={() => host && onRun(host, sn)}
-              className="text-muted-foreground hover:text-emerald-500 disabled:opacity-40 p-0.5"
+              className="shrink-0 text-muted-foreground hover:text-emerald-500 disabled:opacity-40 p-0.5"
             >
               <Play className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
+              aria-label={t('panel.edit')}
+              title={t('panel.edit')}
+              onClick={() => openEdit(sn)}
+              className="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted-foreground hover:text-foreground p-0.5"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
               aria-label={t('panel.delete')}
+              title={t('panel.delete')}
               onClick={() => void deleteSnippet(projectId, sn.id).then(reload)}
-              className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted-foreground hover:text-red-500 p-0.5"
+              className="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted-foreground hover:text-red-500 p-0.5"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>

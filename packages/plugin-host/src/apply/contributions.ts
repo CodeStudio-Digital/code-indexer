@@ -8,11 +8,9 @@ export interface PluginContributions {
   worker: string | null;
   permissions: NonNullable<AppManifest['permissions']> | null;
   /**
-   * Declarative LLM-provider contributions (metadata + `supports*` flags, no
-   * adapter functions). Lets the provider-host loader discover which enabled
-   * plugins contribute providers — and surface them in the admin picker —
-   * without importing the bundle. The functions are wired in-process by the
-   * loader (trust-gated) from the bundle's `worker` entry.
+   * Declarative LLM-provider contributions — each a full `ProviderSpec` (DATA,
+   * no functions). The provider-host loader validates each and turns it into a
+   * runtime definition via `buildProviderDefinition` — NO bundle is imported.
    */
   providers: NonNullable<AppManifest['providers']>;
 }

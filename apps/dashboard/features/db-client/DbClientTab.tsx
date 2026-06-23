@@ -12,8 +12,11 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useDbClient } from './useDbClient.js';
 import { ConnectionTree } from './tree/ConnectionTree.js';
 import { QueryConsole } from './query/QueryConsole.js';
+import { DataGridTab } from './data/DataGridTab.js';
+import { TableStructureEditor } from './structure/TableStructureEditor.js';
+import { WorkAreaTabBar } from './workarea/WorkAreaTabBar.js';
 import { ConnectionDialog } from './dialogs/ConnectionDialog.js';
-import type { DbConnection } from './types.js';
+import type { DbConnection, WorkTab } from './types.js';
 
 export function DbClientTab({ projectId }: { projectId: number }) {
   const { t } = useTranslation('dbClient');
@@ -49,7 +52,32 @@ export function DbClientTab({ projectId }: { projectId: number }) {
           </Panel>
           <PanelResizeHandle className="w-px bg-border hover:bg-accent" />
           <Panel minSize={40}>
-            <QueryConsole projectId={projectId} connectionId={db.activeConnectionId} />
+            <div className="flex h-full flex-col">
+              <WorkAreaTabBar db={db} />
+              <div className="relative min-h-0 flex-1">
+                {db.workTabs.length === 0 && (
+                  <div className="grid h-full place-items-center px-6 text-center text-xs text-muted-foreground">
+                    {t('tabs.empty')}
+                  </div>
+                )}
+                {/* Keep-alive: every open tab stays mounted; only the active one
+                    is shown (preserves SQL text + scroll, like the Monaco tabs). */}
+                {db.workTabs.map((tab) => (
+                  <div
+                    key={tab.id}
+                    className="absolute inset-0"
+                    style={{ display: tab.id === db.activeTabId ? 'block' : 'none' }}
+                  >
+                    <TabContent
+                      tab={tab}
+                      projectId={projectId}
+                      suggestions={db.treeSuggestions(tab.connectionId)}
+                      onStructureApplied={() => db.invalidateTables(tab.connectionId, tab.schema)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
           </Panel>
         </PanelGroup>
       </div>
@@ -65,4 +93,32 @@ export function DbClientTab({ projectId }: { projectId: number }) {
       )}
     </div>
   );
+}
+
+/** Render a single work tab's content (query console / data grid / structure). */
+function TabContent({
+  tab,
+  projectId,
+  suggestions,
+  onStructureApplied,
+}: {
+  tab: WorkTab;
+  projectId: number;
+  suggestions: string[];
+  onStructureApplied: () => void;
+}) {
+  if (tab.kind === 'data' && tab.table) {
+    return <DataGridTab connectionId={tab.connectionId} schema={tab.schema ?? ''} table={tab.table} />;
+  }
+  if (tab.kind === 'structure') {
+    return (
+      <TableStructureEditor
+        connectionId={tab.connectionId}
+        schema={tab.schema}
+        table={tab.table || undefined}
+        onApplied={onStructureApplied}
+      />
+    );
+  }
+  return <QueryConsole projectId={projectId} connectionId={tab.connectionId} suggestions={suggestions} schema={tab.schema} />;
 }

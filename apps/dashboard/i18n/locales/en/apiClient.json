@@ -264,6 +264,10 @@
   "jsonTree": {
     "showMore": "… show {{count}} more ({{hidden}} hidden)"
   },
+  "mode": {
+    "client": "Client",
+    "docs": "Documentation"
+  },
   "regression": {
     "failedCount": "{{count}} failed",
     "history": "History",
@@ -351,8 +355,17 @@
   },
   "snippets": {},
   "tabs": {
+    "close": "Close",
+    "closeAll": "Close all",
     "closeAria": "Close {{name}}",
-    "noRequestOpen": "No request open"
+    "closeLeft": "Close to the left",
+    "closeOthers": "Close others",
+    "closeRight": "Close to the right",
+    "filterPlaceholder": "Filter {{count}} open tabs…",
+    "listAria": "Open tabs",
+    "noMatch": "No tabs match.",
+    "noRequestOpen": "No request open",
+    "openCount": "{{count}} open"
   },
   "tests": {
     "console": "Console",

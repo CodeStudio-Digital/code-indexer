@@ -114,6 +114,12 @@ export interface RunQueryOptions {
   maxRows?: number;
   /** Abort signal — drivers cancel the in-flight query when it fires. */
   signal?: AbortSignal;
+  /**
+   * Scope the statement to a schema/database (a console opened on a schema):
+   * pg sets `search_path`, MySQL runs `USE`, then resets afterwards — applied on
+   * the dedicated per-query connection so it never leaks across queries.
+   */
+  schema?: string;
 }
 
 export interface DatabaseDriver {
@@ -127,6 +133,8 @@ export interface DatabaseDriver {
   listTables(schema?: string): Promise<TableRef[]>;
   /** Deep single-table introspection: columns + indexes + foreign keys. */
   describeTable(schema: string, name: string): Promise<TableInfo>;
+  /** Paginated `SELECT *` for a table, with engine-correct identifier quoting. */
+  tablePreview(schema: string, table: string, opts: { limit: number; offset: number }): Promise<QueryResult>;
   /** Back-compat: all tables in a schema with their columns (agent `db_schema`). */
   schema(schemaName?: string): Promise<TableInfo[]>;
   /** Execute a statement with optional params, row cap, and cancellation. */

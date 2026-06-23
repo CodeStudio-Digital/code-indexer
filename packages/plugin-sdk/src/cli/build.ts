@@ -58,28 +58,10 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
     commands: pm.commands ?? [],
     themes: pm.themes ?? [],
     ...(pm.permissions ? { permissions: pm.permissions } : {}),
-    ...(pm.providers && pm.providers.length
-      ? {
-          providers: pm.providers.map((p) => ({
-            kind: p.kind,
-            displayName: p.displayName,
-            credKind: p.credKind,
-            envVars: p.envVars,
-            ...(p.defaultBaseURL ? { defaultBaseURL: p.defaultBaseURL } : {}),
-            defaultModels: p.defaultModels,
-            ...(p.defaultModel ? { defaultModel: p.defaultModel } : {}),
-            pricing: p.pricing,
-            ...(p.capabilities ? { capabilities: p.capabilities } : {}),
-            ...(p.visual ? { visual: p.visual } : {}),
-            // Adapter functions are dropped; report which roles they cover so
-            // the host can surface the provider without executing the bundle.
-            supportsCoder: !!p.createCoder,
-            supportsIndexer: !!(p.createIndexer || p.createIndexerAsync),
-            supportsFetchModels: !!p.fetchModels,
-            supportsTestConnection: !!p.testConnection,
-          })),
-        }
-      : {}),
+    // Providers are pure-data ProviderSpecs — written verbatim. The host turns
+    // each into a runtime definition via buildProviderDefinition; no plugin code
+    // is ever imported for a provider.
+    ...(pm.providers && pm.providers.length ? { providers: pm.providers } : {}),
   };
   const appJson = join(root, '.app.json');
   await writeFile(appJson, `${JSON.stringify(app, null, 2)}\n`);

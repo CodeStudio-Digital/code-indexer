@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -90,7 +90,14 @@ export function CommandPalette({ open, onOpenChange, actions }: CommandPalettePr
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const listRef = useRef<HTMLDivElement | null>(null);
+  // Scroll element kept in STATE (via callback ref), not a plain ref. The
+  // palette stays mounted while only the Dialog's portal subtree mounts on
+  // open; assigning a ref object would not re-render, so the virtualizer would
+  // keep reading a stale `null` scroll element and render an empty list until
+  // some unrelated state change (mouse move, keystroke) forced a re-render.
+  // Storing the node in state makes attachment itself trigger that re-render,
+  // so rows paint immediately on open.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
 
   const filtered = useMemo(() => filterCommands(actions, query), [actions, query]);
 
@@ -106,7 +113,7 @@ export function CommandPalette({ open, onOpenChange, actions }: CommandPalettePr
 
   const virtualizer = useVirtualizer({
     count: filtered.length,
-    getScrollElement: () => listRef.current,
+    getScrollElement: () => scrollEl,
     estimateSize: () => 34,
     overscan: 10,
   });
@@ -180,7 +187,7 @@ export function CommandPalette({ open, onOpenChange, actions }: CommandPalettePr
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
         </div>
-        <div ref={listRef} className="max-h-[55vh] overflow-y-auto p-1.5">
+        <div ref={setScrollEl} className="max-h-[55vh] overflow-y-auto p-1.5">
           {filtered.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">
               {t('commandPalette.empty')}

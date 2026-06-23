@@ -264,6 +264,10 @@
   "jsonTree": {
     "showMore": "… mostrar mais {{count}} ({{hidden}} oculto(s))"
   },
+  "mode": {
+    "client": "Cliente",
+    "docs": "Documentação"
+  },
   "regression": {
     "failedCount": "{{count}} falharam",
     "history": "Histórico",
@@ -351,8 +355,17 @@
   },
   "snippets": {},
   "tabs": {
+    "close": "Fechar",
+    "closeAll": "Fechar todas",
     "closeAria": "Fechar {{name}}",
-    "noRequestOpen": "Nenhuma requisição aberta"
+    "closeLeft": "Fechar à esquerda",
+    "closeOthers": "Fechar outras",
+    "closeRight": "Fechar à direita",
+    "filterPlaceholder": "Filtrar {{count}} abas…",
+    "listAria": "Abas abertas",
+    "noMatch": "Nenhuma aba corresponde.",
+    "noRequestOpen": "Nenhuma requisição aberta",
+    "openCount": "{{count}} aberta(s)"
   },
   "tests": {
     "console": "Console",

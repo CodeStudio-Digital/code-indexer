@@ -6,9 +6,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Folder, File as FileIcon, ArrowUp, RefreshCw, FolderPlus, Upload, Download, Pencil, Trash2, Loader2 } from 'lucide-react';
+import { Folder, File as FileIcon, ArrowUp, RefreshCw, FolderPlus, Upload, Download, SquarePen, Pencil, Trash2, Loader2 } from 'lucide-react';
 import type { SftpEntry } from '@mcp/api-bus';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../../components/ui/select.js';
+import { useWorkspaceStore } from '../../../state/workspace.js';
+import { useWorkspaceLayout } from '../../../state/workspace-layout.js';
+import { prompt, confirm, toast } from '../../../components/ui/prompt-dialog.js';
 import {
   resolveSpecFromHost,
   sftpList,
@@ -20,6 +23,7 @@ import {
   sftpClose,
   sftpDownload,
   sftpUpload,
+  sftpReadFile,
   pickLocalFiles,
   pickSavePath,
   type NeedTrust,
@@ -28,6 +32,7 @@ import type { SshConnectSpec } from '@mcp/api-bus';
 import type { SshHost, SshIdentity } from '../types.js';
 
 interface SftpBrowserProps {
+  projectId: number;
   hosts: SshHost[];
   identities: SshIdentity[];
   onNeedTrust: NeedTrust;
@@ -62,7 +67,7 @@ const safeBaseName = (name: string): string => {
 };
 const joinPosix = (dir: string, name: string): string => (dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`);
 
-export function SftpBrowser({ hosts, identities, onNeedTrust }: SftpBrowserProps) {
+export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpBrowserProps) {
   const { t } = useTranslation('ssh');
   const [hostId, setHostId] = useState('');
   const [spec, setSpec] = useState<SshConnectSpec | null>(null);
@@ -71,6 +76,8 @@ export function SftpBrowser({ hosts, identities, onNeedTrust }: SftpBrowserProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
+  /** Path of the entry with an in-flight per-row action (open/rename/delete) → shows a spinner. */
+  const [busyPath, setBusyPath] = useState<string | null>(null);
 
   const specRef = useRef<SshConnectSpec | null>(null);
   specRef.current = spec;
@@ -138,19 +145,22 @@ export function SftpBrowser({ hosts, identities, onNeedTrust }: SftpBrowserProps
   const runTransfer = useCallback(
     async (tf: Transfer, stream: AsyncIterable<{ type: string; transferred?: number; total?: number; message?: string }>) => {
       setTransfers((ts) => [...ts.filter((x) => x.id !== tf.id), tf]);
+      const label = tf.dir === 'up' ? t('sftp.uploaded', { name: tf.name }) : t('sftp.downloaded', { name: tf.name });
       try {
         for await (const p of stream) {
           if (p.type === 'progress') updateTransfer(tf.id, { transferred: p.transferred ?? 0, total: p.total ?? tf.total });
-          else if (p.type === 'done') updateTransfer(tf.id, { done: true });
-          else if (p.type === 'error') updateTransfer(tf.id, { done: true, error: p.message });
+          else if (p.type === 'done') { updateTransfer(tf.id, { done: true }); toast.success(label); }
+          else if (p.type === 'error') { updateTransfer(tf.id, { done: true, error: p.message }); toast.error(t('sftp.actionError', { reason: p.message ?? '' })); }
         }
       } catch (e) {
-        updateTransfer(tf.id, { done: true, error: e instanceof Error ? e.message : String(e) });
+        const reason = e instanceof Error ? e.message : String(e);
+        updateTransfer(tf.id, { done: true, error: reason });
+        toast.error(t('sftp.actionError', { reason }));
       }
       // Auto-clear finished transfers after a moment.
       setTimeout(() => setTransfers((ts) => ts.filter((x) => x.id !== tf.id)), 4000);
     },
-    [updateTransfer],
+    [updateTransfer, t],
   );
 
   const download = useCallback(
@@ -165,6 +175,45 @@ export function SftpBrowser({ hosts, identities, onNeedTrust }: SftpBrowserProps
       );
     },
     [runTransfer],
+  );
+
+  // Open a remote text file in the Monaco editor: fetch its bytes into an
+  // in-memory tab whose save re-uploads over SFTP and whose close discards it.
+  // While fetching, the row spins; on success we surface the editor (collapse the
+  // bottom panel) so the user lands ON the file they just opened.
+  const editRemote = useCallback(
+    async (entry: SftpEntry) => {
+      const s = specRef.current;
+      if (!s || entry.type === 'dir') return;
+      setError(null);
+      setBusyPath(entry.path);
+      try {
+        const { content } = await sftpReadFile(s, entry.path);
+        const host = hosts.find((h) => String(h.id) === hostId);
+        useWorkspaceStore.getState().openSftpFile({
+          kind: 'sftp',
+          projectId,
+          path: `sftp:${s.hostId}:${entry.path}`,
+          remotePath: entry.path,
+          spec: s,
+          hostLabel: host?.label ?? s.host,
+          content,
+          dirty: false,
+        });
+        // Move the user to the editor: collapse the bottom panel so the freshly
+        // opened (and focused) remote file takes the full editor area.
+        useWorkspaceLayout.getState().setActiveBottom(null);
+      } catch (e) {
+        // Open/read failure (too-large / binary / not-utf8 / read error) — NOT a
+        // listing failure, so don't reuse the navigation `fail` helper's text.
+        const reason = e instanceof Error ? e.message : String(e);
+        setError(t('sftp.editError', { name: entry.name, reason }));
+        toast.error(t('sftp.editError', { name: entry.name, reason }));
+      } finally {
+        setBusyPath(null);
+      }
+    },
+    [projectId, hosts, hostId, t],
   );
 
   const upload = useCallback(async () => {
@@ -184,45 +233,55 @@ export function SftpBrowser({ hosts, identities, onNeedTrust }: SftpBrowserProps
   const mkdir = useCallback(async () => {
     const s = specRef.current;
     if (!s) return;
-    const name = window.prompt(t('sftp.newFolderPrompt'));
+    const name = await prompt({ title: t('sftp.newFolder'), placeholder: t('sftp.newFolderPrompt'), confirmLabel: t('sftp.newFolder'), cancelLabel: t('dialog.cancel') });
     if (!name?.trim()) return;
     try {
       await sftpMkdir(s, joinPosix(cwd, name.trim()));
+      toast.success(t('sftp.folderCreated', { name: name.trim() }));
       void navigate(cwd);
     } catch (e) {
-      fail(e);
+      toast.error(t('sftp.actionError', { reason: e instanceof Error ? e.message : String(e) }));
     }
-  }, [cwd, navigate, fail, t]);
+  }, [cwd, navigate, t]);
 
   const rename = useCallback(
     async (entry: SftpEntry) => {
       const s = specRef.current;
       if (!s) return;
-      const next = window.prompt(t('sftp.renamePrompt'), entry.name);
+      const next = await prompt({ title: t('sftp.rename'), defaultValue: entry.name, placeholder: t('sftp.renamePrompt'), confirmLabel: t('sftp.rename'), cancelLabel: t('dialog.cancel') });
       if (!next?.trim() || next.trim() === entry.name) return;
+      setBusyPath(entry.path);
       try {
         await sftpRename(s, entry.path, joinPosix(cwd, next.trim()));
+        toast.success(t('sftp.renamed', { name: next.trim() }));
         void navigate(cwd);
       } catch (e) {
-        fail(e);
+        toast.error(t('sftp.actionError', { reason: e instanceof Error ? e.message : String(e) }));
+      } finally {
+        setBusyPath(null);
       }
     },
-    [cwd, navigate, fail, t],
+    [cwd, navigate, t],
   );
 
   const remove = useCallback(
     async (entry: SftpEntry) => {
       const s = specRef.current;
       if (!s) return;
-      if (!window.confirm(t('sftp.deleteConfirm', { name: entry.name }))) return;
+      const ok = await confirm({ title: t('sftp.delete'), description: t('sftp.deleteConfirm', { name: entry.name }), confirmLabel: t('sftp.delete'), cancelLabel: t('dialog.cancel'), tone: 'destructive' });
+      if (!ok) return;
+      setBusyPath(entry.path);
       try {
         await sftpRemove(s, entry.path, entry.type === 'dir');
+        toast.success(t('sftp.deleted', { name: entry.name }));
         void navigate(cwd);
       } catch (e) {
-        fail(e);
+        toast.error(t('sftp.actionError', { reason: e instanceof Error ? e.message : String(e) }));
+      } finally {
+        setBusyPath(null);
       }
     },
-    [cwd, navigate, fail, t],
+    [cwd, navigate, t],
   );
 
   const iconBtn = 'rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40';
@@ -279,24 +338,35 @@ export function SftpBrowser({ hosts, identities, onNeedTrust }: SftpBrowserProps
             <button
               type="button"
               className="truncate flex-1 text-left hover:underline"
-              onClick={() => (e.type === 'dir' ? void navigate(e.path) : void download(e))}
+              onClick={() => (e.type === 'dir' ? void navigate(e.path) : void editRemote(e))}
             >
               {e.name}
             </button>
             <span className="text-muted-foreground tabular-nums shrink-0 w-16 text-right">
               {e.type === 'dir' ? '' : fmtBytes(e.size)}
             </span>
-            {e.type !== 'dir' && (
-              <button type="button" aria-label={t('sftp.download')} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5" onClick={() => void download(e)}>
-                <Download className="h-3 w-3" />
-              </button>
+            {busyPath === e.path ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0 mr-0.5" />
+            ) : (
+              <>
+                {e.type !== 'dir' && (
+                  <button type="button" aria-label={t('sftp.edit')} title={t('sftp.edit')} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5" onClick={() => void editRemote(e)}>
+                    <SquarePen className="h-3 w-3" />
+                  </button>
+                )}
+                {e.type !== 'dir' && (
+                  <button type="button" aria-label={t('sftp.download')} title={t('sftp.download')} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5" onClick={() => void download(e)}>
+                    <Download className="h-3 w-3" />
+                  </button>
+                )}
+                <button type="button" aria-label={t('sftp.rename')} title={t('sftp.rename')} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5" onClick={() => void rename(e)}>
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button type="button" aria-label={t('sftp.delete')} title={t('sftp.delete')} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 hover:text-red-500" onClick={() => void remove(e)}>
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </>
             )}
-            <button type="button" aria-label={t('sftp.rename')} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5" onClick={() => void rename(e)}>
-              <Pencil className="h-3 w-3" />
-            </button>
-            <button type="button" aria-label={t('sftp.delete')} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 hover:text-red-500" onClick={() => void remove(e)}>
-              <Trash2 className="h-3 w-3" />
-            </button>
           </div>
         ))}
       </div>

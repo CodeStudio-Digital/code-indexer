@@ -21,6 +21,14 @@ export interface SshShell {
   hostId: string;
   /** Tab label, e.g. `user@host`. */
   label: string;
+  /**
+   * 'shell' = interactive (auto-closes when the user types `exit`).
+   * 'snippet' = one-shot command run; its tab is KEPT after the process exits so
+   * the user can read the output/log (they close it manually). Default 'shell'.
+   */
+  kind?: 'shell' | 'snippet';
+  /** The underlying process has exited — set for kept (snippet) tabs. */
+  exited?: boolean;
 }
 
 interface SshSessionsState {
@@ -30,6 +38,8 @@ interface SshSessionsState {
   add: (projectId: number, shell: SshShell) => void;
   /** Drop a shell; focus falls back to the last remaining sibling. */
   remove: (projectId: number, terminalId: string) => void;
+  /** Mark a shell's process as exited WITHOUT removing its tab (snippet logs stay readable). */
+  markExited: (projectId: number, terminalId: string) => void;
   /** Focus an existing shell. */
   setActive: (projectId: number, terminalId: string) => void;
 }
@@ -53,6 +63,19 @@ export const useSshSessions = create<SshSessionsState>((set) => ({
         activeByProject: {
           ...s.activeByProject,
           [projectId]: wasActive ? list[list.length - 1]?.terminalId : s.activeByProject[projectId],
+        },
+      };
+    }),
+
+  markExited: (projectId, terminalId) =>
+    set((s) => {
+      const list = s.byProject[projectId] ?? [];
+      const target = list.find((x) => x.terminalId === terminalId);
+      if (!target || target.exited) return s; // idempotent — no churn / re-render storm
+      return {
+        byProject: {
+          ...s.byProject,
+          [projectId]: list.map((x) => (x.terminalId === terminalId ? { ...x, exited: true } : x)),
         },
       };
     }),

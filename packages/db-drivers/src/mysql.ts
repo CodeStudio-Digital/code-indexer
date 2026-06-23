@@ -34,7 +34,10 @@ interface MysqlPool {
 const SYSTEM_DBS = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
 
 function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
-  if (config.connectionString) return { uri: config.connectionString, connectionLimit: 3 };
+  const opts = config.options ?? {};
+  const extra: Record<string, unknown> = { connectionLimit: 3 };
+  if (typeof opts.connectTimeoutMs === 'number') extra.connectTimeout = opts.connectTimeoutMs;
+  if (config.connectionString) return { uri: config.connectionString, ...extra };
   return {
     host: config.host,
     port: config.port ?? 3306,
@@ -42,7 +45,7 @@ function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
     password: config.password,
     database: config.database || undefined,
     ...(sslConfig(config) ? { ssl: sslConfig(config) } : {}),
-    connectionLimit: 3,
+    ...extra,
   };
 }
 
@@ -72,6 +75,10 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
+      // Schema-scoped console (schema == database in MySQL): switch on THIS conn only.
+      if (opts.schema) {
+        await conn.query(`USE ${qIdent(opts.schema)}`);
+      }
       const [rows, fields] = await conn.query(sql, opts.params);
       if (Array.isArray(rows)) {
         const arr = rows as Array<Record<string, unknown>>;
@@ -89,6 +96,8 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       return { rows: [], rowCount: ok.affectedRows ?? 0, fields: [], command: 'OK' };
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      // Restore the connection's default database before returning it to the pool.
+      if (opts.schema && config.database) await conn.query(`USE ${qIdent(config.database)}`).catch(() => void 0);
       conn.release();
     }
   }
@@ -197,6 +206,11 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       })) satisfies TableRef[];
     },
     describeTable,
+    tablePreview(schemaName, name, { limit, offset }) {
+      const target = schemaName || config.database;
+      const rel = target ? `${qIdent(target)}.${qIdent(name)}` : qIdent(name);
+      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit, offset], maxRows: limit });
+    },
     async schema(schemaName) {
       const tables = await driver.listTables(schemaName);
       const out: TableInfo[] = [];
@@ -212,6 +226,11 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
     },
   };
   return driver;
+}
+
+/** MySQL identifier quoting: wrap in backticks, escaping embedded backticks. */
+function qIdent(s: string): string {
+  return `\`${s.replace(/`/g, '``')}\``;
 }
 
 function groupIndexes(rows: Array<{ INDEX_NAME: string; NON_UNIQUE: number; COLUMN_NAME: string }>): IndexInfo[] {

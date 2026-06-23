@@ -12,7 +12,8 @@
     "edit": "Edit",
     "delete": "Delete",
     "deleteConfirm": "Delete host \"{{label}}\"?",
-    "ungrouped": "Ungrouped"
+    "ungrouped": "Ungrouped",
+    "exited": "Finished — output kept (close to dismiss)"
   },
   "dialog": {
     "titleNew": "New SSH host",
@@ -73,6 +74,7 @@
     "newFolder": "New folder",
     "upload": "Upload",
     "download": "Download",
+    "edit": "Edit in editor",
     "rename": "Rename",
     "delete": "Delete",
     "empty": "Empty directory",
@@ -80,7 +82,17 @@
     "newFolderPrompt": "Folder name:",
     "renamePrompt": "New name:",
     "transfers": "Transfers",
-    "loadError": "Could not list: {{reason}}"
+    "loadError": "Could not list: {{reason}}",
+    "editError": "Could not open {{name}}: {{reason}}",
+    "actionError": "Operation failed: {{reason}}",
+    "folderCreated": "Folder \"{{name}}\" created",
+    "renamed": "Renamed to \"{{name}}\"",
+    "deleted": "Deleted \"{{name}}\"",
+    "uploaded": "Uploaded {{name}}",
+    "downloaded": "Downloaded {{name}}",
+    "editSaved": "Uploaded {{name}}",
+    "editSaveFailed": "Upload to server failed",
+    "editHint": "Ctrl/⌘S saves to the server"
   },
   "snippets": {
     "title": "Snippets",
@@ -93,6 +105,8 @@
     "runOn": "Run on",
     "run": "Run",
     "save": "Save",
+    "update": "Update",
+    "multilineHint": "Each line runs as a separate command (it's run as a shell script).",
     "selectHost": "Select a host",
     "runError": "Could not run snippet: {{reason}}"
   },

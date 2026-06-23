@@ -136,6 +136,10 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
       );
     },
     describeTable,
+    tablePreview(_schema, name, { limit, offset }) {
+      const rel = `"${name.replace(/"/g, '""')}"`;
+      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit, offset], maxRows: limit });
+    },
     async schema() {
       const tables = await driver.listTables();
       const out: TableInfo[] = [];

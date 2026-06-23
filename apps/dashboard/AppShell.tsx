@@ -333,11 +333,12 @@ export function AppShell() {
           view.page === 'agents' ||
           view.page === 'global' ||
           view.page === 'design-systems' ||
-          // Settings (/admin) owns its own padding + a fixed-height,
-          // independently-scrolling rail/content split (IDE-style), so it
-          // opts out of the outer scroll+padding like the other two-pane
+          // Settings (/admin) and Docs (/docs) own their own padding + a
+          // fixed-height, independently-scrolling split (IDE-style), so they
+          // opt out of the outer scroll+padding like the other two-pane
           // surfaces above.
-          view.page === 'admin'
+          view.page === 'admin' ||
+          view.page === 'docs'
             ? 'flex flex-col overflow-hidden'
             : 'overflow-auto px-6 py-5',
         )}

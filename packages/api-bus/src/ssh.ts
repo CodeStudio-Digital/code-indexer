@@ -142,6 +142,30 @@ export interface SshApi {
     input: { spec: SshConnectSpec; localPath: string; remotePath: string },
     ctx: ApiContext,
   ): AsyncStream<SftpProgress>;
+
+  /**
+   * Read a SMALL remote text file into memory for in-editor editing (the
+   * SFTP "edit" pencil opens the result in a Monaco tab). Refuses directories
+   * (`sftp_is_directory`), oversized files (`sftp_file_too_large`, ~2 MB cap)
+   * and binary content (`sftp_binary_file`) — those belong in the streaming
+   * download path, not the editor.
+   */
+  sftpReadFile(
+    input: { spec: SshConnectSpec; remotePath: string },
+    ctx: ApiContext,
+  ): Promise<SftpReadFileResult>;
+  /** Overwrite a remote file with UTF-8 text — the in-editor save. Returns the new byte length. */
+  sftpWriteFile(
+    input: { spec: SshConnectSpec; remotePath: string; content: string },
+    ctx: ApiContext,
+  ): Promise<{ size: number }>;
+}
+
+export interface SftpReadFileResult {
+  /** Decoded UTF-8 text content. */
+  content: string;
+  /** Byte length on the wire. */
+  size: number;
 }
 
 export interface SftpEntry {

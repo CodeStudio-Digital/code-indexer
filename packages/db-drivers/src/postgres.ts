@@ -36,7 +36,11 @@ interface PgPool {
 }
 
 function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
-  if (config.connectionString) return { connectionString: config.connectionString, max: 3 };
+  const opts = config.options ?? {};
+  const extra: Record<string, unknown> = { max: 3 };
+  if (typeof opts.connectTimeoutMs === 'number') extra.connectionTimeoutMillis = opts.connectTimeoutMs;
+  if (typeof opts.applicationName === 'string' && opts.applicationName) extra.application_name = opts.applicationName;
+  if (config.connectionString) return { connectionString: config.connectionString, ...extra };
   const ssl = sslConfig(config);
   return {
     host: config.host,
@@ -45,7 +49,7 @@ function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
     password: config.password,
     database: config.database,
     ...(ssl ? { ssl } : {}),
-    max: 3,
+    ...extra,
   };
 }
 
@@ -81,6 +85,10 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
+      // Schema-scoped console: set the search_path on THIS dedicated client only.
+      if (opts.schema) {
+        await client.query({ text: `SET search_path TO ${qIdent(opts.schema)}, public` });
+      }
       const raw = await client.query({ text: sql, values: opts.params });
       const result = Array.isArray(raw) ? lastWithRows(raw) : raw;
       const rows = result.rows ?? [];
@@ -94,6 +102,8 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       };
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      // Reset the search_path so the pooled client is clean for the next borrower.
+      if (opts.schema) await client.query({ text: 'RESET search_path' }).catch(() => void 0);
       client.release();
     }
   }
@@ -224,6 +234,10 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       })) satisfies TableRef[];
     },
     describeTable,
+    tablePreview(schemaName, name, { limit, offset }) {
+      const rel = `${qIdent(schemaName)}.${qIdent(name)}`;
+      return runQuery(`SELECT * FROM ${rel} LIMIT $1 OFFSET $2`, { params: [limit, offset], maxRows: limit });
+    },
     async schema(schemaName = 'public') {
       const tables = await driver.listTables(schemaName);
       const out: TableInfo[] = [];
@@ -239,6 +253,11 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
     },
   };
   return driver;
+}
+
+/** Postgres identifier quoting: wrap in double-quotes, escaping embedded quotes. */
+function qIdent(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
 }
 
 function lastWithRows(results: PgResult[]): PgResult {

@@ -5,7 +5,6 @@
  */
 import {
   BookOpen,
-  BookText,
   Brain,
   Database,
   FileCode2,
@@ -38,7 +37,8 @@ export const TABS: TabDef[] = [
   // Output/Find) — rodar scripts e ver saída de PTY são a mesma atividade.
   { id: 'api',          label: 'API',           icon: Webhook,           group: 'core' },
   { id: 'databases',    label: 'Databases',     icon: Server,            group: 'core' },
-  { id: 'docs',         label: 'Docs',          icon: BookText,          group: 'core' },
+  // Docs Studio is NOT a rail tab — it lives inside the API tab (Client / Docs
+  // toggle) to keep everything API-related in one place.
   { id: 'diagrams',     label: 'Diagrams',      icon: Workflow,          group: 'core' },
   // Index — aba unificada: busca (hybrid/FTS/vector), controle do indexer (run +
   // embeddings + histórico), arquivos indexados, dependências, arquitetura, diff

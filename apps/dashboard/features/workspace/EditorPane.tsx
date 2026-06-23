@@ -55,6 +55,9 @@ const StashDetailView = lazy(() =>
 const MergeTabView = lazy(() =>
   import('./editor/merge/MergeTabView.js').then((m) => ({ default: m.MergeTabView })),
 );
+const SftpEditMount = lazy(() =>
+  import('../ssh/sftp/SftpEditMount.js').then((m) => ({ default: m.SftpEditMount })),
+);
 
 function isMarkdownPath(path: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(path);
@@ -157,6 +160,9 @@ function EditorPaneView({ paneId }: { paneId: string }) {
               <MergeTabView key={activeFile.path} tab={activeFile} />
             ) : activeFile.kind === 'diff' ? (
               <DiffMount diff={activeFile} />
+            ) : activeFile.kind === 'sftp' ? (
+              // Remote file edited in-place (download→edit→upload→discard, in memory).
+              <SftpEditMount key={activeFile.path} tab={activeFile} />
             ) : isDrawioPath(activeFile.path) ? (
               <DrawioEditor file={activeFile} />
             ) : isMarkdownPath(activeFile.path) ? (

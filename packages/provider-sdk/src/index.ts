@@ -13,3 +13,4 @@ export * from './credentials.js';
 export * from './auth.js';
 export * from './provider.js';
 export * from './spec.js';
+export { providerSpecSchema, thirdPartyProviderSpecSchema } from './spec.schema.js';

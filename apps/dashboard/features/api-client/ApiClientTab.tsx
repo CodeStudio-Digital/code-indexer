@@ -4,7 +4,7 @@
  * plus a toolbar for the active environment. Mounted both in the project IDE
  * (ProjectView) and inside the company API tab.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Loader2, Settings2, Download, Upload, Play, ChevronDown, Plus, Library, Globe, RefreshCw } from 'lucide-react';
@@ -37,15 +37,22 @@ import { CloudSyncDialog } from './CloudSyncDialog.js';
 import { RegressionPanel } from './RegressionPanel.js';
 import { jsonShape } from './ai/response-shape.js';
 
+// Docs Studio lives INSIDE this tab (Client / Docs toggle), not as its own rail
+// tab — lazy so its heavy deps (Scalar, Monaco) don't weigh on the client view.
+const DocsStudioView = lazy(() => import('./docs-studio/DocsStudioView.js').then((m) => ({ default: m.DocsStudioView })));
+
 const RESP_TABS = [
   { id: 'response' as const, labelKey: 'response' },
   { id: 'history' as const, labelKey: 'history' },
 ];
 
-export function ApiClientTab({ projectId }: { projectId: number }) {
+export function ApiClientTab({ projectId, docsAccess = false }: { projectId: number; docsAccess?: boolean }) {
   const { t } = useTranslation('apiClient');
   const c = useApiClient(projectId);
   const { state } = c;
+  // Client = the Postman UI; Docs = the in-tab Documentation Studio. Only offered
+  // when `docsAccess` (the project IDE); the company surface has its own toggle.
+  const [view, setView] = useState<'client' | 'docs'>('client');
   const [envManagerOpen, setEnvManagerOpen] = useState(false);
   const [envEditorOpen, setEnvEditorOpen] = useState(false);
   const [envEditId, setEnvEditId] = useState<number | null>(null);
@@ -124,6 +131,26 @@ export function ApiClientTab({ projectId }: { projectId: number }) {
   // saved request closes immediately (it persists on blur — nothing to lose).
   const closeTabGuarded = useCallback((id: number) => { if (id < 0) void discardDraftGuarded(); else c.closeTab(id); }, [discardDraftGuarded, c.closeTab]);
 
+  // Context-menu bulk closes. If the action would discard the unsaved draft,
+  // confirm once first; a saved request persists on blur, so it closes freely.
+  const draftId = state.draftRequest?.id ?? null;
+  const runBulkClose = useCallback(async (willDiscardDraft: boolean, run: () => void) => {
+    if (willDiscardDraft && !(await confirmDiscard())) return;
+    run();
+  }, [confirmDiscard]);
+  const onCloseOthers = useCallback((id: number) =>
+    void runBulkClose(dirty && draftId != null && id !== draftId, () => c.closeOtherTabs(id)),
+    [runBulkClose, dirty, draftId, c.closeOtherTabs]);
+  const onCloseRight = useCallback((id: number) => {
+    const di = draftId != null ? state.openTabIds.indexOf(draftId) : -1;
+    void runBulkClose(dirty && di > state.openTabIds.indexOf(id), () => c.closeTabsToRight(id));
+  }, [runBulkClose, dirty, draftId, state.openTabIds, c.closeTabsToRight]);
+  const onCloseLeft = useCallback((id: number) => {
+    const di = draftId != null ? state.openTabIds.indexOf(draftId) : -1;
+    void runBulkClose(dirty && di >= 0 && di < state.openTabIds.indexOf(id), () => c.closeTabsToLeft(id));
+  }, [runBulkClose, dirty, draftId, state.openTabIds, c.closeTabsToLeft]);
+  const onCloseAllTabs = useCallback(() => void runBulkClose(dirty, () => c.closeAllTabs()), [runBulkClose, dirty, c.closeAllTabs]);
+
   const activeRequest = useMemo(
     () => state.requests.find((r) => r.id === state.activeRequestId) ?? null,
     [state.requests, state.activeRequestId],
@@ -163,12 +190,24 @@ export function ApiClientTab({ projectId }: { projectId: number }) {
     }
   }, [state.response, activeRequest, projectId, t]);
 
-  if (state.loading) {
-    return <div className="h-full flex items-center justify-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>;
-  }
-
   return (
     <div className="flex flex-col h-full bg-card">
+      {docsAccess && (
+        <div className="h-8 shrink-0 flex items-center gap-1 px-2 border-b text-xs">
+          <ModeBtn active={view === 'client'} onClick={() => setView('client')}>{t('mode.client')}</ModeBtn>
+          <ModeBtn active={view === 'docs'} onClick={() => setView('docs')}>{t('mode.docs')}</ModeBtn>
+        </div>
+      )}
+      {docsAccess && view === 'docs' ? (
+        <div className="flex-1 min-h-0">
+          <Suspense fallback={<div className="h-full grid place-items-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>}>
+            <DocsStudioView projectId={projectId} />
+          </Suspense>
+        </div>
+      ) : state.loading ? (
+        <div className="flex-1 flex items-center justify-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>
+      ) : (
+      <>
       <div className="h-10 flex items-center gap-2 px-3 border-b text-xs">
         <span className="font-medium">API</span>
         <DropdownMenu>
@@ -261,6 +300,10 @@ export function ApiClientTab({ projectId }: { projectId: number }) {
                 activeRequestId={state.activeRequestId}
                 onActivate={c.selectRequest}
                 onClose={closeTabGuarded}
+                onCloseOthers={onCloseOthers}
+                onCloseRight={onCloseRight}
+                onCloseLeft={onCloseLeft}
+                onCloseAll={onCloseAllTabs}
               />
               <div className="flex-1 min-h-0">
                 <RequestEditor
@@ -380,6 +423,21 @@ export function ApiClientTab({ projectId }: { projectId: number }) {
         onOpenChange={setRegressionOpen}
         onRequestsChanged={c.reloadRequests}
       />
+      </>
+      )}
     </div>
+  );
+}
+
+/** Segmented Client / Docs switch shown in the API tab when docs access is on. */
+function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2 py-0.5 rounded transition-colors ${active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+    >
+      {children}
+    </button>
   );
 }

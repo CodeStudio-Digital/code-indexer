@@ -49,6 +49,8 @@ export interface DbConnectSpec {
   database?: string;
   /** sqlite only. */
   filePath?: string;
+  /** URL mode — a full connection string (decrypted just-in-time); wins over fields. */
+  connectionString?: string;
   ssl?: { mode?: DbSslMode; ca?: string; cert?: string; key?: string };
   options?: Record<string, unknown>;
   /** Server-enforced safety valve — when true, non-SELECT statements are rejected. */
@@ -121,6 +123,52 @@ export interface DbIntrospectResult {
   tables: DbTableRef[];
 }
 
+// ─── DDL / DML edit specs (mirror @mcp/db-drivers, kept self-contained here) ──
+export type DbRowChangeKind = 'insert' | 'update' | 'delete';
+
+export interface DbColumnSpec {
+  name: string;
+  type: string;
+  nullable?: boolean;
+  default?: string | null;
+  primaryKey?: boolean;
+  autoIncrement?: boolean;
+  unsigned?: boolean;
+}
+export interface DbCreateTableSpec {
+  schema?: string;
+  table: string;
+  columns: DbColumnSpec[];
+}
+export type DbAlterAction =
+  | { kind: 'addColumn'; column: DbColumnSpec }
+  | { kind: 'dropColumn'; name: string }
+  | { kind: 'renameColumn'; from: string; to: string }
+  | { kind: 'modifyColumn'; name: string; column: DbColumnSpec };
+export interface DbAlterTableSpec {
+  schema?: string;
+  table: string;
+  actions: DbAlterAction[];
+}
+export interface DbDropTableSpec {
+  schema?: string;
+  table: string;
+}
+export type DbDdlOp = 'create' | 'alter' | 'drop';
+export interface DbDdlSpec {
+  create?: DbCreateTableSpec;
+  alter?: DbAlterTableSpec;
+  drop?: DbDropTableSpec;
+}
+
+/** Result of an edit/DDL op: the rendered SQL (for the preview) + execution result. */
+export interface DbEditResult {
+  /** Human-readable SQL with literals inlined — for the preview dialog. */
+  sql: string;
+  /** Present when actually executed (omitted on dryRun). */
+  result?: DbQueryResult;
+}
+
 export interface DbClientApi {
   /** Open + ping + close — a pre-flight for the editor; never keeps a pool. */
   testConnection(
@@ -152,6 +200,12 @@ export interface DbClientApi {
     ctx: ApiContext,
   ): Promise<DbTableInfo>;
 
+  /** Paginated `SELECT *` for a table (double-click → data tab). */
+  tableRows(
+    input: { connectionId: string; schema: string; table: string; limit: number; offset: number },
+    ctx: ApiContext,
+  ): Promise<DbQueryResult>;
+
   /** Execute a statement (server caps rows). Pass `queryId` to allow cancel. */
   query(
     input: {
@@ -160,10 +214,38 @@ export interface DbClientApi {
       params?: unknown[];
       maxRows?: number;
       queryId?: string;
+      /** Scope this console to a schema (pg search_path / mysql USE). */
+      schema?: string;
     },
     ctx: ApiContext,
   ): Promise<DbQueryResult>;
 
   /** Abort an in-flight query by its client-supplied queryId. */
   cancel(input: { connectionId: string; queryId: string }, ctx: ApiContext): Promise<void>;
+
+  /**
+   * Apply a single row change (insert/update/delete), parameterized + PK-scoped.
+   * `dryRun` returns the rendered SQL WITHOUT executing (for the preview dialog).
+   */
+  editRow(
+    input: {
+      connectionId: string;
+      op: DbRowChangeKind;
+      schema?: string;
+      table: string;
+      pk?: Record<string, unknown>;
+      values?: Record<string, unknown>;
+      dryRun?: boolean;
+    },
+    ctx: ApiContext,
+  ): Promise<DbEditResult>;
+
+  /**
+   * Run a DDL change (create/alter/drop table). `dryRun` returns the rendered
+   * SQL preview WITHOUT executing. Rejected when the connection is read-only.
+   */
+  ddl(
+    input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean },
+    ctx: ApiContext,
+  ): Promise<DbEditResult>;
 }

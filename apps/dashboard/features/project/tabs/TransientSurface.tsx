@@ -18,7 +18,6 @@ const SnapshotEditor = lazy(() => import('../../snapshots/index.js'));
 const IndexWorkspace = lazy(() => import('./index-workspace/IndexWorkspace.js').then((m) => ({ default: m.IndexWorkspace })));
 const ApiClientTab = lazy(() => import('../../api-client/ApiClientTab.js').then((m) => ({ default: m.ApiClientTab })));
 const DbClientTab = lazy(() => import('../../db-client/DbClientTab.js').then((m) => ({ default: m.DbClientTab })));
-const DocsStudioView = lazy(() => import('../../api-client/docs-studio/DocsStudioView.js').then((m) => ({ default: m.DocsStudioView })));
 const DiagramsView = lazy(() => import('../diagrams/DiagramsView.js').then((m) => ({ default: m.DiagramsView })));
 
 /** Fallback dos chunks lazy de aba. */
@@ -48,20 +47,16 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
     return <Suspense fallback={<TabSpinner />}><SnapshotEditor key={projectId} projectId={projectId} /></Suspense>;
   }
 
-  // API client owns a full-height 3-pane layout.
+  // API client owns a full-height 3-pane layout. `docsAccess` adds the in-tab
+  // Client / Docs toggle (the Docs Studio lives here, not as its own rail tab).
   if (tab === 'api') {
-    return <Suspense fallback={<TabSpinner />}><ApiClientTab projectId={projectId} /></Suspense>;
+    return <Suspense fallback={<TabSpinner />}><ApiClientTab projectId={projectId} docsAccess /></Suspense>;
   }
 
   // Database client — DataGrip × phpMyAdmin. key={projectId} → remount per
   // project so a live connection session never bleeds across projects.
   if (tab === 'databases') {
     return <Suspense fallback={<TabSpinner />}><DbClientTab key={projectId} projectId={projectId} /></Suspense>;
-  }
-
-  // Docs Studio — author + preview a collection's documentation. Own layout.
-  if (tab === 'docs') {
-    return <Suspense fallback={<TabSpinner />}><DocsStudioView key={projectId} projectId={projectId} /></Suspense>;
   }
 
   // Preview tab — the live dev-server preview, full-width.

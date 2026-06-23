@@ -10,12 +10,20 @@
  * open DB tab keeps its connection.
  */
 import { createDriver } from './factory.js';
-import type { DatabaseDriver, DbConnectConfig } from './types.js';
+import type { DatabaseDriver, DbConnectConfig, DbEngine } from './types.js';
+
+/** Per-connection metadata co-located with the pool so EVERY handler instance
+ *  (IPC + Hono fallback + agent path) resolves it from one shared source. */
+export interface ConnMeta {
+  engine?: DbEngine;
+  readOnly?: boolean;
+}
 
 interface PoolEntry {
   driver: DatabaseDriver;
   lastUsed: number;
   pinned: boolean;
+  meta: ConnMeta;
 }
 
 const IDLE_TTL_MS = 5 * 60 * 1000;
@@ -67,9 +75,20 @@ export class DbConnectionManager {
       }
     }
     const driver = await createDriver(config);
-    this.pools.set(key, { driver, lastUsed: Date.now(), pinned: opts.pinned ?? false });
+    this.pools.set(key, { driver, lastUsed: Date.now(), pinned: opts.pinned ?? false, meta: {} });
     this.ensureSweeper();
     return driver;
+  }
+
+  /** Attach metadata (engine / read-only) to a pooled connection. */
+  setMeta(key: string, meta: ConnMeta): void {
+    const entry = this.pools.get(key);
+    if (entry) entry.meta = { ...entry.meta, ...meta };
+  }
+
+  /** Read a pooled connection's metadata (undefined if not connected). */
+  getMeta(key: string): ConnMeta | undefined {
+    return this.pools.get(key)?.meta;
   }
 
   /** Look up an established driver (no create). Bumps lastUsed. */

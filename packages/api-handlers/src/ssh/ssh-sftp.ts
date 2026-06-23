@@ -6,7 +6,7 @@
  * `SftpProgress` — consumed by the renderer exactly like `terminal.output`.
  */
 
-import type { Client, SFTPWrapper, FileEntryWithStats } from 'ssh2';
+import type { Client, SFTPWrapper, FileEntryWithStats, Stats } from 'ssh2';
 import { ApiError, type SftpEntry, type SftpProgress, type SshConnectSpec } from '@mcp/api-bus';
 import type { SshConnectionManager } from './ssh-connection-manager.js';
 
@@ -21,14 +21,22 @@ function toEntry(dir: string, e: FileEntryWithStats): SftpEntry {
   return { name: e.filename, path: joinPosix(dir, e.filename), type, size: a.size, mtime: a.mtime * 1000, mode: a.mode };
 }
 
+interface SftpSession {
+  sftp: SFTPWrapper;
+  /** Idempotently return the pooled-connection ref this session holds. */
+  release: () => void;
+}
+
 export class SftpManager {
-  private readonly sessions = new Map<string, SFTPWrapper>();
+  private readonly sessions = new Map<string, SftpSession>();
+  /** Max bytes we'll pull into the editor — larger files belong in a download. */
+  private static readonly MAX_EDIT_BYTES = 2 * 1024 * 1024;
 
   constructor(private readonly manager: SshConnectionManager) {}
 
   private async get(spec: SshConnectSpec): Promise<SFTPWrapper> {
     const existing = this.sessions.get(spec.hostId);
-    if (existing) return existing;
+    if (existing) return existing.sftp;
     const client = await this.manager.acquire(spec); // throws host-key/connect errors
     let sftp: SFTPWrapper;
     try {
@@ -37,9 +45,22 @@ export class SftpManager {
       this.manager.release(spec.hostId);
       throw err;
     }
-    this.sessions.set(spec.hostId, sftp);
+    // Return the acquired ref EXACTLY once — whether the whole connection dies,
+    // the SFTP channel alone closes (SFTP is one channel on a multiplexed
+    // Client that a shell/tunnel may keep alive), or close() is called. Without
+    // this, an independent SFTP-channel close would strand the ref and the
+    // pooled connection could never reach refCount 0 (leak).
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      this.manager.release(spec.hostId);
+    };
+    const session: SftpSession = { sftp, release };
+    this.sessions.set(spec.hostId, session);
     const drop = (): void => {
-      this.sessions.delete(spec.hostId);
+      if (this.sessions.get(spec.hostId) === session) this.sessions.delete(spec.hostId);
+      release();
     };
     client.on('close', drop);
     sftp.on('close', drop);
@@ -47,15 +68,15 @@ export class SftpManager {
   }
 
   close(hostId: string): void {
-    const sftp = this.sessions.get(hostId);
-    if (!sftp) return;
+    const session = this.sessions.get(hostId);
+    if (!session) return;
     this.sessions.delete(hostId);
     try {
-      sftp.end();
+      session.sftp.end();
     } catch {
       /* already closed */
     }
-    this.manager.release(hostId);
+    session.release(); // idempotent — a no-op if the channel already closed
   }
 
   async realpath(spec: SshConnectSpec, path: string): Promise<string> {
@@ -109,6 +130,44 @@ export class SftpManager {
     });
   }
 
+  /** Read a small remote text file into memory (the in-editor "edit" path). */
+  async readFile(spec: SshConnectSpec, remotePath: string): Promise<{ content: string; size: number }> {
+    const sftp = await this.get(spec);
+    // stat first so the size cap rejects a huge file WITHOUT buffering it.
+    const stats = await new Promise<Stats>((resolve, reject) => {
+      sftp.stat(remotePath, (err, st) => (err ? reject(sftpError(err)) : resolve(st)));
+    });
+    if (stats.isDirectory()) throw new ApiError('sftp_is_directory', 400, 'path is a directory');
+    if (stats.size > SftpManager.MAX_EDIT_BYTES) {
+      throw new ApiError('sftp_file_too_large', 413, `file is ${stats.size} bytes (edit limit ${SftpManager.MAX_EDIT_BYTES})`);
+    }
+    const buf = await new Promise<Buffer>((resolve, reject) => {
+      sftp.readFile(remotePath, (err, data) => (err ? reject(sftpError(err)) : resolve(data)));
+    });
+    if (looksBinary(buf)) throw new ApiError('sftp_binary_file', 415, 'file appears to be binary — download it instead');
+    let content: string;
+    try {
+      // fatal → reject non-UTF-8 (latin1/Windows-1252) rather than lossily
+      // substituting U+FFFD and re-encoding it back as UTF-8 on save (which
+      // would permanently destroy the original bytes). ignoreBOM keeps a leading
+      // BOM in the text so it round-trips on write.
+      content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf);
+    } catch {
+      throw new ApiError('sftp_not_utf8', 415, 'file is not valid UTF-8 — download it instead');
+    }
+    return { content, size: buf.length };
+  }
+
+  /** Overwrite a remote file with UTF-8 text (the in-editor save). */
+  async writeFile(spec: SshConnectSpec, remotePath: string, content: string): Promise<{ size: number }> {
+    const sftp = await this.get(spec);
+    const buf = Buffer.from(content, 'utf8');
+    await new Promise<void>((resolve, reject) => {
+      sftp.writeFile(remotePath, buf, (err) => (err ? reject(sftpError(err)) : resolve()));
+    });
+    return { size: buf.length };
+  }
+
   upload(spec: SshConnectSpec, localPath: string, remotePath: string): AsyncIterable<SftpProgress> {
     return transferStream((onProgress, done) => {
       void this.get(spec)
@@ -139,6 +198,13 @@ function voidOp(run: (cb: (err?: Error | null) => void) => void): Promise<void> 
 
 function sftpError(err: Error): ApiError {
   return new ApiError('sftp_failed', 502, err.message);
+}
+
+/** Heuristic: a NUL byte in the first 8 KB ⇒ treat as binary (not editable text). */
+function looksBinary(buf: Buffer): boolean {
+  const n = Math.min(buf.length, 8192);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
+  return false;
 }
 
 /** Bridge a callback-style transfer (with a sync progress step) to an AsyncIterable. */

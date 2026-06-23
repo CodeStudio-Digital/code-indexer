@@ -21,6 +21,10 @@ import type {
   DbSavedQuery,
   DbTableInfo,
   DbQueryHistoryRow,
+  DbRowChangeKind,
+  DbDdlOp,
+  DbDdlSpec,
+  DbEditResult,
 } from './types.js';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -88,23 +92,62 @@ export const deleteSavedQuery = (p: number, sqid: number) =>
 export const encryptSecretValue = (plain: string) => encryptSecret(plain);
 
 // ─── Live ops (api-bus dbClient) ─────────────────────────────────────────
+/** Parse the options_json blob (never throws). */
+export function parseConnOptions(conn: DbConnection): Record<string, unknown> {
+  try {
+    return JSON.parse(conn.options_json || '{}') as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/** The subset of options passed to the driver pool (timeout / app name). */
+function pickConnectOptions(options: Record<string, unknown>): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  if (typeof options.connectTimeoutMs === 'number') out.connectTimeoutMs = options.connectTimeoutMs;
+  if (typeof options.applicationName === 'string' && options.applicationName) out.applicationName = options.applicationName;
+  return Object.keys(out).length ? out : undefined;
+}
+
+async function resolveSsl(conn: DbConnection): Promise<DbConnectSpec['ssl']> {
+  if (!conn.ssl_mode || conn.ssl_mode === 'disable') return undefined;
+  return {
+    mode: conn.ssl_mode,
+    ca: conn.enc_ssl_ca ? await decryptSecret(conn.enc_ssl_ca) : undefined,
+    cert: conn.enc_ssl_cert ? await decryptSecret(conn.enc_ssl_cert) : undefined,
+    key: conn.enc_ssl_key ? await decryptSecret(conn.enc_ssl_key) : undefined,
+  };
+}
+
 /**
- * Build a live connect spec from a saved connection row, decrypting the secret
- * just-in-time. The plaintext never leaves this process.
+ * Build a live connect spec from a saved connection row, decrypting secrets
+ * just-in-time. In URL mode the encrypted blob IS the full connection string
+ * (which carries the password, so it stays device-bound encrypted at rest).
+ * The plaintext never leaves this process.
  */
 export async function resolveSpec(conn: DbConnection): Promise<DbConnectSpec> {
-  const password = conn.enc_password ? await decryptSecret(conn.enc_password) : undefined;
-  return {
+  const options = parseConnOptions(conn);
+  const secret = conn.enc_password ? await decryptSecret(conn.enc_password) : '';
+  const ssl = await resolveSsl(conn);
+  const connectOptions = pickConnectOptions(options);
+  const base = {
     connectionId: String(conn.id),
     engine: conn.engine,
+    ssl,
+    options: connectOptions,
+    readOnly: conn.is_read_only === 1,
+  };
+  if (options.urlMode === true) {
+    return { ...base, connectionString: secret || undefined };
+  }
+  return {
+    ...base,
     host: conn.host ?? undefined,
     port: conn.port ?? undefined,
     username: conn.username ?? undefined,
-    password,
+    password: secret || undefined,
     database: conn.database_name ?? undefined,
     filePath: conn.file_path ?? undefined,
-    ssl: conn.ssl_mode ? { mode: conn.ssl_mode } : undefined,
-    readOnly: conn.is_read_only === 1,
   };
 }
 
@@ -128,11 +171,32 @@ export const introspect = (connectionId: string, database?: string, schema?: str
 export const describeTable = (connectionId: string, schema: string, table: string) =>
   apiCall<DbTableInfo>('dbClient.describeTable', { connectionId, schema, table });
 
+export const tableRows = (
+  connectionId: string,
+  schema: string,
+  table: string,
+  limit: number,
+  offset: number,
+) => apiCall<DbQueryResult>('dbClient.tableRows', { connectionId, schema, table, limit, offset });
+
 export const runQuery = (
   connectionId: string,
   sql: string,
-  opts?: { params?: unknown[]; maxRows?: number; queryId?: string },
+  opts?: { params?: unknown[]; maxRows?: number; queryId?: string; schema?: string },
 ) => apiCall<DbQueryResult>('dbClient.query', { connectionId, sql, ...opts });
 
 export const cancelQuery = (connectionId: string, queryId: string) =>
   apiCall<void>('dbClient.cancel', { connectionId, queryId });
+
+export const editRow = (input: {
+  connectionId: string;
+  op: DbRowChangeKind;
+  schema?: string;
+  table: string;
+  pk?: Record<string, unknown>;
+  values?: Record<string, unknown>;
+  dryRun?: boolean;
+}) => apiCall<DbEditResult>('dbClient.editRow', input);
+
+export const ddl = (input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean }) =>
+  apiCall<DbEditResult>('dbClient.ddl', input);
