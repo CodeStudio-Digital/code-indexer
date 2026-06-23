@@ -13,7 +13,7 @@ import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/dur
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction/threshold.js';
 import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
-import { buildSystemPrompt } from '@mcp/code-agent/core/system-prompt.js';
+import { buildSystemPrompt, normalizeProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
@@ -79,6 +79,12 @@ import { profileToTiers, getToolTier, type CoderProfile, type ToolTier } from '@
 import { parseToolsetState, resolveSessionProfile } from '@mcp/code-agent/tools/profile-resolution.js';
 import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
+import {
+  type ReadProject,
+  perProjectIndexLimit,
+  mergeMemoryIndex,
+  interleaveLabeled,
+} from '@mcp/code-agent/core/runner/assembly/union-memory.js';
 import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { ToolOutputStore } from '@mcp/code-agent/overlay/tool-output-store.js';
@@ -227,6 +233,30 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   const project = db.getProject(session.project_id);
   if (!project) throw new Error(`Project ${session.project_id} not found`);
+
+  // Memory READ scope. A GLOBAL session's project is a SYNTHETIC union (mig 155)
+  // whose own memory is empty/ephemeral; read the memory of every REAL
+  // constituent (primary first) so the agent sees both projects' learnings.
+  // For an ordinary project this resolves to `[the project]`, so every memory
+  // consumer below stays single-iteration and byte-equivalent to before.
+  const allReadProjects: ReadProject[] = project.is_synthetic
+    ? (() => {
+        const links = db.listUnionProjectIds(project.id);
+        return links.length
+          ? links.map((l) => ({ id: l.project_id, name: l.name }))
+          : [{ id: project.id, name: project.name }];
+      })()
+    : [{ id: project.id, name: project.name }];
+  // Honour each project's memory toggle (mig 115): read only from enabled
+  // members. Empty → the session has no memory and every gate below falls to
+  // `undefined` — exactly as a single disabled project did before.
+  const memoryReadProjects = allReadProjects.filter((p) => db.getProjectMemoryEnabled(p.id));
+  const anyMemoryEnabled = memoryReadProjects.length > 0;
+  // Durable WRITES land on the PRIMARY real constituent (the host adapter
+  // redirects the synthetic id); gate the compaction harvest on THAT project's
+  // toggle so a disabled primary is never written to via a global session. For
+  // an ordinary project this is just `project.id`.
+  const memoryWriteProjectId = db.resolveMemoryWriteProject(project.id).id;
 
   // Global (multi-project) session — v2 VIRTUAL UNION model: the session runs
   // over a SYNTHETIC project whose `root_path` is a directory of junctions to
@@ -952,12 +982,29 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       },
     },
     // Durable project memory ports (save_note scope 'project' + recall_memory).
-    // Gated on the per-project toggle; absent ports → tools answer clearly.
+    // Gated on the per-project toggle (any union member for a global session);
+    // absent ports → tools answer clearly. `save` keeps the session's project id
+    // (the synthetic one for a global session) — the host adapter redirects it
+    // to the primary real project so durable facts never land on the throwaway
+    // union. `recall` reads the whole union (interleaved + labeled by project).
     projectMemory:
-      opts.projectMemory && db.getProjectMemoryEnabled(project.id)
+      opts.projectMemory && anyMemoryEnabled
         ? {
             save: (entry) => opts.projectMemory!.save(project.id, project.name, entry),
-            recall: (query, limit) => opts.projectMemory!.recall(project.id, project.name, query, limit),
+            recall: async (query, limit) => {
+              if (memoryReadProjects.length <= 1) {
+                return opts.projectMemory!.recall(project.id, project.name, query, limit);
+              }
+              const perProject = await Promise.all(
+                memoryReadProjects.map((p) =>
+                  opts
+                    .projectMemory!.recall(p.id, p.name, query, limit)
+                    .then((rows) => ({ name: p.name, rows }))
+                    .catch(() => ({ name: p.name, rows: [] })),
+                ),
+              );
+              return interleaveLabeled(perProject, limit);
+            },
           }
         : undefined,
     // Global USER memory (save_note scope 'user') — NOT gated by the project
@@ -1185,7 +1232,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     projectRoot: project.root_path,
     os: process.platform,
     planMode: opts.planMode,
-    providerFamily: session.provider as CoderProviderName,
+    providerFamily: normalizeProviderFamily(session.provider),
     profile: preResolvedProfile,
     sessionId: String(session.id),
     customTiers: customTierSummary.size > 0
@@ -1639,11 +1686,29 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     // Mem C — proactive project-memory retrieval. Wired only when the host
-    // provided a retriever AND this project has memory enabled (migration 115);
-    // the Executing node awaits it before assembly and injects relevant memory.
+    // provided a retriever AND some read project has memory enabled (migration
+    // 115); the Executing node awaits it before assembly and injects relevant
+    // memory. A global session retrieves across every union member (interleaved
+    // + labeled); a single project is the identity path.
     getRelevantProjectMemory:
-      opts.memoryRetriever && db.getProjectMemoryEnabled(project.id)
-        ? (taskText: string) => opts.memoryRetriever!.retrieve(project.id, project.name, taskText)
+      opts.memoryRetriever && anyMemoryEnabled
+        ? async (taskText: string) => {
+            // Single project: identity path — call the retriever directly so
+            // error propagation/diagnostics are unchanged vs. the pre-union code.
+            if (memoryReadProjects.length <= 1) {
+              const p = memoryReadProjects[0];
+              return opts.memoryRetriever!.retrieve(p.id, p.name, taskText);
+            }
+            const perProject = await Promise.all(
+              memoryReadProjects.map((p) =>
+                opts
+                  .memoryRetriever!.retrieve(p.id, p.name, taskText)
+                  .then((rows) => ({ name: p.name, rows: [...rows] }))
+                  .catch(() => ({ name: p.name, rows: [] as Array<{ id: string; title: string; content: string; staleNote?: string }> })),
+              ),
+            );
+            return interleaveLabeled(perProject);
+          }
         : undefined,
     // Session State Block data — non-company sessions only. The runner
     // renders goal/plan/todos/notes/files/recall into a `<session-state>`
@@ -1659,13 +1724,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           }
         },
     // Project memory index (MEMORY.md-style) — direct store read (works in
-    // workers too: each worker holds its own WAL handle). Gated on the
-    // per-project toggle; empty index → no injection.
+    // workers too: each worker holds its own WAL handle). Gated on the toggle
+    // (any union member for a global session); empty index → no injection. A
+    // global session merges every constituent's index (labeled + re-ranked by
+    // importance); a single project is the identity path.
     getProjectMemoryIndex:
-      !opts.companyContext && db.getProjectMemoryEnabled(project.id)
+      !opts.companyContext && anyMemoryEnabled
         ? () => {
             try {
-              return db.listMemoryIndex(project.id, 12);
+              const per = perProjectIndexLimit(memoryReadProjects.length);
+              return mergeMemoryIndex(
+                memoryReadProjects.map((p) => ({ name: p.name, entries: db.listMemoryIndex(p.id, per) })),
+              );
             } catch {
               return null;
             }
@@ -1689,6 +1759,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
     maxTurns: opts.maxTurns ?? 50,
     planMode: opts.planMode,
+    // Mirror the same resolution used for the system-prompt's plan-depth block
+    // so the runner's decision-gate nudge can skip `simple` tasks.
+    planDepth:
+      opts.planDepth
+      ?? (session.plan_depth_override as 'simple' | 'normal' | 'complex' | null)
+      ?? 'normal',
     specMode: opts.specMode ?? (effectiveAgentId === 'spec'),
     thinking: opts.thinking,
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
@@ -2212,7 +2288,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         return harvestCompactionMemory({
           runEndMemory: opts.runEndMemory,
           store,
-          getMemoryEnabled: () => db.getProjectMemoryEnabled(project.id),
+          getMemoryEnabled: () => db.getProjectMemoryEnabled(memoryWriteProjectId),
           projectId: project.id,
           projectName: project.name,
           sessionId: session.id,

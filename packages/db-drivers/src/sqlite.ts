@@ -1,0 +1,155 @@
+/**
+ * SQLite driver (better-sqlite3 — native, but ALREADY the store's binary, so it
+ * is electron:rebuild-ed once for the whole app). Synchronous + local + fast, so
+ * results are capped by `maxRows` and cancellation is a no-op (a giant scan would
+ * move to a worker in P4). Introspection uses the `pragma_*` table-valued
+ * functions so the table name is bound, never string-interpolated.
+ */
+import { createRequire } from 'node:module';
+import type DatabaseConstructor from 'better-sqlite3';
+import { DEFAULT_MAX_ROWS } from './types.js';
+import type {
+  ColumnInfo,
+  DatabaseDriver,
+  DbConnectConfig,
+  ForeignKeyInfo,
+  IndexInfo,
+  QueryResult,
+  RunQueryOptions,
+  TableInfo,
+  TableRef,
+} from './types.js';
+
+const require = createRequire(import.meta.url);
+const Database = require('better-sqlite3') as typeof DatabaseConstructor;
+type DB = InstanceType<typeof Database>;
+
+export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
+  const filePath = config.filePath ?? config.database ?? config.connectionString;
+  if (!filePath) throw new Error('sqlite: filePath is required');
+  const db: DB = new Database(filePath, { readonly: false, fileMustExist: false });
+
+  function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    try {
+      const stmt = db.prepare(sql);
+      const params = (opts.params ?? []) as unknown[];
+      if (stmt.reader) {
+        const all = stmt.all(...params) as Array<Record<string, unknown>>;
+        const truncated = all.length > max;
+        const fields = (stmt.columns() as Array<{ name: string }>).map((c) => ({ name: c.name }));
+        return Promise.resolve({
+          rows: truncated ? all.slice(0, max) : all,
+          rowCount: all.length,
+          fields,
+          truncated,
+        });
+      }
+      const info = stmt.run(...params);
+      return Promise.resolve({ rows: [], rowCount: info.changes, fields: [], command: 'OK' });
+    } catch (err) {
+      // better-sqlite3 can't prepare multiple statements — fall back to exec (no rows).
+      if (err instanceof Error && /multiple statements|cannot.*prepare/i.test(err.message)) {
+        db.exec(sql);
+        return Promise.resolve({ rows: [], rowCount: 0, fields: [], command: 'OK' });
+      }
+      return Promise.reject(err);
+    }
+  }
+
+  function describeTable(_schema: string, name: string): Promise<TableInfo> {
+    const cols = db
+      .prepare('SELECT * FROM pragma_table_info(?)')
+      .all(name) as Array<{ cid: number; name: string; type: string; notnull: number; dflt_value: unknown; pk: number }>;
+    const columns: ColumnInfo[] = cols.map((c) => ({
+      name: c.name,
+      dataType: c.type || 'BLOB',
+      nullable: c.notnull === 0,
+      isPrimaryKey: c.pk > 0,
+      // INTEGER PRIMARY KEY is the rowid alias — effectively auto-increment.
+      isAutoIncrement: c.pk > 0 && /^integer$/i.test(c.type),
+      defaultValue: c.dflt_value == null ? null : String(c.dflt_value),
+      ordinal: c.cid + 1,
+    }));
+
+    const idxList = db
+      .prepare('SELECT * FROM pragma_index_list(?)')
+      .all(name) as Array<{ name: string; unique: number; origin: string }>;
+    const indexes: IndexInfo[] = idxList.map((ix) => {
+      const cols2 = db
+        .prepare('SELECT * FROM pragma_index_info(?)')
+        .all(ix.name) as Array<{ name: string }>;
+      return {
+        name: ix.name,
+        columns: cols2.map((c) => c.name),
+        unique: ix.unique === 1,
+        primary: ix.origin === 'pk',
+      };
+    });
+
+    const fkList = db
+      .prepare('SELECT * FROM pragma_foreign_key_list(?)')
+      .all(name) as Array<{ id: number; table: string; from: string; to: string; on_update: string; on_delete: string }>;
+    const fkMap = new Map<number, ForeignKeyInfo>();
+    for (const fk of fkList) {
+      let entry = fkMap.get(fk.id);
+      if (!entry) {
+        entry = {
+          name: `fk_${name}_${fk.id}`,
+          columns: [],
+          refTable: fk.table,
+          refColumns: [],
+          onDelete: fk.on_delete,
+          onUpdate: fk.on_update,
+        };
+        fkMap.set(fk.id, entry);
+      }
+      entry.columns.push(fk.from);
+      entry.refColumns.push(fk.to);
+    }
+
+    return Promise.resolve({ schema: 'main', name, kind: 'table', columns, indexes, foreignKeys: [...fkMap.values()] });
+  }
+
+  const driver: DatabaseDriver = {
+    testConnection() {
+      const row = db.prepare('SELECT sqlite_version() AS v').get() as { v: string };
+      return Promise.resolve({ serverVersion: `SQLite ${row.v}` });
+    },
+    listDatabases() {
+      const rows = db.pragma('database_list') as Array<{ name: string }>;
+      return Promise.resolve(rows.map((r) => r.name));
+    },
+    listSchemas() {
+      return Promise.resolve(['main']);
+    },
+    listTables() {
+      const rows = db
+        .prepare(
+          `SELECT name, type FROM sqlite_master
+            WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'
+            ORDER BY name`,
+        )
+        .all() as Array<{ name: string; type: string }>;
+      return Promise.resolve(
+        rows.map((r) => ({ schema: 'main', name: r.name, kind: r.type === 'view' ? ('view' as const) : ('table' as const) })) satisfies TableRef[],
+      );
+    },
+    describeTable,
+    async schema() {
+      const tables = await driver.listTables();
+      const out: TableInfo[] = [];
+      for (const t of tables) out.push(await describeTable('main', t.name));
+      return out;
+    },
+    runQuery,
+    query(sql, params) {
+      return runQuery(sql, { params });
+    },
+    close() {
+      db.close();
+      return Promise.resolve();
+    },
+  };
+  return driver;
+}

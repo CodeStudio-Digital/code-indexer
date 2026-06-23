@@ -78,6 +78,11 @@ export function ApiTokensPanel() {
     setFormScopes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
   };
 
+  // Hoisted out of the token `.map()` below — these are row-invariant, so
+  // resolving them once per render avoids an i18next lookup per token row.
+  const revokedLabel = t('auth.apiTokens.revoked');
+  const lastUsedLabel = t('auth.apiTokens.lastUsed');
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -106,14 +111,14 @@ export function ApiTokensPanel() {
                     {tok.tier}
                   </Badge>
                 )}
-                {tok.revoked_at && <Badge variant="destructive">{t('auth.apiTokens.revoked')}</Badge>}
+                {tok.revoked_at && <Badge variant="destructive">{revokedLabel}</Badge>}
               </div>
               <div className="text-xs text-muted-foreground mt-0.5 flex gap-3">
                 {/* Show scopes only when no tier is bound — tier names
                     are the meaningful gate to surface; scopes become an
                     internal implementation detail. */}
                 {!tok.tier && <span>{tok.scopes.join(' ')}</span>}
-                {tok.last_used_at && <span>{t('auth.apiTokens.lastUsed')}: {new Date(tok.last_used_at).toLocaleString()}</span>}
+                {tok.last_used_at && <span>{lastUsedLabel}: {new Date(tok.last_used_at).toLocaleString()}</span>}
               </div>
             </div>
             {!tok.revoked_at && (

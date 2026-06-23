@@ -14,15 +14,29 @@ import { createSharingBundle } from '../sharing-composition.js';
 import { createFeedbackBundle } from '../feedback-composition.js';
 import { createAccountAdmin, purgeAccountBlobs } from '../infra/account-admin.js';
 import { createD1Executor } from '../infra/d1/d1-executor.js';
+import { createVaultKeysRepo } from '../infra/d1/vault-keys-repo.js';
 import { pbkdf2Hasher } from '../infra/pbkdf2-hasher.js';
-import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { requireClaims, unauthorized, isVerified, emailNotVerified } from '../middleware/auth.js';
 import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
 import { recordAudit, recordAuditNow } from '../middleware/audit.js';
 
 const deleteSchema = z.object({ password: z.string().min(1).max(512), confirm: z.literal('DELETE') });
+const vaultKeySchema = z.object({ publicSpki: z.string().min(1).max(2048) });
 
 export function accountRouter(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
+
+  // POST /v1/account/vault/key — publish my ECDH public key so org admins can
+  // wrap a shared Team Vault Key to me. The private key never reaches the server.
+  app.post('/vault/key', async (c) => {
+    const parsed = vaultKeySchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid key.' }, 400);
+    const claims = await requireClaims(c, createIdentityBundle(c.env));
+    if (!claims) return unauthorized(c);
+    if (!isVerified(claims)) return emailNotVerified(c); // cloud WRITE (R3)
+    await createVaultKeysRepo(createD1Executor(c.env.DB)).putMemberKey(claims.sub, parsed.data.publicSpki, Date.now());
+    return c.json({ ok: true }, 200);
+  });
 
   // GET /v1/account/export — the user's data across identity/billing/sharing/feedback.
   app.get('/export', async (c) => {

@@ -9,65 +9,77 @@
  * carries the same signal (green=indexed, muted=pending) in 8px
  * instead of ~70px of horizontal real estate. Files / symbols / date
  * sit right-aligned with `·` separators so the row reads naturally.
+ *
+ * Memoized + fed stable callbacks from the parent: the compact list can be
+ * 40+ rows, and heap profiling showed this row's per-render churn (a fresh
+ * context-menu array + the per-row Radix `<Tooltip>` provider/portal) as a
+ * source of allocation and detached-DOM residue. The status hint is now a
+ * native `title`/`aria-label` (same string, zero JS/DOM cost).
  */
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Clock, Pencil } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { useContextMenu } from '../../../components/ui/context-menu.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { cn, formatRelativeTime } from '../../../lib/utils.js';
 import type { ProjectCardData } from './ProjectCard.js';
 import { buildProjectContextMenuItems } from './projectContextMenu.js';
 
 export interface ProjectRowProps {
   project: ProjectCardData;
-  onSelect: () => void;
-  onEdit: () => void;
+  /** Stable handlers from the parent (the row passes its own project back). */
+  onSelect: (project: ProjectCardData) => void;
+  onEdit: (project: ProjectCardData) => void;
 }
 
-export function ProjectRow({ project: p, onSelect, onEdit }: ProjectRowProps) {
+export const ProjectRow = memo(function ProjectRow({ project: p, onSelect, onEdit }: ProjectRowProps) {
   const { t } = useTranslation(['projects', 'common']);
   const indexed = !!p.last_indexed;
-  const { triggerProps, Menu } = useContextMenu(
-    buildProjectContextMenuItems({
-      project: p,
-      onSelect,
-      onEdit,
-      labels: {
-        open: t('projects:contextMenu.open', 'Open'),
-        openInNewWindow: t('projects:contextMenu.openInNewWindow', 'Open in new window'),
-        openInExplorer: t('projects:contextMenu.openInExplorer', 'Open in file explorer'),
-        copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
-        edit: t('projects:contextMenu.edit', 'Edit'),
-        copied: t('projects:contextMenu.copied', 'Copied'),
-      },
+  const statusLabel = indexed ? t('common:status.indexed') : t('common:status.pending');
+
+  const labels = useMemo(
+    () => ({
+      open: t('projects:contextMenu.open', 'Open'),
+      openInNewWindow: t('projects:contextMenu.openInNewWindow', 'Open in new window'),
+      openInExplorer: t('projects:contextMenu.openInExplorer', 'Open in file explorer'),
+      copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
+      edit: t('projects:contextMenu.edit', 'Edit'),
+      copied: t('projects:contextMenu.copied', 'Copied'),
     }),
+    [t],
   );
+  const menuItems = useMemo(
+    () =>
+      buildProjectContextMenuItems({
+        project: p,
+        onSelect: () => onSelect(p),
+        onEdit: () => onEdit(p),
+        labels,
+      }),
+    [p, onSelect, onEdit, labels],
+  );
+  const { triggerProps, Menu } = useContextMenu(menuItems);
+
   return (
     <div
-      onClick={onSelect}
+      onClick={() => onSelect(p)}
       {...triggerProps}
       className={cn(
         'group flex items-center gap-2.5 px-3 py-2 rounded-md border bg-card cursor-pointer',
         'hover:border-primary/40 hover:bg-card/80 transition-colors',
       )}
     >
-      {/* Status dot — green when indexed, muted otherwise. Replaces
-          the full Badge from the card view to save ~70px of width. */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            className={cn(
-              'h-2 w-2 rounded-full shrink-0',
-              indexed ? 'bg-emerald-500' : 'bg-muted-foreground/40',
-            )}
-            aria-label={indexed ? t('common:status.indexed') : t('common:status.pending')}
-          />
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          {indexed ? t('common:status.indexed') : t('common:status.pending')}
-        </TooltipContent>
-      </Tooltip>
+      {/* Status dot — green when indexed, muted otherwise. Replaces the full
+          Badge from the card view to save ~70px of width. The hover hint is a
+          native title (was a per-row Radix Tooltip — see file header). */}
+      <span
+        className={cn(
+          'h-2 w-2 rounded-full shrink-0',
+          indexed ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+        )}
+        title={statusLabel}
+        aria-label={statusLabel}
+      />
 
       <span className="font-medium text-sm truncate shrink-0 max-w-[260px]">{p.name}</span>
 
@@ -104,7 +116,7 @@ export function ProjectRow({ project: p, onSelect, onEdit }: ProjectRowProps) {
         className="h-7 w-7 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={(e) => {
           e.stopPropagation();
-          onEdit();
+          onEdit(p);
         }}
         aria-label={t('projects:editProject')}
       >
@@ -113,4 +125,4 @@ export function ProjectRow({ project: p, onSelect, onEdit }: ProjectRowProps) {
       {Menu}
     </div>
   );
-}
+});

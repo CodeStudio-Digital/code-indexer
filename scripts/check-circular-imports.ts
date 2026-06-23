@@ -27,6 +27,8 @@ const REPO_ROOT = process.cwd();
 
 const ROOTS = [
   'packages/services/src',
+  'packages/provider-sdk/src',
+  'packages/provider-engine/src',
   'packages/company/src',
   'packages/company-contracts/src',
   'packages/store/src',
@@ -41,6 +43,10 @@ const ROOTS = [
 const ALIAS_MAP: Array<{ prefix: string; replacement: string }> = [
   { prefix: '@mcp/services/', replacement: 'packages/services/src/' },
   { prefix: '@mcp/services', replacement: 'packages/services/src/index.ts' },
+  { prefix: '@mcp/provider-sdk/', replacement: 'packages/provider-sdk/src/' },
+  { prefix: '@mcp/provider-sdk', replacement: 'packages/provider-sdk/src/index.ts' },
+  { prefix: '@mcp/provider-engine/', replacement: 'packages/provider-engine/src/' },
+  { prefix: '@mcp/provider-engine', replacement: 'packages/provider-engine/src/index.ts' },
   { prefix: '@mcp/company-contracts/', replacement: 'packages/company-contracts/src/' },
   { prefix: '@mcp/company-contracts', replacement: 'packages/company-contracts/src/index.ts' },
   { prefix: '@mcp/company/', replacement: 'packages/company/src/' },

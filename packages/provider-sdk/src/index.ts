@@ -1,0 +1,15 @@
+/**
+ * @mcp/provider-sdk — the stable contract every LLM provider plugs into.
+ *
+ * Leaf package: depends only on `@mcp/shared`. Owns the wire format, the
+ * streaming + single-shot adapter interfaces, the credential shape, and the
+ * `defineProvider` authoring surface. Built-in and plugin providers alike are
+ * authored against these types; the core dispatches everything through them.
+ */
+export * from './wire.js';
+export * from './adapter.js';
+export * from './indexer.js';
+export * from './credentials.js';
+export * from './auth.js';
+export * from './provider.js';
+export * from './spec.js';

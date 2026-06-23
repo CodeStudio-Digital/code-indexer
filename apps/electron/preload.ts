@@ -157,6 +157,8 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   // same port). Implemented by apps/electron/src/terminal-ipc.ts.
   'terminal:open',
   'terminal:output',
+  'ssh:sftpDownloadStream',
+  'ssh:sftpUploadStream',
   'runner:events',
   'runtime:download',
   // Universal "Inspect" — stream of element selections from the CDP preview
@@ -295,6 +297,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('cloud:startBrowserLogin', provider) as Promise<{ ok: boolean; error?: string }>,
     onAuthChanged: (cb: (state: { state: string; account: unknown }) => void) => subscribe('cloud:auth-changed', cb),
   },
+  /**
+   * SSH credential shim — encrypt/decrypt saved-host secrets with the OS
+   * keychain (`safeStorage`). The renderer encrypts before persisting a host
+   * and decrypts just before connecting; SQLite only ever holds ciphertext.
+   */
+  ssh: {
+    encryptSecret: (plain: string) => ipcRenderer.invoke('ssh:encryptSecret', plain) as Promise<string>,
+    decryptSecret: (blob: string) => ipcRenderer.invoke('ssh:decryptSecret', blob) as Promise<string>,
+  },
+  /**
+   * Generalized device-bound secret shim (OS keychain via `safeStorage`).
+   * Shared by the SSH client, the database client, and any future sensitive
+   * store. `@mcp/secret-box` reads this bridge (falling back to `ssh` for
+   * back-compat). SQLite only ever holds the tagged ciphertext.
+   */
+  secrets: {
+    encrypt: (plain: string) => ipcRenderer.invoke('secrets:encrypt', plain) as Promise<string>,
+    decrypt: (blob: string) => ipcRenderer.invoke('secrets:decrypt', blob) as Promise<string>,
+  },
   // Primitives — see the IPC primitives section above. The renderer
   // builds a Proxy on top of these (Proxies don't cross contextBridge).
   invoke: invokeApi,
@@ -303,6 +324,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Open a bidirectional MessagePort stream. See openDuplex above. */
   openDuplexStream: (channel: string, payload: unknown) => openDuplex(`api:${channel}`, payload),
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+  /** SFTP upload source — native open-file dialog, returns absolute paths (or []). */
+  openFiles: () => ipcRenderer.invoke('dialog:openFiles') as Promise<string[]>,
+  /** SFTP download target — native save dialog, returns absolute path (or null). */
+  saveFile: (defaultName?: string) => ipcRenderer.invoke('dialog:saveFile', defaultName) as Promise<string | null>,
   openExternal: (url: string) => ipcRenderer.send('shell:openExternal', url),
   openPath: (path: string) => ipcRenderer.send('shell:openPath', path),
   /**

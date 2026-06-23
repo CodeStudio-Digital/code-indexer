@@ -27,7 +27,8 @@ import type { ProviderStore } from '@mcp/store/provider-store.js';
 // VS Code's public Copilot client id, documented in the GitHub Copilot
 // client library and used by all OSS Copilot integrations. This is not a
 // secret — it's the public identifier for the device flow.
-const COPILOT_CLIENT_ID = '01ab8ac9400c4e429b23';
+// Exported so the declarative `spec.auth` (specs/copilot.ts) is parity-tested.
+export const COPILOT_CLIENT_ID = '01ab8ac9400c4e429b23';
 
 const UA = 'GitHubCopilotChat/0.26.7';
 const EDITOR_VERSION = 'vscode/1.95.0';

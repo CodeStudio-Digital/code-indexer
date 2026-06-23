@@ -11,32 +11,9 @@ import type {
   ProviderKind,
   AuthMode,
 } from '@mcp/store/provider-store.js';
-import {
-  refreshIfExpired,
-  copilotHeaders,
-  getStoredCopilotOpts,
-} from '@mcp/services/services/oauth/copilot.js';
-import {
-  refreshIfExpired as refreshOpenAIToken,
-  openaiAuthHeaders,
-  CHATGPT_CODEX_BASE_URL,
-} from '@mcp/services/services/oauth/openai.js';
-import {
-  refreshIfExpired as refreshGoogleOAuthToken,
-} from '@mcp/services/services/oauth/google.js';
-import {
-  fetchClaudeCodeModels,
-} from '@mcp/services/services/oauth/claude-code.js';
-import {
-  fetchKimiCodeModels,
-  refreshIfExpired as refreshKimiCodeToken,
-} from '@mcp/services/services/oauth/kimi-code.js';
-import {
-  resolveClaudeCodeCreds,
-  resolveKimiCodeCreds,
-} from '@mcp/services/providers/shared/oauth.js';
+import { getDefinition } from '@mcp/services/providers/registry.js';
+import { resolveCreds } from '@mcp/services/providers/shared/resolver.js';
 import { publicProvider } from './shared/mask.js';
-import { resolveCopilotApiBase } from './shared/copilot-opts.js';
 import { refreshAllProviderModels } from '@mcp/indexer/indexer/providers/scheduled-refresh.js';
 
 export function providersRouter(store: ProviderStore): Hono {
@@ -61,6 +38,7 @@ export function providersRouter(store: ProviderStore): Hono {
         defaultBaseURL: def.defaultBaseURL ?? null,
         defaultModels: def.defaultModels,
         capabilities: def.capabilities ?? {},
+        visual: def.visual ?? null,
         supportsIndexer: !!(def.createIndexer || def.createIndexerAsync),
         supportsCoder: !!def.createCoder,
       })),
@@ -68,7 +46,15 @@ export function providersRouter(store: ProviderStore): Hono {
   });
 
   app.get('/providers', (c) => {
-    return c.json({ providers: store.listProviders().map(publicProvider) });
+    // Enrich each row with its definition's visual identity (icon name +
+    // accent classes) so the dashboard renders tiles data-driven instead of
+    // from a hardcoded kind→icon map. `null` for kinds without a definition.
+    return c.json({
+      providers: store.listProviders().map((p) => ({
+        ...publicProvider(p),
+        visual: getDefinition(p.kind)?.visual ?? null,
+      })),
+    });
   });
 
   app.get('/providers/:id', (c) => {
@@ -151,123 +137,25 @@ export function providersRouter(store: ProviderStore): Hono {
   });
 
   /**
-   * POST /providers/:id/test — cheap connectivity check. For OpenAI-compat
-   * kinds, hits /v1/models. For Anthropic-compat, tries a zero-token
-   * messages.create (the SDK rejects empty, so we use a tiny ping). Returns
-   * `{ok, latencyMs, error?}` so the UI can show a badge.
+   * POST /providers/:id/test — cheap connectivity check. Resolves credentials
+   * once (refreshing OAuth tokens), then delegates the actual ping to the
+   * provider definition's `testConnection`. Returns `{ok, latencyMs, error?}`
+   * so the UI can show a badge. Shapes without a `testConnection` (e.g. the
+   * OpenAI-compat zai/deepseek/cloudflare/moonshot) are a no-op pass, matching
+   * the prior behaviour. A plugin-contributed provider gets tested the same way.
    */
   app.post('/providers/:id/test', async (c) => {
     const cfg = store.getProvider(c.req.param('id'));
     if (!cfg) return c.json({ error: 'not found' }, 404);
 
+    const def = getDefinition(cfg.kind);
     const started = Date.now();
+    if (!def?.testConnection) {
+      return c.json({ ok: true, latencyMs: Date.now() - started });
+    }
     try {
-      if (cfg.kind === 'copilot') {
-        // Refresh short-lived Copilot token before testing.
-        let token = cfg.api_key ?? '';
-        try {
-          const fresh = await refreshIfExpired(store, cfg.id);
-          if (fresh) token = fresh;
-        } catch { /* fall through with existing token */ }
-        const opts = getStoredCopilotOpts(store, cfg.id);
-        const base = resolveCopilotApiBase(store, cfg);
-        const r = await fetch(`${base}/models`, {
-          headers: copilotHeaders(token, opts),
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      } else if (cfg.kind === 'chatgpt') {
-        // ChatGPT (Codex backend) — refresh the OAuth access token, then
-        // ping the Codex base with the auth headers. There's no public
-        // /models endpoint so we use a lightweight /responses HEAD-ish
-        // request; if the base URL returns anything other than 5xx/auth
-        // errors we consider the provider healthy.
-        let token = cfg.api_key ?? '';
-        try {
-          const fresh = await refreshOpenAIToken(store, cfg.id);
-          if (fresh) token = fresh;
-        } catch (e) {
-          throw new Error(`token refresh failed: ${(e as Error).message}`);
-        }
-        if (!token) throw new Error('no access token stored — re-connect');
-        const base = (cfg.base_url ?? CHATGPT_CODEX_BASE_URL).replace(/\/$/, '');
-        const r = await fetch(`${base}/health`, {
-          method: 'GET',
-          headers: openaiAuthHeaders(token),
-        }).catch(() => null);
-        // Some Codex edges don't expose /health; accept any response that
-        // isn't an auth failure as proof the token works.
-        if (r && (r.status === 401 || r.status === 403)) {
-          throw new Error(`HTTP ${r.status}`);
-        }
-      } else if (cfg.kind === 'openai' || cfg.kind === 'openrouter') {
-        const base = cfg.base_url ?? (
-          cfg.kind === 'openrouter'
-            ? 'https://openrouter.ai/api/v1'
-            : 'https://api.openai.com/v1'
-        );
-        const url = base.endsWith('/') ? `${base}models` : `${base}/models`;
-        const r = await fetch(url, {
-          headers: { Authorization: `Bearer ${cfg.api_key ?? ''}` },
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      } else if (cfg.kind === 'claude-code') {
-        const creds = await resolveClaudeCodeCreds(cfg);
-        await fetchClaudeCodeModels({
-          baseURL: creds.baseURL ?? cfg.base_url,
-          apiKey: creds.apiKey,
-          authToken: creds.authToken,
-          headers: creds.extraHeaders,
-          fetch: creds.fetch,
-        });
-      } else if (cfg.kind === 'kimi-code') {
-        const creds = await resolveKimiCodeCreds(cfg);
-        try {
-          await fetchKimiCodeModels({
-            baseURL: creds.baseURL ?? cfg.base_url,
-            apiKey: creds.apiKey,
-            headers: creds.extraHeaders,
-          });
-        } catch (e) {
-          if (!/HTTP 401/.test((e as Error).message)) throw e;
-          const fresh = await refreshKimiCodeToken(store, cfg.id, { force: true });
-          await fetchKimiCodeModels({
-            baseURL: creds.baseURL ?? cfg.base_url,
-            apiKey: fresh ?? creds.apiKey,
-            headers: creds.extraHeaders,
-          });
-        }
-      } else if (cfg.kind === 'anthropic') {
-        // Instantiate the adapter to validate key+baseURL; no network call is
-        // cheaper than a minimal /v1/messages ping, so use that.
-        const base = cfg.base_url ?? 'https://api.anthropic.com';
-        const url = `${base.replace(/\/$/, '')}/v1/models`;
-        const r = await fetch(url, {
-          headers: {
-            'x-api-key': cfg.api_key ?? '',
-            'anthropic-version': '2023-06-01',
-          },
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      } else if (cfg.kind === 'gemini') {
-        const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cfg.api_key ?? '')}`
-        );
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      } else if (cfg.kind === 'google-oauth') {
-        let token = cfg.api_key ?? '';
-        try {
-          const fresh = await refreshGoogleOAuthToken(store, cfg.id);
-          if (fresh) token = fresh;
-        } catch (e) {
-          throw new Error(`token refresh failed: ${(e as Error).message}`);
-        }
-        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      } else if (cfg.kind === 'bedrock') {
-        return c.json({ ok: false, error: 'bedrock test not implemented' });
-      }
+      const creds = await resolveCreds(def, cfg);
+      await def.testConnection({ config: cfg, creds });
       return c.json({ ok: true, latencyMs: Date.now() - started });
     } catch (e) {
       return c.json({ ok: false, latencyMs: Date.now() - started, error: (e as Error).message });

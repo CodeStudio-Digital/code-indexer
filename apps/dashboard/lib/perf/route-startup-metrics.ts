@@ -102,6 +102,15 @@ let nextRouteId = 1;
 let nextEventId = 1;
 let samples: MutableRouteStartupSample[] = [];
 
+// Collection is OFF by default. In a normal session nobody reads route-startup
+// telemetry, so the per-`apiCall`/`useApi` span wrapping and the 4 always-on
+// PerformanceObservers are pure overhead. The admin RouteStartupPanel
+// ref-counts collection ON only while it is mounted (see
+// `acquireRouteMetricsCollection`). While OFF every recorder below short-circuits.
+let collectionEnabled = false;
+let collectionRefs = 0;
+const activeObservers: PerformanceObserver[] = [];
+
 function perfNow(): number {
   if (typeof performance === 'undefined') {
     return Date.now();
@@ -142,7 +151,7 @@ function stripMutable(sample: MutableRouteStartupSample): RouteStartupSample {
 }
 
 function routeSampleFor(projectId?: number): MutableRouteStartupSample | undefined {
-  if (!current) {
+  if (!collectionEnabled || !current) {
     return undefined;
   }
   if (
@@ -324,9 +333,56 @@ function observePerformanceType(
       }
     });
     observer.observe({ type, buffered: true } as PerformanceObserverInit);
+    activeObservers.push(observer);
   } catch {
     // Optional browser metrics should never affect the app itself.
   }
+}
+
+/**
+ * Turn route-metrics collection on while a perf panel is mounted. Ref-counted
+ * so multiple holders can share it; the returned disposer releases one hold and
+ * tears the observers down when the last holder unmounts. `buffered: true` means
+ * paint/LCP/CLS/longtask entries from the initial page load are still replayed
+ * when collection starts later, so the panel sees startup history.
+ */
+export function acquireRouteMetricsCollection(): () => void {
+  collectionRefs += 1;
+  if (collectionRefs === 1) {
+    collectionEnabled = true;
+    ensureRouteStartupMetrics();
+    startInitialProjectRouteFromLocation();
+  }
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    collectionRefs = Math.max(0, collectionRefs - 1);
+    if (collectionRefs === 0) {
+      collectionEnabled = false;
+      stopRouteStartupMetrics();
+      current = undefined;
+    }
+  };
+}
+
+/** Disconnect the route-startup PerformanceObservers (best-effort). */
+export function stopRouteStartupMetrics(): void {
+  for (const observer of activeObservers) {
+    try {
+      observer.disconnect();
+    } catch {
+      // disconnect is best-effort.
+    }
+  }
+  activeObservers.length = 0;
+  started = false;
+}
+
+export function isRouteMetricsCollecting(): boolean {
+  return collectionEnabled;
 }
 
 function addVital(
@@ -366,7 +422,7 @@ export function startProjectRoute(
   projectId: number,
   options: { tab?: string; source?: string; startTimeMs?: number } = {},
 ): void {
-  if (!Number.isFinite(projectId)) {
+  if (!collectionEnabled || !Number.isFinite(projectId)) {
     return;
   }
   if (current?.route === PROJECT_ROUTE && current.projectId === projectId) {
@@ -560,6 +616,9 @@ export function recordRouteSpan(
 }
 
 export function startUseApiRouteSpan(url: string): (doneMeta?: RouteMetricMeta) => void {
+  if (!collectionEnabled) {
+    return () => undefined;
+  }
   const metric = classifyUseApiUrl(url);
   if (!metric) {
     return () => undefined;
@@ -573,6 +632,9 @@ export function startUseApiRouteSpan(url: string): (doneMeta?: RouteMetricMeta) 
 }
 
 export function recordUseApiCacheHit(url: string): void {
+  if (!collectionEnabled) {
+    return;
+  }
   const metric = classifyUseApiUrl(url);
   if (!metric) {
     return;
@@ -587,6 +649,9 @@ export function recordUseApiCacheHit(url: string): void {
 }
 
 export function startApiCallRouteSpan(path: string, input?: unknown): (doneMeta?: RouteMetricMeta) => void {
+  if (!collectionEnabled) {
+    return () => undefined;
+  }
   const metric = classifyApiCall(path, input);
   if (!metric) {
     return () => undefined;
@@ -599,6 +664,9 @@ export function startApiCallRouteSpan(path: string, input?: unknown): (doneMeta?
 }
 
 export function recordApiCallCacheHit(path: string, input?: unknown): void {
+  if (!collectionEnabled) {
+    return;
+  }
   const metric = classifyApiCall(path, input);
   if (!metric) {
     return;

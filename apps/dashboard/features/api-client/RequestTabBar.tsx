@@ -49,13 +49,15 @@ export function RequestTabBar({ requests, draftRequest, draftDirty, openTabIds, 
             onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); onClose(id); } }}
             title={info.name}
             className={cn(
-              'group/tab relative flex items-center gap-1.5 pl-2.5 pr-1 max-w-[180px] cursor-pointer border-r border-border/40 text-xs select-none',
+              // Shrink to fit the bar (each tab truncates with "…"); a min-width floor
+              // keeps the method+close usable, and the row scrolls only past that point.
+              'group/tab relative flex items-center gap-1.5 pl-2.5 pr-1 min-w-[96px] max-w-[200px] shrink cursor-pointer border-r border-border/40 text-xs select-none',
               active ? 'bg-background text-foreground' : 'text-muted-foreground hover:bg-muted/50',
             )}
           >
             {active && <div className="absolute left-0 right-0 top-0 h-0.5 bg-primary" />}
             <span className={cn('font-mono font-semibold text-[9px] shrink-0', METHOD_COLOR[info.method] ?? '')}>{info.method}</span>
-            <span className="truncate">{info.name}</span>
+            <span className="flex-1 min-w-0 truncate">{info.name}</span>
             {info.dirty && <span className="h-1.5 w-1.5 rounded-full bg-foreground/60 shrink-0 group-hover/tab:hidden" aria-hidden />}
             <button
               type="button"

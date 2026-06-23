@@ -1,5 +1,6 @@
 import type {
   AgentAttachment,
+  DecisionAnswers,
   StreamTask,
   StreamTaskExecutionMode,
 } from '../../hooks/useAgentStream.js';
@@ -296,6 +297,9 @@ export interface PromptHandlers {
     toolUseId: string,
     verdict: { approved: boolean; note?: string; alwaysAllow?: boolean },
   ) => Promise<void>;
+  /** Resolve a `decision_gate` questionnaire — the user's chosen approaches.
+   *  Optional so hosts that don't render plan-mode forks can omit it. */
+  onDecide?: (answers: DecisionAnswers) => Promise<void>;
 }
 
 // ─── Visual grouping for chat display ───────────────────────────

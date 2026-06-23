@@ -297,6 +297,11 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   // before calling it. MUST be listed explicitly: getToolTier falls back to
   // bootstrap for unlisted tools, which would expose it on turn 1.
   'create_skill',
+  // decision_gate — the plan agent's rich questionnaire of alternative
+  // approaches (richer ask_user). Navigate-tier, NOT bootstrap: the plan agent
+  // runs profile 'navigate' so it sees this, while solo bootstrap sessions keep
+  // it off their turn-1 surface (prefix-cache head stays put).
+  'decision_gate',
   // spawn_agent moved to BOOTSTRAP_TOOLS — orchestration tools live there
   // alongside expand_toolset/find_tools so any session can delegate.
   // execute_tasks (plural) is the new wave-based orchestrator (PR 3) —
@@ -576,6 +581,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   read_file: 'Read file contents (with line range support)',
   list_directory: 'List files and directories',
   ask_user: 'Ask the user a question and wait for a reply',
+  decision_gate: 'Present alternative approaches (with tradeoffs) for the user to choose before the plan',
   submit_plan: 'Submit an implementation plan for user approval',
   submit_tasks: 'Submit a task list for user approval',
   list_tasks: 'List current task ids and statuses',

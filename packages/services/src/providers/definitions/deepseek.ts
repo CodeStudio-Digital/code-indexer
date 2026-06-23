@@ -5,6 +5,7 @@ import { OpenAIChatProvider } from '@mcp/code-agent/providers/openai.js';
 export const deepseek = defineProvider({
   kind: 'deepseek',
   displayName: 'DeepSeek',
+  visual: { icon: 'Cpu', fg: 'text-indigo-500', bg: 'bg-indigo-500/15' },
   credKind: 'api-key',
   envVars: ['DEEPSEEK_API_KEY'],
   defaultBaseURL: 'https://api.deepseek.com/v1',

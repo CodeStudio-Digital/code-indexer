@@ -15,6 +15,9 @@ import {
   createGlobalWorkspaceSession,
   reuseGlobalWorkspaceSession,
   teardownGlobalWorkspaceIfOrphan,
+  attachProjectToGlobalSession,
+  detachProjectFromGlobalSession,
+  GlobalWorkspaceError,
 } from './global-workspace.js';
 import {
   coderWorkerEnabled,
@@ -229,6 +232,21 @@ export function mountCoderSessionsRoutes(
       }
     } catch {
       /* best-effort — teardown still proceeds */
+    }
+  };
+
+  // Is a run in flight for this session? Used to reject mutations that must not
+  // race a live run (attach/detach project: rebuilding/removing a junction mid-
+  // turn could pull the cwd out from under the agent). Best-effort: a false
+  // negative just lets the mutation through (the change still only takes effect
+  // on the next run anyway).
+  const isRunActive = (id: number): boolean => {
+    try {
+      if (coderWorkerEnabled()) return getCoderWorkerPool().isRunning(id);
+      const bus = activeRuns.get(id);
+      return !!bus && !bus.ended;
+    } catch {
+      return false;
     }
   };
 
@@ -747,6 +765,42 @@ export function mountCoderSessionsRoutes(
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(sessionStore.getSessionProjects(id));
+  });
+
+  /**
+   * Attach a real project to an existing global session's virtual workspace,
+   * after creation ("anexar projeto"). Rebuilds the junctions + warms the union
+   * index so the file tree/search pick it up now; the agent spans the new root
+   * on its NEXT run. Rejected (409) while a run is in flight. Returns the updated
+   * link set. MUST stay before the `/:id` catch-all (Hono route ordering).
+   */
+  app.post('/api/coder/sessions/:id/projects', async (c) => {
+    const id = parseIdParam(c);
+    if (isRunActive(id)) return c.json({ error: 'session is running' }, 409);
+    const body = await parseJsonBody<{ project_id?: number }>(c);
+    const projectId = Number(body.project_id);
+    if (!Number.isFinite(projectId)) return c.json({ error: 'project_id required' }, 400);
+    try {
+      return c.json(attachProjectToGlobalSession(deps, id, projectId));
+    } catch (e) {
+      if (e instanceof GlobalWorkspaceError) return c.json({ error: e.message }, e.status);
+      throw e;
+    }
+  });
+
+  /** Detach a real project from a global session's virtual workspace. Refuses the
+   *  primary / last project. Rejected (409) while a run is in flight. */
+  app.delete('/api/coder/sessions/:id/projects/:projectId', (c) => {
+    const id = parseIdParam(c);
+    if (isRunActive(id)) return c.json({ error: 'session is running' }, 409);
+    const projectId = parseInt(c.req.param('projectId') ?? '', 10);
+    if (!Number.isFinite(projectId)) return c.json({ error: 'invalid project id' }, 400);
+    try {
+      return c.json(detachProjectFromGlobalSession(deps, id, projectId));
+    } catch (e) {
+      if (e instanceof GlobalWorkspaceError) return c.json({ error: e.message }, e.status);
+      throw e;
+    }
   });
 
   app.get('/api/coder/sessions/:id', (c) => {

@@ -17,6 +17,8 @@ import pluginsPtBR from './locales/pt-BR/plugins.json';
 import settingsPtBR from './locales/pt-BR/settings.json';
 import cloudPtBR from './locales/pt-BR/cloud.json';
 import apiClientPtBR from './locales/pt-BR/apiClient.json';
+import sshPtBR from './locales/pt-BR/ssh.json';
+import dbClientPtBR from './locales/pt-BR/dbClient.json';
 
 import commonEn from './locales/en/common.json';
 import adminEn from './locales/en/admin.json';
@@ -33,6 +35,8 @@ import pluginsEn from './locales/en/plugins.json';
 import settingsEn from './locales/en/settings.json';
 import cloudEn from './locales/en/cloud.json';
 import apiClientEn from './locales/en/apiClient.json';
+import sshEn from './locales/en/ssh.json';
+import dbClientEn from './locales/en/dbClient.json';
 
 i18n
   .use(LanguageDetector)
@@ -55,6 +59,8 @@ i18n
         settings: settingsPtBR,
         cloud: cloudPtBR,
         apiClient: apiClientPtBR,
+        ssh: sshPtBR,
+        dbClient: dbClientPtBR,
       },
       en: {
         common: commonEn,
@@ -72,6 +78,8 @@ i18n
         settings: settingsEn,
         cloud: cloudEn,
         apiClient: apiClientEn,
+        ssh: sshEn,
+        dbClient: dbClientEn,
       },
     },
     fallbackLng: 'pt-BR',

@@ -16,6 +16,7 @@ import { GeminiChatProvider } from '@mcp/code-agent/providers/gemini.js';
 export const googleOAuth = defineProvider({
   kind: 'google-oauth',
   displayName: 'Google (OAuth)',
+  visual: { icon: 'Globe', fg: 'text-blue-500', bg: 'bg-blue-500/15' },
   credKind: 'oauth',
   envVars: [],
   /**
@@ -64,4 +65,11 @@ export const googleOAuth = defineProvider({
       cloudCodeSessionId: opts?.cloudCodeSessionId,
       model: model ?? 'gemini-2.5-flash',
     }),
+  testConnection: async ({ creds }) => {
+    // `resolveGoogleOAuthCreds` already refreshed the access token (as apiKey).
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: { Authorization: `Bearer ${creds.apiKey ?? ''}` },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  },
 });

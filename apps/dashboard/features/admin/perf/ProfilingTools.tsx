@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
 import { apiBaseUrl } from '../../../lib/api-client.js';
-import { ensureRendererVitals, getLongTasks, clearLongTasks } from './renderer-vitals.js';
+import { ensureRendererVitals, stopRendererVitals, getLongTasks, clearLongTasks } from './renderer-vitals.js';
 import { RouteStartupPanel } from './RouteStartupPanel.js';
 
 interface SlowCallRow {
@@ -87,7 +87,10 @@ export function ProfilingTools() {
       void loadSlowCalls();
       void loadFreezes();
     }, 10_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      stopRendererVitals();
+    };
   }, []);
 
   const runCpuProfile = async () => {

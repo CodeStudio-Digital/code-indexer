@@ -28,13 +28,15 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 
-const OPENAI_CLIENT_ID = process.env.OPENAI_OAUTH_CLIENT_ID ?? 'app_EMoamEEZ73f0CkXaXp7hrann';
+// CLIENT_ID/AUTHORIZE_URL/TOKEN_URL/SCOPES exported so the declarative
+// `spec.auth` (provider-engine specs/chatgpt.ts) is parity-tested against source.
+export const OPENAI_CLIENT_ID = process.env.OPENAI_OAUTH_CLIENT_ID ?? 'app_EMoamEEZ73f0CkXaXp7hrann';
 const OPENAI_AUTH_HOST = 'https://auth.openai.com';
-const OPENAI_AUTHORIZE_URL = `${OPENAI_AUTH_HOST}/oauth/authorize`;
-const OPENAI_TOKEN_URL = `${OPENAI_AUTH_HOST}/oauth/token`;
+export const OPENAI_AUTHORIZE_URL = `${OPENAI_AUTH_HOST}/oauth/authorize`;
+export const OPENAI_TOKEN_URL = `${OPENAI_AUTH_HOST}/oauth/token`;
 const OPENAI_REDIRECT_PORT = 1455;
 const OPENAI_REDIRECT_URI = `http://localhost:${OPENAI_REDIRECT_PORT}/auth/callback`;
-const OPENAI_SCOPES = 'openid profile email offline_access';
+export const OPENAI_SCOPES = 'openid profile email offline_access';
 
 /**
  * Default Codex edge. Override with CHATGPT_CODEX_BASE_URL.

@@ -11,6 +11,7 @@ import {
   FileCode2,
   GitBranch,
   MessageSquareCode,
+  Server,
   Webhook,
   Workflow,
   type LucideIcon,
@@ -36,6 +37,7 @@ export const TABS: TabDef[] = [
   // 'runners' migrou para o BottomPanel (aba ao lado de Terminal/Problems/
   // Output/Find) — rodar scripts e ver saída de PTY são a mesma atividade.
   { id: 'api',          label: 'API',           icon: Webhook,           group: 'core' },
+  { id: 'databases',    label: 'Databases',     icon: Server,            group: 'core' },
   { id: 'docs',         label: 'Docs',          icon: BookText,          group: 'core' },
   { id: 'diagrams',     label: 'Diagrams',      icon: Workflow,          group: 'core' },
   // Index — aba unificada: busca (hybrid/FTS/vector), controle do indexer (run +

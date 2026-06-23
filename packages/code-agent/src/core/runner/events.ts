@@ -91,6 +91,24 @@ export interface RunnerEvents {
   /** Emitted when the agent calls ask_user; payload waits for /answer. */
   question_posted: (block: QuestionBlock) => void;
   /**
+   * Emitted when the agent calls `decision_gate` — a richer multi-question
+   * questionnaire of alternative approaches. Payload waits for POST /decide.
+   * Mirrors `tasks_posted`: a custom-shaped SSE event (NOT a persisted
+   * ContentBlock), forwarded 1:1 by runnerWiring → published as `decision`.
+   */
+  decision_posted: (payload: {
+    id: string;
+    header?: string;
+    questions: Array<{
+      id: string;
+      header?: string;
+      question: string;
+      multiSelect?: boolean;
+      options: Array<{ label: string; value: string; summary?: string; tradeoffs?: string }>;
+    }>;
+    allowFreeform?: boolean;
+  }) => void;
+  /**
    * Emitted by the PermissionGate when a write/execute/admin tool call pauses
    * waiting for user approval (modes 'ask'/'auto'). Resolved via
    * POST /tool-approval → provideUserInput(json, 'tool_approval:<toolUseId>').

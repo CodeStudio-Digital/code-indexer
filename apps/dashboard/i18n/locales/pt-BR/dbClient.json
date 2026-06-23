@@ -1,0 +1,59 @@
+{
+  "title": "Bancos de dados",
+  "connections": {
+    "title": "Conexões",
+    "add": "Nova conexão",
+    "empty": "Nenhuma conexão salva",
+    "search": "Filtrar conexões…",
+    "connect": "Conectar",
+    "disconnect": "Desconectar",
+    "edit": "Editar…",
+    "delete": "Excluir",
+    "refresh": "Atualizar",
+    "newQuery": "Nova consulta",
+    "deleteTitle": "Excluir conexão?",
+    "deleteBody": "Isso remove a conexão salva e o histórico de consultas dela.",
+    "connecting": "Conectando…"
+  },
+  "dialog": {
+    "titleNew": "Nova conexão",
+    "titleEdit": "Editar conexão",
+    "name": "Nome",
+    "engine": "Motor",
+    "host": "Host",
+    "port": "Porta",
+    "user": "Usuário",
+    "password": "Senha",
+    "database": "Banco",
+    "filePath": "Caminho do arquivo",
+    "ssl": "Modo SSL",
+    "readOnly": "Somente leitura (bloquear escrita)",
+    "test": "Testar conexão",
+    "testing": "Testando…",
+    "testOk": "Conexão OK",
+    "testFail": "Falha na conexão",
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "namePlaceholder": "Meu banco",
+    "passwordKept": "Deixe em branco para manter a senha salva",
+    "filePlaceholder": "C:/caminho/para/db.sqlite"
+  },
+  "toolbar": {
+    "noConnection": "Nenhuma conexão selecionada",
+    "connectedTo": "Conectado"
+  },
+  "query": {
+    "placeholder": "Escreva SQL e clique em Executar (Ctrl/Cmd+Enter)",
+    "run": "Executar",
+    "running": "Executando…",
+    "cancel": "Cancelar",
+    "noActive": "Conecte a um banco para executar consultas",
+    "empty": "Nenhuma linha retornada",
+    "rows": "linhas",
+    "affected": "afetadas",
+    "elapsed": "ms"
+  },
+  "tree": {
+    "loading": "Carregando…"
+  }
+}

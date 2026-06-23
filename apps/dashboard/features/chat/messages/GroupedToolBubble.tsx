@@ -105,7 +105,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
               renderAssistantBlock(
                 b,
                 mi * 1000 + bi,
-                { onAnswer: handlers.onAnswer, onPlanResponse: handlers.onPlanResponse, onTasksResponse: handlers.onTasksResponse },
+                { onAnswer: handlers.onAnswer, onPlanResponse: handlers.onPlanResponse, onTasksResponse: handlers.onTasksResponse, onDecide: handlers.onDecide },
                 toolResultsById,
                 tasksState,
                 activeTasksToolUseId,

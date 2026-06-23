@@ -15,11 +15,16 @@ describe('tool tiers', () => {
     // 3 and 4 — lazy tool discovery and reviewer subagent).
     // Bumped to 42 when `rag_search_docs` joined (Documentação feature —
     // read-only RAG over the user-curated doc corpus).
-    expect(TIER_COUNTS.bootstrap).toBe(42);
+    // Refreshed to 54 after subsequent tier additions (rag_read_doc /
+    // rag_doc_outline, skill discovery, kanban/DS comms, etc.).
+    expect(TIER_COUNTS.bootstrap).toBe(54);
   });
 
   it('navigate tier contains the expected tools', () => {
-    expect(TIER_COUNTS.navigate).toBe(41);
+    // Refreshed to 62; +1 is `decision_gate` (plan-mode questionnaire of
+    // alternative approaches — navigate-tier so it stays off the turn-1
+    // bootstrap surface).
+    expect(TIER_COUNTS.navigate).toBe(62);
   });
 
   it('admin tier contains the expected tools', () => {

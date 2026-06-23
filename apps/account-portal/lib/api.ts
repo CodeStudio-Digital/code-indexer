@@ -326,6 +326,14 @@ export const api = {
   orgBillingCheckout: (orgId: string, seats?: number) =>
     request<{ url: string }>(`/v1/orgs/${encodeURIComponent(orgId)}/billing/checkout`, { body: { seats } }),
   orgBillingPortal: (orgId: string) => request<{ url: string }>(`/v1/orgs/${encodeURIComponent(orgId)}/billing/portal`, { method: 'POST' }),
+
+  // SSH vault (zero-knowledge): the portal manages key distribution metadata only — it
+  // never sees plaintext or vault keys. `vaultMembers` = who published a key (grant-ready);
+  // `vaultRotate` invalidates all grants so an admin can re-share after a membership change.
+  vaultMembers: (orgId: string) =>
+    request<{ members: { accountId: string; publicSpki: string }[] }>(`/v1/orgs/${encodeURIComponent(orgId)}/vault/members`),
+  vaultRotate: (orgId: string, projectWorkspaceId: string) =>
+    request<{ ok: true }>(`/v1/orgs/${encodeURIComponent(orgId)}/vault/rotate`, { body: { projectWorkspaceId } }),
 };
 
 export interface HostedDoc {

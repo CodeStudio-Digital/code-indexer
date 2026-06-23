@@ -84,7 +84,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Long-term memory': 440,
   '# Memory (session + project)': 1300,
   '# Style': 290,
-  '# Plan mode is ACTIVE': 4250, // specialist plan.txt rewrite + ## Plan depth block (mig 151); complex variant ≈ 3866 + ~10%
+  '# Plan mode is ACTIVE': 5480, // plan.txt + ## Plan depth block + decision-gate step/section; complex variant ≈ 4974 + ~10%
 
   '# Explore mode is ACTIVE': 2420,
   '# Build mode is ACTIVE': 2530,
@@ -99,7 +99,7 @@ const SECTION_BUDGETS: Record<string, number> = {
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
   default: 11000,   // zai · navigate · no plan · no agentId · loop v2 · drive
-  planMode: 14300,  // same + specialist plan.txt + ## Plan depth block (mig 151); normal ≈ 13839, complex ≈ 13918
+  planMode: 15400,  // same + specialist plan.txt + ## Plan depth block + decision-gate guidance; normal ≈ 14952, complex ≈ 15026
 };
 
 interface Composition {

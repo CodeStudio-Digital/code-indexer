@@ -1,15 +1,11 @@
 /**
- * Tool definition shared by native tools (fs/shell/git) and bridged MCP tools.
- *
- * `parameters` is a JSON Schema object describing the tool input. Each provider
- * adapter knows how to translate this into its vendor-specific tool spec.
+ * `JsonSchema` (the tool-input schema) now lives in `@mcp/provider-sdk` so the
+ * provider adapter contract can reference it without depending back into
+ * code-agent. Re-exported here so existing importers keep working.
  */
-export interface JsonSchema {
-  type: 'object';
-  properties: Record<string, unknown>;
-  required?: string[];
-  additionalProperties?: boolean;
-}
+export type { JsonSchema } from '@mcp/provider-sdk';
+
+import type { JsonSchema } from '@mcp/provider-sdk';
 
 /**
  * Coarse risk classification used by the policy module to decide whether a

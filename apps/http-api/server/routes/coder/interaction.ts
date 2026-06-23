@@ -6,7 +6,7 @@ import {
   formatTasksApprovedResult,
   formatTasksRejectedResult,
 } from '@mcp/code-agent/tools/tasks.js';
-import { formatAskUserResult } from '@mcp/code-agent/tools/interaction.js';
+import { formatAskUserResult, formatDecisionGateResult } from '@mcp/code-agent/tools/interaction.js';
 import { approvalAskId, buildUserDeniedText } from '@mcp/code-agent/core/permission-gate.js';
 import { createChatProviderAsync } from '@mcp/services/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
@@ -20,6 +20,11 @@ import { emitWorkerLog } from '../../../coder-bus.js';
 
 interface AnswerBody {
   answer: string;
+}
+
+interface DecideBody {
+  /** Chosen option values + optional free-form note, keyed by question id. */
+  answers: Record<string, { selected?: string[]; freeform?: string }>;
 }
 
 interface PlanResponseBody {
@@ -203,6 +208,64 @@ export function mountCoderInteractionRoutes(
         type: 'tool_result',
         tool_use_id: pending.toolUseId,
         content: formatAskUserResult(answer),
+      }],
+    };
+    sessionStore.appendMessage(id, toolMsg);
+    return c.json(
+      inWorkerMode
+        ? { ok: true, resumed_via_worker: true }
+        : { ok: true, resumed: true },
+    );
+  });
+
+  /**
+   * Resolve a pending `decision_gate` questionnaire — the user picked among the
+   * alternative approaches. Mirrors /answer: live path resolves the runner's
+   * pending `waitForUserInput()`; dead-runner path reconstructs the tool_result
+   * from the persisted tool_use input (the original questions) so a restart
+   * mid-questionnaire still resumes.
+   */
+  app.post('/api/coder/sessions/:id/decide', async (c) => {
+    const id = parseIdParam(c);
+    const body = await c.req.json<DecideBody>();
+    const answers = body.answers && typeof body.answers === 'object' ? body.answers : {};
+    logRouteHit(id, '/decide', { questions: Object.keys(answers).length });
+    const payload = JSON.stringify({ answers });
+    const inWorkerMode = coderWorkerEnabled();
+    if (inWorkerMode) {
+      try {
+        const ok = await getCoderWorkerPool().provideUserInput(id, payload);
+        if (ok) return c.json({ ok: true });
+      } catch (err) {
+        console.warn(
+          `[coder] worker provideUserInput(decide) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    const entry = activeRuns.get(id);
+    if (entry?.runner) {
+      const ok = entry.runner.provideUserInput(payload);
+      if (ok) return c.json({ ok });
+    }
+    const pending = findPendingInteraction(id);
+    if (!pending || pending.name !== 'decision_gate') {
+      return c.json({ error: 'no pending decision' }, 404);
+    }
+    const rawQuestions = (pending.input as { questions?: unknown } | undefined)?.questions;
+    const questions = Array.isArray(rawQuestions)
+      ? (rawQuestions as Array<{
+          id: string;
+          header?: string;
+          question: string;
+          options: Array<{ label: string; value: string }>;
+        }>)
+      : [];
+    const toolMsg: AgentMessage = {
+      role: 'tool',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: pending.toolUseId,
+        content: formatDecisionGateResult(questions, answers),
       }],
     };
     sessionStore.appendMessage(id, toolMsg);

@@ -2,6 +2,8 @@ export type ProviderKind =
   | 'anthropic'
   | 'claude-code'
   | 'openai'
+  | 'deepseek'
+  | 'zai'
   | 'gemini'
   | 'bedrock'
   | 'copilot'
@@ -11,6 +13,17 @@ export type ProviderKind =
   | 'kimi-code'
   | 'cloudflare'
   | 'moonshot';
+
+/**
+ * Renderer-safe provider visual identity, shipped by the backend from the
+ * provider definition. `icon` is a lucide icon NAME (resolved to a component
+ * in `provider-icons.tsx`); the two classes are Tailwind fg/bg accents.
+ */
+export interface ProviderVisualData {
+  icon: string;
+  fg: string;
+  bg: string;
+}
 
 export interface AdminProvider {
   id: string;
@@ -27,6 +40,8 @@ export interface AdminProvider {
   is_default: boolean;
   extra: Record<string, unknown>;
   fallback_provider_id: string | null;
+  /** Visual identity from the provider definition (null for unknown kinds). */
+  visual?: ProviderVisualData | null;
 }
 
 export interface AdminModel {

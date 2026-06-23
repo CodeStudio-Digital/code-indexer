@@ -2,6 +2,7 @@ import { defineProvider } from '../types.js';
 import { ChatGPTProvider } from '@mcp/indexer/indexer/providers/chatgpt.js';
 import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
 import { getStore } from '../shared/store.js';
+import { openaiAuthHeaders, CHATGPT_CODEX_BASE_URL } from '../../services/oauth/openai.js';
 
 /**
  * ChatGPT (Codex PKCE OAuth). credKind='oauth' — `resolveCreds` dispatches
@@ -12,6 +13,7 @@ import { getStore } from '../shared/store.js';
 export const chatgpt = defineProvider({
   kind: 'chatgpt',
   displayName: 'ChatGPT (Codex OAuth)',
+  visual: { icon: 'MessagesSquare', fg: 'text-emerald-400', bg: 'bg-emerald-400/15' },
   credKind: 'oauth',
   envVars: [],
   defaultModels: ['gpt-5.3-codex', 'gpt-5-codex', 'gpt-4o'],
@@ -76,5 +78,16 @@ export const chatgpt = defineProvider({
       applyPatchToolType,
       imageGenerationEnabled,
     });
+  },
+  testConnection: async ({ creds }) => {
+    // `resolveChatGPTCreds` already refreshed the access token. The Codex
+    // backend has no public /models; accept any non-auth response from /health.
+    if (!creds.apiKey) throw new Error('no access token stored — re-connect');
+    const base = (creds.baseURL ?? CHATGPT_CODEX_BASE_URL).replace(/\/$/, '');
+    const r = await fetch(`${base}/health`, {
+      method: 'GET',
+      headers: openaiAuthHeaders(creds.apiKey),
+    }).catch(() => null);
+    if (r && (r.status === 401 || r.status === 403)) throw new Error(`HTTP ${r.status}`);
   },
 });

@@ -18,6 +18,7 @@ import { BedrockChatProvider } from '@mcp/code-agent/providers/bedrock.js';
 export const bedrock = defineProvider({
   kind: 'bedrock',
   displayName: 'AWS Bedrock',
+  visual: { icon: 'Cloud', fg: 'text-amber-500', bg: 'bg-amber-500/15' },
   credKind: 'aws',
   envVars: [],
   defaultModels: [
@@ -48,4 +49,9 @@ export const bedrock = defineProvider({
       secretAccessKey: creds.aws?.secretAccessKey,
       sessionToken: creds.aws?.sessionToken,
     }),
+  // No cheap connectivity probe for Bedrock (SigV4 + Converse has no free
+  // ping). Surfaced as an explicit test failure, matching prior behaviour.
+  testConnection: async () => {
+    throw new Error('bedrock test not implemented');
+  },
 });

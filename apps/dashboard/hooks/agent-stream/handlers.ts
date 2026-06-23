@@ -304,6 +304,26 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flush();
     },
 
+    decision: (data) => {
+      const d = data as {
+        id: string;
+        header?: string;
+        questions: Array<{
+          id: string;
+          header?: string;
+          question: string;
+          multiSelect?: boolean;
+          options: Array<{ label: string; value: string; summary?: string; tradeoffs?: string }>;
+        }>;
+        allowFreeform?: boolean;
+      };
+      blocks.push({
+        type: 'decision',
+        decision: { id: d.id, header: d.header, questions: d.questions, allowFreeform: d.allowFreeform },
+      });
+      flush();
+    },
+
     tasks_posted: (data) => {
       const d = data as { tool_use_id: string; summary: string; tasks: StreamTask[]; version: number };
       blocks.push({

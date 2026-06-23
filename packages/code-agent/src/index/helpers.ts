@@ -1,4 +1,4 @@
-import type { CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
+import { getDefinition } from '@mcp/services/providers/registry.js';
 
 /**
  * Best-effort file-path extraction from the user's prompt text. Used by the
@@ -25,25 +25,13 @@ export function extractFilePathsFromText(text: string): string[] {
  * Default model id for a provider when the caller didn't specify one. Used
  * by `runCoder` when creating a fresh session via the `{ create: { ... } }`
  * shape and the operator passed only a provider.
+ *
+ * Registry-driven (replaces a hardcoded, defaultless `switch` that returned
+ * `undefined` for the 6 kinds it omitted): the provider definition declares
+ * its preferred `defaultModel`, falling back to the head of `defaultModels`,
+ * and finally to a safe Sonnet default for an unknown/plugin kind.
  */
-export function defaultModelFor(provider: CoderProviderName): string {
-  switch (provider) {
-    case 'anthropic':
-    case 'claude-code':
-      return 'claude-sonnet-4-6';
-    case 'openai':
-      return 'gpt-4o-mini';
-    case 'openrouter':
-      return '~openai/gpt-latest';
-    case 'zai':
-      return 'glm-5.1';
-    case 'deepseek':
-      return 'deepseek-chat';
-    case 'kimi-code':
-      return 'kimi-k2.6';
-    case 'gemini':
-      // 2.5-flash is the current free-tier model; 2.0-flash has its free
-      // quota set to 0 as of April 2026 and returns 429 immediately.
-      return 'gemini-2.5-flash';
-  }
+export function defaultModelFor(provider: string): string {
+  const def = getDefinition(provider);
+  return def?.defaultModel ?? def?.defaultModels?.[0] ?? 'claude-sonnet-4-6';
 }

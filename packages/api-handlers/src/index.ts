@@ -15,6 +15,8 @@ import type { Api } from '@mcp/api-bus';
 import { createProjectsHandlers } from './projects/index.js';
 import { createFilesHandlers } from './files/index.js';
 import { createTerminalHandlers } from './terminal/index.js';
+import { createSshHandlers } from './ssh/index.js';
+import { createDbClientHandlers } from './db-client/index.js';
 import { createRunnerHandlers } from './runner/index.js';
 import { createRuntimeHandlers } from './runtime/index.js';
 import { createCoderHandlers } from './coder/index.js';
@@ -44,6 +46,8 @@ export {
 } from './projects/link-design-system.js';
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
+export { createSshHandlers, sharedSshManager } from './ssh/index.js';
+export { createDbClientHandlers } from './db-client/index.js';
 export { createRunnerHandlers } from './runner/index.js';
 export { sharedPtyManager } from './terminal/pty-manager.js';
 export { createRuntimeHandlers } from './runtime/index.js';
@@ -100,6 +104,8 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     projects: createProjectsHandlers(deps),
     files: createFilesHandlers(deps),
     terminal: createTerminalHandlers(deps),
+    ssh: createSshHandlers(deps),
+    dbClient: createDbClientHandlers(deps),
     runner: createRunnerHandlers(deps),
     runtime: createRuntimeHandlers(deps),
     coder: createCoderHandlers(deps),

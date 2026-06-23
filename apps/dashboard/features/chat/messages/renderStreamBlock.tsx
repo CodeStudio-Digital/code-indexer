@@ -2,6 +2,7 @@ import type { StreamBlock } from '../../../hooks/agent-stream/types.js';
 import { PlanPromptView } from '../prompts/PlanPromptView.js';
 import { SpecPromptView } from '../prompts/SpecPromptView.js';
 import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
+import { DecisionGateView } from '../prompts/DecisionGateView.js';
 import { TaskListReview } from '../prompts/TaskListReview.js';
 import type { PromptHandlers } from '../types.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
@@ -85,6 +86,15 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
   }
   if (block.type === 'agents') {
     return <AgentsGroupBlock key={`ag-${block.group.groupId}`} group={block.group} />;
+  }
+  if (block.type === 'decision') {
+    return (
+      <DecisionGateView
+        key={`dg-${block.decision.id}`}
+        decision={block.decision}
+        onConfirm={handlers.onDecide ?? (async () => { /* no-op when unwired */ })}
+      />
+    );
   }
   return (
     <QuestionPromptView key={`qq-${block.question.id}`} question={block.question} onAnswer={handlers.onAnswer} />

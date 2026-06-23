@@ -76,6 +76,31 @@ export interface QuestionPrompt {
   resolved?: string;
 }
 
+// ─── Decision gate (decision_gate tool) ───────────────────────
+export interface DecisionOption {
+  label: string;
+  value: string;
+  summary?: string;
+  tradeoffs?: string;
+}
+export interface DecisionQuestion {
+  id: string;
+  header?: string;
+  question: string;
+  multiSelect?: boolean;
+  options: DecisionOption[];
+}
+/** User's choices, keyed by question id. `selected` holds chosen option values. */
+export type DecisionAnswers = Record<string, { selected: string[]; freeform?: string }>;
+export interface DecisionPrompt {
+  id: string;
+  header?: string;
+  questions: DecisionQuestion[];
+  allowFreeform?: boolean;
+  /** Read-only answers once resolved (history rendering). */
+  resolved?: DecisionAnswers;
+}
+
 export type StreamTaskMode = 'inline' | 'subagent';
 export type StreamTaskExecutionMode = 'inline' | 'all-subagent' | 'smart' | 'per-task';
 export type StreamTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped' | 'interrupted';
@@ -230,6 +255,7 @@ export type StreamBlock =
   | { type: 'plan'; plan: PlanPrompt }
   | { type: 'spec'; spec: SpecPrompt }
   | { type: 'question'; question: QuestionPrompt }
+  | { type: 'decision'; decision: DecisionPrompt }
   | { type: 'tasks'; tasks: TasksPrompt }
   | { type: 'task_run'; run: TaskRunState }
   | { type: 'agents'; group: AgentsGroup };

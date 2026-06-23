@@ -35,6 +35,7 @@ function readString(value: unknown): string | undefined {
 export const openrouter = defineProvider({
   kind: 'openrouter',
   displayName: 'OpenRouter',
+  visual: { icon: 'Network', fg: 'text-pink-500', bg: 'bg-pink-500/15' },
   credKind: 'api-key',
   envVars: ['OPENROUTER_API_KEY'],
   defaultBaseURL: DEFAULT_BASE_URL,
@@ -68,4 +69,10 @@ export const openrouter = defineProvider({
       defaultHeaders: buildOpenRouterHeaders(creds.extra),
       vendor: 'openrouter',
     }),
+  testConnection: async ({ creds }) => {
+    const base = creds.baseURL ?? DEFAULT_BASE_URL;
+    const url = base.endsWith('/') ? `${base}models` : `${base}/models`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${creds.apiKey ?? ''}` } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  },
 });

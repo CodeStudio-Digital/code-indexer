@@ -20,8 +20,16 @@ import {
   buildGlobalWorkspace,
   cleanupGlobalWorkspace,
 } from '@mcp/code-agent/core/virtual-workspace.js';
-import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { CoderSession, LinkedProject } from '@mcp/code-agent/sessions/types.js';
 import type { ServerDeps } from '../../deps.js';
+
+/** A typed failure for the link-mutation helpers — the route maps `.status`. */
+export class GlobalWorkspaceError extends Error {
+  constructor(message: string, readonly status: 400 | 404 | 409) {
+    super(message);
+    this.name = 'GlobalWorkspaceError';
+  }
+}
 
 export interface CreateGlobalInput {
   title: string;
@@ -120,15 +128,21 @@ export function reuseGlobalWorkspaceSession(
 }
 
 /**
- * Rebuild the synthetic project's junctions from the session's linked projects.
- * Idempotent — repairs a missing/cleaned workspace when a global session is
- * (re)opened, before indexing. No-op for non-global / non-synthetic sessions.
+ * Rebuild the synthetic project's junctions from the UNION of every session on
+ * the workspace (`listUnionProjects`), not just this session's slice. The union
+ * dir is shared + refcounted across sibling sessions, and runtime/memory already
+ * resolve the set this way (`db.listUnionProjectIds`), so building the physical
+ * dir from the same aggregate keeps it from flip-flopping when siblings diverge
+ * (e.g. one attaches a project the other lacks). For the common 1-session union
+ * this is identical to the per-session set. Idempotent — repairs a missing /
+ * cleaned workspace when a global session is (re)opened, before indexing. No-op
+ * for non-global / non-synthetic sessions.
  */
 export function ensureGlobalWorkspaceLinks(deps: ServerDeps, session: CoderSession): void {
   if (!session.is_global) return;
   const sp = deps.db.getProject(session.project_id);
   if (!sp?.is_synthetic) return;
-  const linked = deps.sessionStore.getSessionProjects(session.id);
+  const linked = deps.sessionStore.listUnionProjects(sp.id);
   if (linked.length === 0) {
     // Every linked real project was deleted — the agent would run over a stale
     // empty union. Surface it rather than silently no-op'ing.
@@ -136,6 +150,66 @@ export function ensureGlobalWorkspaceLinks(deps: ServerDeps, session: CoderSessi
     return;
   }
   buildGlobalWorkspace(sp.root_path, linked.map((l) => ({ name: l.name, rootPath: l.root_path })));
+}
+
+/**
+ * Attach a real project to an existing global session's virtual workspace, then
+ * rebuild the junctions + warm the union index so the new files surface in the
+ * tree/search immediately. The agent itself spans the new root on its NEXT run
+ * (roots/env/memory are re-read at run start). Throws `GlobalWorkspaceError` on
+ * a bad session/target; the route maps the status. Returns the updated link set.
+ */
+export function attachProjectToGlobalSession(
+  deps: ServerDeps,
+  sessionId: number,
+  projectId: number,
+): LinkedProject[] {
+  const session = deps.sessionStore.getSession(sessionId);
+  if (!session) throw new GlobalWorkspaceError('session not found', 404);
+  if (!session.is_global) throw new GlobalWorkspaceError('not a global session', 400);
+  const sp = deps.db.getProject(session.project_id);
+  if (!sp?.is_synthetic) throw new GlobalWorkspaceError('session has no virtual workspace', 400);
+  const target = deps.db.getProject(projectId);
+  if (!target) throw new GlobalWorkspaceError(`project ${projectId} not found`, 400);
+  // A synthetic union is itself a dir of junctions — linking one would nest a
+  // workspace inside a workspace (mirrors the create-time guard).
+  if (target.is_synthetic) throw new GlobalWorkspaceError('a virtual workspace cannot be linked', 400);
+  const current = deps.sessionStore.getSessionProjects(sessionId);
+  if (current.some((p) => p.project_id === projectId)) {
+    throw new GlobalWorkspaceError('project already linked', 409);
+  }
+  deps.sessionStore.linkSessionProject(sessionId, projectId, { isPrimary: false });
+  ensureGlobalWorkspaceLinks(deps, session); // rebuild junctions from the union
+  try { deps.projectIndexService.ensureFresh(session.project_id, 'session'); } catch { /* best-effort */ }
+  return deps.sessionStore.getSessionProjects(sessionId);
+}
+
+/**
+ * Detach a real project from a global session's virtual workspace. Refuses to
+ * remove the primary (the default repo) or the last remaining project. The
+ * junction is dropped only if NO session on the shared union still links the
+ * project (refcount), since `ensureGlobalWorkspaceLinks` rebuilds from the union
+ * aggregate. Throws `GlobalWorkspaceError`; returns the updated link set.
+ */
+export function detachProjectFromGlobalSession(
+  deps: ServerDeps,
+  sessionId: number,
+  projectId: number,
+): LinkedProject[] {
+  const session = deps.sessionStore.getSession(sessionId);
+  if (!session) throw new GlobalWorkspaceError('session not found', 404);
+  if (!session.is_global) throw new GlobalWorkspaceError('not a global session', 400);
+  const sp = deps.db.getProject(session.project_id);
+  if (!sp?.is_synthetic) throw new GlobalWorkspaceError('session has no virtual workspace', 400);
+  const current = deps.sessionStore.getSessionProjects(sessionId);
+  const row = current.find((p) => p.project_id === projectId);
+  if (!row) throw new GlobalWorkspaceError('project not linked', 400);
+  if (row.is_primary) throw new GlobalWorkspaceError('cannot remove the primary project', 400);
+  if (current.length <= 1) throw new GlobalWorkspaceError('cannot remove the last project', 400);
+  deps.sessionStore.unlinkSessionProject(sessionId, projectId);
+  ensureGlobalWorkspaceLinks(deps, session); // rebuild junctions from the union
+  try { deps.projectIndexService.ensureFresh(session.project_id, 'session'); } catch { /* best-effort */ }
+  return deps.sessionStore.getSessionProjects(sessionId);
 }
 
 /**

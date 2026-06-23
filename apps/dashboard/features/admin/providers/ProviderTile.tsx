@@ -39,7 +39,7 @@ interface ProviderTileProps {
 
 export function ProviderTile({ provider: p, modelCount, testResult: tr, onOpen }: ProviderTileProps) {
   const { t } = useTranslation(['admin']);
-  const { icon: Icon, fg, bg } = providerVisual(p.kind);
+  const { icon: Icon, fg, bg } = providerVisual(p);
   const missingKey = !p.has_key && p.auth_mode === 'api_key';
 
   return (

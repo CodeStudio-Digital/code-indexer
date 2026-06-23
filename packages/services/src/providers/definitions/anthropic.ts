@@ -5,8 +5,12 @@ import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
 export const anthropic = defineProvider({
   kind: 'anthropic',
   displayName: 'Anthropic (Claude)',
+  visual: { icon: 'Sparkles', fg: 'text-orange-500', bg: 'bg-orange-500/15' },
   credKind: 'api-key',
   envVars: ['ANTHROPIC_API_KEY'],
+  // Preferred default when only a provider (no model) is given. Sonnet, not
+  // the cheaper haiku that leads `defaultModels` (used for the picker list).
+  defaultModel: 'claude-sonnet-4-6',
   defaultModels: [
     'claude-haiku-4-5-20251001',
     'claude-sonnet-4-6-20260320',
@@ -38,4 +42,11 @@ export const anthropic = defineProvider({
       // (API requirement) so callers don't need to also set max_tokens here.
       defaultThinking: { type: 'enabled', budget_tokens: 32000 },
     }),
+  testConnection: async ({ creds }) => {
+    const base = (creds.baseURL ?? 'https://api.anthropic.com').replace(/\/$/, '');
+    const r = await fetch(`${base}/v1/models`, {
+      headers: { 'x-api-key': creds.apiKey ?? '', 'anthropic-version': '2023-06-01' },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  },
 });

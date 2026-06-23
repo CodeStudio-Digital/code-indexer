@@ -113,7 +113,10 @@ export function mountCoderSummarizeClearRoute(
         void harvestCompactionMemory({
           runEndMemory: deps.runEndMemory,
           store: sessionStore,
-          getMemoryEnabled: () => deps.db.getProjectMemoryEnabled(session.project_id),
+          // Gate on the WRITE target: a global session redirects the write to the
+          // primary real project (deps.runEndMemory), so a disabled primary must
+          // not be written to. Identity for ordinary projects.
+          getMemoryEnabled: () => deps.db.getProjectMemoryEnabled(deps.db.resolveMemoryWriteProject(session.project_id).id),
           projectId: session.project_id,
           projectName: deps.db.getProject(session.project_id)?.name ?? '',
           sessionId: id,

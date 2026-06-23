@@ -47,6 +47,8 @@ export default defineConfig({
       ...pkgAliases('@mcp/code-agent', 'code-agent'),
       ...pkgAliases('@mcp/company', 'company'),
       ...pkgAliases('@mcp/company-contracts', 'company-contracts'),
+      ...pkgAliases('@mcp/vault-crypto', 'vault-crypto'),
+      ...pkgAliases('@mcp/secret-box', 'secret-box'),
       { find: /^@apps\/(.*)$/, replacement: resolve(repoRoot, 'apps/$1') },
     ],
   },

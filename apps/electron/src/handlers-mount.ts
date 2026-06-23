@@ -34,7 +34,10 @@ function isApiError(err: unknown): err is ApiError {
 
 function serializeError(err: unknown) {
   if (isApiError(err)) {
-    return { message: err.message, code: err.code, status: err.status };
+    // `details` carries structured, actionable metadata (e.g. the SSH host-key
+    // fingerprint on `ssh_host_key_unknown`) the renderer needs to react —
+    // forwarded only when present so ordinary errors stay lean.
+    return { message: err.message, code: err.code, status: err.status, details: err.details };
   }
   if (err instanceof Error) return { message: err.message };
   return { message: String(err) };

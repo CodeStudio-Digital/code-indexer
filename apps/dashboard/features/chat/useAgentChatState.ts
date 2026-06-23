@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AssistantTurn } from '../../hooks/useAgentStream.js';
 import type {
   CoderSessionStats,
@@ -122,20 +122,31 @@ export function useAgentChatState({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, sessionData?.session?.provider, sessionData?.session?.model]);
 
-  const providerOptions: ProviderOption[] =
-    enrichedProviders.length > 0
-      ? enrichedProviders.map((p) => ({
-          id: p.id,
-          label: p.name,
-          kind: p.kind,
-          models: p.models,
-          // Without this, providerSupportsThinking() can't see supportsThinking
-          // and the Thinking chip never renders — bug existed since the
-          // capability flag was introduced (Composer used the same hook).
-          capabilities: p.capabilities,
-        }))
-      : PROVIDERS.map((p) => ({ id: p.id, label: p.label, models: [] as EnrichedProviderModel[] }));
-  const currentProviderModels = providerOptions.find((p) => p.id === provider)?.models ?? [];
+  // Memoized so the returned references stay stable across the parent's
+  // frequent re-renders (click/stream churn). An inline `.map(...)` here would
+  // hand AgentChat a fresh array every render, silently defeating the
+  // React.memo on <Composer> (which takes providerOptions/currentProviderModels
+  // as props). Only recomputes when the underlying provider list changes.
+  const providerOptions: ProviderOption[] = useMemo(
+    () =>
+      enrichedProviders.length > 0
+        ? enrichedProviders.map((p) => ({
+            id: p.id,
+            label: p.name,
+            kind: p.kind,
+            models: p.models,
+            // Without this, providerSupportsThinking() can't see supportsThinking
+            // and the Thinking chip never renders — bug existed since the
+            // capability flag was introduced (Composer used the same hook).
+            capabilities: p.capabilities,
+          }))
+        : PROVIDERS.map((p) => ({ id: p.id, label: p.label, models: [] as EnrichedProviderModel[] })),
+    [enrichedProviders],
+  );
+  const currentProviderModels = useMemo(
+    () => providerOptions.find((p) => p.id === provider)?.models ?? [],
+    [providerOptions, provider],
+  );
 
   // Detect whether the current live turn was just persisted to the DB. When
   // true, the message list hides the live AssistantBubble to avoid showing
@@ -150,9 +161,13 @@ export function useAgentChatState({
     return persistedText === liveText;
   })();
 
-  const getModelsForProvider = (providerId: string): EnrichedProviderModel[] => {
-    return providerOptions.find((p) => p.id === providerId)?.models ?? [];
-  };
+  // Stable identity (deps: providerOptions) so passing it to the memoized
+  // <Composer> doesn't bust the memo on every parent render.
+  const getModelsForProvider = useCallback(
+    (providerId: string): EnrichedProviderModel[] =>
+      providerOptions.find((p) => p.id === providerId)?.models ?? [],
+    [providerOptions],
+  );
 
   return {
     providerOptions,

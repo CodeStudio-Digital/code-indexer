@@ -10,6 +10,7 @@ import type {
   PluginStorage,
   PluginPermissions,
 } from './capabilities.js';
+import type { ProviderDefinition } from '@mcp/provider-sdk';
 
 /** What a plugin tool handler returns. The host maps it to the agent's ToolResult. */
 export interface PluginToolResult {
@@ -111,4 +112,12 @@ export interface PluginModule {
   themes: ContributedTheme[];
   /** Capabilities the plugin requires (fs/exec/storage). Extracted to .app.json. */
   permissions?: PluginPermissions;
+  /**
+   * LLM providers contributed by this plugin. Each is a full
+   * `@mcp/provider-sdk` ProviderDefinition (with adapter functions). The CLI
+   * `build` step extracts only the declarative subset to `.app.json`; the
+   * provider-host loader imports this module in-process to register the
+   * functions (gated by install-time trust).
+   */
+  providers?: ProviderDefinition[];
 }

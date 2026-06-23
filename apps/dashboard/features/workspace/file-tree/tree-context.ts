@@ -17,6 +17,7 @@ import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import type { TreeEntry } from '../../../state/file-tree.js';
 import { useLocalHistory } from '../../../state/local-history-store.js';
+import { openDetached } from '../../popout/openDetached.js';
 import { fileRunCommand, runnableForFile, type FileRuntime } from '../../../lib/run-target.js';
 import { launchRun } from '../../../state/run-launch.js';
 import { deleteSelection } from './delete-selection.js';
@@ -163,7 +164,18 @@ export function buildContextItems(
     { id: 'copy-path', label: 'Copy path', icon: ClipboardCopy, onSelect: doCopyPath },
     // Local History só para arquivos (pastas não têm versões).
     ...(!isDir
-      ? [{ id: 'history', label: 'Local History', icon: History, onSelect: () => useLocalHistory.getState().open(projectId, entry.path) } as ContextMenuItem]
+      ? [{
+          id: 'history',
+          label: 'Local History',
+          icon: History,
+          // Desktop: janela popout dedicada (redimensionável). Browser/dev:
+          // fallback na modal antiga via store.
+          onSelect: () => openDetached(
+            'local-history',
+            { projectId: String(projectId), path: entry.path },
+            () => useLocalHistory.getState().open(projectId, entry.path),
+          ),
+        } as ContextMenuItem]
       : []),
     ...runItem,
     { id: 'delete', label: 'Delete', icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => void doDelete() },

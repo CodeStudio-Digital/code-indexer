@@ -11,6 +11,7 @@
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "@mcp/services": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
     "@mcp/candidate-pipeline": "workspace:*"
   }
 }

@@ -5,6 +5,7 @@ import { OpenAIChatProvider } from '@mcp/code-agent/providers/openai.js';
 export const openai = defineProvider({
   kind: 'openai',
   displayName: 'OpenAI',
+  visual: { icon: 'Brain', fg: 'text-emerald-500', bg: 'bg-emerald-500/15' },
   credKind: 'api-key',
   envVars: ['OPENAI_API_KEY'],
   defaultModels: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
@@ -33,4 +34,10 @@ export const openai = defineProvider({
       model: model ?? 'gpt-4o-mini',
       defaultHeaders: creds.extraHeaders,
     }),
+  testConnection: async ({ creds }) => {
+    const base = creds.baseURL ?? 'https://api.openai.com/v1';
+    const url = base.endsWith('/') ? `${base}models` : `${base}/models`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${creds.apiKey ?? ''}` } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  },
 });

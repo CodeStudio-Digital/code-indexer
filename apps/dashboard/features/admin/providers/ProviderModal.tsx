@@ -68,7 +68,7 @@ export function ProviderModal({ provider, onClose, ...rest }: ProviderModalProps
       </Dialog>
     );
   }
-  const { icon: Icon, fg, bg } = providerVisual(provider.kind);
+  const { icon: Icon, fg, bg } = providerVisual(provider);
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>

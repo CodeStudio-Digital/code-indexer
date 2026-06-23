@@ -24,6 +24,7 @@ const DEFAULT_MODEL = 'kimi-k2-0711-preview';
 export const moonshot = defineProvider({
   kind: 'moonshot',
   displayName: 'Moonshot AI (API key)',
+  visual: { icon: 'Bot', fg: 'text-cyan-400', bg: 'bg-cyan-400/15' },
   credKind: 'api-key',
   envVars: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'],
   defaultBaseURL: DEFAULT_BASE_URL,

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
 import {
-  ensureRouteStartupMetrics,
+  acquireRouteMetricsCollection,
   getRouteStartupSnapshot,
   resetRouteStartupMetrics,
   startProjectRoute,
@@ -26,11 +26,14 @@ export function RouteStartupPanel() {
   const [snapshot, setSnapshot] = useState<RouteStartupSnapshot>(() => getRouteStartupSnapshot());
 
   useEffect(() => {
-    ensureRouteStartupMetrics();
+    const release = acquireRouteMetricsCollection();
     const refresh = () => setSnapshot(getRouteStartupSnapshot());
     refresh();
     const timer = setInterval(refresh, 1_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      release();
+    };
   }, []);
 
   const current = snapshot.current;

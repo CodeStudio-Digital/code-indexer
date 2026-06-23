@@ -35,6 +35,7 @@ function buildBaseURL(extra: Record<string, unknown> | undefined): string {
 export const cloudflare = defineProvider({
   kind: 'cloudflare',
   displayName: 'Cloudflare Workers AI',
+  visual: { icon: 'Layers', fg: 'text-orange-600', bg: 'bg-orange-600/15' },
   credKind: 'api-key',
   envVars: ['CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN'],
   defaultBaseURL: BASE_URL_TEMPLATE,

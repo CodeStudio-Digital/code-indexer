@@ -185,6 +185,9 @@ importers:
       sqlite-vec:
         specifier: ^0.1.9
         version: 0.1.9
+      ssh2:
+        specifier: ^1.16.0
+        version: 1.17.0
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.5.0
@@ -243,6 +246,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.0.4
         version: 19.2.3(@types/react@19.2.14)
+      '@types/ssh2':
+        specifier: ^1.15.5
+        version: 1.15.5
       '@types/turndown':
         specifier: ^5.0.6
         version: 5.0.6
@@ -342,6 +348,9 @@ importers:
       '@mcp/candidate-pipeline':
         specifier: workspace:*
         version: link:../candidate-pipeline
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
       '@mcp/services':
         specifier: workspace:*
         version: link:../services
@@ -363,6 +372,9 @@ importers:
       '@mcp/company-contracts':
         specifier: workspace:*
         version: link:../company-contracts
+      '@mcp/db-drivers':
+        specifier: workspace:*
+        version: link:../db-drivers
       '@mcp/design-system':
         specifier: workspace:*
         version: link:../design-system
@@ -377,6 +389,8 @@ importers:
         version: link:../store
 
   packages/company-contracts: {}
+
+  packages/db-drivers: {}
 
   packages/design-system:
     dependencies:
@@ -410,6 +424,9 @@ importers:
       '@mcp/candidate-pipeline':
         specifier: workspace:*
         version: link:../candidate-pipeline
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
       '@mcp/services':
         specifier: workspace:*
         version: link:../services
@@ -433,6 +450,12 @@ importers:
       '@mcp/plugin-sdk':
         specifier: workspace:*
         version: link:../plugin-sdk
+      '@mcp/provider-engine':
+        specifier: workspace:*
+        version: link:../provider-engine
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
       '@mcp/shared':
         specifier: workspace:*
         version: link:../shared
@@ -442,9 +465,39 @@ importers:
 
   packages/plugin-market-client: {}
 
-  packages/plugin-sdk: {}
+  packages/plugin-sdk:
+    dependencies:
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
 
   packages/podman-core: {}
+
+  packages/provider-engine:
+    dependencies:
+      '@mcp/code-agent':
+        specifier: workspace:*
+        version: link:../code-agent
+      '@mcp/indexer':
+        specifier: workspace:*
+        version: link:../indexer
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
+      '@mcp/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@mcp/store':
+        specifier: workspace:*
+        version: link:../store
+
+  packages/provider-sdk:
+    dependencies:
+      '@mcp/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/secret-box: {}
 
   packages/services:
     dependencies:
@@ -454,6 +507,12 @@ importers:
       '@mcp/candidate-pipeline':
         specifier: workspace:*
         version: link:../candidate-pipeline
+      '@mcp/provider-engine':
+        specifier: workspace:*
+        version: link:../provider-engine
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
       '@mcp/shared':
         specifier: workspace:*
         version: link:../shared
@@ -493,6 +552,8 @@ importers:
       '@mcp/shared':
         specifier: workspace:*
         version: link:../shared
+
+  packages/vault-crypto: {}
 
   packages/worker-pool: {}
 
@@ -3232,6 +3293,9 @@ packages:
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
 
+  '@types/ssh2@1.15.5':
+    resolution: {integrity: sha512-N1ASjp/nXH3ovBHddRJpli4ozpk6UdDYIX4RJWFa9L1YKnzdhTlVmiGHm4DZnj/jLbqZpes4aeR30EFGQtvhQQ==}
+
   '@types/turndown@5.0.6':
     resolution: {integrity: sha512-ru00MoyeeouE5BX4gRL+6m/BsDfbRayOskWqUvh7CLGW+UXxHQItqALa38kKnOiZPqJrtzJUgAC2+F0rL1S4Pg==}
 
@@ -3537,6 +3601,9 @@ packages:
     resolution: {integrity: sha512-HGyxoOTYUyCM6stUe6EJgnd4EoewAI7zMdfqO+kGjnlZmBDz/cR5pf8r/cR4Wq60sL/p0IkcjUEEPwS3GFrIyw==}
     engines: {node: '>=8'}
 
+  asn1@0.2.6:
+    resolution: {integrity: sha512-ix/FxPn0MDjeyJ7i/yoHGFt/EX6LyNbxSEhPPXODPL+KB0VPk86UYfL0lMdy+KCnv+fmvIzySwaK5COwqVbWTQ==}
+
   assert-plus@1.0.0:
     resolution: {integrity: sha512-NfJ4UzBCcQGLDlQq7nHxH+tv3kyZ0hHQqF5BO6J7tNJeP5do1llPr8dZ8zHonfhAu0PHAdMkSo+8o0wxg9lZWw==}
     engines: {node: '>=0.8'}
@@ -3591,6 +3658,9 @@ packages:
     resolution: {integrity: sha512-qCkNLi2sfBOn8XhZQ0FXsT1Ki/Yo5P90hrkRamVFRS7/KV9hpfA4HkoWNU152+8w0zPjnxo5psx5NL3PSGgv5g==}
     engines: {node: '>=6.0.0'}
     hasBin: true
+
+  bcrypt-pbkdf@1.0.2:
+    resolution: {integrity: sha512-qeFIXtP4MSoi6NLqO12WfqARWWuCKi2Rn/9hJLEmtB5yTNr9DqFWkJRCf2qShWzPeAMRnOgCrq0sg/KLv5ES9w==}
 
   better-sqlite3@11.10.0:
     resolution: {integrity: sha512-EwhOpyXiOEL/lKzHz9AW1msWFNzGc/z+LzeB3/jnFJpxu+th2yqvzsSWas1v9jgs9+xiXJcD5A8CJxAG2TaghQ==}
@@ -3664,6 +3734,10 @@ packages:
 
   buffer@5.7.1:
     resolution: {integrity: sha512-EHcyIPBQ4BSGlvjB16k5KgAJ27CIsHY/2JBmCRReo48y9rQ3MaUzWX3KVlBa4U7MyX02HdVj0K7C3WaB3ju7FQ==}
+
+  buildcheck@0.0.7:
+    resolution: {integrity: sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA==}
+    engines: {node: '>=10.0.0'}
 
   builder-util-runtime@9.2.10:
     resolution: {integrity: sha512-6p/gfG1RJSQeIbz8TK5aPNkoztgY1q5TgmGFMAXcY8itsGW6Y2ld1ALsZ5UJn8rog7hKF3zHx5iQbNQ8uLcRlw==}
@@ -3878,6 +3952,10 @@ packages:
   cors@2.8.6:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
+
+  cpu-features@0.0.10:
+    resolution: {integrity: sha512-9IkYqtX3YHPCzoVg1Py+o9057a3i0fp7S530UWokCSaFVTc7CwXPRiOjRjBQQ18ZCNafx78YfnG+HALxtVmOGA==}
+    engines: {node: '>=10.0.0'}
 
   crc-32@1.2.2:
     resolution: {integrity: sha512-ROmzCKrTnOwybPcJApAA6WBWij23HVfGVNKqqrZpuyZOHqK2CwHSvpGuyt/UNNvaIjEd8X5IFGp4Mh+Ie1IHJQ==}
@@ -5370,6 +5448,9 @@ packages:
     resolution: {integrity: sha512-Tz09sEL2EEuv5fFowm419c1+a/jSMiBjI9gHxVLrVdbUkkNUUfjsVYs9pVZu5oCon/kmRh9TfLEObFtkVxmY0w==}
     engines: {node: '>=8.0.0'}
 
+  nan@2.27.0:
+    resolution: {integrity: sha512-hC+0LidcL3XE4rp1C4H54KujgXKzbfyTngZTwBByQxsOxCEKZT0MPQ4hOKUH2jU1OYstqdDH4onyHPDzcV0XdQ==}
+
   nanoid@3.3.11:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -6214,6 +6295,10 @@ packages:
   sqlite-vec@0.1.9:
     resolution: {integrity: sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA==}
 
+  ssh2@1.17.0:
+    resolution: {integrity: sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ==}
+    engines: {node: '>=10.16.0'}
+
   ssri@9.0.1:
     resolution: {integrity: sha512-o57Wcn66jMQvfHG1FlYbWeZWW/dHZhJXjpIcTfXldXEk5nz5lStPo3mK0OJQfGR3RbZUlbISexbljkJzuEj/8Q==}
     engines: {node: ^12.13.0 || ^14.15.0 || >=16.0.0}
@@ -6426,6 +6511,9 @@ packages:
 
   tw-animate-css@1.4.0:
     resolution: {integrity: sha512-7bziOlRqH0hJx80h/3mbicLW7o8qLsH5+RaLR2t+OHM3D0JlWGODQKQ4cxbK7WlvmUxpcj6Kgu6EKqjrGFe3QQ==}
+
+  tweetnacl@0.14.5:
+    resolution: {integrity: sha512-KXXFFdAbFXY4geFIwoyNK+f5Z1b7swfXABfL7HXCmoIWMKU3dmS26672A4EeQtDzLKy7SXmfBu51JolvEKwtGA==}
 
   type-fest@0.13.1:
     resolution: {integrity: sha512-34R7HTnG0XIJcBSn5XhDd7nNFPRcXYRZrBB2O2jdKqYODldSzBAqzsWoZYYvduky73toYS/ESqxPvkDf/F0XMg==}
@@ -9964,6 +10052,10 @@ snapshots:
 
   '@types/retry@0.12.0': {}
 
+  '@types/ssh2@1.15.5':
+    dependencies:
+      '@types/node': 18.19.130
+
   '@types/turndown@5.0.6': {}
 
   '@types/unist@2.0.11': {}
@@ -10364,6 +10456,10 @@ snapshots:
 
   array-union@2.1.0: {}
 
+  asn1@0.2.6:
+    dependencies:
+      safer-buffer: 2.1.2
+
   assert-plus@1.0.0:
     optional: true
 
@@ -10400,6 +10496,10 @@ snapshots:
   base64-js@1.5.1: {}
 
   baseline-browser-mapping@2.10.19: {}
+
+  bcrypt-pbkdf@1.0.2:
+    dependencies:
+      tweetnacl: 0.14.5
 
   better-sqlite3@11.10.0:
     dependencies:
@@ -10485,6 +10585,9 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
+
+  buildcheck@0.0.7:
+    optional: true
 
   builder-util-runtime@9.2.10:
     dependencies:
@@ -10741,6 +10844,12 @@ snapshots:
     dependencies:
       object-assign: 4.1.1
       vary: 1.1.2
+
+  cpu-features@0.0.10:
+    dependencies:
+      buildcheck: 0.0.7
+      nan: 2.27.0
+    optional: true
 
   crc-32@1.2.2: {}
 
@@ -12667,6 +12776,9 @@ snapshots:
     dependencies:
       lru.min: 1.1.4
 
+  nan@2.27.0:
+    optional: true
+
   nanoid@3.3.11: {}
 
   nanoid@5.1.11: {}
@@ -13648,6 +13760,14 @@ snapshots:
       sqlite-vec-linux-x64: 0.1.9
       sqlite-vec-windows-x64: 0.1.9
 
+  ssh2@1.17.0:
+    dependencies:
+      asn1: 0.2.6
+      bcrypt-pbkdf: 1.0.2
+    optionalDependencies:
+      cpu-features: 0.0.10
+      nan: 2.27.0
+
   ssri@9.0.1:
     dependencies:
       minipass: 3.3.6
@@ -13871,6 +13991,8 @@ snapshots:
       '@mixmark-io/domino': 2.2.0
 
   tw-animate-css@1.4.0: {}
+
+  tweetnacl@0.14.5: {}
 
   type-fest@0.13.1: {}
 

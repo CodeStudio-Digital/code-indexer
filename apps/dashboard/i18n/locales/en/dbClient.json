@@ -1,0 +1,59 @@
+{
+  "title": "Databases",
+  "connections": {
+    "title": "Connections",
+    "add": "New connection",
+    "empty": "No saved connections",
+    "search": "Filter connections…",
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "edit": "Edit…",
+    "delete": "Delete",
+    "refresh": "Refresh",
+    "newQuery": "New query",
+    "deleteTitle": "Delete connection?",
+    "deleteBody": "This removes the saved connection and its query history.",
+    "connecting": "Connecting…"
+  },
+  "dialog": {
+    "titleNew": "New connection",
+    "titleEdit": "Edit connection",
+    "name": "Name",
+    "engine": "Engine",
+    "host": "Host",
+    "port": "Port",
+    "user": "User",
+    "password": "Password",
+    "database": "Database",
+    "filePath": "File path",
+    "ssl": "SSL mode",
+    "readOnly": "Read-only (block writes)",
+    "test": "Test connection",
+    "testing": "Testing…",
+    "testOk": "Connection OK",
+    "testFail": "Connection failed",
+    "save": "Save",
+    "cancel": "Cancel",
+    "namePlaceholder": "My database",
+    "passwordKept": "Leave blank to keep the saved password",
+    "filePlaceholder": "C:/path/to/db.sqlite"
+  },
+  "toolbar": {
+    "noConnection": "No connection selected",
+    "connectedTo": "Connected"
+  },
+  "query": {
+    "placeholder": "Write SQL and press Run (Ctrl/Cmd+Enter)",
+    "run": "Run",
+    "running": "Running…",
+    "cancel": "Cancel",
+    "noActive": "Connect to a database to run queries",
+    "empty": "No rows returned",
+    "rows": "rows",
+    "affected": "affected",
+    "elapsed": "ms"
+  },
+  "tree": {
+    "loading": "Loading…"
+  }
+}

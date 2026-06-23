@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { openStream } from './openStream.js';
 import type {
   AgentAttachment,
+  DecisionAnswers,
   SessionPatch,
   SessionState,
   StreamTask,
@@ -281,6 +282,21 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
     [sessionId, postAndResume],
   );
 
+  const decideGate = useCallback(
+    (
+      answers: DecisionAnswers,
+      onMessageComplete?: () => void,
+      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
+    ) =>
+      postAndResume(
+        `/api/coder/sessions/${sessionId}/decide`,
+        { answers },
+        { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) },
+        onMessageComplete,
+      ),
+    [sessionId, postAndResume],
+  );
+
   const respondToTasks = useCallback(
     (
       verdict: {
@@ -389,6 +405,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
     clearCurrentTurn,
     answerQuestion,
     respondToPlan,
+    decideGate,
     respondToTasks,
     respondToSpec,
     respondToToolApproval,

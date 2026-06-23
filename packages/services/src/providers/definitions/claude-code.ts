@@ -4,6 +4,7 @@ import { AnthropicProvider } from '@mcp/indexer/indexer/providers/anthropic.js';
 import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
 import {
   CLAUDE_CODE_BASE_URL,
+  fetchClaudeCodeModels,
   getClaudeCodeSystemPrefixBlocks,
   resolveClaudeCodeModel,
   type ClaudeCodeAccountInfo,
@@ -131,9 +132,11 @@ export const CLAUDE_CODE_SEED_MODELS = [
 export const claudeCode = defineProvider({
   kind: 'claude-code',
   displayName: 'Claude Code (OAuth)',
+  visual: { icon: 'Sparkles', fg: 'text-orange-400', bg: 'bg-orange-400/15' },
   credKind: 'oauth',
   envVars: [],
   defaultBaseURL: CLAUDE_CODE_BASE_URL,
+  defaultModel: 'claude-sonnet-4-6',
   defaultModels: CLAUDE_CODE_SEED_MODELS.map((m) => m.model_id),
   pricing: {
     default: { inputPer1M: 0.00, outputPer1M: 0.00 },
@@ -203,6 +206,17 @@ export const claudeCode = defineProvider({
           effort: resolved.effort,
         };
       },
+    });
+  },
+  testConnection: async ({ creds, config }) => {
+    // `resolveClaudeCodeCreds` already refreshed/selected the right auth
+    // (Bearer for claude.ai inference, managed api_key for console-only).
+    await fetchClaudeCodeModels({
+      baseURL: creds.baseURL ?? config.base_url,
+      apiKey: creds.apiKey,
+      authToken: creds.authToken,
+      headers: creds.extraHeaders,
+      fetch: creds.fetch,
     });
   },
 });

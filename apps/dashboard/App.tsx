@@ -30,6 +30,7 @@ import { AccountGate } from './features/account/AccountGate.js';
 import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/index.js';
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
+import { PopoutRoot } from './features/popout/PopoutRoot.js';
 
 // ─── Route components ────────────────────────────────────────
 
@@ -228,7 +229,25 @@ function DesignSystemsRoute() {
 
 // ─── Router setup ────────────────────────────────────────────
 
+// Janelas popout (openInNewWindow) carregam, em produção, `index.html` com
+// `{ hash: '/popout/…' }` (main.ts). `createBrowserRouter` lê a location inicial
+// UMA vez no module scope, então reescrevemos o hash → pathname AQUI, antes da
+// criação do router, para que ele case a rota `/popout/:kind` direto — sem
+// passar pelo AppRoot/AppShell (evita o flash do chrome). Em dev a rota já chega
+// pelo pathname, então isto é no-op. Escopado a `/popout/` para não interferir
+// no deep-link normal (que o AppRoot trata após montar).
+(function hoistPopoutHash() {
+  if (typeof window === 'undefined') return;
+  const h = window.location.hash;
+  if (h.startsWith('#/popout/')) {
+    window.history.replaceState(null, '', h.slice(1));
+  }
+})();
+
 const router = createBrowserRouter([
+  // Rota top-level SEM AppShell: o popout é chrome-less (PopoutRoot traz a
+  // própria caption). Por isso é irmã de `/`, não filha do AppRoot.
+  { path: '/popout/:kind', element: <PopoutRoot /> },
   {
     path: '/',
     // AppRoot wraps AppShell + the onboarding wizard overlay so the
