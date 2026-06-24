@@ -37,7 +37,7 @@ export function replaceFromSource(
   const tx = db.transaction(() => {
     const existingRows = db
       .prepare(
-        'SELECT model_id, mode, enabled, default_reasoning_level, max_tools FROM provider_models WHERE provider_id = ? AND source = ?'
+        'SELECT model_id, mode, enabled, default_reasoning_level, max_tools, context_window, context_window_overridden FROM provider_models WHERE provider_id = ? AND source = ?'
       )
       .all(providerId, source) as {
         model_id: string;
@@ -45,6 +45,8 @@ export function replaceFromSource(
         enabled: number;
         default_reasoning_level: string | null;
         max_tools: number | null;
+        context_window: number | null;
+        context_window_overridden: number | null;
       }[];
     const existingEnabled = new Map<string, boolean>();
     // Track whether each row existed before (regardless of whether the stored
@@ -55,11 +57,20 @@ export function replaceFromSource(
     // max_tools is admin-set and live discovery never supplies it — without
     // this preservation every refresh would wipe the admin's cap.
     const existingMaxTools = new Map<string, number | null>();
+    // context_window CAN come from discovery, so we only freeze it when the
+    // admin explicitly overrode it (`context_window_overridden`). Otherwise
+    // every refresh re-derives it (the registry for Z.AI, the real upstream
+    // window for OpenRouter) and the admin's manual value (e.g. glm-5.2 → 1M)
+    // silently reverts. See migration 175.
+    const existingOverriddenWindow = new Map<string, number | null>();
     for (const row of existingRows) {
       const key = `${row.model_id}|${row.mode}`;
       existingEnabled.set(key, !!row.enabled);
       existingReasoning.set(key, row.default_reasoning_level);
       existingMaxTools.set(key, row.max_tools);
+      if (row.context_window_overridden) {
+        existingOverriddenWindow.set(key, row.context_window);
+      }
     }
 
     db
@@ -73,8 +84,8 @@ export function replaceFromSource(
           display_name, description, default_reasoning_level,
           supported_reasoning_levels, apply_patch_tool_type, available_in_plans,
           minimal_client_version, visibility, supported_in_api, input_modalities,
-          max_tools)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          max_tools, context_window_overridden)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(provider_id, model_id, mode) DO UPDATE SET
          name = excluded.name,
          context_window = excluded.context_window,
@@ -94,7 +105,8 @@ export function replaceFromSource(
          visibility = excluded.visibility,
          supported_in_api = excluded.supported_in_api,
          input_modalities = excluded.input_modalities,
-         max_tools = excluded.max_tools`
+         max_tools = excluded.max_tools,
+         context_window_overridden = excluded.context_window_overridden`
     );
     for (const m of models) {
       const mode = m.mode ?? '';
@@ -109,12 +121,19 @@ export function replaceFromSource(
       const finalMaxTools = existingMaxTools.has(key)
         ? existingMaxTools.get(key) ?? null
         : m.max_tools ?? null;
+      // A flagged existing row keeps its admin window (and the flag); the
+      // incoming discovery window is ignored. New/non-overridden rows take the
+      // incoming value, and may themselves arrive pre-flagged (manual rebuild).
+      const isOverridden = existingOverriddenWindow.has(key) || m.context_window_overridden === true;
+      const finalContextWindow = existingOverriddenWindow.has(key)
+        ? existingOverriddenWindow.get(key) ?? null
+        : m.context_window ?? null;
       insert.run(
         providerId,
         m.model_id,
         mode,
         m.name,
-        m.context_window ?? null,
+        finalContextWindow,
         m.default_max_tokens ?? null,
         m.can_reason ? 1 : 0,
         m.supports_attachments ? 1 : 0,
@@ -133,7 +152,8 @@ export function replaceFromSource(
           ? null
           : m.supported_in_api ? 1 : 0,
         m.input_modalities ? JSON.stringify(m.input_modalities) : null,
-        finalMaxTools
+        finalMaxTools,
+        isOverridden ? 1 : 0
       );
     }
   });
@@ -164,6 +184,10 @@ export function update(
   if (patch.context_window !== undefined) {
     sets.push('context_window = ?');
     args.push(patch.context_window);
+    // Flag a real value as an admin override so refreshes stop clobbering it;
+    // clearing it (null) reverts to discovery (migration 175).
+    sets.push('context_window_overridden = ?');
+    args.push(patch.context_window === null ? 0 : 1);
   }
   if (patch.max_tools !== undefined) {
     sets.push('max_tools = ?');

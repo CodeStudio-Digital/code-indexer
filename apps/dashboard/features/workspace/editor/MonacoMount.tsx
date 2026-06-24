@@ -25,7 +25,9 @@ import { Loader2 } from 'lucide-react';
 import { languageIdForPath as inferLanguage } from '@mcp/shared/utils/language-id.js';
 import { useWorkspaceStore, type OpenFile } from '../../../state/workspace.js';
 import { useUiDensity } from '../../../state/ui-density.js';
+import { useEditorTheme, resolveThemeId } from '../../../state/editor-theme.js';
 import { registerLspProviders, unregisterLspProviders } from './lspProvider.js';
+import { reassertPhpHighlighting } from './php-highlight.js';
 import {
   getActiveEditor,
   initEditorModels,
@@ -48,6 +50,24 @@ import { useKeymapStore } from '../../../keymap/keymap-store.js';
 function detectDarkMode(): boolean {
   if (typeof document === 'undefined') return true;
   return document.documentElement.classList.contains('dark');
+}
+
+/**
+ * Reactive `.dark` tracking. `detectDarkMode()` is a one-shot read; the editor
+ * theme must also re-resolve when AppShell flips light/dark, so observe the
+ * class on <html> and re-render on change (mirrors merge/MergeTabView).
+ */
+function useIsDark(): boolean {
+  const [dark, setDark] = useState(detectDarkMode);
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setDark(el.classList.contains('dark')));
+    obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+    setDark(el.classList.contains('dark')); // sync any change since first render
+    return () => obs.disconnect();
+  }, []);
+  return dark;
 }
 
 interface MonacoMountProps {
@@ -96,6 +116,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       setEditorInstance(editor);
       setMonacoInstance(monaco);
       initEditorModels(monaco);
+      // Deterministically (re)assert our richer PHP tokenizer over Monaco's
+      // async-loaded default for php files — see php-highlight.ts.
+      if (editor.getModel()?.getLanguageId() === 'php') reassertPhpHighlighting(monaco);
       // Split-safe active-editor tracking: with two panes mounted, the global
       // active editor (commands: go-to-line, format, add-to-chat) must follow
       // FOCUS, not mount order. Set it on mount only for the active pane so a
@@ -192,7 +215,19 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // — dispatched by the global keymap dispatcher, preset-rebindable.
 
   const language = inferLanguage(file.path);
-  const dark = detectDarkMode();
+  const dark = useIsDark();
+  // Resolve the editor color scheme from the global preference: per-language
+  // override (e.g. PHP → IntelliJ Darcula) beats the dark/light default. The
+  // theme prop drives `monaco.editor.setTheme`, which is GLOBAL — in a split
+  // view both panes follow whichever one last (re)rendered; acceptable for v1.
+  const themeDark = useEditorTheme((s) => s.darkTheme);
+  const themeLight = useEditorTheme((s) => s.lightTheme);
+  const perLanguage = useEditorTheme((s) => s.perLanguage);
+  const themeId = resolveThemeId({
+    appearance: dark ? 'dark' : 'light',
+    languageId: language,
+    state: { darkTheme: themeDark, lightTheme: themeLight, perLanguage },
+  });
 
   // Stable options reference: @monaco-editor/react re-applies editor.updateOptions
   // whenever this object's identity changes, and MonacoMount re-renders on every
@@ -268,6 +303,11 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       },
       wordBasedSuggestions: 'off',
       inlayHints: { enabled: 'onUnlessPressed' },
+      // Force semantic highlighting ON (default is 'configuredByTheme', and the
+      // standalone vs/vs-dark themes DON'T enable it — so LSP semantic tokens
+      // for ts/js/php/python were never painted). This is what lets a theme
+      // colour methods ≠ properties ≠ functions from the language server.
+      'semanticHighlighting.enabled': true,
       // Navigation behaviour for Ctrl+Click on a symbol.
       //   - definitions/type definitions: `'goto'` jumps to the first result
       //     immediately; the default `'peek'` popup doesn't fire our editor
@@ -309,7 +349,7 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       keepCurrentModel
       defaultLanguage={language}
       language={language}
-      theme={dark ? 'vs-dark' : 'vs'}
+      theme={themeId}
       onMount={handleMount}
       onChange={handleChange}
       options={editorOptions}

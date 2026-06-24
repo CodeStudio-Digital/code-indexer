@@ -43,6 +43,7 @@ import {
   type LspWorkspaceEdit,
 } from '@mcp/services/lsp/lsp-protocol.js';
 import { serverForLanguage, serverById } from '@mcp/services/lsp/server-registry.js';
+import { remapSemanticTokens, MONACO_SEMANTIC_LEGEND } from './semantic-tokens-remap.js';
 import { mapLspConfigSection, languageLevelForServer } from '@mcp/services/lsp/lsp-config-map.js';
 import { parseLanguageLevels } from '@mcp/shared/utils/language-levels.js';
 import { detectLanguageLevel } from './language-level-detect.js';
@@ -350,6 +351,33 @@ export async function serverReferences(
   if (!acq) return null;
   try {
     return toLocations(await acq.handle.references(relToAbs(root, file), position));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Semantic tokens via the language server (intelephense/pyright/…), remapped
+ * onto Monaco's legend. null = no server / no provider → router falls back to
+ * `{ data: [] }` (Monarch keeps colouring). The server encodes against its own
+ * legend, so we MUST translate before handing the stream to Monaco.
+ */
+export async function serverSemanticTokens(
+  db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
+): Promise<{ data: number[] } | null> {
+  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  if (!acq) return null;
+  const legend = acq.handle.semanticTokensLegend();
+  if (!legend) return null; // server doesn't advertise semantic tokens
+  const abs = relToAbs(root, file);
+  // W3: ensure the live buffer is open before requesting — else the server
+  // answers for a doc it doesn't know (race / Windows path divergence).
+  const live = getDoc(projectId, file);
+  if (live) acq.handle.ensureOpen(abs, live.languageId, live.version, live.content);
+  try {
+    const raw = (await acq.handle.semanticTokens(abs)) as { data?: number[] } | null;
+    if (!raw?.data || raw.data.length === 0) return null;
+    return { data: remapSemanticTokens(raw.data, legend, MONACO_SEMANTIC_LEGEND) };
   } catch {
     return null;
   }

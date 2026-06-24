@@ -8,21 +8,31 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { PanelRight } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { cn } from '../../lib/utils.js';
 import { useDbClient } from './useDbClient.js';
 import { ConnectionTree } from './tree/ConnectionTree.js';
 import { QueryConsole } from './query/QueryConsole.js';
+import { QueryAuxPanel } from './query/QueryAuxPanel.js';
 import { DataGridTab } from './data/DataGridTab.js';
 import { TableStructureEditor } from './structure/TableStructureEditor.js';
+import { ErDiagramTab } from './structure/ErDiagramTab.js';
 import { WorkAreaTabBar } from './workarea/WorkAreaTabBar.js';
 import { ConnectionDialog } from './dialogs/ConnectionDialog.js';
-import type { DbConnection, WorkTab } from './types.js';
+import type { DbConnection, DbEngine, WorkTab } from './types.js';
 
 export function DbClientTab({ projectId }: { projectId: number }) {
   const { t } = useTranslation('dbClient');
   const db = useDbClient(projectId);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<DbConnection | null>(null);
+  const [auxOpen, setAuxOpen] = useState(false);
+  const [auxTick, setAuxTick] = useState(0);
+
+  function openFromAux(sql: string): void {
+    if (db.activeConnectionId != null) db.openQueryTab(db.activeConnectionId, undefined, sql);
+  }
 
   function openAdd(): void {
     setEditing(null);
@@ -43,6 +53,13 @@ export function DbClientTab({ projectId }: { projectId: number }) {
           {activeConn ? `· ${activeConn.label}` : `· ${t('toolbar.noConnection')}`}
         </span>
         {db.error && <span className="ml-auto truncate text-red-400" title={db.error}>{db.error}</span>}
+        <button
+          className={cn('ml-auto rounded p-1 hover:bg-muted', auxOpen ? 'text-foreground' : 'text-muted-foreground', db.error && 'ml-2')}
+          title={t('aux.panel')}
+          onClick={() => setAuxOpen((o) => !o)}
+        >
+          <PanelRight className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       <div className="min-h-0 flex-1">
@@ -52,32 +69,51 @@ export function DbClientTab({ projectId }: { projectId: number }) {
           </Panel>
           <PanelResizeHandle className="w-px bg-border hover:bg-accent" />
           <Panel minSize={40}>
-            <div className="flex h-full flex-col">
-              <WorkAreaTabBar db={db} />
-              <div className="relative min-h-0 flex-1">
-                {db.workTabs.length === 0 && (
-                  <div className="grid h-full place-items-center px-6 text-center text-xs text-muted-foreground">
-                    {t('tabs.empty')}
+            <PanelGroup direction="horizontal">
+              <Panel minSize={30}>
+                <div className="flex h-full flex-col">
+                  <WorkAreaTabBar db={db} />
+                  <div className="relative min-h-0 flex-1">
+                    {db.workTabs.length === 0 && (
+                      <div className="grid h-full place-items-center px-6 text-center text-xs text-muted-foreground">
+                        {t('tabs.empty')}
+                      </div>
+                    )}
+                    {/* Keep-alive: every open tab stays mounted; only the active one
+                        is shown (preserves SQL text + scroll, like the Monaco tabs). */}
+                    {db.workTabs.map((tab) => (
+                      <div
+                        key={tab.id}
+                        className="absolute inset-0"
+                        style={{ display: tab.id === db.activeTabId ? 'block' : 'none' }}
+                      >
+                        <TabContent
+                          tab={tab}
+                          projectId={projectId}
+                          engine={db.connections.find((c) => c.id === tab.connectionId)?.engine}
+                          suggestions={db.treeSuggestions(tab.connectionId)}
+                          onStructureApplied={() => db.invalidateTables(tab.connectionId, tab.schema)}
+                          onSaved={() => setAuxTick((x) => x + 1)}
+                        />
+                      </div>
+                    ))}
                   </div>
-                )}
-                {/* Keep-alive: every open tab stays mounted; only the active one
-                    is shown (preserves SQL text + scroll, like the Monaco tabs). */}
-                {db.workTabs.map((tab) => (
-                  <div
-                    key={tab.id}
-                    className="absolute inset-0"
-                    style={{ display: tab.id === db.activeTabId ? 'block' : 'none' }}
-                  >
-                    <TabContent
-                      tab={tab}
+                </div>
+              </Panel>
+              {auxOpen && (
+                <>
+                  <PanelResizeHandle className="w-px bg-border hover:bg-accent" />
+                  <Panel defaultSize={26} minSize={16} maxSize={42}>
+                    <QueryAuxPanel
                       projectId={projectId}
-                      suggestions={db.treeSuggestions(tab.connectionId)}
-                      onStructureApplied={() => db.invalidateTables(tab.connectionId, tab.schema)}
+                      connectionId={db.activeConnectionId}
+                      refreshKey={auxTick}
+                      onOpenQuery={openFromAux}
                     />
-                  </div>
-                ))}
-              </div>
-            </div>
+                  </Panel>
+                </>
+              )}
+            </PanelGroup>
           </Panel>
         </PanelGroup>
       </div>
@@ -99,26 +135,43 @@ export function DbClientTab({ projectId }: { projectId: number }) {
 function TabContent({
   tab,
   projectId,
+  engine,
   suggestions,
   onStructureApplied,
+  onSaved,
 }: {
   tab: WorkTab;
   projectId: number;
+  engine?: DbEngine;
   suggestions: string[];
   onStructureApplied: () => void;
+  onSaved: () => void;
 }) {
   if (tab.kind === 'data' && tab.table) {
     return <DataGridTab connectionId={tab.connectionId} schema={tab.schema ?? ''} table={tab.table} />;
+  }
+  if (tab.kind === 'er') {
+    return <ErDiagramTab connectionId={tab.connectionId} schema={tab.schema} />;
   }
   if (tab.kind === 'structure') {
     return (
       <TableStructureEditor
         connectionId={tab.connectionId}
+        engine={engine}
         schema={tab.schema}
         table={tab.table || undefined}
         onApplied={onStructureApplied}
       />
     );
   }
-  return <QueryConsole projectId={projectId} connectionId={tab.connectionId} suggestions={suggestions} schema={tab.schema} />;
+  return (
+    <QueryConsole
+      projectId={projectId}
+      connectionId={tab.connectionId}
+      suggestions={suggestions}
+      schema={tab.schema}
+      initialSql={tab.initialSql}
+      onSaved={onSaved}
+    />
+  );
 }

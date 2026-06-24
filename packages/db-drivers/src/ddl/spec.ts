@@ -22,11 +22,32 @@ export interface CreateTableSpec {
   columns: ColumnSpec[];
 }
 
+export interface IndexSpec {
+  name: string;
+  columns: string[];
+  unique?: boolean;
+}
+
+export interface ForeignKeySpec {
+  name: string;
+  columns: string[];
+  refSchema?: string;
+  refTable: string;
+  refColumns: string[];
+  onDelete?: string;
+  onUpdate?: string;
+}
+
 export type AlterAction =
   | { kind: 'addColumn'; column: ColumnSpec }
   | { kind: 'dropColumn'; name: string }
   | { kind: 'renameColumn'; from: string; to: string }
-  | { kind: 'modifyColumn'; name: string; column: ColumnSpec };
+  | { kind: 'modifyColumn'; name: string; column: ColumnSpec }
+  | { kind: 'renameTable'; to: string }
+  | { kind: 'addIndex'; index: IndexSpec }
+  | { kind: 'dropIndex'; name: string }
+  | { kind: 'addForeignKey'; fk: ForeignKeySpec }
+  | { kind: 'dropForeignKey'; name: string };
 
 export interface AlterTableSpec {
   schema?: string;

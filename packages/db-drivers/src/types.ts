@@ -19,6 +19,9 @@ export type DbEngine =
 
 export type DbSslMode = 'disable' | 'require' | 'verify-ca' | 'verify-full';
 
+/** Object kinds listed lazily in the tree (beyond tables/views/columns). */
+export type DbObjectKind = 'triggers' | 'functions' | 'sequences';
+
 export interface DbSslConfig {
   mode?: DbSslMode;
   ca?: string;
@@ -133,6 +136,8 @@ export interface DatabaseDriver {
   listTables(schema?: string): Promise<TableRef[]>;
   /** Deep single-table introspection: columns + indexes + foreign keys. */
   describeTable(schema: string, name: string): Promise<TableInfo>;
+  /** Names of schema/table objects of a kind (triggers/functions/sequences) for the tree. */
+  listObjects(kind: DbObjectKind, schema?: string, table?: string): Promise<string[]>;
   /** Paginated `SELECT *` for a table, with engine-correct identifier quoting. */
   tablePreview(schema: string, table: string, opts: { limit: number; offset: number }): Promise<QueryResult>;
   /** Back-compat: all tables in a schema with their columns (agent `db_schema`). */

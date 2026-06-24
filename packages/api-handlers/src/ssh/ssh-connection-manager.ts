@@ -19,8 +19,14 @@
 
 import { createHash } from 'node:crypto';
 import type { Duplex } from 'node:stream';
-import { Client, type ConnectConfig } from 'ssh2';
+// ssh2 is CommonJS; not all of its named exports survive Node's ESM interop
+// (see ssh-keys.ts). Pull the runtime `Client` value off the default import;
+// types stay as erased type-only named imports.
+import ssh2, { type ConnectConfig } from 'ssh2';
 import { ApiError, type SshConnectSpec, type SshAuth, type SshHostKeyInfo } from '@mcp/api-bus';
+
+const { Client } = ssh2;
+type Client = InstanceType<typeof ssh2.Client>;
 import { KnownHostsStore } from './known-hosts.js';
 
 interface ManagedConnection {

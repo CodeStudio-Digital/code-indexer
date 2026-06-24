@@ -27,8 +27,10 @@ import {
   SUBMIT_TASKS_DESC,
   EXECUTE_TASK_DESC,
   TASK_COMPLETE_DESC,
+  TASK_LIST_DESC,
   maybeTerse,
 } from '@mcp/code-agent/tools/descriptions.js';
+import { todoWrite, updateTodo } from '@mcp/code-agent/tools/todo.js';
 
 // ─── Burst guard for submit_tasks ───────────────────────────────
 //
@@ -306,7 +308,10 @@ export function formatTasksRejectedResult(feedback?: string): string {
 
 export function formatTaskCompletedResult(taskId: string, summary: string, nextTaskId: string | null): string {
   if (nextTaskId) {
-    return `Task ${taskId} marked as done. Summary: ${summary}\n\nNext task ready: ${nextTaskId}. Call execute_task with task_id="${nextTaskId}" to continue.`;
+    // execute_tasks (plural) is the only registered orchestrator — it re-derives
+    // the next runnable task itself, so don't point at the unregistered singular
+    // execute_task or pass a task_id.
+    return `Task ${taskId} marked as done. Summary: ${summary}\n\nNext task ready: ${nextTaskId}. Call execute_tasks() again to advance.`;
   }
   return `Task ${taskId} marked as done. Summary: ${summary}\n\nAll tasks complete. You may now respond to the user with a final wrap-up.`;
 }
@@ -404,6 +409,7 @@ export const submitTasks: CoderTool = {
 
     const toolUseId = `tasks_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const initialState: TasksState = {
+      gate: 'approve',
       summary: validated.summary,
       tasks: validated.tasks,
       execution_mode: null,
@@ -1181,12 +1187,99 @@ export const updateTask: CoderTool = {
 // Avoid the unused-import linter complaint until Phase 2 needs them.
 void extractPathsFromToolArgs;
 
+// ─── task_list (unified front door) ─────────────────────────────
+//
+// ONE always-on tool that replaces the todos/tasks selection fork. A single
+// `gate` field picks intensity; the handler dispatches to the existing,
+// well-tested track (todo_write/update_todo) and approve (submit_tasks)
+// handlers, which all write the SAME store (`coder_tasks_state`). The legacy
+// names stay registered as back-compat aliases (demoted out of bootstrap).
+
+/**
+ * Infer the gate when the model omits it: approve-shaped items carry
+ * orchestration fields (description/files/kind/depends_on/references/
+ * suggested_mode/estimated_complexity/parallel_group); checklist items only
+ * carry content/activeForm/status. Default to track (the cheap, no-pause path).
+ */
+function inferGate(items: unknown): 'track' | 'approve' {
+  if (!Array.isArray(items)) return 'track';
+  // `title` is a clean approve discriminator — a track TodoItem only ever
+  // carries content/activeForm/status, never title. Keep this set in sync with
+  // the dashboard's taskListIsApprove (MessageView.tsx) so the rendered card
+  // can never disagree with the handler dispatch.
+  const APPROVE_FIELDS = [
+    'title', 'description', 'files', 'kind', 'depends_on',
+    'references', 'suggested_mode', 'estimated_complexity', 'parallel_group',
+  ];
+  const looksApprove = items.some(
+    (it) => it && typeof it === 'object' && APPROVE_FIELDS.some((f) => {
+      const v = (it as Record<string, unknown>)[f];
+      return Array.isArray(v) ? v.length > 0 : v !== undefined && v !== '';
+    }),
+  );
+  return looksApprove ? 'approve' : 'track';
+}
+
+const taskListSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    gate: {
+      type: 'string',
+      enum: ['track', 'approve'],
+      description:
+        "'track' (default) = lightweight checklist, NEVER pauses, no approval — your live progress list. " +
+        "'approve' = gated structured task list: pauses for user approval and is the ONLY thing that arms execute_tasks subagent waves (requires 2+ items with files/kind). " +
+        'Omit and it is inferred from the item shape.',
+    },
+    summary: { type: 'string', description: 'For gate:approve — 1-2 line statement of the overall objective.' },
+    items: {
+      type: 'array',
+      description:
+        'The full list (replaces the current one). ' +
+        'gate:track items = {id?, content, activeForm, status: pending|in_progress|completed}. ' +
+        'gate:approve items = {id?, title, description, files, references?, depends_on?, suggested_mode, estimated_complexity, kind?, parallel_group?}.',
+      items: { type: 'object' },
+    },
+    updates: {
+      type: 'array',
+      description:
+        'Checklist patch (gate:track only): atomically flip status / rename existing items by id without re-sending the whole list. ' +
+        'Each entry {id, status?, content?, activeForm?}. Prefer this over re-writing `items` for status changes.',
+      items: { type: 'object' },
+    },
+  },
+  additionalProperties: false,
+} as unknown as JsonSchema;
+
+export const taskList: CoderTool = {
+  name: 'task_list',
+  description: maybeTerse(TASK_LIST_DESC),
+  source: 'native',
+  parameters: taskListSchema,
+  handler: async (args, ctx): Promise<ToolResult> => {
+    // Patch path → track checklist patch (the update_todo flow).
+    if (args.updates !== undefined) {
+      return updateTodo.handler({ updates: args.updates }, ctx);
+    }
+    if (args.items === undefined) {
+      return err('task_list: provide `items` (the full list) or `updates` (a checklist patch).');
+    }
+    const gate = args.gate === 'approve' || args.gate === 'track' ? args.gate : inferGate(args.items);
+    if (gate === 'approve') {
+      return submitTasks.handler({ summary: args.summary, tasks: args.items }, ctx);
+    }
+    // track → the todo_write flow (no pause).
+    return todoWrite.handler({ todos: args.items }, ctx);
+  },
+};
+
 // Frente D — `executeTask` (singular) intentionally absent: the
 // orchestrator `execute_tasks` (plural, wave-based) is the only path
 // the model needs. The export still exists below for backwards
 // compatibility with callers that import it directly, but it is NOT
 // registered in any session.
 export const tasksTools: CoderTool[] = [
+  taskList,
   submitTasks,
   listTasks,
   cancelTasks,

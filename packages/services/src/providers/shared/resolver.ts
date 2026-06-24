@@ -6,8 +6,23 @@ import {
   resolveGoogleOAuthCreds,
   resolveClaudeCodeCreds,
   resolveKimiCodeCreds,
+  runOAuthRefresh,
 } from './oauth.js';
 import { resolveBedrockCreds } from './aws.js';
+
+/**
+ * Whether to route this kind through the data-driven generic OAuth path
+ * (`runOAuthRefresh`) instead of the legacy per-kind switch. Read at CALL time
+ * (workers are long-lived) so the staged cutover can flip a kind without a
+ * restart. Default OFF → the legacy path is untouched. `MCP_GENERIC_OAUTH=1`
+ * enables it; an optional `MCP_GENERIC_OAUTH_KINDS=a,b` scopes it per-kind.
+ */
+function genericOAuthEnabled(kind: string): boolean {
+  if (process.env.MCP_GENERIC_OAUTH !== '1') return false;
+  const list = process.env.MCP_GENERIC_OAUTH_KINDS?.trim();
+  if (!list) return true;
+  return list.split(',').map((s) => s.trim()).includes(kind);
+}
 
 /**
  * Resolve runtime credentials for a provider instance. Despachado por
@@ -44,6 +59,11 @@ export async function resolveCreds(
           `Configure it via the admin UI first.`,
         );
       }
+      // Generic OAuth seam (default OFF). When enabled for this kind it routes
+      // through the data-driven dispatch, which for the 5 connectors delegates
+      // to the SAME resolve*Creds below — so the legacy path stays the fallback
+      // and behavior is identical until per-kind E2E flips a kind on.
+      if (genericOAuthEnabled(def.kind)) return runOAuthRefresh(def, cfg);
       if (def.kind === 'copilot') return resolveCopilotCreds(cfg);
       if (def.kind === 'chatgpt') return resolveChatGPTCreds(cfg);
       if (def.kind === 'google-oauth') return resolveGoogleOAuthCreds(cfg);

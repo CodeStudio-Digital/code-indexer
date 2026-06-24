@@ -8,6 +8,7 @@ import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-gene
 import { enumerateExternalTools } from '../../../admin/mcp-servers.routes.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { TOOL_PERMISSION_MODES } from '@mcp/code-agent/core/permission-gate.js';
+import { deriveTodosFromState, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helpers.js';
@@ -903,27 +904,44 @@ export function mountCoderSessionsRoutes(
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c, 'session not found');
     const goal = sessionStore.getSessionGoal(id);
-    const tasks = sessionStore.getTasksState(id);
-    // Parse the persisted todos JSON so a fresh dashboard mount can populate
-    // the sidebar immediately, without waiting for the runner to emit a
-    // todos_updated SSE event. Resolves the "estado some no resume" report.
-    let todos: Array<{ id?: string; content: string; activeForm: string; status: string }> = [];
-    if (session.todos_json) {
-      try {
-        const parsed = JSON.parse(session.todos_json) as unknown;
-        if (Array.isArray(parsed)) {
-          todos = parsed.map((t) => {
-            const o = (t ?? {}) as Record<string, unknown>;
-            return {
-              id: typeof o.id === 'string' ? o.id : undefined,
-              content: typeof o.content === 'string' ? o.content : '',
-              activeForm: typeof o.activeForm === 'string' ? o.activeForm : '',
-              status: typeof o.status === 'string' ? o.status : 'pending',
-            };
-          });
+    // Post-merge: todos + tasks share ONE store (coder_tasks_state, gate-typed).
+    // A track-gate list IS the lightweight checklist → surface it as `todos`,
+    // not `tasks`. An approve-gate list → `tasks`. This makes the sidebar render
+    // exactly ONE section instead of stacking a duplicate of the same items.
+    const tasksState = sessionStore.getTasksState(id);
+    const gate = effectiveGate(tasksState);
+    const isTrack = !!tasksState && tasksState.tasks.length > 0 && gate === 'track';
+
+    let todos: Array<{ id?: string; content: string; activeForm: string; status: string }>;
+    if (tasksState) {
+      // Single source of truth: derive the checklist from the unified state
+      // (empty unless it is a track list).
+      todos = deriveTodosFromState(tasksState).map((td) => ({
+        id: td.id,
+        content: td.content,
+        activeForm: td.activeForm,
+        status: td.status,
+      }));
+    } else {
+      // Pre-migration / runner-not-yet-constructed fallback: legacy todos_json.
+      todos = [];
+      if (session.todos_json) {
+        try {
+          const parsed = JSON.parse(session.todos_json) as unknown;
+          if (Array.isArray(parsed)) {
+            todos = parsed.map((t) => {
+              const o = (t ?? {}) as Record<string, unknown>;
+              return {
+                id: typeof o.id === 'string' ? o.id : undefined,
+                content: typeof o.content === 'string' ? o.content : '',
+                activeForm: typeof o.activeForm === 'string' ? o.activeForm : '',
+                status: typeof o.status === 'string' ? o.status : 'pending',
+              };
+            });
+          }
+        } catch {
+          // Malformed JSON: fall through with todos = []
         }
-      } catch {
-        // Malformed JSON: fall through with todos = []
       }
     }
     return c.json({
@@ -937,13 +955,16 @@ export function mountCoderSessionsRoutes(
             updated_at: goal.updatedAt,
           }
         : null,
-      tasks: tasks
+      // Only an APPROVE list renders as "Tasks". A track checklist is returned
+      // via `todos` above, so `tasks` is null for it (no duplicate panel).
+      tasks: tasksState && !isTrack && tasksState.tasks.length > 0
         ? {
-            summary: tasks.summary,
-            approved: tasks.approved,
-            execution_mode: tasks.execution_mode,
-            current_task_id: tasks.current_task_id,
-            tasks: tasks.tasks.map((t) => ({
+            gate,
+            summary: tasksState.summary,
+            approved: tasksState.approved,
+            execution_mode: tasksState.execution_mode,
+            current_task_id: tasksState.current_task_id,
+            tasks: tasksState.tasks.map((t) => ({
               id: t.id,
               title: t.title,
               status: t.status,

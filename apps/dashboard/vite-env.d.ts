@@ -35,6 +35,8 @@ declare global {
     openExternal?: (url: string) => void;
     /** Reveal a local folder/file in the OS file manager. */
     openPath?: (path: string) => void;
+    /** Reveal a file in its containing folder, with the file selected. */
+    showItemInFolder?: (path: string) => void;
     /**
      * Start the ephemeral 127.0.0.1 OAuth loopback (RFC 8252) used to
      * capture the redirect when MCP OAuth opens in the external browser.
@@ -67,6 +69,21 @@ declare global {
     isNotificationSupported?: () => Promise<boolean>;
     /** Navigate an existing renderer window after a native notification click. */
     onNavigate?: (cb: (route: string) => void) => () => void;
+    /**
+     * Window → project registry (title-bar switcher): report this window's
+     * active project, and list/focus projects open in other windows.
+     * Electron-only — undefined in a plain-browser dev session.
+     */
+    windowRegistry?: {
+      setActiveProject: (projectId: number) => void;
+      listOpenProjects: () => Promise<
+        Array<{ windowId: number; projectId: number; focused: boolean }>
+      >;
+      focusProject: (projectId: number) => Promise<{ ok: boolean; windowId?: number }>;
+      onOpenProjectsChanged: (
+        cb: (list: Array<{ windowId: number; projectId: number; focused: boolean }>) => void,
+      ) => () => void;
+    };
     /** Auto-updater hooks (stubbed until Dia 17 of the macro plan lands). */
     onUpdateAvailable?: (cb: () => void) => () => void;
     restartAndUpdate?: () => void;

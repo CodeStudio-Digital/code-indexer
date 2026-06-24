@@ -364,6 +364,16 @@ export class LocalProcessManager {
     this.emit({ kind: 'destroyed', sandboxId: sessionId });
   }
 
+  /**
+   * Stop every live local process (app shutdown). Reuses the per-session
+   * SIGTERM→SIGKILL ladder in `stop()`. Without this, company dev servers
+   * spawned here survive the app and keep holding their ports.
+   */
+  async killAll(reason = 'app-quit'): Promise<void> {
+    const ids = new Set<string>([...this.processes.keys(), ...this.children.keys()]);
+    await Promise.allSettled([...ids].map((id) => this.stop(id, reason)));
+  }
+
   // ─────────────────────────────────────────────── internals
 
   private handleExit(sessionId: string, _signal: NodeJS.Signals | string, reason: string): void {

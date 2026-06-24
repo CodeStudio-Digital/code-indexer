@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2, Undo2, Ban } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
-import { cellText } from './ResultTable.js';
+import { cellText } from './grid-utils.js';
 import { rowKeyOf, type GridEdits, type Row } from './use-grid-edits.js';
 
 export function EditableGrid({

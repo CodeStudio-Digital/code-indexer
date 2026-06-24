@@ -24,8 +24,7 @@ export type SectionId =
   | 'verdaccio'
   | 'pipeline-bindings'
   | 'perf'
-  | 'auth'
-  | 'appearance';
+  | 'auth';
 
 export type GroupId = 'models' | 'knowledge' | 'extensions' | 'services' | 'system';
 

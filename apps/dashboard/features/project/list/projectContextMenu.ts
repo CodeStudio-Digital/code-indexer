@@ -16,7 +16,9 @@ import { toast } from '../../../components/ui/prompt-dialog.js';
 import type { ProjectCardData } from './ProjectCard.js';
 
 export interface BuildProjectMenuArgs {
-  project: ProjectCardData;
+  /** Only id/name/root_path are read — the title-bar switcher passes a
+   *  lightweight `{id,name,root_path}` while the cards pass full data. */
+  project: Pick<ProjectCardData, 'id' | 'name' | 'root_path'>;
   onSelect: () => void;
   onEdit: () => void;
   /**

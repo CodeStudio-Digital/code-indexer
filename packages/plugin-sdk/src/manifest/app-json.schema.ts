@@ -6,7 +6,7 @@
  * are keyed by `name`/`id`.
  */
 import { z } from 'zod';
-import { thirdPartyProviderSpecSchema } from '@mcp/provider-sdk';
+import { thirdPartyProviderSpecSchema, providerSpecSchema } from '@mcp/provider-sdk';
 import { CONTRIB_ID_RE, relPath } from './common.js';
 
 const contribId = z.string().regex(CONTRIB_ID_RE, 'id must be kebab/snake-case');
@@ -74,19 +74,33 @@ export const permissionsSchema = z
   })
   .strict();
 
-export const appManifestSchema = z.object({
-  worker: relPath.optional(),
-  tools: z.array(pluginToolDeclSchema).optional(),
-  toolWindows: z.array(toolWindowDeclSchema).optional(),
-  commands: z.array(commandDeclSchema).optional(),
-  themes: z.array(themeDeclSchema).optional(),
-  permissions: permissionsSchema.optional(),
-  // A plugin contributes a provider as a full declarative ProviderSpec (DATA).
-  // The third-party variant rejects host-only capabilities (auth.hooks, sdk:*
-  // discovery/test, unknown wires) so a plugin cannot claim them.
-  providers: z.array(thirdPartyProviderSpecSchema).optional(),
-});
+function buildAppManifestSchema(providers: z.ZodTypeAny) {
+  return z.object({
+    worker: relPath.optional(),
+    tools: z.array(pluginToolDeclSchema).optional(),
+    toolWindows: z.array(toolWindowDeclSchema).optional(),
+    commands: z.array(commandDeclSchema).optional(),
+    themes: z.array(themeDeclSchema).optional(),
+    permissions: permissionsSchema.optional(),
+    // A plugin contributes a provider as a full declarative ProviderSpec (DATA).
+    providers: z.array(providers).optional(),
+  });
+}
 
-export function parseAppManifest(json: unknown) {
-  return appManifestSchema.parse(json);
+// Default (third-party) manifest schema: rejects host-only provider capabilities
+// (auth.hooks, sdk:* discovery/test, unknown wires) so a plugin can't claim them.
+export const appManifestSchema = buildAppManifestSchema(thirdPartyProviderSpecSchema);
+
+// First-party (bundled) lane: a plugin shipped INSIDE the app (source 'bundled')
+// may carry host capabilities — its providers validate against the FULL schema.
+// The provider LOADER stays the authoritative runtime gate (isFirstPartyBundled),
+// so this only governs whether the install snapshot is allowed to persist them.
+const firstPartyAppManifestSchema = buildAppManifestSchema(providerSpecSchema);
+
+export function parseAppManifest(
+  json: unknown,
+  opts?: { trustProviders?: boolean },
+): z.infer<typeof appManifestSchema> {
+  const schema = opts?.trustProviders ? firstPartyAppManifestSchema : appManifestSchema;
+  return schema.parse(json) as z.infer<typeof appManifestSchema>;
 }

@@ -370,6 +370,15 @@ export interface CoderTask {
   id: string;
   title: string;
   description: string;
+  /**
+   * Track-gate (lightweight checklist) fields — set only when the owning
+   * `TasksState.gate === 'track'`. `content` is the imperative label and
+   * `activeForm` the present-continuous shown while the item runs. They mirror
+   * the old `TodoItem` shape so a track list renders as a no-pause checklist.
+   * Undefined for `gate === 'approve'` tasks (which use `title`/`description`).
+   */
+  content?: string;
+  activeForm?: string;
   files: string[];
   references: TaskReference[];
   depends_on: string[];
@@ -420,14 +429,28 @@ export interface TaskResult {
 
 export type TaskExecutionMode = 'inline' | 'all-subagent' | 'smart' | 'per-task';
 
+/**
+ * Intensity axis of the unified task list (merge of the old `todos` and
+ * `submit_tasks` systems).
+ *   - 'track'   = lightweight self-tracking checklist; NEVER pauses, no
+ *                 approval, does NOT arm `execute_tasks`. Items use
+ *                 `content`/`activeForm`. (Replaces the old todo_write list.)
+ *   - 'approve' = gated structured task list; pauses for user approval and is
+ *                 the ONLY thing that arms `execute_tasks` subagent waves.
+ * Omitted on legacy rows → treated as 'approve' (their only prior meaning).
+ */
+export type TaskGate = 'track' | 'approve';
+
 /** Top-level shape persisted in coder_tasks_state.state JSON. */
 export interface TasksState {
+  /** Intensity gate. Undefined on legacy rows ⇒ read as 'approve'. */
+  gate?: TaskGate;
   /** 1-2 line statement of the overall objective from the model. */
   summary: string;
   tasks: CoderTask[];
   /** Set after user approval; null while awaiting verdict. */
   execution_mode: TaskExecutionMode | null;
-  /** Whether the user has approved the list. */
+  /** Whether the user has approved the list. Always true for `gate==='track'`. */
   approved: boolean;
   /** Currently-running task id (for resume detection). */
   current_task_id: string | null;

@@ -104,11 +104,58 @@ describe('DDL builder', () => {
     expect(stmts[2]).toBe('ALTER TABLE `t` RENAME COLUMN `a` TO `b`');
   });
 
+  it('ALTER rename table per engine', () => {
+    expect(buildDdl('postgres', 'alter', { alter: { table: 'old', actions: [{ kind: 'renameTable', to: 'new' }] } })).toEqual([
+      'ALTER TABLE "old" RENAME TO "new"',
+    ]);
+    expect(buildDdl('mysql', 'alter', { alter: { table: 'old', actions: [{ kind: 'renameTable', to: 'new' }] } })).toEqual([
+      'ALTER TABLE `old` RENAME TO `new`',
+    ]);
+  });
+
+  it('add/drop index per engine', () => {
+    expect(
+      buildDdl('postgres', 'alter', { alter: { schema: 'app', table: 'users', actions: [{ kind: 'addIndex', index: { name: 'ix_email', columns: ['email'], unique: true } }] } }),
+    ).toEqual(['CREATE UNIQUE INDEX "ix_email" ON "app"."users" ("email")']);
+    expect(buildDdl('postgres', 'alter', { alter: { schema: 'app', table: 'users', actions: [{ kind: 'dropIndex', name: 'ix_email' }] } })).toEqual([
+      'DROP INDEX "app"."ix_email"',
+    ]);
+    expect(buildDdl('mysql', 'alter', { alter: { table: 'users', actions: [{ kind: 'dropIndex', name: 'ix_email' }] } })).toEqual([
+      'DROP INDEX `ix_email` ON `users`',
+    ]);
+  });
+
+  it('add/drop foreign key per engine; sqlite is a comment', () => {
+    const [pgFk] = buildDdl('postgres', 'alter', {
+      alter: { table: 'posts', actions: [{ kind: 'addForeignKey', fk: { name: 'fk_user', columns: ['user_id'], refTable: 'users', refColumns: ['id'], onDelete: 'CASCADE' } }] },
+    });
+    expect(pgFk).toBe('ALTER TABLE "posts" ADD CONSTRAINT "fk_user" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE');
+    expect(buildDdl('mysql', 'alter', { alter: { table: 'posts', actions: [{ kind: 'dropForeignKey', name: 'fk_user' }] } })).toEqual([
+      'ALTER TABLE `posts` DROP FOREIGN KEY `fk_user`',
+    ]);
+    expect(buildDdl('postgres', 'alter', { alter: { table: 'posts', actions: [{ kind: 'dropForeignKey', name: 'fk_user' }] } })).toEqual([
+      'ALTER TABLE "posts" DROP CONSTRAINT "fk_user"',
+    ]);
+    const [sqliteFk] = buildDdl('sqlite', 'alter', { alter: { table: 'posts', actions: [{ kind: 'addForeignKey', fk: { name: 'fk', columns: ['a'], refTable: 't', refColumns: ['id'] } }] } });
+    expect(sqliteFk).toMatch(/rebuild/i);
+  });
+
   it('sqlite modify column emits an unsupported comment (rebuild required)', () => {
     const [stmt] = buildDdl('sqlite', 'alter', {
       alter: { table: 't', actions: [{ kind: 'modifyColumn', name: 'x', column: { name: 'x', type: 'TEXT' } }] },
     });
     expect(stmt).toMatch(/rebuild/i);
+  });
+
+  it('rejects an invalid referential action (no injection via ON DELETE)', () => {
+    expect(() =>
+      buildDdl('postgres', 'alter', { alter: { table: 't', actions: [{ kind: 'addForeignKey', fk: { name: 'f', columns: ['a'], refTable: 'u', refColumns: ['id'], onDelete: 'CASCADE; DROP TABLE x' } }] } }),
+    ).toThrow(/referential action/i);
+  });
+
+  it('rejects a statement-breaking column type/default (no injection)', () => {
+    expect(() => buildDdl('postgres', 'create', { create: { table: 't', columns: [{ name: 'c', type: 'int); DROP TABLE x; --' }] } })).toThrow(/unsafe/i);
+    expect(() => buildDdl('mysql', 'alter', { alter: { table: 't', actions: [{ kind: 'addColumn', column: { name: 'c', type: 'INT', default: "1; DROP TABLE x" } }] } })).toThrow(/unsafe/i);
   });
 
   it('quoteRelation omits sqlite main schema', () => {

@@ -275,6 +275,37 @@ export class PtyManager {
       entry.exitHooks.delete(cb);
     };
   }
+
+  /**
+   * OS pids of every live PTY — read BEFORE `killAll()` so the caller can
+   * process-tree-kill (taskkill /T) any grandchildren the PTY launched
+   * (e.g. a `npm run dev` → vite). node-pty's own `kill()` only reaps the
+   * direct shell, not the dev server it spawned.
+   */
+  listPids(): number[] {
+    const pids: number[] = [];
+    for (const entry of this.entries.values()) {
+      const pid = entry.pty.pid;
+      if (typeof pid === 'number' && pid > 0) pids.push(pid);
+    }
+    return pids;
+  }
+
+  /**
+   * Kill every live PTY (app shutdown). Best-effort — signals each child and
+   * clears the registry so a second call is a no-op. Grandchildren are reaped
+   * by the caller via tree-kill of `listPids()`.
+   */
+  killAll(): void {
+    for (const entry of this.entries.values()) {
+      try {
+        entry.pty.kill();
+      } catch {
+        /* already exited */
+      }
+    }
+    this.entries.clear();
+  }
 }
 
 export function defaultShell(): string {

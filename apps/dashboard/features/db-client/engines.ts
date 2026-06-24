@@ -35,3 +35,18 @@ export function engineMeta(id: DbEngine): EngineMeta | undefined {
 export function engineLabel(id: DbEngine): string {
   return engineMeta(id)?.label ?? id;
 }
+
+/** Common column types per engine — populate the structure editor's type dropdown (free-text still allowed). */
+export function commonTypes(id: DbEngine): string[] {
+  switch (id) {
+    case 'postgres':
+      return ['integer', 'bigint', 'smallint', 'serial', 'bigserial', 'text', 'varchar(255)', 'char(10)', 'boolean', 'date', 'timestamp', 'timestamptz', 'numeric(10,2)', 'real', 'double precision', 'json', 'jsonb', 'uuid', 'bytea'];
+    case 'mysql':
+    case 'mariadb':
+      return ['INT', 'BIGINT', 'TINYINT', 'SMALLINT', 'VARCHAR(255)', 'TEXT', 'CHAR(10)', 'BOOLEAN', 'DATE', 'DATETIME', 'TIMESTAMP', 'DECIMAL(10,2)', 'FLOAT', 'DOUBLE', 'JSON', 'BLOB', 'ENUM'];
+    case 'sqlite':
+      return ['INTEGER', 'TEXT', 'REAL', 'BLOB', 'NUMERIC'];
+    default:
+      return [];
+  }
+}

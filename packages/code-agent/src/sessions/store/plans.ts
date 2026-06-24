@@ -60,14 +60,18 @@ export function get(db: DB, id: number): CoderPlanRow | null {
   return row ?? null;
 }
 
-/** Chronological trace of every `todo_write` call in a session. */
+/**
+ * Chronological trace of every checklist write in a session. Post-merge the
+ * checklist is written via `task_list` (track gate); `todo_write` is the legacy
+ * alias. Both are included so the history survives the rename.
+ */
 export function listTodoHistory(db: DB, sessionId: number): { id: number; args_json: string; created_at: string }[] {
   return db.prepare(`
     SELECT tc.id, tc.args_json, tc.created_at
       FROM coder_tool_calls tc
       JOIN coder_messages m ON m.id = tc.message_id
      WHERE m.session_id = ?
-       AND tc.tool_name = 'todo_write'
+       AND tc.tool_name IN ('todo_write', 'task_list')
      ORDER BY tc.created_at ASC, tc.id ASC
   `).all(sessionId) as { id: number; args_json: string; created_at: string }[];
 }

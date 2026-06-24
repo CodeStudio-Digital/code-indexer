@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, CheckCircle2 } from 'lucide-react';
+import { Loader2, CheckCircle2, KeyRound, Copy, Check, AlertTriangle } from 'lucide-react';
 import type { SshAuth, SshConnectSpec } from '@mcp/api-bus';
 import {
   Dialog,
@@ -25,7 +25,7 @@ import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Switch } from '../../components/ui/switch.js';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../components/ui/select.js';
-import { createHost, patchHost, encryptSecret, testConnection } from './api.js';
+import { createHost, patchHost, encryptSecret, testConnection, generateKey } from './api.js';
 import type { SshAuthMethod, SshHost } from './types.js';
 
 export interface HostEditDialogProps {
@@ -63,6 +63,12 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Keygen: the generated public key (shown once so the user can add it to the
+  // server's authorized_keys) + a copy affordance.
+  const [genPubKey, setGenPubKey] = useState<string | null>(null);
+  const [genFingerprint, setGenFingerprint] = useState('');
+  const [genCopied, setGenCopied] = useState(false);
+  const [genBusy, setGenBusy] = useState(false);
 
   // Hydrate from the host being edited (secrets stay blank — "leave blank to keep").
   useEffect(() => {
@@ -72,6 +78,7 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
     setPassword('');
     setPrivateKey('');
     setPassphrase('');
+    setGenPubKey(null);
     if (initial) {
       setLabel(initial.label);
       setHost(initial.hostname);
@@ -167,6 +174,33 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
     }
   }
 
+  async function handleGenerateKey(): Promise<void> {
+    setError(null);
+    setGenBusy(true);
+    try {
+      const comment = username.trim() && host.trim() ? `${username.trim()}@${host.trim()}` : 'codestudio';
+      const k = await generateKey({ type: 'ed25519', comment, passphrase: passphrase || undefined });
+      setPrivateKey(k.privateKey);
+      setGenPubKey(k.publicKey);
+      setGenFingerprint(k.fingerprint);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenBusy(false);
+    }
+  }
+
+  async function copyPubKey(): Promise<void> {
+    if (!genPubKey) return;
+    try {
+      await navigator.clipboard.writeText(genPubKey);
+      setGenCopied(true);
+      setTimeout(() => setGenCopied(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
   const jumpCandidates = hosts.filter((h) => h.id !== initial?.id);
 
   return (
@@ -226,9 +260,32 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
           {method === 'privateKey' && (
             <>
               <div className={FIELD}>
-                <label className={LABEL}>{t('dialog.privateKey')}</label>
+                <div className="flex items-center justify-between">
+                  <label className={LABEL}>{t('dialog.privateKey')}</label>
+                  <button
+                    type="button"
+                    onClick={() => void handleGenerateKey()}
+                    disabled={genBusy}
+                    className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50"
+                  >
+                    {genBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
+                    {t('dialog.generateKey')}
+                  </button>
+                </div>
                 <Textarea value={privateKey} onChange={(e) => setPrivateKey(e.target.value)} placeholder={t('dialog.privateKeyPlaceholder')} rows={4} className="font-mono text-xs" />
               </div>
+              {genPubKey && (
+                <div className="rounded-md border bg-muted/40 p-2 space-y-1.5">
+                  <p className="text-[11px] text-muted-foreground">{t('dialog.publicKeyHint')}</p>
+                  <div className="flex items-start gap-2">
+                    <code className="flex-1 min-w-0 break-all text-[10px] font-mono select-all">{genPubKey}</code>
+                    <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" title={t('vault.copy')} onClick={() => void copyPubKey()}>
+                      {genCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                  {genFingerprint && <p className="text-[10px] text-muted-foreground font-mono">{genFingerprint}</p>}
+                </div>
+              )}
               <div className={FIELD}>
                 <label className={LABEL}>{t('dialog.passphrase')}</label>
                 <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />
@@ -257,6 +314,12 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
             <span>{t('dialog.agentForwarding')}</span>
             <Switch checked={agentForwarding} onCheckedChange={setAgentForwarding} />
           </label>
+          {agentForwarding && (
+            <p className="text-[11px] text-amber-500 flex items-start gap-1 -mt-1">
+              <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+              {t('dialog.agentForwardingWarning')}
+            </p>
+          )}
 
           {error && <p className="text-xs text-red-500">{error}</p>}
           {tested && !error && (

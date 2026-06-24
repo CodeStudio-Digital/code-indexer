@@ -1,80 +1,142 @@
 /**
- * Query console: a Monaco SQL editor (schema-aware autocomplete, Cmd/Ctrl+Enter
- * to run the selection or the whole buffer) over a results grid, for the active
- * connection. Cancel aborts an in-flight query; each run is written to history.
+ * Query console: a Monaco SQL editor (schema-aware autocomplete) over a results
+ * area, for the active connection.
+ *
+ *  - Cmd/Ctrl+Enter runs the selection (or the whole buffer if no selection).
+ *  - Cmd/Ctrl+Shift+Enter runs the whole buffer.
+ * Multiple `;`-separated statements run in sequence and show as N result-set
+ * sub-tabs (stops at the first error). A bottom status bar shows rows / time /
+ * statement count / the schema scope. Each run is written to history.
  */
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Play, Square, Loader2 } from 'lucide-react';
+import { Play, Square, Loader2, Save, Network } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Button } from '../../../components/ui/button.js';
+import { prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import * as api from '../api.js';
-import { ResultTable } from '../grid/ResultTable.js';
+import { VirtualResultGrid } from '../grid/VirtualResultGrid.js';
+import { SubTabs } from '../../api-client/SubTabs.js';
 import { SqlEditor } from './SqlEditor.js';
+import { splitStatements } from './sql-split.js';
 import type { DbQueryResult } from '../types.js';
+
+interface ResultSet {
+  sql: string;
+  result?: DbQueryResult;
+  error?: string;
+}
 
 export function QueryConsole({
   projectId,
   connectionId,
   suggestions = [],
   schema,
+  initialSql,
+  onSaved,
 }: {
   projectId: number;
   connectionId: number | null;
   suggestions?: string[];
   /** When set, the console is scoped to this schema (pg search_path / mysql USE). */
   schema?: string;
+  /** Initial SQL when opened from history / a saved query. */
+  initialSql?: string;
+  /** Called after saving a query, so a side panel can refresh. */
+  onSaved?: () => void;
 }) {
   const { t } = useTranslation('dbClient');
-  const [sql, setSql] = useState('');
+  const [sql, setSql] = useState(initialSql ?? '');
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<DbQueryResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<ResultSet[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
   const queryIdRef = useRef<string | null>(null);
   const runningRef = useRef(false);
 
   const run = useCallback(
     async (text: string) => {
-      if (connectionId == null || !text.trim() || runningRef.current) return;
+      if (connectionId == null || runningRef.current) return;
+      const statements = splitStatements(text);
+      if (statements.length === 0) return;
       runningRef.current = true;
-      const cid = String(connectionId);
-      const queryId = crypto.randomUUID();
-      queryIdRef.current = queryId;
       setRunning(true);
-      setError(null);
+      const cid = String(connectionId);
+      const out: ResultSet[] = [];
       const started = Date.now();
+      let totalRows = 0;
+      let failed: string | null = null;
       try {
-        const res = await api.runQuery(cid, text, { queryId, schema });
-        setResult(res);
-        void api
-          .addHistory(projectId, connectionId, {
-            sql: text,
-            duration_ms: res.durationMs ?? Date.now() - started,
-            row_count: res.rowCount,
-            status: 'ok',
-          })
-          .catch(() => void 0);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        setResult(null);
-        void api.addHistory(projectId, connectionId, { sql: text, status: 'error', error_message: msg }).catch(() => void 0);
+        for (const stmt of statements) {
+          const queryId = crypto.randomUUID();
+          queryIdRef.current = queryId;
+          try {
+            const res = await api.runQuery(cid, stmt, { queryId, schema });
+            out.push({ sql: stmt, result: res });
+            totalRows += res.rowCount;
+          } catch (e) {
+            failed = e instanceof Error ? e.message : String(e);
+            out.push({ sql: stmt, error: failed });
+            break; // stop the batch on the first failing statement
+          }
+        }
       } finally {
+        queryIdRef.current = null;
         runningRef.current = false;
         setRunning(false);
-        queryIdRef.current = null;
       }
+      setResults(out);
+      setActiveIdx(out.length - 1);
+      void api
+        .addHistory(projectId, connectionId, {
+          sql: text,
+          duration_ms: Date.now() - started,
+          row_count: totalRows,
+          status: failed ? 'error' : 'ok',
+          error_message: failed,
+        })
+        .catch(() => void 0);
     },
-    [connectionId, projectId],
+    [connectionId, projectId, schema],
   );
 
   const cancel = useCallback(() => {
     if (connectionId != null && queryIdRef.current) void api.cancelQuery(String(connectionId), queryIdRef.current);
   }, [connectionId]);
 
+  const explain = useCallback(async () => {
+    if (connectionId == null || !sql.trim() || runningRef.current) return;
+    runningRef.current = true;
+    setRunning(true);
+    try {
+      const res = await api.explain(String(connectionId), sql);
+      setResults([{ sql, result: res }]);
+    } catch (e) {
+      setResults([{ sql, error: e instanceof Error ? e.message : String(e) }]);
+    } finally {
+      runningRef.current = false;
+      setRunning(false);
+      setActiveIdx(0);
+    }
+  }, [connectionId, sql]);
+
+  const save = useCallback(async () => {
+    if (!sql.trim()) return;
+    const name = await prompt({ title: t('query.saveTitle'), placeholder: t('query.saveName'), confirmLabel: t('dialog.save') });
+    if (!name?.trim()) return;
+    try {
+      await api.createSavedQuery(projectId, { connection_id: connectionId, name: name.trim(), sql });
+      toast.success(t('query.saved'));
+      onSaved?.();
+    } catch (e) {
+      toast.error(t('query.saveFail'), { description: e instanceof Error ? e.message : String(e) });
+    }
+  }, [sql, projectId, connectionId, t, onSaved]);
+
   if (connectionId == null) {
     return <div className="grid h-full place-items-center text-xs text-muted-foreground">{t('query.noActive')}</div>;
   }
+
+  const active = results[activeIdx];
 
   return (
     <div className="flex h-full flex-col">
@@ -91,32 +153,69 @@ export function QueryConsole({
           </Button>
         )}
         {running && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-        {schema && (
-          <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-400" title={'search_path'}>
-            {schema}
-          </span>
-        )}
-        <div className="flex-1" />
-        {result && (
-          <span className="text-[11px] text-muted-foreground tabular-nums">
-            {result.rowCount} {t('query.rows')}
-            {result.truncated ? ' ⚠' : ''}
-            {result.durationMs != null ? ` · ${result.durationMs} ${t('query.elapsed')}` : ''}
-          </span>
-        )}
+        <Button size="sm" variant="ghost" onClick={() => void explain()} disabled={!sql.trim() || running} title={t('query.explain')}>
+          <Network className="mr-1.5 h-3 w-3" />
+          {t('query.explain')}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => void save()} disabled={!sql.trim()} title={t('query.saveTitle')}>
+          <Save className="h-3 w-3" />
+        </Button>
       </div>
 
       <PanelGroup direction="vertical" className="min-h-0 flex-1">
         <Panel defaultSize={40} minSize={15}>
-          <SqlEditor value={sql} onChange={setSql} onRun={(s) => void run(s)} suggestions={suggestions} height="100%" />
+          <SqlEditor
+            value={sql}
+            onChange={setSql}
+            onRun={(s) => void run(s)}
+            onRunAll={(s) => void run(s)}
+            suggestions={suggestions}
+            height="100%"
+          />
         </Panel>
         <PanelResizeHandle className="h-px bg-border hover:bg-accent" />
         <Panel minSize={20}>
-          <div className="h-full overflow-auto">
-            <ResultTable result={result} error={error} />
+          <div className="flex h-full flex-col">
+            {results.length > 1 && (
+              <SubTabs
+                tabs={results.map((r, i) => ({
+                  id: String(i),
+                  label: `${t('query.result')} ${i + 1}`,
+                  badge: r.error ? 1 : r.result?.rowCount,
+                  badgeTone: r.error ? ('danger' as const) : ('primary' as const),
+                }))}
+                active={String(activeIdx)}
+                onChange={(id) => setActiveIdx(Number(id))}
+              />
+            )}
+            <div className="min-h-0 flex-1">
+              <VirtualResultGrid result={active?.result ?? null} error={active?.error ?? null} />
+            </div>
           </div>
         </Panel>
       </PanelGroup>
+
+      {/* Status bar */}
+      <div className="flex h-6 shrink-0 items-center gap-2 border-t bg-card/40 px-2 text-[11px] text-muted-foreground">
+        {schema && (
+          <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 text-[10px] text-sky-400" title={'search_path'}>
+            {schema}
+          </span>
+        )}
+        {active?.error ? (
+          <span className="truncate text-red-400">{active.error}</span>
+        ) : active?.result ? (
+          <span className="tabular-nums">
+            {active.result.rowCount} {t('query.rows')}
+            {active.result.truncated ? ' ⚠' : ''}
+            {active.result.durationMs != null ? ` · ${active.result.durationMs} ${t('query.elapsed')}` : ''}
+          </span>
+        ) : (
+          <span>{t('query.idle')}</span>
+        )}
+        <div className="flex-1" />
+        {results.length > 1 && <span className="tabular-nums">{t('query.statementsN', { n: results.length })}</span>}
+      </div>
     </div>
   );
 }

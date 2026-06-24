@@ -1,0 +1,12 @@
+{
+  "name": "provider-bedrock",
+  "version": "0.1.0",
+  "description": "AWS Bedrock (SigV4) as a bundled first-party provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "AWS Bedrock",
+    "shortDescription": "Anthropic + Llama models on AWS Bedrock via SigV4 credentials",
+    "category": "ai-provider"
+  }
+}

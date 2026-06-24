@@ -138,7 +138,12 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'list_directory',
   'ask_user',
   'submit_plan',
-  'submit_tasks',
+  // task_list — the ONE always-on task/checklist tool (merge of todo_write +
+  // submit_tasks). gate:'track' = no-pause checklist; gate:'approve' = gated +
+  // arms execute_tasks. The legacy names (submit_tasks/todo_write/update_todo)
+  // are demoted to NAVIGATE as back-compat aliases so only task_list is on the
+  // turn-1 surface — kills the two-tool selection fork.
+  'task_list',
   // list/cancel/delete/archive_tasks demoted to navigate (Phase B) — ~1 call
   // each across 12k turns. Subordinates run profile 'navigate'+ and masters
   // 'full', so they still see them; only solo bootstrap sessions defer them
@@ -201,11 +206,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'recall_investigations',
   'get_tool_output',
   'glob',
-  'todo_write',
-  // update_todo patches a single todo by id — companion to todo_write's
-  // full-list write. Was a silent bootstrap fallback (unlisted in any tier)
-  // until P1; the contract test in __tests__/tiers.test.ts now enforces it.
-  'update_todo',
+  // todo_write / update_todo demoted to NAVIGATE (merge): they are now
+  // back-compat aliases of task_list({gate:'track', ...}); only task_list is on
+  // the bootstrap surface so the model sees ONE task tool.
   // Goal tools — session objective state. create_goal + update_goal stay in
   // bootstrap: the goal-gate hides/exposes create_goal by name on status, and
   // without update_goal reachable a bootstrap-only session could never clear
@@ -341,6 +344,11 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'delete_tasks',
   'archive_task_list',
   'update_task',
+  // Back-compat aliases of task_list (merge of todos+tasks). Kept reachable for
+  // resumed sessions / direct callers; only task_list is bootstrap-visible.
+  'submit_tasks',
+  'todo_write',
+  'update_todo',
   'read_plan',
   'list_notes',
   'recall_memory',
@@ -583,7 +591,8 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   ask_user: 'Ask the user a question and wait for a reply',
   decision_gate: 'Present alternative approaches (with tradeoffs) for the user to choose before the plan',
   submit_plan: 'Submit an implementation plan for user approval',
-  submit_tasks: 'Submit a task list for user approval',
+  task_list: 'The one task tool: gate:track = no-pause checklist; gate:approve = gated list that arms execute_tasks',
+  submit_tasks: 'Alias of task_list({gate:"approve"}) — submit a gated task list for approval',
   list_tasks: 'List current task ids and statuses',
   cancel_tasks: 'Cancel current tasks without deleting the audit trail',
   delete_tasks: 'Delete tasks from the current task list',

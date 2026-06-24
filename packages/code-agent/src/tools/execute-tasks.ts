@@ -38,6 +38,7 @@ import {
   type SubagentDeps,
 } from '@mcp/code-agent/tools/subagent.js';
 import { applyPlanApproval } from '@mcp/code-agent/tools/plan.js';
+import { effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 import {
   type ExecuteTasksMode,
   type TaskLimit,
@@ -295,6 +296,13 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       }
 
       if (!state) return err('execute_tasks: no tasks state found. Call submit_tasks first.');
+      if (effectiveGate(state) !== 'approve') {
+        return err(
+          'execute_tasks: the active list is a lightweight checklist (gate:"track"), which is not executable. ' +
+          'It is your own progress tracker — just do the work and flip items with task_list updates. ' +
+          'To run parallel subagent waves, re-issue the list with task_list({gate:"approve", ...}) and get it approved first.',
+        );
+      }
       if (!state.approved) return err('execute_tasks: task list not approved yet.');
       if (state.tasks.length === 0) return err('execute_tasks: empty task list.');
 

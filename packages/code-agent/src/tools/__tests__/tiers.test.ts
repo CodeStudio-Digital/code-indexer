@@ -66,9 +66,20 @@ describe('tier contract — always-on state tools are explicitly tiered', () => 
     // get_goal demoted to navigate in Phase B (12 calls / 12k turns); create_goal
     // + update_goal stay in bootstrap so a goal can be set AND cleared without a
     // tier unlock (the goal-gate hides create_goal by name on in-progress).
-    for (const name of ['update_todo', 'create_goal', 'update_goal']) {
+    for (const name of ['create_goal', 'update_goal']) {
       expect(BOOTSTRAP_TOOLS.has(name)).toBe(true);
     }
     expect(getToolTier('get_goal')).toBe('navigate');
+  });
+
+  it('task_list is the one bootstrap task tool; todo_write/update_todo/submit_tasks are navigate aliases', () => {
+    // Merge of todos+tasks: only task_list rides the turn-1 surface. The legacy
+    // names stay registered (back-compat aliases) but demoted to navigate so the
+    // model sees ONE task tool — killing the two-tool selection fork.
+    expect(BOOTSTRAP_TOOLS.has('task_list')).toBe(true);
+    for (const name of ['todo_write', 'update_todo', 'submit_tasks']) {
+      expect(BOOTSTRAP_TOOLS.has(name)).toBe(false);
+      expect(getToolTier(name)).toBe('navigate');
+    }
   });
 });

@@ -22,13 +22,18 @@ export interface SshShell {
   /** Tab label, e.g. `user@host`. */
   label: string;
   /**
-   * 'shell' = interactive (auto-closes when the user types `exit`).
-   * 'snippet' = one-shot command run; its tab is KEPT after the process exits so
-   * the user can read the output/log (they close it manually). Default 'shell'.
+   * 'shell' = interactive remote shell. 'snippet' = one-shot command run; its tab
+   * is KEPT after exit so the user can read the output/log. Default 'shell'.
    */
   kind?: 'shell' | 'snippet';
   /** The underlying process has exited — set for kept (snippet) tabs. */
   exited?: boolean;
+  /**
+   * Connection state for SHELL tabs. Unset/'connected' = live; 'dropped' = the
+   * channel closed (network blip / `exit`) and the tab is kept with a Reconnect
+   * affordance; 'reconnecting' = a reconnect attempt is in flight.
+   */
+  state?: 'connected' | 'reconnecting' | 'dropped';
 }
 
 interface SshSessionsState {
@@ -40,6 +45,10 @@ interface SshSessionsState {
   remove: (projectId: number, terminalId: string) => void;
   /** Mark a shell's process as exited WITHOUT removing its tab (snippet logs stay readable). */
   markExited: (projectId: number, terminalId: string) => void;
+  /** Set a shell's connection state (drives the status dot + Reconnect affordance). */
+  setShellState: (projectId: number, terminalId: string, state: SshShell['state']) => void;
+  /** Reconnect succeeded: point the tab at the NEW terminalId and mark it connected. */
+  swapTerminal: (projectId: number, oldTerminalId: string, newTerminalId: string) => void;
   /** Focus an existing shell. */
   setActive: (projectId: number, terminalId: string) => void;
 }
@@ -77,6 +86,35 @@ export const useSshSessions = create<SshSessionsState>((set) => ({
           ...s.byProject,
           [projectId]: list.map((x) => (x.terminalId === terminalId ? { ...x, exited: true } : x)),
         },
+      };
+    }),
+
+  setShellState: (projectId, terminalId, state) =>
+    set((s) => {
+      const list = s.byProject[projectId] ?? [];
+      const target = list.find((x) => x.terminalId === terminalId);
+      if (!target || target.state === state) return s; // idempotent
+      return {
+        byProject: {
+          ...s.byProject,
+          [projectId]: list.map((x) => (x.terminalId === terminalId ? { ...x, state } : x)),
+        },
+      };
+    }),
+
+  swapTerminal: (projectId, oldTerminalId, newTerminalId) =>
+    set((s) => {
+      const list = s.byProject[projectId] ?? [];
+      if (!list.some((x) => x.terminalId === oldTerminalId)) return s;
+      const wasActive = s.activeByProject[projectId] === oldTerminalId;
+      return {
+        byProject: {
+          ...s.byProject,
+          [projectId]: list.map((x) =>
+            x.terminalId === oldTerminalId ? { ...x, terminalId: newTerminalId, state: 'connected', exited: false } : x,
+          ),
+        },
+        activeByProject: wasActive ? { ...s.activeByProject, [projectId]: newTerminalId } : s.activeByProject,
       };
     }),
 

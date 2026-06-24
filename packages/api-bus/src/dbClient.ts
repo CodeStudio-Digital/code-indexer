@@ -30,6 +30,11 @@ export type DbEngine =
 
 export type DbSslMode = 'disable' | 'require' | 'verify-ca' | 'verify-full';
 
+/** Lazily-listed schema objects beyond tables/views/columns. */
+export type DbObjectKind = 'triggers' | 'functions' | 'sequences';
+/** What `generateSql` produces for a table. */
+export type DbGenerateKind = 'create' | 'select' | 'insert' | 'truncate';
+
 /**
  * Everything needed to open a live connection. For a SAVED connection the
  * renderer resolves this from the DbClientStore row, decrypting `enc_password`
@@ -140,11 +145,30 @@ export interface DbCreateTableSpec {
   table: string;
   columns: DbColumnSpec[];
 }
+export interface DbIndexSpec {
+  name: string;
+  columns: string[];
+  unique?: boolean;
+}
+export interface DbForeignKeySpec {
+  name: string;
+  columns: string[];
+  refSchema?: string;
+  refTable: string;
+  refColumns: string[];
+  onDelete?: string;
+  onUpdate?: string;
+}
 export type DbAlterAction =
   | { kind: 'addColumn'; column: DbColumnSpec }
   | { kind: 'dropColumn'; name: string }
   | { kind: 'renameColumn'; from: string; to: string }
-  | { kind: 'modifyColumn'; name: string; column: DbColumnSpec };
+  | { kind: 'modifyColumn'; name: string; column: DbColumnSpec }
+  | { kind: 'renameTable'; to: string }
+  | { kind: 'addIndex'; index: DbIndexSpec }
+  | { kind: 'dropIndex'; name: string }
+  | { kind: 'addForeignKey'; fk: DbForeignKeySpec }
+  | { kind: 'dropForeignKey'; name: string };
 export interface DbAlterTableSpec {
   schema?: string;
   table: string;
@@ -206,6 +230,18 @@ export interface DbClientApi {
     ctx: ApiContext,
   ): Promise<DbQueryResult>;
 
+  /** Names of schema/table objects of a kind (tree groups: triggers/functions/sequences). */
+  listObjects(
+    input: { connectionId: string; kind: DbObjectKind; schema?: string; table?: string },
+    ctx: ApiContext,
+  ): Promise<string[]>;
+
+  /** Generate SQL for a table: full CREATE (Show DDL), a SELECT or an INSERT template. */
+  generateSql(
+    input: { connectionId: string; schema?: string; table: string; kind: DbGenerateKind },
+    ctx: ApiContext,
+  ): Promise<{ sql: string }>;
+
   /** Execute a statement (server caps rows). Pass `queryId` to allow cancel. */
   query(
     input: {
@@ -222,6 +258,9 @@ export interface DbClientApi {
 
   /** Abort an in-flight query by its client-supplied queryId. */
   cancel(input: { connectionId: string; queryId: string }, ctx: ApiContext): Promise<void>;
+
+  /** Run the engine's EXPLAIN for a statement (does not execute it) → plan rows. */
+  explain(input: { connectionId: string; sql: string }, ctx: ApiContext): Promise<DbQueryResult>;
 
   /**
    * Apply a single row change (insert/update/delete), parameterized + PK-scoped.

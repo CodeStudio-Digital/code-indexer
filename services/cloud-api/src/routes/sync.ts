@@ -94,6 +94,10 @@ export function syncRouter(): Hono<{ Bindings: Env }> {
     if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid pull payload.', details: parsed.error.flatten() }, 400);
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
+    // Bound pull too (push was already limited): a client shouldn't be able to
+    // hammer the feed to re-download the whole corpus repeatedly.
+    const limited = await enforceRateLimit(c, [{ key: `sync:pull:acct:${claims.sub}`, limit: 600, windowMs: HOUR }]);
+    if (limited) return limited;
     const bundle = createSyncBundle(c.env, claims.sub);
     const ent = await resolveEntitlements(c.env, claims.sub);
     const kinds = parsed.data.kinds ?? SYNC_KINDS;

@@ -21,12 +21,15 @@ export function SqlEditor({
   value,
   onChange,
   onRun,
+  onRunAll,
   suggestions,
   height,
 }: {
   value: string;
   onChange: (v: string) => void;
   onRun: (sql: string) => void;
+  /** Run the whole buffer regardless of selection (Cmd/Ctrl+Shift+Enter). */
+  onRunAll?: (sql: string) => void;
   suggestions: string[];
   height?: string | number;
 }) {
@@ -34,6 +37,8 @@ export function SqlEditor({
   suggRef.current = suggestions;
   const runRef = useRef(onRun);
   runRef.current = onRun;
+  const runAllRef = useRef(onRunAll);
+  runAllRef.current = onRunAll;
 
   function onMount(ed: editor.IStandaloneCodeEditor, monaco: typeof import('monaco-editor')): void {
     const provider = monaco.languages.registerCompletionItemProvider('sql', {
@@ -66,6 +71,10 @@ export function SqlEditor({
       const sel = ed.getSelection();
       const selected = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) : null;
       runRef.current(selected || ed.getValue());
+    });
+    // Cmd/Ctrl+Shift+Enter → run the whole buffer (all statements).
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
+      (runAllRef.current ?? runRef.current)(ed.getValue());
     });
 
     ed.onDidDispose(() => provider.dispose());

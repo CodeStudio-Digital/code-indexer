@@ -12,6 +12,8 @@ import type {
   SshOpenShellResult,
   SshTunnel,
   SshTunnelInput,
+  SshGeneratedKey,
+  SshConfigHost,
   SftpEntry,
   SftpProgress,
 } from '@mcp/api-bus';
@@ -46,12 +48,16 @@ export const sftpRename = (spec: SshConnectSpec, from: string, to: string) =>
 export const sftpRemove = (spec: SshConnectSpec, path: string, isDir: boolean) =>
   apiCall<void>('ssh.sftpRemove', { spec, path, isDir });
 export const sftpClose = (hostId: string) => apiCall<void>('ssh.sftpClose', { hostId });
-export const sftpDownload = (spec: SshConnectSpec, remotePath: string, localPath: string) =>
-  apiStream<SftpProgress>('ssh.sftpDownloadStream', { spec, remotePath, localPath });
-export const sftpUpload = (spec: SshConnectSpec, localPath: string, remotePath: string) =>
-  apiStream<SftpProgress>('ssh.sftpUploadStream', { spec, localPath, remotePath });
+export const sftpDownload = (spec: SshConnectSpec, remotePath: string, localPath: string, transferId: string) =>
+  apiStream<SftpProgress>('ssh.sftpDownloadStream', { spec, remotePath, localPath, transferId });
+export const sftpUpload = (spec: SshConnectSpec, localPath: string, remotePath: string, transferId: string) =>
+  apiStream<SftpProgress>('ssh.sftpUploadStream', { spec, localPath, remotePath, transferId });
+export const sftpCancel = (transferId: string) => apiCall<void>('ssh.sftpCancel', { transferId });
 export const sftpReadFile = (spec: SshConnectSpec, remotePath: string) =>
   apiCall<{ content: string; size: number }>('ssh.sftpReadFile', { spec, remotePath });
+export const generateKey = (input: { type?: 'ed25519' | 'rsa'; bits?: number; comment?: string; passphrase?: string }) =>
+  apiCall<SshGeneratedKey>('ssh.generateKey', input);
+export const importSshConfig = () => apiCall<SshConfigHost[]>('ssh.importSshConfig', {});
 export const sftpWriteFile = (spec: SshConnectSpec, remotePath: string, content: string) =>
   apiCall<{ size: number }>('ssh.sftpWriteFile', { spec, remotePath, content });
 
@@ -141,6 +147,8 @@ export const listIdentities = (p: number) =>
   req<{ identities: SshIdentity[] }>(`${root(p)}/identities`).then((r) => r.identities);
 export const createIdentity = (p: number, body: Record<string, unknown>) =>
   req<SshIdentity>(`${root(p)}/identities`, j('POST', body));
+export const patchIdentity = (p: number, iid: number, patch: Record<string, unknown>) =>
+  req<SshIdentity>(`${root(p)}/identities/${iid}`, j('PATCH', patch));
 export const deleteIdentity = (p: number, iid: number) =>
   req<{ ok: true }>(`${root(p)}/identities/${iid}`, { method: 'DELETE' });
 

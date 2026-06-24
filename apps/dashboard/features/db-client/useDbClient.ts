@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from './api.js';
 import { engineLabel } from './engines.js';
-import type { DbConnection, DbConnectionStatus, DbTreeNode, WorkTab } from './types.js';
+import type { DbConnection, DbConnectionStatus, DbTableInfo, DbTreeGroupKind, DbTreeNode, WorkTab } from './types.js';
 
 export interface UseDbClient {
   connections: DbConnection[];
@@ -35,6 +35,8 @@ export interface UseDbClient {
   openStructureTab: (node: DbTreeNode) => Promise<void>;
   /** Open a blank "create table" structure tab for a connection/schema. */
   openNewTable: (connectionId: number, schema?: string) => Promise<void>;
+  /** Open an ER-diagram tab for a schema. */
+  openErDiagram: (connectionId: number, schema?: string) => Promise<void>;
   /** Refetch a node's children (after DDL/DML changed the schema). */
   refreshNode: (nodeId: string) => void;
   /** Invalidate cached tables under a connection/schema after a DDL change. */
@@ -44,7 +46,7 @@ export interface UseDbClient {
   // ─── Work-area tabs ──────────────────────────────────────────────────
   workTabs: WorkTab[];
   activeTabId: string | null;
-  openQueryTab: (connectionId: number, schema?: string) => void;
+  openQueryTab: (connectionId: number, schema?: string, initialSql?: string) => void;
   activateTab: (id: string) => void;
   closeTab: (id: string) => void;
   reorderTab: (id: string, beforeId: string | null) => void;
@@ -58,6 +60,38 @@ function connNode(conn: DbConnection): DbTreeNode {
     connectionId: conn.id,
     depth: 0,
     expandable: true,
+  };
+}
+
+/** A folder node (Indexes / Foreign keys / Triggers / Functions / Sequences). */
+function groupNode(parent: DbTreeNode, groupKind: DbTreeGroupKind): DbTreeNode {
+  return {
+    id: `${parent.id}/grp:${groupKind}`,
+    kind: 'group',
+    groupKind,
+    label: groupKind, // display label is localized in the tree row via t()
+    connectionId: parent.connectionId,
+    database: parent.database,
+    schema: parent.schema,
+    table: parent.table,
+    depth: parent.depth + 1,
+    expandable: true,
+  };
+}
+
+/** A leaf node (index / fk / trigger / function / sequence). */
+function leaf(parent: DbTreeNode, kind: DbTreeNode['kind'], name: string, label: string): DbTreeNode {
+  return {
+    id: `${parent.id}/${kind}:${name}`,
+    kind,
+    label,
+    name,
+    connectionId: parent.connectionId,
+    database: parent.database,
+    schema: parent.schema,
+    table: parent.table,
+    depth: parent.depth + 1,
+    expandable: false,
   };
 }
 
@@ -75,6 +109,8 @@ export function useDbClient(projectId: number): UseDbClient {
 
   const connectedRef = useRef<Set<number>>(new Set());
   const querySeqRef = useRef(0);
+  /** Cache TableInfo so columns + Indexes + FKs folders don't each refetch. */
+  const tableInfoRef = useRef<Map<string, DbTableInfo>>(new Map());
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -147,12 +183,32 @@ export function useDbClient(projectId: number): UseDbClient {
     [setStatus],
   );
 
+  /** Describe a table, memoized so columns + index/FK folders don't each refetch. */
+  const getTableInfo = useCallback(
+    async (connId: number, schema: string | undefined, table: string): Promise<DbTableInfo> => {
+      const key = `${connId}:${schema ?? ''}:${table}`;
+      const cached = tableInfoRef.current.get(key);
+      if (cached) return cached;
+      const info = await api.describeTable(String(connId), schema ?? 'public', table);
+      tableInfoRef.current.set(key, info);
+      return info;
+    },
+    [],
+  );
+
   /** Fetch the children of a node (connect-aware, engine-aware). */
   const fetchChildren = useCallback(async (node: DbTreeNode): Promise<DbTreeNode[]> => {
     const cid = String(node.connectionId);
     if (node.depth === 0) {
       // Connection root → databases.
-      const dbs = await api.listDatabases(cid);
+      const conn = connections.find((c) => c.id === node.connectionId);
+      let dbs = await api.listDatabases(cid);
+      // Postgres binds a connection to ONE database; switching needs a new
+      // connection. Show only the connected db so the tree never lists databases
+      // whose schemas it can't actually browse. (Multi-db = a connection each.)
+      if (conn?.engine === 'postgres' && conn.database_name) {
+        dbs = [conn.database_name];
+      }
       return dbs.map((db) => ({
         id: `conn:${node.connectionId}/db:${db}`,
         kind: 'database' as const,
@@ -178,7 +234,7 @@ export function useDbClient(projectId: number): UseDbClient {
     }
     if (node.kind === 'schema') {
       const { tables } = await api.introspect(cid, node.database, node.schema);
-      return tables.map((t) => ({
+      const tableNodes: DbTreeNode[] = tables.map((t) => ({
         id: `${node.id}/table:${t.name}`,
         kind: t.kind === 'view' ? ('view' as const) : ('table' as const),
         label: t.name,
@@ -190,10 +246,15 @@ export function useDbClient(projectId: number): UseDbClient {
         depth: node.depth + 1,
         expandable: true,
       }));
+      const engine = connections.find((c) => c.id === node.connectionId)?.engine;
+      const groups: DbTreeNode[] = [];
+      if (engine === 'postgres' || engine === 'mysql' || engine === 'mariadb') groups.push(groupNode(node, 'functions'));
+      if (engine === 'postgres') groups.push(groupNode(node, 'sequences'));
+      return [...tableNodes, ...groups];
     }
     if (node.kind === 'table' || node.kind === 'view') {
-      const info = await api.describeTable(cid, node.schema ?? 'public', node.table ?? '');
-      return info.columns.map((c) => ({
+      const info = await getTableInfo(node.connectionId, node.schema, node.table ?? '');
+      const colNodes: DbTreeNode[] = info.columns.map((c) => ({
         id: `${node.id}/col:${c.name}`,
         kind: 'column' as const,
         label: `${c.name} : ${c.dataType}${c.isPrimaryKey ? ' [PK]' : ''}${c.nullable ? '' : ' *'}`,
@@ -205,9 +266,27 @@ export function useDbClient(projectId: number): UseDbClient {
         depth: node.depth + 1,
         expandable: false,
       }));
+      return [...colNodes, groupNode(node, 'indexes'), groupNode(node, 'fks'), groupNode(node, 'triggers')];
+    }
+    if (node.kind === 'group') {
+      if (node.groupKind === 'indexes') {
+        const info = await getTableInfo(node.connectionId, node.schema, node.table ?? '');
+        return (info.indexes ?? []).map((ix) =>
+          leaf(node, 'index', ix.name, `${ix.name}${ix.unique ? ' (unique)' : ''}${ix.primary ? ' [PK]' : ''} (${ix.columns.join(', ')})`),
+        );
+      }
+      if (node.groupKind === 'fks') {
+        const info = await getTableInfo(node.connectionId, node.schema, node.table ?? '');
+        return (info.foreignKeys ?? []).map((fk) =>
+          leaf(node, 'fk', fk.name, `${fk.columns.join(', ')} → ${fk.refTable} (${fk.refColumns.join(', ')})`),
+        );
+      }
+      const kind = node.groupKind === 'functions' ? 'function' : node.groupKind === 'sequences' ? 'sequence' : 'trigger';
+      const names = await api.listObjects(cid, node.groupKind!, node.schema, node.table);
+      return names.map((n) => leaf(node, kind, n, n));
     }
     return [];
-  }, []);
+  }, [connections, getTableInfo]);
 
   const toggleExpand = useCallback(
     async (node: DbTreeNode) => {
@@ -274,10 +353,10 @@ export function useDbClient(projectId: number): UseDbClient {
     });
   }, []);
 
-  const openQueryTab = useCallback((connectionId: number, schema?: string) => {
+  const openQueryTab = useCallback((connectionId: number, schema?: string, initialSql?: string) => {
     querySeqRef.current += 1;
     const id = `query:${connectionId}:${querySeqRef.current}:${Date.now()}`;
-    const tab: WorkTab = { id, kind: 'query', title: '', connectionId, schema, seq: querySeqRef.current };
+    const tab: WorkTab = { id, kind: 'query', title: '', connectionId, schema, initialSql, seq: querySeqRef.current };
     setWorkTabs((tabs) => [...tabs, tab]);
     setActiveTabId(id);
     setActiveConnectionId(connectionId);
@@ -362,7 +441,22 @@ export function useDbClient(projectId: number): UseDbClient {
     [ensureConnected],
   );
 
+  const openErDiagram = useCallback(
+    async (connectionId: number, schema?: string) => {
+      if (!(await ensureConnected(connectionId))) return;
+      const id = `er:${connectionId}:${schema ?? ''}`;
+      setWorkTabs((tabs) => {
+        if (tabs.some((t) => t.id === id)) return tabs;
+        return [...tabs, { id, kind: 'er', title: `ER · ${schema ?? ''}`, connectionId, schema }];
+      });
+      setActiveTabId(id);
+      setActiveConnectionId(connectionId);
+    },
+    [ensureConnected],
+  );
+
   const refreshNode = useCallback((nodeId: string) => {
+    tableInfoRef.current.clear();
     setChildrenById((prev) => {
       const next = { ...prev };
       // Drop the node's cached children + everything under it so the next
@@ -389,6 +483,7 @@ export function useDbClient(projectId: number): UseDbClient {
   );
 
   const invalidateTables = useCallback((connectionId: number, schema?: string) => {
+    tableInfoRef.current.clear();
     const match = (k: string): boolean =>
       k.startsWith(`conn:${connectionId}`) && (!schema || k.endsWith(`schema:${schema}`));
     setChildrenById((prev) => {
@@ -435,7 +530,11 @@ export function useDbClient(projectId: number): UseDbClient {
       for (const child of childrenById[node.id] ?? []) pushSubtree(child);
     }
   };
-  for (const conn of connections) {
+  // Group connections so same-group roots are adjacent (header rendered in the tree).
+  const ordered = [...connections].sort(
+    (a, b) => (a.group_name ?? '').localeCompare(b.group_name ?? '') || a.sort_order - b.sort_order || a.label.localeCompare(b.label),
+  );
+  for (const conn of ordered) {
     const root = connNode(conn);
     // Label the root with its engine so different engines are distinguishable.
     root.label = `${conn.label} · ${engineLabel(conn.engine)}`;
@@ -460,6 +559,7 @@ export function useDbClient(projectId: number): UseDbClient {
     openTableData,
     openStructureTab,
     openNewTable,
+    openErDiagram,
     refreshNode,
     invalidateTables,
     treeSuggestions,

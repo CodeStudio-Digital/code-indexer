@@ -10,6 +10,7 @@ import { LiveTextBlock, LiveThinkingBlock } from './live-blocks.js';
 import { TaskExecutionBlock } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { TodoWriteBlock } from './TodoWriteBlock.js';
+import { taskListIsApprove } from './MessageView.js';
 import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.js';
@@ -28,10 +29,14 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
     if (isGoalTool(block.call.name)) {
       return <GoalCallBlock key={`tc-${block.call.id}`} call={block.call} />;
     }
-    // todo_write / update_todo: render the checklist inside the collapsed tool
-    // block (consistent with the historical transcript) instead of raw JSON.
+    // todo_write / update_todo / task_list(track): render the checklist inside
+    // the collapsed tool block (consistent with the historical transcript)
+    // instead of raw JSON. task_list(approve) is handled by the approval prompt,
+    // not here.
     if (
-      (block.call.name === 'todo_write' || block.call.name === 'update_todo') &&
+      (block.call.name === 'todo_write' ||
+        block.call.name === 'update_todo' ||
+        (block.call.name === 'task_list' && !taskListIsApprove(block.call.input))) &&
       block.call.result &&
       !block.call.result.isError
     ) {

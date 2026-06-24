@@ -36,6 +36,7 @@ export interface ProviderModelRaw {
   mode: string;
   name: string;
   context_window: number | null;
+  context_window_overridden: number | null;
   default_max_tokens: number | null;
   can_reason: number;
   supports_attachments: number;
@@ -141,6 +142,7 @@ export function hydrateModel(r: ProviderModelRaw): ProviderModel {
     mode: r.mode,
     name: r.name,
     context_window: r.context_window,
+    context_window_overridden: !!r.context_window_overridden,
     default_max_tokens: r.default_max_tokens,
     can_reason: !!r.can_reason,
     supports_attachments: !!r.supports_attachments,

@@ -156,12 +156,24 @@ export const DECISION_GATE_DESC =
 export const SUBMIT_PLAN_DESC =
   'Submit an implementation plan and wait for user approval. Returns the verdict (approved/rejected) and optional feedback.\n' +
   "USE: in plan mode, BEFORE any mutating tool. No exceptions.\n" +
-  "USE: for linear, single-action work (one refactor, one bugfix, one feature). For 2+ independent items use submit_tasks instead.\n" +
+  "USE: for linear, single-action work (one refactor, one bugfix, one feature). For 2+ independent items use task_list({gate:'approve'}) instead.\n" +
   "DON'T: submit a plan that reads 'I will look at the code and decide' — do the exploration FIRST, then submit a concrete plan.\n" +
   "DON'T: try to skip the plan with a direct edit. Mutating tools are blocked until the plan is approved.\n" +
   "DON'T: re-submit a rejected plan with cosmetic tweaks — read the feedback and actually address it.";
 
 // ---------- tasks (src/core/coder/tools/tasks.ts) ----------
+
+export const TASK_LIST_DESC =
+  'The ONE task/checklist tool. A single `gate` picks intensity — there is no separate todo tool.\n' +
+  "  - gate:'track' (default) — lightweight checklist that NEVER pauses. Your live progress list during a run. " +
+  'Pass the full `items` ({content, activeForm, status}) to (re)write it, or `updates` ({id, status}) to flip one item. No approval, no subagents.\n' +
+  "  - gate:'approve' — gated structured list: pauses for user approval and is the ONLY thing that arms `execute_tasks` (parallel subagent waves). " +
+  'Requires 2+ items, each with files + kind. For a single linear change use submit_plan instead.\n' +
+  '\n' +
+  'There is ONE list per session: a track checklist and an approve list cannot coexist. Picking gate:approve formalizes a checklist into a gated plan; ' +
+  'do NOT keep a parallel checklist alongside an approved task list — drive the approved list with execute_tasks / update_task.\n' +
+  "USE gate:'track' for multi-step work you're doing yourself (3+ steps). USE gate:'approve' when work decomposes into 2+ independent units worth approving + delegating to subagents.\n" +
+  "DON'T re-write the whole list to flip a status — use `updates`. DON'T pad a list with trivial items.";
 
 export const SUBMIT_TASKS_DESC =
   'Submit a STRUCTURED task list and wait for user approval. Returns the (possibly-edited) tasks and chosen execution mode.\n' +

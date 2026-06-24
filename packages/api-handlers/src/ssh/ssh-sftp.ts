@@ -6,6 +6,7 @@
  * `SftpProgress` — consumed by the renderer exactly like `terminal.output`.
  */
 
+import { rm } from 'node:fs/promises';
 import type { Client, SFTPWrapper, FileEntryWithStats, Stats } from 'ssh2';
 import { ApiError, type SftpEntry, type SftpProgress, type SshConnectSpec } from '@mcp/api-bus';
 import type { SshConnectionManager } from './ssh-connection-manager.js';
@@ -29,6 +30,8 @@ interface SftpSession {
 
 export class SftpManager {
   private readonly sessions = new Map<string, SftpSession>();
+  /** Active cancellable transfers: transferId → abort fn (ends its dedicated channel). */
+  private readonly transfers = new Map<string, () => void>();
   /** Max bytes we'll pull into the editor — larger files belong in a download. */
   private static readonly MAX_EDIT_BYTES = 2 * 1024 * 1024;
 
@@ -115,19 +118,82 @@ export class SftpManager {
     await voidOp((cb) => (isDir ? sftp.rmdir(path, cb) : sftp.unlink(path, cb)));
   }
 
-  download(spec: SshConnectSpec, remotePath: string, localPath: string): AsyncIterable<SftpProgress> {
+  /**
+   * Run a fastGet/fastPut on a DEDICATED sftp channel (its own ref on the pooled
+   * connection), so cancelling it ends ONLY that channel — the browse session and
+   * sibling transfers are untouched. The abort fn is registered under `transferId`
+   * for `cancel()`; ref release + channel close are idempotent (one settle).
+   */
+  private transfer(
+    transferId: string,
+    spec: SshConnectSpec,
+    run: (sftp: SFTPWrapper, onProgress: (t: number, total: number) => void, finish: (err?: Error) => void) => void,
+    onCancel?: () => void,
+  ): AsyncIterable<SftpProgress> {
     return transferStream((onProgress, done) => {
-      void this.get(spec)
-        .then((sftp) => {
-          sftp.fastGet(
-            remotePath,
-            localPath,
-            { step: (transferred, _chunk, total) => onProgress(transferred, total) },
-            (err) => done(err ?? undefined),
-          );
+      let channel: SFTPWrapper | null = null;
+      let settled = false;
+      let acquired = false;
+      let released = false;
+      const release = (): void => {
+        if (released) return;
+        released = true;
+        this.manager.release(spec.hostId);
+      };
+      const settle = (err?: Error): void => {
+        if (settled) return;
+        settled = true;
+        this.transfers.delete(transferId);
+        try {
+          channel?.end();
+        } catch {
+          /* already closed */
+        }
+        if (acquired) release();
+        done(err);
+      };
+      this.transfers.set(transferId, () => {
+        onCancel?.();
+        settle(new ApiError('sftp_cancelled', 499, 'transfer cancelled'));
+      });
+      void this.manager
+        .acquire(spec)
+        .then((client) => {
+          acquired = true;
+          return openSftp(client);
         })
-        .catch(done);
+        .then((sftp) => {
+          if (settled) {
+            // Cancelled before the channel opened — close it + return the ref.
+            try {
+              sftp.end();
+            } catch {
+              /* */
+            }
+            release();
+            return;
+          }
+          channel = sftp;
+          run(sftp, onProgress, (err) => settle(err ?? undefined));
+        })
+        .catch((err) => settle(err instanceof Error ? err : new Error(String(err))));
     });
+  }
+
+  /** Abort an in-flight transfer by id (no-op if it already finished). */
+  cancel(transferId: string): void {
+    this.transfers.get(transferId)?.();
+  }
+
+  download(spec: SshConnectSpec, remotePath: string, localPath: string, transferId: string): AsyncIterable<SftpProgress> {
+    return this.transfer(
+      transferId,
+      spec,
+      (sftp, onProgress, finish) =>
+        sftp.fastGet(remotePath, localPath, { step: (t, _c, total) => onProgress(t, total) }, (err) => finish(err ?? undefined)),
+      // Delete the partial file left behind by a cancelled download.
+      () => void rm(localPath, { force: true }).catch(() => undefined),
+    );
   }
 
   /** Read a small remote text file into memory (the in-editor "edit" path). */
@@ -168,19 +234,10 @@ export class SftpManager {
     return { size: buf.length };
   }
 
-  upload(spec: SshConnectSpec, localPath: string, remotePath: string): AsyncIterable<SftpProgress> {
-    return transferStream((onProgress, done) => {
-      void this.get(spec)
-        .then((sftp) => {
-          sftp.fastPut(
-            localPath,
-            remotePath,
-            { step: (transferred, _chunk, total) => onProgress(transferred, total) },
-            (err) => done(err ?? undefined),
-          );
-        })
-        .catch(done);
-    });
+  upload(spec: SshConnectSpec, localPath: string, remotePath: string, transferId: string): AsyncIterable<SftpProgress> {
+    return this.transfer(transferId, spec, (sftp, onProgress, finish) =>
+      sftp.fastPut(localPath, remotePath, { step: (t, _c, total) => onProgress(t, total) }, (err) => finish(err ?? undefined)),
+    );
   }
 }
 

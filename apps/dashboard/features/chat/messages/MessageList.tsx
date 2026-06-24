@@ -133,7 +133,8 @@ const PersistedMessages = React.memo(function PersistedMessages({
     for (const msg of sessionData.messages) {
       if (msg.role !== 'assistant') continue;
       for (const b of msg.content) {
-        if (b.type === 'tool_use' && b.name === 'submit_tasks' && b.id) last = b.id;
+        // submit_tasks (legacy) and task_list (merged) both post the approve list.
+        if (b.type === 'tool_use' && (b.name === 'submit_tasks' || b.name === 'task_list') && b.id) last = b.id;
       }
     }
     return last;

@@ -1,6 +1,7 @@
 {
   "appId": "studio.codestudio.app",
   "productName": "CodeStudio",
+  "npmRebuild": false,
   "directories": {
     "output": "dist/electron-builder",
     "buildResources": "apps/electron/build"

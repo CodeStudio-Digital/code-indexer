@@ -28,12 +28,14 @@ interface FileTreeViewProps {
   projectId: number;
   active: boolean;
   activePath: string | null;
+  /** Native `root_path` of the project — feeds the menu's "Absolute path" copy. */
+  projectRoot?: string | null;
   onOpen: (path: string) => void;
 }
 
 const ACTIVE_GIT_STATUS_POLL_MS = 30_000;
 
-export function FileTreeView({ projectId, active, activePath, onOpen }: FileTreeViewProps) {
+export function FileTreeView({ projectId, active, activePath, projectRoot, onOpen }: FileTreeViewProps) {
   // Seletores ESTREITOS (não o store inteiro): assinar `useFileTreeStore()` sem
   // seletor re-renderizava a árvore a cada mudança de qualquer campo (incl. o set
   // `loading`). Não assinamos `children`/`loading` aqui — `rows` lê o snapshot via
@@ -50,6 +52,8 @@ export function FileTreeView({ projectId, active, activePath, onOpen }: FileTree
   const [search, setSearch] = useState('');
   const [allPaths, setAllPaths] = useState<string[] | null>(null);
   const [gitStatus, setGitStatus] = useState<Map<string, GitFileStatus>>(() => new Map());
+  // Repo flag + root (do mesmo poll de status) → habilita "Git ▸" e o caminho repo-relative.
+  const [repo, setRepo] = useState<{ isRepo: boolean; repoRoot: string | null }>({ isRepo: false, repoRoot: null });
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Load the tree only once the Files pane is actually shown. It is a keep-alive
@@ -63,6 +67,7 @@ export function FileTreeView({ projectId, active, activePath, onOpen }: FileTree
     if (storeProjectId !== projectId) init(projectId);
     useSelectionStore.getState().init(projectId); // reset seleção na troca de projeto (idempotente)
     setGitStatus(new Map());
+    setRepo({ isRepo: false, repoRoot: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init on project switch / first activation
   }, [projectId, active]);
 
@@ -86,7 +91,7 @@ export function FileTreeView({ projectId, active, activePath, onOpen }: FileTree
       const finishSpan = startRouteSpan('FileTree:gitStatus', { projectId, tab: 'files' });
       const startedAt = performance.now();
       try {
-        const status = await apiCall<{ files: Array<{ path: string; state: GitFileStatus; staged: boolean }>; notARepo: boolean }>(
+        const status = await apiCall<{ files: Array<{ path: string; state: GitFileStatus; staged: boolean }>; notARepo: boolean; repoRoot: string | null }>(
           'projectGit.status', { projectId },
         );
         finishSpan({ status: 'ok' });
@@ -97,6 +102,11 @@ export function FileTreeView({ projectId, active, activePath, onOpen }: FileTree
             if (!f.staged || !map.has(f.path)) map.set(f.path, f.state);
           }
         }
+        // Identity-stable: só re-renderiza quando o flag/raiz do repo muda de fato.
+        setRepo((prev) => {
+          const next = { isRepo: !status.notARepo, repoRoot: status.repoRoot };
+          return prev.isRepo === next.isRepo && prev.repoRoot === next.repoRoot ? prev : next;
+        });
         // Identity-stable when nothing changed — otherwise the poll
         // re-rendered the whole tree (and rebuilt dirSeverity) every tick.
         setGitStatus((prev) => {
@@ -274,6 +284,9 @@ export function FileTreeView({ projectId, active, activePath, onOpen }: FileTree
                   active={row.entry.path === activePath}
                   expanded={expanded.has(row.entry.path)}
                   status={status}
+                  projectRoot={projectRoot}
+                  repoRoot={repo.repoRoot}
+                  isRepo={repo.isRepo}
                   renaming={renamingPath === row.entry.path}
                   onOpen={onOpen}
                   onToggle={toggle}

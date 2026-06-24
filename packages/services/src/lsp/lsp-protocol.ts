@@ -79,10 +79,20 @@ export interface LspHover {
     | Array<string | { language?: string; value: string }>;
 }
 
+export interface SemanticTokensLegend {
+  tokenTypes: string[];
+  tokenModifiers: string[];
+}
+
 export interface ServerCapabilities {
   textDocumentSync?: number | { change?: number };
   positionEncoding?: string;
   codeActionProvider?: boolean | { codeActionKinds?: string[] };
+  semanticTokensProvider?: {
+    legend: SemanticTokensLegend;
+    full?: boolean | { delta?: boolean };
+    range?: boolean;
+  };
 }
 
 // ─── position conversions (±1 only — see header) ───────────────────

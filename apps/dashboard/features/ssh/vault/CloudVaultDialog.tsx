@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ShieldCheck, Copy, Check, Loader2, Link2, Lock, Users, UploadCloud, DownloadCloud } from 'lucide-react';
+import { ShieldCheck, Copy, Check, Loader2, Link2, Lock, Users, UploadCloud, DownloadCloud, KeyRound, AlertTriangle } from 'lucide-react';
 import type { OrgPublic, OrgRolePublic } from '@mcp/api-bus';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
 import { Button } from '../../../components/ui/button.js';
@@ -27,6 +27,9 @@ interface Props {
 /** Map hook error codes to friendly copy (security codes get explicit, alarming messages). */
 function vaultErrorMessage(error: string, t: (k: string) => string): string {
   if (error === 'wrong_passphrase') return t('vault.wrongPassphrase');
+  if (error === 'wrong_recovery_key') return t('vault.wrongRecoveryKey');
+  if (error === 'no_recovery') return t('vault.noRecovery');
+  if (error === 'no_vault') return t('vault.noVault');
   if (error === 'no_grant') return t('vault.noGrant');
   if (error === 'grant_unverified') return t('vault.grantUnverified');
   if (error === 'granter_key_changed') return t('vault.granterKeyChanged');
@@ -37,12 +40,18 @@ function vaultErrorMessage(error: string, t: (k: string) => string): string {
 export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
   const { t } = useTranslation('ssh');
   const { has } = useEntitlements();
-  const { workspaceId, busy, error, last, unlocked, unlock, sync, linkWorkspace, shareWithOrg, pullTeam } = useSshVaultSync(projectId);
+  const { workspaceId, busy, error, last, unlocked, recoveryEnabled, unlock, unlockWithRecovery, enrollRecoveryKey, sync, linkWorkspace, shareWithOrg, pullTeam } = useSshVaultSync(projectId);
   const [passphrase, setPassphrase] = useState('');
   const [copied, setCopied] = useState(false);
   const [joinId, setJoinId] = useState('');
   const [orgs, setOrgs] = useState<{ org: OrgPublic; role: OrgRolePublic }[]>([]);
   const [orgId, setOrgId] = useState('');
+  // Recovery-key flows: locked "forgot passphrase" recovery + unlocked enroll (show-once).
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoveryKey, setRecoveryKey] = useState('');
+  const [newPassphrase, setNewPassphrase] = useState('');
+  const [generated, setGenerated] = useState<string | null>(null);
+  const [recoveryCopied, setRecoveryCopied] = useState(false);
 
   const entitled = has('sshVault');
   const teamEntitled = has('teamSshVault');
@@ -84,6 +93,38 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
     }
   };
 
+  const recoverAndReset = async () => {
+    if (!recoveryKey.trim() || !newPassphrase) return;
+    try {
+      await unlockWithRecovery(recoveryKey.trim(), newPassphrase);
+      setRecoveryMode(false);
+      setRecoveryKey('');
+      setNewPassphrase('');
+      await sync();
+    } catch {
+      /* surfaced via hook error */
+    }
+  };
+
+  const enroll = async () => {
+    try {
+      setGenerated(await enrollRecoveryKey());
+    } catch {
+      /* surfaced via hook error */
+    }
+  };
+
+  const copyRecovery = async () => {
+    if (!generated) return;
+    try {
+      await navigator.clipboard.writeText(generated);
+      setRecoveryCopied(true);
+      setTimeout(() => setRecoveryCopied(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  };
+
   const join = async () => {
     if (!joinId.trim()) return;
     if (await confirm({ title: t('vault.linkConfirmTitle'), description: t('vault.linkConfirmBody'), tone: 'destructive' })) {
@@ -105,7 +146,7 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
         {!entitled ? <UpgradeNotice message={t('vault.upgradeMsg')} cta={t('vault.upgradeCta')} /> : null}
         {error ? <p className="text-xs text-destructive">{vaultErrorMessage(error, t)}</p> : null}
 
-        {!unlocked ? (
+        {!unlocked && !recoveryMode ? (
           <div className="space-y-1.5">
             <div className="text-xs font-medium text-muted-foreground">{t('vault.passphrase')}</div>
             <Input
@@ -119,10 +160,45 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
               <Lock className="h-3 w-3 mt-0.5 shrink-0" />
               {t('vault.passphraseHint')}
             </p>
-            <Button size="sm" disabled={!entitled || busy || !passphrase} onClick={() => void unlockAndSync()}>
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <ShieldCheck className="h-3.5 w-3.5 mr-1" />}
-              {busy ? t('vault.unlocking') : t('vault.unlock')}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" disabled={!entitled || busy || !passphrase} onClick={() => void unlockAndSync()}>
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <ShieldCheck className="h-3.5 w-3.5 mr-1" />}
+                {busy ? t('vault.unlocking') : t('vault.unlock')}
+              </Button>
+              <button type="button" disabled={!entitled || busy} className="text-[11px] text-muted-foreground hover:text-foreground underline disabled:opacity-50" onClick={() => setRecoveryMode(true)}>
+                {t('vault.forgotPassphrase')}
+              </button>
+            </div>
+          </div>
+        ) : !unlocked && recoveryMode ? (
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <KeyRound className="h-3.5 w-3.5" /> {t('vault.recoveryTitle')}
+            </div>
+            <Input
+              value={recoveryKey}
+              onChange={(e) => setRecoveryKey(e.target.value)}
+              disabled={!entitled || busy}
+              placeholder={t('vault.recoveryKeyPlaceholder')}
+              className="font-mono text-xs"
+            />
+            <div className="text-[11px] text-muted-foreground">{t('vault.newPassphrase')}</div>
+            <Input
+              type="password"
+              value={newPassphrase}
+              onChange={(e) => setNewPassphrase(e.target.value)}
+              disabled={!entitled || busy}
+              onKeyDown={(e) => e.key === 'Enter' && void recoverAndReset()}
+            />
+            <div className="flex items-center gap-2">
+              <Button size="sm" disabled={!entitled || busy || !recoveryKey.trim() || !newPassphrase} onClick={() => void recoverAndReset()}>
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <KeyRound className="h-3.5 w-3.5 mr-1" />}
+                {busy ? t('vault.recovering') : t('vault.recoverAndReset')}
+              </Button>
+              <button type="button" disabled={busy} className="text-[11px] text-muted-foreground hover:text-foreground underline disabled:opacity-50" onClick={() => setRecoveryMode(false)}>
+                {t('dialog.cancel')}
+              </button>
+            </div>
           </div>
         ) : (
           <div className="flex items-center gap-2">
@@ -137,6 +213,42 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
             ) : null}
           </div>
         )}
+
+        {unlocked ? (
+          <div className="space-y-1.5 border-t pt-3">
+            <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <KeyRound className="h-3.5 w-3.5" /> {t('vault.recoverySection')}
+            </div>
+            {generated ? (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 space-y-1.5">
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 flex items-start gap-1">
+                  <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" /> {t('vault.recoveryShownOnce')}
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 min-w-0 break-all text-[11px] font-mono bg-background rounded px-2 py-1 border select-all">{generated}</code>
+                  <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" title={t('vault.copy')} onClick={() => void copyRecovery()}>
+                    {recoveryCopied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => setGenerated(null)}>
+                  <Check className="h-3.5 w-3.5 mr-1" /> {t('vault.recoverySaved')}
+                </Button>
+              </div>
+            ) : recoveryEnabled ? (
+              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                <Check className="h-3 w-3 shrink-0" /> {t('vault.recoveryActive')}
+              </p>
+            ) : (
+              <>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => void enroll()}>
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <KeyRound className="h-3.5 w-3.5 mr-1" />}
+                  {t('vault.generateRecovery')}
+                </Button>
+                <p className="text-[11px] text-muted-foreground">{t('vault.recoveryHint')}</p>
+              </>
+            )}
+          </div>
+        ) : null}
 
         <div className="space-y-1.5">
           <div className="text-xs font-medium text-muted-foreground">{t('vault.workspace')}</div>

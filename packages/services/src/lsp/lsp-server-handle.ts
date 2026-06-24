@@ -12,6 +12,7 @@ import {
   toLsp,
   type LspDiagnostic,
   type ServerCapabilities,
+  type SemanticTokensLegend,
 } from './lsp-protocol.js';
 
 export type LspHandleState = 'starting' | 'ready' | 'stopped' | 'crashed';
@@ -35,6 +36,7 @@ const REQ_TIMEOUT_MS = {
   references: 30_000,
   resolve: 5_000,
   codeAction: 10_000,
+  semanticTokens: 10_000,
 } as const;
 const STDERR_RING = 8 * 1024;
 
@@ -155,6 +157,27 @@ export class LspServerHandle {
             isPreferredSupport: true,
           },
           definition: {}, references: {}, documentSymbol: {}, signatureHelp: {},
+          // Semantic highlighting — without declaring this some servers don't
+          // advertise `semanticTokensProvider`. The tokenTypes/tokenModifiers
+          // are the full LSP standard set we understand; the server replies
+          // with ITS own legend (server-backend remaps onto Monaco's legend).
+          semanticTokens: {
+            dynamicRegistration: false,
+            requests: { full: true, range: false },
+            tokenTypes: [
+              'namespace', 'type', 'class', 'enum', 'interface', 'struct',
+              'typeParameter', 'parameter', 'variable', 'property', 'enumMember',
+              'event', 'function', 'method', 'macro', 'keyword', 'modifier',
+              'comment', 'string', 'number', 'regexp', 'operator', 'decorator',
+            ],
+            tokenModifiers: [
+              'declaration', 'definition', 'readonly', 'static', 'deprecated',
+              'abstract', 'async', 'modification', 'documentation', 'defaultLibrary',
+            ],
+            formats: ['relative'],
+            overlappingTokenSupport: false,
+            multilineTokenSupport: false,
+          },
         },
       },
     }, INIT_TIMEOUT_MS);
@@ -264,6 +287,20 @@ export class LspServerHandle {
       range: { start: toLsp(range.start), end: toLsp(range.end) },
       context: { diagnostics: [] },
     }, REQ_TIMEOUT_MS.codeAction);
+  }
+
+  /** `textDocument/semanticTokens/full` — tokens encoded against the server's
+   *  own legend (see `semanticTokensLegend`). Returns `{ data: number[] }`. */
+  semanticTokens(absPath: string): Promise<unknown> {
+    return this.rpc.request('textDocument/semanticTokens/full', {
+      textDocument: { uri: pathToUri(absPath) },
+    }, REQ_TIMEOUT_MS.semanticTokens);
+  }
+
+  /** The server's semantic-token legend (from the init handshake), or null if
+   *  it doesn't provide semantic tokens. Needed to remap onto Monaco's legend. */
+  semanticTokensLegend(): SemanticTokensLegend | null {
+    return this.capabilities.semanticTokensProvider?.legend ?? null;
   }
 
   /** Graceful: shutdown request → exit notification → SIGKILL after 3s. */

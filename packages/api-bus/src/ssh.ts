@@ -132,16 +132,18 @@ export interface SshApi {
   sftpRemove(input: { spec: SshConnectSpec; path: string; isDir: boolean }, ctx: ApiContext): Promise<void>;
   /** Close the cached SFTP session for a host (releases its hold on the connection). */
   sftpClose(input: { hostId: string }, ctx: ApiContext): Promise<void>;
-  /** Download a remote file to a local path; streams transfer progress. */
+  /** Download a remote file to a local path; streams transfer progress. `transferId` keys `sftpCancel`. */
   sftpDownloadStream(
-    input: { spec: SshConnectSpec; remotePath: string; localPath: string },
+    input: { spec: SshConnectSpec; remotePath: string; localPath: string; transferId: string },
     ctx: ApiContext,
   ): AsyncStream<SftpProgress>;
-  /** Upload a local file to a remote path; streams transfer progress. */
+  /** Upload a local file to a remote path; streams transfer progress. `transferId` keys `sftpCancel`. */
   sftpUploadStream(
-    input: { spec: SshConnectSpec; localPath: string; remotePath: string },
+    input: { spec: SshConnectSpec; localPath: string; remotePath: string; transferId: string },
     ctx: ApiContext,
   ): AsyncStream<SftpProgress>;
+  /** Abort an in-flight transfer by id (ends only its dedicated channel). No-op if already done. */
+  sftpCancel(input: { transferId: string }, ctx: ApiContext): Promise<void>;
 
   /**
    * Read a SMALL remote text file into memory for in-editor editing (the
@@ -159,6 +161,36 @@ export interface SshApi {
     input: { spec: SshConnectSpec; remotePath: string; content: string },
     ctx: ApiContext,
   ): Promise<{ size: number }>;
+
+  /**
+   * Generate a fresh SSH keypair (ed25519 default, or RSA) in OpenSSH format.
+   * The private key is returned ONCE for the renderer to seal + persist; the
+   * public key goes into the server's authorized_keys.
+   */
+  generateKey(
+    input: { type?: 'ed25519' | 'rsa'; bits?: number; comment?: string; passphrase?: string },
+    ctx: ApiContext,
+  ): Promise<SshGeneratedKey>;
+
+  /** Read + parse the user's `~/.ssh/config` for one-click host import. [] if absent. */
+  importSshConfig(input: Record<string, never>, ctx: ApiContext): Promise<SshConfigHost[]>;
+}
+
+export interface SshConfigHost {
+  alias: string;
+  hostName: string;
+  user?: string;
+  port?: number;
+  identityFile?: string;
+  proxyJump?: string;
+}
+
+export interface SshGeneratedKey {
+  publicKey: string;
+  privateKey: string;
+  keyType: string;
+  /** OpenSSH SHA-256 fingerprint (`SHA256:…`). */
+  fingerprint: string;
 }
 
 export interface SftpReadFileResult {

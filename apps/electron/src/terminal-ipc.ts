@@ -36,6 +36,7 @@
 import { createRequire } from 'node:module';
 import { ipcMain, MessageChannelMain, type IpcMainEvent } from 'electron';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
+import { childRegistry } from './child-process-registry.js';
 
 const require = createRequire(import.meta.url);
 
@@ -227,8 +228,26 @@ export function mountTerminalIpc(deps: ServerDeps): void {
       return;
     }
 
+    // Track for guaranteed teardown on app quit. The registry kills the shell
+    // AND tree-kills its pid (so a `npm run dev` started here can't orphan).
+    // The normal close paths below call `unregister()` so a clean exit doesn't
+    // leave a stale entry.
+    const unregister = childRegistry.register({
+      kind: 'pty',
+      pid: term.pid,
+      label: 'terminal:host',
+      kill: () => {
+        try {
+          term.kill();
+        } catch {
+          /* already dead */
+        }
+      },
+    });
+
     const dataSub = term.onData((data) => post({ type: 'data', data }));
     const exitSub = term.onExit(({ exitCode, signal }) => {
+      unregister();
       post({ type: 'exit', code: exitCode, signal });
       try {
         port2.postMessage({ type: 'done' });
@@ -250,6 +269,7 @@ export function mountTerminalIpc(deps: ServerDeps): void {
       }
     });
     port2.on('close', () => {
+      unregister();
       dataSub.dispose();
       exitSub.dispose();
       try { term.kill(); } catch { /* already dead */ }

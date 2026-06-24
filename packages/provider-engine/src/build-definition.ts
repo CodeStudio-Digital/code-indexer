@@ -1,4 +1,5 @@
 import type { ProviderSpec, ProviderDefinition, WireKind } from '@mcp/provider-sdk';
+import { withStreamResilience } from '@mcp/provider-sdk';
 import { buildOpenAICompat } from './wires/openai-compat.js';
 import { buildAnthropic } from './wires/anthropic.js';
 import { buildGemini } from './wires/gemini.js';
@@ -32,6 +33,8 @@ export function buildProviderDefinition(spec: ProviderSpec): ProviderDefinition 
   if (!wire) {
     throw new Error(`provider-engine: no builder for wire '${spec.wire}' (kind '${spec.kind}')`);
   }
+  const built = wire(spec);
+  const baseCreateCoder = built.createCoder;
   return {
     kind: spec.kind,
     displayName: spec.displayName,
@@ -46,7 +49,14 @@ export function buildProviderDefinition(spec: ProviderSpec): ProviderDefinition 
     visual: spec.visual,
     auth: spec.auth,
     config: spec.config,
-    ...wire(spec),
+    ...built,
+    // Every coder provider gets stream resilience: Node 24's undici flags a
+    // late "Premature close" on an already-complete stream as an error.
+    // withStreamResilience swallows that benign trailing close (and re-throws
+    // genuine mid-stream truncations). Set after `...built` so it wins.
+    createCoder: baseCreateCoder
+      ? (creds, model, opts) => withStreamResilience(baseCreateCoder(creds, model, opts))
+      : baseCreateCoder,
     // testConnection is wire-orthogonal (driven by spec.test); set last so it
     // wins over any wire default. Undefined when no `test` is declared.
     testConnection: buildTestConnection(spec),

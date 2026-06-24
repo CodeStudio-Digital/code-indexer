@@ -513,10 +513,10 @@ export function mountCoderInteractionRoutes(
       if (ok) return c.json({ ok });
     }
 
-    // Resume path — runner is gone. Find the pending submit_tasks tool_use
-    // in the message history and inject its tool_result.
+    // Resume path — runner is gone. Find the pending submit_tasks / task_list
+    // (approve) tool_use in the message history and inject its tool_result.
     const pending = findPendingInteraction(id);
-    if (!pending || pending.name !== 'submit_tasks') {
+    if (!pending || (pending.name !== 'submit_tasks' && pending.name !== 'task_list')) {
       return c.json({ error: 'no pending tasks' }, 404);
     }
     sessionStore.resolveTasks(id, {

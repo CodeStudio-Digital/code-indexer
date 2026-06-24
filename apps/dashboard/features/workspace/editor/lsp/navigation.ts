@@ -4,11 +4,15 @@
  * faz o Ctrl+Click abrir a aba no workspace store. O backend roteia por linguagem.
  */
 import type * as MonacoNs from 'monaco-editor';
-import { apiCall } from '../../../../lib/api-client.js';
+import { apiCall, apiStream, electronApi } from '../../../../lib/api-client.js';
 import { logLsp } from '../lsp-log.js';
 import { throttledPerKey, clearThrottleKey } from '../semanticTokensThrottle.js';
 import { relPath, toMonacoRange, type HoverDTO, type LspLocationDTO, type Monaco } from './dto.js';
 
+// MUST stay identical to MONACO_SEMANTIC_LEGEND in
+// packages/api-handlers/src/lsp/semantic-tokens-remap.ts — the backend encodes
+// the token stream against this exact ordering (TS service for ts/js; server
+// tokens remapped onto it for php/python).
 const SEMANTIC_TOKEN_LEGEND: MonacoNs.languages.SemanticTokensLegend = {
   tokenTypes: [
     'class', 'enum', 'interface', 'namespace', 'typeParameter',
@@ -20,12 +24,26 @@ const SEMANTIC_TOKEN_LEGEND: MonacoNs.languages.SemanticTokensLegend = {
   ],
 };
 
-/** Semantic tokens (TS/JS — precisam do TS service project-aware). */
+// Languages whose semantic tokens the backend can serve: ts/js via the
+// in-process TS service, php/python via their LSP server (intelephense/pyright),
+// remapped onto the legend above. Cold/absent servers return empty → Monaco
+// falls back to Monarch and re-requests once the server warms (or on edit).
+const SEMANTIC_TOKEN_LANGS = ['typescript', 'javascript', 'php', 'python'] as const;
+
+/** Semantic tokens — TS/JS (TS service) + php/python (language server). */
 export function registerSemanticTokenProviders(monaco: Monaco, projectId: number): MonacoNs.IDisposable[] {
   const disposers: MonacoNs.IDisposable[] = [];
-  for (const lang of ['typescript', 'javascript']) {
+  // Firing this tells Monaco to re-request semantic tokens for visible models.
+  // The TS service answers instantly, but php/python servers spawn cold — the
+  // first open of a .php returns empty (Monarch only) until the server is ready.
+  // We fire on the server's 'ready' transition so the file colours WITHOUT
+  // needing a keystroke to nudge a re-request.
+  const tokensChanged = new monaco.Emitter<void>();
+  disposers.push(tokensChanged);
+  for (const lang of SEMANTIC_TOKEN_LANGS) {
     disposers.push(
       monaco.languages.registerDocumentSemanticTokensProvider(lang, {
+        onDidChange: tokensChanged.event,
         getLegend: () => SEMANTIC_TOKEN_LEGEND,
         async provideDocumentSemanticTokens(model) {
           // Monaco re-requests after every change — throttle per model so a
@@ -54,7 +72,62 @@ export function registerSemanticTokenProviders(monaco: Monaco, projectId: number
       }),
     );
   }
+  // Nudge a re-request when a language server warms up, so the first .php/.py
+  // opened before the server was ready picks up semantic colours without an edit.
+  disposers.push(startSemanticTokensRefresh(projectId, () => tokensChanged.fire()));
   return disposers;
+}
+
+/**
+ * Subscribe to the LSP server-status stream and call `refresh` whenever a
+ * server transitions to 'ready'. Mirrors diagnosticsStream's transport split
+ * (Electron MessagePort vs SSE) with a light reconnect. Best-effort — a dropped
+ * stream just means colours arrive on the next edit instead.
+ */
+function startSemanticTokensRefresh(projectId: number, refresh: () => void): MonacoNs.IDisposable {
+  interface StatusFrame { languageId?: string; state?: string }
+  let stopped = false;
+  let es: EventSource | null = null;
+  let closeIterator: (() => void) | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const onFrame = (f: StatusFrame): void => {
+    if (f?.state === 'ready') refresh();
+  };
+
+  const connect = (): void => {
+    if (stopped) return;
+    if (electronApi()) {
+      const it = apiStream<StatusFrame>('lsp.serverStatusStream', { projectId })[Symbol.asyncIterator]();
+      closeIterator = () => { void it.return?.(); };
+      void (async () => {
+        try {
+          while (!stopped) {
+            const r = await it.next();
+            if (r.done || stopped) break;
+            onFrame(r.value);
+          }
+        } catch { /* stream dropped */ }
+        if (!stopped) retryTimer = setTimeout(connect, 2000);
+      })();
+    } else {
+      es = new EventSource(`/api/lsp/${projectId}/server-status/stream`);
+      es.addEventListener('serverStatus', (ev) => {
+        if (stopped) return;
+        try { onFrame(JSON.parse((ev as MessageEvent).data) as StatusFrame); } catch { /* bad frame */ }
+      });
+    }
+  };
+  connect();
+
+  return {
+    dispose() {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      closeIterator?.();
+      es?.close();
+    },
+  };
 }
 
 /** Hover / definition / references — um provider '*' cada; o backend responde p/ toda linguagem. */

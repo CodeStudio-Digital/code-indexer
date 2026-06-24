@@ -17,15 +17,23 @@ async function readJson(path: string): Promise<unknown | null> {
   }
 }
 
-/** Read + validate plugin.json (required) and .app.json (optional) from a dir. */
-export async function loadManifest(dir: string): Promise<LoadedManifest> {
+/**
+ * Read + validate plugin.json (required) and .app.json (optional) from a dir.
+ * `trustProviders` validates contributed providers against the FULL provider
+ * schema (host capabilities allowed) — used only for first-party bundled
+ * installs; the provider loader remains the authoritative runtime gate.
+ */
+export async function loadManifest(
+  dir: string,
+  opts?: { trustProviders?: boolean },
+): Promise<LoadedManifest> {
   const raw = await readJson(join(dir, 'plugin.json'));
   if (raw === null) throw new Error(`No plugin.json found in ${dir}`);
   const manifest = parsePluginManifest(raw);
 
   const appPath = manifest.apps ? join(dir, manifest.apps) : join(dir, '.app.json');
   const appRaw = await readJson(appPath);
-  const app = appRaw !== null ? parseAppManifest(appRaw) : null;
+  const app = appRaw !== null ? parseAppManifest(appRaw, opts) : null;
 
   return { manifest, app };
 }

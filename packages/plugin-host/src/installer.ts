@@ -43,7 +43,12 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<Install
   try {
     const { ref } = await materialize(opts.source, stagingDir);
 
-    const { manifest, app } = await loadManifest(stagingDir);
+    // First-party bundled installs (shipped inside the app) may declare host
+    // provider capabilities (auth.hooks, sdk:* discovery) — validate their
+    // providers with the full schema so the snapshot persists them. The provider
+    // loader's isFirstPartyBundled stays the authoritative runtime gate.
+    const trustProviders = opts.source.source === 'bundled';
+    const { manifest, app } = await loadManifest(stagingDir, { trustProviders });
     const namespace = (opts.namespace ?? manifest.name).toLowerCase();
 
     const baseDir = pluginDir(namespace);

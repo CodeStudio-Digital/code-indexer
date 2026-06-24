@@ -96,9 +96,23 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       return { rows: [], rowCount: ok.affectedRows ?? 0, fields: [], command: 'OK' };
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
-      // Restore the connection's default database before returning it to the pool.
-      if (opts.schema && config.database) await conn.query(`USE ${qIdent(config.database)}`).catch(() => void 0);
-      conn.release();
+      // A `USE <schema>` switch must not leak to the next pooled borrower. Restore
+      // the connection's known default db; if there's none to restore to (or the
+      // restore fails), DESTROY the connection instead of releasing it dirty.
+      if (opts.schema) {
+        if (config.database) {
+          try {
+            await conn.query(`USE ${qIdent(config.database)}`);
+            conn.release();
+          } catch {
+            conn.destroy();
+          }
+        } else {
+          conn.destroy();
+        }
+      } else {
+        conn.release();
+      }
     }
   }
 
@@ -206,10 +220,29 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       })) satisfies TableRef[];
     },
     describeTable,
+    async listObjects(kind, schemaName, table) {
+      const target = schemaName || config.database;
+      if (kind === 'sequences') return []; // MySQL has no sequences
+      if (kind === 'triggers') {
+        const rows = await poolRows<{ TRIGGER_NAME: string }>(
+          `SELECT TRIGGER_NAME FROM information_schema.TRIGGERS
+            WHERE EVENT_OBJECT_SCHEMA = ? AND EVENT_OBJECT_TABLE = ? ORDER BY TRIGGER_NAME`,
+          [target, table ?? ''],
+        );
+        return rows.map((r) => r.TRIGGER_NAME);
+      }
+      const rows = await poolRows<{ ROUTINE_NAME: string }>(
+        `SELECT ROUTINE_NAME FROM information_schema.ROUTINES
+          WHERE ROUTINE_SCHEMA = ? ORDER BY ROUTINE_NAME`,
+        [target],
+      );
+      return rows.map((r) => r.ROUTINE_NAME);
+    },
     tablePreview(schemaName, name, { limit, offset }) {
       const target = schemaName || config.database;
       const rel = target ? `${qIdent(target)}.${qIdent(name)}` : qIdent(name);
-      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit, offset], maxRows: limit });
+      // Fetch one extra row so `truncated` reflects that more rows exist past the page.
+      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit + 1, offset], maxRows: limit });
     },
     async schema(schemaName) {
       const tables = await driver.listTables(schemaName);

@@ -1,0 +1,12 @@
+{
+  "name": "provider-google-oauth",
+  "version": "0.1.0",
+  "description": "Google / Gemini (OAuth) as a bundled first-party provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "Google (Gemini OAuth)",
+    "shortDescription": "Gemini via Google OAuth (gemini-cli) loopback connector",
+    "category": "ai-provider"
+  }
+}

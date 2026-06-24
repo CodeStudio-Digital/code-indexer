@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Table2, Eye, TerminalSquare, Columns3, MoreHorizontal, Plus, Search, X } from 'lucide-react';
+import { Table2, Eye, TerminalSquare, Columns3, Share2, MoreHorizontal, Plus, Search, X } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { useContextMenu, type ContextMenuItem } from '../../../components/ui/context-menu.js';
 import {
@@ -27,6 +27,7 @@ function tabLabel(tab: WorkTab, queryWord: string): string {
 function TabIcon({ kind }: { kind: WorkTab['kind'] }) {
   if (kind === 'query') return <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-violet-400" />;
   if (kind === 'structure') return <Columns3 className="h-3.5 w-3.5 shrink-0 text-amber-400" />;
+  if (kind === 'er') return <Share2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />;
   return <Table2 className="h-3.5 w-3.5 shrink-0 text-sky-400" />;
 }
 

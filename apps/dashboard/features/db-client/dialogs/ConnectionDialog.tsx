@@ -43,7 +43,11 @@ interface FormState {
   connectTimeoutSec: string;
   applicationName: string;
   is_read_only: boolean;
+  color: string;
+  group: string;
 }
+
+const COLORS = ['', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899'];
 
 function initialForm(existing: DbConnection | null): FormState {
   let opts: Record<string, unknown> = {};
@@ -73,6 +77,8 @@ function initialForm(existing: DbConnection | null): FormState {
     connectTimeoutSec: typeof opts.connectTimeoutMs === 'number' ? String(opts.connectTimeoutMs / 1000) : '',
     applicationName: typeof opts.applicationName === 'string' ? opts.applicationName : '',
     is_read_only: existing?.is_read_only === 1,
+    color: existing?.color ?? '',
+    group: existing?.group_name ?? '',
   };
 }
 
@@ -180,6 +186,8 @@ export function ConnectionDialog({
         file_path: usesFile ? form.file_path || null : null,
         ssl_mode: usesFile ? null : form.ssl_mode,
         is_read_only: form.is_read_only,
+        color: form.color || null,
+        group_name: form.group.trim() || null,
         options: buildOptions(),
       };
       // Encrypted secret blob: URL (carries the password) or the password itself.
@@ -296,6 +304,27 @@ export function ConnectionDialog({
                   <input type="checkbox" checked={form.is_read_only} onChange={(e) => set('is_read_only', e.target.checked)} />
                   {t('dialog.readOnly')}
                 </label>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label={t('dialog.group')}>
+                    <Input value={form.group} onChange={(e) => set('group', e.target.value)} placeholder={t('dialog.groupPlaceholder')} />
+                  </Field>
+                  <Field label={t('dialog.color')}>
+                    <div className="flex h-8 items-center gap-1.5">
+                      {COLORS.map((c) => (
+                        <button
+                          key={c || 'none'}
+                          type="button"
+                          onClick={() => set('color', c)}
+                          className={`h-4 w-4 rounded-full border ${form.color === c ? 'ring-2 ring-foreground ring-offset-1 ring-offset-background' : ''} ${c ? '' : 'bg-transparent'}`}
+                          style={c ? { backgroundColor: c } : undefined}
+                          title={c || t('dialog.colorNone')}
+                          aria-label={c || t('dialog.colorNone')}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+                </div>
               </TabsContent>
 
               <TabsContent value="schemas" className="mt-3 grid gap-2">

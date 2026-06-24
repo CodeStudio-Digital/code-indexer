@@ -101,6 +101,7 @@ import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
 import { ragDocOutlineTools } from '@mcp/code-agent/tools/rag-doc-outline.js';
 import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
+import { type TodoItem, buildTrackState } from '@mcp/code-agent/tools/task-list-shared.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
@@ -907,7 +908,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     },
     clearTasksState: () => {
       try {
-        return store.clearTasksState(session.id);
+        const cleared = store.clearTasksState(session.id);
+        // Also clear the legacy todos_json shadow. Otherwise archive_task_list
+        // (which DELETEs the coder_tasks_state row) leaves a stale non-empty
+        // todos_json, and the resume migration (which fires when no task-state
+        // row exists) would re-fold the intentionally-cleared checklist.
+        store.setSessionTodos(session.id, null);
+        return cleared;
       } catch (e) {
         console.warn(`[coder] clearTasksState failed: ${e instanceof Error ? e.message : String(e)}`);
         return false;
@@ -1851,39 +1858,29 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
   });
 
-  // Rehydrate the lightweight todo list from the DB so a session resume
-  // brings back the sidebar state the user saw before the restart.
-  if (session.todos_json) {
+  // Post-merge migration: the lightweight checklist now lives in the unified
+  // task store (coder_tasks_state, gate:'track') — one row per session. On
+  // resume, if a session has a legacy `todos_json` but no task state yet, fold
+  // it into a track-gate state so the sidebar comes back. If a task state
+  // already exists it is the source of truth — leave it alone.
+  if (session.todos_json && !store.getTasksState(session.id)) {
     try {
-      const parsed = JSON.parse(session.todos_json) as Array<Partial<import('@mcp/code-agent/tools/todo.js').TodoItem>>;
-      if (Array.isArray(parsed)) {
-        // Backfill missing ids on legacy rows (pre-id schema). Persist the
-        // mutated list back ONCE so future resumes see the same ids — without
-        // this the agent would see a different id on each resume and lose
-        // update_todo continuity.
-        let backfilled = false;
-        const hydrated = parsed.map((t) => {
-          const id = typeof t.id === 'string' && t.id.length >= 6 ? t.id : (backfilled = true, generateTodoId());
-          return {
-            id,
-            content: typeof t.content === 'string' ? t.content : '',
-            activeForm: typeof t.activeForm === 'string' ? t.activeForm : '',
-            status: t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending' as const,
-          };
+      const parsed = JSON.parse(session.todos_json) as Array<Partial<TodoItem>>;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const hydrated: TodoItem[] = parsed.map((t) => ({
+          id: typeof t.id === 'string' && t.id.length >= 6 ? t.id : generateTodoId(),
+          content: typeof t.content === 'string' ? t.content : '',
+          activeForm: typeof t.activeForm === 'string' ? t.activeForm : '',
+          status: t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending',
+        }));
+        store.recordTasks({
+          session_id: session.id,
+          tool_use_id: `track_migrate_${session.id}`,
+          state: buildTrackState(hydrated),
         });
-        // Bypass the event emitter on rehydrate — the runner isn't listening
-        // yet and we don't want to double-persist on startup.
-        runner.currentTodos = hydrated;
-        if (backfilled) {
-          try {
-            store.setSessionTodos(session.id, JSON.stringify(hydrated));
-          } catch (e) {
-            console.warn(`[coder] failed to persist backfilled todo ids: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        }
       }
     } catch (e) {
-      console.warn(`[coder] failed to parse todos_json: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[coder] failed to migrate todos_json: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -2108,7 +2105,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // tool_use that the dashboard renders as a stuck "running" spinner with no
   // approve affordance — worse than the pre-fix behavior (turn cleanly gone).
   const RESUMABLE_INTERACTIVE_TOOLS = new Set([
-    'submit_plan', 'submit_tasks', 'ask_user', 'submit_spec', 'submit_specification_to_master',
+    // task_list(gate:'approve') is the canonical (bootstrap) route to the gated
+    // pause — it dispatches to submitTasks' waitForUserInput and renders a real
+    // TaskListReview approve card, so it MUST be checkpointed or the in-flight
+    // approval is lost on reopen/restart. (findPendingInteraction already
+    // matches task_list; this keeps the writer in sync with that reader.)
+    'submit_plan', 'submit_tasks', 'task_list', 'ask_user', 'submit_spec', 'submit_specification_to_master',
   ]);
   const hasResumableInteractiveToolUse = (msg: AgentMessage): boolean =>
     Array.isArray(msg.content) &&

@@ -1,0 +1,12 @@
+{
+  "name": "provider-kimi-code",
+  "version": "0.1.0",
+  "description": "Kimi Code (OAuth) as a bundled first-party provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "Kimi Code",
+    "shortDescription": "Kimi coding models via the device-code OAuth connector",
+    "category": "ai-provider"
+  }
+}

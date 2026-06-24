@@ -61,13 +61,18 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
     const cols = db
       .prepare('SELECT * FROM pragma_table_info(?)')
       .all(name) as Array<{ cid: number; name: string; type: string; notnull: number; dflt_value: unknown; pk: number }>;
+    // Only a table declared with AUTOINCREMENT is truly auto-increment; a plain
+    // INTEGER PRIMARY KEY is just the rowid alias. Read the actual DDL to tell.
+    const ddl = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
+      | { sql?: string }
+      | undefined)?.sql ?? '';
+    const hasAutoInc = /\bAUTOINCREMENT\b/i.test(ddl);
     const columns: ColumnInfo[] = cols.map((c) => ({
       name: c.name,
       dataType: c.type || 'BLOB',
       nullable: c.notnull === 0,
       isPrimaryKey: c.pk > 0,
-      // INTEGER PRIMARY KEY is the rowid alias — effectively auto-increment.
-      isAutoIncrement: c.pk > 0 && /^integer$/i.test(c.type),
+      isAutoIncrement: hasAutoInc && c.pk > 0 && /^integer$/i.test(c.type),
       defaultValue: c.dflt_value == null ? null : String(c.dflt_value),
       ordinal: c.cid + 1,
     }));
@@ -136,9 +141,17 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
       );
     },
     describeTable,
+    listObjects(kind, _schema, table) {
+      if (kind !== 'triggers') return Promise.resolve([]); // sqlite has no functions/sequences
+      const rows = (table
+        ? db.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ? ORDER BY name`).all(table)
+        : db.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`).all()) as Array<{ name: string }>;
+      return Promise.resolve(rows.map((r) => r.name));
+    },
     tablePreview(_schema, name, { limit, offset }) {
       const rel = `"${name.replace(/"/g, '""')}"`;
-      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit, offset], maxRows: limit });
+      // Fetch one extra row so `truncated` reflects that more rows exist past the page.
+      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit + 1, offset], maxRows: limit });
     },
     async schema() {
       const tables = await driver.listTables();

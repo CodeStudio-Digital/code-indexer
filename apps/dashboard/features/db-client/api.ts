@@ -25,6 +25,8 @@ import type {
   DbDdlOp,
   DbDdlSpec,
   DbEditResult,
+  DbObjectKind,
+  DbGenerateKind,
 } from './types.js';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -77,6 +79,12 @@ export const listHistory = (p: number, cid: number, limit = 100) =>
 
 export const addHistory = (p: number, cid: number, body: Record<string, unknown>) =>
   req<DbQueryHistoryRow>(`${root(p)}/connections/${cid}/history`, j(body));
+
+export const clearHistory = (p: number, cid: number) =>
+  req<{ ok: true }>(`${root(p)}/connections/${cid}/history`, { method: 'DELETE' });
+
+export const deleteHistoryRow = (p: number, hid: number) =>
+  req<{ ok: true }>(`${root(p)}/history/${hid}`, { method: 'DELETE' });
 
 // ─── Saved queries ───────────────────────────────────────────────────────
 export const listSavedQueries = (p: number) =>
@@ -179,6 +187,16 @@ export const tableRows = (
   offset: number,
 ) => apiCall<DbQueryResult>('dbClient.tableRows', { connectionId, schema, table, limit, offset });
 
+export const listObjects = (
+  connectionId: string,
+  kind: DbObjectKind,
+  schema?: string,
+  table?: string,
+) => apiCall<string[]>('dbClient.listObjects', { connectionId, kind, schema, table });
+
+export const generateSql = (connectionId: string, schema: string | undefined, table: string, kind: DbGenerateKind) =>
+  apiCall<{ sql: string }>('dbClient.generateSql', { connectionId, schema, table, kind });
+
 export const runQuery = (
   connectionId: string,
   sql: string,
@@ -187,6 +205,9 @@ export const runQuery = (
 
 export const cancelQuery = (connectionId: string, queryId: string) =>
   apiCall<void>('dbClient.cancel', { connectionId, queryId });
+
+export const explain = (connectionId: string, sql: string) =>
+  apiCall<DbQueryResult>('dbClient.explain', { connectionId, sql });
 
 export const editRow = (input: {
   connectionId: string;

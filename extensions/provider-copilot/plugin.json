@@ -1,0 +1,12 @@
+{
+  "name": "provider-copilot",
+  "version": "0.1.0",
+  "description": "GitHub Copilot (OAuth) as a bundled first-party provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "GitHub Copilot",
+    "shortDescription": "Copilot models via the GitHub device-code OAuth connector",
+    "category": "ai-provider"
+  }
+}

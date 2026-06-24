@@ -282,6 +282,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onFocusChanged: (cb: (v: boolean) => void) => subscribe('window:focus-changed', cb),
   },
   /**
+   * Window → project registry for the title-bar project switcher. The renderer
+   * reports its active project (so every window's switcher can show it under
+   * "Open Projects"), and can FOCUS an already-open project's window instead of
+   * navigating the current one. Handlers in apps/electron/src/window-registry-ipc.ts.
+   */
+  windowRegistry: {
+    setActiveProject: (projectId: number) => ipcRenderer.send('window:setProject', projectId),
+    listOpenProjects: () =>
+      ipcRenderer.invoke('window:listOpenProjects') as Promise<
+        Array<{ windowId: number; projectId: number; focused: boolean }>
+      >,
+    focusProject: (projectId: number) =>
+      ipcRenderer.invoke('window:focusProject', projectId) as Promise<{
+        ok: boolean;
+        windowId?: number;
+      }>,
+    onOpenProjectsChanged: (
+      cb: (list: Array<{ windowId: number; projectId: number; focused: boolean }>) => void,
+    ) => subscribe('window:open-projects-changed', cb),
+  },
+  /**
    * Cloud account/login — a SEPARATE HTTPS surface (the deployed Worker), not the
    * in-process api bus. The refresh token stays in main; the renderer only ever
    * sends an opaque op + receives `{ ok, status, body }` (tokens stripped).
@@ -330,6 +351,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveFile: (defaultName?: string) => ipcRenderer.invoke('dialog:saveFile', defaultName) as Promise<string | null>,
   openExternal: (url: string) => ipcRenderer.send('shell:openExternal', url),
   openPath: (path: string) => ipcRenderer.send('shell:openPath', path),
+  showItemInFolder: (path: string) => ipcRenderer.send('shell:showItemInFolder', path),
   /**
    * Start/stop the ephemeral OAuth loopback listener (RFC 8252). The MCP
    * OAuth dialog starts it just before opening the provider login in the

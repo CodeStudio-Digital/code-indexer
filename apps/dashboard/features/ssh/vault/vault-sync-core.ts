@@ -82,6 +82,39 @@ export async function planVaultPush(
   return { items, cache };
 }
 
+// ─── Portable cross-device references (identities + jump hosts) ────────────
+//
+// Numeric DB ids (ssh_hosts.id, ssh_identities.id) are auto-increment and differ
+// per device, so a host's identity_id/jump_host_id can't travel verbatim. Each
+// referenced row already maps to a STABLE clientDocId (hostMap/identityMap); we
+// carry that in the envelope and resolve it back to a local id on the recipient.
+// Rename-safe and unambiguous (unlike name-matching). A dangling ref resolves to
+// null (fall back) — we NEVER write a foreign numeric id.
+
+/** Build a host's portable refs: the referenced identity/jump-host as their clientDocIds. */
+export function hostRefs(
+  host: { identity_id: number | null; jump_host_id: number | null },
+  identityMap: Record<string, string>,
+  hostMap: Record<string, string>,
+): { identity_ref: string | null; jump_host_ref: string | null } {
+  return {
+    identity_ref: host.identity_id != null ? identityMap[String(host.identity_id)] ?? null : null,
+    jump_host_ref: host.jump_host_id != null ? hostMap[String(host.jump_host_id)] ?? null : null,
+  };
+}
+
+/** Resolve portable refs back to LOCAL numeric ids on this device (dangling → null). */
+export function resolveRefs(
+  record: { identity_ref?: string | null; jump_host_ref?: string | null },
+  idDocToLocal: (cid: string) => number | undefined,
+  hostDocToLocal: (cid: string) => number | undefined,
+): { identity_id: number | null; jump_host_id: number | null } {
+  return {
+    identity_id: record.identity_ref ? idDocToLocal(record.identity_ref) ?? null : null,
+    jump_host_id: record.jump_host_ref ? hostDocToLocal(record.jump_host_ref) ?? null : null,
+  };
+}
+
 export interface VaultApplyAction<T = object> {
   clientDocId: string;
   kind: VaultKind;

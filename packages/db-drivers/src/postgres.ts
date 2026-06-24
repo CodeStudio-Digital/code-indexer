@@ -21,7 +21,8 @@ import type {
 // Minimal structural types so we don't hard-depend on `pg`'s types at build time.
 interface PgClient {
   query(config: { text: string; values?: unknown[]; rowMode?: string }): Promise<PgResult | PgResult[]>;
-  release(): void;
+  /** Passing an error evicts the client from the pool instead of recycling it. */
+  release(err?: Error | boolean): void;
 }
 interface PgResult {
   rows: Array<Record<string, unknown>>;
@@ -38,7 +39,8 @@ interface PgPool {
 function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
   const opts = config.options ?? {};
   const extra: Record<string, unknown> = { max: 3 };
-  if (typeof opts.connectTimeoutMs === 'number') extra.connectionTimeoutMillis = opts.connectTimeoutMs;
+  // Never wait forever on a black-holed host (pg default is 0 = infinite).
+  extra.connectionTimeoutMillis = typeof opts.connectTimeoutMs === 'number' ? opts.connectTimeoutMs : 10_000;
   if (typeof opts.applicationName === 'string' && opts.applicationName) extra.application_name = opts.applicationName;
   if (config.connectionString) return { connectionString: config.connectionString, ...extra };
   const ssl = sslConfig(config);
@@ -103,8 +105,18 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
       // Reset the search_path so the pooled client is clean for the next borrower.
-      if (opts.schema) await client.query({ text: 'RESET search_path' }).catch(() => void 0);
-      client.release();
+      // If RESET fails (e.g. an in-flight cancel landed on it), EVICT the client
+      // (release with an error) so a dirty search_path can't leak to the next use.
+      if (opts.schema) {
+        try {
+          await client.query({ text: 'RESET search_path' });
+          client.release();
+        } catch (e) {
+          client.release(e instanceof Error ? e : new Error(String(e)));
+        }
+      } else {
+        client.release();
+      }
     }
   }
 
@@ -157,13 +169,14 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
     }));
 
     const idxRes = await pool.query(
+      // indkey is an int2vector; cast to int2[] so array_position resolves.
       `SELECT i.relname AS index_name, ix.indisunique AS is_unique, ix.indisprimary AS is_primary,
-              a.attname AS column_name, array_position(ix.indkey, a.attnum) AS ord
+              a.attname AS column_name, array_position(ix.indkey::int2[], a.attnum) AS ord
          FROM pg_class t
          JOIN pg_namespace n ON n.oid = t.relnamespace
          JOIN pg_index ix ON t.oid = ix.indrelid
          JOIN pg_class i ON i.oid = ix.indexrelid
-         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey::int2[])
         WHERE n.nspname = $1 AND t.relname = $2
         ORDER BY index_name, ord`,
       [schemaName, name],
@@ -172,18 +185,23 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       idxRes.rows as Array<{ index_name: string; is_unique: boolean; is_primary: boolean; column_name: string }>,
     );
 
+    // pg_constraint + WITH ORDINALITY pairs local↔referenced columns positionally
+    // (information_schema's kcu×ccu join cross-products composite FKs).
     const fkRes = await pool.query(
-      `SELECT tc.constraint_name, kcu.column_name,
-              ccu.table_schema AS ref_schema, ccu.table_name AS ref_table, ccu.column_name AS ref_column,
-              rc.delete_rule, rc.update_rule
-         FROM information_schema.table_constraints tc
-         JOIN information_schema.key_column_usage kcu
-           ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-         JOIN information_schema.constraint_column_usage ccu
-           ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
-         JOIN information_schema.referential_constraints rc
-           ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema
-        WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1 AND tc.table_name = $2`,
+      `SELECT con.conname AS constraint_name,
+              att.attname AS column_name,
+              fns.nspname AS ref_schema, fcl.relname AS ref_table, fatt.attname AS ref_column,
+              con.confdeltype AS delete_rule, con.confupdtype AS update_rule
+         FROM pg_constraint con
+         JOIN pg_class cl ON cl.oid = con.conrelid
+         JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+         JOIN pg_class fcl ON fcl.oid = con.confrelid
+         JOIN pg_namespace fns ON fns.oid = fcl.relnamespace
+         JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(att_local, att_ref, ord) ON true
+         JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.att_local
+         JOIN pg_attribute fatt ON fatt.attrelid = con.confrelid AND fatt.attnum = k.att_ref
+        WHERE con.contype = 'f' AND ns.nspname = $1 AND cl.relname = $2
+        ORDER BY con.conname, k.ord`,
       [schemaName, name],
     );
     const foreignKeys = groupForeignKeys(
@@ -234,9 +252,34 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       })) satisfies TableRef[];
     },
     describeTable,
+    async listObjects(kind, schemaName = 'public', table) {
+      if (kind === 'triggers') {
+        const res = await pool.query(
+          `SELECT DISTINCT trigger_name FROM information_schema.triggers
+            WHERE event_object_schema = $1 AND event_object_table = $2 ORDER BY trigger_name`,
+          [schemaName, table ?? ''],
+        );
+        return (res.rows as Array<{ trigger_name: string }>).map((r) => r.trigger_name);
+      }
+      if (kind === 'functions') {
+        const res = await pool.query(
+          `SELECT routine_name FROM information_schema.routines
+            WHERE routine_schema = $1 ORDER BY routine_name`,
+          [schemaName],
+        );
+        return (res.rows as Array<{ routine_name: string }>).map((r) => r.routine_name);
+      }
+      const res = await pool.query(
+        `SELECT sequence_name FROM information_schema.sequences
+          WHERE sequence_schema = $1 ORDER BY sequence_name`,
+        [schemaName],
+      );
+      return (res.rows as Array<{ sequence_name: string }>).map((r) => r.sequence_name);
+    },
     tablePreview(schemaName, name, { limit, offset }) {
       const rel = `${qIdent(schemaName)}.${qIdent(name)}`;
-      return runQuery(`SELECT * FROM ${rel} LIMIT $1 OFFSET $2`, { params: [limit, offset], maxRows: limit });
+      // Fetch one extra row so `truncated` can signal there are more rows past the page.
+      return runQuery(`SELECT * FROM ${rel} LIMIT $1 OFFSET $2`, { params: [limit + 1, offset], maxRows: limit });
     },
     async schema(schemaName = 'public') {
       const tables = await driver.listTables(schemaName);
@@ -282,6 +325,24 @@ function groupIndexes(
   return [...map.values()];
 }
 
+/** pg_constraint conf{del,upd}type single-char codes → SQL referential action. */
+function pgFkAction(code: string): string | undefined {
+  switch (code) {
+    case 'c':
+      return 'CASCADE';
+    case 'r':
+      return 'RESTRICT';
+    case 'n':
+      return 'SET NULL';
+    case 'd':
+      return 'SET DEFAULT';
+    case 'a':
+      return 'NO ACTION';
+    default:
+      return undefined;
+  }
+}
+
 function groupForeignKeys(
   rows: Array<{
     constraint_name: string;
@@ -303,8 +364,8 @@ function groupForeignKeys(
         refSchema: r.ref_schema,
         refTable: r.ref_table,
         refColumns: [],
-        onDelete: r.delete_rule,
-        onUpdate: r.update_rule,
+        onDelete: pgFkAction(r.delete_rule),
+        onUpdate: pgFkAction(r.update_rule),
       };
       map.set(r.constraint_name, fk);
     }

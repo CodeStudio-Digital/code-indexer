@@ -183,7 +183,7 @@ export function AppShell() {
     isProjectView && view.projectId ? `/projects/${view.projectId}` : '',
   );
   const projectName = isProjectView ? (activeProject?.name ?? null) : null;
-  const { data: projectsData } = useApi<Array<{ id: number; name: string }>>('/projects');
+  const { data: projectsData } = useApi<Array<{ id: number; name: string; root_path?: string }>>('/projects');
   const { data: recentData } = useApi<
     Array<{ id: number; title: string; project_id: number; project_name: string }>
   >('/coder/sessions/recent?limit=10');

@@ -214,6 +214,62 @@ export async function checkVerifier(vdk: CryptoKey, env: RecordEnvelope): Promis
   }
 }
 
+// ─── Recovery Key (passphrase escrow-free recovery) ───────────────────────
+//
+// A lost passphrase would otherwise make the vault PERMANENTLY unrecoverable.
+// A recovery key is a SECOND high-entropy secret that wraps the SAME VDK (a
+// re-wrap, not a re-encrypt — identical to a passphrase change). The user
+// generates it once, stores it offline, and can later unlock + reset the
+// passphrase with it. Zero-knowledge: the server never sees it; it only stores
+// the extra wrapped-VDK blob in vault_meta. Anyone holding the recovery key can
+// decrypt the vault, so it is 256-bit random + shown once + never persisted.
+
+// Crockford base32 (no I/L/O/U → no transcription confusables).
+const RECOVERY_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function base32encode(bytes: Uint8Array): string {
+  let bits = 0;
+  let value = 0;
+  let out = '';
+  for (const b of bytes) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += RECOVERY_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += RECOVERY_ALPHABET[(value << (5 - bits)) & 31];
+  return out;
+}
+
+/**
+ * A fresh 256-bit recovery key, grouped in 4s for legibility (copy/paste in
+ * practice). e.g. `K7Q2-9F3M-...`. Show ONCE; never store it.
+ */
+export function generateRecoveryKey(): string {
+  const raw = base32encode(crypto.getRandomValues(new Uint8Array(32)));
+  return (raw.match(/.{1,4}/g) ?? [raw]).join('-');
+}
+
+/**
+ * Canonical form fed to the KDF: uppercase, map visual confusables to the
+ * Crockford set, strip hyphens/whitespace. So `k7q2 9f3m`, `K7Q2-9F3M`, and
+ * `K7Q29F3M` all derive the same KEK.
+ */
+export function normalizeRecoveryKey(input: string): string {
+  return input
+    .toUpperCase()
+    .replace(/[ILO]/g, (c) => (c === 'O' ? '0' : '1'))
+    .replace(/U/g, 'V')
+    .replace(/[^0-9A-Z]/g, '');
+}
+
+/** Derive a KEK from the recovery key (reuses the passphrase KDF path with its own salt). */
+export function deriveRecoveryKek(recoveryKey: string, params: KdfParams): Promise<CryptoKey> {
+  return deriveKek(normalizeRecoveryKey(recoveryKey), params);
+}
+
 // ─── Team sharing: ECDH identity keypair + Team Vault Key (TVK) wrapping ───
 //
 // Each member has a long-lived ECDH P-256 identity keypair. The PUBLIC key is

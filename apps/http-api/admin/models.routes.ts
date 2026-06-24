@@ -61,6 +61,7 @@ export function modelsRouter(store: ProviderStore): Hono {
           mode: m.mode,
           name: m.name,
           context_window: m.context_window,
+          context_window_overridden: m.context_window_overridden,
           default_max_tokens: m.default_max_tokens,
           can_reason: m.can_reason,
           supports_attachments: m.supports_attachments,

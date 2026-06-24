@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateVdk, encryptJson, decryptJson, type RecordAad, type RecordEnvelope } from '@mcp/vault-crypto';
 import type { SyncPullItem } from '@mcp/api-bus';
-import { planVaultPush, planVaultApply, stableStringify } from '../vault-sync-core.js';
+import { planVaultPush, planVaultApply, stableStringify, hostRefs, resolveRefs } from '../vault-sync-core.js';
 
 describe('vault-sync-core', () => {
   it('round-trips a host record (secrets included) through push → apply', async () => {
@@ -84,5 +84,41 @@ describe('vault-sync-core', () => {
   it('stableStringify is key-order independent', () => {
     expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ b: 2, a: 1 }));
     expect(stableStringify({ a: [{ y: 1, x: 2 }] })).toBe(stableStringify({ a: [{ x: 2, y: 1 }] }));
+  });
+
+  describe('portable refs (identity + jump host)', () => {
+    const identityMap = { '7': 'ws1:id-a', '8': 'ws1:id-b' };
+    const hostMap = { '10': 'ws1:host-a', '11': 'ws1:host-b' };
+
+    it('maps local numeric ids to stable clientDocIds on push', () => {
+      expect(hostRefs({ identity_id: 7, jump_host_id: 11 }, identityMap, hostMap)).toEqual({
+        identity_ref: 'ws1:id-a',
+        jump_host_ref: 'ws1:host-b',
+      });
+      expect(hostRefs({ identity_id: null, jump_host_id: null }, identityMap, hostMap)).toEqual({
+        identity_ref: null,
+        jump_host_ref: null,
+      });
+      // A ref to a row not yet in the map (e.g. an identity that failed to push) → null.
+      expect(hostRefs({ identity_id: 99, jump_host_id: null }, identityMap, hostMap).identity_ref).toBeNull();
+    });
+
+    it('resolves clientDocIds back to local ids on apply (DIFFERENT device ids)', () => {
+      // Device B assigns different numeric ids for the same docs.
+      const idDocToLocal = (c: string) => ({ 'ws1:id-a': 42 })[c];
+      const hostDocToLocal = (c: string) => ({ 'ws1:host-b': 77 })[c];
+      expect(resolveRefs({ identity_ref: 'ws1:id-a', jump_host_ref: 'ws1:host-b' }, idDocToLocal, hostDocToLocal)).toEqual({
+        identity_id: 42,
+        jump_host_id: 77,
+      });
+    });
+
+    it('a dangling ref resolves to null — never writes a foreign id', () => {
+      expect(resolveRefs({ identity_ref: 'ws1:missing', jump_host_ref: 'ws1:gone' }, () => undefined, () => undefined)).toEqual({
+        identity_id: null,
+        jump_host_id: null,
+      });
+      expect(resolveRefs({}, () => 5, () => 6)).toEqual({ identity_id: null, jump_host_id: null });
+    });
   });
 });

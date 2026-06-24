@@ -19,6 +19,7 @@ import type { Database as DB } from 'better-sqlite3';
 import * as plans from './plans.js';
 import * as tasks from './tasks.js';
 import * as goals from './goals.js';
+import { deriveTodosFromState } from '@mcp/code-agent/tools/task-list-shared.js';
 
 export interface SessionMemoryRow {
   id: number;
@@ -434,19 +435,30 @@ export function getSessionStateData(db: DB, sessionId: number): SessionStateData
   const latestPlan = plans.list(db, sessionId)[0] ?? null;
   const goal = goals.get(db, sessionId);
 
+  // Single source of truth: the checklist now lives in the unified task store
+  // (coder_tasks_state, gate:'track'). Derive from it — same as currentTodos and
+  // /state-summary — so this block can't diverge after archive_task_list /
+  // delete_tasks (which mutate the store but not the legacy todos_json shadow).
+  // deriveTodosFromState returns [] for approve lists (they render as Tasks).
   let todos: Array<{ status: string; label: string }> = [];
-  try {
-    const row = db.prepare('SELECT todos_json FROM coder_sessions WHERE id = ?')
-      .get(sessionId) as { todos_json: string | null } | undefined;
-    if (row?.todos_json) {
-      const parsed = JSON.parse(row.todos_json) as Array<{ content?: string; status?: string }>;
-      if (Array.isArray(parsed)) {
-        todos = parsed
-          .filter((t) => t && typeof t.content === 'string')
-          .map((t) => ({ status: t.status ?? 'pending', label: t.content as string }));
+  const tasksState = tasks.getState(db, sessionId);
+  if (tasksState) {
+    todos = deriveTodosFromState(tasksState).map((t) => ({ status: t.status, label: t.content }));
+  } else {
+    // Pre-migration fallback only (no task-state row yet): legacy todos_json.
+    try {
+      const row = db.prepare('SELECT todos_json FROM coder_sessions WHERE id = ?')
+        .get(sessionId) as { todos_json: string | null } | undefined;
+      if (row?.todos_json) {
+        const parsed = JSON.parse(row.todos_json) as Array<{ content?: string; status?: string }>;
+        if (Array.isArray(parsed)) {
+          todos = parsed
+            .filter((t) => t && typeof t.content === 'string')
+            .map((t) => ({ status: t.status ?? 'pending', label: t.content as string }));
+        }
       }
-    }
-  } catch { /* malformed todos_json → no todos section */ }
+    } catch { /* malformed todos_json → no todos section */ }
+  }
 
   return {
     goal: goal ? { text: goal.text, status: goal.status } : null,

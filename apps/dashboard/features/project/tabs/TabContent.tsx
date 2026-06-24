@@ -40,6 +40,8 @@ export interface TabContentProps {
   tab: ProjectTabId;
   projectId: number;
   projectName: string;
+  /** Native `root_path` — forwarded to CodeSurface → file tree menu. */
+  projectRoot?: string | null;
   initialSessionId?: number;
   onOpenFile: (path: string) => void;
   activeFilePath: string | null;
@@ -89,6 +91,7 @@ export function TabContent(props: TabContentProps) {
       visible={isCode}
       projectId={props.projectId}
       projectName={props.projectName}
+      projectRoot={props.projectRoot}
       activeFilePath={props.activeFilePath}
       onOpenFile={props.onOpenFile}
     />

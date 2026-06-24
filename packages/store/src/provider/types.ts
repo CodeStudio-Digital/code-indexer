@@ -43,6 +43,14 @@ export interface ProviderModel {
   mode: string;
   name: string;
   context_window: number | null;
+  /**
+   * True when the admin manually set `context_window` (migration 175). Live
+   * discovery refreshes leave a flagged row's window alone — without this,
+   * every refresh (incl. the one ~10s after each startup) re-derives the
+   * window from discovery and silently reverts the admin's value (e.g. a
+   * `glm-5.2` bumped to 1M reverting to the registry's 200K).
+   */
+  context_window_overridden: boolean;
   default_max_tokens: number | null;
   can_reason: boolean;
   supports_attachments: boolean;
@@ -146,6 +154,12 @@ export interface UpsertModelInput {
   mode?: string;
   name: string;
   context_window?: number | null;
+  /**
+   * Carries the admin-override marker through `replaceFromSource` rebuilds
+   * (migration 175). Live discovery omits it (= not an override). Existing
+   * flagged rows keep their window regardless of what this input carries.
+   */
+  context_window_overridden?: boolean;
   default_max_tokens?: number | null;
   can_reason?: boolean;
   supports_attachments?: boolean;

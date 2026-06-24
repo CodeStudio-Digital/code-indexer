@@ -26,7 +26,7 @@ export interface CoderRuntime {
     sessionId: number,
   ): {
     toolUseId: string;
-    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
+    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
     /** Original tool_use input — the decision_gate resume path needs the questions. */
     input?: Record<string, unknown>;
   } | null;
@@ -108,7 +108,7 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     sessionId: number,
   ): {
     toolUseId: string;
-    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
+    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
     input?: Record<string, unknown>;
   } | null {
     const data = sessionStore.loadSessionWithMessages(sessionId);
@@ -132,6 +132,7 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
           b.name !== 'submit_plan'
           && b.name !== 'ask_user'
           && b.name !== 'submit_tasks'
+          && b.name !== 'task_list'
           && b.name !== 'submit_spec'
           && b.name !== 'submit_specification_to_master'
           && b.name !== 'decision_gate'
@@ -139,7 +140,7 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
         if (seenResults.has(b.id)) continue;
         return {
           toolUseId: b.id,
-          name: b.name as 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate',
+          name: b.name as 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate',
           // decision_gate's resume path needs the original questions (carried
           // in the tool_use input) to map chosen values back to labels.
           input: b.input as Record<string, unknown> | undefined,

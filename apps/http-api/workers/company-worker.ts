@@ -30,11 +30,16 @@
 // so `@mcp/*` aliases throw "Cannot find package". Relative paths
 // resolve identically under tsx, tsc and raw node.
 import { parentPort, workerData } from 'node:worker_threads';
+import { installLlmDispatcher } from '../install-llm-dispatcher.js';
 import {
   MessageBridge,
   openWorkerDb,
   type MessageBridgeOpts,
 } from '../../../packages/orchestrator-host/src/index.js';
+
+// Streaming-resilient global undici dispatcher for THIS worker realm — every
+// worker_thread has its own, so install before any provider fetch.
+installLlmDispatcher();
 import { CompanyStore } from '../../../packages/store/src/company-store.js';
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
 import { hydrateWorkerCapabilities } from './worker-capabilities.js';

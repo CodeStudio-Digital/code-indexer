@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Folder, File as FileIcon, ArrowUp, RefreshCw, FolderPlus, Upload, Download, SquarePen, Pencil, Trash2, Loader2 } from 'lucide-react';
+import { Folder, File as FileIcon, ArrowUp, RefreshCw, FolderPlus, Upload, Download, SquarePen, Pencil, Trash2, Loader2, X } from 'lucide-react';
 import type { SftpEntry } from '@mcp/api-bus';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../../components/ui/select.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
@@ -23,6 +23,7 @@ import {
   sftpClose,
   sftpDownload,
   sftpUpload,
+  sftpCancel,
   sftpReadFile,
   pickLocalFiles,
   pickSavePath,
@@ -46,6 +47,7 @@ interface Transfer {
   total: number;
   done?: boolean;
   error?: string;
+  cancelled?: boolean;
 }
 
 function fmtBytes(n: number): string {
@@ -146,16 +148,22 @@ export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpB
     async (tf: Transfer, stream: AsyncIterable<{ type: string; transferred?: number; total?: number; message?: string }>) => {
       setTransfers((ts) => [...ts.filter((x) => x.id !== tf.id), tf]);
       const label = tf.dir === 'up' ? t('sftp.uploaded', { name: tf.name }) : t('sftp.downloaded', { name: tf.name });
+      const isCancel = (msg?: string) => msg === 'transfer cancelled';
       try {
         for await (const p of stream) {
           if (p.type === 'progress') updateTransfer(tf.id, { transferred: p.transferred ?? 0, total: p.total ?? tf.total });
           else if (p.type === 'done') { updateTransfer(tf.id, { done: true }); toast.success(label); }
-          else if (p.type === 'error') { updateTransfer(tf.id, { done: true, error: p.message }); toast.error(t('sftp.actionError', { reason: p.message ?? '' })); }
+          else if (p.type === 'error') {
+            const cancelled = isCancel(p.message);
+            updateTransfer(tf.id, { done: true, cancelled, error: cancelled ? undefined : p.message });
+            if (!cancelled) toast.error(t('sftp.actionError', { reason: p.message ?? '' }));
+          }
         }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
-        updateTransfer(tf.id, { done: true, error: reason });
-        toast.error(t('sftp.actionError', { reason }));
+        const cancelled = isCancel(reason);
+        updateTransfer(tf.id, { done: true, cancelled, error: cancelled ? undefined : reason });
+        if (!cancelled) toast.error(t('sftp.actionError', { reason }));
       }
       // Auto-clear finished transfers after a moment.
       setTimeout(() => setTransfers((ts) => ts.filter((x) => x.id !== tf.id)), 4000);
@@ -163,15 +171,22 @@ export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpB
     [updateTransfer, t],
   );
 
+  /** Cancel an in-flight transfer (ends its channel in main; the stream then errors out as cancelled). */
+  const cancelTransfer = useCallback((id: string) => {
+    setTransfers((ts) => ts.map((x) => (x.id === id ? { ...x, cancelled: true } : x)));
+    void sftpCancel(id).catch(() => undefined);
+  }, []);
+
   const download = useCallback(
     async (entry: SftpEntry) => {
       const s = specRef.current;
       if (!s) return;
       const local = await pickSavePath(safeBaseName(entry.name));
       if (!local) return;
+      const id = `down:${entry.path}`;
       await runTransfer(
-        { id: `down:${entry.path}`, name: entry.name, dir: 'down', transferred: 0, total: entry.size },
-        sftpDownload(s, entry.path, local),
+        { id, name: entry.name, dir: 'down', transferred: 0, total: entry.size },
+        sftpDownload(s, entry.path, local, id),
       );
     },
     [runTransfer],
@@ -222,9 +237,10 @@ export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpB
     const files = await pickLocalFiles();
     for (const local of files) {
       const name = baseName(local);
+      const id = `up:${local}`;
       await runTransfer(
-        { id: `up:${local}`, name, dir: 'up', transferred: 0, total: 0 },
-        sftpUpload(s, local, joinPosix(cwd, name)),
+        { id, name, dir: 'up', transferred: 0, total: 0 },
+        sftpUpload(s, local, joinPosix(cwd, name), id),
       );
     }
     void navigate(cwd);
@@ -380,10 +396,23 @@ export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpB
               <div key={tf.id} className="px-3 py-1 text-[11px] flex items-center gap-2">
                 {tf.dir === 'up' ? <Upload className="h-3 w-3 shrink-0" /> : <Download className="h-3 w-3 shrink-0" />}
                 <span className="truncate flex-1">{tf.name}</span>
-                {tf.error ? (
+                {tf.cancelled ? (
+                  <span className="text-muted-foreground shrink-0">{t('sftp.cancelled')}</span>
+                ) : tf.error ? (
                   <span className="text-red-500 shrink-0">{tf.error}</span>
                 ) : (
                   <span className="text-muted-foreground tabular-nums shrink-0">{tf.done ? '100%' : `${pct}%`}</span>
+                )}
+                {!tf.done && !tf.cancelled && (
+                  <button
+                    type="button"
+                    aria-label={t('sftp.cancel')}
+                    title={t('sftp.cancel')}
+                    className="shrink-0 p-0.5 text-muted-foreground hover:text-red-500"
+                    onClick={() => cancelTransfer(tf.id)}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
                 )}
               </div>
             );

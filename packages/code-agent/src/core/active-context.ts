@@ -12,8 +12,8 @@
  * `currentTodos`, the session's persisted goal, and the active task scope
  * (if execute_task is in flight). It is never persisted to `this.messages`.
  */
-import type { TodoItem } from '@mcp/code-agent/tools/todo.js';
 import type { TasksState } from '@mcp/code-agent/sessions/types.js';
+import { type TodoItem, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 
 export interface GoalSnapshot {
   text: string;
@@ -43,7 +43,10 @@ export function buildActiveContextBlock(input: ActiveContextInputs): string | nu
   const state = input.tasksState ?? null;
   const cap = input.maxChars ?? DEFAULT_MAX_CHARS;
 
-  const activeTask = state
+  // Only an APPROVE list has an execute_tasks "active task" scope. A track
+  // checklist's in-progress item is rendered under `todos:` instead, so never
+  // surface it as active_task (that would double-render and confuse the model).
+  const activeTask = state && effectiveGate(state) === 'approve'
     ? state.tasks.find((t) => t.status === 'running') ?? null
     : null;
 

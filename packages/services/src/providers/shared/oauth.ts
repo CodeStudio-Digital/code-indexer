@@ -1,5 +1,9 @@
-import type { ResolvedCreds } from '../types.js';
+import type { ProviderDefinition, ResolvedCreds } from '../types.js';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
+// Leaf engine primitive (RFC 6749 refresh + rotation-tolerant fold). One-way
+// edge: services already depends on @mcp/provider-engine; token.ts imports only
+// @mcp/provider-sdk types + node, so no cycle.
+import { refreshTokenGrant, applyRefresh } from '@mcp/provider-engine/oauth/token.js';
 import {
   refreshIfExpired as refreshCopilotToken,
   copilotHeaders,
@@ -286,4 +290,77 @@ function normalizeKimiCodeThinkingMode(value: unknown): 'auto' | 'enabled' | 'di
   return value === 'enabled' || value === 'disabled' || value === 'auto'
     ? value
     : 'auto';
+}
+
+/**
+ * Pure-declarative RFC 6749 refresh for a HOOKLESS OAuth provider (a third-party
+ * authorization-code/device-code plugin that sets only `spec.auth.tokenUrl` +
+ * `clientId`). Refreshes near expiry using the engine primitives, persists the
+ * rotated token (rotation-tolerant via {@link applyRefresh}) + mirrors api_key,
+ * and returns Bearer creds. The 5 first-party connectors DON'T use this — they
+ * delegate to their hardened `resolve*Creds` (see {@link runOAuthRefresh}).
+ */
+async function resolveGenericOAuthCreds(
+  def: ProviderDefinition,
+  cfg: ProviderConfig,
+): Promise<ResolvedCreds> {
+  const store = getStore();
+  if (!store) throw new Error(`OAuth provider '${def.kind}' requires the ProviderStore`);
+  const auth = def.auth;
+  const tok = store.getOAuth(cfg.id);
+  let token = tok?.access_token ?? cfg.api_key ?? '';
+
+  if (auth?.tokenUrl && tok?.refresh_token) {
+    const thresholdMs = (auth.refreshThresholdSec ?? 60) * 1000;
+    const needsRefresh = !tok.expires_at || tok.expires_at - Date.now() <= thresholdMs;
+    if (needsRefresh) {
+      try {
+        const resp = await refreshTokenGrant(auth, {
+          refreshToken: tok.refresh_token,
+          scope: auth.scopes?.length ? auth.scopes.join(' ') : undefined,
+        });
+        const next = applyRefresh(cfg.id, tok, resp);
+        store.setOAuth(next);
+        store.upsertProvider({ ...cfg, api_key: next.access_token });
+        token = next.access_token;
+      } catch (e) {
+        console.warn(`[${def.kind}] generic OAuth refresh failed: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  return {
+    apiKey: token || undefined,
+    baseURL: cfg.base_url ?? def.defaultBaseURL,
+    extra: cfg.extra,
+  };
+}
+
+/**
+ * Data-driven OAuth credential resolution, dispatched by `spec.auth.hooks`. For
+ * the 5 first-party connectors this is EXACTLY the legacy per-kind dispatch
+ * (`hooks` === kind), delegating to the same hardened `resolve*Creds` so every
+ * lockout defense (kimi tombstone/race, copilot PAT inversion, claude-code
+ * dual-cred) is preserved verbatim. A hookless provider falls through to the
+ * pure-declarative RFC path. This is the seam the resolver uses behind
+ * `MCP_GENERIC_OAUTH`; the legacy switch stays the default until per-kind E2E.
+ */
+export function runOAuthRefresh(
+  def: ProviderDefinition,
+  cfg: ProviderConfig,
+): Promise<ResolvedCreds> {
+  switch (def.auth?.hooks) {
+    case 'copilot':
+      return resolveCopilotCreds(cfg);
+    case 'chatgpt':
+      return resolveChatGPTCreds(cfg);
+    case 'google-oauth':
+      return resolveGoogleOAuthCreds(cfg);
+    case 'claude-code':
+      return resolveClaudeCodeCreds(cfg);
+    case 'kimi-code':
+      return resolveKimiCodeCreds(cfg);
+    default:
+      return resolveGenericOAuthCreds(def, cfg);
+  }
 }

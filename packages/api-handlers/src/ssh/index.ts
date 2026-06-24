@@ -20,6 +20,8 @@ import { KnownHostsStore } from './known-hosts.js';
 import { adaptChannelToIPty } from './ssh-pty-adapter.js';
 import { TunnelManager } from './ssh-tunnels.js';
 import { SftpManager } from './ssh-sftp.js';
+import { generateSshKey } from './ssh-keys.js';
+import { readSshConfig } from './ssh-config-parser.js';
 
 let _manager: SshConnectionManager | null = null;
 /** Process-wide pooled SSH connection manager (lazy so the data dir resolves at first use). */
@@ -142,14 +144,23 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
     async sftpClose({ hostId }) {
       sharedSftpManager().close(hostId);
     },
-    sftpDownloadStream({ spec, remotePath, localPath }) {
-      return sharedSftpManager().download(spec, remotePath, localPath);
+    sftpDownloadStream({ spec, remotePath, localPath, transferId }) {
+      return sharedSftpManager().download(spec, remotePath, localPath, transferId);
     },
-    sftpUploadStream({ spec, localPath, remotePath }) {
-      return sharedSftpManager().upload(spec, localPath, remotePath);
+    sftpUploadStream({ spec, localPath, remotePath, transferId }) {
+      return sharedSftpManager().upload(spec, localPath, remotePath, transferId);
+    },
+    async sftpCancel({ transferId }) {
+      sharedSftpManager().cancel(transferId);
     },
     async sftpReadFile({ spec, remotePath }) {
       return sharedSftpManager().readFile(spec, remotePath);
+    },
+    async generateKey(input) {
+      return generateSshKey(input);
+    },
+    async importSshConfig() {
+      return readSshConfig();
     },
     async sftpWriteFile({ spec, remotePath, content }) {
       return sharedSftpManager().writeFile(spec, remotePath, content);

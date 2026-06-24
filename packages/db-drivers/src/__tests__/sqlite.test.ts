@@ -63,7 +63,8 @@ describe('@mcp/db-drivers sqlite', () => {
     const name = info.columns.find((c) => c.name === 'name')!;
     const email = info.columns.find((c) => c.name === 'email')!;
     expect(id.isPrimaryKey).toBe(true);
-    expect(id.isAutoIncrement).toBe(true);
+    // Plain `INTEGER PRIMARY KEY` is the rowid alias, NOT declared AUTOINCREMENT.
+    expect(id.isAutoIncrement).toBe(false);
     expect(name.nullable).toBe(false);
     expect(email.nullable).toBe(true);
     // The unique index on email is reported.

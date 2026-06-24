@@ -23,27 +23,38 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createApp } from '@apps/http-api/server.js';
 import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
+import { installLlmDispatcher } from '@apps/http-api/install-llm-dispatcher.js';
 import { mountIpcHandlers } from './src/handlers-mount.js';
 import { createElectronProfiler } from './src/perf-trace.js';
 import { setElectronProfiler } from '@apps/http-api/server/perf/electron-profiler.js';
 import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { PreviewWindowService } from './src/preview-window/service.js';
 import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
-import { startOptionalDevHttp } from './src/dev-http.js';
+import { startOptionalDevHttp, stopDevHttp } from './src/dev-http.js';
 import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
 import { mountSecretsIpc } from './src/secrets-ipc.js';
 import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
+import { registerWindowRegistryIpc } from './src/window-registry-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
 import { mountCloudIpc } from './src/cloud/cloud-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import { APP_DISPLAY_NAME, APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
+import { childRegistry } from './src/child-process-registry.js';
+import { killTree } from './src/tree-kill.js';
+import { sharedPtyManager } from '@mcp/api-handlers';
+import { getLocalProcessManager } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 import type { Hono } from 'hono';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Streaming-resilient global undici dispatcher for the main-process realm
+// (provider-refresh, model-pricing, quality-watchdog fetch here). Workers set
+// their own — see apps/http-api/install-llm-dispatcher.ts.
+installLlmDispatcher();
 
 // ─── Main-process safety net ─────────────────────────────────────
 // A stray throw/rejection from a BACKGROUND feature (preview/devtools CDP,
@@ -59,12 +70,40 @@ process.on('unhandledRejection', (reason) => {
   console.error('[electron-main] unhandledRejection (kept alive):', reason);
 });
 
+// ─── Crash / signal teardown of OS children ──────────────────────
+// The orderly cleanup lives in `will-quit` (graceful flush → force sweep).
+// But Ctrl-C in `electron:dev` (SIGINT), an external SIGTERM, or a hard
+// `process.exit` bypass `will-quit` entirely — without these, terminal
+// shells and their `npm run dev` grandchildren orphan. `killAllSync` is the
+// synchronous last resort (it's the only thing allowed on the 'exit' tick).
+const teardownOnSignal = (signal: NodeJS.Signals): void => {
+  console.error(`[electron-main] received ${signal} — killing tracked child processes`);
+  try {
+    childRegistry.killAllSync();
+  } catch {
+    /* best-effort */
+  }
+  app.quit();
+};
+process.on('SIGINT', () => teardownOnSignal('SIGINT'));
+process.on('SIGTERM', () => teardownOnSignal('SIGTERM'));
+process.on('exit', () => {
+  try {
+    childRegistry.killAllSync();
+  } catch {
+    /* best-effort */
+  }
+});
+
 const DEV_URL = process.env.MCP_ELECTRON_DEV_URL;
 // `.cjs` (not `.js`) because root package.json has "type": "module";
 // Electron's preload loader respects that and would otherwise try to
 // parse the file as ESM, silently failing to expose contextBridge.
 // See dev.ts buildSync block for the full explanation.
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
+
+/** Max time the graceful quit phase may take before we force-kill + exit. */
+const QUIT_GRACE_MS = 8000;
 
 // ─── Renderer/main V8 heap ceiling ───────────────────────────────
 //
@@ -179,7 +218,7 @@ async function bootstrap() {
   // Boot the backend in-process. The Hono app is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl
   // the same backend from outside the Electron window for debugging.
-  const { app: honoApp, deps } = createApp();
+  const { app: honoApp, deps, mcpPool } = createApp();
   await startOptionalDevHttp(honoApp);
 
   // Perf monitor: hand the backend the Electron process tree
@@ -216,6 +255,7 @@ async function bootstrap() {
   registerNativeIpc();
   registerWindowIpc();
   registerWindowControlsIpc();
+  registerWindowRegistryIpc();
   registerOAuthLoopbackIpc(honoApp);
   registerMcpProtocol(honoApp);
 
@@ -245,32 +285,69 @@ async function bootstrap() {
   app.on('before-quit', () => previewService.closeAll());
   app.on('before-quit', () => stopOAuthLoopback());
 
-  // Windows GUI quit emits NO SIGINT/SIGTERM, so the http-api signal
-  // handlers never fire in the desktop app — without this, pending dbWriter
-  // writes could be lost and worker pools die unflushed on quit. `will-quit`
-  // is deferred once (preventDefault → async cleanup → app.quit()).
+  // The shared PTY manager backs the api `terminal` + `runner` namespaces —
+  // i.e. the project's `npm run dev` dev servers. Register it as ONE tracked
+  // child: its kill snapshots the live pids, signals each PTY, then tree-kills
+  // so the dev servers (and their vite/esbuild grandchildren) can't orphan.
+  // The per-window host shells in terminal-ipc.ts register themselves.
+  childRegistry.register({
+    kind: 'pty',
+    label: 'runner-ptys',
+    kill: () => {
+      const pids = sharedPtyManager.listPids();
+      sharedPtyManager.killAll();
+      for (const pid of pids) killTree(pid);
+    },
+  });
+
+  // Windows GUI quit emits NO SIGINT/SIGTERM, so the http-api signal handlers
+  // never fire in the desktop app — `will-quit` is the one place we can flush
+  // and reap everything. Two phases, order critical:
+  //   1. GRACEFUL — flush in-flight worker turns, close the dbWriter, stop
+  //      LSP/ONNX/DB pools, shut external MCP subprocesses + company dev
+  //      servers, close the optional dev-http listener. Force-killing here
+  //      would lose the user's last turn (the very reason pools go first).
+  //   2. FORCE — tree-kill every remaining OS child (terminal PTYs, runner
+  //      dev servers + grandchildren) the graceful pass didn't already remove.
+  // A watchdog bounds phase 1 so a stuck dispose can't hang the quit; we then
+  // `app.exit(0)` (not `quit()`) to avoid re-entering this handler.
   let quitCleanupDone = false;
   app.on('will-quit', (e) => {
     if (quitCleanupDone) return;
     e.preventDefault();
+
+    const graceful = (async (): Promise<void> => {
+      const { disposeCoderWorkerPool } = await import('../http-api/sse/coderWorkerPoolSingleton.js');
+      const { disposeWorkerOrchestratorPool } = await import('../http-api/sse/workerPoolSingleton.js');
+      // Worker pools FIRST so each worker's `stop` handler parks its pause /
+      // flushes its in-flight turn before the shared dbWriter is closed.
+      await Promise.allSettled([disposeCoderWorkerPool(), disposeWorkerOrchestratorPool()]);
+      const { runShutdownTasks } = await import('../http-api/server/shutdown-tasks.js');
+      const { disposeIndexerProcessResources } = await import('@mcp/indexer/bootstrap/dispose.js');
+      await Promise.allSettled([
+        runShutdownTasks(), // dbWriter close, LSP stopAll, ONNX dispose, DB client pools
+        disposeIndexerProcessResources(),
+        mcpPool.shutdown(), // external MCP stdio subprocesses (else orphaned — was never called)
+        getLocalProcessManager().killAll(), // company dev servers
+      ]);
+      stopDevHttp();
+    })();
+
     void (async () => {
       try {
-        // Dispose worker pools FIRST so each worker's `stop` handler parks an
-        // interactive pause / flushes its in-flight turn before the shared
-        // dbWriter is closed below. Windows GUI quit emits no SIGINT/SIGTERM,
-        // so the http-api signal handler never runs — without this the worker
-        // dies unflushed and loses the last turn.
-        const { disposeCoderWorkerPool } = await import('../http-api/sse/coderWorkerPoolSingleton.js');
-        const { disposeWorkerOrchestratorPool } = await import('../http-api/sse/workerPoolSingleton.js');
-        await Promise.allSettled([disposeCoderWorkerPool(), disposeWorkerOrchestratorPool()]);
-        const { runShutdownTasks } = await import('../http-api/server/shutdown-tasks.js');
-        const { disposeIndexerProcessResources } = await import('@mcp/indexer/bootstrap/dispose.js');
-        await Promise.allSettled([runShutdownTasks(), disposeIndexerProcessResources()]);
-      } catch (err) {
-        console.error('[electron] quit cleanup failed:', err);
+        await Promise.race([
+          graceful.catch((err) => console.error('[electron] graceful quit cleanup failed:', err)),
+          new Promise((r) => setTimeout(r, QUIT_GRACE_MS).unref?.()),
+        ]);
       } finally {
+        // Phase 2 — reap every remaining OS child (PTYs + dev-server trees).
+        try {
+          await childRegistry.killAll({ graceMs: 1500 });
+        } catch (err) {
+          console.error('[electron] force-kill sweep failed:', err);
+        }
         quitCleanupDone = true;
-        app.quit();
+        app.exit(0);
       }
     })();
   });
@@ -549,6 +626,15 @@ function registerNativeIpc() {
   ipcMain.on('shell:openPath', (_event, targetPath: string) => {
     if (typeof targetPath === 'string' && targetPath.length > 0) {
       void shell.openPath(targetPath);
+    }
+  });
+
+  // Reveal a file in its containing folder WITH the file selected (Explorer/
+  // Finder "Reveal"). Used by the file-tree context menu for files; folders
+  // use shell:openPath (which opens the folder itself).
+  ipcMain.on('shell:showItemInFolder', (_event, targetPath: string) => {
+    if (typeof targetPath === 'string' && targetPath.length > 0) {
+      shell.showItemInFolder(targetPath);
     }
   });
 

@@ -4,8 +4,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ClientChannel } from 'ssh2';
+import { createHash } from 'node:crypto';
 import { KnownHostsStore } from '../known-hosts.js';
 import { adaptChannelToIPty } from '../ssh-pty-adapter.js';
+import { generateSshKey } from '../ssh-keys.js';
 
 describe('KnownHostsStore (TOFU)', () => {
   let dir: string;
@@ -94,5 +96,35 @@ describe('adaptChannelToIPty', () => {
     ipty.kill();
     expect(ch.close).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('generateSshKey', () => {
+  it('generates an ed25519 keypair in OpenSSH format with a correct SHA256 fingerprint', () => {
+    const k = generateSshKey({ type: 'ed25519', comment: 'me@cs' });
+    expect(k.keyType).toBe('ssh-ed25519');
+    expect(k.publicKey).toMatch(/^ssh-ed25519 AAAA[\w+/]+ me@cs$/);
+    expect(k.privateKey).toContain('BEGIN OPENSSH PRIVATE KEY');
+    // Fingerprint = base64(sha256(raw blob)), no padding.
+    const blob = Buffer.from(k.publicKey.split(/\s+/)[1], 'base64');
+    const expected = `SHA256:${createHash('sha256').update(blob).digest('base64').replace(/=+$/, '')}`;
+    expect(k.fingerprint).toBe(expected);
+  });
+
+  it('generates distinct keys each call', () => {
+    expect(generateSshKey({}).publicKey).not.toBe(generateSshKey({}).publicKey);
+  });
+
+  it('encrypts the private key when a passphrase is given', () => {
+    const k = generateSshKey({ type: 'ed25519', passphrase: 's3cret' });
+    // An encrypted OpenSSH key names its cipher (not "none") in the header bytes.
+    expect(k.privateKey).toContain('BEGIN OPENSSH PRIVATE KEY');
+    expect(k.privateKey).not.toBe(generateSshKey({ type: 'ed25519' }).privateKey);
+  });
+
+  it('honors an RSA request with a sane minimum bit length', () => {
+    const k = generateSshKey({ type: 'rsa', bits: 1024 }); // below floor → bumped to 4096
+    expect(k.keyType).toBe('ssh-rsa');
+    expect(k.publicKey.startsWith('ssh-rsa ')).toBe(true);
   });
 });

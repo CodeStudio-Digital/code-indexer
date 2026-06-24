@@ -526,7 +526,7 @@
   "plan.reject": "Reject",
   "plan.reviseRequested": "Revision requested",
   "rightRail.plans": "Plans",
-  "rightRail.tasks": "Tasks",
+  "rightRail.tasks": "Checklist history",
   "rightRail.diagram": "Diagram",
   "diagram.empty": "No diagram open. Ask the draw.io agent to create one — it appears here live.",
   "diagrams.search": "Search diagrams…",

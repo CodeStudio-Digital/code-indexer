@@ -55,7 +55,11 @@
     "sslKey": "Chave cliente (PEM)",
     "sslKept": "Deixe em branco para manter",
     "connectTimeout": "Timeout de conexão (s)",
-    "applicationName": "Nome da aplicação"
+    "applicationName": "Nome da aplicação",
+    "group": "Grupo",
+    "groupPlaceholder": "ex.: Produção",
+    "color": "Cor",
+    "colorNone": "Sem cor"
   },
   "toolbar": {
     "noConnection": "Nenhuma conexão selecionada",
@@ -70,21 +74,69 @@
     "empty": "Nenhuma linha retornada",
     "rows": "linhas",
     "affected": "afetadas",
-    "elapsed": "ms"
+    "elapsed": "ms",
+    "saveTitle": "Salvar consulta",
+    "saveName": "Nome da consulta",
+    "saved": "Consulta salva",
+    "saveFail": "Falha ao salvar consulta",
+    "result": "Resultado",
+    "statementsN": "{{n}} comandos",
+    "idle": "Pronto",
+    "explain": "Explain",
+    "plan": "Plano"
+  },
+  "aux": {
+    "history": "Histórico",
+    "saved": "Salvas",
+    "empty": "Nada aqui ainda",
+    "clear": "Limpar histórico",
+    "refresh": "Atualizar",
+    "delete": "Excluir",
+    "copy": "Copiar SQL",
+    "open": "Abrir em nova consulta",
+    "clearConfirm": "Limpar todo o histórico desta conexão?",
+    "panel": "Histórico & consultas salvas"
   },
   "tree": {
     "loading": "Carregando…"
+  },
+  "er": {
+    "building": "Gerando diagrama…",
+    "capped": "Mostrando as primeiras {{n}} tabelas"
+  },
+  "grid": {
+    "export": "Exportar",
+    "copyCsv": "Copiar como CSV",
+    "copy": "Copiar",
+    "copied": "Copiado para a área de transferência"
   },
   "node": {
     "viewData": "Ver dados",
     "editStructure": "Editar estrutura…",
     "newTable": "Nova tabela…",
+    "erDiagram": "Diagrama ER",
     "dropTable": "Excluir tabela",
     "newQuery": "Nova consulta",
     "refresh": "Atualizar",
     "copyName": "Copiar nome",
+    "copyDdl": "Copiar comando CREATE",
+    "genSelect": "Gerar SELECT",
+    "genInsert": "Gerar INSERT",
+    "truncate": "Truncar",
+    "truncateConfirm": "Apagar TODAS as linhas de {{name}}? Não dá pra desfazer.",
+    "truncated": "Tabela truncada",
+    "rename": "Renomear…",
+    "renamePrompt": "Novo nome da tabela",
+    "ddlCopied": "Comando CREATE copiado",
     "dropConfirmTitle": "Excluir tabela {{name}}?",
-    "dropConfirmBody": "Isso apaga permanentemente a tabela e todos os dados dela."
+    "dropConfirmBody": "Isso apaga permanentemente a tabela e todos os dados dela.",
+    "group": {
+      "indexes": "Índices",
+      "fks": "Chaves estrangeiras",
+      "triggers": "Triggers",
+      "functions": "Funções",
+      "sequences": "Sequences"
+    }
   },
   "structure": {
     "tableName": "Nome da tabela",
@@ -107,7 +159,22 @@
     "noChanges": "Nenhuma alteração para aplicar",
     "create": "Criar tabela",
     "confirmBody": "Isso altera o esquema do banco.",
-    "loading": "Carregando…"
+    "loading": "Carregando…",
+    "tabColumns": "Colunas",
+    "tabIndexes": "Índices",
+    "tabFks": "Chaves estrangeiras",
+    "idxName": "Nome",
+    "idxCols": "Colunas (separadas por vírgula)",
+    "unique": "Único",
+    "addIndex": "Adicionar índice",
+    "fkName": "Nome",
+    "fkCols": "Colunas",
+    "fkRefTable": "Tabela ref.",
+    "fkRefCols": "Colunas ref.",
+    "onDelete": "Ao excluir",
+    "onUpdate": "Ao atualizar",
+    "addFk": "Adicionar chave estrangeira",
+    "existingReadOnly": "Existente — exclua para remover (sem edição in-place)"
   },
   "tabs": {
     "query": "Consulta",

@@ -1,44 +1,53 @@
-import { randomUUID } from 'node:crypto';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { type TodoItem, generateTodoId, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 
 /**
- * todo_write / update_todo — lightweight, user-visible checklist distinct from submit_tasks.
+ * todo_write / update_todo — the `track` (lightweight checklist) gate of the
+ * unified `task_list` tool. Kept as registered back-compat aliases after the
+ * todos/tasks merge; `task_list({gate:'track', ...})` is the canonical name.
  *
- * Why have this AND submit_tasks?
- *   - submit_tasks PAUSES execution waiting for user approval of a structured
- *     task list with curated file/reference scopes. Heavy, gated.
- *   - todo_write does NOT pause. It's the agent's way of broadcasting "here's
- *     what I'm doing, here's where I am" during a long run. The dashboard
- *     renders the list in a sidebar and updates it in real time.
+ *   - track (these) does NOT pause. It broadcasts "here's what I'm doing" — the
+ *     dashboard renders it as a live sidebar checklist.
+ *   - approve (`submit_tasks` / `task_list({gate:'approve'})`) PAUSES for user
+ *     approval and is the only thing that arms `execute_tasks`.
  *
- * Each TodoItem carries a stable `id` (8-char hex slice of a UUID v4)
- * generated server-side. The id lets `update_todo` patch a single item
- * (status/content/activeForm) without the agent having to re-send the
- * full list — the previous "Pass the FULL list each call" contract was
- * the root cause of the agent forgetting old items mid-run.
+ * Both gates write the SAME store (`coder_tasks_state`, one row per session),
+ * so a checklist and an approve list can never coexist as parallel lists.
+ *
+ * Each TodoItem carries a stable `id` (8-char hex). The id lets `update_todo`
+ * patch a single item without re-sending the full list.
  */
 
-export interface TodoItem {
-  /** Stable identifier — referenced by `update_todo` for incremental patches. */
-  id: string;
-  /** Imperative form — what the agent is going to do ("Run tests"). */
-  content: string;
-  /** Present continuous — what shows up in the UI while it runs ("Running tests"). */
-  activeForm: string;
-  status: 'pending' | 'in_progress' | 'completed';
-}
-
-/**
- * Generate a short, stable id for a todo. 8 hex chars from a UUID v4 — short
- * enough for the agent to copy into update_todo arguments, long enough that
- * collision in a list of 50 items is astronomically unlikely.
- */
-export function generateTodoId(): string {
-  return randomUUID().replace(/-/g, '').slice(0, 8);
-}
+// Re-exported so existing importers (active-context, dashboard typing) keep
+// resolving `TodoItem`/`generateTodoId` from this module after the move.
+export { generateTodoId };
+export type { TodoItem };
 
 const ID_RE = /^[a-z0-9]{6,32}$/;
+
+/**
+ * Data-safety guard for the track gate. Refuse a checklist write while an
+ * APPROVE list is still active (has pending/running tasks): the single store
+ * holds one list per session, so a track write would otherwise clobber an
+ * in-flight approved task list. Returns an actionable redirect, or null to
+ * proceed. (Terminal approve lists — all done/skipped/failed/interrupted — are
+ * fine to replace with a checklist.)
+ */
+function guardTrackWriteOverApprove(ctx: ToolContext): string | null {
+  const state = ctx.getTasksState?.() ?? null;
+  if (!state || state.tasks.length === 0) return null;
+  if (effectiveGate(state) !== 'approve') return null;
+  const hasActive = state.tasks.some((t) => t.status === 'pending' || t.status === 'running');
+  if (!hasActive) return null;
+  return (
+    'Refused: an approved task list is still active, so a lightweight checklist would overwrite it. ' +
+    'Drive it with execute_tasks (if approved), or adjust/clear it with update_task / cancel_tasks / ' +
+    'delete_tasks — call expand_toolset("navigate") first if those are not yet available — before ' +
+    'starting a checklist. ' +
+    '(todos and tasks share one list per session — task_list gate:"track" vs gate:"approve".)'
+  );
+}
 
 function validateTodos(raw: unknown): { ok: true; todos: TodoItem[] } | { ok: false; error: string } {
   if (!Array.isArray(raw)) return { ok: false, error: 'todos must be an array' };
@@ -202,6 +211,8 @@ export const todoWrite: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    const guard = guardTrackWriteOverApprove(ctx);
+    if (guard) return err(guard);
     const validation = validateTodos(args.todos);
     if (!validation.ok) return err(validation.error);
     const todos = validation.todos;
@@ -342,6 +353,8 @@ export const updateTodo: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    const guard = guardTrackWriteOverApprove(ctx);
+    if (guard) return err(guard);
     // Two mutually exclusive arg shapes: legacy single (top-level id) or batch.
     const hasBatch = args.updates !== undefined;
     const hasSingle =

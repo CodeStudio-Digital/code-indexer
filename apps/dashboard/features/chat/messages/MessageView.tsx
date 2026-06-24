@@ -27,6 +27,34 @@ import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 import { deriveTaskCardState } from './task-card-state.js';
 
+/**
+ * `task_list` is the unified tool (merge of todo_write + submit_tasks). An
+ * APPROVE-gate call carries structured items (title/description/files) and
+ * renders as the TaskListReview approval card; a TRACK-gate call is a checklist
+ * and renders as TodoWriteBlock. The legacy names (submit_tasks/todo_write/
+ * update_todo) are matched by their own names.
+ */
+export function taskListIsApprove(input: unknown): boolean {
+  const o = (input ?? {}) as Record<string, unknown>;
+  if (o.gate === 'approve') return true;
+  if (o.gate === 'track' || Array.isArray(o.updates) || Array.isArray(o.todos)) return false;
+  const items = Array.isArray(o.items) ? o.items : Array.isArray(o.tasks) ? o.tasks : [];
+  // Keep this field set identical to inferGate's APPROVE_FIELDS (tasks.ts) so
+  // the render decision can never disagree with the backend handler dispatch.
+  const APPROVE_FIELDS = [
+    'title', 'description', 'files', 'kind', 'depends_on',
+    'references', 'suggested_mode', 'estimated_complexity', 'parallel_group',
+  ];
+  return items.some((it) => {
+    if (!it || typeof it !== 'object') return false;
+    const r = it as Record<string, unknown>;
+    return APPROVE_FIELDS.some((f) => {
+      const v = r[f];
+      return Array.isArray(v) ? v.length > 0 : v !== undefined && v !== '';
+    });
+  });
+}
+
 interface MessageViewProps {
   message: PersistedMessage;
   /** DB id of the persisted message row — used to fork from a user turn. */
@@ -542,19 +570,21 @@ export function renderAssistantBlock(
     );
   }
 
-  if (b.name === 'submit_tasks') {
-    // Always render the rich TaskListReview for submit_tasks tool calls
-    // (pending OR resolved). When the run already completed and we have a
-    // tool_result, the resolved state hides the action buttons but keeps the
-    // readable list. This avoids dumping a giant raw JSON tool_use block on
+  if (b.name === 'submit_tasks' || (b.name === 'task_list' && taskListIsApprove(b.input))) {
+    // Always render the rich TaskListReview for submit_tasks / task_list(approve)
+    // tool calls (pending OR resolved). When the run already completed and we
+    // have a tool_result, the resolved state hides the action buttons but keeps
+    // the readable list. This avoids dumping a giant raw JSON tool_use block on
     // the user when they reopen an old session.
     //
-    // The session keeps ONE coder_tasks_state row (latest submit_tasks wins),
+    // The session keeps ONE coder_tasks_state row (latest approve list wins),
     // so only the ACTIVE card (matching activeTasksToolUseId) overlays the live
     // `tasksState` for runtime status; superseded cards render their own frozen
     // tool_use.input snapshot. See deriveTaskCardState for the resolved logic.
-    const inp = (b.input ?? {}) as { summary?: string; tasks?: Array<Record<string, unknown>> };
-    const frozenTasks: StreamTask[] = (Array.isArray(inp.tasks) ? inp.tasks : []).map((t, ti) => ({
+    // task_list(approve) carries items under `items`; submit_tasks under `tasks`.
+    const inp = (b.input ?? {}) as { summary?: string; tasks?: Array<Record<string, unknown>>; items?: Array<Record<string, unknown>> };
+    const rawTaskItems = Array.isArray(inp.items) ? inp.items : Array.isArray(inp.tasks) ? inp.tasks : [];
+    const frozenTasks: StreamTask[] = rawTaskItems.map((t, ti) => ({
       id: String(t.id ?? `alias_${ti + 1}`),
       title: String(t.title ?? ''),
       description: String(t.description ?? ''),
@@ -728,7 +758,11 @@ export function renderAssistantBlock(
   // todo_write / update_todo: render the checklist instead of raw JSON. Both
   // tools emit the same list text in the result; parse that. Collapsed by
   // default like the other rich history blocks.
-  if (b.name === 'todo_write' || b.name === 'update_todo') {
+  if (
+    b.name === 'todo_write' ||
+    b.name === 'update_todo' ||
+    (b.name === 'task_list' && !taskListIsApprove(b.input))
+  ) {
     const tc: ToolCallEvent = {
       id: b.id ?? '',
       name: b.name ?? '',

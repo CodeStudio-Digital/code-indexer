@@ -48,7 +48,10 @@
 // questionnaire over genuine forks before the plan, the depth block gates it
 // per simple/normal/complex, and the plan document gains a **Decisions**
 // section. Static prefix mudou → invalida fingerprints stale.
-export const SYSTEM_PROMPT_VERSION = '20260622.1';
+// 2026-06-24.1 bump — todos/tasks merge: ONE `task_list` tool (gate track|approve)
+// replaces the todo_write+submit_tasks selection fork; Interactive-tools section
+// and plan.txt rewritten around the gate. Static prefix mudou → invalida stale.
+export const SYSTEM_PROMPT_VERSION = '20260624.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

@@ -52,6 +52,7 @@ import {
   useWorkspaceStore,
 } from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
+import { pushRecentProject } from '../../state/recent-projects.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import { useFsEvents, type FsEventDTO } from '../../hooks/useFsEvents.js';
 import { useGitMeta } from '../../hooks/useGitMeta.js';
@@ -256,6 +257,15 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     setProject(projectId);
   }, [projectId, setProject]);
 
+  // Title-bar switcher feeds: report this window's active project to the main
+  // process (so every window's switcher lists it under "Open Projects") and
+  // record it in the recent-projects MRU. Electron call is optional-chained —
+  // a plain-browser session just keeps the MRU.
+  useEffect(() => {
+    window.electronAPI?.windowRegistry?.setActiveProject?.(projectId);
+    pushRecentProject(projectId);
+  }, [projectId]);
+
   // Persiste as abas deste projeto a cada mudança ENQUANTO ele está ativo.
   // savePersistedTabs se auto-filtra por projectId, então uma aba estranha
   // jamais é escrita sob esta chave.
@@ -350,6 +360,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
                 tab={tab}
                 projectId={projectId}
                 projectName={projectName}
+                projectRoot={project?.root_path ?? null}
                 initialSessionId={initialSessionId}
                 onOpenFile={handleOpen}
                 activeFilePath={activeFilePath}

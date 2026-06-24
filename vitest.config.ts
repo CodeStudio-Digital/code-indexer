@@ -27,6 +27,8 @@ export default defineConfig({
       ...pkgAliases('@mcp/api-bus', 'api-bus'),
       ...pkgAliases('@mcp/api-handlers', 'api-handlers'),
       ...pkgAliases('@mcp/vault-crypto', 'vault-crypto'),
+      ...pkgAliases('@mcp/db-drivers', 'db-drivers'),
+      ...pkgAliases('@mcp/secret-box', 'secret-box'),
       ...legacyServicesFallback,
       ...pkgAliases('@mcp/services', 'services'),
       ...pkgAliases('@mcp/provider-sdk', 'provider-sdk'),

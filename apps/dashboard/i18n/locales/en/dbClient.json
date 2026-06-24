@@ -55,7 +55,11 @@
     "sslKey": "Client key (PEM)",
     "sslKept": "Leave blank to keep",
     "connectTimeout": "Connect timeout (s)",
-    "applicationName": "Application name"
+    "applicationName": "Application name",
+    "group": "Group",
+    "groupPlaceholder": "e.g. Production",
+    "color": "Color",
+    "colorNone": "No color"
   },
   "toolbar": {
     "noConnection": "No connection selected",
@@ -70,21 +74,69 @@
     "empty": "No rows returned",
     "rows": "rows",
     "affected": "affected",
-    "elapsed": "ms"
+    "elapsed": "ms",
+    "saveTitle": "Save query",
+    "saveName": "Query name",
+    "saved": "Query saved",
+    "saveFail": "Failed to save query",
+    "result": "Result",
+    "statementsN": "{{n}} statements",
+    "idle": "Ready",
+    "explain": "Explain",
+    "plan": "Plan"
+  },
+  "aux": {
+    "history": "History",
+    "saved": "Saved",
+    "empty": "Nothing here yet",
+    "clear": "Clear history",
+    "refresh": "Refresh",
+    "delete": "Delete",
+    "copy": "Copy SQL",
+    "open": "Open in a new query",
+    "clearConfirm": "Clear all history for this connection?",
+    "panel": "History & saved queries"
   },
   "tree": {
     "loading": "Loading…"
+  },
+  "er": {
+    "building": "Building diagram…",
+    "capped": "Showing the first {{n}} tables"
+  },
+  "grid": {
+    "export": "Export",
+    "copyCsv": "Copy as CSV",
+    "copy": "Copy",
+    "copied": "Copied to clipboard"
   },
   "node": {
     "viewData": "View data",
     "editStructure": "Edit structure…",
     "newTable": "New table…",
+    "erDiagram": "ER diagram",
     "dropTable": "Drop table",
     "newQuery": "New query",
     "refresh": "Refresh",
     "copyName": "Copy name",
+    "copyDdl": "Copy CREATE statement",
+    "genSelect": "Generate SELECT",
+    "genInsert": "Generate INSERT",
+    "truncate": "Truncate",
+    "truncateConfirm": "Delete ALL rows from {{name}}? This cannot be undone.",
+    "truncated": "Table truncated",
+    "rename": "Rename…",
+    "renamePrompt": "New table name",
+    "ddlCopied": "CREATE statement copied",
     "dropConfirmTitle": "Drop table {{name}}?",
-    "dropConfirmBody": "This permanently deletes the table and all its data."
+    "dropConfirmBody": "This permanently deletes the table and all its data.",
+    "group": {
+      "indexes": "Indexes",
+      "fks": "Foreign keys",
+      "triggers": "Triggers",
+      "functions": "Functions",
+      "sequences": "Sequences"
+    }
   },
   "structure": {
     "tableName": "Table name",
@@ -107,7 +159,22 @@
     "noChanges": "No changes to apply",
     "create": "Create table",
     "confirmBody": "This changes the database schema.",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "tabColumns": "Columns",
+    "tabIndexes": "Indexes",
+    "tabFks": "Foreign keys",
+    "idxName": "Name",
+    "idxCols": "Columns (comma-separated)",
+    "unique": "Unique",
+    "addIndex": "Add index",
+    "fkName": "Name",
+    "fkCols": "Columns",
+    "fkRefTable": "Ref. table",
+    "fkRefCols": "Ref. columns",
+    "onDelete": "On delete",
+    "onUpdate": "On update",
+    "addFk": "Add foreign key",
+    "existingReadOnly": "Existing — drop to remove (no in-place edit)"
   },
   "tabs": {
     "query": "Query",

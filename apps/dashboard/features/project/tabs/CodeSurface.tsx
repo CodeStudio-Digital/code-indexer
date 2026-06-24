@@ -17,11 +17,13 @@ export interface CodeSurfaceProps {
   visible: boolean;
   projectId: number;
   projectName: string;
+  /** Native `root_path` — forwarded to the file tree's "Copy reference" menu. */
+  projectRoot?: string | null;
   activeFilePath: string | null;
   onOpenFile: (path: string) => void;
 }
 
-export function CodeSurface({ mode, visible, projectId, projectName, activeFilePath, onOpenFile }: CodeSurfaceProps) {
+export function CodeSurface({ mode, visible, projectId, projectName, projectRoot, activeFilePath, onOpenFile }: CodeSurfaceProps) {
   // autoSaveId único (não por-modo) de propósito: a coluna do editor é a mesma
   // entre Files e Git, então a largura do painel esquerdo persiste através da troca
   // — comportamento mais previsível que dois tamanhos concorrentes.
@@ -32,7 +34,7 @@ export function CodeSurface({ mode, visible, projectId, projectName, activeFileP
           {mode === 'git' ? (
             <GitWindow projectId={projectId} active={visible && mode === 'git'} />
           ) : (
-            <FileTreeView projectId={projectId} active={visible && mode === 'files'} activePath={activeFilePath} onOpen={onOpenFile} />
+            <FileTreeView projectId={projectId} active={visible && mode === 'files'} activePath={activeFilePath} projectRoot={projectRoot} onOpen={onOpenFile} />
           )}
         </div>
       </Panel>

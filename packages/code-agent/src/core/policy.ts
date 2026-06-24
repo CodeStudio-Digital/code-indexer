@@ -96,6 +96,10 @@ const BUILTIN_CLASSIFICATION: Record<
   // ─── Interactive (pause for human) ────────────────────────────
   ask_user:         { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_plan:      { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
+  // task_list: interactive because gate:'approve' pauses for approval (must opt
+  // out of the NORMAL tool timeout). gate:'track' returns immediately, for which
+  // the interactive flag is a harmless no-op.
+  task_list:        { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_tasks:     { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_spec:      { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   list_tasks:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },

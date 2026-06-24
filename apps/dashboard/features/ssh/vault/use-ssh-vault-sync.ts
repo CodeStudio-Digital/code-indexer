@@ -9,8 +9,11 @@
  * State (workspaceId, doc maps, versions, cursor, ciphertext cache) persists per
  * project; the VDK lives in memory only (cleared on lock/unmount).
  *
- * v1 scope: hosts with INLINE secrets. Identity-referenced secrets and the jump
- * chain don't travel yet (re-link on the other device) — documented follow-up.
+ * Personal feed syncs hosts AND identities (private keys travel sealed) AND the
+ * jump chain — cross-device references are carried as stable clientDocIds and
+ * remapped to local numeric ids on apply (see hostRefs/resolveRefs). The TEAM
+ * feed stays hosts-only with inline secrets (P2 scope); team-shared identities
+ * are a later, entitlement-gated step.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cloudCall } from '../../../lib/cloud/cloud-client.js';
@@ -34,13 +37,15 @@ import {
   generateSigningKeyPair,
   signGrant,
   verifyGrantSig,
+  generateRecoveryKey,
+  deriveRecoveryKek,
   type KdfParams,
   type RecordEnvelope,
   type RecordAad,
 } from '@mcp/vault-crypto';
 import * as api from '../api.js';
-import type { SshHost } from '../types.js';
-import { planVaultPush, planVaultApply, type VaultCacheEntry, type VaultPushRecord } from './vault-sync-core.js';
+import type { SshHost, SshIdentity } from '../types.js';
+import { planVaultPush, planVaultApply, hostRefs, resolveRefs, type VaultCacheEntry, type VaultPushRecord } from './vault-sync-core.js';
 
 const META_DOC = 'vault:meta';
 /** OWASP-2024 floor; the local mint uses 650k. Reject anything weaker the server might serve. */
@@ -69,6 +74,18 @@ interface VaultMetaBody {
   wrappedIdentityPriv?: string;
   sigPub?: string;
   wrappedSigPriv?: string;
+  /**
+   * Optional escrow-free recovery slot: a SECOND wrap of the same VDK (+ identity
+   * privs) under a recovery-key-derived KEK. Lets a user who lost their passphrase
+   * unlock + reset it. Still zero-knowledge — the server only sees the extra blob.
+   */
+  recovery?: {
+    kdf: KdfParams;
+    wrappedVdk: string;
+    wrappedIdentityPriv?: string;
+    wrappedSigPriv?: string;
+    createdAtMs: number;
+  };
 }
 
 /** The unlocked vault held in memory (never persisted). */
@@ -95,11 +112,27 @@ interface VaultHostRecord {
   group_name: string | null;
   tags: string[];
   agent_forwarding: boolean;
+  /** Portable references (personal feed only): the referenced identity / jump host as clientDocIds. */
+  identity_ref?: string | null;
+  jump_host_ref?: string | null;
+}
+
+/** Plaintext identity record carried in the vault (the private key travels, sealed). */
+interface VaultIdentityRecord {
+  name: string;
+  username: string | null;
+  auth_kind: SshIdentity['auth_kind'];
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+  public_key: string | null;
+  key_type: string | null;
 }
 
 interface SyncState {
   workspaceId: string;
   hostMap: Record<string, string>; // local host id → clientDocId
+  identityMap: Record<string, string>; // local identity id → clientDocId
   versions: Record<string, number>; // clientDocId → server version
   cursor: number;
   bodyCache: Record<string, VaultCacheEntry>; // clientDocId → {hash, ciphertext}
@@ -135,6 +168,7 @@ function load(projectId: number): SyncState {
       return {
         workspaceId: p.workspaceId ?? newId(),
         hostMap: p.hostMap ?? {},
+        identityMap: p.identityMap ?? {},
         versions: p.versions ?? {},
         cursor: p.cursor ?? 0,
         bodyCache: p.bodyCache ?? {},
@@ -151,7 +185,7 @@ function load(projectId: number): SyncState {
   } catch {
     /* fresh workspace */
   }
-  return { workspaceId: newId(), hostMap: {}, versions: {}, cursor: 0, bodyCache: {}, orgShareMap: {}, teamHostMap: {}, teamVersions: {}, teamCursor: 0, memberEncPins: {}, orgGranterSigPins: {}, appliedSeq: {}, teamAppliedSeq: {} };
+  return { workspaceId: newId(), hostMap: {}, identityMap: {}, versions: {}, cursor: 0, bodyCache: {}, orgShareMap: {}, teamHostMap: {}, teamVersions: {}, teamCursor: 0, memberEncPins: {}, orgGranterSigPins: {}, appliedSeq: {}, teamAppliedSeq: {} };
 }
 
 function save(projectId: number, s: SyncState): void {
@@ -162,7 +196,10 @@ function save(projectId: number, s: SyncState): void {
   }
 }
 
-async function hostToRecord(h: SshHost): Promise<VaultHostRecord> {
+async function hostToRecord(
+  h: SshHost,
+  refs?: { identityMap: Record<string, string>; hostMap: Record<string, string> },
+): Promise<VaultHostRecord> {
   return {
     label: h.label,
     hostname: h.hostname,
@@ -181,11 +218,18 @@ async function hostToRecord(h: SshHost): Promise<VaultHostRecord> {
       }
     })(),
     agent_forwarding: !!h.agent_forwarding,
+    // Personal feed carries portable refs; the team feed (no refs) omits them.
+    ...(refs ? hostRefs(h, refs.identityMap, refs.hostMap) : {}),
   };
 }
 
-/** Vault record → createHost/patchHost body (re-seal secrets with the OS keychain). */
-async function recordToHostBody(r: VaultHostRecord): Promise<Record<string, unknown>> {
+/**
+ * Vault record → createHost/patchHost body (re-seal secrets with the OS keychain).
+ * `ids` (personal feed) sets the resolved local identity_id; jump_host_id is set
+ * separately AFTER all hosts exist (a deferred sweep). The team feed passes no
+ * `ids`, so it never writes identity/jump links (P2 scope).
+ */
+async function recordToHostBody(r: VaultHostRecord, ids?: { identity_id: number | null }): Promise<Record<string, unknown>> {
   return {
     label: r.label,
     hostname: r.hostname,
@@ -198,6 +242,34 @@ async function recordToHostBody(r: VaultHostRecord): Promise<Record<string, unkn
     enc_password: r.password ? await api.encryptSecret(r.password) : null,
     enc_private_key: r.privateKey ? await api.encryptSecret(r.privateKey) : null,
     enc_passphrase: r.passphrase ? await api.encryptSecret(r.passphrase) : null,
+    ...(ids ? { identity_id: ids.identity_id } : {}),
+  };
+}
+
+async function identityToRecord(i: SshIdentity): Promise<VaultIdentityRecord> {
+  return {
+    name: i.name,
+    username: i.username,
+    auth_kind: i.auth_kind,
+    password: i.enc_password ? await api.decryptSecret(i.enc_password) : undefined,
+    privateKey: i.enc_private_key ? await api.decryptSecret(i.enc_private_key) : undefined,
+    passphrase: i.enc_passphrase ? await api.decryptSecret(i.enc_passphrase) : undefined,
+    public_key: i.public_key,
+    key_type: i.key_type,
+  };
+}
+
+/** Vault identity record → createIdentity/patchIdentity body (re-seal secrets). */
+async function recordToIdentityBody(r: VaultIdentityRecord): Promise<Record<string, unknown>> {
+  return {
+    name: r.name,
+    username: r.username,
+    auth_kind: r.auth_kind,
+    public_key: r.public_key,
+    key_type: r.key_type,
+    enc_password: r.password ? await api.encryptSecret(r.password) : null,
+    enc_private_key: r.privateKey ? await api.encryptSecret(r.privateKey) : null,
+    enc_passphrase: r.passphrase ? await api.encryptSecret(r.passphrase) : null,
   };
 }
 
@@ -207,6 +279,7 @@ export function useSshVaultSync(projectId: number) {
   const [error, setError] = useState<string | null>(null);
   const [last, setLast] = useState<VaultSyncSummary | null>(null);
   const [unlocked, setUnlocked] = useState(false);
+  const [recoveryEnabled, setRecoveryEnabled] = useState(false);
   const vdkRef = useRef<UnlockedVault | null>(null);
 
   useEffect(() => {
@@ -214,6 +287,7 @@ export function useSshVaultSync(projectId: number) {
     setError(null);
     setLast(null);
     setUnlocked(false);
+    setRecoveryEnabled(false);
     vdkRef.current = null;
   }, [projectId]);
 
@@ -322,6 +396,121 @@ export function useSshVaultSync(projectId: number) {
       await cloudCall('account.vaultKeyPut', { publicSpki: identityPub }).catch(() => undefined);
 
       vdkRef.current = { key: vdk, vdkId, identityPub, identityPrivPkcs8, sigPub, sigPrivPkcs8 };
+      setRecoveryEnabled(!!meta.recovery);
+      setUnlocked(true);
+    } catch (e) {
+      setError(e instanceof CloudError ? e.message : e instanceof Error ? e.message : String(e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  /**
+   * Enroll an escrow-free recovery key (requires an unlocked vault). Generates a
+   * 256-bit key, wraps the CURRENT VDK + identity privs under it, and stores the
+   * extra slot in vault_meta. Returns the key to show ONCE — never stored.
+   */
+  const enrollRecoveryKey = useCallback(async (): Promise<string> => {
+    const v = vdkRef.current;
+    if (!v) throw new Error('locked');
+    setBusy(true);
+    setError(null);
+    try {
+      const pull = await cloudCall('sync.pull', { kinds: ['vault_meta'], sinceVersion: 0 });
+      const metaDoc = pull.documents.find((d) => d.kind === 'vault_meta' && d.clientDocId === META_DOC && !d.deleted);
+      if (!metaDoc) throw new Error('no_vault');
+      const meta = metaDoc.body as VaultMetaBody;
+      const recoveryKey = generateRecoveryKey();
+      const rKdf = defaultKdfParams();
+      const rKek = await deriveRecoveryKek(recoveryKey, rKdf);
+      const recovery: NonNullable<VaultMetaBody['recovery']> = {
+        kdf: rKdf,
+        wrappedVdk: await wrapVdk(rKek, v.key),
+        wrappedIdentityPriv: await wrapIdentityPrivate(rKek, v.identityPrivPkcs8),
+        wrappedSigPriv: await wrapIdentityPrivate(rKek, v.sigPrivPkcs8),
+        createdAtMs: Date.now(),
+      };
+      await cloudCall('sync.push', {
+        documents: [{ kind: 'vault_meta', clientDocId: META_DOC, baseVersion: metaDoc.version, updatedAtMs: Date.now(), body: { ...meta, recovery } }],
+      });
+      setRecoveryEnabled(true);
+      return recoveryKey;
+    } catch (e) {
+      setError(e instanceof CloudError ? e.message : e instanceof Error ? e.message : String(e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  /**
+   * Unlock with the recovery key when the passphrase is lost, then RE-KEY the
+   * vault to a fresh passphrase. The VDK is unchanged, so the whole encrypted
+   * corpus stays valid — only the passphrase wrap + verifier are replaced.
+   */
+  const unlockWithRecovery = useCallback(async (recoveryKey: string, newPassphrase: string): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const pull = await cloudCall('sync.pull', { kinds: ['vault_meta'], sinceVersion: 0 });
+      const metaDoc = pull.documents.find((d) => d.kind === 'vault_meta' && d.clientDocId === META_DOC && !d.deleted);
+      if (!metaDoc) throw new Error('no_vault');
+      const meta = metaDoc.body as VaultMetaBody;
+      if (!meta.recovery) throw new Error('no_recovery');
+      validateKdf(meta.recovery.kdf);
+      const rKek = await deriveRecoveryKek(recoveryKey, meta.recovery.kdf);
+      let vdk: CryptoKey;
+      try {
+        vdk = await unwrapVdk(rKek, meta.recovery.wrappedVdk);
+      } catch {
+        throw new Error('wrong_recovery_key');
+      }
+      if (!(await checkVerifier(vdk, meta.verifier))) throw new Error('wrong_recovery_key');
+
+      // Recover identity/sig privs from the recovery slot (wrapped under the SAME
+      // recovery KEK at enroll time); regenerate only if a legacy slot lacked them.
+      let identityPub = meta.identityPub;
+      let identityPrivPkcs8: string;
+      if (meta.recovery.wrappedIdentityPriv && identityPub) {
+        identityPrivPkcs8 = await unwrapIdentityPrivate(rKek, meta.recovery.wrappedIdentityPriv);
+      } else {
+        const id = await generateIdentityKeyPair();
+        identityPub = id.publicSpki;
+        identityPrivPkcs8 = id.privatePkcs8;
+      }
+      let sigPub = meta.sigPub;
+      let sigPrivPkcs8: string;
+      if (meta.recovery.wrappedSigPriv && sigPub) {
+        sigPrivPkcs8 = await unwrapIdentityPrivate(rKek, meta.recovery.wrappedSigPriv);
+      } else {
+        const sk = await generateSigningKeyPair();
+        sigPub = sk.publicSpki;
+        sigPrivPkcs8 = sk.privatePkcs8;
+      }
+
+      // Re-key to the new passphrase (VDK unchanged → corpus stays valid). The
+      // recovery slot is kept (it wraps the same VDK independent of passphrase).
+      const newKdf = defaultKdfParams();
+      const newKek = await deriveKek(newPassphrase, newKdf);
+      const nextMeta: VaultMetaBody = {
+        ...meta,
+        kdf: newKdf,
+        wrappedVdk: await wrapVdk(newKek, vdk),
+        vdkId: meta.vdkId,
+        verifier: await makeVerifier(vdk),
+        identityPub,
+        wrappedIdentityPriv: await wrapIdentityPrivate(newKek, identityPrivPkcs8),
+        sigPub,
+        wrappedSigPriv: await wrapIdentityPrivate(newKek, sigPrivPkcs8),
+      };
+      await cloudCall('sync.push', {
+        documents: [{ kind: 'vault_meta', clientDocId: META_DOC, baseVersion: metaDoc.version, updatedAtMs: Date.now(), body: nextMeta }],
+      });
+      await cloudCall('account.vaultKeyPut', { publicSpki: identityPub }).catch(() => undefined);
+
+      vdkRef.current = { key: vdk, vdkId: meta.vdkId, identityPub, identityPrivPkcs8, sigPub, sigPrivPkcs8 };
+      setRecoveryEnabled(true);
       setUnlocked(true);
     } catch (e) {
       setError(e instanceof CloudError ? e.message : e instanceof Error ? e.message : String(e));
@@ -342,23 +531,38 @@ export function useSshVaultSync(projectId: number) {
     try {
       const cur = load(projectId);
       const hostMap = { ...cur.hostMap };
+      const identityMap = { ...cur.identityMap };
       const versions = { ...cur.versions };
       const appliedSeq = { ...cur.appliedSeq };
       const now = Date.now();
       const enc = (v: unknown, aad: RecordAad) => encryptJson(vdk.key, v, aad);
-      const dec = (e: RecordEnvelope, aad: RecordAad) => decryptJson<VaultHostRecord>(vdk.key, e, aad);
+      const dec = (e: RecordEnvelope, aad: RecordAad) => decryptJson<VaultHostRecord & VaultIdentityRecord>(vdk.key, e, aad);
+      const localFor = (map: Record<string, string>, cid: string): number | undefined => {
+        const hit = Object.entries(map).find(([, v]) => v === cid);
+        return hit ? Number(hit[0]) : undefined;
+      };
 
-      // 1) PUSH local hosts (encrypted).
+      // 1) PUSH local identities + hosts (encrypted). Mint clientDocIds FIRST so a
+      //    host's identity/jump refs resolve regardless of iteration order.
       const hosts = await api.listHosts(projectId);
-      const clientDocIdFor = (id: number): string => {
+      const identities = await api.listIdentities(projectId);
+      const hostDocFor = (id: number): string => {
         const k = String(id);
         if (!hostMap[k]) hostMap[k] = `${cur.workspaceId}:${newId()}`;
         return hostMap[k];
       };
+      const idDocFor = (id: number): string => {
+        const k = String(id);
+        if (!identityMap[k]) identityMap[k] = `${cur.workspaceId}:${newId()}`;
+        return identityMap[k];
+      };
+      for (const i of identities) idDocFor(i.id);
+      for (const h of hosts) hostDocFor(h.id);
+
       const pushRecords: VaultPushRecord[] = [];
-      for (const h of hosts) {
-        pushRecords.push({ clientDocId: clientDocIdFor(h.id), kind: 'ssh_host', record: await hostToRecord(h) });
-      }
+      for (const i of identities) pushRecords.push({ clientDocId: idDocFor(i.id), kind: 'ssh_identity', record: await identityToRecord(i) });
+      for (const h of hosts) pushRecords.push({ clientDocId: hostDocFor(h.id), kind: 'ssh_host', record: await hostToRecord(h, { identityMap, hostMap }) });
+
       const plan = await planVaultPush(pushRecords, cur.workspaceId, vdk.vdkId, enc, (cid) => versions[cid] ?? 0, (cid) => cur.bodyCache[cid], now);
       let conflicts = 0;
       if (plan.items.length > 0) {
@@ -369,35 +573,68 @@ export function useSshVaultSync(projectId: number) {
         }
       }
 
-      // 2) PULL this workspace's host docs and apply (decrypt → re-seal → upsert).
-      const pull = await cloudCall('sync.pull', { kinds: ['ssh_host'], sinceVersion: cur.cursor });
-      const actions = await planVaultApply<VaultHostRecord>(pull.documents, cur.workspaceId, cur.workspaceId, vdk.vdkId, dec, (cid) => versions[cid] ?? 0, (cid) => appliedSeq[cid] ?? 0);
-      const localIdFor = (cid: string): number | undefined => {
-        const hit = Object.entries(hostMap).find(([, v]) => v === cid);
-        return hit ? Number(hit[0]) : undefined;
-      };
-      for (const a of actions) {
-        const localId = localIdFor(a.clientDocId);
+      // 2) PULL identities + hosts and apply. Two-pass: identities first (so a host
+      //    can resolve its identity_id), hosts next, then a jump-host sweep (so refs
+      //    to hosts created in THIS pull also resolve).
+      const pull = await cloudCall('sync.pull', { kinds: ['ssh_identity', 'ssh_host'], sinceVersion: cur.cursor });
+      const actions = await planVaultApply<VaultHostRecord & VaultIdentityRecord>(pull.documents, cur.workspaceId, cur.workspaceId, vdk.vdkId, dec, (cid) => versions[cid] ?? 0, (cid) => appliedSeq[cid] ?? 0);
+
+      // Pass A — identities.
+      for (const a of actions.filter((x) => x.kind === 'ssh_identity')) {
+        const localId = localFor(identityMap, a.clientDocId);
+        if (a.deleted) {
+          if (localId != null) {
+            await api.deleteIdentity(projectId, localId).catch(() => undefined);
+            delete identityMap[String(localId)];
+          }
+        } else if (a.record) {
+          const body = await recordToIdentityBody(a.record);
+          if (localId != null) await api.patchIdentity(projectId, localId, body);
+          else {
+            const created = await api.createIdentity(projectId, body);
+            identityMap[String(created.id)] = a.clientDocId;
+          }
+          appliedSeq[a.clientDocId] = a.seq;
+        }
+        versions[a.clientDocId] = a.version;
+      }
+
+      // Pass B — hosts (identity_id resolved now; jump_host_id deferred to Pass C).
+      const idDocToLocal = (cid: string) => localFor(identityMap, cid);
+      const jumpSweep: { localId: number; ref: string | null }[] = [];
+      for (const a of actions.filter((x) => x.kind === 'ssh_host')) {
+        let localId = localFor(hostMap, a.clientDocId);
         if (a.deleted) {
           if (localId != null) {
             await api.deleteHost(projectId, localId);
             delete hostMap[String(localId)];
           }
         } else if (a.record) {
-          const body = await recordToHostBody(a.record);
+          const ids = resolveRefs(a.record, idDocToLocal, () => undefined); // jump in Pass C
+          const body = await recordToHostBody(a.record, { identity_id: ids.identity_id });
           if (localId != null) await api.patchHost(projectId, localId, body);
           else {
             const created = await api.createHost(projectId, body);
+            localId = created.id;
             hostMap[String(created.id)] = a.clientDocId;
           }
+          jumpSweep.push({ localId, ref: a.record.jump_host_ref ?? null });
           appliedSeq[a.clientDocId] = a.seq; // advance the rollback high-water
         }
         versions[a.clientDocId] = a.version;
       }
 
+      // Pass C — jump-host sweep: every host now exists, so a ref (incl. to a host
+      // created in THIS pull) resolves to a local id; null clears a removed jump.
+      const hostDocToLocal = (cid: string) => localFor(hostMap, cid);
+      for (const { localId, ref } of jumpSweep) {
+        await api.patchHost(projectId, localId, { jump_host_id: ref ? hostDocToLocal(ref) ?? null : null });
+      }
+
       persist({
         ...cur,
         hostMap,
+        identityMap,
         versions,
         appliedSeq,
         cursor: Math.max(cur.cursor, pull.cursor),
@@ -416,7 +653,7 @@ export function useSshVaultSync(projectId: number) {
       const trimmed = id.trim();
       if (!trimmed) return;
       // Reset sync bookkeeping but KEEP the pinned-keys trust store.
-      persist({ ...load(projectId), workspaceId: trimmed, hostMap: {}, versions: {}, cursor: 0, bodyCache: {}, orgShareMap: {}, teamHostMap: {}, teamVersions: {}, teamCursor: 0 });
+      persist({ ...load(projectId), workspaceId: trimmed, hostMap: {}, identityMap: {}, versions: {}, cursor: 0, bodyCache: {}, orgShareMap: {}, teamHostMap: {}, teamVersions: {}, teamCursor: 0 });
       setLast(null);
     },
     [persist, projectId],
@@ -562,5 +799,5 @@ export function useSshVaultSync(projectId: number) {
     [projectId, persist],
   );
 
-  return { workspaceId: state.workspaceId, busy, error, last, unlocked, unlock, sync, linkWorkspace, shareWithOrg, pullTeam };
+  return { workspaceId: state.workspaceId, busy, error, last, unlocked, recoveryEnabled, unlock, unlockWithRecovery, enrollRecoveryKey, sync, linkWorkspace, shareWithOrg, pullTeam };
 }

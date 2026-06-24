@@ -101,8 +101,14 @@ export const FUZZY_LOOP_TOOLS: ReadonlySet<string> = new Set<string>([
   'set_agent_status',
   'submit_plan',
   'submit_plan_to_master',
+  'task_list',
   'submit_tasks',
   'submit_tasks_to_master',
+  // Track-gate aliases of task_list: include so a varied-checklist loop
+  // (re-writing the list each refused turn with a tweak) still accumulates and
+  // escalates to a Planning turn instead of slipping past as "diverse usage".
+  'todo_write',
+  'update_todo',
   'expand_toolset',
   'find_tools',
 ]);

@@ -6,8 +6,10 @@
  * The store is intentionally Electron-free and crypto-free: `enc_*` columns are
  * persisted verbatim as opaque tagged blobs (the renderer encrypts via the OS
  * keychain before writing). This keeps the store unit-testable under
- * better-sqlite3 without the Electron ABI, and means a leaked DB file holds only
- * device-bound ciphertext.
+ * better-sqlite3 without the Electron ABI. On a machine WITH an OS keychain the
+ * blob is device-bound ciphertext (`enc:`); on a rare keychain-less host the
+ * shim falls back to `plain:<base64>` — obfuscated, NOT encrypted-at-rest (same
+ * caveat as migration 173). The passphrase vault (P3) closes that gap.
  */
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';

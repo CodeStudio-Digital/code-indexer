@@ -335,9 +335,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 - \`ask_user\`: when you need a decision/preference/choice from the user, call this. Provide \`options\` for multiple choice (rendered as buttons) or omit them for free-form. Do NOT use for things you can verify yourself.${isSpec ? `
 - \`submit_spec\`: REQUIRED before any mutating tool (see Spec mode above). Pass \`{ name, body, parent_id? }\`. The runner writes the spec to \`.mcp/specs/<slug>-<unix>.md\` and blocks until a human approves or requests changes.` : ''}
 - \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec IS the plan.' : ctx.planMode ? 'REQUIRED before mutating tools when the work is linear/informational (see Plan mode above).' : 'Optional — call when the user explicitly asks for a plan.'}
-- \`submit_tasks\`: ${isSpec ? 'BLOCKED before spec approval. After approval, derive tasks from the spec\'s Implementation Plan and call submit_tasks.' : ctx.planMode ? 'REQUIRED instead of submit_plan when the work decomposes into 2+ independent tasks (see Plan mode above).' : 'Optional — for multi-item work that benefits from per-task context curation and individual user approval.'}
-- \`list_tasks\` / \`execute_tasks\` / \`task_complete\`: companions to submit_tasks. Task ids are backend-generated \`tsk_...\`; \`execute_tasks\` ONCE dispatches the whole approved list in dependency waves; \`task_complete\` only closes an inline scope opened by \`execute_tasks\` — never call it on a subagent-mode task.
-- \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: abandon, remove, or clear task rounds. Never reuse legacy ids like \`task_1\`.
+- \`task_list\`: the ONE task/checklist tool (no separate todo tool). \`gate:'track'\` (default) = no-pause checklist (\`items\`/\`updates\`). \`gate:'approve'\` = ${isSpec ? 'BLOCKED until spec approval' : ctx.planMode ? 'REQUIRED over submit_plan for 2+ tasks' : 'gated multi-item work worth approval'}; pauses and is the ONLY thing that arms \`execute_tasks\` (\`submit_tasks\` = legacy alias). ONE list/session.
+- \`execute_tasks\` / \`task_complete\` / \`list_tasks\`: run an approved \`task_list\`. Ids are backend \`tsk_...\`; \`execute_tasks\` ONCE dispatches the list in dependency waves; \`task_complete\` closes an inline scope (never a subagent task).
+- \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: abandon/remove/clear task rounds. Never reuse ids like \`task_1\`.
 `;
 
   // Static "agent loop" + "do not re-read" + "active context pointer". The
@@ -365,7 +365,7 @@ Follow this order for code-fix tasks; do NOT free-explore:
 3. **Patch** — make the edits in one or two passes (multi_edit when feasible). Do not browse around.
 4. **Verify** — run the relevant test/lint/build and report the result.
 
-This pipeline is more token-efficient than free agents on isolated tasks. If the work decomposes into multiple independent changes, use submit_tasks instead and run the same loop per task.
+This pipeline is more token-efficient than free agents on isolated tasks. If the work decomposes into multiple independent changes, use \`task_list({gate:'approve'})\` instead and run the same loop per task.
 `
     : '';
 
@@ -423,7 +423,7 @@ function buildPlanDepthBlock(depth: string): string {
     normal:
       'Target a complete plan (~300–1000 lines of markdown). Investigate the affected areas thoroughly: dependencies, call-sites, reusable prior art, and the verification path. Decision gate: when investigation surfaces a genuine fork (2+ viable approaches the user owns), run `decision_gate` before writing the plan.',
     complex:
-      'Target a meticulous plan (2000+ lines of markdown). Investigate exhaustively: map the full dependency graph, edge cases, migrations, and a concrete end-to-end verification plan. Decision gate: surface EVERY genuine fork (architecture, scope, migration strategy, UX behavior) via `decision_gate` before finalizing. Decompose with `submit_tasks` when the work has 2+ independent parts.',
+      'Target a meticulous plan (2000+ lines of markdown). Investigate exhaustively: map the full dependency graph, edge cases, migrations, and a concrete end-to-end verification plan. Decision gate: surface EVERY genuine fork (architecture, scope, migration strategy, UX behavior) via `decision_gate` before finalizing. Decompose with `task_list({gate:\'approve\'})` when the work has 2+ independent parts.',
   } as const;
   // Normalize at the single rendering chokepoint: callers reach here via a
   // type cast over the persisted column (index.ts), so a value corrupted by

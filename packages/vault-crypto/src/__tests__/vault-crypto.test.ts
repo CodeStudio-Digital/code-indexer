@@ -12,6 +12,9 @@ import {
   checkVerifier,
   generateSalt,
   randomId,
+  generateRecoveryKey,
+  normalizeRecoveryKey,
+  deriveRecoveryKek,
   type KdfParams,
   type RecordAad,
 } from '../index.js';
@@ -94,5 +97,51 @@ describe('vault-crypto personal key schedule', () => {
   it('generates distinct ids/salts', () => {
     expect(randomId()).not.toBe(randomId());
     expect(generateSalt()).not.toBe(generateSalt());
+  });
+});
+
+describe('vault-crypto recovery key', () => {
+  it('unwraps the SAME VDK with the recovery key (escrow-free recovery)', async () => {
+    const { key: vdk } = await generateVdk();
+    const verifier = await makeVerifier(vdk);
+    const recoveryKey = generateRecoveryKey();
+    const rKdf = fastParams();
+    const rKek = await deriveRecoveryKek(recoveryKey, rKdf);
+    const wrapped = await wrapVdk(rKek, vdk);
+
+    // Later, on a device that lost the passphrase: same recovery key → same VDK.
+    const rKek2 = await deriveRecoveryKek(recoveryKey, rKdf);
+    const vdk2 = await unwrapVdk(rKek2, wrapped);
+    expect(await checkVerifier(vdk2, verifier)).toBe(true);
+  });
+
+  it('rejects a wrong recovery key', async () => {
+    const { key: vdk } = await generateVdk();
+    const rKdf = fastParams();
+    const wrapped = await wrapVdk(await deriveRecoveryKek(generateRecoveryKey(), rKdf), vdk);
+    await expect(unwrapVdk(await deriveRecoveryKek(generateRecoveryKey(), rKdf), wrapped)).rejects.toBeDefined();
+  });
+
+  it('normalizes grouping, case, and visual confusables to one canonical key', () => {
+    expect(normalizeRecoveryKey('K7Q2-9F3M')).toBe('K7Q29F3M');
+    expect(normalizeRecoveryKey('k7q2 9f3m')).toBe('K7Q29F3M');
+    // I/L→1, O→0, U→V (Crockford); so a transcription slip still derives the same KEK.
+    expect(normalizeRecoveryKey('OIL-U')).toBe('011V');
+  });
+
+  it('derives the same KEK from grouped/lowercase variants of one key', async () => {
+    const rKdf = fastParams();
+    const key = generateRecoveryKey(); // e.g. AAAA-BBBB-...
+    const a = await deriveRecoveryKek(key, rKdf);
+    const b = await deriveRecoveryKek(key.toLowerCase().replace(/-/g, ' '), rKdf);
+    const { key: vdk } = await generateVdk();
+    const wrapped = await wrapVdk(a, vdk);
+    await expect(unwrapVdk(b, wrapped)).resolves.toBeDefined(); // same KEK ⇒ unwraps
+  });
+
+  it('generates distinct, well-formed recovery keys', () => {
+    const k = generateRecoveryKey();
+    expect(k).toMatch(/^[0-9A-Z]{4}(-[0-9A-Z]{4})+$/);
+    expect(generateRecoveryKey()).not.toBe(generateRecoveryKey());
   });
 });

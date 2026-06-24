@@ -50,7 +50,7 @@ buildSync({
   bundle: true,
   platform: 'node',
   format: 'cjs',
-  target: 'node20',
+  target: 'node22', // Electron 42 ships Node 24; node22 is the safe esbuild target.
   // Electron itself isn't a normal npm dep at runtime — it's the host.
   // Marking it external avoids bundling the entire @types stubs.
   external: ['electron'],

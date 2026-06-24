@@ -87,7 +87,7 @@ async function buildPreload() {
     bundle: true,
     platform: 'node',
     format: 'cjs',
-    target: 'node20',
+    target: 'node22', // Electron 42 ships Node 24; node22 is the safe esbuild target.
     external: ['electron'],
     sourcemap: false,
     minify: true,
@@ -156,6 +156,14 @@ if (noPackage) {
   console.log('\n--no-package: skipping electron-builder. Done.');
   process.exit(0);
 }
+
+// 3e. Rebuild native modules against Electron's ABI before packaging.
+//     electron-builder's own npmRebuild is disabled (electron-builder.json)
+//     because it would force a from-source node-pty build that fails on winpty
+//     under pnpm/Windows. node-pty ships N-API prebuilds (ABI-stable) and needs
+//     no rebuild; better-sqlite3 uses the V8 C++ API and MUST be rebuilt for
+//     Electron — that's exactly what `electron:rebuild` (-o better-sqlite3) does.
+run('pnpm', ['run', 'electron:rebuild']);
 
 // 4. electron-builder
 const builderArgs = ['exec', 'electron-builder', '--config', 'apps/electron/electron-builder.json'];

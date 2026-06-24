@@ -18,8 +18,8 @@
  */
 import type { ProviderStore, ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { getSpecByKind, discoverModels as engineDiscoverModels } from '@mcp/provider-engine';
-import { listProviderPlugins } from '@mcp/plugin-host';
-import { thirdPartyProviderSpecSchema, type ProviderSpec } from '@mcp/provider-sdk';
+import { listProviderPlugins, isFirstPartyBundled } from '@mcp/plugin-host';
+import { thirdPartyProviderSpecSchema, providerSpecSchema, type ProviderSpec } from '@mcp/provider-sdk';
 
 export interface DiscoveryResult {
   models: UpsertModelInput[];
@@ -41,8 +41,14 @@ export interface DiscoveryResult {
 function resolveProviderSpec(kind: string): ProviderSpec | undefined {
   try {
     for (const ref of listProviderPlugins()) {
+      // First-party bundled refs may declare host capabilities (sdk:* discovery,
+      // auth.hooks) — validate with the full schema, mirroring the provider
+      // loader. Without this, a bundled OAuth connector's spec fails the
+      // third-party parse and its live discovery would fall closed once it
+      // leaves BUILTIN_SPECS.
+      const schema = isFirstPartyBundled(ref) ? providerSpecSchema : thirdPartyProviderSpecSchema;
       for (const raw of ref.specs) {
-        const parsed = thirdPartyProviderSpecSchema.safeParse(raw);
+        const parsed = schema.safeParse(raw);
         if (parsed.success && parsed.data.kind === kind) return parsed.data as ProviderSpec;
       }
     }

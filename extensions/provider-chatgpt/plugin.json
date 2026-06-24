@@ -1,0 +1,12 @@
+{
+  "name": "provider-chatgpt",
+  "version": "0.1.0",
+  "description": "ChatGPT / Codex (OAuth) as a bundled first-party provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "ChatGPT (Codex)",
+    "shortDescription": "ChatGPT subscription via the Codex Responses API OAuth connector",
+    "category": "ai-provider"
+  }
+}

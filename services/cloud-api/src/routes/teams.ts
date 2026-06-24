@@ -284,6 +284,8 @@ export function teamsRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
     if (!isVerified(claims)) return emailNotVerified(c);
+    const limited = await enforceRateLimit(c, [{ key: `vault:grants:${claims.sub}`, limit: 60, windowMs: HOUR }]);
+    if (limited) return limited;
     const orgId = c.req.param('id');
     const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
     if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
@@ -317,6 +319,8 @@ export function teamsRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
     if (!isVerified(claims)) return emailNotVerified(c);
+    const limited = await enforceRateLimit(c, [{ key: `vault:rotate:${claims.sub}`, limit: 30, windowMs: HOUR }]);
+    if (limited) return limited;
     const orgId = c.req.param('id');
     const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
     if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
@@ -332,6 +336,8 @@ export function teamsRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
     if (!isVerified(claims)) return emailNotVerified(c);
+    const limited = await enforceRateLimit(c, [{ key: `vault:push:${claims.sub}`, limit: 240, windowMs: HOUR }]);
+    if (limited) return limited;
     const orgId = c.req.param('id');
     const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
     if (!member) return respondTeamError(c, TeamErrors.orgNotFound());
@@ -347,6 +353,8 @@ export function teamsRouter(): Hono<{ Bindings: Env }> {
     if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid pull.', details: parsed.error.flatten() }, 400);
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
+    const limited = await enforceRateLimit(c, [{ key: `vault:pull:${claims.sub}`, limit: 600, windowMs: HOUR }]);
+    if (limited) return limited;
     const orgId = c.req.param('id');
     const member = await createTeamsBundle(c.env).service.membershipOf(orgId, claims.sub);
     if (!member) return respondTeamError(c, TeamErrors.orgNotFound());

@@ -29,7 +29,7 @@ Deliver the plan (the `submit_plan` markdown) with these sections:
 
 Choose ONE delivery:
 - `submit_plan` — a single coherent change (one fix/feature across a few files) or a purely informational deliverable.
-- `submit_tasks` — work that decomposes into 2+ independent tasks, each with its own files + curated references; gives the user per-item control. When in doubt between a long bullet plan and tasks, prefer tasks.
+- `task_list({gate:'approve', ...})` — work that decomposes into 2+ independent tasks, each with its own files + curated references; per-item control, and arms `execute_tasks`. When in doubt between a long bullet plan and tasks, prefer tasks. (`submit_tasks` = legacy alias; `task_list({gate:'track'})` is just a no-pause progress checklist, NOT a delivery.)
 
 After approval, execution proceeds (this session switches to build, or a fresh `build` session runs it). Calling `execute_tasks` before approval is read as "the plan is ready" — it pauses for approval, never silently mutates.
 

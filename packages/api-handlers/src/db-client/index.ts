@@ -16,7 +16,10 @@ import {
   buildDdl,
   buildDml,
   createDriver,
+  quoteIdent,
+  quoteRelation,
   sharedDbConnectionManager,
+  type ColumnSpec,
   type DbConnectConfig,
   type DbEngine,
   type RowChange,
@@ -50,10 +53,39 @@ function toConfig(spec: DbConnectSpec): DbConnectConfig {
   };
 }
 
-/** Leading-keyword check: is this statement a read (safe under read-only)? */
-const READ_PREFIX = /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(select|with|show|explain|describe|desc|pragma|table)\b/i;
+/** Strip comments + string/identifier literals so keyword/`;` checks aren't fooled. */
+function stripSqlNoise(sql: string): string {
+  return sql
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/'(?:''|[^'])*'/g, "''")
+    .replace(/"(?:""|[^"])*"/g, '""')
+    .replace(/`(?:``|[^`])*`/g, '``');
+}
+
+/** True when the buffer contains more than one top-level statement. */
+function hasMultipleStatements(sql: string): boolean {
+  return stripSqlNoise(sql).replace(/;+\s*$/, '').includes(';');
+}
+
+const WRITE_KW = /\b(insert|update|delete|drop|alter|create|truncate|replace|merge|grant|revoke|attach|detach|vacuum|reindex|call)\b/i;
+
+/**
+ * Strict read-only classifier. A statement is read-safe only if it is a SINGLE
+ * statement, leads with a read verb, is not `EXPLAIN ANALYZE` (which executes),
+ * and contains NO write keyword anywhere (catches data-modifying CTEs like
+ * `WITH x AS (DELETE …) …`). Conservative by design: a few benign statements
+ * (writing-looking but harmless) may be rejected under read-only — that is the
+ * safe failure direction for a security valve.
+ */
 function isReadStatement(sql: string): boolean {
-  return READ_PREFIX.test(sql);
+  const s = stripSqlNoise(sql).trim();
+  if (!s) return false;
+  if (s.replace(/;+\s*$/, '').includes(';')) return false; // single statement only
+  if (!/^(select|show|explain|describe|desc|with)\b/i.test(s)) return false;
+  if (/^explain\b/i.test(s) && /\banalyze\b/i.test(s)) return false; // EXPLAIN ANALYZE runs it
+  if (WRITE_KW.test(s)) return false; // writing CTE / any embedded write
+  return true;
 }
 
 export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
@@ -138,6 +170,41 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return { ...res, durationMs: Date.now() - started };
     },
 
+    async listObjects({ connectionId, kind, schema, table }) {
+      return requireDriver(connectionId).listObjects(kind, schema, table);
+    },
+
+    async generateSql({ connectionId, schema, table, kind }) {
+      const driver = requireDriver(connectionId);
+      const engine = requireEngine(connectionId);
+      const rel = quoteRelation(engine, schema, table);
+      if (kind === 'select') return { sql: `SELECT * FROM ${rel} LIMIT 100;` };
+      if (kind === 'truncate') {
+        // SQLite has no TRUNCATE — DELETE FROM is the equivalent.
+        return { sql: engine === 'sqlite' ? `DELETE FROM ${rel};` : `TRUNCATE TABLE ${rel};` };
+      }
+      // Default the schema for relational engines so describeTable doesn't match
+      // zero rows (which would emit a column-less CREATE).
+      const effSchema = schema ?? (engine === 'postgres' ? 'public' : undefined);
+      const info = await driver.describeTable(effSchema ?? '', table);
+      if (kind === 'insert') {
+        const cols = info.columns.filter((c) => !c.isAutoIncrement);
+        const colList = cols.map((c) => quoteIdent(engine, c.name)).join(', ');
+        const values = cols.map(() => 'NULL').join(', ');
+        return { sql: `INSERT INTO ${rel} (${colList})\nVALUES (${values});` };
+      }
+      // 'create' — reconstruct CREATE TABLE from the introspected columns.
+      const columns: ColumnSpec[] = info.columns.map((c) => ({
+        name: c.name,
+        type: c.dataType,
+        nullable: c.nullable,
+        default: c.defaultValue ?? null,
+        primaryKey: c.isPrimaryKey,
+        autoIncrement: c.isAutoIncrement,
+      }));
+      return { sql: buildDdl(engine, 'create', { create: { schema: effSchema, table, columns } }).join(';\n') + ';' };
+    },
+
     async query({ connectionId, sql, params, maxRows, queryId, schema }) {
       const driver = requireDriver(connectionId);
       if (mgr.getMeta(keyFor(connectionId))?.readOnly && !isReadStatement(sql)) {
@@ -159,6 +226,21 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       inflight.get(`${connectionId}:${queryId}`)?.abort();
     },
 
+    async explain({ connectionId, sql }) {
+      const engine = requireEngine(connectionId);
+      // A trailing statement would EXECUTE (EXPLAIN binds only the first); refuse it.
+      if (hasMultipleStatements(sql)) throw new ApiError('db_explain_multi', 400, 'Explain expects a single statement.');
+      // On a read-only connection, only read statements may be explained (blocks
+      // EXPLAIN ANALYZE of a write, which would run it).
+      if (mgr.getMeta(keyFor(connectionId))?.readOnly && !isReadStatement(sql)) {
+        throw new ApiError('db_read_only', 403, 'Connection is read-only — only read statements can be explained.');
+      }
+      const prefix = engine === 'sqlite' ? 'EXPLAIN QUERY PLAN ' : 'EXPLAIN ';
+      const started = Date.now();
+      const res = await requireDriver(connectionId).runQuery(prefix + sql, { maxRows: 2000 });
+      return { ...res, durationMs: Date.now() - started };
+    },
+
     async editRow({ connectionId, op, schema, table, pk, values, dryRun }) {
       assertWritable(connectionId);
       const engine = requireEngine(connectionId);
@@ -175,11 +257,16 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       const statements = buildDdl(engine, op, spec);
       const sql = statements.join(';\n') + ';';
       if (dryRun) return { sql };
+      // An all-comment set means the engine can't express the change (e.g. SQLite
+      // modify-column / FK needs a table rebuild). Surface it instead of silently
+      // reporting success after touching nothing.
+      if (statements.every((s) => /^\s*--/.test(s))) {
+        throw new ApiError('db_ddl_unsupported', 422, statements.join('\n').replace(/^\s*--\s?/gm, '') || 'Unsupported DDL.');
+      }
       const driver = requireDriver(connectionId);
       let result;
       for (const stmt of statements) {
-        // Skip pure comment lines (e.g. SQLite "modify not supported").
-        if (/^\s*--/.test(stmt)) continue;
+        if (/^\s*--/.test(stmt)) continue; // skip comment lines mixed into a larger set
         result = await driver.runQuery(stmt);
       }
       return { sql, result };

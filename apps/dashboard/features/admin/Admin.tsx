@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Activity,
-  ALargeSmall,
   AlertTriangle,
   AppWindow,
   Blocks,
@@ -47,7 +46,6 @@ import { HygienePanel } from './HygienePanel.js';
 import { LspServersPanel } from './LspServersPanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
-import { AppearancePanel } from './AppearancePanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
 import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { VerdaccioPanel } from './VerdaccioPanel.js';
@@ -174,8 +172,6 @@ export default function Admin() {
       hint: t('admin:perf.hint') },
     { id: 'auth',              label: t('admin:tabs.auth'),       icon: KeyRound,      group: 'system',
       hint: 'OAuth 2.1, API tokens, audit log' },
-    { id: 'appearance',        label: t('admin:tabs.appearance'), icon: ALargeSmall,   group: 'system',
-      hint: t('admin:appearance.subtitle') },
   ];
 
   const active = sections.find((s) => s.id === section) ?? sections[0];
@@ -355,7 +351,6 @@ export default function Admin() {
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
           {section === 'perf'              && <PerfMonitorPanel />}
           {section === 'auth'              && <AuthPanel />}
-          {section === 'appearance'        && <AppearancePanel />}
           </div>
         </section>
       </div>

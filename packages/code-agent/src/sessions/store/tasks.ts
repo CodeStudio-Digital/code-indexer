@@ -30,7 +30,12 @@ export interface RecordTasksInput {
 export function record(db: DB, input: RecordTasksInput): CoderTasksRow {
   const previous = getState(db, input.session_id);
   let mergedState: TasksState = input.state;
-  if (previous && previous.tasks.length > 0) {
+  // Track-gate writes (the lightweight checklist) are authoritative full
+  // replacements — the agent sets each item's status explicitly via
+  // task_list/todo_write, so we must NOT preserve prior runtime status the way
+  // the approve flow does. Skip the merge entirely for track lists.
+  const isTrackWrite = input.state.gate === 'track';
+  if (!isTrackWrite && previous && previous.tasks.length > 0) {
     const prevById = new Map(previous.tasks.map((t) => [t.id, t]));
     const mergedTasks: CoderTask[] = input.state.tasks.map((incoming) => {
       const prior = prevById.get(incoming.id);
@@ -138,6 +143,13 @@ export function clear(db: DB, sessionId: number): boolean {
 export function recoverStale(db: DB, sessionId: number): number {
   const current = getState(db, sessionId);
   if (!current) return 0;
+  // Track-gate checklists have no orphaned execute_task/subagent scope to
+  // recover — a 'running' item is just the in_progress UI marker. Skip them so
+  // they aren't flipped to 'interrupted' (which deriveTodosFromState reads back
+  // as 'pending', silently losing the marker on every turn-end/resume). Inline
+  // gate check (no effectiveGate import) keeps the store a leaf — matches the
+  // isTrackWrite check in record().
+  if ((current.gate ?? 'approve') === 'track') return 0;
   let recovered = 0;
   const tasks = current.tasks.map((t) => {
     if (t.status === 'running') {

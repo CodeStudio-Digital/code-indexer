@@ -29,6 +29,8 @@ import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import { defineEditorThemes } from '../features/workspace/editor/themes/index.js';
+import { enrichPhpHighlighting, registerPhpConstructHover } from '../features/workspace/editor/php-highlight.js';
 
 let initialized = false;
 
@@ -63,6 +65,17 @@ export function setupMonaco(): void {
   // Hand the bundled `monaco` to @monaco-editor/react so it skips the
   // CDN fetch + cdn-side instantiation that was disposing under us.
   loader.config({ monaco });
+
+  // Register the curated color schemes (One Dark Pro, Dracula, IntelliJ
+  // Darcula, …) so any editor can `setTheme` to them. Must run before the first
+  // mount; the built-in vs/vs-dark need no registration.
+  defineEditorThemes(monaco);
+
+  // Enrich PHP highlighting so functions/methods/properties/classes get
+  // distinct colours from syntax (free intelephense gives no semantic tokens).
+  enrichPhpHighlighting(monaco);
+  // Hover docs for language constructs (isset/empty/…) that intelephense doesn't document.
+  registerPhpConstructHover(monaco);
 
   // ─── Disable Monaco's built-in TS validator entirely ────────────
   //

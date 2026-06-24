@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Blocks, Braces, Hexagon, MemoryStick, Search, Settings2, TerminalSquare, Trash2 } from 'lucide-react';
+import { ALargeSmall, Blocks, Braces, Hexagon, MemoryStick, Palette, Search, Settings2, TerminalSquare, Trash2 } from 'lucide-react';
 import type { Project } from '@mcp/shared/types.js';
 import { cn } from '../../../lib/utils.js';
 import { apiCall } from '../../../lib/api-client.js';
@@ -24,9 +24,21 @@ import { SearchPane } from './panes/SearchPane.js';
 import { RuntimePane } from './panes/RuntimePane.js';
 import { TerminalPane } from './panes/TerminalPane.js';
 import { MemoryPane } from './panes/MemoryPane.js';
+import { AppearancePane } from './panes/AppearancePane.js';
+import { EditorThemePane } from './panes/EditorThemePane.js';
 import { DangerPane } from './panes/DangerPane.js';
 
-export type SettingsSection = 'general' | 'search' | 'node' | 'php' | 'python' | 'terminal' | 'memory' | 'danger';
+export type SettingsSection =
+  | 'general'
+  | 'search'
+  | 'node'
+  | 'php'
+  | 'python'
+  | 'terminal'
+  | 'memory'
+  | 'appearance'
+  | 'editorTheme'
+  | 'danger';
 
 export type PatchFn = (body: Record<string, unknown>) => Promise<void>;
 
@@ -91,6 +103,8 @@ export function ProjectSettingsModal({
     { id: 'python', label: 'Python', Icon: Braces },
     { id: 'terminal', label: t('settings.nav.terminal'), Icon: TerminalSquare },
     { id: 'memory', label: t('settings.nav.memory'), Icon: MemoryStick },
+    { id: 'appearance', label: t('settings.nav.appearance'), Icon: ALargeSmall },
+    { id: 'editorTheme', label: t('settings.nav.editorTheme'), Icon: Palette },
     { id: 'danger', label: t('settings.nav.danger'), Icon: Trash2 },
   ];
 
@@ -143,6 +157,8 @@ export function ProjectSettingsModal({
             {section === 'python' && <RuntimePane kind="python" project={project} patch={patch} />}
             {section === 'terminal' && <TerminalPane project={project} patch={patch} />}
             {section === 'memory' && <MemoryPane project={project} patch={patch} />}
+            {section === 'appearance' && <AppearancePane />}
+            {section === 'editorTheme' && <EditorThemePane />}
             {section === 'danger' && (
               <DangerPane project={project} onDeleted={() => { onOpenChange(false); onDeleted?.(); }} />
             )}

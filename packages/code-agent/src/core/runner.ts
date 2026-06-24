@@ -51,6 +51,11 @@ import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
+import {
+  type TodoItem,
+  buildTrackState,
+  deriveTodosFromState,
+} from '@mcp/code-agent/tools/task-list-shared.js';
 import { buildIndexedDocsBlock } from '@mcp/code-agent/core/docs-hint.js';
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
@@ -688,12 +693,17 @@ export class CoderRunner extends EventEmitter {
   private pendingWatchdogNudge: string | null = null;
 
   /**
-   * Lightweight todo list maintained by the `todo_write` tool. Distinct from
-   * the heavyweight `submit_tasks` flow — todos never pause the run; they
-   * just broadcast a `todos_updated` event so the dashboard can render a
-   * live sidebar. Persisted in `coder_sessions.todos_json` across restarts.
+   * Lightweight checklist (the `track` gate of the unified task list). Since
+   * the todos/tasks merge this is a DERIVED VIEW over the single task store
+   * (`coder_tasks_state`): it returns the track-gate items as `TodoItem[]`, or
+   * `[]` when the active list is an `approve` list (or there is none). Writes
+   * go through {@link setTodos}, which records a track `TasksState`. The
+   * `todos_updated` event still fires so the dashboard sidebar stays live.
    */
-  public currentTodos: import('@mcp/code-agent/tools/todo.js').TodoItem[] = [];
+  get currentTodos(): TodoItem[] {
+    const ctx = this.opts.toolContext;
+    return deriveTodosFromState(ctx.getTasksState ? ctx.getTasksState() : null);
+  }
 
   /**
    * Worktree scope tracking. When `enter_worktree` is called, the runner
@@ -1394,10 +1404,21 @@ export class CoderRunner extends EventEmitter {
    * `todo_write`; can also be called by host code on session resume to
    * rehydrate from the database.
    */
-  setTodos(todos: import('@mcp/code-agent/tools/todo.js').TodoItem[]): void {
+  setTodos(todos: TodoItem[]): void {
     // Defensive copy — the tool may mutate its input later.
-    this.currentTodos = todos.map((t) => ({ ...t }));
-    this.emit('todos_updated', { todos: this.currentTodos });
+    const next = todos.map((t) => ({ ...t }));
+    // One store: a checklist write is a track-gate `TasksState`. record()
+    // skips its approve-flow merge for track gate (authoritative full
+    // replacement). When there is no task store (ephemeral/subagent runners),
+    // we simply emit so any live listener still updates.
+    const ctx = this.opts.toolContext;
+    if (ctx.recordTasks) {
+      ctx.recordTasks(
+        `track_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        buildTrackState(next),
+      );
+    }
+    this.emit('todos_updated', { todos: next });
   }
 
 

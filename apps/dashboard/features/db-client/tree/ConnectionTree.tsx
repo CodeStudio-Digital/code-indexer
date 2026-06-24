@@ -7,13 +7,14 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronRight, ChevronDown, Database, Table2, Eye, Columns3, Box, Loader2,
-  Plus, RefreshCw, MoreVertical, Plug, PlugZap,
+  Plus, RefreshCw, MoreVertical, Plug, PlugZap, Folder, KeyRound, Link2, Zap, Braces, Hash,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '../../../components/ui/dropdown-menu.js';
-import { confirm, toast } from '../../../components/ui/prompt-dialog.js';
+import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import { useContextMenu, type ContextMenuItem } from '../../../components/ui/context-menu.js';
+import { copyText } from '../../../lib/clipboard.js';
 import * as api from '../api.js';
 import type { UseDbClient } from '../useDbClient.js';
 import type { DbConnection, DbConnectionStatus, DbTreeNode } from '../types.js';
@@ -27,14 +28,71 @@ function buildNodeMenu(
   const copyName: ContextMenuItem = {
     id: 'copy',
     label: t('node.copyName'),
-    onSelect: () => void navigator.clipboard.writeText(node.table ?? node.label).catch(() => undefined),
+    onSelect: () => void navigator.clipboard.writeText(node.name ?? node.table ?? node.label).catch(() => undefined),
   };
   if (node.kind === 'table' || node.kind === 'view') {
+    const cid = String(node.connectionId);
+    const tbl = node.table ?? '';
     return [
       { id: 'data', label: t('node.viewData'), onSelect: () => void db.openTableData(node) },
       { id: 'structure', label: t('node.editStructure'), onSelect: () => void db.openStructureTab(node) },
       { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId) },
+      {
+        id: 'gen-select',
+        label: t('node.genSelect'),
+        separatorBefore: true,
+        onSelect: async () => {
+          const { sql } = await api.generateSql(cid, node.schema, tbl, 'select');
+          db.openQueryTab(node.connectionId, node.schema, sql);
+        },
+      },
+      {
+        id: 'gen-insert',
+        label: t('node.genInsert'),
+        onSelect: async () => {
+          const { sql } = await api.generateSql(cid, node.schema, tbl, 'insert');
+          db.openQueryTab(node.connectionId, node.schema, sql);
+        },
+      },
+      {
+        id: 'copy-ddl',
+        label: t('node.copyDdl'),
+        onSelect: async () => {
+          const { sql } = await api.generateSql(cid, node.schema, tbl, 'create');
+          if (await copyText(sql)) toast.success(t('node.ddlCopied'));
+        },
+      },
       copyName,
+      {
+        id: 'rename',
+        label: t('node.rename'),
+        separatorBefore: true,
+        onSelect: async () => {
+          const to = await prompt({ title: t('node.rename'), placeholder: t('node.renamePrompt'), defaultValue: tbl });
+          if (!to?.trim() || to.trim() === tbl) return;
+          try {
+            await api.ddl({ connectionId: cid, op: 'alter', spec: { alter: { schema: node.schema, table: tbl, actions: [{ kind: 'renameTable', to: to.trim() }] } } });
+            db.invalidateTables(node.connectionId, node.schema);
+          } catch (e) {
+            toast.error(t('node.rename'), { description: e instanceof Error ? e.message : String(e) });
+          }
+        },
+      },
+      {
+        id: 'truncate',
+        label: t('node.truncate'),
+        destructive: true,
+        onSelect: async () => {
+          if (!(await confirm({ title: t('node.truncate'), description: t('node.truncateConfirm', { name: tbl }), tone: 'destructive' }))) return;
+          try {
+            const { sql } = await api.generateSql(cid, node.schema, tbl, 'truncate');
+            await api.runQuery(cid, sql, { schema: node.schema });
+            toast.success(t('node.truncated'));
+          } catch (e) {
+            toast.error(t('node.truncate'), { description: e instanceof Error ? e.message : String(e) });
+          }
+        },
+      },
       {
         id: 'drop',
         label: t('node.dropTable'),
@@ -58,6 +116,7 @@ function buildNodeMenu(
       // Console scoped to this schema (pg search_path / mysql USE).
       { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId, node.schema) },
       { id: 'newtable', label: t('node.newTable'), onSelect: () => void db.openNewTable(node.connectionId, node.schema) },
+      { id: 'er', label: t('node.erDiagram'), onSelect: () => void db.openErDiagram(node.connectionId, node.schema) },
       { id: 'refresh', label: t('node.refresh'), onSelect: () => db.refreshNode(node.id) },
     ];
   }
@@ -67,7 +126,19 @@ function buildNodeMenu(
       { id: 'refresh', label: t('node.refresh'), onSelect: () => db.refreshNode(node.id) },
     ];
   }
-  if (node.kind === 'column') return [copyName];
+  if (node.kind === 'group') {
+    return [{ id: 'refresh', label: t('node.refresh'), onSelect: () => db.refreshNode(node.id) }];
+  }
+  if (
+    node.kind === 'column' ||
+    node.kind === 'index' ||
+    node.kind === 'fk' ||
+    node.kind === 'trigger' ||
+    node.kind === 'function' ||
+    node.kind === 'sequence'
+  ) {
+    return [copyName];
+  }
   return [];
 }
 
@@ -89,6 +160,18 @@ function NodeIcon({ node }: { node: DbTreeNode }) {
       return <Table2 className="h-3.5 w-3.5 text-muted-foreground" />;
     case 'view':
       return <Eye className="h-3.5 w-3.5 text-muted-foreground" />;
+    case 'group':
+      return <Folder className="h-3.5 w-3.5 text-muted-foreground/70" />;
+    case 'index':
+      return <KeyRound className="h-3.5 w-3.5 text-violet-400/80" />;
+    case 'fk':
+      return <Link2 className="h-3.5 w-3.5 text-amber-400/80" />;
+    case 'trigger':
+      return <Zap className="h-3.5 w-3.5 text-rose-400/80" />;
+    case 'function':
+      return <Braces className="h-3.5 w-3.5 text-emerald-400/80" />;
+    case 'sequence':
+      return <Hash className="h-3.5 w-3.5 text-sky-400/80" />;
     default:
       return <Columns3 className="h-3.5 w-3.5 text-muted-foreground/70" />;
   }
@@ -144,9 +227,25 @@ export function ConnectionTree({
         {db.connections.length === 0 && !db.loading && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">{t('connections.empty')}</div>
         )}
-        {visibleRows.map((node) => (
-          <Row key={node.id} node={node} db={db} t={t} onEdit={onEdit} />
-        ))}
+        {(() => {
+          const els: React.ReactNode[] = [];
+          let lastGroup = '';
+          for (const node of visibleRows) {
+            if (node.depth === 0) {
+              const g = db.connections.find((c) => c.id === node.connectionId)?.group_name?.trim() ?? '';
+              if (g && g !== lastGroup) {
+                els.push(
+                  <div key={`grp:${g}`} className="px-3 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50">
+                    {g}
+                  </div>,
+                );
+              }
+              lastGroup = g;
+            }
+            els.push(<Row key={node.id} node={node} db={db} t={t} onEdit={onEdit} />);
+          }
+          return els;
+        })()}
       </div>
     </div>
   );
@@ -174,7 +273,7 @@ function Row({
     <>
     <div
       className="group flex h-[22px] cursor-pointer items-center gap-1 pr-1 text-xs hover:bg-muted/60"
-      style={{ paddingLeft: 4 + node.depth * 12 }}
+      style={{ paddingLeft: 4 + node.depth * 12, ...(conn?.color ? { boxShadow: `inset 3px 0 0 ${conn.color}` } : {}) }}
       {...(menuItems.length > 0 ? triggerProps : {})}
       onClick={() => void db.toggleExpand(node)}
       onDoubleClick={() => {
@@ -196,7 +295,7 @@ function Row({
       <NodeIcon node={node} />
       {node.depth === 0 && <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[status]}`} />}
       <span className="flex-1 truncate" title={node.label}>
-        {node.label}
+        {node.kind === 'group' && node.groupKind ? t(`node.group.${node.groupKind}`) : node.label}
       </span>
 
       {conn && (

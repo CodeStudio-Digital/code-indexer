@@ -40,6 +40,10 @@ export interface FileTreeRowProps {
   expanded: boolean;
   status?: GitFileStatus;
   renaming: boolean;
+  /** Project context for the "Copy reference" + "Git" menu items (stable per project). */
+  projectRoot?: string | null;
+  repoRoot?: string | null;
+  isRepo?: boolean;
   onOpen: (path: string) => void;
   onToggle: (path: string) => void;
   /** Clique simples (seleção). Duplo-clique/seta usam onOpen/onToggle. */
@@ -58,10 +62,14 @@ function FileTreeRowImpl(props: FileTreeRowProps) {
   const selected = useSelectionStore((s) => s.selected.has(entry.path));
   const selCount = useSelectionStore((s) => (s.selected.has(entry.path) ? s.selected.size : 1));
   const isDir = entry.type === 'dir';
-  const items = buildContextItems(entry, projectId, props.onMutated, () => props.onStartRename(entry.path), {
-    count: selCount,
-    getPaths: () => [...useSelectionStore.getState().selected],
-  });
+  const items = buildContextItems(
+    entry,
+    projectId,
+    props.onMutated,
+    () => props.onStartRename(entry.path),
+    { count: selCount, getPaths: () => [...useSelectionStore.getState().selected] },
+    { projectRoot: props.projectRoot ?? null, repoRoot: props.repoRoot ?? null, isRepo: props.isRepo ?? false },
+  );
   const { triggerProps, Menu } = useContextMenu(items);
   const color = colorForStatus(status);
   const { Icon: TypeIcon, colorClass } = fileIconFor(isDir ? '' : entry.path);

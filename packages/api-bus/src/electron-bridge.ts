@@ -26,6 +26,9 @@ export interface ElectronAPI {
   /** Reveal a local folder/file in the OS file manager (Explorer/Finder/…). */
   openPath(path: string): void;
 
+  /** Reveal a file in its containing folder, with the file selected. */
+  showItemInFolder(path: string): void;
+
   /** App version from electron `app.getVersion()`. */
   getAppVersion(): Promise<string>;
 
