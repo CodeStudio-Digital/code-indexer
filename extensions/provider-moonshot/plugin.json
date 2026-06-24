@@ -1,0 +1,12 @@
+{
+  "name": "provider-moonshot",
+  "version": "0.1.0",
+  "description": "Moonshot AI (API key) as a bundled provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "Moonshot AI",
+    "shortDescription": "Kimi / Moonshot chat models via API key through the providers contribution point",
+    "category": "ai-provider"
+  }
+}

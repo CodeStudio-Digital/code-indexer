@@ -1,0 +1,12 @@
+{
+  "name": "provider-openrouter",
+  "version": "0.1.0",
+  "description": "OpenRouter as a bundled provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "OpenRouter",
+    "shortDescription": "Many models behind one OpenAI-compatible endpoint via the providers contribution point",
+    "category": "ai-provider"
+  }
+}
