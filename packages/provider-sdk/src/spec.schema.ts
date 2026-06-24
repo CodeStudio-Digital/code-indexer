@@ -39,6 +39,7 @@ const wireOptsSchema = z
       .object({
         map: z.record(z.string(), z.object({ baseURL: z.string() }).strict()),
         envOverride: z.string().optional(),
+        defaultModeKey: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -163,6 +164,65 @@ const authNeedsSchema = z
   })
   .strict();
 
+/** Declarative settings-form field. Pure presentational data — no host capability,
+ *  so the SAME schema is safe for built-ins and third-party plugins. */
+const configFieldSchema = z
+  .object({
+    key: z.string().min(1),
+    type: z.enum(['text', 'password', 'select', 'toggle']),
+    label: z.string(),
+    storeIn: z.enum(['api_key', 'base_url', 'extra']),
+    options: z.array(z.object({ value: z.string(), label: z.string() }).strict()).optional(),
+    placeholder: z.string().optional(),
+    helpText: z.string().optional(),
+    optional: z.boolean().optional(),
+    advanced: z.boolean().optional(),
+    default: z.string().optional(),
+  })
+  .strict();
+
+const providerConfigDescriptorSchema = z.object({ fields: z.array(configFieldSchema) }).strict();
+
+/** Recursive JSON value (for `request.body.inject`). Pure data — third-party-safe. */
+const jsonValueSchema: z.ZodType = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+
+/** Declarative HTTP-request customization. Claims NO host capability → the SAME
+ *  schema is safe for built-ins and third-party plugins (added to both variants). */
+const requestDescriptorSchema = z
+  .object({
+    auth: z.object({ header: z.string().min(1), valueTemplate: z.string() }).strict().optional(),
+    headers: z
+      .array(z.object({ header: z.string().min(1), value: z.string() }).strict())
+      .optional(),
+    query: z.record(z.string(), z.string()).optional(),
+    model: z
+      .object({
+        stripSuffix: z.array(z.string()).optional(),
+        map: z.record(z.string(), z.string()).optional(),
+        template: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    body: z
+      .object({
+        inject: z.record(z.string(), jsonValueSchema).optional(),
+        remove: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    response: z.object({ reasoningDeltaKey: z.string() }).strict().optional(),
+  })
+  .strict();
+
 /** Common auth fields (both host + third-party). `flavor`/`hooks` are tightened per-variant. */
 const authBase = {
   mode: z.enum(['api-key', 'oauth', 'aws-sigv4']),
@@ -216,15 +276,29 @@ function specSchema<
       defaultModels: z.array(z.string()),
       defaultModel: z.string().optional(),
       pricing: z.record(z.string(), pricingEntrySchema),
+      pricingPriority: z.number().optional(),
       capabilities: capabilitiesSchema.optional(),
       wire: z.enum(['openai-compat', 'anthropic', 'gemini', 'bedrock', 'codex', 'kimi']),
       wireOpts: wireOptsSchema.optional(),
+      request: requestDescriptorSchema.optional(),
       discovery: discoveryDescriptorSchema(opts.discoveryFormats).optional(),
       models: z.record(z.string(), providerModelMetaSchema).optional(),
       test: testDescriptorSchema(opts.testFormats).optional(),
       auth: opts.auth.optional(),
+      config: providerConfigDescriptorSchema.optional(),
     })
-    .strict();
+    .strict()
+    // `request.auth` overrides the credential header — only meaningful (and only
+    // safe) on the api-key path. OAuth/aws connectors own auth via their hooks.
+    .superRefine((spec, ctx) => {
+      if (spec.request?.auth && spec.credKind !== 'api-key') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['request', 'auth'],
+          message: "request.auth requires credKind 'api-key'",
+        });
+      }
+    });
 }
 
 /** Full schema (built-ins / host) — every wire, format, and host-only auth. */

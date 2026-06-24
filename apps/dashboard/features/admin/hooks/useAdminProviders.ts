@@ -9,7 +9,6 @@ import {
   refreshProviderModels,
   saveProvider,
   setFallbackProvider as setFallbackProviderApi,
-  setKimiCodeThinkingMode as setKimiCodeThinkingModeApi,
   setModelReasoningLevel,
   setModelContextWindow as setModelContextWindowApi,
   setModelMaxTools as setModelMaxToolsApi,
@@ -230,24 +229,6 @@ export function useAdminProviders() {
     }
   };
 
-  const setKimiCodeThinkingMode = async (
-    providerId: string,
-    mode: 'auto' | 'enabled' | 'disabled',
-  ) => {
-    const provider = providers.find((p) => p.id === providerId);
-    if (!provider) return;
-    try {
-      await setKimiCodeThinkingModeApi(provider, mode);
-      await load();
-    } catch (e) {
-      await notify({
-        title: 'Kimi Code thinking update failed',
-        description: (e as Error).message,
-        variant: 'destructive',
-      });
-    }
-  };
-
   const setFallback = async (providerId: string, fallbackProviderId: string | null) => {
     try {
       await setFallbackProviderApi(providerId, fallbackProviderId);
@@ -283,7 +264,6 @@ export function useAdminProviders() {
     setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,
-    setKimiCodeThinkingMode,
     setFallback,
   };
 }

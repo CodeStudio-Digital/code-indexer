@@ -17,10 +17,12 @@
  * own project picker.
  */
 import { useEffect, useState } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
-import { BookOpen } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { BookOpen, Info } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
+import { cn } from '../../lib/utils.js';
 import { CollectionsList } from './CollectionsList.js';
 import { CollectionDetail } from './CollectionDetail.js';
 import { SuggestionsPanel } from './suggestions/SuggestionsPanel.js';
@@ -78,26 +80,47 @@ export function DocsPage() {
   const selected = collections?.find((c) => c.id === selectedId) ?? null;
 
   return (
-    // Full-height IDE-style shell: a compact title band + a tab strip, with
-    // the active tab's body filling the remaining height and scrolling on its
+    // Full-height IDE-style shell. The title, an info affordance (description
+    // on hover) and the tabs all share one compact top band styled like the
+    // app's top nav; the active tab's body fills the rest and scrolls on its
     // own. `/docs` opts out of AppShell's outer scroll+padding (see AppShell),
     // so this owns its height; `min-h-0` on flex children is load-bearing.
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-2.5 px-4 py-2.5 border-b shrink-0 min-w-0">
-        <div className="h-7 w-7 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0">
-          <BookOpen className="h-4 w-4" />
-        </div>
-        <h1 className="text-sm font-semibold shrink-0">{t('title')}</h1>
-        <p className="min-w-0 truncate text-xs text-muted-foreground hidden md:block">
-          <Trans
-            t={t}
-            i18nKey="subtitle"
-            values={{ tool: 'rag_search_docs' }}
-            components={{
-              tool: <code className="text-[11px] bg-muted px-1 py-0.5 rounded" />,
-            }}
-          />
-        </p>
+    <Tabs defaultValue="collections" className="flex h-full min-h-0 flex-col">
+      <header className="flex items-center gap-2 px-3 h-11 border-b shrink-0">
+        <BookOpen className="h-4 w-4 text-primary shrink-0" />
+        <span className="text-[13px] font-semibold shrink-0">{t('title')}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={t('aboutAria')}
+              className="text-muted-foreground/70 hover:text-foreground transition-colors shrink-0"
+            >
+              <Info className="h-3.5 w-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-sm leading-relaxed">
+            {t('subtitle', { tool: 'rag_search_docs' })}
+          </TooltipContent>
+        </Tooltip>
+
+        <div className="mx-1 h-4 w-px bg-border shrink-0" />
+
+        <TabsList className="h-auto gap-0.5 bg-transparent p-0">
+          {(['collections', 'suggestions', 'research'] as const).map((id) => (
+            <TabsTrigger
+              key={id}
+              value={id}
+              className={cn(
+                'h-7 rounded px-2 text-xs font-medium text-muted-foreground shadow-none',
+                'hover:text-foreground hover:bg-muted',
+                'data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none',
+              )}
+            >
+              {t(`tabs.${id}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
       </header>
 
       {error && (
@@ -106,14 +129,7 @@ export function DocsPage() {
         </div>
       )}
 
-      <Tabs defaultValue="collections" className="flex flex-1 min-h-0 flex-col">
-        <TabsList className="mx-4 mt-3 self-start shrink-0">
-          <TabsTrigger value="collections">{t('tabs.collections')}</TabsTrigger>
-          <TabsTrigger value="suggestions">{t('tabs.suggestions')}</TabsTrigger>
-          <TabsTrigger value="research">{t('tabs.research')}</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="collections" className="flex-1 min-h-0 mt-3 border-t">
+      <TabsContent value="collections" className="flex-1 min-h-0 mt-0">
           <PanelGroup direction="horizontal" autoSaveId="mcp-docs-collections-horiz">
             <Panel defaultSize={28} minSize={18} maxSize={42}>
               <div className="h-full overflow-y-auto border-r p-3">
@@ -134,8 +150,8 @@ export function DocsPage() {
           </PanelGroup>
         </TabsContent>
 
-        <TabsContent value="suggestions" className="flex-1 min-h-0 mt-3 overflow-y-auto px-4 pb-4">
-          <div className="space-y-3 pt-1">
+        <TabsContent value="suggestions" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
+          <div className="space-y-3 pt-3">
             {projects.length > 0 && (
               <div className="flex items-center gap-2 text-sm">
                 <label className="text-muted-foreground">{t('projectPicker.label')}</label>
@@ -156,12 +172,11 @@ export function DocsPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="research" className="flex-1 min-h-0 mt-3 overflow-y-auto px-4 pb-4">
-          <div className="pt-1">
+        <TabsContent value="research" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
+          <div className="pt-3">
             <ResearchPanel />
           </div>
         </TabsContent>
       </Tabs>
-    </div>
   );
 }

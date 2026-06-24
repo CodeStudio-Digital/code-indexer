@@ -106,7 +106,7 @@ export class AnthropicChatProvider implements ChatProvider {
     this.useBetaMessages = opts.useBetaMessages ?? false;
     this.streamViaCreate = opts.streamViaCreate ?? false;
     this.client = new Anthropic({
-      apiKey: opts.authToken ? null : (opts.apiKey ?? process.env.ANTHROPIC_API_KEY),
+      apiKey: opts.authToken ? null : (opts.apiKey ?? ''),
       ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
       ...(opts.authToken ? { authToken: opts.authToken } : {}),
       ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),

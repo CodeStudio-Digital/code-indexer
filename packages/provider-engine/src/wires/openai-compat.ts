@@ -6,6 +6,12 @@ import { DeepSeekProvider } from '@mcp/indexer/indexer/providers/deepseek.js';
 import { parseModelWithMode } from '../wire-helpers/model-mode.js';
 import { resolveBaseURL } from '../wire-helpers/base-url.js';
 import { resolveHeaders } from '../wire-helpers/headers.js';
+import {
+  requestStaticHeaders,
+  requestAuthHeader,
+  requestQuery,
+  rewriteModelId,
+} from '../wire-helpers/request.js';
 
 type WireParts = Pick<
   ProviderDefinition,
@@ -35,13 +41,40 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
   return {
     createCoder: (creds, model) => {
       const parsed = parseModelWithMode(model);
+      const baseURL = resolveBaseURL(spec, creds, parsed.mode);
+      const baseModel = parsed.model ?? spec.defaultModel ?? spec.defaultModels[0];
+
+      // Fast path: no `request` descriptor → byte-identical to the native wire.
+      if (!spec.request) {
+        return new OpenAIChatProvider({
+          name: spec.kind,
+          apiKey: creds.apiKey,
+          baseURL,
+          model: baseModel,
+          defaultHeaders: resolveHeaders(spec, creds),
+          vendor,
+        });
+      }
+
+      // Declarative request shaping (custom auth header, extra headers, query,
+      // model rewrite, static body inject/remove, response key mapping).
+      const finalModel = rewriteModelId(spec, baseModel);
+      const ctx = { apiKey: creds.apiKey, baseURL, model: finalModel, creds };
+      const authHeader = requestAuthHeader(spec, ctx);
       return new OpenAIChatProvider({
         name: spec.kind,
-        apiKey: creds.apiKey,
-        baseURL: resolveBaseURL(spec, creds, parsed.mode),
-        model: parsed.model ?? spec.defaultModel ?? spec.defaultModels[0],
-        defaultHeaders: resolveHeaders(spec, creds),
+        // When the descriptor owns auth, suppress the SDK's Authorization (the
+        // adapter sets the custom header + drops Authorization).
+        apiKey: authHeader ? '' : creds.apiKey,
+        baseURL,
+        model: finalModel,
+        defaultHeaders: requestStaticHeaders(spec, ctx, resolveHeaders(spec, creds)),
         vendor,
+        authHeader,
+        defaultQuery: requestQuery(spec, ctx),
+        bodyInject: spec.request.body?.inject,
+        bodyRemove: spec.request.body?.remove,
+        reasoningDeltaKey: spec.request.response?.reasoningDeltaKey,
       });
     },
 

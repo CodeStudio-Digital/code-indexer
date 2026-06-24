@@ -6,6 +6,7 @@ import {
   refreshIfExpired as refreshKimiCodeToken,
 } from '@mcp/services/services/oauth/kimi-code.js';
 import { getStore } from '@mcp/services/providers/shared/store.js';
+import { requestFetchHeaders } from './request.js';
 
 type TestConnection = NonNullable<ProviderDefinition['testConnection']>;
 
@@ -25,9 +26,14 @@ export function buildTestConnection(spec: ProviderSpec): TestConnection | undefi
       return async ({ creds }) => {
         const base = creds.baseURL ?? t.fallbackBaseURL ?? spec.defaultBaseURL ?? 'https://api.openai.com/v1';
         const url = base.endsWith('/') ? `${base}models` : `${base}/models`;
-        const r = await fetch(url, {
-          headers: { Authorization: `Bearer ${creds.apiKey ?? ''}`, ...creds.extraHeaders },
-        });
+        // Byte-identical (native Bearer + extraHeaders) when no `request` set.
+        const headers = requestFetchHeaders(
+          spec,
+          { apiKey: creds.apiKey, baseURL: base, creds },
+          { Authorization: `Bearer ${creds.apiKey ?? ''}`, ...creds.extraHeaders },
+          'Authorization',
+        );
+        const r = await fetch(url, { headers });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
       };
 

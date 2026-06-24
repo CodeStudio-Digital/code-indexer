@@ -148,6 +148,10 @@ await buildPreload();
   }
 }
 
+// 3d. Bundled provider plugins → dist/bundled-plugins/ (electron-builder ships
+//     it via extraResources → resourcesPath/bundled-plugins; seeded on first boot).
+run('node', ['scripts/build-bundled-plugins.mjs']);
+
 if (noPackage) {
   console.log('\n--no-package: skipping electron-builder. Done.');
   process.exit(0);

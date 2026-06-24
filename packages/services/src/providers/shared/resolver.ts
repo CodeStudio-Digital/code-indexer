@@ -10,23 +10,17 @@ import {
 import { resolveBedrockCreds } from './aws.js';
 
 /**
- * Pick the first defined env var from a list.
- */
-function pickEnv(envVars: string[]): string | undefined {
-  for (const v of envVars) {
-    const val = process.env[v];
-    if (val) return val;
-  }
-  return undefined;
-}
-
-/**
  * Resolve runtime credentials for a provider instance. Despachado por
- * credKind: api-key reads DB row or env; oauth refreshes via the shared
+ * credKind: api-key reads the DB row only; oauth refreshes via the shared
  * OAuth helpers; aws reads the AWS block from oauth_tokens.extra.
  *
- * cfg=null means "no DB row" — only legal for api-key with env var set,
- * or for aws with instance-role fallback. OAuth shapes require a cfg.
+ * Credentials are never sourced from the environment — the provider
+ * configuration (admin UI / `provider_configs` row) is the sole source. With
+ * no row, an api-key shape resolves to `apiKey: undefined` and the downstream
+ * call fails with a clear auth error rather than silently using an env token.
+ *
+ * cfg=null means "no DB row" — for api-key that yields no key; aws falls back
+ * to the instance-role SDK chain. OAuth shapes require a cfg.
  */
 export async function resolveCreds(
   def: ProviderDefinition,
@@ -35,7 +29,7 @@ export async function resolveCreds(
   switch (def.credKind) {
     case 'api-key':
       return {
-        apiKey: cfg?.api_key ?? pickEnv(def.envVars),
+        apiKey: cfg?.api_key ?? undefined,
         baseURL: cfg?.base_url ?? def.defaultBaseURL,
         // Forward the cfg.extra blob so api-key shapes that need
         // per-instance config (e.g. Cloudflare's account_id) can read it

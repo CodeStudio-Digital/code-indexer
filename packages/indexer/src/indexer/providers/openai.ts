@@ -30,7 +30,10 @@ export class OpenAIProvider implements LLMProvider {
     this.model = model ?? 'gpt-4o-mini';
     this.summaryModel = summaryModel;
     this.client = new OpenAI({
-      apiKey: apiKey ?? process.env.OPENAI_API_KEY,
+      // Credentials come only from the resolved provider config — never the
+      // environment. Empty string blocks the SDK's OPENAI_API_KEY auto-read;
+      // an unconfigured provider then fails with a clean 401.
+      apiKey: apiKey ?? '',
       ...(baseURL ? { baseURL } : {}),
       ...(defaultHeaders ? { defaultHeaders } : {}),
     });

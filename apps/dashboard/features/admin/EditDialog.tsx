@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -18,6 +18,8 @@ import {
 } from '../../components/ui/select.js';
 import { Switch } from '../../components/ui/switch.js';
 import { KINDS, type AdminProvider, type ProviderKind } from './types.js';
+import { fetchKnownProviders, type KnownProvider } from './api.js';
+import { ProviderConfigFields } from './ProviderConfigForm.js';
 
 interface EditDialogProps {
   initial: Partial<AdminProvider>;
@@ -28,15 +30,35 @@ interface EditDialogProps {
 export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
   const { t } = useTranslation(['admin', 'common']);
   const isNew = !initial.id;
-  const initialAccountId = readAccountId(initial.extra);
-  const [form, setForm] = useState<Partial<AdminProvider> & { api_key?: string; account_id?: string }>({
+  const [form, setForm] = useState<Partial<AdminProvider> & { api_key?: string }>({
     ...initial,
     api_key: '', // Never pre-fill; blank means "leave existing".
-    account_id: initialAccountId,
+    extra: { ...(initial.extra ?? {}) },
   });
+
+  // The kind options come from the registry (built-ins + enabled plugins), so a
+  // declarative plugin provider is configurable like a built-in. Falls back to
+  // the static KINDS list if the registry call fails.
+  const [known, setKnown] = useState<KnownProvider[]>([]);
+  useEffect(() => {
+    fetchKnownProviders()
+      .then(setKnown)
+      .catch(() => setKnown([]));
+  }, []);
+  const kindOptions: Array<{ value: string; label: string }> =
+    known.length > 0
+      ? known.map((k) => ({ value: k.kind, label: k.displayName || k.kind }))
+      : KINDS.map((k) => ({ value: k, label: k }));
+
+  const selected = known.find((k) => k.kind === form.kind);
+  const isOauth = selected?.credKind === 'oauth' || selected?.credKind === 'aws';
+  const configFields = selected?.config?.fields ?? [];
 
   function update<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
+  }
+  function updateExtra(key: string, v: unknown) {
+    setForm((f) => ({ ...f, extra: { ...(f.extra ?? {}), [key]: v } }));
   }
 
   function submit() {
@@ -51,13 +73,13 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
       use_for_coder: form.use_for_coder,
       use_for_general: form.use_for_general,
       is_default: form.is_default,
+      // The declarative config fields wrote their values into `extra` (merged
+      // with the existing blob); send it so the backend persists them.
+      extra: form.extra,
     };
     // Only send api_key when the user typed something — avoids clobbering an
     // existing key with an empty string on edit.
     if (form.api_key && form.api_key.length > 0) payload.api_key = form.api_key;
-    if (form.kind === 'cloudflare') {
-      payload.extra = { ...(initial.extra ?? {}), account_id: form.account_id?.trim() ?? '' };
-    }
     onSave(payload);
   }
 
@@ -94,65 +116,67 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {KINDS.map((k) => (
-                  <SelectItem key={k} value={k}>
-                    {k}
+                {kindOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-          <div>
-            <label className="text-xs font-medium">{t('admin:editProvider.baseUrl')}</label>
-            <Input
-              value={form.base_url ?? ''}
-              onChange={(e) => update('base_url', e.target.value)}
-              placeholder={t('admin:editProvider.baseUrlPlaceholder')}
-            />
-            {form.kind === 'zai' && (
-              <ZaiEndpointHint
-                baseUrl={form.base_url ?? ''}
-                onSet={(url) => update('base_url', url)}
-              />
-            )}
-          </div>
-          <div>
-            <label className="text-xs font-medium">{t('admin:editProvider.apiKey')} {!isNew && t('admin:editProvider.apiKeyKeep')}</label>
-            <Input
-              type="password"
-              value={form.api_key ?? ''}
-              onChange={(e) => update('api_key', e.target.value)}
-              placeholder={isNew ? t('admin:editProvider.apiKeyPlaceholder') : t('admin:editProvider.apiKeyMasked')}
-            />
-          </div>
-          {form.kind === 'cloudflare' && (
+          {!isOauth && (
             <div>
-              <label className="text-xs font-medium">Cloudflare Account ID</label>
+              <label className="text-xs font-medium">{t('admin:editProvider.baseUrl')}</label>
               <Input
-                value={form.account_id ?? ''}
-                onChange={(e) => update('account_id', e.target.value)}
-                placeholder="e.g. 1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p"
+                value={form.base_url ?? ''}
+                onChange={(e) => update('base_url', e.target.value)}
+                placeholder={t('admin:editProvider.baseUrlPlaceholder')}
               />
             </div>
           )}
-          <div className="flex items-center gap-6 pt-2">
-            <label className="flex items-center gap-2 text-sm">
+          {isOauth ? (
+            <div className="rounded border border-input bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              {selected?.displayName} usa conexão {selected?.credKind === 'aws' ? 'por credenciais' : 'OAuth'} —
+              conecte pelo botão do provider (acima na lista). {initial.has_key ? 'Conectado.' : ''}
+            </div>
+          ) : (
+            <div>
+              <label className="text-xs font-medium">{t('admin:editProvider.apiKey')} {!isNew && t('admin:editProvider.apiKeyKeep')}</label>
+              <Input
+                type="password"
+                value={form.api_key ?? ''}
+                onChange={(e) => update('api_key', e.target.value)}
+                placeholder={isNew ? t('admin:editProvider.apiKeyPlaceholder') : t('admin:editProvider.apiKeyMasked')}
+              />
+            </div>
+          )}
+          {/* Declarative per-provider extra fields (zai plan mode, cloudflare
+              account id, kimi thinking, openrouter attribution, …). */}
+          <ProviderConfigFields
+            fields={configFields}
+            base_url={form.base_url ?? ''}
+            extra={(form.extra ?? {}) as Record<string, unknown>}
+            onBaseUrl={(v) => update('base_url', v)}
+            onExtra={updateExtra}
+          />
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-2">
+            <label className="flex items-center gap-2 whitespace-nowrap text-sm">
               <Switch checked={!!form.enabled} onCheckedChange={(v) => update('enabled', v)} />
               {t('admin:editProvider.enabled')}
             </label>
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 whitespace-nowrap text-sm">
               <Switch checked={!!form.use_for_agent} onCheckedChange={(v) => update('use_for_agent', v)} />
               {t('admin:editProvider.indexer')}
             </label>
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 whitespace-nowrap text-sm">
               <Switch checked={!!form.use_for_coder} onCheckedChange={(v) => update('use_for_coder', v)} />
               {t('admin:editProvider.coder')}
             </label>
-            <label className="flex items-center gap-2 text-sm" title="Disponibilizar este provider para uso como IA geral (commit messages, prompts, etc)">
+            <label className="flex items-center gap-2 whitespace-nowrap text-sm" title="Disponibilizar este provider para uso como IA geral (commit messages, prompts, etc)">
               <Switch checked={!!form.use_for_general} onCheckedChange={(v) => update('use_for_general', v)} />
               IA geral
             </label>
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 whitespace-nowrap text-sm">
               <Switch checked={!!form.is_default} onCheckedChange={(v) => update('is_default', v)} />
               {t('admin:editProvider.default')}
             </label>
@@ -171,68 +195,3 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
   );
 }
 
-function readAccountId(extra: Record<string, unknown> | undefined): string {
-  const raw = extra?.account_id;
-  return typeof raw === 'string' ? raw : '';
-}
-
-/**
- * Z.AI ships two inference endpoints — a free-tier general PaaS one
- * and a paid Coding Plan one. Both serve the same model ids but use
- * different API key namespaces, so picking the wrong endpoint 401s
- * every request.
- *
- * Rather than make the operator memorise the two URLs, this helper
- * surfaces them as one-click chips under the base_url field. The
- * `base_url` itself stays a normal Input so dev / staging URLs still
- * work. Empty base_url is shown as "general (default)".
- */
-function ZaiEndpointHint({
-  baseUrl,
-  onSet,
-}: {
-  baseUrl: string;
-  onSet: (url: string) => void;
-}) {
-  const ZAI_GENERAL = 'https://api.z.ai/api/paas/v4/';
-  const ZAI_CODING = 'https://api.z.ai/api/coding/paas/v4/';
-  const trimmed = baseUrl.trim().replace(/\/?$/, '/');
-  const isCoding = trimmed === ZAI_CODING;
-  const isGeneral = trimmed === '' || trimmed === ZAI_GENERAL;
-  return (
-    <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[11px]">
-      <span className="text-muted-foreground">Endpoint:</span>
-      <button
-        type="button"
-        onClick={() => onSet('')}
-        className={
-          'px-2 py-0.5 rounded border transition-colors ' +
-          (isGeneral
-            ? 'bg-primary/10 border-primary text-foreground'
-            : 'border-input text-muted-foreground hover:bg-muted/40')
-        }
-        title="Standard API key. Works for every supported GLM model."
-      >
-        General (free tier)
-      </button>
-      <button
-        type="button"
-        onClick={() => onSet(ZAI_CODING)}
-        className={
-          'px-2 py-0.5 rounded border transition-colors ' +
-          (isCoding
-            ? 'bg-primary/10 border-primary text-foreground'
-            : 'border-input text-muted-foreground hover:bg-muted/40')
-        }
-        title="Requires the paid GLM Coding Plan subscription. Same model ids, different API key."
-      >
-        GLM Coding Plan
-      </button>
-      <span className="text-muted-foreground/70">
-        Per-message override:{' '}
-        <code className="font-mono">model::coding</code> /{' '}
-        <code className="font-mono">model::general</code>
-      </span>
-    </div>
-  );
-}

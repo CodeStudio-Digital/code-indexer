@@ -89,12 +89,30 @@ export const zaiSpec: ProviderSpec = {
     modelModes: {
       map: { coding: { baseURL: ZAI_CODING_URL }, general: { baseURL: ZAI_GENERAL_URL } },
       envOverride: 'ZAI_BASE_URL',
+      defaultModeKey: 'zai_mode',
     },
   },
   discovery: {
     from: 'openai-models',
     modelsUrl: 'https://api.z.ai/api/paas/v4/models',
     supportsModes: ['normal', 'coding'],
+  },
+  config: {
+    fields: [
+      {
+        key: 'zai_mode',
+        type: 'select',
+        label: 'Plan mode',
+        storeIn: 'extra',
+        options: [
+          { value: 'normal', label: 'Normal (general endpoint)' },
+          { value: 'coding', label: 'Coding (GLM Coding Plan endpoint)' },
+        ],
+        default: 'normal',
+        helpText:
+          "Default Z.AI endpoint + the plan's models. A model suffix like 'glm-4.6::coding' still overrides per request.",
+      },
+    ],
   },
 };
 
@@ -166,6 +184,18 @@ export const cloudflareSpec: ProviderSpec = {
       required: true,
     },
   },
+  config: {
+    fields: [
+      {
+        key: 'account_id',
+        type: 'text',
+        label: 'Account ID',
+        storeIn: 'extra',
+        placeholder: '32-character Cloudflare account id',
+        helpText: 'From your Cloudflare dashboard. Fills {account_id} in the base URL.',
+      },
+    ],
+  },
 };
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -214,6 +244,29 @@ export const openrouterSpec: ProviderSpec = {
   },
   discovery: { from: 'openrouter-models' },
   test: { from: 'openai-models' },
+  config: {
+    fields: [
+      {
+        key: 'http_referer',
+        type: 'text',
+        label: 'HTTP-Referer',
+        storeIn: 'extra',
+        optional: true,
+        advanced: true,
+        placeholder: 'https://yourapp.example',
+        helpText: 'Optional attribution sent to OpenRouter.',
+      },
+      {
+        key: 'app_title',
+        type: 'text',
+        label: 'App title',
+        storeIn: 'extra',
+        optional: true,
+        advanced: true,
+        placeholder: 'My App',
+      },
+    ],
+  },
 };
 
 export const OPENAI_COMPAT_SPECS: ProviderSpec[] = [

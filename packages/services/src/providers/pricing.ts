@@ -8,9 +8,18 @@ import type { PricingEntry } from './types.js';
  *
  * Returns zero pricing for unknown models — matches the legacy fallback
  * behavior so the indexer never throws on a model name it doesn't know.
+ *
+ * Candidates are walked in ascending `pricingPriority` (default 0) before the
+ * first-match: a provider can pin its precedence for a cross-provider duplicate
+ * model id as DATA, independent of registry/plugin load order. The sort is
+ * stable, so with no priorities set the walk is the registry insertion order —
+ * byte-identical to the legacy first-match.
  */
 export function lookupPricing(model: string): PricingEntry {
-  for (const def of listDefinitions()) {
+  const ordered = [...listDefinitions()].sort(
+    (a, b) => (a.pricingPriority ?? 0) - (b.pricingPriority ?? 0),
+  );
+  for (const def of ordered) {
     const entry = def.pricing[model];
     if (entry) return entry;
   }

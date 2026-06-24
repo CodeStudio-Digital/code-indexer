@@ -285,6 +285,61 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
   });
 });
 
+// ─── No env credential fallback ─────────────────────────────────────────
+/**
+ * Credentials never come from the environment — the provider configuration is
+ * the sole source. An env var like ZAI_API_KEY must not resolve to a key, nor
+ * auto-select a provider when nothing is configured.
+ */
+describe('resolveCreds — env vars are not a credential source', () => {
+  const orig = process.env.ZAI_API_KEY;
+  beforeEach(() => { process.env.ZAI_API_KEY = 'env-token-should-be-ignored'; });
+  afterEach(() => {
+    if (orig !== undefined) process.env.ZAI_API_KEY = orig;
+    else delete process.env.ZAI_API_KEY;
+  });
+
+  it('returns apiKey undefined for an api-key shape with no DB row, even with the env var set', async () => {
+    const { resolveCreds } = await import('@mcp/services/providers/shared/resolver.js');
+    const creds = await resolveCreds(zai, null);
+    expect(creds.apiKey).toBeUndefined();
+    expect(creds.baseURL).toBe('https://api.z.ai/api/paas/v4'); // def.defaultBaseURL
+  });
+
+  it('uses the configured DB key when a row is present', async () => {
+    const { resolveCreds } = await import('@mcp/services/providers/shared/resolver.js');
+    const cfg = {
+      id: 'zai', name: 'Z.AI', kind: 'zai', base_url: null, api_key: 'db-key',
+      auth_mode: 'api_key', enabled: true, use_for_agent: true, use_for_coder: true,
+      use_for_general: false, is_default: false, extra: {}, fallback_provider_id: null,
+      created_at: '', updated_at: '',
+    } as ProviderConfig;
+    const creds = await resolveCreds(zai, cfg);
+    expect(creds.apiKey).toBe('db-key');
+  });
+});
+
+describe('lookupProvider — no env auto-select', () => {
+  const orig = process.env.ZAI_API_KEY;
+  beforeEach(() => { process.env.ZAI_API_KEY = 'env-token-should-be-ignored'; });
+  afterEach(() => {
+    if (orig !== undefined) process.env.ZAI_API_KEY = orig;
+    else delete process.env.ZAI_API_KEY;
+  });
+
+  it('throws when nothing is configured, even though an env var is set', async () => {
+    const store = {
+      getProvider: () => null,
+      listProviders: () => [],
+    } as unknown as ProviderStore;
+
+    const { lookupProvider } = await import('@mcp/services/providers/factory.js');
+    await withMockedStore(store, async () => {
+      await expect(lookupProvider()).rejects.toThrow(/No provider available/);
+    });
+  });
+});
+
 // ─── Google OAuth definition: cloudCodeSessionId propagation ─────────────
 describe('google-oauth.createCoder — cloudCodeSessionId', () => {
   const creds: ResolvedCreds = {

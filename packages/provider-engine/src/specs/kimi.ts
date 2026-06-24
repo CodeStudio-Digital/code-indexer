@@ -42,6 +42,11 @@ export const kimiCodeSpec: ProviderSpec = {
     'kimi-k2-thinking-turbo': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2-turbo-preview': { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
+  // Wins the cross-provider duplicate-id collision with moonshot (default 0) for
+  // the shared `kimi-k2-turbo-preview` / `kimi-k2-thinking-turbo` ids: kimi-code
+  // is the $0 OAuth plan, moonshot is metered. Deterministic once BOTH are
+  // plugins (load order no longer fixes the winner).
+  pricingPriority: -10,
   capabilities: {
     supportsThinking: true,
     supportsVision: true,
@@ -65,6 +70,23 @@ export const kimiCodeSpec: ProviderSpec = {
     deviceAuthUrl: 'https://auth.kimi.com/api/oauth/device_authorization',
     tokenUrl: 'https://auth.kimi.com/api/oauth/token',
     hooks: 'kimi-code',
+  },
+  // The thinking-mode key matches wireOpts.thinkingMode.key ('thinkingMode').
+  config: {
+    fields: [
+      {
+        key: 'thinkingMode',
+        type: 'select',
+        label: 'Thinking mode',
+        storeIn: 'extra',
+        options: [
+          { value: 'auto', label: 'Auto' },
+          { value: 'enabled', label: 'Enabled' },
+          { value: 'disabled', label: 'Disabled' },
+        ],
+        default: 'auto',
+      },
+    ],
   },
 };
 

@@ -15,7 +15,10 @@ export async function materialize(
 ): Promise<MaterializeResult> {
   switch (source.source) {
     case 'local':
-      if (!source.path) throw new Error('local source requires "path"');
+    case 'bundled':
+      // 'bundled' is a first-party plugin shipped with the app; it lives on disk
+      // exactly like a local source, only the recorded `source` tag differs.
+      if (!source.path) throw new Error(`${source.source} source requires "path"`);
       return materializeLocal(source.path, stagingDir);
     case 'github':
       if (!source.repo) throw new Error('github source requires "repo"');

@@ -23,7 +23,7 @@
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
 import type { ProviderDefinition, ProviderSpec } from '@mcp/provider-sdk';
-import { thirdPartyProviderSpecSchema } from '@mcp/provider-sdk';
+import { thirdPartyProviderSpecSchema, providerSpecSchema } from '@mcp/provider-sdk';
 
 export interface ProviderPluginRef {
   namespace: string;
@@ -57,6 +57,19 @@ export function listProviderPlugins(): ProviderPluginRef[] {
   return out;
 }
 
+/**
+ * First-party trust predicate: a provider plugin shipped INSIDE the app
+ * (seeded with `source: 'bundled'`, see seedBundledPlugins) under the reserved
+ * `provider-*` namespace. Such a plugin is validated against the full host
+ * schema (may declare OAuth `auth.hooks` / `sdk:*` discovery) and is exempt from
+ * `reservedKinds` (it legitimately owns its built-in kind). The bundled artifact
+ * is trusted by provenance (it came from the app bundle); Ed25519-signature
+ * verification is a future hardening for market/github first-party installs.
+ */
+export function isFirstPartyBundled(ref: ProviderPluginRef): boolean {
+  return ref.source === 'bundled' && ref.namespace.startsWith('provider-');
+}
+
 export interface LoadPluginProvidersOptions {
   /** Register a built provider into the core registry (e.g. upsertProvider). */
   register: (def: ProviderDefinition) => void;
@@ -64,6 +77,16 @@ export interface LoadPluginProvidersOptions {
   buildDefinition: (spec: ProviderSpec) => ProviderDefinition;
   /** Optional soft allow/deny per plugin (default: allow all). */
   trust?: (ref: ProviderPluginRef) => boolean;
+  /**
+   * First-party (bundled + blessed) predicate. A ref it returns true for is
+   * validated against the FULL `providerSpecSchema` (may declare `auth.hooks`,
+   * `sdk:*` discovery/test, `pat-exchange`) and is EXEMPT from `reservedKinds`
+   * (a bundled `provider-copilot` legitimately owns kind `copilot`). Everything
+   * else is validated against `thirdPartyProviderSpecSchema` — no host hooks.
+   * Decided at install time (source 'bundled' + reserved namespace + signature),
+   * not by the spec content. Default: nothing is first-party.
+   */
+  firstParty?: (ref: ProviderPluginRef) => boolean;
   /** Built-in kinds a plugin must NOT shadow. A spec whose kind is reserved is skipped. */
   reservedKinds?: ReadonlySet<string>;
   /** Override the discovery (tests). Defaults to {@link listProviderPlugins}. */
@@ -95,16 +118,20 @@ export function loadPluginProviders(opts: LoadPluginProvidersOptions): LoadPlugi
       skipped.add(ref.namespace);
       continue;
     }
+    // Blessed bundled plugins validate against the full host schema and own
+    // their (otherwise reserved) kind; untrusted plugins get the third-party gate.
+    const blessed = opts.firstParty?.(ref) ?? false;
+    const schema = blessed ? providerSpecSchema : thirdPartyProviderSpecSchema;
     const kinds: string[] = [];
     for (const raw of ref.specs) {
-      const parsed = thirdPartyProviderSpecSchema.safeParse(raw);
+      const parsed = schema.safeParse(raw);
       if (!parsed.success) {
         opts.onError?.(ref.namespace, parsed.error);
         skipped.add(ref.namespace);
         continue;
       }
       const spec = parsed.data as ProviderSpec;
-      if (opts.reservedKinds?.has(spec.kind)) {
+      if (!blessed && opts.reservedKinds?.has(spec.kind)) {
         opts.onError?.(ref.namespace, new Error(`provider kind '${spec.kind}' is reserved by a built-in`));
         skipped.add(ref.namespace);
         continue;

@@ -41,9 +41,11 @@ export function buildProviderDefinition(spec: ProviderSpec): ProviderDefinition 
     defaultModels: spec.defaultModels,
     defaultModel: spec.defaultModel,
     pricing: spec.pricing,
+    pricingPriority: spec.pricingPriority,
     capabilities: spec.capabilities,
     visual: spec.visual,
     auth: spec.auth,
+    config: spec.config,
     ...wire(spec),
     // testConnection is wire-orthogonal (driven by spec.test); set last so it
     // wins over any wire default. Undefined when no `test` is declared.

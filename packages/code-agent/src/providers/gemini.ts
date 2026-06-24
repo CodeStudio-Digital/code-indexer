@@ -61,9 +61,9 @@ export class GeminiChatProvider implements ChatProvider {
         sessionId: opts.cloudCodeSessionId ?? randomUUID(),
       };
     } else {
-      const apiKey = opts.apiKey ?? process.env.GEMINI_API_KEY;
+      const apiKey = opts.apiKey;
       if (!apiKey) {
-        throw new Error('GEMINI_API_KEY not set (pass via provider config or env var)');
+        throw new Error('Gemini API key not set — configure the provider via the admin UI');
       }
       this.client = new GoogleGenAI({ apiKey });
     }

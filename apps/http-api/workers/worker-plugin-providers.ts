@@ -13,13 +13,18 @@
  * drop stale) isn't needed here — a freshly-spawned worker starts from the
  * lazily-seeded built-ins, so it only needs to OVERLAY the enabled plugins.
  */
-import { loadPluginProviders } from '../../../packages/plugin-host/src/index.js';
-import { buildProviderDefinition } from '../../../packages/provider-engine/src/index.js';
+import { loadPluginProviders, isFirstPartyBundled } from '../../../packages/plugin-host/src/index.js';
+import { buildProviderDefinition, BUILTIN_SPECS } from '../../../packages/provider-engine/src/index.js';
 import { upsertProvider } from '../../../packages/services/src/providers/registry.js';
 
 export function registerWorkerPluginProviders(): void {
   try {
-    loadPluginProviders({ register: upsertProvider, buildDefinition: buildProviderDefinition });
+    loadPluginProviders({
+      register: upsertProvider,
+      buildDefinition: buildProviderDefinition,
+      firstParty: isFirstPartyBundled,
+      reservedKinds: new Set(BUILTIN_SPECS.map((s) => s.kind)),
+    });
   } catch (err) {
     console.warn(
       `[provider-plugin/worker] ${err instanceof Error ? err.message : String(err)}`,

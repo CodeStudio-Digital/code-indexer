@@ -25,6 +25,28 @@ export interface ProviderVisualData {
   bg: string;
 }
 
+/**
+ * Declarative settings-form field shipped by the backend from the provider spec
+ * (mirror of `@mcp/provider-sdk`'s ConfigField — the dashboard is outside the
+ * Node tsc graph). The form renders these without any per-kind code.
+ */
+export type ConfigFieldType = 'text' | 'password' | 'select' | 'toggle';
+export interface ConfigField {
+  key: string;
+  type: ConfigFieldType;
+  label: string;
+  storeIn: 'api_key' | 'base_url' | 'extra';
+  options?: { value: string; label: string }[];
+  placeholder?: string;
+  helpText?: string;
+  optional?: boolean;
+  advanced?: boolean;
+  default?: string;
+}
+export interface ProviderConfigDescriptor {
+  fields: ConfigField[];
+}
+
 export interface AdminProvider {
   id: string;
   name: string;

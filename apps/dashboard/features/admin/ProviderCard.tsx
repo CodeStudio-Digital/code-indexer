@@ -39,7 +39,6 @@ interface ProviderCardProps {
     subagentProviderId: string | null,
     modelId: string | null,
   ) => void;
-  onSetKimiCodeThinkingMode: (providerId: string, mode: 'auto' | 'enabled' | 'disabled') => void;
 }
 
 export function ProviderCard({
@@ -66,7 +65,6 @@ export function ProviderCard({
   onBackfillContextWindows,
   onSetFallback,
   onSetSubagentTarget,
-  onSetKimiCodeThinkingMode,
 }: ProviderCardProps) {
   const { t } = useTranslation(['admin', 'common']);
   const selectedSubagentProviderId = readSubagentProviderId(p.extra?.subagent_provider_id);
@@ -158,29 +156,7 @@ export function ProviderCard({
           {p.kind === 'claude-code' && (
             <ClaudeCodeUsagePanel providerId={p.id} />
           )}
-          {(p.kind === 'kimi-code' || p.kind === 'moonshot') && (
-            <div className="flex items-center justify-between py-3">
-              <label className="text-sm font-medium">
-                {t('admin:provider.kimiThinking')}
-              </label>
-              <select
-                aria-label="Kimi Code thinking mode"
-                className="h-7 rounded border bg-background px-1.5 text-xs"
-                value={readKimiThinkingMode(p.extra?.kimi_code_thinking_mode)}
-                onChange={(e) =>
-                  onSetKimiCodeThinkingMode(
-                    p.id,
-                    readKimiThinkingMode(e.target.value),
-                  )
-                }
-              >
-                <option value="auto">{t('admin:provider.kimiThinking.auto')}</option>
-                <option value="enabled">{t('admin:provider.kimiThinking.enabled')}</option>
-                <option value="disabled">{t('admin:provider.kimiThinking.disabled')}</option>
-              </select>
-            </div>
-          )}
-          <AddModelForm onAdd={onAddModel} kind={p.kind} />
+          <AddModelForm onAdd={onAddModel} />
           {models.length === 0 ? (
             <div className="py-3 text-sm text-muted-foreground">
               {t('admin:provider.noModels')}
@@ -348,12 +324,6 @@ export function ProviderCard({
       )}
     </Card>
   );
-}
-
-function readKimiThinkingMode(value: unknown): 'auto' | 'enabled' | 'disabled' {
-  return value === 'enabled' || value === 'disabled' || value === 'auto'
-    ? value
-    : 'auto';
 }
 
 function readSubagentProviderId(value: unknown): string | null {

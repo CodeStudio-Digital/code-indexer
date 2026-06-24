@@ -39,6 +39,10 @@ export function providersRouter(store: ProviderStore): Hono {
         defaultModels: def.defaultModels,
         capabilities: def.capabilities ?? {},
         visual: def.visual ?? null,
+        // Declarative settings form + connect descriptor (built-ins AND plugins),
+        // so the dashboard renders each provider's config screen with no per-kind code.
+        config: def.config ?? null,
+        auth: def.auth ?? null,
         supportsIndexer: !!(def.createIndexer || def.createIndexerAsync),
         supportsCoder: !!def.createCoder,
       })),

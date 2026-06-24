@@ -40,11 +40,14 @@ function lookupByCfg(
 }
 
 /**
- * Resolve a provider by instance name. Four-branch lookup:
+ * Resolve a provider by instance name. Three-branch lookup:
  *   1. name as ProviderStore instance (covers built-ins + custom admin rows)
  *   2. unnamed: pick is_default row from store
- *   3. name directly as a registry shape (no DB row — env var only)
- *   4. fallback: first shape whose envVar is set in process.env
+ *   3. name directly as a registry shape (no DB row — yields no credential)
+ *
+ * Credentials never come from the environment: there is no env-var fallback
+ * branch. With no configured row, dispatch fails with a clear "configure a
+ * provider" error instead of silently activating a provider from an env token.
  *
  * This is the single entry point that reconciles shapes (registry) with
  * instances (ProviderStore), so custom providers added via the admin UI
@@ -68,26 +71,19 @@ export async function lookupProvider(name?: string): Promise<LookupResult> {
       try {
         return lookupByCfg(registry, defRow, defRow.id);
       } catch {
-        // Fall through to legacy paths if the default row has an unregistered kind.
+        // Fall through to the shape lookup if the default row has an unregistered kind.
       }
     }
   }
 
-  // 3. Legacy: name matches a shape directly, no DB row.
+  // 3. Legacy: name matches a shape directly, no DB row (no credential).
   if (name) {
     const def = registry.get(name);
     if (def) return { def, cfg: null };
   }
 
-  // 4. Last resort: first shape whose env var is set.
-  for (const def of registry.values()) {
-    if (def.envVars.some((v) => !!process.env[v])) return { def, cfg: null };
-  }
-
-  const knownEnv = [...registry.values()].flatMap((d) => d.envVars).join(', ');
   throw new Error(
-    `No provider available. Configure one via the admin UI, pass -p <name>, ` +
-      `or set one of: ${knownEnv}.`,
+    `No provider available. Configure one via the admin UI or pass -p <name>.`,
   );
 }
 
@@ -129,7 +125,7 @@ export function createProvider(name?: string, model?: string): LLMProvider {
   const registry = getRegistry();
   const store = getStore();
 
-  // Only the ProviderStore lookup + env-var fallback — no OAuth refresh.
+  // Only the ProviderStore lookup — no env-var fallback, no OAuth refresh.
   let def: ProviderDefinition | undefined;
   let cfg: ProviderConfig | null = null;
 
@@ -141,11 +137,6 @@ export function createProvider(name?: string, model?: string): LLMProvider {
     }
   }
   if (!def && name) def = registry.get(name);
-  if (!def) {
-    for (const d of registry.values()) {
-      if (d.envVars.some((v) => !!process.env[v])) { def = d; break; }
-    }
-  }
   if (!def) throw new Error(`No provider available for name=${name ?? '(auto)'}`);
 
   if (def.credKind !== 'api-key') {
@@ -157,7 +148,7 @@ export function createProvider(name?: string, model?: string): LLMProvider {
     throw new Error(`Shape '${def.kind}' does not support the indexer`);
   }
   const creds = {
-    apiKey: cfg?.api_key ?? def.envVars.map((v) => process.env[v]).find(Boolean),
+    apiKey: cfg?.api_key ?? undefined,
     baseURL: cfg?.base_url ?? def.defaultBaseURL,
   };
   return def.createIndexer(creds, model);

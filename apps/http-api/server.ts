@@ -88,6 +88,7 @@ import { mergeDBPricing } from '@mcp/code-agent/providers/pricing-cache.js';
 import { hardcodedPriceSeed } from '@mcp/code-agent/providers/pricing.js';
 import { startProviderRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-refresh.js';
 import { syncPluginProviders } from './server/plugin-providers.js';
+import { seedBundledPlugins } from './server/bundled-plugins.js';
 import { startModelPricingRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-pricing-refresh.js';
 import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js';
 import { ensureBuiltinSkills } from '@mcp/indexer/bootstrap/ensure-builtin-skills.js';
@@ -993,6 +994,14 @@ export async function startServer(port: number, host: string) {
       `Fix: run \`npm run build\` for production, or \`npm run dev:server\` / \`npm run electron:dev\` in development.`,
     );
     process.exit(1);
+  }
+  // Seed the first-party bundled provider plugins into the installed-plugins
+  // store BEFORE createApp() runs syncPluginProviders, so they register on this
+  // very boot. Idempotent + best-effort (built-ins remain if it fails).
+  try {
+    await seedBundledPlugins();
+  } catch (err) {
+    console.warn(`[bundled-plugins] seed failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   const { app, chromeService, deps } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);

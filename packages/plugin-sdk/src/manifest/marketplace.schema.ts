@@ -5,7 +5,10 @@
 import { z } from 'zod';
 
 export const pluginSourceSchema = z.object({
-  source: z.enum(['local', 'github', 'url', 'market']),
+  // 'bundled' = a first-party plugin shipped inside the app, seeded from disk on
+  // first boot (materialized like 'local' but recorded with source='bundled' so
+  // the provider loader can grant it the first-party trust tier).
+  source: z.enum(['local', 'github', 'url', 'market', 'bundled']),
   path: z.string().optional(),
   repo: z.string().optional(),
   ref: z.string().optional(),

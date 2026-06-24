@@ -1,6 +1,7 @@
 {
   "title": "Documentation",
   "subtitle": "Indexed external documentation that any agent can query via {{tool}}. Add PDFs or URLs; the indexer chunks, enriches, and embeds them.",
+  "aboutAria": "About this page",
 
   "tabs.collections": "Collections",
   "tabs.suggestions": "Suggestions",

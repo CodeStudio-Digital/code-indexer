@@ -37,6 +37,23 @@ export const moonshotSpec: ProviderSpec = {
   wire: 'kimi',
   wireOpts: { thinkingMode: { from: 'extra', key: 'kimi_code_thinking_mode', default: 'auto' } },
   discovery: { from: 'openai-models', filterPrefixes: ['kimi-', 'moonshot-'] },
+  // The thinking-mode key matches wireOpts.thinkingMode.key ('kimi_code_thinking_mode').
+  config: {
+    fields: [
+      {
+        key: 'kimi_code_thinking_mode',
+        type: 'select',
+        label: 'Thinking mode',
+        storeIn: 'extra',
+        options: [
+          { value: 'auto', label: 'Auto' },
+          { value: 'enabled', label: 'Enabled' },
+          { value: 'disabled', label: 'Disabled' },
+        ],
+        default: 'auto',
+      },
+    ],
+  },
 };
 
 export const MOONSHOT_SPECS: ProviderSpec[] = [moonshotSpec];

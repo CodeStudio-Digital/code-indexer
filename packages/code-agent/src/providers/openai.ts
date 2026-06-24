@@ -14,6 +14,11 @@ export class OpenAIChatProvider implements ChatProvider {
   model: string;
   private client: OpenAI;
   private vendor: OpenAICompatVendor;
+  // Declarative request shaping (set only when a provider's `request` descriptor
+  // is present; undefined for every built-in → native behavior unchanged).
+  private bodyInject?: Record<string, unknown>;
+  private bodyRemove?: string[];
+  private reasoningDeltaKey?: string;
 
   constructor(opts: {
     name?: string;
@@ -22,14 +27,40 @@ export class OpenAIChatProvider implements ChatProvider {
     model: string;
     defaultHeaders?: Record<string, string>;
     vendor?: OpenAICompatVendor;
+    /** Custom auth header (from `request.auth`). Replaces the SDK's Authorization. */
+    authHeader?: { name: string; value: string };
+    /** Query params appended to every request (from `request.query`). */
+    defaultQuery?: Record<string, string>;
+    /** Static body fields merged in (from `request.body.inject`). */
+    bodyInject?: Record<string, unknown>;
+    /** Top-level body keys removed before send (from `request.body.remove`). */
+    bodyRemove?: string[];
+    /** Non-standard reasoning delta key (from `request.response.reasoningDeltaKey`). */
+    reasoningDeltaKey?: string;
   }) {
     this.name = opts.name ?? 'openai';
     this.model = opts.model;
     this.vendor = opts.vendor ?? 'openai';
+    this.bodyInject = opts.bodyInject;
+    this.bodyRemove = opts.bodyRemove;
+    this.reasoningDeltaKey = opts.reasoningDeltaKey;
+
+    // Merge a custom auth header in, suppressing the SDK's native Authorization
+    // when a differently-named header carries the credential (null omits it).
+    const headers: Record<string, string | null> = { ...(opts.defaultHeaders ?? {}) };
+    if (opts.authHeader) {
+      headers[opts.authHeader.name] = opts.authHeader.value;
+      if (opts.authHeader.name.toLowerCase() !== 'authorization') headers['Authorization'] = null;
+    }
+
     this.client = new OpenAI({
-      apiKey: opts.apiKey ?? process.env.OPENAI_API_KEY,
+      // Credentials come only from the resolved provider config — never the
+      // environment. Empty string blocks the SDK's OPENAI_API_KEY auto-read;
+      // an unconfigured provider then fails with a clean 401.
+      apiKey: opts.apiKey ?? '',
       ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
-      ...(opts.defaultHeaders ? { defaultHeaders: opts.defaultHeaders } : {}),
+      ...(Object.keys(headers).length > 0 ? { defaultHeaders: headers } : {}),
+      ...(opts.defaultQuery ? { defaultQuery: opts.defaultQuery } : {}),
     });
   }
 
@@ -133,6 +164,17 @@ export class OpenAIChatProvider implements ChatProvider {
         ...openrouterExtras,
         ...cacheKeyExtras,
       };
+      // Declarative body shaping (custom providers only). Re-assert the
+      // streaming invariants afterward so a descriptor can't break the stream.
+      if (this.bodyRemove || this.bodyInject) {
+        const p = params as Record<string, unknown>;
+        if (this.bodyRemove) for (const k of this.bodyRemove) delete p[k];
+        if (this.bodyInject) Object.assign(p, this.bodyInject);
+        p.model = this.model;
+        p.messages = messages;
+        p.stream = true;
+        p.stream_options = { include_usage: true };
+      }
       stream = await this.client.chat.completions.create(
         params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming
       );
@@ -158,6 +200,14 @@ export class OpenAIChatProvider implements ChatProvider {
       const openrouterReasoning = (delta as { reasoning?: unknown })?.reasoning;
       if (typeof openrouterReasoning === 'string' && openrouterReasoning.length > 0) {
         yield { type: 'thinking_delta', text: openrouterReasoning };
+      }
+      // Declarative response mapping: a vendor exposing chain-of-thought under a
+      // non-standard delta key (custom providers only).
+      if (this.reasoningDeltaKey) {
+        const custom = (delta as Record<string, unknown>)?.[this.reasoningDeltaKey];
+        if (typeof custom === 'string' && custom.length > 0) {
+          yield { type: 'thinking_delta', text: custom };
+        }
       }
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {

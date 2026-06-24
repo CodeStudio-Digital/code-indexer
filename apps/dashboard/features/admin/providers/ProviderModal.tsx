@@ -52,10 +52,6 @@ export interface ProviderModalProps {
     subagentProviderId: string | null,
     modelId: string | null,
   ) => void;
-  onSetKimiCodeThinkingMode: (
-    providerId: string,
-    mode: 'auto' | 'enabled' | 'disabled',
-  ) => void;
 }
 
 export function ProviderModal({ provider, onClose, ...rest }: ProviderModalProps) {

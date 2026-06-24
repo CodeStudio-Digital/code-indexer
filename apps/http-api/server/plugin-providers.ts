@@ -11,7 +11,7 @@
  * enabled. Called at boot AND after every install/enable/disable/uninstall, so a
  * plugin provider appears or disappears live — no restart, no flags.
  */
-import { loadPluginProviders } from '@mcp/plugin-host';
+import { loadPluginProviders, isFirstPartyBundled } from '@mcp/plugin-host';
 import { buildProviderDefinition, BUILTIN_SPECS } from '@mcp/provider-engine';
 import {
   upsertProvider,
@@ -25,12 +25,18 @@ export function syncPluginProviders(): void {
   // Restore built-ins first (undo any stale override left by a now-disabled plugin).
   for (const spec of BUILTIN_SPECS) upsertProvider(buildProviderDefinition(spec));
 
-  // Overlay providers contributed by currently-enabled plugins. A plugin may
-  // override a built-in kind (the user explicitly installed it); the schema
-  // already rejected host-only capabilities, and no plugin code runs.
+  // Overlay providers contributed by currently-enabled plugins.
+  //  - A first-party BUNDLED plugin (provider-*, shipped in the app) may own a
+  //    built-in kind and declare host capabilities (validated with the full
+  //    schema, exempt from reservedKinds) — that's how the relocated providers
+  //    take over their kind.
+  //  - Any OTHER (third-party) plugin is held to the third-party schema and may
+  //    NOT shadow a built-in kind.
   const res = loadPluginProviders({
     register: upsertProvider,
     buildDefinition: buildProviderDefinition,
+    firstParty: isFirstPartyBundled,
+    reservedKinds: builtinKinds,
     onError: (ns, e) =>
       console.warn(`[provider-plugin] ${ns}: ${e instanceof Error ? e.message : String(e)}`),
   });

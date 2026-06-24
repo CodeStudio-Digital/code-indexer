@@ -18,7 +18,13 @@ export function resolveBaseURL(
   if (wo?.modelModes) {
     const mm = wo.modelModes;
     if (mm.envOverride && process.env[mm.envOverride]) return process.env[mm.envOverride];
+    // Per-request override: the `::mode` suffix on the model id wins.
     if (mode && mm.map[mode]) return mm.map[mode].baseURL;
+    // Provider-level default mode (the "plan mode" select, e.g. extra.zai_mode).
+    const defMode = mm.defaultModeKey
+      ? (creds.extra?.[mm.defaultModeKey] as string | undefined)
+      : undefined;
+    if (defMode && mm.map[defMode]) return mm.map[defMode].baseURL;
     if (creds.baseURL && creds.baseURL.trim()) return creds.baseURL;
     return mm.map.general?.baseURL ?? spec.defaultBaseURL;
   }

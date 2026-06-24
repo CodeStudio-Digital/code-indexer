@@ -83,7 +83,6 @@ export default function Admin() {
     setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,
-    setKimiCodeThinkingMode,
     setFallback,
   } = useAdminProviders();
 
@@ -335,7 +334,6 @@ export default function Admin() {
                 onBackfillContextWindows={backfillContextWindows}
                 onSetFallback={setFallback}
                 onSetSubagentTarget={setSubagentTarget}
-                onSetKimiCodeThinkingMode={setKimiCodeThinkingMode}
               />
             </div>
           )}

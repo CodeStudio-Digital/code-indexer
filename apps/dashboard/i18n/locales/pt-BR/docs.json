@@ -1,6 +1,7 @@
 {
   "title": "Documentação",
   "subtitle": "Documentação externa indexada que qualquer agente pode consultar via {{tool}}. Adicione PDFs ou URLs; o indexador divide em chunks, enriquece e calcula embeddings.",
+  "aboutAria": "Sobre esta página",
 
   "tabs.collections": "Coleções",
   "tabs.suggestions": "Sugestões",

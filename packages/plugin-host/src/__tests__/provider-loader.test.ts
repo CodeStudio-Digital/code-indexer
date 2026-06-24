@@ -112,4 +112,48 @@ describe('loadPluginProviders (declarative DATA → buildDefinition → register
     expect(register).not.toHaveBeenCalled();
     expect(res.skipped).toEqual(['x']);
   });
+
+  it('firstParty (blessed) ref may declare host-only auth.hooks (full schema)', () => {
+    const register = vi.fn();
+    const onError = vi.fn();
+    const blessedSpec = { ...validSpec('copilot'), credKind: 'oauth', auth: { mode: 'oauth', flavor: 'pat-exchange', hooks: 'copilot' } };
+    const res = loadPluginProviders({
+      register,
+      buildDefinition: vi.fn(fakeDef),
+      firstParty: (r) => r.source === 'bundled',
+      refs: [ref('provider-copilot', [blessedSpec], { source: 'bundled' })],
+      onError,
+    });
+    expect(onError).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(res.loaded).toEqual([{ namespace: 'provider-copilot', kinds: ['copilot'] }]);
+  });
+
+  it('firstParty ref is EXEMPT from reservedKinds (owns its built-in kind)', () => {
+    const register = vi.fn();
+    const res = loadPluginProviders({
+      register,
+      buildDefinition: vi.fn(fakeDef),
+      firstParty: (r) => r.source === 'bundled',
+      reservedKinds: new Set(['anthropic']),
+      refs: [ref('provider-anthropic', [validSpec('anthropic')], { source: 'bundled' })],
+    });
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(res.loaded).toEqual([{ namespace: 'provider-anthropic', kinds: ['anthropic'] }]);
+  });
+
+  it('a NON-firstParty ref with host-only auth.hooks is still rejected (third-party gate)', () => {
+    const register = vi.fn();
+    const onError = vi.fn();
+    const evil = { ...validSpec('evil'), credKind: 'oauth', auth: { mode: 'oauth', hooks: 'copilot' } };
+    const res = loadPluginProviders({
+      register,
+      buildDefinition: vi.fn(fakeDef),
+      firstParty: (r) => r.source === 'bundled', // evil is source 'local' → not blessed
+      refs: [ref('evil', [evil])],
+      onError,
+    });
+    expect(register).not.toHaveBeenCalled();
+    expect(res.skipped).toEqual(['evil']);
+  });
 });

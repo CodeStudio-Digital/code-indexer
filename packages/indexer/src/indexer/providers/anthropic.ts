@@ -57,7 +57,7 @@ export class AnthropicProvider implements LLMProvider {
     this.defaultSystemPrefixBlocks = opts?.systemPrefixBlocks;
     this.useBetaMessages = opts?.useBetaMessages ?? false;
     this.client = new Anthropic({
-      apiKey: opts?.authToken ? null : (apiKey ?? process.env.ANTHROPIC_API_KEY),
+      apiKey: opts?.authToken ? null : (apiKey ?? ''),
       ...(opts?.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
       ...(opts?.authToken ? { authToken: opts.authToken } : {}),
       ...(baseURL ? { baseURL } : {}),

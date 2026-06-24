@@ -25,7 +25,7 @@ export class GeminiProvider implements LLMProvider {
         projectId: projectId ?? '',
       };
     } else {
-      this.genAI = new GoogleGenerativeAI(apiKey ?? process.env.GEMINI_API_KEY ?? '');
+      this.genAI = new GoogleGenerativeAI(apiKey ?? '');
     }
   }
 

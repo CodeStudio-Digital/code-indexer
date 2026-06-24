@@ -22,11 +22,8 @@ export interface AddModelInput {
 
 export function AddModelForm({
   onAdd,
-  kind,
 }: {
   onAdd: (input: AddModelInput) => void;
-  /** Provider kind — drives provider-specific affordances (Z.AI mode select). */
-  kind?: string;
 }) {
   const { t } = useTranslation(['admin', 'common']);
   const [open, setOpen] = useState(false);
@@ -97,33 +94,16 @@ export function AddModelForm({
           if (e.key === 'Escape') reset();
         }}
       />
-      {kind === 'zai' ? (
-        <select
-          aria-label={t('admin:provider.addModel.modePlaceholder')}
-          className="h-8 w-40 rounded border bg-background px-2 text-xs"
-          value={mode}
-          onChange={(e) => setMode(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') reset();
-          }}
-          title={t('admin:provider.addModel.modeHint')}
-        >
-          <option value="">{t('admin:provider.addModel.modeNone')}</option>
-          <option value="coding">{t('admin:provider.addModel.modeCoding')}</option>
-          <option value="general">{t('admin:provider.addModel.modeGeneral')}</option>
-        </select>
-      ) : (
-        <input
-          className={`${inputCls} w-28`}
-          placeholder={t('admin:provider.addModel.modePlaceholder')}
-          value={mode}
-          onChange={(e) => setMode(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commit();
-            if (e.key === 'Escape') reset();
-          }}
-        />
-      )}
+      <input
+        className={`${inputCls} w-28`}
+        placeholder={t('admin:provider.addModel.modePlaceholder')}
+        value={mode}
+        onChange={(e) => setMode(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') reset();
+        }}
+      />
       <Button size="sm" className="h-8 text-xs" onClick={commit} disabled={!modelId.trim()}>
         {t('admin:provider.addModel.save')}
       </Button>

@@ -24,7 +24,7 @@ export { buildPluginTools } from './plugin-tool-bridge.js';
 export type { EnabledPlugin, PluginToolInvoker, PluginInvokeContext } from './plugin-tool-bridge.js';
 export { listEnabledPluginRuntime } from './enabled.js';
 export type { EnabledPluginRuntime, PluginBundleRef } from './enabled.js';
-export { listProviderPlugins, loadPluginProviders } from './provider-loader.js';
+export { listProviderPlugins, loadPluginProviders, isFirstPartyBundled } from './provider-loader.js';
 export type {
   ProviderPluginRef,
   LoadPluginProvidersOptions,

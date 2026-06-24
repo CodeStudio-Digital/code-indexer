@@ -47,6 +47,44 @@ export interface ProviderVisual {
   bg: string;
 }
 
+// ─── Declarative config form ─────────────────────────────────────
+/**
+ * One field in a provider's declarative settings form. The admin UI renders
+ * these (no per-kind code) so a plugin provider gets a tailored config screen.
+ * `api_key` + `base_url` are rendered by the host form itself (every api-key
+ * provider has them) — `fields` declares only the EXTRAS a provider needs.
+ */
+export type ConfigFieldType = 'text' | 'password' | 'select' | 'toggle';
+/** Where a field's value is persisted on the provider_configs row. */
+export type ConfigFieldStore = 'api_key' | 'base_url' | 'extra';
+
+export interface ConfigFieldOption {
+  value: string;
+  label: string;
+}
+
+export interface ConfigField {
+  /** Field id. For `storeIn: 'extra'` this is also the `extra.<key>` key. */
+  key: string;
+  type: ConfigFieldType;
+  label: string;
+  storeIn: ConfigFieldStore;
+  /** Options for `type: 'select'`. */
+  options?: ConfigFieldOption[];
+  placeholder?: string;
+  helpText?: string;
+  /** When true, the field is optional (no required marker). */
+  optional?: boolean;
+  /** Render under an "Advanced" disclosure. */
+  advanced?: boolean;
+  /** Default value (string for text/select; 'true'/'false' for toggle). */
+  default?: string;
+}
+
+export interface ProviderConfigDescriptor {
+  fields: ConfigField[];
+}
+
 /** Context handed to a provider's connectivity check. */
 export interface ProviderTestContext {
   /** The stored provider instance being tested. */
@@ -94,6 +132,13 @@ export interface ProviderDefinition {
   defaultModel?: string;
   /** Per-model pricing. Used by pricing.ts::lookupPricing. */
   pricing: Record<string, PricingEntry>;
+  /**
+   * Tie-breaker for cross-provider duplicate model ids: lower wins (default 0,
+   * stable insertion order otherwise). `lookupPricing` sorts by this before its
+   * first-match walk, so pricing precedence is independent of registry/plugin
+   * load order.
+   */
+  pricingPriority?: number;
   capabilities?: ProviderCapabilities;
   /**
    * Renderer-safe visual identity. When set, the admin dashboard reads it
@@ -107,6 +152,12 @@ export interface ProviderDefinition {
    * the legacy per-kind routes; a plugin OAuth provider relies on this.
    */
   auth?: AuthDescriptor;
+  /**
+   * Declarative settings form for a provider instance. The admin UI renders it
+   * (api_key/base_url built-in + these EXTRA fields) so each provider — built-in
+   * or plugin — gets a tailored config screen with no per-kind code.
+   */
+  config?: ProviderConfigDescriptor;
   /**
    * Imperative OAuth handlers (start/poll/refresh/logout) — a plugin OAuth
    * provider implements only what its `auth.flavor` needs, using host-provided

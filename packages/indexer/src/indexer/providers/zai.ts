@@ -29,7 +29,7 @@ export class ZAIProvider implements LLMProvider {
   constructor(apiKey?: string, model?: string, baseURL?: string) {
     this.model = model ?? 'glm-5.1';
     this.inner = new OpenAIProvider(
-      apiKey ?? process.env.ZAI_API_KEY,
+      apiKey,
       this.model,
       resolveBaseURL(this.model, baseURL)
     );

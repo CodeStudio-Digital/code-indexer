@@ -10,7 +10,7 @@ export class DeepSeekProvider implements LLMProvider {
   constructor(apiKey?: string, model?: string) {
     this.model = model ?? 'deepseek-chat';
     this.inner = new OpenAIProvider(
-      apiKey ?? process.env.DEEPSEEK_API_KEY,
+      apiKey,
       this.model,
       'https://api.deepseek.com'
     );

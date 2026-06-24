@@ -32,6 +32,10 @@
     {
       "from": "apps/http-api/vendor/drawio",
       "to": "drawio"
+    },
+    {
+      "from": "dist/bundled-plugins",
+      "to": "bundled-plugins"
     }
   ],
   "win": {

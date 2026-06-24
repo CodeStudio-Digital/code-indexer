@@ -1,9 +1,30 @@
-import type { AdminModel, AdminProvider, TestResult } from './types.js';
+import type { AdminModel, AdminProvider, TestResult, ProviderConfigDescriptor } from './types.js';
 
 export async function fetchProviders(): Promise<AdminProvider[]> {
   const r = await fetch('/api/admin/providers');
   const j = (await r.json()) as { providers: AdminProvider[] };
   return j.providers;
+}
+
+/** A provider SHAPE known to the registry — built-ins AND enabled plugins. */
+export interface KnownProvider {
+  kind: string;
+  displayName: string;
+  credKind: string;
+  visual: { icon: string; fg: string; bg: string } | null;
+  /** Declarative settings-form fields (extras beyond api_key/base_url). */
+  config?: ProviderConfigDescriptor | null;
+}
+
+/**
+ * The registry of known provider shapes (drives the "Add provider" kind picker).
+ * Includes providers contributed by enabled plugins, so a declarative plugin
+ * provider is configurable exactly like a built-in.
+ */
+export async function fetchKnownProviders(): Promise<KnownProvider[]> {
+  const r = await fetch('/api/admin/providers/known');
+  if (!r.ok) return [];
+  return (await r.json()) as KnownProvider[];
 }
 
 export async function fetchProviderModels(id: string): Promise<AdminModel[]> {
@@ -118,26 +139,6 @@ export async function setSubagentTarget(
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider_id: subagentProviderId, model_id: modelId }),
-  });
-  if (!r.ok) {
-    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
-    throw new Error(err.error ?? `HTTP ${r.status}`);
-  }
-}
-
-export async function setKimiCodeThinkingMode(
-  provider: AdminProvider,
-  mode: 'auto' | 'enabled' | 'disabled',
-): Promise<void> {
-  const r = await fetch(`/api/admin/providers/${provider.id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      extra: {
-        ...provider.extra,
-        kimi_code_thinking_mode: mode,
-      },
-    }),
   });
   if (!r.ok) {
     const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };

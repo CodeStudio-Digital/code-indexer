@@ -7,11 +7,10 @@
  * per-kind `discoverX` sibling modules are now the equivalence-test reference for
  * the engine builders and are removed in the cleanup phase.
  *
- * `ENGINE_DISCOVERY_KINDS` is the allow-list of kinds that had a live-discovery
- * case before the cutover. deepseek/zai are intentionally EXCLUDED — they never
- * had an admin case (live discovery happens only in the indexer), so they keep
- * throwing here; routing their `openai-models` spec through the engine would
- * newly enable live discovery for them (a behavior change).
+ * A kind is routed iff its spec declares a real `discovery` (anything but
+ * `static`). That auto-covers every built-in with live discovery (incl. zai /
+ * deepseek, whose `openai-models` `/models` the admin Refresh now serves) and
+ * fails closed for kinds with no/`static` discovery (no silent catalog wipe).
  *
  * The {@link DiscoveryResult} shape and the `(store, cfg, previousEtag?)`
  * signature are unchanged, so all callers (refresh route, scheduler, the OAuth
@@ -19,6 +18,8 @@
  */
 import type { ProviderStore, ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { getSpecByKind, discoverModels as engineDiscoverModels } from '@mcp/provider-engine';
+import { listProviderPlugins } from '@mcp/plugin-host';
+import { thirdPartyProviderSpecSchema, type ProviderSpec } from '@mcp/provider-sdk';
 
 export interface DiscoveryResult {
   models: UpsertModelInput[];
@@ -31,29 +32,34 @@ export interface DiscoveryResult {
   notModified: boolean;
 }
 
-const ENGINE_DISCOVERY_KINDS = new Set<string>([
-  'chatgpt',
-  'copilot',
-  'openai',
-  'anthropic',
-  'claude-code',
-  'gemini',
-  'bedrock',
-  'google-oauth',
-  'kimi-code',
-  'cloudflare',
-  'moonshot',
-  'openrouter',
-]);
+/**
+ * Resolve the `ProviderSpec` for a kind — an enabled PLUGIN provider's spec wins
+ * over a built-in of the same kind (mirrors how the registry override works), so
+ * a plugin-contributed provider's live discovery is served too. Falls back to the
+ * built-in spec. Best-effort: a snapshot read failure just uses the built-in.
+ */
+function resolveProviderSpec(kind: string): ProviderSpec | undefined {
+  try {
+    for (const ref of listProviderPlugins()) {
+      for (const raw of ref.specs) {
+        const parsed = thirdPartyProviderSpecSchema.safeParse(raw);
+        if (parsed.success && parsed.data.kind === kind) return parsed.data as ProviderSpec;
+      }
+    }
+  } catch {
+    /* fall through to the built-in */
+  }
+  return getSpecByKind(kind);
+}
 
 export async function discoverModels(
   store: ProviderStore,
   cfg: ProviderConfig,
   previousEtag?: string | null,
 ): Promise<DiscoveryResult> {
-  if (ENGINE_DISCOVERY_KINDS.has(cfg.kind)) {
-    const spec = getSpecByKind(cfg.kind);
-    if (spec) return engineDiscoverModels(spec, cfg, store, previousEtag ?? null);
+  const spec = resolveProviderSpec(cfg.kind);
+  if (spec?.discovery && spec.discovery.from !== 'static') {
+    return engineDiscoverModels(spec, cfg, store, previousEtag ?? null);
   }
   throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
 }
