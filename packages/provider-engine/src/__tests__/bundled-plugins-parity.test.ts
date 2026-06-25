@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { zaiSpec, cloudflareSpec, openrouterSpec } from '../specs/openai-compat.js';
+import { zaiSpec, cloudflareSpec, openrouterSpec, fuguSpec } from '../specs/openai-compat.js';
 import { moonshotSpec } from '../specs/moonshot.js';
 import { copilotSpec } from '../specs/copilot.js';
 import { chatgptSpec } from '../specs/chatgpt.js';
@@ -17,6 +17,7 @@ import claudeCodePlugin from '../../../../extensions/provider-claude-code/src/pl
 import googleOAuthPlugin from '../../../../extensions/provider-google-oauth/src/plugin.js';
 import kimiCodePlugin from '../../../../extensions/provider-kimi-code/src/plugin.js';
 import bedrockPlugin from '../../../../extensions/provider-bedrock/src/plugin.js';
+import fuguPlugin from '../../../../extensions/provider-fugu/src/plugin.js';
 
 /**
  * Drift guard: every bundled provider plugin (the 4 api-key + the 6 OAuth/AWS
@@ -28,6 +29,7 @@ const cases = [
   { name: 'openrouter', plugin: openrouterPlugin, spec: openrouterSpec },
   { name: 'moonshot', plugin: moonshotPlugin, spec: moonshotSpec },
   { name: 'zai', plugin: zaiPlugin, spec: zaiSpec },
+  { name: 'fugu', plugin: fuguPlugin, spec: fuguSpec },
   { name: 'copilot', plugin: copilotPlugin, spec: copilotSpec },
   { name: 'chatgpt', plugin: chatgptPlugin, spec: chatgptSpec },
   { name: 'claude-code', plugin: claudeCodePlugin, spec: claudeCodeSpec },

@@ -23,10 +23,12 @@ const REGISTRY_ORDER = [
   'cloudflare',
   'moonshot',
   'openrouter',
+  // Appended after the cutover (no model-id collisions → position irrelevant for pricing).
+  'fugu',
 ];
 
 describe('registry cutover parity', () => {
-  it('BUILTIN_SPECS is the 14 kinds in the exact former BUILTIN_DEFINITIONS order', () => {
+  it('BUILTIN_SPECS is the expected kinds in the exact former BUILTIN_DEFINITIONS order', () => {
     expect(BUILTIN_SPECS.map((s) => s.kind)).toEqual(REGISTRY_ORDER);
   });
 
@@ -35,7 +37,7 @@ describe('registry cutover parity', () => {
     expect(getSpecByKind('does-not-exist')).toBeUndefined();
   });
 
-  it('building all 14 yields the same kinds, all with a coder builder', () => {
+  it('building all specs yields the same kinds, all with a coder builder', () => {
     const defs = BUILTIN_SPECS.map(buildProviderDefinition);
     expect(defs.map((d) => d.kind)).toEqual(REGISTRY_ORDER);
     expect(defs.every((d) => typeof d.createCoder === 'function')).toBe(true);

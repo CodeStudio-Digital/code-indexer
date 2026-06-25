@@ -59,6 +59,28 @@ export async function discoverOpenAIModels(
     list = list.filter((m) => filterPrefixes.some((p) => m.model_id.startsWith(p)));
   }
 
+  // Gap-fill from the spec's per-model seed metadata. The bare `/models` listing
+  // only carries an id (no reasoning levels, max tokens, …), so a provider whose
+  // models DON'T self-describe over the wire (e.g. Fugu's reasoning_effort levels)
+  // can declare them as DATA via `spec.models`. Inert for every provider that
+  // omits `models`; `??`-fill is purely additive (live discovery stays the source
+  // of truth — it can only fill fields the API left empty, never override them).
+  const seed = spec.models;
+  if (seed) {
+    list = list.map((m) => {
+      const meta = seed[m.model_id];
+      if (!meta) return m;
+      return {
+        ...m,
+        context_window: m.context_window ?? meta.contextWindow ?? null,
+        default_max_tokens: m.default_max_tokens ?? meta.maxTokens ?? null,
+        supported_reasoning_levels: m.supported_reasoning_levels ?? meta.supportedReasoningLevels ?? null,
+        default_reasoning_level: m.default_reasoning_level ?? meta.defaultReasoningLevel ?? null,
+        apply_patch_tool_type: m.apply_patch_tool_type ?? meta.applyPatchToolType ?? null,
+      };
+    });
+  }
+
   // Legacy duplication (normal+coding variants) only when NO plan mode is
   // selected — preserves behavior for older zai rows that set the flag.
   if (!planMode && spec.discovery?.supportsModes && cfg.extra?.zai_has_coding_mode === true) {

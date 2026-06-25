@@ -4,7 +4,7 @@ import type { ProviderConfig } from '@mcp/store/provider-store.js';
 import { discoverOpenai } from '@apps/http-api/admin/model-discovery/openai.js';
 import { discoverMoonshot } from '@apps/http-api/admin/model-discovery/moonshot.js';
 import { discoverOpenAIModels } from '../discovery/openai-models.js';
-import { openaiSpec, zaiSpec } from '../specs/openai-compat.js';
+import { openaiSpec, zaiSpec, fuguSpec } from '../specs/openai-compat.js';
 import { moonshotSpec } from '../specs/moonshot.js';
 
 /**
@@ -154,5 +154,50 @@ describe('discoverOpenAIModels equivalence with admin discoverX', () => {
     ]);
     // Hit the spec-declared discovery URL, not a base_url-derived one.
     expect(stub.calls).toEqual([zaiSpec.discovery!.modelsUrl]);
+  });
+});
+
+describe('discoverOpenAIModels spec.models gap-fill overlay', () => {
+  it('(d) fugu: overlays reasoning levels + context window from spec.models onto live ids', async () => {
+    // Fugu's /v1/models returns only ids; the reasoning levels live in spec.models.
+    const FUGU_RESPONSE = { data: [{ id: 'fugu' }, { id: 'fugu-ultra' }] };
+    const cfg = baseCfg({ kind: 'fugu', base_url: 'https://api.sakana.ai/v1', api_key: 'k' });
+
+    stubFetch(FUGU_RESPONSE);
+    const out = await discoverOpenAIModels(fuguSpec, cfg);
+
+    expect(out).toHaveLength(2);
+    for (const row of out) {
+      expect(row.supported_reasoning_levels).toEqual(['high', 'xhigh', 'max']);
+      expect(row.default_reasoning_level).toBe('xhigh');
+      expect(row.context_window).toBe(272_000);
+      expect(row.source).toBe('live');
+    }
+  });
+
+  it('(d) ids absent from spec.models pass through untouched', async () => {
+    // A live id the spec doesn't describe keeps the bare shape (no reasoning meta).
+    const RESPONSE = { data: [{ id: 'fugu' }, { id: 'fugu-experimental' }] };
+    const cfg = baseCfg({ kind: 'fugu', base_url: 'https://api.sakana.ai/v1', api_key: 'k' });
+
+    stubFetch(RESPONSE);
+    const out = await discoverOpenAIModels(fuguSpec, cfg);
+
+    const experimental = out.find((m) => m.model_id === 'fugu-experimental')!;
+    expect(experimental.supported_reasoning_levels).toBeUndefined();
+    expect(experimental.default_reasoning_level).toBeUndefined();
+  });
+
+  it('(d) a spec WITHOUT models is inert (no reasoning fields added)', async () => {
+    // Guards the blast radius: every existing openai-compat provider omits
+    // spec.models, so the overlay must leave their rows byte-identical.
+    const RESPONSE = { data: [{ id: 'gpt-4o' }] };
+    const cfg = baseCfg({ base_url: 'https://api.openai.com/v1', api_key: 'k' });
+
+    stubFetch(RESPONSE);
+    const out = await discoverOpenAIModels(openaiSpec, cfg);
+
+    expect(out[0]).not.toHaveProperty('supported_reasoning_levels');
+    expect(out[0]).not.toHaveProperty('default_reasoning_level');
   });
 });

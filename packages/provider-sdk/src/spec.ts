@@ -23,7 +23,7 @@ export const PROVIDER_SPEC_VERSION = 1 as const;
 export type WireKind = 'openai-compat' | 'anthropic' | 'gemini' | 'bedrock' | 'codex' | 'kimi';
 
 /** OpenAI-compatible vendor flag (enables vendor-specific request tweaks). */
-export type OpenAICompatVendor = 'openai' | 'openrouter' | 'zai' | 'deepseek' | 'copilot';
+export type OpenAICompatVendor = 'openai' | 'openrouter' | 'zai' | 'deepseek' | 'copilot' | 'fugu';
 
 /** Reads a value from `cfg.extra[key]` or `process.env[key]`. */
 export interface ValueSource {

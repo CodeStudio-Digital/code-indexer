@@ -269,10 +269,61 @@ export const openrouterSpec: ProviderSpec = {
   },
 };
 
+/**
+ * Sakana AI Fugu — a multi-agent frontier model exposed over the OpenAI API
+ * (https://api.sakana.ai/v1, chat/completions + /models). Its one distinctive
+ * control is reasoning effort: Chat Completions takes the STRING field
+ * `reasoning_effort` with `high`/`xhigh`/`max` (xhigh==max aliases; server
+ * default xhigh) — forwarded per-request by the `vendor:'fugu'` branch in the
+ * openai-compat adapter. The bare `/models` endpoint returns only ids, so the
+ * reasoning levels + context window are declared as DATA via `models` (gap-filled
+ * onto the live discovery result by `discoverOpenAIModels`).
+ */
+export const fuguSpec: ProviderSpec = {
+  kind: 'fugu',
+  displayName: 'Sakana AI Fugu',
+  visual: { icon: 'Sparkles', fg: 'text-sky-500', bg: 'bg-sky-500/15' },
+  credKind: 'api-key',
+  envVars: ['FUGU_API_KEY'],
+  defaultBaseURL: 'https://api.sakana.ai/v1',
+  defaultModels: ['fugu', 'fugu-ultra', 'fugu-ultra-20260615'],
+  defaultModel: 'fugu',
+  pricing: {
+    // fugu-ultra: $5/1M in, $30/1M out (flat tier; the >272K-context and cached
+    // tiers aren't representable in PricingEntry). Base `fugu` bills at the
+    // underlying model's standard rate — no fixed public number, so omitted.
+    'fugu-ultra': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'fugu-ultra-20260615': { inputPer1M: 5.0, outputPer1M: 30.0 },
+  },
+  capabilities: { supportsThinking: true, supportsVision: true },
+  wire: 'openai-compat',
+  wireOpts: { vendor: 'fugu', summaryModelDefault: 'fugu' },
+  discovery: { from: 'openai-models' },
+  test: { from: 'openai-models', fallbackBaseURL: 'https://api.sakana.ai/v1' },
+  models: {
+    fugu: {
+      supportedReasoningLevels: ['high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'xhigh',
+      contextWindow: 272_000,
+    },
+    'fugu-ultra': {
+      supportedReasoningLevels: ['high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'xhigh',
+      contextWindow: 272_000,
+    },
+    'fugu-ultra-20260615': {
+      supportedReasoningLevels: ['high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'xhigh',
+      contextWindow: 272_000,
+    },
+  },
+};
+
 export const OPENAI_COMPAT_SPECS: ProviderSpec[] = [
   openaiSpec,
   deepseekSpec,
   zaiSpec,
   cloudflareSpec,
   openrouterSpec,
+  fuguSpec,
 ];

@@ -7,7 +7,7 @@ import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core
  * provider that implements the OpenAI chat completions schema with function
  * calling and streaming).
  */
-export type OpenAICompatVendor = 'openai' | 'openrouter' | 'zai' | 'deepseek' | 'copilot';
+export type OpenAICompatVendor = 'openai' | 'openrouter' | 'zai' | 'deepseek' | 'copilot' | 'fugu';
 
 export class OpenAIChatProvider implements ChatProvider {
   readonly name: string;
@@ -129,6 +129,16 @@ export class OpenAIChatProvider implements ChatProvider {
       }
     }
 
+    // Sakana Fugu reasons by default; its OpenAI-compatible Chat Completions takes
+    // the discrete effort as the STRING field `reasoning_effort` (high/xhigh/max,
+    // where xhigh==max). Forward the user-selected level when present; omitting it
+    // lets Fugu apply its server-side default (xhigh). Gated on vendor so other
+    // OpenAI-compatible vendors never receive the field.
+    const fuguExtras: Record<string, unknown> = {};
+    if (this.vendor === 'fugu' && req.reasoningEffort) {
+      fuguExtras.reasoning_effort = req.reasoningEffort;
+    }
+
     // Stable cache hint per session. OpenAI accepts `prompt_cache_key`
     // (https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-key)
     // and routes the request to a server that has the prefix cached. DeepSeek
@@ -162,6 +172,7 @@ export class OpenAIChatProvider implements ChatProvider {
         ...zaiExtras,
         ...deepseekExtras,
         ...openrouterExtras,
+        ...fuguExtras,
         ...cacheKeyExtras,
       };
       // Declarative body shaping (custom providers only). Re-assert the

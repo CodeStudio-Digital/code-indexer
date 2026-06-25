@@ -32,7 +32,10 @@ const templateVarSchema = z
 
 const wireOptsSchema = z
   .object({
-    vendor: z.enum(['openai', 'openrouter', 'zai', 'deepseek', 'copilot']).optional(),
+    // Shared by both the full and third-party schemas: a third party may author
+    // `vendor:'fugu'` — harmless (the flag only tweaks requests against their own
+    // configured baseURL, same profile as the already-allowed 'zai'/'openrouter').
+    vendor: z.enum(['openai', 'openrouter', 'zai', 'deepseek', 'copilot', 'fugu']).optional(),
     baseUrlTemplate: z.string().optional(),
     baseUrlVars: z.record(z.string(), templateVarSchema).optional(),
     modelModes: z

@@ -1,0 +1,12 @@
+{
+  "name": "provider-fugu",
+  "version": "0.1.0",
+  "description": "Sakana AI Fugu (Fugu + Fugu Ultra) as a provider plugin",
+  "author": { "name": "mcp" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "Sakana AI Fugu",
+    "shortDescription": "Fugu + Fugu Ultra reasoning models (reasoning_effort high/xhigh/max) via the providers contribution point",
+    "category": "ai-provider"
+  }
+}
