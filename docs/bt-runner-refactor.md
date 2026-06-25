@@ -321,7 +321,11 @@ execute_tasks()
 ### Compactação
 | Env | Default | Função |
 |---|---|---|
+| `CODER_COMPACT_PROTECT_RATIO` | `0.30` | Cauda mantida verbatim (fração da janela em TOKENS); subiu de 0.15 |
+| `CODER_COMPACT_MIN_TAIL_TURNS` | `8` | Piso por contagem — mínimo de turnos renderizáveis (user+assistant) sempre na cauda, mesmo com tail denso em tokens |
+| `CODER_COMPACT_MIN_TAIL_FRACTION` | `0.10` | Piso fracionário — fração dos turnos renderizáveis visíveis; piso efetivo = max(turns, ceil(fração×total)) |
 | `CODER_COMPACT_PRESERVE_LAST_N_TURNS` | `2` | Kimi-style — tail de N user turns sempre intacto |
+| `CODER_COMPACT_RECEDE_TAIL_RATIO` | `0.50` | Teto do recede (fração da janela) — limita o quão grande a cauda cresce, abaixo do trigger |
 | `CODER_PRUNE_MINIMUM` | `60000` | (legado char-based) — só usado quando char path roda |
 | `CODER_PRUNE_PROTECT` | `80000` | (legado char-based) |
 

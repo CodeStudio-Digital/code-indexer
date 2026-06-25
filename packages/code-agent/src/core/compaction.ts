@@ -62,6 +62,7 @@ export {
   computeCutoffIndexByTokens,
   snapCutoffPreservingPairs,
   recedeToPreserveLastNTurns,
+  recedeToPreserveLastNRenderableTurns,
   snapCutoffToRoleBoundary,
 } from './compaction/cutoff.js';
 

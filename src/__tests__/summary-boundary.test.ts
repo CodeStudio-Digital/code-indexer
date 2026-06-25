@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/durable-compaction.js';
+import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 
 /**
  * Migration 128 — durable compaction boundary (prepend model). The summary is
@@ -129,6 +131,60 @@ describe('durable compaction boundary', () => {
       'SELECT COUNT(*) AS c FROM coder_messages WHERE session_id = ?',
     ).get(sessionId) as { c: number }).c;
     expect(total).toBe(5);
+  });
+
+  it('runDurableCompaction keeps >= the message floor of renderable tail on a dense autonomous run', async () => {
+    const ENV_KEYS = [
+      'CODER_COMPACT_PROTECT_RATIO',
+      'CODER_COMPACT_PRESERVE_LAST_N_TURNS',
+      'CODER_COMPACT_MIN_TAIL_TURNS',
+      'CODER_COMPACT_MIN_TAIL_FRACTION',
+    ] as const;
+    const saved: Record<string, string | undefined> = {};
+    for (const k of ENV_KEYS) saved[k] = process.env[k];
+    // Tiny token tail + floor pinned to 8 + user-turn recede disabled — so the
+    // message-count floor is the thing keeping the recent tail.
+    process.env.CODER_COMPACT_PROTECT_RATIO = '0.02';
+    process.env.CODER_COMPACT_PRESERVE_LAST_N_TURNS = '0';
+    process.env.CODER_COMPACT_MIN_TAIL_TURNS = '8';
+    process.env.CODER_COMPACT_MIN_TAIL_FRACTION = '0';
+    try {
+      // 1 user request, then 20 dense (assistant tool_use → big tool_result) turns.
+      store.appendMessage(sessionId, { role: 'user', content: [{ type: 'text', text: 'build the feature' }] });
+      for (let i = 0; i < 20; i++) {
+        store.appendMessage(sessionId, {
+          role: 'assistant', content: [{ type: 'tool_use', id: `id${i}`, name: 'read_file', input: {} }],
+        });
+        store.appendMessage(sessionId, {
+          role: 'tool',
+          content: [{ type: 'tool_result', tool_use_id: `id${i}`, content: `contents of f${i} `.repeat(400) }],
+        });
+      }
+
+      const res = await runDurableCompaction({
+        store,
+        sessionId,
+        provider: { model: 'fake-model-xyz' } as unknown as ChatProvider, // 128K fallback window
+        summarize: async () => ({
+          primary_request: 'build the feature',
+          key_concepts: [], files_and_code: [], errors_and_fixes: [],
+          problem_solving: '', all_user_messages: ['build the feature'],
+          pending_tasks: [], current_work: '', next_step: '',
+        }),
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.prunedCount).toBeGreaterThan(0); // it really moved a boundary
+      // Visible tail after the boundary must retain at least the 8-turn floor.
+      const visible = store.loadSessionWithMessages(sessionId);
+      const renderableVisible = (visible?.messages ?? []).filter((m) => m.role !== 'tool').length;
+      expect(renderableVisible).toBeGreaterThanOrEqual(8);
+    } finally {
+      for (const k of ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
   });
 
   it('bumps the per-kind durable-compaction counters (migration 130)', () => {

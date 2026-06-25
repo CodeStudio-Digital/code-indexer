@@ -79,12 +79,17 @@ export interface ProtectTokensInputs {
 }
 
 /**
- * Default lowered from 0.40 → 0.15 (keep the recent ~15% verbatim). 40% proved
- * larger than needed and inflated every prompt; a smaller tail + the summary is
- * enough to retain the immediate working state (incl. recent tool calls).
- * Override per-install via `CODER_COMPACT_PROTECT_RATIO` (Settings → exposed).
+ * Default history: 0.40 → 0.15 → **0.30**. 0.40 inflated every prompt; 0.15
+ * proved too aggressive in autonomous runs — the tail is `protectRatio` of the
+ * window in TOKENS, and a token-dense recent tail (file reads, code_exec,
+ * search dumps) collapses 15% to only a handful of messages, so the agent lost
+ * its just-gathered working state and re-explored. 0.30 keeps a meaningful
+ * recent tail; the companion message-count floor
+ * (`recedeToPreserveLastNRenderableTurns`) guarantees the tail never collapses
+ * below the last N turns regardless of token density. Override per-install via
+ * `CODER_COMPACT_PROTECT_RATIO` (Settings → exposed).
  */
-export const DEFAULT_PROTECT_RATIO = 0.15;
+export const DEFAULT_PROTECT_RATIO = 0.3;
 
 /** Env-resolved protect ratio, clamped so a typo can't zero/expand the tail. */
 export function resolveProtectRatio(): number {
@@ -122,6 +127,47 @@ export function resolveRecedeTailRatio(): number {
   // Clamp against the RESOLVED trigger ratio (not the constant) so an env
   // override of the trigger keeps the post-compaction prompt below it.
   return Math.min(resolveTriggerRatio() - 0.05, Math.max(resolveProtectRatio(), ratio));
+}
+
+/**
+ * Message-count FLOOR on the recent tail (paired with
+ * `recedeToPreserveLastNRenderableTurns`). The token keep-ratio is a fraction
+ * of the WINDOW — a token-dense recent stretch collapses it to a couple of
+ * messages. This floor guarantees the tail never drops below the last
+ * `max(minTurns, ceil(minFraction × visibleRenderableTurns))` renderable turns,
+ * so the agent keeps its immediate working state regardless of token density.
+ * Best-effort under the recede ceiling (`maxTailTokens`) so it can't overflow
+ * the window.
+ */
+export const DEFAULT_MIN_TAIL_TURNS = 8;
+export const DEFAULT_MIN_TAIL_FRACTION = 0.1;
+
+/** Absolute floor of recent renderable turns. Clamped to ≥ 0. */
+export function resolveMinTailTurns(): number {
+  const raw = process.env.CODER_COMPACT_MIN_TAIL_TURNS;
+  if (!raw) return DEFAULT_MIN_TAIL_TURNS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MIN_TAIL_TURNS;
+  return Math.floor(n);
+}
+
+/** Fractional floor on the visible renderable turns. Clamped to 0–0.6. */
+export function resolveMinTailFraction(): number {
+  const raw = process.env.CODER_COMPACT_MIN_TAIL_FRACTION;
+  if (raw == null || raw === '') return DEFAULT_MIN_TAIL_FRACTION;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_MIN_TAIL_FRACTION;
+  return Math.min(0.6, Math.max(0, n));
+}
+
+/**
+ * Effective renderable-turn floor for a transcript with `totalRenderableTurns`
+ * visible (non-tool) messages: the larger of the absolute floor and the
+ * fractional floor. Never exceeds the total (can't keep more turns than exist).
+ */
+export function computeMinTailTurns(totalRenderableTurns: number): number {
+  const byFraction = Math.ceil(resolveMinTailFraction() * totalRenderableTurns);
+  return Math.min(totalRenderableTurns, Math.max(resolveMinTailTurns(), byFraction));
 }
 
 /**

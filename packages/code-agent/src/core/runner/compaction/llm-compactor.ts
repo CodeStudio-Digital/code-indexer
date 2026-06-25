@@ -30,12 +30,14 @@ import {
   computeCutoffIndexByTokens,
   snapCutoffPreservingPairs,
   recedeToPreserveLastNTurns,
+  recedeToPreserveLastNRenderableTurns,
 } from '@mcp/code-agent/core/compaction/cutoff.js';
 import {
   summarizeSpanV2,
   type CompactionSummaryV2,
 } from '@mcp/code-agent/core/summarizer.js';
 import { preserveLastNTurns } from '../recovery-config.js';
+import { computeMinTailTurns } from './threshold.js';
 import { renderSummaryAsMessage } from './summary-renderer.js';
 
 export interface CompactArgs {
@@ -90,6 +92,13 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
 
   let cutoff = computeCutoffIndexByTokens(args.messages, args.protectTokens);
   cutoff = recedeToPreserveLastNTurns(args.messages, cutoff, preserveLastNTurns(), args.maxTailTokens);
+  // Message-count floor: keep at least the last N renderable turns verbatim so a
+  // token-dense tail can't collapse the recent working state. Bounded by the
+  // same recede ceiling (`maxTailTokens`) so it never overflows the window.
+  const renderableTurns = args.messages.reduce((acc, m) => acc + (m.role !== 'tool' ? 1 : 0), 0);
+  cutoff = recedeToPreserveLastNRenderableTurns(
+    args.messages, cutoff, computeMinTailTurns(renderableTurns), args.maxTailTokens,
+  );
   cutoff = snapCutoffPreservingPairs(args.messages, cutoff);
 
   // No-op when nothing is compactable.

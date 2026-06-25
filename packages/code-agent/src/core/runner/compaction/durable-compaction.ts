@@ -18,9 +18,10 @@ import {
   computeCutoffIndexByTokens,
   snapCutoffPreservingPairs,
   recedeToPreserveLastNTurns,
+  recedeToPreserveLastNRenderableTurns,
 } from '@mcp/code-agent/core/compaction/cutoff.js';
 import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
-import { computeProtectTokens, resolveRecedeTailRatio } from './threshold.js';
+import { computeProtectTokens, resolveRecedeTailRatio, computeMinTailTurns } from './threshold.js';
 import { preserveLastNTurns } from '../recovery-config.js';
 
 /** Below this many visible rows there's nothing worth compacting durably. */
@@ -51,6 +52,15 @@ export async function runDurableCompaction(args: {
   store: SessionStore;
   sessionId: number;
   provider: ChatProvider;
+  /**
+   * Test-only override for the summary step. Production passes undefined so we
+   * use the real `summarizeSpanV2` (driven by `provider`). Mirrors the same
+   * injection point on `compactWithLLM`.
+   */
+  summarize?: (
+    head: AgentMessage[],
+    provider: ChatProvider,
+  ) => Promise<import('@mcp/code-agent/core/summarizer.js').CompactionSummaryV2 | null>;
 }): Promise<DurableCompactionResult> {
   const { store, sessionId, provider } = args;
   const data = store.loadSessionWithMessages(sessionId);
@@ -64,6 +74,11 @@ export async function runDurableCompaction(args: {
   const maxTailTokens = computeProtectTokens({ model: provider.model, protectRatio: resolveRecedeTailRatio() });
   let cutoff = computeCutoffIndexByTokens(msgs, protectTokens);
   cutoff = recedeToPreserveLastNTurns(msgs, cutoff, preserveLastNTurns(), maxTailTokens);
+  // Message-count floor: keep at least the last N renderable turns verbatim so a
+  // token-dense tail can't collapse the recent working state (same as the
+  // in-memory compactor). Bounded by the recede ceiling so it can't overflow.
+  const renderableTurns = msgs.reduce((acc, m) => acc + (m.role !== 'tool' ? 1 : 0), 0);
+  cutoff = recedeToPreserveLastNRenderableTurns(msgs, cutoff, computeMinTailTurns(renderableTurns), maxTailTokens);
   cutoff = snapCutoffPreservingPairs(msgs, cutoff);
   if (cutoff <= 0 || cutoff >= msgs.length) return { ok: false, reason: 'nothing-to-compact' };
 
@@ -72,7 +87,8 @@ export async function runDurableCompaction(args: {
     ? [summaryMessage(prior), ...msgs.slice(0, cutoff)]
     : msgs.slice(0, cutoff);
 
-  const summary = await summarizeSpanV2(head, provider);
+  const summarize = args.summarize ?? summarizeSpanV2;
+  const summary = await summarize(head, provider);
   if (!summary) return { ok: false, reason: 'summary-failed' };
 
   const boundaryId = rows[cutoff - 1].id;

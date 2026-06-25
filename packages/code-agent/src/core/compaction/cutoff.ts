@@ -163,6 +163,67 @@ export function recedeToPreserveLastNTurns(
 }
 
 /**
+ * Recede `cutoff` toward 0 until the tail holds at least `n` RENDERABLE
+ * (non-`tool`) messages — i.e. user + assistant turns. This is the
+ * message-count FLOOR that guarantees a meaningful recent tail regardless of
+ * token density.
+ *
+ * Why this exists on top of `recedeToPreserveLastNTurns`: that sibling only
+ * counts `user` turns, of which an autonomous run has almost none (one initial
+ * request, then hundreds of assistant/tool turns). With the token tail measured
+ * as a fraction of the window, a token-dense recent stretch (file reads,
+ * code_exec, search dumps) collapses the tail to a couple of messages — the
+ * agent then loses its just-gathered working state and re-explores. Counting
+ * ALL renderable turns gives a floor the token math can't defeat.
+ *
+ * `maxTailTokens` (optional) caps how far we recede: the floor is BEST-EFFORT
+ * under the token ceiling. When recent turns are so dense that even `n` of them
+ * exceed the ceiling, we stop at the furthest-back boundary that still fits and
+ * return it (`spillOversizedToolResults` is the relief valve that frees room on
+ * the next pass). Without a budget we recede freely to satisfy the floor.
+ *
+ * Recedes only (never advances) and never receives a `tool` message as the new
+ * boundary's first kept turn — the caller still feeds the result through
+ * `snapCutoffPreservingPairs` to keep tool_use/tool_result pairs atomic.
+ */
+export function recedeToPreserveLastNRenderableTurns(
+  messages: AgentMessage[],
+  cutoff: number,
+  n: number,
+  maxTailTokens?: number,
+): number {
+  if (n <= 0 || cutoff <= 0 || cutoff >= messages.length) return cutoff;
+
+  // Seed the running tail size + renderable count from the existing tail.
+  let tailTokens = 0;
+  let renderableInTail = 0;
+  for (let i = cutoff; i < messages.length; i++) {
+    if (maxTailTokens != null) tailTokens += estimateMessageTokens(messages[i]);
+    if (messages[i].role !== 'tool') renderableInTail++;
+  }
+  if (renderableInTail >= n) return cutoff;
+
+  let needed = n - renderableInTail;
+  let safe = cutoff;
+  for (let i = cutoff - 1; i >= 0; i--) {
+    if (maxTailTokens != null) {
+      const t = estimateMessageTokens(messages[i]);
+      if (tailTokens + t > maxTailTokens) return safe; // ceiling hit — best-effort
+      tailTokens += t;
+    }
+    safe = i;
+    if (messages[i].role !== 'tool') {
+      needed--;
+      if (needed === 0) return i;
+    }
+  }
+  // Fewer than N renderable messages exist before the original cutoff. With a
+  // budget the loop returned a SAFE bounded boundary unless everything fit
+  // (then `safe` reached 0). Either way `safe` is the furthest valid recede.
+  return safe;
+}
+
+/**
  * Adjust cutoff so it never falls between an assistant message (with tool_use
  * blocks) and its paired tool message (with tool_result blocks).
  *

@@ -3,11 +3,14 @@
  * Tests `recedeToPreserveLastNTurns` in isolation + interaction with
  * `snapCutoffPreservingPairs` so the combined cutoff behaves correctly.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   recedeToPreserveLastNTurns,
   snapCutoffPreservingPairs,
 } from '@mcp/code-agent/core/compaction.js';
+import { compactWithLLM } from '@mcp/code-agent/core/runner/compaction/llm-compactor.js';
+import { estimateMessageTokens } from '@mcp/code-agent/core/token-accounting.js';
+import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 
 function user(text: string): AgentMessage {
@@ -24,6 +27,9 @@ function toolResult(id: string, text: string): AgentMessage {
     role: 'tool',
     content: [{ type: 'tool_result', tool_use_id: id, content: text }],
   };
+}
+function renderableCount(messages: AgentMessage[]): number {
+  return messages.reduce((acc, m) => acc + (m.role !== 'tool' ? 1 : 0), 0);
 }
 
 describe('recedeToPreserveLastNTurns', () => {
@@ -123,5 +129,69 @@ describe('R4 + R5 interaction (recede + pair-preserve)', () => {
     const receded = recedeToPreserveLastNTurns(msgs, 3, 1);
     const final = snapCutoffPreservingPairs(msgs, receded);
     expect(final).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('message-count floor — compactWithLLM keeps recent turns on a dense, user-turn-free tail', () => {
+  const ENV_KEYS = [
+    'CODER_COMPACT_PRESERVE_LAST_N_TURNS',
+    'CODER_COMPACT_MIN_TAIL_TURNS',
+    'CODER_COMPACT_MIN_TAIL_FRACTION',
+  ] as const;
+  const saved: Record<string, string | undefined> = {};
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it('an autonomous run (1 user turn, dense tool results) still retains >= floor renderable turns', async () => {
+    for (const k of ENV_KEYS) saved[k] = process.env[k];
+    // Isolate the floor: disable the user-turn recede (only 1 user turn exists
+    // anyway) and pin the floor to exactly 8 renderable turns.
+    process.env.CODER_COMPACT_PRESERVE_LAST_N_TURNS = '0';
+    process.env.CODER_COMPACT_MIN_TAIL_TURNS = '8';
+    process.env.CODER_COMPACT_MIN_TAIL_FRACTION = '0';
+
+    // 1 user request, then 20 autonomous (assistant tool_use → big tool_result)
+    // turns — no further user messages. The token cutoff alone would keep only a
+    // couple of these dense turns.
+    const msgs: AgentMessage[] = [user('build the feature')];
+    for (let i = 0; i < 20; i++) {
+      msgs.push(assistantWithToolUse(`id${i}`, 'read_file'));
+      msgs.push(toolResult(`id${i}`, `contents of f${i} `.repeat(120))); // token-dense
+    }
+
+    // Tiny protect budget → token cutoff keeps ~the last message only.
+    const protectTokens = estimateMessageTokens(msgs[msgs.length - 1]) + 1;
+    // Generous ceiling so the floor (not the budget) is the binding constraint.
+    const maxTailTokens = msgs.reduce((a, m) => a + estimateMessageTokens(m), 0) + 1;
+
+    const result = await compactWithLLM({
+      messages: msgs,
+      protectTokens,
+      maxTailTokens,
+      summaryProvider: { model: 'test-model' } as unknown as ChatProvider,
+      // Bypass the real LLM — the cutoff math is what we're asserting.
+      summarize: async () => ({
+        primary_request: 'build the feature',
+        key_concepts: [],
+        files_and_code: [],
+        errors_and_fixes: [],
+        problem_solving: '',
+        all_user_messages: ['build the feature'],
+        pending_tasks: [],
+        current_work: '',
+        next_step: '',
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.collapsedFrom).toBeGreaterThan(0); // it really compacted a head
+    // result.messages = [synthetic summary, ...tail]; the synthetic is a user
+    // message, so exclude it before counting the preserved tail's turns.
+    const tail = result.messages.slice(1);
+    expect(renderableCount(tail)).toBeGreaterThanOrEqual(8);
   });
 });
