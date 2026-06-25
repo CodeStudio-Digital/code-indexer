@@ -27,6 +27,29 @@ import {
   REPEATABLE_NAME_PATTERN,
 } from '@mcp/code-agent/core/runner/constants.js';
 
+/**
+ * C2-b — coarse error-signal classification (Claude Code's "check the evidence
+ * supports THAT action" applied to retries). `transient` = worth retrying as-is
+ * (network/timeout/rate-limit/5xx); `permanent` = the call is wrong and won't
+ * fix itself by repeating (perms, missing file, syntax); `unknown` when neither
+ * pattern matches — treated as "don't reset" so behavior degrades gracefully.
+ */
+export type ErrorSignal = 'transient' | 'permanent' | 'unknown';
+
+const TRANSIENT_ERROR_RE =
+  /\b(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPIPE|EAI_AGAIN|socket hang up|network error|timed?\s?out|timeout|rate[ -]?limit(?:ed)?|429|50[234]|temporarily unavailable|try again)\b/i;
+const PERMANENT_ERROR_RE =
+  /\b(?:EACCES|EPERM|ENOENT|EISDIR|ENOTDIR|no such file|permission denied|syntax ?error|cannot find module|unexpected token|is not defined|invalid argument)\b/i;
+
+export function parseErrorSignal(content: string): ErrorSignal {
+  if (!content) return 'unknown';
+  // Transient first: a network blip is the common retry-worthy case; permanent
+  // patterns are more specific and rarely co-occur with a transient token.
+  if (TRANSIENT_ERROR_RE.test(content)) return 'transient';
+  if (PERMANENT_ERROR_RE.test(content)) return 'permanent';
+  return 'unknown';
+}
+
 /** One entry per tool name in the failure-streak table. */
 export interface FailureStreakEntry {
   /** Consecutive `isError=true` results since the last success. */
@@ -41,6 +64,13 @@ export interface FailureStreakEntry {
    * even after the original `tool_result` is elided by compaction.
    */
   lastError: string;
+  /**
+   * C2-b — the error category of the FIRST failure in this streak (only set
+   * when classification is on). When a later failure's category differs, the
+   * cause changed and the streak resets rather than escalating to refusal on
+   * an unrelated problem.
+   */
+  signalCategory?: ErrorSignal;
 }
 
 /** State container — keyed by tool name. Mutated in place. */
@@ -89,6 +119,13 @@ export interface CheckFailureStreakInput {
    * `FAILURE_STREAK_REFUSE_THRESHOLD`.
    */
   refuseThreshold?: number;
+  /**
+   * C2-b — enable error-signal classification (CODER_FAILURE_CLASSIFICATION).
+   * Passed by the caller (executing-dispatch) so the pure function stays
+   * env-free and testable. When false/omitted the guard behaves exactly as
+   * before (the extra `signalCategory` field is inert).
+   */
+  classifyErrors?: boolean;
 }
 
 const ERROR_SNIPPET_CHARS = 200;
@@ -136,14 +173,30 @@ export function checkFailureStreak(inp: CheckFailureStreakInput): FailureStreakV
   const refuseThreshold = inp.refuseThreshold ?? FAILURE_STREAK_REFUSE_THRESHOLD;
 
   const prev = inp.state.streaks.get(inp.toolName);
-  const consecutive = (prev?.consecutive ?? 0) + 1;
-  const firstFailureTurn = prev?.firstFailureTurn ?? inp.turn;
   const lastError = (inp.errorContent ?? '').slice(0, ERROR_SNIPPET_CHARS);
+
+  // C2-b — when the failure CATEGORY changes mid-streak (e.g. a permanent
+  // EACCES after a run of transient ECONNREFUSED), the cause is different, so
+  // RESET the streak instead of escalating to refusal on an unrelated problem.
+  // Only resets when classification is on AND both categories are concrete
+  // (not `unknown`) AND they actually differ.
+  const signal: ErrorSignal | undefined = inp.classifyErrors ? parseErrorSignal(lastError) : undefined;
+  const signalChanged =
+    !!inp.classifyErrors &&
+    prev?.signalCategory != null &&
+    prev.signalCategory !== 'unknown' &&
+    signal != null &&
+    signal !== 'unknown' &&
+    prev.signalCategory !== signal;
+
+  const consecutive = signalChanged ? 1 : (prev?.consecutive ?? 0) + 1;
+  const firstFailureTurn = signalChanged ? inp.turn : (prev?.firstFailureTurn ?? inp.turn);
   inp.state.streaks.set(inp.toolName, {
     consecutive,
     firstFailureTurn,
     lastFailureTurn: inp.turn,
     lastError,
+    signalCategory: signal ?? prev?.signalCategory,
   });
 
   // Refuse takes precedence over reminder. The first time we cross the

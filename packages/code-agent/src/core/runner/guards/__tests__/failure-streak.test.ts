@@ -18,6 +18,7 @@ import {
   buildFailureStreakRefusalText,
   emptyFailureStreakState,
   isFailureStreakExempt,
+  parseErrorSignal,
 } from '../failure-streak.js';
 
 describe('checkFailureStreak — happy path', () => {
@@ -205,5 +206,81 @@ describe('marker / refusal text builders', () => {
       toolName: 'write_stdin', count: 5, firstFailureTurn: 7, lastError: '',
     });
     expect(text).not.toContain('Last error:');
+  });
+});
+
+describe('parseErrorSignal — classification', () => {
+  it('classifies transient network/timeout/rate-limit errors', () => {
+    expect(parseErrorSignal('connect ECONNREFUSED 127.0.0.1:5432')).toBe('transient');
+    expect(parseErrorSignal('request timed out after 30s')).toBe('transient');
+    expect(parseErrorSignal('HTTP 429 rate limited, try again')).toBe('transient');
+    expect(parseErrorSignal('upstream returned 503')).toBe('transient');
+  });
+  it('classifies permanent perms/missing/syntax errors', () => {
+    expect(parseErrorSignal("EACCES: permission denied, open '/etc/x'")).toBe('permanent');
+    expect(parseErrorSignal('ENOENT: no such file or directory')).toBe('permanent');
+    expect(parseErrorSignal('SyntaxError: unexpected token')).toBe('permanent');
+    expect(parseErrorSignal('Cannot find module "foo"')).toBe('permanent');
+  });
+  it('returns unknown when no pattern matches or content is empty', () => {
+    expect(parseErrorSignal('the widget exploded')).toBe('unknown');
+    expect(parseErrorSignal('')).toBe('unknown');
+  });
+});
+
+describe('checkFailureStreak — C2-b signal classification', () => {
+  it('resets the streak when the error category changes (classifyErrors on)', () => {
+    const state = emptyFailureStreakState();
+    for (let i = 1; i <= 4; i++) {
+      checkFailureStreak({
+        toolName: 'http_request', isError: true,
+        errorContent: 'ECONNREFUSED', turn: i, state, classifyErrors: true,
+      });
+    }
+    expect(state.streaks.get('http_request')?.consecutive).toBe(4);
+    // 5th failure is a DIFFERENT (permanent) cause → reset to 1, not refuse.
+    const v = checkFailureStreak({
+      toolName: 'http_request', isError: true,
+      errorContent: 'EACCES: permission denied', turn: 5, state, classifyErrors: true,
+    });
+    expect(v.kind).toBe('pass');
+    expect(state.streaks.get('http_request')?.consecutive).toBe(1);
+    expect(state.streaks.get('http_request')?.signalCategory).toBe('permanent');
+  });
+
+  it('still escalates to refuse when the category is stable (classifyErrors on)', () => {
+    const state = emptyFailureStreakState();
+    let v;
+    for (let i = 1; i <= 5; i++) {
+      v = checkFailureStreak({
+        toolName: 'http_request', isError: true,
+        errorContent: 'ETIMEDOUT', turn: i, state, classifyErrors: true,
+      });
+    }
+    expect(v?.kind).toBe('refuse');
+  });
+
+  it('does NOT reset on a category change when classifyErrors is off (legacy behavior)', () => {
+    const state = emptyFailureStreakState();
+    for (let i = 1; i <= 4; i++) {
+      checkFailureStreak({ toolName: 'http_request', isError: true, errorContent: 'ECONNREFUSED', turn: i, state });
+    }
+    const v = checkFailureStreak({
+      toolName: 'http_request', isError: true, errorContent: 'EACCES', turn: 5, state,
+    });
+    expect(v.kind).toBe('refuse');
+  });
+
+  it('does not reset on an unknown→concrete transition (avoids false resets)', () => {
+    const state = emptyFailureStreakState();
+    for (let i = 1; i <= 4; i++) {
+      checkFailureStreak({
+        toolName: 'edit_file', isError: true, errorContent: 'weird failure', turn: i, state, classifyErrors: true,
+      });
+    }
+    const v = checkFailureStreak({
+      toolName: 'edit_file', isError: true, errorContent: 'EACCES', turn: 5, state, classifyErrors: true,
+    });
+    expect(v.kind).toBe('refuse');
   });
 });

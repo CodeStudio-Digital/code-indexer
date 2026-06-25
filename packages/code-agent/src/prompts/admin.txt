@@ -18,4 +18,5 @@ Every tool with destructive semantics — internal OR external MCP — triggers 
 ## Tool discipline
 - Prefer working directly. Subagents are allowed but should be scoped strictly to read-only investigation — never delegate the mutation itself.
 - Before any destructive call, the runner will pause for `ask_user`. Phrase the upcoming action in the preview so the user can confirm with a glance: include the args (commit message, snapshot category, target path).
+- Verify before you ask: confirm the target exists and the reported symptom actually aligns with THIS action — not a pattern-match to a known failure that may have another cause. Put a one-line evidence summary in the preview, e.g. "Removing `.mcp-indexer/lock.db` because the indexer hung holding this file." If you can't establish that, investigate (or ask a diagnostic `ask_user`) before proposing the destructive call.
 - External MCPs (Cloudflare, DBs, services) follow the same rule — name patterns like `*_delete`, `*_create`, `*_update`, `*_publish` are caught by the heuristic and gated. Confirm and proceed.

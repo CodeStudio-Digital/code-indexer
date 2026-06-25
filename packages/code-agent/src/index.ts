@@ -50,6 +50,7 @@ import { buildExpandTools } from '@mcp/code-agent/tools/expand.js';
 import { buildFindToolsTool } from '@mcp/code-agent/tools/find-tools.js';
 import { buildRequestReviewTool } from '@mcp/code-agent/tools/request-review.js';
 import { buildSelfReviewTool } from '@mcp/code-agent/tools/self-review.js';
+import { runVerifyCompletionSubagent } from '@mcp/code-agent/tools/verify-completion-subagent.js';
 import { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
 import { buildMcpResourceTools } from '@mcp/code-agent/tools/mcp-resources.js';
 import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
@@ -130,6 +131,8 @@ import {
 import { matchSkills, type SkillMatchContext } from '@mcp/code-agent/skills/skill-matcher.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
+import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
+import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
@@ -1598,6 +1601,54 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Fallback config not available (migration not run yet) — skip silently
   }
 
+  // ─── A1: independent goal-completion verifier (CODER_GOAL_VERIFY) ─────
+  // At a text-only finish the runner asks this to confirm the ORIGINAL goal is
+  // actually met before ending — the "stop-condition verifier" half of Claude
+  // Code's two-agent split. It spawns a READ-ONLY verifier subagent on a CLEAN
+  // context (never sees this run's transcript); the verifier runs `git_diff`
+  // itself (REVIEW_ALLOWLIST) and reads files to confirm. Cross-model when a
+  // `goal_verification` pipeline binding is set, else it reuses the parent
+  // provider (still clean-context independent). Fail-open + bounded by the BT
+  // (ctx.goalVerifyAttempts) — it can never block or loop the run. Off by
+  // default and skipped for company subordinates (the master gates those).
+  const verifyGoalCompletion =
+    process.env.CODER_GOAL_VERIFY === '1' && !opts.companyContext
+      ? async (): Promise<{ goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null> => {
+          try {
+            const state = store.getSessionStateData(session.id);
+            const goalText = state?.goal?.text?.trim();
+            if (!state || !goalText || state.filesChanged.length === 0) return null;
+            let verifier: ChatProvider | null = null;
+            try {
+              const resolver = new PipelineProviderResolver(
+                new PipelineProviderBindingsStore(store.getDb()),
+                new ProviderStore(store.getDb()),
+              );
+              const bound = await resolver.resolveOrNull('goal_verification', 'reviewer', {
+                sessionId: session.id,
+              });
+              if (bound) verifier = await createCoderProvider(bound.provider.id, bound.modelId);
+            } catch {
+              /* fall back to the parent provider */
+            }
+            const result = await runVerifyCompletionSubagent(
+              {
+                provider: verifier ?? provider,
+                tools: registry.list(),
+                ctx: toolContext,
+                sessionId: session.id,
+                sessionStore: store,
+                agentLoopV2: agentLoopV2EnvFlag,
+              },
+              { goal: goalText, plan: state.activePlan?.text ?? null, diff: '', testSummary: null },
+            );
+            return { goalMet: result.goalMet, gaps: result.gaps };
+          } catch {
+            return null; // fail-open — the verifier must never block the run
+          }
+        }
+      : undefined;
+
   // ─── Context window (DB-first, registry fallback) ────────────────
   // The DB is the source of truth WHEN populated, but ZAI / new model
   // releases / hand-imported configs frequently leave it null. Fall back
@@ -1799,6 +1850,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     externalToolTiers,
     fallbackChain,
     createProvider: createProviderForFallback,
+    verifyGoalCompletion,
     hookRegistry: hookRegistry.hasHandlers ? hookRegistry : undefined,
     context_window: sessionContextWindow,
     isCompanySubordinate: opts.companyContext != null && !opts.companyContext.isMaster,

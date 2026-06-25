@@ -23,6 +23,15 @@ function snapAt(id: number, importance: number, createdAt: string): ContextSnaps
   };
 }
 
+function snapCat(id: number, category: string, importance = 0.5): ContextSnapshot {
+  return {
+    id, project_id: 1, title: `T${id}`, category: category as ContextSnapshot['category'],
+    content: `c${id}`, tags: '[]',
+    created_at: '', updated_at: '', created_by: 'manual', embedding_hash: null,
+    source: 'manual', importance, last_accessed_at: null, access_count: 0,
+  };
+}
+
 function fakeAccess(): AccessMarker & { ids: number[] } {
   const ids: number[] = [];
   return { ids, markSnapshotAccessed(x) { ids.push(...x); } };
@@ -107,5 +116,53 @@ describe('MemoryRetriever', () => {
     expect(out.map((o) => o.id)).toEqual(['1', '2']); // fresh first despite stale's better rank
     expect(out.find((o) => o.id === '2')!.staleNote).toContain('src/x.ts');
     expect(out.find((o) => o.id === '1')!.staleNote).toBeUndefined();
+  });
+
+  it('D1 — minRelevance drops low-scoring tangential hits before topK', async () => {
+    // 4 equal-importance hits → blended scores 0.55, 0.275, 0.183, 0.137 (rank/(i+1) × 0.55).
+    const hits = [snap(1, 'A', 'a'), snap(2, 'B', 'b'), snap(3, 'C', 'c'), snap(4, 'D', 'd')];
+    const search: SnapshotSearch = { async searchSnapshotsHybrid() { return hits; } };
+    const out = await new MemoryRetriever(search, fakeAccess(), { topK: 5, minRelevance: 0.25 })
+      .retrieve(1, 'p', 'a sufficiently long query string');
+    expect(out.map((o) => o.id)).toEqual(['1', '2']); // only the two above the 0.25 floor
+  });
+
+  it('D1 — no floor (default) keeps the legacy topK behavior', async () => {
+    const hits = [snap(1, 'A', 'a'), snap(2, 'B', 'b'), snap(3, 'C', 'c'), snap(4, 'D', 'd')];
+    const search: SnapshotSearch = { async searchSnapshotsHybrid() { return hits; } };
+    const out = await new MemoryRetriever(search, fakeAccess(), { topK: 4 })
+      .retrieve(1, 'p', 'a sufficiently long query string');
+    expect(out).toHaveLength(4);
+  });
+
+  it('D1 — conservative categories need a higher bar (CC user-profile caution)', async () => {
+    // id1 note @0.55 (bar 0.25 → keep); id2 user @0.275 (bar 0.25×1.5=0.375 → drop);
+    // id3 note @0.183 (bar 0.25 → drop).
+    const hits = [snapCat(1, 'note'), snapCat(2, 'user'), snapCat(3, 'note')];
+    const search: SnapshotSearch = { async searchSnapshotsHybrid() { return hits; } };
+    const out = await new MemoryRetriever(search, fakeAccess(), {
+      topK: 5, minRelevance: 0.25, conservativeCategories: new Set(['user']),
+    }).retrieve(1, 'p', 'a sufficiently long query string');
+    expect(out.map((o) => o.id)).toEqual(['1']);
+  });
+
+  it('D1 (2/2) — setRecallFilter post-filters and bumps access only for kept', async () => {
+    const hits = [snap(1, 'A', 'a'), snap(2, 'B', 'b'), snap(3, 'C', 'c')];
+    const search: SnapshotSearch = { async searchSnapshotsHybrid() { return hits; } };
+    const access = fakeAccess();
+    const r = new MemoryRetriever(search, access, { topK: 5 });
+    r.setRecallFilter(async (_task, items) => items.filter((m) => m.id === '2'));
+    const out = await r.retrieve(1, 'p', 'a sufficiently long query string');
+    expect(out.map((o) => o.id)).toEqual(['2']);
+    expect(access.ids).toEqual([2]); // only the kept item's access is bumped
+  });
+
+  it('D1 (2/2) — a throwing recall filter is fail-open (keeps unfiltered items)', async () => {
+    const hits = [snap(1, 'A', 'a'), snap(2, 'B', 'b')];
+    const search: SnapshotSearch = { async searchSnapshotsHybrid() { return hits; } };
+    const r = new MemoryRetriever(search, fakeAccess(), { topK: 5 });
+    r.setRecallFilter(async () => { throw new Error('llm down'); });
+    const out = await r.retrieve(1, 'p', 'a sufficiently long query string');
+    expect(out.map((o) => o.id)).toEqual(['1', '2']);
   });
 });

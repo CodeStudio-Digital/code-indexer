@@ -91,7 +91,7 @@ describe('PR-6 R23 — buildSubagentLoopFraming exports a discipline block', () 
   it('contains persistence framing without the active-context pointer', () => {
     const block = buildSubagentLoopFraming();
     expect(block).toContain('# Agent loop (subagent)');
-    expect(block).toContain('Persist until the assigned task');
+    expect(block).toContain('carry it through end-to-end');
     expect(block).toContain('# Do not re-read what you already have');
     // Active context is NOT mentioned — subagents don't get that injection.
     expect(block).not.toContain('<active-context>');
@@ -100,13 +100,13 @@ describe('PR-6 R23 — buildSubagentLoopFraming exports a discipline block', () 
 
   it('warns specifically about slice-resolver snap behaviour (PR-5 alignment)', () => {
     const block = buildSubagentLoopFraming();
-    expect(block).toContain('slice resolver snaps');
+    expect(block).toContain('Reads snap to the enclosing symbol');
     expect(block).toContain('around_line');
   });
 
   it('mentions the runner-level refusal contract', () => {
     const block = buildSubagentLoopFraming();
-    expect(block).toContain('refuses identical-result reads');
+    expect(block).toContain('refuses identical-content tool results');
   });
 });
 

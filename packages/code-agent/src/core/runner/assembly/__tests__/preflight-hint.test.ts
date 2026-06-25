@@ -27,7 +27,7 @@ describe('renderPreflightHint', () => {
       'read these project memories BEFORE exploring (recall_memory({query:"<title>"})):',
       '- "Auth token refresh gotcha" — same login flow',
       '- "API error envelope"',
-      'note: these are suggestions from a cheap pre-analysis. Verify against the code; find_tools / expand_toolset remain available if something is missing.',
+      'note: these are suggestions from a cheap pre-analysis run before any code was read. Verify against the code; if a memory conflicts with what you observe, trust the code (memories age when files change); find_tools / expand_toolset remain available if something is missing.',
       '</preflight>',
     ].join('\n'));
   });

@@ -88,3 +88,49 @@ export function maybeDecisionGateNudge(input: {
   if (!DECISION_FORK_RE.test(input.planText)) return null;
   return DECISION_GATE_NUDGE_TEXT;
 }
+
+/**
+ * A1 — goal-completion gate for a text-only finish (the "stop-condition
+ * verifier" half of Claude Code's two-agent split).
+ *
+ * When the host wired `bridge.verifyGoalCompletion` (CODER_GOAL_VERIFY on), a
+ * text-only turn that would end the run first asks an INDEPENDENT read-only
+ * verifier subagent whether the original goal is actually met. A 'not met'
+ * verdict returns a `<system-reminder>` listing the gaps (the Executing node
+ * injects it and re-enters); a 'met' verdict (or no verdict at all) lets the
+ * run finish.
+ *
+ * Fail-open by construction: unset callback, a thrown verifier, or a null
+ * verdict (no active goal / no pending diff) all return null so the run is
+ * NEVER blocked by the verifier itself. Bounded by
+ * `CODER_GOAL_VERIFY_MAX_ATTEMPTS` (default 2) — the cap is checked BEFORE the
+ * (expensive) verifier call so a stubborn verdict can't loop or keep spending.
+ */
+const GOAL_VERIFY_MAX_ATTEMPTS = Math.max(0, Number(process.env.CODER_GOAL_VERIFY_MAX_ATTEMPTS ?? 2));
+
+export async function maybeGoalVerifyNudge(ctx: RunContext): Promise<string | null> {
+  const verify = ctx.bridge?.verifyGoalCompletion;
+  if (!verify) return null; // disabled / not wired (subagents, tests)
+  if (ctx.goalVerifyAttempts >= GOAL_VERIFY_MAX_ATTEMPTS) return null; // bounded — don't even spend the call
+
+  let verdict: { goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null;
+  try {
+    verdict = await verify();
+  } catch {
+    return null; // fail-open — a broken verifier must never block the run
+  }
+  if (!verdict) return null; // not applicable (no goal / no diff) or host-disabled
+  if (verdict.goalMet) return null; // goal met → let the run finish
+
+  ctx.goalVerifyAttempts += 1;
+  const gapLines = verdict.gaps.length
+    ? verdict.gaps.map((g) => `- [${g.severity}] ${g.description}`).join('\n')
+    : '- (no specific gaps returned — re-check the goal against your changes)';
+  return (
+    '<system-reminder>An independent completion check found the goal is NOT fully met yet. ' +
+    'Address these gaps, then continue toward done:\n' +
+    gapLines +
+    `\nIf a gap is wrong or genuinely out of scope, say so explicitly in your final summary instead of silently ignoring it. ` +
+    `This check runs at most ${GOAL_VERIFY_MAX_ATTEMPTS} time(s) per run.</system-reminder>`
+  );
+}

@@ -202,6 +202,37 @@ describe('computeDynamicInjection', () => {
     expect(out!.reminder).toContain('s1');
     expect(out!.reminder).toContain('self_review');
   });
+
+  it('G3 — reminds not to re-run setup for already-executed skills after compaction', () => {
+    const out = computeDynamicInjection(baseCtx({
+      turn: 10,
+      recentCompactionAt: 9,
+      skillsAlreadyExecuted: ['turnstile-spin', 'docx'],
+    }));
+    expect(out).not.toBeNull();
+    expect(out!.reminder).toContain('do NOT re-run their one-time setup');
+    expect(out!.reminder).toContain('turnstile-spin, docx');
+  });
+
+  it('G3 — does NOT emit the skill marker without a recent compaction', () => {
+    expect(
+      computeDynamicInjection(baseCtx({
+        turn: 10,
+        recentCompactionAt: null,
+        skillsAlreadyExecuted: ['turnstile-spin'],
+      })),
+    ).toBeNull();
+  });
+
+  it('G3 — post-compaction with no repeated skills shows the generic line only', () => {
+    const out = computeDynamicInjection(baseCtx({
+      turn: 10,
+      recentCompactionAt: 9,
+      skillsAlreadyExecuted: [],
+    }));
+    expect(out!.reminder).toContain('compaction occurred');
+    expect(out!.reminder).not.toContain('do NOT re-run their one-time setup');
+  });
 });
 
 describe('computeDynamicInjection — session state block', () => {

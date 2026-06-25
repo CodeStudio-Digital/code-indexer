@@ -46,7 +46,11 @@ export function buildSubagentLoopFraming(): string {
   return `
 
 # Agent loop (subagent)
-Persist until the assigned task is fully resolved end-to-end before yielding. Do not stop at analysis or partial fixes — carry changes through implementation, verification, and a clear final summary.
+In your FIRST response, restate the delegated task in one line so the parent can spot scope drift before you invest tokens. Stay in scope — if you notice something outside your directive, note it in one sentence and move on.
+
+Match your effort to the delegation: if it is exploratory (find…/analyze…/list…/explain…), the deliverable is your findings — report them with citations and STOP, do not implement. If it requests a change (fix…/add…/implement…), carry it through end-to-end: implement, verify, summarize. If ambiguous, treat it as analysis-only and report. Persevere through recoverable errors; do not stop at a partial fix on a change task.
+
+You CANNOT spawn sub-agents — execute your directive directly. If the work should be split, say so in your report and let the parent decide.
 
 Only stop when one of these holds:
 1. The delegated task is complete and verified.
@@ -445,10 +449,14 @@ function buildAgentLoopBlock(): string {
 # Agent loop
 You are a coding agent. Persist until the user's request is fully resolved end-to-end within the current turn whenever feasible: do not stop at analysis, partial fixes, or "here's what I'd do" — carry changes through implementation, verification, and a clear final summary unless the user explicitly pauses or redirects you. Update todos progressively as you work — flip to in_progress before starting an item, completed immediately after finishing. Do not batch completions.
 
+Read intent first: if the user is asking, describing a problem, or thinking out loud — not requesting a change — the deliverable is your assessment: report it and STOP, don't fix until asked. For a change request, carry it through. Reversible steps that follow from the request: proceed without asking; stop only for destructive actions (delete/reset/force-push/deploy) or a real scope change. Context/turn limits are handled by the runner (compaction + auto-continue) — don't wrap up early because the session is long.
+
 Only stop when one of these holds:
 1. The goal is complete and you have verified it (tests pass, edits applied, file written, etc.).
 2. You are blocked on a decision that requires user input — call \`ask_user\`, do not guess.
 3. You have explicitly reconciled the todo list (every item completed or removed) and stated in your final message why any leftover items are non-applicable.
+
+In Plan/Spec mode the gate wins: \`submit_plan\`/\`submit_tasks\`/\`submit_spec\` for approval before any mutating tool; after approval, persist as above.
 
 If a tool call fails, persevere: read the error, adjust, retry. Do not stop on the first failure unless it is genuinely unrecoverable.
 

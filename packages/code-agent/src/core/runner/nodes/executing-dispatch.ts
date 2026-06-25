@@ -647,6 +647,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         errorContent: shapedContent,
         turn: args.turn,
         state: args.failureStreakState,
+        // C2-b — opt-in error-signal classification (reset the streak when the
+        // failure category changes). Off by default → identical legacy behavior.
+        classifyErrors: process.env.CODER_FAILURE_CLASSIFICATION === '1',
       });
       if (verdict.kind === 'reminder') {
         finalContent =

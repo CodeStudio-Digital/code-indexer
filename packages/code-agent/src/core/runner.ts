@@ -1941,6 +1941,8 @@ export class CoderRunner extends EventEmitter {
         buildQualityFeedbackSuffix: () => this.buildQualityFeedbackSuffix(),
         getRelevantProjectMemory: this.opts.getRelevantProjectMemory,
         getSessionStateData: this.opts.getSessionStateData,
+        // A1 — independent goal-completion verifier (host-built; undefined when off).
+        verifyGoalCompletion: this.opts.verifyGoalCompletion,
         getProjectMemoryIndex: this.opts.getProjectMemoryIndex,
         // Session-drive "guide files": surface the files this session has
         // edited so the dynamic injector can remind the model (the injector

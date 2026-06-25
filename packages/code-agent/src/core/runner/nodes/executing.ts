@@ -53,7 +53,7 @@ import {
 } from '../assembly/session-state.js';
 import { resolveInjectionPolicy } from '../assembly/injection-policy.js';
 import { applySelfReviewDecline, computeSelfReviewNudge } from './executing-self-review.js';
-import { maybePlanNudge } from './executing-plan-gate.js';
+import { maybePlanNudge, maybeGoalVerifyNudge } from './executing-plan-gate.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
@@ -162,6 +162,17 @@ export class ExecutingNode implements BehaviorNode {
     // `injectionState.recentCompactionAt`, so a compaction in the last
     // ≤2 turns produces a "context was summarized" reminder here.
     let injectionResultForCommit: DynamicInjectionResult | null = null;
+    // B1/G3 — skills whose bodies are (re)injected this turn = the trailing user
+    // message's selectedSkillIds (same source `buildActiveSkillsBlock` uses).
+    // Captured here so both the injector (to flag already-executed skills
+    // post-compaction) and the post-assembly commit (to record them) can use it.
+    let activeSkillIdsThisTurn: string[] = [];
+    for (let i = ctx.messages.length - 1; i >= 0; i--) {
+      if (ctx.messages[i]!.role === 'user') {
+        activeSkillIdsThisTurn = ctx.messages[i]!.selectedSkillIds ?? [];
+        break;
+      }
+    }
     const dynamicInjectionFn = (): DynamicInjectionResult | null => {
       const signals = ctx.bridge?.collectDynamicInjectionSignals?.() ?? null;
       const recentCompactionAt = ctx.injectionState.recentCompactionAt;
@@ -234,6 +245,12 @@ export class ExecutingNode implements BehaviorNode {
         turn: ctx.turn,
         newlyRegisteredSkillIds: signals?.newlyRegisteredSkillIds ?? [],
         lastInjectedSkillIds: ctx.injectionState.lastInjectedSkillIds,
+        // G3 — active skills seen in a PRIOR turn (executedSkillIds holds only
+        // prior turns until the commit below) → the post-compaction "don't re-run
+        // setup" marker. Empty when none repeat or none were seen before.
+        skillsAlreadyExecuted: activeSkillIdsThisTurn.filter((id) =>
+          ctx.injectionState.executedSkillIds.has(id),
+        ),
         recentlyEditedFiles: signals?.recentlyEditedFiles ?? [],
         lastInjectedFiles: ctx.injectionState.lastInjectedFiles,
         recentCompactionAt,
@@ -293,6 +310,11 @@ export class ExecutingNode implements BehaviorNode {
       if (injectionToCommit.includedPreflightHash) {
         ctx.injectionState.lastInjectedPreflightHash = injectionToCommit.includedPreflightHash;
       }
+    }
+    // B1/G3 — record this turn's active skills (every turn, independent of the
+    // reminder) so a later post-compaction turn knows they were already used.
+    for (const id of activeSkillIdsThisTurn) {
+      ctx.injectionState.executedSkillIds.add(id);
     }
     if (
       ctx.injectionState.recentCompactionAt != null &&
@@ -658,6 +680,15 @@ export class ExecutingNode implements BehaviorNode {
       const planNudge = maybePlanNudge(ctx);
       if (planNudge) {
         ctx.messages.push({ role: 'user', content: [{ type: 'text', text: planNudge }] });
+        return events.turnSucceeded({ hasToolCalls: false });
+      }
+      // A1 goal-completion gate (CODER_GOAL_VERIFY): before letting a text-only
+      // finish end the run, an INDEPENDENT read-only verifier confirms the goal
+      // is actually met. A 'not met' verdict re-enters the turn with the gaps;
+      // fail-open + bounded by ctx.goalVerifyAttempts. See executing-plan-gate.
+      const goalNudge = await maybeGoalVerifyNudge(ctx);
+      if (goalNudge) {
+        ctx.messages.push({ role: 'user', content: [{ type: 'text', text: goalNudge }] });
         return events.turnSucceeded({ hasToolCalls: false });
       }
       // Text-only assistant turn ends the run — no tool_use means the

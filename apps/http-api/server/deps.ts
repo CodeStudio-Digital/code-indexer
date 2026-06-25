@@ -8,6 +8,7 @@ import { SnapshotService } from '@mcp/services/services/snapshots.js';
 import { ProjectIndexService, createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
 import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import { MemoryRetriever } from '@mcp/services/memory/retriever.js';
+import { LlmRecallFilter } from '@mcp/services/memory/recall-filter.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
 import { DiffService } from '@mcp/services/services/differ.js';
@@ -700,6 +701,15 @@ export function createDeps(): ServerDeps {
   // empty injection is explainable from the logs.
   const memoryRetriever = new MemoryRetriever(hybridSearch, db, {
     topK: 5,
+    // D1 — opt-in relevance floor (CODER_MEMORY_MIN_RELEVANCE, e.g. 0.2): drops
+    // tangential hits instead of padding topK, and recalls user/feedback memory
+    // more conservatively. Off by default → legacy behavior.
+    ...(process.env.CODER_MEMORY_MIN_RELEVANCE
+      ? {
+          minRelevance: Number(process.env.CODER_MEMORY_MIN_RELEVANCE),
+          conservativeCategories: new Set(['user', 'feedback', 'project-overview']),
+        }
+      : {}),
     log: (event, data) => console.debug(`[memory] retriever ${event}`, data),
   });
   // Share the same underlying better-sqlite3 handle that CodeIndexDB
@@ -789,6 +799,17 @@ export function createDeps(): ServerDeps {
       }
     },
   });
+  // D1 (2/2) — selective-recall LLM filter (CODER_MEMORY_LLM_FILTER). Keeps only
+  // retrieved memories CLEARLY about the task (CC's aboutness selector). Reuses
+  // the `memory_recall` binding; unset binding → fail-open (no filtering). The
+  // structural relevance floor (CODER_MEMORY_MIN_RELEVANCE) applies regardless.
+  if (process.env.CODER_MEMORY_LLM_FILTER === '1') {
+    const recallFilter = new LlmRecallFilter({
+      resolver: pipelineProviderResolver,
+      getFallbackDefault: () => generalDefaultAsFallback(providerStore),
+    });
+    memoryRetriever.setRecallFilter((task, items) => recallFilter.filter(task, items));
+  }
   // Mem C write-back — distills durable memory (facts + `gotcha` lessons) at
   // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
   // `memory_extraction` binding; when no binding is set it falls back to the

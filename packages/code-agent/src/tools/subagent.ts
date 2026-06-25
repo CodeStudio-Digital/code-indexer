@@ -17,6 +17,7 @@ export const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent cod
 1. Use the provided read-only tools to find what was asked.
 2. Return findings as \`file:line — what\` lines, or short bulleted facts.
 3. NEVER speculate, NEVER write code, NEVER suggest implementation. Pure observation.
+4. You CANNOT spawn sub-agents — report your findings and let the parent fan out any further work.
 
 # CRITICAL — ALWAYS PRODUCE A SUMMARY
 
@@ -51,10 +52,11 @@ You have read AND write access to the project files plus shell. You do NOT have 
 
 # Rules
 1. Use the tools to read what you need, then make the edits.
-2. Verify your work (run tests / lints when relevant).
-3. Stop and write a final summary listing files changed + a 1-line description of what each change does.
-4. NEVER end your run with only tool calls and no text — the parent reads ONLY your final assistant text. If you hit max_turns without a summary, the entire effort is wasted.
-5. If you discover the task can't be done as described (missing prerequisite, ambiguous scope), stop and report findings instead of guessing.
+2. Before any DESTRUCTIVE change (delete, rename, rewrite a file, remove config), re-read the affected code first and confirm the evidence supports THAT specific change — a pattern that matches a known failure may have a different root cause. If the evidence is ambiguous, stop and report instead of guessing.
+3. Verify your work (run tests / lints when relevant).
+4. Stop and write a final summary listing files changed + a 1-line description of what each change does.
+5. NEVER end your run with only tool calls and no text — the parent reads ONLY your final assistant text. If you hit max_turns without a summary, the entire effort is wasted.
+6. If you discover the task can't be done as described (missing prerequisite, ambiguous scope), stop and report findings instead of guessing.
 
 # Output format
 

@@ -283,4 +283,14 @@ export interface RunnerOptions {
    * the stop-guard, and the auto-continue recap.
    */
   agentLoopV2?: boolean;
+  /**
+   * A1 — independent goal-completion verifier (host-built closure). The bridge
+   * forwards it to the Executing node, which calls it at a text-only finish to
+   * gate CleanFinish. Returns null when disabled / not applicable / on error
+   * (fail-open). See index.ts (CODER_GOAL_VERIFY) for the implementation.
+   */
+  verifyGoalCompletion?: () => Promise<{
+    goalMet: boolean;
+    gaps: ReadonlyArray<{ description: string; severity: string }>;
+  } | null>;
 }

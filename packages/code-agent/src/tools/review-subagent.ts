@@ -73,6 +73,7 @@ Skip:
 # Constraints
 - Only review the files in the diff. Do not propose refactors elsewhere.
 - If you read a file outside the diff to verify a caller/dependency, OK — but stay focused.
+- You CANNOT spawn sub-agents — review the diff yourself.
 - Limit yourself to ~15 turns. Quality > exhaustiveness.
 
 # Output format — STRICT

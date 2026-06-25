@@ -37,7 +37,8 @@ export function renderPreflightHint(seed: PreflightSeed): string {
   }
 
   lines.push(
-    'note: these are suggestions from a cheap pre-analysis. Verify against the code; ' +
+    'note: these are suggestions from a cheap pre-analysis run before any code was read. Verify against the code; ' +
+      'if a memory conflicts with what you observe, trust the code (memories age when files change); ' +
       'find_tools / expand_toolset remain available if something is missing.',
   );
   lines.push('</preflight>');

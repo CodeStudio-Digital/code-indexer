@@ -76,6 +76,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
     planNudges: 0,
+    goalVerifyAttempts: 0,
     estimateCalibration: null,
     runId: randomUUID(),
     aborted: false,
@@ -106,6 +107,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     // mutate it as they emit reminders / compact.
     injectionState: {
       lastInjectedSkillIds: new Set<string>(),
+      executedSkillIds: new Set<string>(),
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
       lastInjectedMemoryIds: new Set<string>(),

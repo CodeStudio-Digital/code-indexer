@@ -93,6 +93,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
     planNudges: 0,
+    goalVerifyAttempts: 0,
     estimateCalibration: null,
     runId: 'test-run',
     aborted: false,
@@ -117,6 +118,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     // exercise injection seed this explicitly.
     injectionState: {
       lastInjectedSkillIds: new Set<string>(),
+      executedSkillIds: new Set<string>(),
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
       lastInjectedMemoryIds: new Set<string>(),

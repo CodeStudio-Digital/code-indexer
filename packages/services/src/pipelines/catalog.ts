@@ -304,6 +304,42 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
     },
     introducedInPhase: 'memory',
   },
+  {
+    pipelineName: 'memory_recall',
+    bindingRole: 'reranker',
+    description:
+      'Selective-recall filter (Claude-Code pattern): a cheap LLM pass that keeps only the retrieved project ' +
+      'memories CLEARLY about the current task (aboutness, not keyword overlap; ≤5; conservative with user-profile). ' +
+      'Gated by CODER_MEMORY_LLM_FILTER. Unset → no LLM filtering (the structural relevance floor still applies).',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0, max_tokens: 200 },
+    },
+    introducedInPhase: 'cc-gap-D1',
+  },
+
+  // ─── Goal completion verifier (Claude-Code stop-condition pattern) ───────
+  // An INDEPENDENT read-only second agent that confirms the ORIGINAL goal was
+  // actually met (goal + plan + diff + tests) before the run is allowed to
+  // finish — the "stop-condition verifier" half of CC's two-agent split.
+  // Gated behind CODER_GOAL_VERIFY; unset binding → falls back to the general
+  // default AI model so it works zero-config. Prefer a strong reasoning model,
+  // ideally a DIFFERENT family than the executor so it doesn't share blind spots.
+  {
+    pipelineName: 'goal_verification',
+    bindingRole: 'reviewer',
+    description:
+      'Independent completion verifier: a read-only second agent that confirms the original goal was ' +
+      'actually achieved (goal+plan+diff+tests) before the run finishes. Gated behind CODER_GOAL_VERIFY. ' +
+      'Pick a strong reasoning model — ideally a different family than the executor. Unset → general default AI model.',
+    recommendedDefault: {
+      providerKind: 'anthropic',
+      modelHint: 'claude-sonnet-4',
+      config: { temperature: 0, max_tokens: 1500, json_mode: true },
+    },
+    introducedInPhase: 'cc-gap-A1',
+  },
 
   // ─── Vision fallback (image → text) ──────────────────────────────────────
   // When the active chat model cannot see images (no 'image' input modality)

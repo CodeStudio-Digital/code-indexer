@@ -11,8 +11,12 @@ import { recencyDecay } from '@mcp/candidate-pipeline';
  *
  * v1 gating is structural: a minimum query length + a small top-K, with the
  * caller throttling WHEN it retrieves (session start + material task change).
- * An absolute relevance-score threshold is a later refinement (needs the
- * hybrid search to surface numeric scores).
+ *
+ * D1 — an opt-in `minRelevance` floor now drops weak candidates BEFORE the topK
+ * slice (CC's "if unsure, don't include it"), with a stricter bar for
+ * conservative categories ("be especially conservative with user-profile
+ * memories"). It floors the BLENDED score (rank×importance×recency×staleness);
+ * a floor on the RAW hybrid score still needs the hybrid search to surface it.
  */
 
 export interface SnapshotSearch {
@@ -50,6 +54,14 @@ export interface RetrievedMemory {
   staleNote?: string;
 }
 
+/**
+ * D1 (2/2) — optional LLM selective-recall pass applied to the proactive
+ * `retrieve` result (keeps only items clearly ABOUT the task). Set via
+ * `setRecallFilter` from the wiring layer where the pipeline resolver lives.
+ * Must be FAIL-OPEN (return `items` on any trouble).
+ */
+export type RecallFilterFn = (taskText: string, items: RetrievedMemory[]) => Promise<RetrievedMemory[]>;
+
 export interface MemoryRetrieverOptions {
   /** Items returned (and injected). Default 3. */
   topK?: number;
@@ -58,6 +70,22 @@ export interface MemoryRetrieverOptions {
   /** Skip retrieval for queries shorter than this (avoids noise). Default 4 —
    *  was 12, which silently dropped short-but-real user asks ("fix auth"). */
   minQueryChars?: number;
+  /**
+   * D1 — absolute floor on the blended relevance score. Candidates below it are
+   * dropped BEFORE the topK slice, so a weak/tangential hit is never injected
+   * just to fill the quota. Undefined = no floor (legacy behavior). Applies to
+   * the proactive `retrieve` path only; `recall` (explicit intent) is untouched.
+   */
+  minRelevance?: number;
+  /**
+   * D1 — categories to recall MORE conservatively (CC: "be especially
+   * conservative with user-profile / project-overview memories"). A candidate
+   * whose category is in this set must clear `minRelevance × conservativeFactor`.
+   * Only applies when `minRelevance` is set.
+   */
+  conservativeCategories?: ReadonlySet<string>;
+  /** Multiplier on `minRelevance` for `conservativeCategories`. Default 1.5. */
+  conservativeFactor?: number;
   /** Diagnostics sink for silent-skip paths (short query / zero hits). */
   log?: (event: 'skip_short_query' | 'zero_hits', data: Record<string, unknown>) => void;
 }
@@ -81,11 +109,19 @@ const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const USE_SATURATION = 20; // access_count at which the "frequently useful" term ~saturates
 
 export class MemoryRetriever {
+  /** D1 (2/2) — optional LLM aboutness filter; null = off (structural floor only). */
+  private recallFilter?: RecallFilterFn;
+
   constructor(
     private readonly search: SnapshotSearch,
     private readonly access: AccessMarker & Partial<StaleFilesBatch>,
     private readonly opts: MemoryRetrieverOptions = {},
   ) {}
+
+  /** Install the LLM selective-recall filter (proactive `retrieve` only). */
+  setRecallFilter(fn: RecallFilterFn): void {
+    this.recallFilter = fn;
+  }
 
   async retrieve(projectId: number, projectName: string, queryText: string): Promise<RetrievedMemory[]> {
     const q = queryText.trim();
@@ -104,16 +140,44 @@ export class MemoryRetriever {
       return [];
     }
 
-    const top = this.scoreHits(hits, projectId).slice(0, topK);
-    this.markAccessed(top.map((t) => t.snap.id));
-
-    return top.map((t) => ({
+    const top = this.applyRelevanceFloor(this.scoreHits(hits, projectId)).slice(0, topK);
+    let items: RetrievedMemory[] = top.map((t) => ({
       id: String(t.snap.id),
       title: t.snap.title,
       content: t.snap.content,
       importance: clamp01(t.snap.importance ?? 0.5),
       staleNote: buildStaleNote(t.st?.stale),
     }));
+    // D1 (2/2) — LLM aboutness pass (fail-open). Applied BEFORE markAccessed so
+    // only the memories actually injected get their access bumped.
+    if (this.recallFilter) {
+      try {
+        items = await this.recallFilter(q, items);
+      } catch {
+        /* fail-open — keep the unfiltered items */
+      }
+    }
+    this.markAccessed(items.map((m) => Number(m.id)).filter((n) => Number.isFinite(n)));
+    return items;
+  }
+
+  /**
+   * D1 — drop candidates below the relevance floor (with a stricter bar for
+   * conservative categories) BEFORE the topK slice. No-op when `minRelevance`
+   * is unset → identical legacy behavior. The input is already score-sorted.
+   */
+  private applyRelevanceFloor(
+    scored: Array<{ snap: ContextSnapshot; st?: { stale: string[]; total: number }; score: number }>,
+  ): Array<{ snap: ContextSnapshot; st?: { stale: string[]; total: number }; score: number }> {
+    const floor = this.opts.minRelevance;
+    if (floor == null) return scored;
+    const conservative = this.opts.conservativeCategories;
+    const factor = this.opts.conservativeFactor ?? 1.5;
+    return scored.filter((s) => {
+      const cat = s.snap.category;
+      const bar = conservative && cat && conservative.has(cat) ? floor * factor : floor;
+      return s.score >= bar;
+    });
   }
 
   /**

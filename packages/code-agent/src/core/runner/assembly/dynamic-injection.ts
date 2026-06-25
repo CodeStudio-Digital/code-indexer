@@ -37,6 +37,14 @@ export interface DynamicInjectionContext {
    */
   lastInjectedSkillIds: ReadonlySet<string>;
   /**
+   * B1/G3 — ids of skills active THIS turn that were ALSO active in an earlier
+   * turn (their bodies already shown to the model). After a recent compaction
+   * the provider reminds the model NOT to re-run their one-time setup (the
+   * summary dropped the evidence that it already ran). Empty/omitted = no
+   * marker. Rendered only when `recentCompactionAt` indicates a recent compaction.
+   */
+  skillsAlreadyExecuted?: ReadonlyArray<string>;
+  /**
    * Files the agent edited in the last N turns that the agent's own
    * context window may not still hold. Caller decides N; the provider
    * surfaces up to `maxActiveFiles` of them.
@@ -220,6 +228,13 @@ export function computeDynamicInjection(
     lines.push(
       `compaction occurred at turn ${ctx.recentCompactionAt}; older details were summarized — re-read files instead of recalling from memory.`,
     );
+    const remindSkills = ctx.skillsAlreadyExecuted ?? [];
+    if (remindSkills.length > 0) {
+      lines.push(
+        `skills already used earlier this session are shown again only for reference — do NOT re-run their one-time setup ` +
+          `(auth, install, scheduling, file creation) unless the current task needs a fresh run: ${remindSkills.join(', ')}.`,
+      );
+    }
   }
   if (showPreflight && ctx.preflightHint) {
     lines.push(ctx.preflightHint.text);

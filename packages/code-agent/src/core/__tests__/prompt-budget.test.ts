@@ -87,10 +87,12 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Plan mode is ACTIVE': 5480, // plan.txt + ## Plan depth block + decision-gate step/section; complex variant ≈ 4974 + ~10%
 
   '# Explore mode is ACTIVE': 2420,
-  '# Build mode is ACTIVE': 2530,
+  '# Build mode is ACTIVE': 2980, // Track G: + pre-execution destructive-action evidence line
+
   '# Admin mode is ACTIVE': 2450,
   '# Interactive tools': 1020,
-  '# Agent loop': 1120,
+  '# Agent loop': 1850, // Track G: + balanced anti-stop (report-vs-fix, reversible-vs-destructive) + plan/spec gate override
+
   '# Preambles before tool calls': 370,
   '# Do not re-read what you already have': 430,
   '# Active context': 300,
@@ -99,7 +101,7 @@ const SECTION_BUDGETS: Record<string, number> = {
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
   default: 11000,   // zai · navigate · no plan · no agentId · loop v2 · drive
-  planMode: 15400,  // same + specialist plan.txt + ## Plan depth block + decision-gate guidance; normal ≈ 14952, complex ≈ 15026
+  planMode: 16100,  // same + specialist plan.txt + ## Plan depth block + decision-gate guidance + Track G agent-loop additions (~15858 measured)
 };
 
 interface Composition {

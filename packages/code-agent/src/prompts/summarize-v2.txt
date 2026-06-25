@@ -12,7 +12,7 @@ Output EXACTLY this JSON shape, with no prose before or after the JSON:
   ],
   "errors_and_fixes":    ["error → resolution pairs. Include errors that were fixed AND errors still open."],
   "problem_solving":     "Brief narrative of the solving approach: what was tried, what was discarded and why, what the final approach is.",
-  "all_user_messages":   ["VERBATIM short user messages, capped at 200 chars each, in order. These are the user's actual instructions — do not paraphrase or omit any."],
+  "all_user_messages":   ["VERBATIM user messages VISIBLE in this span (a sampled span may omit middle messages), capped at 200 chars each, in order — these are the user's actual instructions, do not paraphrase. If the span was sampled, add a final \"…(N earlier messages omitted)…\" entry so the continuing agent knows the list is partial."],
   "pending_tasks":       ["Concrete tasks still open. Each item starts with a verb."],
   "current_work":        "What the agent was doing AT THE MOMENT OF COMPACTION — the in-flight task. 1-2 sentences. Empty string if there was none.",
   "next_step":           "The single most likely next action the continuing agent should take. Empty string if unclear."

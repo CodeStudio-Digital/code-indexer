@@ -129,6 +129,15 @@ export interface RunContext {
    */
   planNudges: number;
   /**
+   * A1 — independent goal-completion verifier attempts this run. When
+   * `CODER_GOAL_VERIFY` is on, a text-only finish with an active goal + pending
+   * diff is gated by a read-only verifier subagent (`bridge.verifyGoalCompletion`).
+   * A 'not met' verdict re-enters the turn with the gaps as a `<system-reminder>`;
+   * bounded by `CODER_GOAL_VERIFY_MAX_ATTEMPTS` (default 2) so a stubborn verdict
+   * can't loop the run forever. Incremented only when a nudge is actually issued.
+   */
+  goalVerifyAttempts: number;
+  /**
    * EMA of `real_prompt_tokens / tokenizer_estimate`, learned on turns where
    * the provider reported usage. Calibrates the pre-emit projection and the
    * estimate fallback of the post-turn gates (chars/4 drifts with content
@@ -229,6 +238,15 @@ export interface RunContext {
    */
   injectionState: {
     lastInjectedSkillIds: Set<string>;
+    /**
+     * B1/G3 — skill ids whose bodies have been surfaced in `<active_skills>` in
+     * an EARLIER turn this run (NOT reset like `lastInjectedSkillIds`, which is
+     * per-turn dedup). After a compaction the injector reminds the model that a
+     * still-active skill seen before was already used — so it doesn't re-run the
+     * skill's one-time setup whose evidence the summary dropped. Updated after
+     * each assembly with that turn's active skills; in-memory (per run).
+     */
+    executedSkillIds: Set<string>;
     lastInjectedFiles: Set<string>;
     recentCompactionAt: number | null;
     /** Memory ids already injected (Mem C) — avoids re-injecting each turn. */
@@ -399,6 +417,19 @@ export interface BridgeCallbacks {
     assistantText: string;
     toolResults: Array<{ name: string; input: unknown; content: string; isError: boolean }>;
   }) => void;
+  /**
+   * A1 — independent goal-completion verifier (host-implemented). At a text-only
+   * finish the Executing node calls this; the host gates on `CODER_GOAL_VERIFY`
+   * + an active goal + a pending diff, resolves the `goal_verification` pipeline
+   * binding to a (cross-model) provider, spawns a READ-ONLY verifier subagent
+   * (`runVerifyCompletionSubagent`) that never sees the executor transcript, and
+   * returns its verdict. Returns null when disabled, not applicable, or on any
+   * error (fail-open — never blocks the run). Unset on subagents / tests.
+   */
+  verifyGoalCompletion?: () => Promise<{
+    goalMet: boolean;
+    gaps: ReadonlyArray<{ description: string; severity: string }>;
+  } | null>;
   /**
    * PR-F — supply per-turn signals that drive Kimi-style dynamic
    * injection. Returns the diff between the runner's current view of
