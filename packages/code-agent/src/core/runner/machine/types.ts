@@ -32,7 +32,7 @@ export type BehaviorEvent =
   | { kind: 'TokenThresholdHit'; ratio: number }
   | { kind: 'ToolLoopDetected'; guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak' }
   | { kind: 'MaxTurnsReached'; autoContinueLeft: number }
-  | { kind: 'ProviderError'; retryable: boolean; status: number }
+  | { kind: 'ProviderError'; retryable: boolean; status: number; message?: string; code?: string }
   | { kind: 'CompactionDone'; collapsedFrom: number; collapsedTo: number }
   | { kind: 'CleanFinish' }
   | { kind: 'Aborted' };

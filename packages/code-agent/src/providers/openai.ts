@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { nativeFetch } from '@mcp/code-agent/providers/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 
@@ -61,6 +62,10 @@ export class OpenAIChatProvider implements ChatProvider {
       ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
       ...(Object.keys(headers).length > 0 ? { defaultHeaders: headers } : {}),
       ...(opts.defaultQuery ? { defaultQuery: opts.defaultQuery } : {}),
+      // Route through undici (native fetch) instead of the SDK's bundled
+      // node-fetch@2 so installLlmDispatcher's bodyTimeout:0 applies to the
+      // reasoning phase. See native-fetch.ts.
+      fetch: nativeFetch(),
     });
   }
 

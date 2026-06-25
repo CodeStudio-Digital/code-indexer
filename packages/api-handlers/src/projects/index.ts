@@ -123,6 +123,10 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       return db.listProjects();
     },
 
+    async listForGlobalPicker(_input, _ctx: ApiContext) {
+      return db.listProjectsForGlobalPicker();
+    },
+
     async get({ id }) {
       const project = db.getProject(id);
       if (!project) throw new ApiError('not_found', 404, 'project not found');

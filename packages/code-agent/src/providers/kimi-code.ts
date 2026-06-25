@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { nativeFetch } from '@mcp/code-agent/providers/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
@@ -32,6 +33,9 @@ export class KimiCodeChatProvider implements ChatProvider {
       apiKey: opts.apiKey,
       baseURL: opts.baseURL ?? 'https://api.kimi.com/coding/v1',
       ...(opts.defaultHeaders ? { defaultHeaders: opts.defaultHeaders } : {}),
+      // Use undici (native fetch) so installLlmDispatcher's bodyTimeout:0
+      // applies during the reasoning phase. See native-fetch.ts.
+      fetch: nativeFetch(),
     });
   }
 

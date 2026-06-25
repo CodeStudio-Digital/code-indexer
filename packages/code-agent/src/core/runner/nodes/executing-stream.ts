@@ -56,6 +56,15 @@ export interface ConsumeStreamArgs {
    * Default 90s; override via `CODER_STREAM_IDLE_TIMEOUT_MS`.
    */
   idleTimeoutMs?: number;
+  /**
+   * Max ms to wait for the FIRST delta of ANY kind (time-to-first-byte).
+   * Reasoning models on heavy prompts (GLM-5/glm-5.2 with large tools+context)
+   * can stay completely silent far longer than the inter-delta `idleTimeoutMs`
+   * before the first token — a flat idle timeout kills them mid-think. Applies
+   * ONLY until the first delta arrives; after that `idleTimeoutMs` governs the
+   * gaps. Default 240s; override via `CODER_STREAM_FIRST_BYTE_TIMEOUT_MS`.
+   */
+  firstByteTimeoutMs?: number;
   /** Max ms a stream may emit only thinking deltas without text/tool progress. */
   thinkingOnlyTimeoutMs?: number;
 }
@@ -67,6 +76,15 @@ const DEFAULT_IDLE_TIMEOUT_MS = (() => {
     if (Number.isFinite(n) && n > 0) return n;
   }
   return 90_000;
+})();
+
+const DEFAULT_FIRST_BYTE_TIMEOUT_MS = (() => {
+  const v = process.env.CODER_STREAM_FIRST_BYTE_TIMEOUT_MS;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 240_000;
 })();
 
 const DEFAULT_THINKING_ONLY_TIMEOUT_MS = (() => {
@@ -92,9 +110,13 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   let responseMeta: ChatProviderResponseMeta | null = null;
 
   const idleMs = args.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const firstByteMs = args.firstByteTimeoutMs ?? DEFAULT_FIRST_BYTE_TIMEOUT_MS;
   const thinkingOnlyMs = args.thinkingOnlyTimeoutMs ?? DEFAULT_THINKING_ONLY_TIMEOUT_MS;
   const iterator = args.stream[Symbol.asyncIterator]();
   let lastNonThinkingAt = Date.now();
+  // Until the first delta arrives, use the generous first-byte budget; after
+  // that, the tighter inter-delta idle budget governs gaps.
+  let receivedAny = false;
 
   while (true) {
     if (args.signal?.aborted) {
@@ -106,7 +128,17 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     }
     let next: IteratorResult<ChatDelta>;
     try {
-      next = await raceWithTimeoutAndSignal(iterator.next(), idleMs, args.signal);
+      next = await raceWithTimeoutAndSignal(
+        iterator.next(),
+        receivedAny ? idleMs : firstByteMs,
+        args.signal,
+        receivedAny
+          ? undefined
+          : {
+              label: 'provider produced no first byte within',
+              tuneEnv: 'CODER_STREAM_FIRST_BYTE_TIMEOUT_MS',
+            },
+      );
     } catch (e) {
       // Cooperatively cancel the iterator if it supports return().
       try {
@@ -118,6 +150,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     }
     if (next.done) break;
     const delta = next.value;
+    receivedAny = true;
 
     switch (delta.type) {
       case 'text_delta':
@@ -235,15 +268,17 @@ async function raceWithTimeoutAndSignal<T>(
   p: Promise<T>,
   ms: number,
   signal?: AbortSignal,
+  opts?: { label?: string; tuneEnv?: string },
 ): Promise<T> {
+  const label = opts?.label ?? 'provider stream idle';
+  const tuneEnv = opts?.tuneEnv ?? 'CODER_STREAM_IDLE_TIMEOUT_MS';
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
     return await new Promise<T>((resolve, reject) => {
       timer = setTimeout(() => {
-        const err = new TimeoutError(ms, 'provider stream idle');
-        err.message =
-          `provider stream idle ${ms}ms — aborting turn. Tune CODER_STREAM_IDLE_TIMEOUT_MS.`;
+        const err = new TimeoutError(ms, label);
+        err.message = `${label} ${ms}ms — aborting turn. Tune ${tuneEnv}.`;
         (err as { status?: number }).status = 504; // gateway-timeout-ish so Recovering treats as retryable
         reject(err);
       }, ms);

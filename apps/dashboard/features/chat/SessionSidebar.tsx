@@ -35,7 +35,7 @@ import {
 import { ScrollArea } from '../../components/ui/scroll-area.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
-import { providerAccent } from './constants.js';
+import { providerAccent, workspaceColor, type AccentColor } from './constants.js';
 import type {
   CoderSession,
   CoderSessionGroup,
@@ -65,6 +65,14 @@ interface SessionSidebarProps {
   onRenameGroup: (group: CoderSessionGroup) => void;
   onDeleteGroup: (group: CoderSessionGroup) => void;
   projectName: string;
+  /**
+   * How to bucket the list. `'group'` (default) — the per-project named folders
+   * (`group_id`). `'workspace'` — Sessões Globais: auto-group by the virtual
+   * workspace (`project_id`, the synthetic union), header = `workspace_label`,
+   * each workspace gets a stable accent color. Manual-group controls are hidden
+   * in `'workspace'` mode (groups are per-project).
+   */
+  groupBy?: 'group' | 'workspace';
   /** Mobile drawer open state. On mobile the sidebar is a slide-in overlay. */
   mobileOpen?: boolean;
   /** Called when the mobile drawer should close (backdrop tap, X button). */
@@ -101,11 +109,15 @@ export const SessionSidebar = memo(function SessionSidebar({
   onRenameGroup,
   onDeleteGroup,
   projectName,
+  groupBy = 'group',
   mobileOpen = false,
   onMobileClose,
 }: SessionSidebarProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [selectMode, setSelectMode] = useState(false);
+  // Workspace mode (Sessões Globais) auto-buckets by virtual workspace; the
+  // per-project named-folder controls don't apply there.
+  const showGroups = groupBy === 'group';
 
   // Close the drawer on Escape so mobile users aren't trapped.
   useEffect(() => {
@@ -143,9 +155,43 @@ export const SessionSidebar = memo(function SessionSidebar({
     });
   };
 
-  // Build grouped view — keep group sort_order, then ungrouped at the end.
-  const grouped = useMemo(() => {
+  // Build grouped view. Each entry carries an optional `label`/`accent` so the
+  // workspace mode can render its own header (label + color) without a real
+  // `CoderSessionGroup` row.
+  type GroupEntry = {
+    key: string;
+    group: CoderSessionGroup | null;
+    items: CoderSession[];
+    label?: string;
+    accent?: AccentColor;
+  };
+  const grouped = useMemo<GroupEntry[]>(() => {
     const list = sessions ?? [];
+
+    // Sessões Globais: bucket by the virtual workspace (synthetic project_id),
+    // in first-appearance order (the list is already sorted by favorite+recency).
+    if (groupBy === 'workspace') {
+      const byWs = new Map<string, CoderSession[]>();
+      const order: string[] = [];
+      for (const s of list) {
+        const key = String(s.project_id);
+        if (!byWs.has(key)) { byWs.set(key, []); order.push(key); }
+        byWs.get(key)!.push(s);
+      }
+      return order.map((key) => {
+        const items = byWs.get(key)!;
+        const head = items[0];
+        return {
+          key,
+          group: null,
+          items,
+          label: head.workspace_label || head.project_name || head.title,
+          accent: workspaceColor(head.project_id),
+        };
+      });
+    }
+
+    // Per-project: keep group sort_order, then ungrouped at the end.
     const byGroup = new Map<string, CoderSession[]>();
     for (const s of list) {
       const key = s.group_id == null ? UNGROUPED_KEY : String(s.group_id);
@@ -153,7 +199,7 @@ export const SessionSidebar = memo(function SessionSidebar({
       arr.push(s);
       byGroup.set(key, arr);
     }
-    const ordered: { key: string; group: CoderSessionGroup | null; items: CoderSession[] }[] = [];
+    const ordered: GroupEntry[] = [];
     for (const g of groups ?? []) {
       const items = byGroup.get(String(g.id)) ?? [];
       if (items.length > 0) ordered.push({ key: String(g.id), group: g, items });
@@ -163,7 +209,7 @@ export const SessionSidebar = memo(function SessionSidebar({
       ordered.push({ key: UNGROUPED_KEY, group: null, items: ungrouped });
     }
     return ordered;
-  }, [sessions, groups]);
+  }, [sessions, groups, groupBy]);
 
   const selectedCount = selectedIds.size;
   const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
@@ -254,20 +300,22 @@ export const SessionSidebar = memo(function SessionSidebar({
             </TooltipTrigger>
             <TooltipContent>{selectMode ? t('chat:sidebar.exitSelect') : t('chat:sidebar.selectMultiple')}</TooltipContent>
           </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7"
-                onClick={onCreateGroup}
-                aria-label={t('chat:sidebar.newGroup')}
-              >
-                <FolderPlus className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{t('chat:sidebar.newGroup')}</TooltipContent>
-          </Tooltip>
+          {showGroups && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  onClick={onCreateGroup}
+                  aria-label={t('chat:sidebar.newGroup')}
+                >
+                  <FolderPlus className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t('chat:sidebar.newGroup')}</TooltipContent>
+            </Tooltip>
+          )}
           {sessions && sessions.length > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -339,36 +387,38 @@ export const SessionSidebar = memo(function SessionSidebar({
               <TooltipContent>{isArchivedView ? t('chat:sidebar.unarchive') : t('chat:sidebar.archive')}</TooltipContent>
             </Tooltip>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="icon" variant="ghost" className="h-6 w-6" aria-label={t('chat:sidebar.moveToGroup')}>
-                  <FolderPlus className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>{t('chat:sidebar.moveToGroup')}</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={async () => {
-                    await onBatchMoveToGroup(selectedArray, null);
-                    exitSelectMode();
-                  }}
-                >
-                  {t('chat:sidebar.noGroup')}
-                </DropdownMenuItem>
-                {(groups ?? []).map((g) => (
+            {showGroups && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon" variant="ghost" className="h-6 w-6" aria-label={t('chat:sidebar.moveToGroup')}>
+                    <FolderPlus className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>{t('chat:sidebar.moveToGroup')}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem
-                    key={g.id}
                     onClick={async () => {
-                      await onBatchMoveToGroup(selectedArray, g.id);
+                      await onBatchMoveToGroup(selectedArray, null);
                       exitSelectMode();
                     }}
                   >
-                    {g.name}
+                    {t('chat:sidebar.noGroup')}
                   </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  {(groups ?? []).map((g) => (
+                    <DropdownMenuItem
+                      key={g.id}
+                      onClick={async () => {
+                        await onBatchMoveToGroup(selectedArray, g.id);
+                        exitSelectMode();
+                      }}
+                    >
+                      {g.name}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
 
             <Tooltip>
               <TooltipTrigger asChild>
@@ -401,25 +451,33 @@ export const SessionSidebar = memo(function SessionSidebar({
             </div>
           )}
 
-          {grouped.map(({ key, group, items }) => {
+          {grouped.map(({ key, group, items, label, accent }) => {
             const collapsed = collapsedGroups.has(key);
+            const headerLabel = label ?? (group ? group.name : t('chat:sidebar.ungrouped'));
             return (
               <div key={key} className="space-y-1">
                 <div className="flex items-center gap-1 px-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                   <button
                     type="button"
                     onClick={() => toggleGroupCollapse(key)}
-                    className="flex items-center gap-1 hover:text-foreground transition-colors"
+                    className="flex min-w-0 items-center gap-1 hover:text-foreground transition-colors"
                   >
                     {collapsed ? (
-                      <ChevronRight className="h-3 w-3" />
+                      <ChevronRight className="h-3 w-3 shrink-0" />
                     ) : (
-                      <ChevronDown className="h-3 w-3" />
+                      <ChevronDown className="h-3 w-3 shrink-0" />
                     )}
-                    <span className="font-semibold">
-                      {group ? group.name : t('chat:sidebar.ungrouped')}
+                    {accent && (
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: accent.solid }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span className="font-semibold truncate normal-case" title={headerLabel}>
+                      {headerLabel}
                     </span>
-                    <span className="text-muted-foreground/60">({items.length})</span>
+                    <span className="text-muted-foreground/60 shrink-0">({items.length})</span>
                   </button>
                   {group && (
                     <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
@@ -460,6 +518,8 @@ export const SessionSidebar = memo(function SessionSidebar({
                       isArchivedView={isArchivedView}
                       groups={rowGroups}
                       onMoveToGroup={onMoveToGroup}
+                      showGroups={showGroups}
+                      accent={accent}
                     />
                   ))}
               </div>
@@ -487,6 +547,8 @@ const SessionRow = memo(function SessionRow({
   isArchivedView,
   groups,
   onMoveToGroup,
+  showGroups,
+  accent,
 }: {
   session: CoderSession;
   selected: boolean;
@@ -504,6 +566,11 @@ const SessionRow = memo(function SessionRow({
   isArchivedView: boolean;
   groups: CoderSessionGroup[];
   onMoveToGroup: (id: number, groupId: number | null) => Promise<void> | void;
+  /** Per-project named groups don't apply in global (workspace) mode. */
+  showGroups: boolean;
+  /** Workspace accent — paints a ring on the avatar so a session visually ties
+   *  to its group header (and the chat header bar). Undefined = no ring. */
+  accent?: AccentColor;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   const tokens = s.total_input_tokens + s.total_output_tokens;
@@ -535,6 +602,7 @@ const SessionRow = memo(function SessionRow({
               'h-7 w-7 rounded-md flex items-center justify-center text-white text-[10px] font-bold uppercase shrink-0 mt-0.5',
               providerAccent(s.provider),
             )}
+            style={accent ? { boxShadow: `0 0 0 2px ${accent.solid}` } : undefined}
           >
             {s.provider.slice(0, 2)}
           </div>
@@ -601,22 +669,24 @@ const SessionRow = memo(function SessionRow({
                   </>
                 )}
               </DropdownMenuItem>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <FolderPlus className="h-3.5 w-3.5" /> {t('chat:sidebar.moveToGroup')}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem onClick={() => onMoveToGroup(s.id, null)}>
-                    {t('chat:sidebar.noGroup')}
-                  </DropdownMenuItem>
-                  {groups.length > 0 && <DropdownMenuSeparator />}
-                  {groups.map((g) => (
-                    <DropdownMenuItem key={g.id} onClick={() => onMoveToGroup(s.id, g.id)}>
-                      {g.name}
+              {showGroups && (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <FolderPlus className="h-3.5 w-3.5" /> {t('chat:sidebar.moveToGroup')}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onClick={() => onMoveToGroup(s.id, null)}>
+                      {t('chat:sidebar.noGroup')}
                     </DropdownMenuItem>
-                  ))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
+                    {groups.length > 0 && <DropdownMenuSeparator />}
+                    {groups.map((g) => (
+                      <DropdownMenuItem key={g.id} onClick={() => onMoveToGroup(s.id, g.id)}>
+                        {g.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )}
               <DropdownMenuItem onClick={() => onDuplicate(s.id)}>
                 <Copy className="h-3.5 w-3.5" /> {t('chat:sidebar.duplicate')}
               </DropdownMenuItem>

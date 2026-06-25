@@ -135,6 +135,13 @@ export interface Project {
    * Hidden from `listProjects`. Undefined/0 for normal projects.
    */
   is_synthetic?: number;
+  /**
+   * 1 when this is a loose ad-hoc folder attached to a global session from an
+   * arbitrary path (migration 176) — it has a real `root_path` but was never
+   * registered by the user as a project. Hidden from `listProjects` (the grid),
+   * still offered in the global-session picker. Undefined/0 for normal projects.
+   */
+  is_loose?: number;
 }
 
 // ─── LLM Analysis ────────────────────────────────────────────────

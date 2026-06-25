@@ -14,6 +14,7 @@ export const RECOVERY_KINDS = [
   'provider-400-retry',
   'provider-401-refresh',
   'provider-transient-retry',
+  'provider-unknown-retry',
   'provider-fallback',
   'compact-failure',
 ] as const;
@@ -29,6 +30,10 @@ export const RECOVERY_CAP_DEFAULTS: Record<RecoveryKind, number> = {
   // Transient (429/5xx/timeout) — large cap because R5 already bounds per
   // turn; this catches "every turn for 20 turns gets one 429".
   'provider-transient-retry': 30,
+  // Status-less errors (connection drop / mid-stream / parse). Unlike a true
+  // 5xx these usually repeat identically, so a small cap fails fast (~4
+  // attempts / <1min) with the real message instead of looping ~5min.
+  'provider-unknown-retry': 4,
   'provider-fallback': 5,
   'compact-failure': 3,
 };
@@ -36,6 +41,7 @@ const RECOVERY_CAP_ENV_KEYS: Record<RecoveryKind, string> = {
   'provider-400-retry': 'CODER_RECOVERY_400_MAX',
   'provider-401-refresh': 'CODER_RECOVERY_401_MAX',
   'provider-transient-retry': 'CODER_RECOVERY_TRANSIENT_MAX',
+  'provider-unknown-retry': 'CODER_RECOVERY_UNKNOWN_MAX',
   'provider-fallback': 'CODER_RECOVERY_FALLBACK_MAX',
   'compact-failure': 'CODER_RECOVERY_COMPACT_MAX',
 };

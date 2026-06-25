@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Star, Search, Boxes } from 'lucide-react';
+import { Star, Search, Boxes, FolderOpen } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -12,7 +12,8 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../../components/ui/tabs.js';
 import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
-import { useApi } from '../../../hooks/useApi.js';
+import { toast } from '../../../components/ui/prompt-dialog.js';
+import { useApi, apiPost } from '../../../hooks/useApi.js';
 import { cn } from '../../../lib/utils.js';
 
 interface ProjectRow {
@@ -47,7 +48,8 @@ export interface GlobalNewSessionDialogProps {
 export function GlobalNewSessionDialog({ open, onOpenChange, onCreate }: GlobalNewSessionDialogProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [mode, setMode] = useState<'new' | 'reuse'>('new');
-  const { data: projects } = useApi<ProjectRow[]>(open && mode === 'new' ? '/projects' : '');
+  // `include_loose=1` so previously-added ad-hoc folders (mig 176) also show.
+  const { data: projects } = useApi<ProjectRow[]>(open && mode === 'new' ? '/projects?include_loose=1' : '');
   const { data: workspaces } = useApi<WorkspaceRow[]>(open && mode === 'reuse' ? '/coder/global-workspaces' : '');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -55,13 +57,54 @@ export function GlobalNewSessionDialog({ open, onOpenChange, onCreate }: GlobalN
   const [reuseId, setReuseId] = useState<number | null>(null);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
+  // Loose folders the user just picked this session — merged into the list so a
+  // brand-new ad-hoc folder is selectable before the `/projects` refetch lands.
+  const [extraLoose, setExtraLoose] = useState<ProjectRow[]>([]);
+  const [picking, setPicking] = useState(false);
+
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.openDirectory;
+
+  const merged = useMemo(() => {
+    const byId = new Map<number, ProjectRow>();
+    for (const p of projects ?? []) byId.set(p.id, p);
+    for (const p of extraLoose) byId.set(p.id, p); // dedupe by id
+    return [...byId.values()];
+  }, [projects, extraLoose]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = projects ?? [];
-    if (!q) return list;
-    return list.filter((p) => p.name.toLowerCase().includes(q) || p.root_path.toLowerCase().includes(q));
-  }, [projects, query]);
+    if (!q) return merged;
+    return merged.filter((p) => p.name.toLowerCase().includes(q) || p.root_path.toLowerCase().includes(q));
+  }, [merged, query]);
+
+  // Pick an arbitrary folder via the native picker, register it as a LOOSE
+  // ad-hoc project (idempotent on path), and add it to the selection.
+  const pickFolder = async () => {
+    if (!isElectron) {
+      toast.message(t('chat:global.loosePickerUnavailable'));
+      return;
+    }
+    setPicking(true);
+    try {
+      const dir = await window.electronAPI!.openDirectory!();
+      if (!dir) return;
+      const created = await apiPost<ProjectRow>('/projects', { root_path: dir, loose: true });
+      setExtraLoose((prev) => (prev.some((p) => p.id === created.id) ? prev : [...prev, created]));
+      setQuery(''); // clear filter so the freshly-added folder is visible
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.add(created.id);
+        return next;
+      });
+      setPrimaryId((prev) => prev ?? created.id); // first pick becomes primary
+    } catch (err) {
+      toast.error(t('chat:global.addFolderFailed'), {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setPicking(false);
+    }
+  };
 
   const toggle = (id: number) => {
     setSelected((prev) => {
@@ -84,6 +127,7 @@ export function GlobalNewSessionDialog({ open, onOpenChange, onCreate }: GlobalN
     setPrimaryId(null);
     setReuseId(null);
     setTitle('');
+    setExtraLoose([]);
   };
 
   const effectivePrimary = primaryId != null && selected.has(primaryId)
@@ -136,14 +180,28 @@ export function GlobalNewSessionDialog({ open, onOpenChange, onCreate }: GlobalN
             </TabsList>
 
             <TabsContent value="new" className="space-y-3 min-w-0">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  className="pl-7"
-                  placeholder={t('chat:global.searchProjects')}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1 min-w-0">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    className="pl-7"
+                    placeholder={t('chat:global.searchProjects')}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={pickFolder}
+                  disabled={picking}
+                  className="shrink-0 gap-1.5"
+                  title={t('chat:global.addFolderHint')}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  {t('chat:global.addFolder')}
+                </Button>
               </div>
 
               <div className="max-h-56 w-full overflow-y-auto overflow-x-hidden rounded border divide-y">

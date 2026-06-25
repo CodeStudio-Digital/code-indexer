@@ -69,6 +69,61 @@ export function getCurrentTurnText(turn: AssistantTurn | null): string {
     .join('\n');
 }
 
+// ─── Live ⇄ persisted block dedup ───────────────────────────────
+//
+// A gate tool (submit_tasks / submit_plan / decision_gate / ask_user /
+// submit_spec) PAUSES the turn awaiting approval, so `message_complete` never
+// fires to clear the live buffer. Meanwhile the assistant message is
+// checkpoint-persisted and, on reattach/reopen, the re-opened SSE re-emits the
+// same gate as a LIVE block while the refetched history already renders the
+// PERSISTED card → the user sees the card twice. The text-only
+// `liveTurnDuplicatedInHistory` guard can't catch this (gate turns carry no
+// text). We dedup at the block level: if a live block's tool_use id already
+// exists in persisted history, the persisted card is canonical and the live
+// copy is suppressed.
+
+/** The persisted tool_use id a live block corresponds to, if any.
+ *  Live-only visualizations (text/thinking/activity/task_run/agents) return undefined. */
+export function liveBlockPersistedId(b: StreamBlock): string | undefined {
+  switch (b.type) {
+    case 'tasks':
+      return b.tasks.tool_use_id;
+    case 'plan':
+      return b.plan.id;
+    case 'spec':
+      return b.spec.id;
+    case 'question':
+      return b.question.id;
+    case 'decision':
+      return b.decision.id;
+    case 'tool':
+      return b.call.id;
+    default:
+      return undefined;
+  }
+}
+
+/** All assistant tool_use ids already persisted to history. */
+export function collectPersistedToolUseIds(messages: PersistedMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const b of m.content) {
+      if (b.type === 'tool_use' && b.id) ids.add(b.id);
+    }
+  }
+  return ids;
+}
+
+/** Live blocks NOT yet represented in persisted history (dedup by id). */
+export function visibleLiveBlocks(blocks: StreamBlock[], persistedIds: Set<string>): StreamBlock[] {
+  if (persistedIds.size === 0) return blocks;
+  return blocks.filter((b) => {
+    const id = liveBlockPersistedId(b);
+    return !(id && persistedIds.has(id));
+  });
+}
+
 // ─── Visual grouping ────────────────────────────────────────────
 
 /**

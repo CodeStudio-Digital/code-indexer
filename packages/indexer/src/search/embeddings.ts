@@ -1,5 +1,6 @@
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import { LocalEmbeddingService } from './local-embeddings.js';
+import { resolveProviderEndpoint } from './provider-endpoints.js';
 
 export interface EmbeddingService {
   embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }>;
@@ -372,6 +373,112 @@ export class BedrockTitanEmbeddingService implements EmbeddingService {
   }
 }
 
+/**
+ * OpenAI-compatible embeddings (`POST {baseURL}/embeddings`). Powers the
+ * `provider` embedding kind: it reuses a configured chat provider's base URL +
+ * API key (OpenRouter, OpenAI, …) so one key serves chat, rerank, and
+ * embeddings — no duplicated credential.
+ *
+ * Unlike the local e5 model it adds NO `query:`/`passage:` prefixes: those are
+ * e5-specific and would poison text-embedding-3 / Qwen3 vectors. `dimensions`
+ * is forwarded when set (text-embedding-3 supports shortening) and is part of
+ * the fingerprint because it changes the vector space → forces a re-embed.
+ */
+export class OpenAICompatEmbeddingService implements EmbeddingService {
+  private baseURL: string;
+  private apiKey: string;
+  private model: string;
+  private dimensions?: number;
+  private providerId: string;
+  private fetchFn: typeof fetch;
+  private requestTimeoutMs: number;
+  // OpenAI accepts up to 2048 inputs/request, but token limits bite first on
+  // technical text — 96 is a safe, modest batch (the indexer batches above us).
+  private batchSize = 96;
+
+  constructor(opts: {
+    baseURL: string;
+    apiKey: string;
+    model: string;
+    dimensions?: number;
+    providerId?: string;
+    fetchFn?: typeof fetch;
+    requestTimeoutMs?: number;
+  }) {
+    this.baseURL = opts.baseURL.replace(/\/+$/, '');
+    this.apiKey = opts.apiKey;
+    this.model = opts.model;
+    this.dimensions = opts.dimensions;
+    this.providerId = opts.providerId ?? '';
+    this.fetchFn = opts.fetchFn ?? fetch;
+    const envTimeout = Number(process.env.MCP_EMBED_TIMEOUT_MS);
+    this.requestTimeoutMs = opts.requestTimeoutMs
+      ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 60_000);
+  }
+
+  private async embedBatch(batch: string[]): Promise<number[][]> {
+    if (batch.length === 0) return [];
+    // AbortController guards the historical "socket held open, never responds"
+    // hang (see CloudflareEmbeddingService) — without it the await blocks forever.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), this.requestTimeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetchFn(`${this.baseURL}/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          input: batch,
+          ...(this.dimensions ? { dimensions: this.dimensions } : {}),
+        }),
+        signal: ctl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`Embedding API error: ${response.status} ${body}`.trim());
+    }
+    const data = (await response.json()) as { data: Array<{ index: number; embedding: number[] }> };
+    // OpenAI returns rows in input order, but sort by `index` defensively so a
+    // provider that reorders can't silently misalign vectors with their text.
+    return data.data
+      .slice()
+      .sort((a, b) => a.index - b.index)
+      .map((d) => d.embedding);
+  }
+
+  async embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }> {
+    if (texts.length === 0) return { vectors: [], tokens: 0 };
+    const vectors: number[][] = [];
+    let tokens = 0;
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const batch = texts.slice(i, i + this.batchSize);
+      vectors.push(...(await this.embedBatch(batch)));
+      tokens += batch.reduce((s, t) => s + Math.ceil(t.length / 4), 0);
+    }
+    return { vectors, tokens };
+  }
+
+  async embedQuery(text: string): Promise<{ vector: number[]; tokens: number }> {
+    const r = await this.embed([text]);
+    return { vector: r.vectors[0] ?? [], tokens: r.tokens };
+  }
+
+  fingerprint(): string {
+    return `provider:${this.providerId}:${this.model}${this.dimensions ? `:${this.dimensions}` : ''}`;
+  }
+
+  maxConcurrency(): number {
+    return 4;
+  }
+}
+
 export class NullEmbeddingService implements EmbeddingService {
   async embed(_texts: string[]): Promise<{ vectors: number[][]; tokens: number }> {
     return { vectors: [], tokens: 0 };
@@ -430,6 +537,22 @@ export function createEmbeddingService(
       if (cfg.kind === 'local') {
         const c = cfg.config as { model?: string; cacheDir?: string };
         return new LocalEmbeddingService({ model: c.model, cacheDir: c.cacheDir });
+      }
+      // Reuse a configured chat provider's credentials (OpenAI-compatible
+      // `/embeddings`). Switching to this changes the fingerprint → re-embed.
+      if (cfg.kind === 'provider') {
+        const c = cfg.config as { providerId?: string; model?: string; dimensions?: string | number };
+        const ep = resolveProviderEndpoint(store.getProvider(c.providerId ?? ''));
+        if (ep && c.model) {
+          const dims = typeof c.dimensions === 'number' ? c.dimensions : Number(c.dimensions);
+          return new OpenAICompatEmbeddingService({
+            baseURL: ep.baseURL,
+            apiKey: ep.apiKey,
+            model: c.model,
+            dimensions: Number.isFinite(dims) && dims > 0 ? dims : undefined,
+            providerId: c.providerId ?? '',
+          });
+        }
       }
     }
   }

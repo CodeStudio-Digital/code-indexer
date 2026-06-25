@@ -5,7 +5,7 @@
  * `/api/admin/embeddings` and `/api/admin/vector-stores` endpoints.
  */
 
-export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'null';
+export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'provider' | 'null';
 
 export type VectorStoreKind =
   | 'cloudflare'
@@ -15,7 +15,15 @@ export type VectorStoreKind =
   | 'sqlite-vec'
   | 'null';
 
-export type RerankerKind = 'local' | 'cloudflare' | 'cohere' | 'null';
+export type RerankerKind = 'local' | 'cloudflare' | 'cohere' | 'provider' | 'null';
+
+/**
+ * Provider kinds whose credentials a `provider`-backed embedding/reranker can
+ * reuse — those with an OpenAI-compatible base URL. Mirrors
+ * OPENAI_COMPAT_BASE_URL in `@mcp/indexer/search/provider-endpoints`. The
+ * dialog filters the provider dropdown to these (with a configured key).
+ */
+export const PROVIDER_BACKED_KINDS = ['openrouter', 'openai', 'deepseek', 'zai'];
 
 export interface EmbeddingConfig {
   id: string;
@@ -121,7 +129,9 @@ export async function upsertReranker(c: RerankerConfig): Promise<RerankerConfig>
 export interface FieldSpec {
   key: string;
   label: string;
-  type: 'text' | 'password' | 'select';
+  /** `provider-select` renders a dropdown of configured providers (id → name)
+   *  populated at runtime by the dialog — used by the `provider` kind. */
+  type: 'text' | 'password' | 'select' | 'provider-select';
   placeholder?: string;
   options?: Array<{ value: string; label: string }>;
   required?: boolean;
@@ -144,6 +154,11 @@ export const EMBEDDING_FIELDS: Record<EmbeddingKind, FieldSpec[]> = {
   local: [
     { key: 'model', label: 'Model', type: 'text', placeholder: 'Xenova/multilingual-e5-small' },
     { key: 'cacheDir', label: 'Model Cache Dir (optional)', type: 'text' },
+  ],
+  provider: [
+    { key: 'providerId', label: 'Provider', type: 'provider-select', required: true },
+    { key: 'model', label: 'Model', type: 'text', placeholder: 'openai/text-embedding-3-large', required: true },
+    { key: 'dimensions', label: 'Dimensions (optional)', type: 'text', placeholder: '1024' },
   ],
   null: [],
 };
@@ -197,6 +212,10 @@ export const RERANKER_FIELDS: Record<RerankerKind, FieldSpec[]> = {
   cohere: [
     { key: 'apiKey', label: 'API Key', type: 'password', required: true },
     { key: 'model', label: 'Model', type: 'text', placeholder: 'rerank-v3.5' },
+  ],
+  provider: [
+    { key: 'providerId', label: 'Provider', type: 'provider-select', required: true },
+    { key: 'model', label: 'Model', type: 'text', placeholder: 'nvidia/llama-nemotron-rerank-vl-1b-v2:free' },
   ],
   null: [],
 };

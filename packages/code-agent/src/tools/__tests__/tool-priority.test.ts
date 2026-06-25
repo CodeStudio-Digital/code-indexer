@@ -32,7 +32,7 @@ const named = (n: string) => ({
 
 const BOOTSTRAP_SET = [
   'read_file', 'list_directory', 'glob', 'todo_write', 'code_exec', 'expand_toolset',
-  'find_tools', 'ask_user', 'submit_plan', 'submit_tasks', 'update_goal', 'create_goal',
+  'find_tools', 'ask_user', 'submit_plan', 'task_list', 'submit_tasks', 'update_goal', 'create_goal',
   'save_note', 'recall_investigations', 'get_tool_output', 'invoke_skill',
   'rag_search_docs', 'rag_read_doc', 'get_skills_list', 'get_skill_content',
   'list_skill_namespaces', 'mcp__get_project_pulse', 'mcp__search', 'mcp__grep_code',
@@ -105,6 +105,9 @@ describe('buildTools — priority trim at a weak-model cap', () => {
       if (![...BOOTSTRAP_SET, ...NAVIGATE_SET].includes(n)) continue;
       expect(names, `NEVER_TRIM tool ${n} must survive`).toContain(n);
     }
+    // Regression: task_list is the ONE always-on task tool (todos+tasks merge);
+    // the cap must never drop it, even at the most aggressive 32-tool cap.
+    expect(names).toContain('task_list');
     // Hot working core survives; cold tiers die first.
     expect(names).toContain('write_file');
     expect(names).toContain('edit_file');

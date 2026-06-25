@@ -248,7 +248,7 @@ export interface RunnerEvents {
   /** PR-2 (R1): emitted when a per-recovery-path circuit breaker exceeds
    *  its cap and the loop bails with reason='error'. */
   recovery_aborted: (payload: {
-    kind: 'provider-400-retry' | 'provider-401-refresh' | 'provider-transient-retry' | 'provider-fallback' | 'compact-failure';
+    kind: 'provider-400-retry' | 'provider-401-refresh' | 'provider-transient-retry' | 'provider-unknown-retry' | 'provider-fallback' | 'compact-failure';
     attempts: number;
     cap: number;
     contextHint: string | null;

@@ -243,6 +243,17 @@ export function sweepOrphanGlobalWorkspaces(deps: ServerDeps): number {
       removed++;
     }
   }
+  // GC loose ad-hoc folders (mig 176) that no global session references anymore
+  // (neither as a junction member nor as a session's own project_id). They were
+  // registered transparently when the user started a global session from an
+  // arbitrary path; once that session is gone the hidden row is dead weight.
+  // SAFE: `deleteProject` only drops DB metadata — the real folder on disk is
+  // never touched (loose folders are indexed via the synthetic junction, not
+  // standalone). Done AFTER the synthetic sweep so unions are torn down first.
+  for (const lp of deps.db.listOrphanLooseProjects()) {
+    try { deps.db.deleteProject(lp.id); removed++; } catch { /* ignore */ }
+  }
+
   // Stray dirs with no synthetic project row (e.g. crash between mkdir + createProject).
   let dirs: string[];
   try { dirs = readdirSync(globalWorkspacesBaseDir()); } catch { return removed; }

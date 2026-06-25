@@ -27,7 +27,13 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/projects', async (c) => {
     try {
-      return c.json(await h.list(undefined, createContext()));
+      // `?include_loose=1` returns the global-session picker superset (real
+      // projects + loose ad-hoc folders, mig 176). Default = the grid list.
+      const includeLoose = c.req.query('include_loose') === '1';
+      const list = includeLoose
+        ? await h.listForGlobalPicker(undefined, createContext())
+        : await h.list(undefined, createContext());
+      return c.json(list);
     } catch (err) {
       return mapApiError(c, err);
     }

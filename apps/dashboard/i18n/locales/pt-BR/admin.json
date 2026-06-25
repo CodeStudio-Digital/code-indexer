@@ -343,6 +343,8 @@
   "storageConfig.namePlaceholder": "Meu backend",
   "storageConfig.kind": "Tipo",
   "storageConfig.selectKind": "Selecione…",
+  "storageConfig.selectProvider": "Selecione um provider",
+  "storageConfig.noCompatProvider": "Nenhum provider compatível com OpenAI e com chave configurada. Adicione um em Providers primeiro.",
   "storageConfig.enabled": "Habilitado",
   "storageConfig.default": "Padrão",
   "tools.description": "Desabilite tools globalmente para que nunca fiquem disponíveis em nenhuma sessão do coder. Útil para reduzir ruído ou limitar a contagem de tools para modelos menores.",

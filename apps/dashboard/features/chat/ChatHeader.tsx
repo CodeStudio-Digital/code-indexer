@@ -1,12 +1,12 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Boxes, Info, Loader2, PanelLeft, Scissors, Workflow } from 'lucide-react';
+import { AlertTriangle, Bot, Boxes, Info, Loader2, PanelLeft, Scissors, Star, Workflow } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
-import { providerAccent, providerLabel } from './constants.js';
-import type { CoderSession, CoderSessionStats } from './types.js';
+import { providerAccent, providerLabel, projectColor, workspaceColor } from './constants.js';
+import type { CoderSession, CoderSessionStats, LinkedProject } from './types.js';
 import { formatDuration } from './utils.js';
 
 /** Format token counts in a compact human-readable form (e.g. 180k, 1.2M). */
@@ -54,14 +54,30 @@ interface ChatHeaderProps {
   /** Toggle the Worker Log panel. Hides the button if undefined. */
   onToggleWorkerLog?: () => void;
   /** Global sessions only: count of linked projects in the virtual workspace.
-   *  Renders the "N projects" chip when paired with `onManageProjects`. */
+   *  Used as the fallback "N projects" chip when `linkedProjects` is absent. */
   linkedCount?: number;
   /** Open the "manage workspace projects" dialog (attach/remove). Global only. */
   onManageProjects?: () => void;
+  /** Global sessions only: the linked projects, rendered as colored chips that
+   *  focus the file tree on a single project. */
+  linkedProjects?: LinkedProject[];
+  /** The synthetic union project id — the "All" chip focuses back on it. */
+  workspaceProjectId?: number;
+  /** Which project the file tree is currently rooted at (synthetic id = all). */
+  activeProjectId?: number | null;
+  /** Root the file tree at a project (or the synthetic union for "All"). */
+  onFocusProject?: (projectId: number) => void;
 }
 
-export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas, linkedCount, onManageProjects }: ChatHeaderProps) {
+export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas, linkedCount, onManageProjects, linkedProjects, workspaceProjectId, activeProjectId, onFocusProject }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
+  // Global session: the workspace accent ties this conversation to its sidebar
+  // group. `isGlobal` is implied by having a manage handler + linked count.
+  const isGlobal = linkedCount != null && !!onManageProjects;
+  const wsAccent = isGlobal ? workspaceColor(workspaceProjectId ?? session.project_id) : null;
+  const hasChips = isGlobal && !!linkedProjects && linkedProjects.length > 0 && !!onFocusProject;
+  // "All" = the file tree is rooted at the synthetic union (or unset).
+  const allActive = activeProjectId == null || activeProjectId === (workspaceProjectId ?? session.project_id);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
@@ -104,6 +120,7 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
           'h-9 w-9 rounded-lg flex items-center justify-center text-white shrink-0',
           providerAccent(session.provider),
         )}
+        style={wsAccent ? { boxShadow: `0 0 0 2px ${wsAccent.solid}` } : undefined}
       >
         <Bot className="h-4 w-4" />
       </div>
@@ -114,7 +131,9 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
             {providerLabel(session.provider)}
           </Badge>
           <span className="font-mono">{session.model}</span>
-          {linkedCount != null && onManageProjects && (
+          {/* Generic "N projects" chip — only when we can't render the richer
+              per-project colored chips (no linked-projects payload yet). */}
+          {linkedCount != null && onManageProjects && !hasChips && (
             <button
               type="button"
               onClick={onManageProjects}
@@ -142,6 +161,58 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
             </span>
           )}
         </div>
+        {/* Global session: colored per-project chips. Clicking one roots the
+            file tree at that project; "All" returns to the union. Lets the user
+            tell — and steer — which project a multi-root conversation touches. */}
+        {hasChips && (
+          <div className="mt-1 flex items-center gap-1 overflow-x-auto pb-0.5 chat-scroll">
+            <button
+              type="button"
+              onClick={() => onFocusProject!(workspaceProjectId ?? session.project_id)}
+              className={cn(
+                'shrink-0 rounded border px-1.5 h-5 text-[10px] font-medium transition-colors',
+                allActive ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
+              )}
+              aria-pressed={allActive}
+            >
+              {t('chat:global.allProjects')}
+            </button>
+            {linkedProjects!.map((p) => {
+              const c = projectColor(p.project_id);
+              const active = activeProjectId === p.project_id;
+              return (
+                <button
+                  key={p.project_id}
+                  type="button"
+                  onClick={() => onFocusProject!(p.project_id)}
+                  title={t('chat:global.focusProject', { name: p.name })}
+                  aria-pressed={active}
+                  className="shrink-0 inline-flex items-center gap-1 rounded border px-1.5 h-5 text-[10px] font-medium transition-colors max-w-[160px]"
+                  style={{
+                    borderColor: c.solid,
+                    backgroundColor: active ? c.soft : 'transparent',
+                    color: active ? c.text : undefined,
+                  }}
+                >
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: c.solid }} />
+                  <span className="truncate">{p.name}</span>
+                  {p.is_primary && <Star className="h-2.5 w-2.5 shrink-0 fill-current" />}
+                </button>
+              );
+            })}
+            {onManageProjects && (
+              <button
+                type="button"
+                onClick={onManageProjects}
+                title={t('chat:global.manageTitle')}
+                aria-label={t('chat:global.manageTitle')}
+                className="shrink-0 inline-flex items-center justify-center rounded border h-5 w-5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              >
+                <Boxes className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-3 text-[11px] text-muted-foreground shrink-0">
         <Tooltip>

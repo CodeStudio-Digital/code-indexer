@@ -10,7 +10,7 @@
  * the canonical 3030 error.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { CloudflareEmbeddingService } from '../embeddings.js';
+import { CloudflareEmbeddingService, OpenAICompatEmbeddingService } from '../embeddings.js';
 
 type FetchResp = { status: number; body: unknown };
 type FetchCall = { url: string; body: string[] };
@@ -195,6 +195,94 @@ describe('CloudflareEmbeddingService — fetch timeout (AbortController)', () =>
     const result = await svc.embed(['x']);
     expect(result.vectors.length).toBe(1);
     expect(calls.length).toBe(1);
+  });
+});
+
+describe('OpenAICompatEmbeddingService — provider-backed embeddings', () => {
+  it('POSTs to {baseURL}/embeddings with the model and verbatim input (no e5 prefixes)', async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchFn = (async (url: unknown, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { input: string[] };
+      calls.push({ url: String(url), body: body as unknown as Record<string, unknown> });
+      const data = body.input.map((_t, i) => ({ index: i, embedding: [i, i, i] }));
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const svc = new OpenAICompatEmbeddingService({
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey: 'k',
+      model: 'openai/text-embedding-3-large',
+      fetchFn,
+    });
+
+    const r = await svc.embed(['query text', 'passage text']);
+
+    expect(calls[0].url).toBe('https://openrouter.ai/api/v1/embeddings');
+    expect(calls[0].body.model).toBe('openai/text-embedding-3-large');
+    // Verbatim — no `query:`/`passage:` prefixes (those are e5-only).
+    expect(calls[0].body.input).toEqual(['query text', 'passage text']);
+    expect(calls[0].body.dimensions).toBeUndefined();
+    expect(r.vectors).toEqual([[0, 0, 0], [1, 1, 1]]);
+  });
+
+  it('forwards dimensions and encodes them in the fingerprint', async () => {
+    let captured: Record<string, unknown> = {};
+    const fetchFn = (async (_url: unknown, init: { body: string }) => {
+      captured = JSON.parse(init.body) as Record<string, unknown>;
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1] }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const svc = new OpenAICompatEmbeddingService({
+      baseURL: 'https://x/v1',
+      apiKey: 'k',
+      model: 'text-embedding-3-large',
+      dimensions: 256,
+      providerId: 'or',
+      fetchFn,
+    });
+
+    await svc.embed(['a']);
+
+    expect(captured.dimensions).toBe(256);
+    expect(svc.fingerprint()).toBe('provider:or:text-embedding-3-large:256');
+  });
+
+  it('fingerprint omits the dimensions suffix when unset', () => {
+    const svc = new OpenAICompatEmbeddingService({
+      baseURL: 'https://x/v1',
+      apiKey: 'k',
+      model: 'm',
+      providerId: 'or',
+    });
+    expect(svc.fingerprint()).toBe('provider:or:m');
+  });
+
+  it('sorts returned rows by index so vectors align with their input text', async () => {
+    const fetchFn = (async () =>
+      new Response(
+        JSON.stringify({ data: [{ index: 1, embedding: [9] }, { index: 0, embedding: [8] }] }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const svc = new OpenAICompatEmbeddingService({
+      baseURL: 'https://x/v1',
+      apiKey: 'k',
+      model: 'm',
+      fetchFn,
+    });
+
+    const r = await svc.embed(['a', 'b']);
+    expect(r.vectors).toEqual([[8], [9]]);
+  });
+
+  it('throws cleanly on a non-2xx response (surfaces status)', async () => {
+    const fetchFn = (async () =>
+      new Response('{"error":"bad key"}', { status: 401 })) as unknown as typeof fetch;
+    const svc = new OpenAICompatEmbeddingService({
+      baseURL: 'https://x/v1',
+      apiKey: 'k',
+      model: 'm',
+      fetchFn,
+    });
+
+    await expect(svc.embed(['a'])).rejects.toThrow(/401/);
   });
 });
 

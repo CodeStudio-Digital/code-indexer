@@ -9,7 +9,7 @@ import type {
   SessionData,
 } from './types.js';
 import { PROVIDERS } from './constants.js';
-import { getCurrentTurnText, getPersistedAssistantText } from './utils.js';
+import { collectPersistedToolUseIds, getCurrentTurnText, getPersistedAssistantText } from './utils.js';
 
 interface UseAgentChatStateArgs {
   selectedId: number | null;
@@ -161,6 +161,16 @@ export function useAgentChatState({
     return persistedText === liveText;
   })();
 
+  // The set of assistant tool_use ids already in persisted history. Lets the
+  // live turn suppress gate cards (submit_tasks/submit_plan/decision_gate/…)
+  // that the refetched history already renders — the text-only guard above
+  // misses these because gate turns carry no text. Memoized on sessionData so
+  // it does NOT recompute on every token flush (currentTurn churn).
+  const persistedToolUseIds = useMemo(
+    () => collectPersistedToolUseIds(sessionData?.messages ?? []),
+    [sessionData],
+  );
+
   // Stable identity (deps: providerOptions) so passing it to the memoized
   // <Composer> doesn't bust the memo on every parent render.
   const getModelsForProvider = useCallback(
@@ -176,5 +186,6 @@ export function useAgentChatState({
     tasksState,
     stats,
     liveTurnDuplicatedInHistory,
+    persistedToolUseIds,
   };
 }

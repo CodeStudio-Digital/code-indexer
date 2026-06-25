@@ -6,7 +6,7 @@ import { Alert, AlertDescription } from '../../../components/ui/alert.js';
 import { cn } from '../../../lib/utils.js';
 import { INITIAL_PAGE_SIZE, LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
-import { groupMessages } from '../utils.js';
+import { groupMessages, visibleLiveBlocks } from '../utils.js';
 import { AssistantBubble } from './AssistantBubble.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
@@ -23,6 +23,10 @@ interface MessageListProps {
   doneReason: string | null;
   error: string | null;
   liveTurnDuplicatedInHistory: boolean;
+  /** Assistant tool_use ids already in persisted history. The live turn drops
+   *  any gate/tool block whose id is here, so a paused gate (awaiting approval)
+   *  isn't rendered twice — once persisted (above) and once live (below). */
+  persistedToolUseIds: Set<string>;
   fallbackProviderId: string;
   tasksState: PersistedTasksState | null;
   handlers: PromptHandlers;
@@ -384,6 +388,7 @@ const LiveTurn = React.memo(function LiveTurn({
   providerId,
   handlers,
   hidden,
+  persistedToolUseIds,
 }: {
   currentTurn: AssistantTurn | null;
   streaming: boolean;
@@ -391,15 +396,23 @@ const LiveTurn = React.memo(function LiveTurn({
   providerId: string;
   handlers: PromptHandlers;
   hidden: boolean;
+  persistedToolUseIds: Set<string>;
 }) {
-  const hasBlocks = !!currentTurn && currentTurn.blocks.length > 0 && !hidden;
+  // Drop live blocks already rendered by the persisted history (gate cards on a
+  // paused turn, or a tool call the refetch landed before currentTurn cleared).
+  const allBlocks = currentTurn?.blocks ?? [];
+  const visible = visibleLiveBlocks(allBlocks, persistedToolUseIds);
+  const hasBlocks = visible.length > 0 && !hidden;
   if (hasBlocks) {
     return (
       <AssistantBubble providerId={providerId} streaming={streaming}>
-        {currentTurn!.blocks.map((b, i) => renderStreamBlock(b, i, handlers))}
+        {visible.map((b, i) => renderStreamBlock(b, i, handlers))}
       </AssistantBubble>
     );
   }
+  // Had blocks but every one was deduped into history → render nothing. The
+  // persisted cards are showing above; a dot-pulse spinner here would be noise.
+  if (allBlocks.length > 0 && !hidden) return null;
   // Blocking preflight on a fresh first message — labelled indicator instead of
   // the bare spinner, until the first SSE event clears it.
   if (preflight && !hidden) {
@@ -431,6 +444,7 @@ export function MessageList({
   doneReason,
   error,
   liveTurnDuplicatedInHistory,
+  persistedToolUseIds,
   fallbackProviderId,
   tasksState,
   handlers,
@@ -543,6 +557,7 @@ export function MessageList({
         providerId={providerId}
         handlers={handlers}
         hidden={liveTurnDuplicatedInHistory}
+        persistedToolUseIds={persistedToolUseIds}
       />
 
       {error && (

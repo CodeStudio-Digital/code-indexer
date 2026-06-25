@@ -88,7 +88,12 @@ export interface OAuthTokenRow {
   updated_at: string;
 }
 
-export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'null';
+/**
+ * `'provider'` reuses an already-configured chat provider's credentials
+ * (OpenAI-compatible `/embeddings`) instead of storing its own key — the
+ * config blob holds `{ providerId, model, dimensions? }`.
+ */
+export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'provider' | 'null';
 
 export interface EmbeddingConfigRow {
   id: string;
@@ -122,7 +127,7 @@ export interface VectorStoreConfigRow {
  * embedding/vector kinds because a user can embed locally yet rerank via a
  * Cloudflare Worker, or use Cohere independently of either.
  */
-export type RerankerKind = 'local' | 'cloudflare' | 'cohere' | 'null';
+export type RerankerKind = 'local' | 'cloudflare' | 'cohere' | 'provider' | 'null';
 
 export interface RerankerConfigRow {
   id: string;

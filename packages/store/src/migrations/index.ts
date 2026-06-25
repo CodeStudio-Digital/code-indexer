@@ -188,6 +188,7 @@ import { apiDocPagesExamples172 } from './172_api_doc_pages_examples.js';
 import { sshHosts173 } from './173_ssh_hosts.js';
 import { dbClient174 } from './174_db_client.js';
 import { modelContextWindowOverride175 } from './175_model_context_window_override.js';
+import { projectLoose176 } from './176_project_loose.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -392,6 +393,7 @@ export const MIGRATIONS: Migration[] = [
   sshHosts173,
   dbClient174,
   modelContextWindowOverride175,
+  projectLoose176,
 ];
 
 /**

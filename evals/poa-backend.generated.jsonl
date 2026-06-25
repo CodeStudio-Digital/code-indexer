@@ -1,0 +1,15 @@
+{"query":"sendNotification","relevant_symbols":["sendNotification"],"relevant_files":["application/resources/delinquency/DelinquencyDashboardResource.php"]}
+{"query":"Mark material as damaged (with fee, not returned to stock)","relevant_symbols":["markAsDamaged"],"relevant_files":["domain/service/rental/RentalMaterialService.php"]}
+{"query":"CrmClientQueryResource","relevant_symbols":["CrmClientQueryResource"],"relevant_files":["application/resources/crm/CrmClientQueryResource.php"]}
+{"query":"getStatsByDepartment","relevant_symbols":["getStatsByDepartment"],"relevant_files":["domain/service/visitors/VisitorStatisticsService.php"]}
+{"query":"checkRecadastroValidity","relevant_symbols":["checkRecadastroValidity"],"relevant_files":["infrastructure/cron/jobs/RecadastroValidityJob.php"]}
+{"query":"LoyaltyUserWithdrawalLimitModel","relevant_symbols":["LoyaltyUserWithdrawalLimitModel"],"relevant_files":["domain/model/loyalty/LoyaltyUserWithdrawalLimitModel.php"]}
+{"query":"ScheduleContactListRequest","relevant_symbols":["ScheduleContactListRequest"],"relevant_files":["application/resources/schedule/request/ScheduleContactListRequest.php"]}
+{"query":"Verifica se a transação está pendente","relevant_symbols":["isPending"],"relevant_files":["domain/model/payment/UsersPaymentRecurrenceTransactionModel.php"]}
+{"query":"replaceVariables","relevant_symbols":["replaceVariables"],"relevant_files":["domain/service/documents/DocumentHandler.php"]}
+{"query":"validateModality","relevant_symbols":["validateModality"],"relevant_files":["application/resources/events/public/request/EventParticipantRequest.php"]}
+{"query":"Cancels reservations in the waiting list for a specific date and sends cancellation emails. @param EventEnvironmentReservation $reservation The reservation object containing the date and optional envi...","relevant_symbols":["cancelWaitingListByDate"],"relevant_files":["domain/service/rental/ReservationService.php"]}
+{"query":"LibraryCreateLoanRequest","relevant_symbols":["LibraryCreateLoanRequest"],"relevant_files":["application/resources/library/requests/LibraryCreateLoanRequest.php"]}
+{"query":"copyBaseFiles","relevant_symbols":["copyBaseFiles"],"relevant_files":["application/console/GenerateBaseFilesCommandConsole.php"]}
+{"query":"Check if user has active restrictions Verifica tanto a tabela users_restrictions quanto person_access_control","relevant_symbols":["checkUserRestrictions"],"relevant_files":["domain/service/access/usecases/ValidateMemberGateAccess.php"]}
+{"query":"updateAccountingAccount","relevant_symbols":["updateAccountingAccount"],"relevant_files":["domain/service/siger/FinancialService.php"]}

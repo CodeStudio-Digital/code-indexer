@@ -24,6 +24,7 @@
  */
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
+import { nativeFetch } from '@mcp/code-agent/providers/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 
@@ -124,6 +125,9 @@ export class ChatGPTCodexProvider implements ChatProvider {
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
       defaultHeaders: headers,
+      // Use undici (native fetch) so installLlmDispatcher's bodyTimeout:0
+      // applies during the reasoning phase. See native-fetch.ts.
+      fetch: nativeFetch(),
     });
   }
 

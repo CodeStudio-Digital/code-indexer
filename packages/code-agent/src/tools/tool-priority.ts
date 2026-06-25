@@ -24,6 +24,13 @@ import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
  * `update_goal` (a bootstrap session with an in-progress goal and no
  * update_goal is deadlocked — see tiers.ts goal-tools note).
  *
+ * `task_list` is the ONE always-on task/checklist tool (the todos+tasks
+ * merge — see BOOTSTRAP_TOOLS in tiers.ts). The pre-merge solo aliases
+ * `submit_tasks`/`todo_write` are now navigate-tier back-compat shims, so
+ * they are NOT floored here: a direct caller is covered by pinning, and the
+ * merge means the live task tool the cap must keep is `task_list`. The
+ * subordinate `*_to_master` variants below are distinct live tools and stay.
+ *
  * Company orchestration essentials are protected separately via
  * `isEssentialCompanyTool` (company-essentials.ts) — this set is the
  * session-class-agnostic floor.
@@ -38,11 +45,10 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   'ask_master',
   'task_complete',
   'submit_plan',
-  'submit_tasks',
+  'task_list',
   'submit_plan_to_master',
   'submit_tasks_to_master',
   'update_goal',
-  'todo_write',
 ]);
 
 /**

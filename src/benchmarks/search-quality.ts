@@ -27,7 +27,7 @@
  * in CI to gate retrieval regressions.
  */
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '@mcp/shared/utils/config.js';
@@ -38,6 +38,10 @@ import { createVectorStore, NullVectorStore } from '@mcp/store/vectors.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
 import { createReranker, NullReranker } from '@mcp/indexer/search/reranker.js';
+import { runBenchmark, type CellResult, type EmbeddingEntry } from '@mcp/indexer/benchmarks/engine.js';
+import { buildReranker, buildEmbedding } from '@mcp/indexer/benchmarks/specs.js';
+import { buildScratchVectorStore } from '@mcp/indexer/benchmarks/scratch-index.js';
+import { generateQueriesFromIndex } from '@mcp/indexer/benchmarks/query-gen.js';
 import type { HybridSearchResult, SearchMode } from '@mcp/shared/types.js';
 
 interface EvalQuery {
@@ -214,6 +218,46 @@ function printTable(rows: ModeResult[]): void {
   }
 }
 
+function printMatrix(rows: CellResult[]): void {
+  // Winner = highest nDCG@10 (tie-break MRR), flagged with ★.
+  let best = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (
+      best === -1 ||
+      rows[i].ndcg_at_10 > rows[best].ndcg_at_10 ||
+      (rows[i].ndcg_at_10 === rows[best].ndcg_at_10 && rows[i].mrr > rows[best].mrr)
+    ) {
+      best = i;
+    }
+  }
+  const header = ['', 'embedding', 'reranker', 'R@5', 'R@10', 'MRR', 'nDCG@10', 'p50', 'p95', 'N'];
+  const widths = header.map((h) => h.length);
+  const cells: string[][] = rows.map((r, i) => [
+    i === best ? '*' : '',
+    r.embedding,
+    r.reranker,
+    r.recall_at_5.toFixed(3),
+    r.recall_at_10.toFixed(3),
+    r.mrr.toFixed(3),
+    r.ndcg_at_10.toFixed(3),
+    String(r.p50_ms),
+    String(r.p95_ms),
+    String(r.queries),
+  ]);
+  for (const row of cells) {
+    for (let i = 0; i < row.length; i++) widths[i] = Math.max(widths[i], row[i].length);
+  }
+  const pad = (s: string, w: number) => s.padEnd(w, ' ');
+  console.log(header.map((h, i) => pad(h, widths[i])).join('  '));
+  console.log(widths.map((w) => '-'.repeat(w)).join('  '));
+  for (const row of cells) console.log(row.map((c, i) => pad(c, widths[i])).join('  '));
+  if (best !== -1) {
+    console.log(
+      `\n* best: ${rows[best].embedding} × ${rows[best].reranker} (nDCG@10 ${rows[best].ndcg_at_10.toFixed(3)}, MRR ${rows[best].mrr.toFixed(3)})`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
@@ -232,6 +276,20 @@ async function main(): Promise<void> {
       // Used by the baseline workflow. Default: do not write a file (legacy behavior).
       output: { type: 'string' },
       'save-baseline': { type: 'boolean' },
+      // Matrix mode: comma-separated reranker/embedding specs to compare side
+      // by side (see benchmarks/specs.ts). When either is set, the script runs
+      // the (embedding × reranker) matrix under a single --mode instead of the
+      // legacy per-mode loop.
+      rerankers: { type: 'string' },
+      embeddings: { type: 'string' },
+      mode: { type: 'string' },
+      // Auto-generate the query set from the local symbol index (zero manual
+      // labeling). Replaces --file/builtin when set.
+      generate: { type: 'boolean' },
+      'max-queries': { type: 'string' },
+      // Cap on files re-embedded per non-live embedding (ground-truth targets
+      // always included). Controls cost/time of the embedding-comparison flow.
+      sample: { type: 'string' },
     },
   });
 
@@ -272,7 +330,91 @@ async function main(): Promise<void> {
   const reranker = values['no-rerank'] ? new NullReranker() : createReranker(providerStore);
   const search = new HybridSearch(db, searchable, embeddingService, hyde, reranker);
 
-  const { queries, source } = loadQueries(values.file);
+  const maxQueries = values['max-queries'] ? parseInt(values['max-queries'], 10) : undefined;
+  let { queries, source } = loadQueries(values.file);
+  if (values.generate) {
+    const gen = generateQueriesFromIndex(db, project.id, { maxQueries });
+    if (gen.length === 0) {
+      console.error(`[bench] --generate produced 0 queries (no commented symbols?); keeping ${source}`);
+    } else {
+      queries = gen;
+      source = `generated(${gen.length})`;
+      const genPath = `evals/${project.name.replace(/[^a-z0-9._-]+/gi, '_')}.generated.jsonl`;
+      try {
+        writeFileSync(genPath, gen.map((q) => JSON.stringify(q)).join('\n') + '\n');
+        console.log(`[bench] generated query set written to ${genPath}`);
+      } catch {
+        /* best-effort dump; the in-memory set is what's benchmarked */
+      }
+    }
+  }
+
+  // ── Matrix mode: compare reranker/embedding configs side by side ──────────
+  // Triggered by --rerankers/--embeddings. Runs the (embedding × reranker)
+  // matrix under one --mode instead of the legacy per-mode loop.
+  if (values.rerankers || values.embeddings) {
+    const rerankerSpecs = (values.rerankers ?? 'default').split(',').map((s) => s.trim()).filter(Boolean);
+    const embSpecs = (values.embeddings ?? 'live').split(',').map((s) => s.trim()).filter(Boolean);
+    const rerankers = rerankerSpecs.map((s) => buildReranker(s, providerStore));
+
+    // Non-live embeddings need their vectors re-embedded into a throwaway store
+    // (different vector space). Targets from the query set are always embedded
+    // so recall stays measurable under --sample.
+    const sample = values.sample ? parseInt(values.sample, 10) : undefined;
+    const targetFiles = new Set<string>();
+    for (const q of queries) for (const f of q.relevant_files ?? []) targetFiles.add(f);
+
+    const embeddings: EmbeddingEntry[] = [];
+    for (const s of embSpecs) {
+      const e = buildEmbedding(s, providerStore);
+      if (!e.needsScratch) {
+        embeddings.push({ label: e.label, service: e.service, vectorStore: searchable });
+        continue;
+      }
+      const safe = `${project.name}.${s}`.replace(/[^a-z0-9._-]+/gi, '_');
+      const scratchPath = join('bench', 'scratch', `${safe}.db`);
+      mkdirSync(dirname(scratchPath), { recursive: true });
+      if (existsSync(scratchPath)) rmSync(scratchPath); // clean rebuild — dim may differ from a prior model
+      if (s.startsWith('provider')) {
+        console.warn(
+          `[bench] '${s}' is a remote/paid embedding — re-embedding the corpus costs API calls${sample ? ` (sampled to ${sample} files)` : ' (FULL corpus; consider --sample N)'}`,
+        );
+      }
+      console.log(`[bench] reindexing corpus for '${s}' -> ${scratchPath}`);
+      const { store, embedded, tokens, files } = await buildScratchVectorStore(db, project, e.service, {
+        scratchPath,
+        sample,
+        targetFiles,
+        onProgress: (p) => process.stdout.write(`\r  embed ${s}: ${p.current}/${p.total} files   `),
+      });
+      process.stdout.write('\n');
+      console.log(`[bench] '${s}': ${embedded} vectors from ${files} files, ~${tokens} tokens`);
+      embeddings.push({ label: e.label, service: e.service, vectorStore: store });
+    }
+    const matrixMode = (values.mode as SearchMode | 'expanded') ?? 'hybrid';
+    console.log(`\n[bench] matrix project=${project.name} queries=${queries.length} source=${source} hyde=${hyde ? 'real' : 'off'} mode=${matrixMode}`);
+    console.log(`[bench] embeddings: ${embeddings.map((e) => e.label).join(', ')}`);
+    console.log(`[bench] rerankers:  ${rerankers.map((r) => r.label).join(', ')}\n`);
+    const cells = await runBenchmark(
+      {
+        db,
+        projectId: project.id,
+        projectName: project.name,
+        querySet: queries,
+        embeddings,
+        rerankers,
+        hyde,
+        mode: matrixMode,
+        limit: 20,
+      },
+      (p) => process.stdout.write(`\r  ${p.cell}: ${p.current}/${p.total}      `),
+    );
+    process.stdout.write('\n\n');
+    printMatrix(cells);
+    db.close();
+    return;
+  }
+
   console.log(`\n[bench] project=${project.name} queries=${queries.length} source=${source} hyde=${hyde ? 'real' : 'off'} reranker=${reranker.name}`);
   console.log(`[bench] modes: ${modes.join(', ')}\n`);
 

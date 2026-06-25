@@ -1,5 +1,6 @@
 import type { LLMProvider, ChatProvider, ProviderDefinition, CreateCoderOpts } from './types.js';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
+import { withStreamResilience } from '@mcp/provider-sdk';
 import { getRegistry, getDefinition } from './registry.js';
 import { getStore } from './shared/store.js';
 import { resolveCreds } from './shared/resolver.js';
@@ -110,7 +111,14 @@ export async function createCoderProvider(
     throw new Error(`Shape '${def.kind}' does not support the coder`);
   }
   const creds = await resolveCreds(def, cfg);
-  return def.createCoder(creds, model, { ...opts, providerId: opts?.providerId ?? cfg?.id });
+  // Central stream-resilience for EVERY coder provider (legacy `defineProvider`
+  // AND engine-built). Node 24 (Electron 42) makes node-fetch@2 — the HTTP layer
+  // of the OpenAI SDK — throw `ERR_STREAM_PREMATURE_CLOSE` on the benign trailing
+  // socket teardown AFTER a stream already completed. withStreamResilience
+  // swallows that post-`done` close and re-throws genuine mid-stream truncations.
+  return withStreamResilience(
+    def.createCoder(creds, model, { ...opts, providerId: opts?.providerId ?? cfg?.id }),
+  );
 }
 
 // ─── Back-compat re-exports ──────────────────────────────────────

@@ -343,6 +343,8 @@
   "storageConfig.namePlaceholder": "My Backend",
   "storageConfig.kind": "Kind",
   "storageConfig.selectKind": "Select…",
+  "storageConfig.selectProvider": "Select a provider",
+  "storageConfig.noCompatProvider": "No OpenAI-compatible provider with an API key. Add one under Providers first.",
   "storageConfig.enabled": "Enabled",
   "storageConfig.default": "Default",
   "tools.description": "Globally disable tools so they are never available to any coder session. Useful to reduce noise or cap the tool count for smaller models.",

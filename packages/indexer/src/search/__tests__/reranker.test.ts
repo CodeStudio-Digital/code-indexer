@@ -14,9 +14,13 @@ import {
 import { LocalReranker } from '../local-reranker.js';
 
 type RerankerCfg = { kind: string; config: Record<string, unknown> } | null;
+type ProviderRow = { kind: string; base_url: string | null; api_key: string | null };
 
-function storeWith(cfg: RerankerCfg) {
-  return { getDefaultReranker: () => cfg };
+function storeWith(cfg: RerankerCfg, providers?: Record<string, ProviderRow>) {
+  return {
+    getDefaultReranker: () => cfg,
+    getProvider: (id: string) => providers?.[id] ?? null,
+  };
 }
 
 const ENV_KEYS = [
@@ -94,5 +98,91 @@ describe('createReranker', () => {
     process.env.MCP_RERANK_WORKER_URL = 'https://env.example.dev';
     const r = createReranker(storeWith({ kind: 'cohere', config: { apiKey: 'co-test' } }));
     expect(r).toBeInstanceOf(CohereReranker);
+  });
+
+  it('builds a provider reranker by reusing a configured provider key', () => {
+    const r = createReranker(
+      storeWith(
+        { kind: 'provider', config: { providerId: 'openrouter' } },
+        { openrouter: { kind: 'openrouter', base_url: null, api_key: 'or-test' } },
+      ),
+    );
+    // Provider rerank reuses the Cohere-compatible client under a 'provider' name.
+    expect(r).toBeInstanceOf(CohereReranker);
+    expect(r.name).toBe('provider');
+  });
+
+  it('falls through to Null when the provider has no key or is unknown', () => {
+    expect(
+      createReranker(
+        storeWith(
+          { kind: 'provider', config: { providerId: 'openrouter' } },
+          { openrouter: { kind: 'openrouter', base_url: null, api_key: null } },
+        ),
+      ),
+    ).toBeInstanceOf(NullReranker);
+    expect(
+      createReranker(storeWith({ kind: 'provider', config: { providerId: 'nope' } }, {})),
+    ).toBeInstanceOf(NullReranker);
+  });
+
+  it('falls through to Null when the provider kind is not OpenAI-compatible', () => {
+    // Anthropic has no OpenAI-compatible base URL / rerank endpoint.
+    expect(
+      createReranker(
+        storeWith(
+          { kind: 'provider', config: { providerId: 'anthropic' } },
+          { anthropic: { kind: 'anthropic', base_url: null, api_key: 'sk-ant' } },
+        ),
+      ),
+    ).toBeInstanceOf(NullReranker);
+  });
+
+  it('provider reranker POSTs to {baseURL}/rerank with the configured model', async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init: { body: string }) => {
+      calls.push({ url: String(url), body: JSON.parse(init.body) as Record<string, unknown> });
+      return new Response(JSON.stringify({ results: [{ index: 0, relevance_score: 0.9 }] }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const r = createReranker(
+        storeWith(
+          { kind: 'provider', config: { providerId: 'or', model: 'nvidia/llama-nemotron-rerank-vl-1b-v2:free' } },
+          { or: { kind: 'openrouter', base_url: null, api_key: 'or-key' } },
+        ),
+      );
+      const out = await r.rerank('q', [{ id: 'a', text: 'doc', originalScore: 0.1 }], 5);
+      // Default OpenRouter base URL → /rerank, free Nemotron model, mapped result.
+      expect(calls[0].url).toBe('https://openrouter.ai/api/v1/rerank');
+      expect(calls[0].body.model).toBe('nvidia/llama-nemotron-rerank-vl-1b-v2:free');
+      expect(out[0]).toEqual({ id: 'a', score: 0.9, originalScore: 0.1 });
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('provider reranker honors a custom base_url', async () => {
+    const calls: string[] = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const r = createReranker(
+        storeWith(
+          { kind: 'provider', config: { providerId: 'or' } },
+          { or: { kind: 'openrouter', base_url: 'https://proxy.example/v1/', api_key: 'k' } },
+        ),
+      );
+      await r.rerank('q', [{ id: 'a', text: 'doc', originalScore: 0.1 }], 5);
+      // Trailing slash stripped; custom base wins over the default.
+      expect(calls[0]).toBe('https://proxy.example/v1/rerank');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 });

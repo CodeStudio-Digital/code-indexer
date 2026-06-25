@@ -27,6 +27,7 @@ const EMBEDDING_KINDS: Array<{ value: EmbeddingKind; label: string }> = [
   { value: 'local', label: 'Local (transformers.js — offline)' },
   { value: 'cloudflare', label: 'Cloudflare Workers AI' },
   { value: 'bedrock', label: 'AWS Bedrock (Titan)' },
+  { value: 'provider', label: 'Configured provider (OpenAI-compatible — reindexes)' },
   { value: 'null', label: 'None (disable vectors)' },
 ];
 
@@ -43,6 +44,7 @@ const RERANKER_KINDS: Array<{ value: RerankerKind; label: string }> = [
   { value: 'local', label: 'Local (offline, transformers.js)' },
   { value: 'cloudflare', label: 'Cloudflare Workers AI (bge-reranker)' },
   { value: 'cohere', label: 'Cohere Rerank' },
+  { value: 'provider', label: 'Configured provider (OpenRouter rerank)' },
   { value: 'null', label: 'None (RRF order only)' },
 ];
 

@@ -100,6 +100,10 @@ export interface GitMetaFrame {
 export interface CreateProjectInput {
   name: string;
   root_path: string;
+  description?: string;
+  /** Register as a LOOSE ad-hoc global-session folder (mig 176): hidden from
+   *  the "Projetos" grid, idempotent on an existing path. See CreateProjectService. */
+  loose?: boolean;
 }
 
 export interface UpdateProjectInput {
@@ -193,6 +197,9 @@ export type ScaffoldStreamEvent =
 
 export interface ProjectsApi {
   list(input: void, ctx: ApiContext): Promise<Project[]>;
+  /** Projects for the GLOBAL-session picker: real projects + loose ad-hoc
+   *  folders (mig 176), minus the synthetic unions. Superset of `list`. */
+  listForGlobalPicker(input: void, ctx: ApiContext): Promise<Project[]>;
   get(input: { id: number }, ctx: ApiContext): Promise<Project>;
   create(input: CreateProjectInput, ctx: ApiContext): Promise<Project>;
   update(input: { id: number } & UpdateProjectInput, ctx: ApiContext): Promise<Project>;

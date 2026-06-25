@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -17,7 +17,8 @@ import {
   SelectValue,
 } from '../../components/ui/select.js';
 import { Switch } from '../../components/ui/switch.js';
-import type { FieldSpec } from './storage-api.js';
+import { fetchProviders } from './api.js';
+import { PROVIDER_BACKED_KINDS, type FieldSpec } from './storage-api.js';
 
 /**
  * Generic config dialog shared between embeddings and vector stores.
@@ -66,6 +67,25 @@ export function StorageConfigDialog<K extends string>({
   });
 
   const fields = fieldsByKind[form.kind] ?? [];
+
+  // Configured providers, fetched only when a `provider-select` field is shown
+  // (the `provider` embedding/reranker kind reuses a chat provider's creds).
+  const [providers, setProviders] = useState<
+    Array<{ id: string; name: string; kind: string; has_key: boolean }>
+  >([]);
+  const needsProviders = fields.some((f) => f.type === 'provider-select');
+  useEffect(() => {
+    if (!needsProviders) return;
+    let alive = true;
+    void fetchProviders()
+      .then((ps) => {
+        if (alive) setProviders(ps);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [needsProviders]);
 
   function update<Key extends keyof typeof form>(k: Key, v: (typeof form)[Key]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -138,6 +158,35 @@ export function StorageConfigDialog<K extends string>({
 
           {fields.map((f) => {
             const value = ((form.config?.[f.key] as string | undefined) ?? '').toString();
+            if (f.type === 'provider-select') {
+              const opts = providers.filter(
+                (p) => p.has_key && PROVIDER_BACKED_KINDS.includes(p.kind),
+              );
+              return (
+                <div key={f.key}>
+                  <label className="text-xs font-medium">
+                    {f.label} {f.required && <span className="text-destructive">*</span>}
+                  </label>
+                  <Select value={value} onValueChange={(v) => updateConfig(f.key, v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('admin:storageConfig.selectProvider')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {opts.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} ({p.kind})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {opts.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {t('admin:storageConfig.noCompatProvider')}
+                    </p>
+                  )}
+                </div>
+              );
+            }
             if (f.type === 'select') {
               return (
                 <div key={f.key}>

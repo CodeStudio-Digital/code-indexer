@@ -193,6 +193,10 @@ export interface LinkedProject {
  */
 export interface GlobalCoderSession extends RecentCoderSession {
   linked_count: number;
+  /** Joined names of every linked project (e.g. "ProjA + ProjB") — the sidebar
+   *  groups global sessions by their virtual workspace and uses this as the
+   *  group header. Empty when no project is resolvable. */
+  workspace_label: string;
 }
 
 /** Per-project folder used to organize chat sessions in the sidebar. */

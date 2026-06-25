@@ -105,6 +105,7 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
             doneReason={s.doneReason}
             error={s.error}
             liveTurnDuplicatedInHistory={s.liveTurnDuplicatedInHistory}
+            persistedToolUseIds={s.persistedToolUseIds}
             fallbackProviderId={s.provider}
             tasksState={s.tasksState}
             handlers={s.handlers}

@@ -7,8 +7,10 @@
  * Classification heuristic:
  *   - 401          → provider-401-refresh
  *   - 400          → provider-400-retry
+ *   - 0 (no status)→ provider-unknown-retry  (low cap; connection/mid-stream)
  *   - 429 / 5xx    → provider-transient-retry  (default)
- *   - non-retryable → straight Aborted, no counter bump
+ *   - non-retryable → straight Aborted, no counter bump (uses the real
+ *                     provider message from the event when present)
  *
  * Backoff: exp+jitter via `backoffDelayMs` (lifted from `provider-retry.ts`
  * so the BT shares the same curve as the legacy loop).
@@ -38,7 +40,9 @@ export class RecoveringNode implements BehaviorNode {
     if (!lastEvent.retryable) {
       ctx.stopReason = 'error';
       ctx.transition = classifyTransition(lastEvent.status);
-      ctx.error = new Error(`Provider returned non-retryable status ${lastEvent.status}`);
+      ctx.error = new Error(
+        lastEvent.message ?? `Provider returned non-retryable status ${lastEvent.status}`,
+      );
       return events.aborted();
     }
 
@@ -51,12 +55,13 @@ export class RecoveringNode implements BehaviorNode {
         kind,
         attempts,
         cap,
-        contextHint: `status=${lastEvent.status}`,
+        contextHint: `status=${lastEvent.status}${lastEvent.message ? ` message=${lastEvent.message}` : ''}`,
       });
       ctx.stopReason = 'recovery_capped';
       ctx.transition = classifyTransition(lastEvent.status);
       ctx.error = new Error(
-        `Recovery cap exceeded: kind=${kind} attempts=${attempts}/${cap}`,
+        `Recovery cap exceeded (kind=${kind} ${attempts}/${cap}): ` +
+          (lastEvent.message ?? `status ${lastEvent.status}`),
       );
       return events.aborted();
     }
@@ -74,6 +79,8 @@ export class RecoveringNode implements BehaviorNode {
 function classifyKind(status: number): RecoveryKind {
   if (status === 401) return 'provider-401-refresh';
   if (status === 400) return 'provider-400-retry';
+  // Sentinel 0 = status-less error (connection/mid-stream/parse). Low-cap path.
+  if (status === 0) return 'provider-unknown-retry';
   return 'provider-transient-retry';
 }
 

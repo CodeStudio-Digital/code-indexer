@@ -58,7 +58,20 @@ export function list(db: DB): Project[] {
   // id 0 is the reserved hidden "__user__" project that holds user-scope
   // memory (migration 145) — never a real, listable project.
   // `is_synthetic` (migration 155) hides the virtual union projects backing
-  // global sessions — they're an implementation detail, not user-facing.
+  // global sessions; `is_loose` (migration 176) hides ad-hoc folders attached
+  // to a global session from an arbitrary path — both implementation details,
+  // not user-facing in the "Projetos" grid.
+  return db
+    .prepare(
+      "SELECT * FROM projects WHERE id <> 0 AND COALESCE(is_synthetic, 0) = 0 AND COALESCE(is_loose, 0) = 0 ORDER BY name",
+    )
+    .all() as Project[];
+}
+
+/** Projects offered in the GLOBAL-session project picker: every real project
+ *  PLUS loose ad-hoc folders (migration 176), but NOT the synthetic unions
+ *  (those would nest a workspace inside a workspace). Superset of `list()`. */
+export function listForGlobalPicker(db: DB): Project[] {
   return db
     .prepare("SELECT * FROM projects WHERE id <> 0 AND COALESCE(is_synthetic, 0) = 0 ORDER BY name")
     .all() as Project[];
@@ -79,6 +92,35 @@ export function setSynthetic(db: DB, id: number, synthetic: boolean): void {
     db.prepare("UPDATE projects SET is_synthetic = ? WHERE id = ?").run(synthetic ? 1 : 0, id);
   } catch {
     /* pre-155 DB without the column — caller tolerates (synthetic stays implicit). */
+  }
+}
+
+/** Mark a project as a loose ad-hoc global-session folder — hides it from the
+ *  "Projetos" grid (migration 176). Tolerant of a pre-176 DB. */
+export function setLoose(db: DB, id: number, loose: boolean): void {
+  try {
+    db.prepare("UPDATE projects SET is_loose = ? WHERE id = ?").run(loose ? 1 : 0, id);
+  } catch {
+    /* pre-176 DB without the column — caller tolerates (loose stays implicit). */
+  }
+}
+
+/** Loose ad-hoc folders (migration 176) NOT referenced by any global session —
+ *  neither as a junction member (`coder_session_projects`) nor as a session's
+ *  own `project_id`. Used by the boot sweep to GC folders left by deleted
+ *  global sessions. Tolerant of a pre-176 / pre-152 DB (returns []). */
+export function listOrphanLoose(db: DB): Project[] {
+  try {
+    return db
+      .prepare(
+        `SELECT * FROM projects p
+          WHERE COALESCE(p.is_loose, 0) = 1
+            AND NOT EXISTS (SELECT 1 FROM coder_session_projects csp WHERE csp.project_id = p.id)
+            AND NOT EXISTS (SELECT 1 FROM coder_sessions s WHERE s.project_id = p.id)`,
+      )
+      .all() as Project[];
+  } catch {
+    return [];
   }
 }
 

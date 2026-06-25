@@ -24,10 +24,17 @@ export const events = {
     kind: 'MaxTurnsReached',
     autoContinueLeft: opts.autoContinueLeft,
   }),
-  providerError: (opts: { retryable: boolean; status: number }): BehaviorEvent => ({
+  providerError: (opts: {
+    retryable: boolean;
+    status: number;
+    message?: string;
+    code?: string;
+  }): BehaviorEvent => ({
     kind: 'ProviderError',
     retryable: opts.retryable,
     status: opts.status,
+    ...(opts.message != null ? { message: opts.message } : {}),
+    ...(opts.code != null ? { code: opts.code } : {}),
   }),
   compactionDone: (opts: {
     collapsedFrom: number;

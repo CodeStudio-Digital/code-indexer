@@ -74,7 +74,7 @@ export function useEditorChatSession(projectId: number) {
     answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider,
   } = stream;
 
-  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, liveTurnDuplicatedInHistory } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, liveTurnDuplicatedInHistory, persistedToolUseIds } =
     useAgentChatState({ selectedId, doneReason, sessionData: sessionData ?? null, currentTurn, provider, model, setProvider, setModel });
 
   const settings = useEditorSessionSettings(selectedId, sessionData ?? null);
@@ -305,7 +305,7 @@ export function useEditorChatSession(projectId: number) {
   return {
     sessions: sessions ?? null, refetchSessions, selectedId, setSelectedId, createSession, creating,
     sessionData: sessionData ?? null, streaming, currentTurn, doneReason, error,
-    liveTurnDuplicatedInHistory, tasksState, handlers, loadEarlierMessages, abort, handleSend,
+    liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     queue, handleQueue,
     provider, model, setModel, agent, setAgent: handleAgentChange, maxTurns, setMaxTurns,
     temperature, setTemperature: handleTemperatureChange, onSwitchProvider,

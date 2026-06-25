@@ -303,7 +303,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
-  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats, liveTurnDuplicatedInHistory } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats, liveTurnDuplicatedInHistory, persistedToolUseIds } =
     useAgentChatState({
       selectedId,
       doneReason,
@@ -1341,6 +1341,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           onRenameGroup={handleRenameGroup}
           onDeleteGroup={handleDeleteGroup}
           projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
+          groupBy={isGlobal ? 'workspace' : 'group'}
         />
         </Panel>
         <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />
@@ -1392,10 +1393,14 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   showCanvasToggle={agent === 'diagram' || getDiagram(selectedId ?? 0) != null}
                   canvasActive={activeRightPanelId === 'diagram'}
                   onToggleCanvas={toggleCanvasPanel}
-                  // Global sessions: "N projects" chip → manage the virtual
-                  // workspace (attach/remove projects after creation).
+                  // Global sessions: colored per-project chips (focus the file
+                  // tree) + a manage button for the virtual workspace.
                   linkedCount={isGlobal ? (sessionData?.linked_projects?.length ?? sessionData?.session.linked_count ?? 0) : undefined}
                   onManageProjects={isGlobal ? () => setManageProjectsOpen(true) : undefined}
+                  linkedProjects={isGlobal ? sessionData?.linked_projects : undefined}
+                  workspaceProjectId={isGlobal ? sessionData?.session.project_id : undefined}
+                  activeProjectId={isGlobal ? activeProjectId : undefined}
+                  onFocusProject={isGlobal ? setActiveProjectId : undefined}
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -1418,6 +1423,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   doneReason={doneReason}
                   error={error}
                   liveTurnDuplicatedInHistory={liveTurnDuplicatedInHistory}
+                  persistedToolUseIds={persistedToolUseIds}
                   fallbackProviderId={provider}
                   tasksState={tasksState}
                   handlers={handlers}

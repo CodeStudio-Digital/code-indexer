@@ -506,6 +506,34 @@ describe('ExecutingNode', () => {
     })).rejects.toMatchObject({ name: 'TimeoutError', code: 'TIMEOUT' });
   });
 
+  it('tolerates a long time-to-first-byte (first-byte budget > idle budget)', async () => {
+    async function* slowFirstByte(): AsyncIterable<ChatDelta> {
+      // Silent longer than the inter-delta idle budget, but within first-byte.
+      await sleep(40);
+      yield { type: 'text_delta', text: 'hi' };
+      yield { type: 'done', stop_reason: 'stop' };
+    }
+    const r = await consumeStream({
+      stream: slowFirstByte(),
+      idleTimeoutMs: 10, // would fire at 10ms under the old flat timeout
+      firstByteTimeoutMs: 1_000,
+    });
+    expect(r.textBlocks.join('')).toBe('hi');
+  });
+
+  it('still times out a mid-stream stall AFTER the first byte (idle budget)', async () => {
+    async function* stallAfterFirst(): AsyncIterable<ChatDelta> {
+      yield { type: 'text_delta', text: 'hi' }; // first byte is fast
+      await sleep(60); // gap exceeds the inter-delta idle budget
+      yield { type: 'text_delta', text: 'never' };
+    }
+    await expect(consumeStream({
+      stream: stallAfterFirst(),
+      idleTimeoutMs: 10,
+      firstByteTimeoutMs: 1_000,
+    })).rejects.toMatchObject({ name: 'TimeoutError', code: 'TIMEOUT' });
+  });
+
   it('aborts the tool invocation signal when a tool deadline expires', async () => {
     let sawAbort = false;
     const registry = new ToolRegistry();

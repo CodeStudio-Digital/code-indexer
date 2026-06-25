@@ -13,6 +13,7 @@
  */
 
 import { LocalReranker } from './local-reranker.js';
+import { resolveProviderEndpoint } from './provider-endpoints.js';
 import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 
 // Re-export the contract types so existing importers (`@mcp/indexer/search/reranker.js`)
@@ -70,22 +71,32 @@ export class CloudflareReranker implements RerankerService {
   }
 }
 
-// ─── Cohere Reranker ─────────────────────────────────────────────
+// ─── Cohere-compatible Reranker (Cohere, OpenRouter) ─────────────
 
+/**
+ * Cohere `/v2/rerank` client. The request/response shape
+ * (`{ model, query, documents, top_n }` → `{ results: [{ index,
+ * relevance_score }] }`) is shared by OpenRouter's `/api/v1/rerank`, so the
+ * `endpoint` is parametrized: the `provider` reranker kind points it at a
+ * configured provider's base URL + `/rerank` (see `createReranker`).
+ */
 export class CohereReranker implements RerankerService {
-  readonly name = 'cohere';
+  readonly name: string;
   private apiKey: string;
   private model: string;
+  private endpoint: string;
 
-  constructor(opts: { apiKey: string; model?: string }) {
+  constructor(opts: { apiKey: string; model?: string; endpoint?: string; name?: string }) {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? 'rerank-v3.5';
+    this.endpoint = opts.endpoint ?? 'https://api.cohere.com/v2/rerank';
+    this.name = opts.name ?? 'cohere';
   }
 
   async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
     if (candidates.length === 0) return [];
 
-    const response = await fetch('https://api.cohere.com/v2/rerank', {
+    const response = await fetch(this.endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -100,7 +111,7 @@ export class CohereReranker implements RerankerService {
     });
 
     if (!response.ok) {
-      console.error(`[reranker] Cohere rerank failed: ${response.status}`);
+      console.error(`[reranker] ${this.name} rerank failed: ${response.status}`);
       return candidates.slice(0, topK).map(c => ({
         id: c.id,
         score: c.originalScore,
@@ -146,6 +157,13 @@ interface RerankerConfigSource {
     kind: string;
     config: Record<string, unknown>;
   } | null;
+  /**
+   * Resolve a configured chat provider's credentials. Used by the `provider`
+   * reranker kind to reuse an existing provider's key + base URL instead of
+   * storing a duplicate one. Optional so callers (CLI/tests) without a full
+   * ProviderStore still satisfy the type.
+   */
+  getProvider?(id: string): { kind: string; base_url: string | null; api_key: string | null } | null;
 }
 
 /**
@@ -174,6 +192,20 @@ export function createReranker(store?: RerankerConfigSource | null): RerankerSer
     if (cfg.kind === 'cloudflare') {
       const c = cfg.config as { workerUrl?: string; workerToken?: string };
       if (c.workerUrl) return new CloudflareReranker({ workerUrl: c.workerUrl, workerToken: c.workerToken });
+    }
+    // Reuse a configured chat provider's credentials. OpenRouter exposes a
+    // Cohere-shaped `/rerank`; the model defaults to the free Nemotron reranker.
+    if (cfg.kind === 'provider') {
+      const c = cfg.config as { providerId?: string; model?: string };
+      const ep = resolveProviderEndpoint(store?.getProvider?.(c.providerId ?? ''));
+      if (ep) {
+        return new CohereReranker({
+          apiKey: ep.apiKey,
+          model: c.model || 'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
+          endpoint: `${ep.baseURL}/rerank`,
+          name: 'provider',
+        });
+      }
     }
   }
 

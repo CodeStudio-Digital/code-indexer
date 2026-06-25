@@ -120,6 +120,57 @@ describe('RecoveringNode', () => {
     });
   });
 
+  it('surfaces the provider message in ctx.error on a non-retryable error', async () => {
+    const { ctx } = makeTestContext();
+    const event = await new RecoveringNode().execute(ctx, {
+      kind: 'ProviderError',
+      retryable: false,
+      status: 404,
+      message: 'The model `glm-5.2` does not exist',
+    });
+    expect(event.kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('error');
+    expect(ctx.error?.message).toBe('The model `glm-5.2` does not exist');
+  });
+
+  it('routes a status-less error (0) to provider-unknown-retry', async () => {
+    const { ctx } = makeTestContext();
+    const event = await new RecoveringNode().execute(ctx, {
+      kind: 'ProviderError',
+      retryable: true,
+      status: 0,
+      message: 'socket hang up',
+    });
+    expect(event.kind).toBe('TurnSucceeded');
+    expect(ctx.recovery.get('provider-unknown-retry')).toBe(1);
+    expect(ctx.recovery.has('provider-transient-retry')).toBe(false);
+  });
+
+  it('caps provider-unknown-retry low and includes the message when exceeded', async () => {
+    vi.stubEnv('CODER_RECOVERY_UNKNOWN_MAX', '1');
+    const { ctx, recordedEvents } = makeTestContext();
+    const err = {
+      kind: 'ProviderError' as const,
+      retryable: true,
+      status: 0,
+      message: 'unexpected end of stream',
+    };
+
+    // 1/1 → ok.
+    expect((await new RecoveringNode().execute(ctx, err)).kind).toBe('TurnSucceeded');
+    // 2/1 → exceeded → Aborted.
+    const second = await new RecoveringNode().execute(ctx, err);
+    expect(second.kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('recovery_capped');
+    expect(ctx.error?.message).toContain('unexpected end of stream');
+
+    const aborted = recordedEvents.find((r) => r.event === 'recovery_aborted');
+    expect(aborted!.args[0]).toMatchObject({
+      kind: 'provider-unknown-retry',
+      contextHint: expect.stringContaining('unexpected end of stream'),
+    });
+  });
+
   it('preserves per-kind isolation — 401 cap does not affect transient', async () => {
     vi.stubEnv('CODER_RECOVERY_401_MAX', '0');
     const { ctx } = makeTestContext();

@@ -423,6 +423,11 @@ export class CodeIndexDB {
   }
   /** Synthetic global-session union projects (hidden from listProjects). */
   listSyntheticProjects(): Project[] { return projects.listSynthetic(this.db); }
+  /** Projects for the GLOBAL-session picker: real projects + loose ad-hoc
+   *  folders (mig 176), minus the synthetic unions. Superset of listProjects. */
+  listProjectsForGlobalPicker(): Project[] { return projects.listForGlobalPicker(this.db); }
+  /** Loose ad-hoc folders (mig 176) referenced by no global session — for boot GC. */
+  listOrphanLooseProjects(): Project[] { return projects.listOrphanLoose(this.db); }
   /**
    * Real constituent projects of a SYNTHETIC union project (global session),
    * deduped from the `coder_session_projects` junction rows of ANY session on
@@ -549,6 +554,11 @@ export class CodeIndexDB {
   setProjectSynthetic(id: number, synthetic: boolean): void {
     projects.setSynthetic(this.db, id, synthetic);
     this.readCache.invalidateKey('projects:list'); // synthetic hides from the list
+  }
+  /** Mark a project as a loose ad-hoc global-session folder (hidden from listProjects). */
+  setProjectLoose(id: number, loose: boolean): void {
+    projects.setLoose(this.db, id, loose);
+    this.readCache.invalidateKey('projects:list'); // loose hides from the list
   }
   deleteProject(id: number): void {
     // Tiered-hybrid: remove the per-project DB files (app-layer cascade — the

@@ -44,6 +44,10 @@ export interface CoderSession {
   is_global?: boolean;
   /** Primary project name — only enriched on the global-sessions list payload. */
   project_name?: string;
+  /** Joined names of every linked project ("ProjA + ProjB") — only on the
+   *  global-sessions list payload; the sidebar groups by virtual workspace and
+   *  shows this as the group header. */
+  workspace_label?: string;
   /** Count of linked projects — only on the global-sessions list payload. */
   linked_count?: number;
   title: string;

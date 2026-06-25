@@ -168,6 +168,9 @@ export function listGlobal(
                 WHERE csp.coder_session_id = s.id
                 ORDER BY csp.is_primary DESC, csp.project_id ASC
                 LIMIT 1) AS project_name,
+              (SELECT group_concat(p.name, ' + ') FROM coder_session_projects csp
+                 JOIN projects p ON p.id = csp.project_id
+                WHERE csp.coder_session_id = s.id) AS workspace_label,
               (SELECT COUNT(*) FROM coder_session_projects csp
                 WHERE csp.coder_session_id = s.id
                   AND csp.project_id IN (SELECT id FROM projects)) AS linked_count
@@ -175,10 +178,15 @@ export function listGlobal(
         WHERE ${clauses.join(' AND ')}
         ORDER BY s.is_favorite DESC, s.updated_at DESC`,
     )
-    .all(...params) as Array<SessionRow & { project_name: string | null; linked_count: number }>;
+    .all(...params) as Array<SessionRow & { project_name: string | null; workspace_label: string | null; linked_count: number }>;
   return rows.map((r) => {
     const mapped = mapSessionRow(r)!;
-    return { ...mapped, project_name: r.project_name ?? '', linked_count: r.linked_count };
+    return {
+      ...mapped,
+      project_name: r.project_name ?? '',
+      workspace_label: r.workspace_label ?? r.project_name ?? '',
+      linked_count: r.linked_count,
+    };
   });
 }
 
