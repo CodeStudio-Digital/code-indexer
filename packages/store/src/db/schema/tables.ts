@@ -35,6 +35,12 @@ export function createBaseTables(db: DB): void {
       complexity TEXT NOT NULL DEFAULT 'low',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      -- Also added by migration 012 (purely additive there). Declared in the base
+      -- table so a FRESH DB has the column before idx_files_project_embedding is
+      -- created below; on existing DBs migration 012 already added it and this
+      -- CREATE TABLE IF NOT EXISTS is a no-op. Column order matches 012's ALTER
+      -- (appended right after updated_at), so fresh and migrated DBs are identical.
+      embedding_hash TEXT,
       UNIQUE(project_id, path)
     );
 

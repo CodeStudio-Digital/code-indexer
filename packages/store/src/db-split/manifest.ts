@@ -58,6 +58,9 @@ export const FEATURE_TABLES: ManifestEntry[] = [
   { table: 'api_requests', cls: 'FEATURE', where: 'collection_id IN (SELECT id FROM legacy.api_collections WHERE project_id = @pid)' },
   { table: 'api_request_history', cls: 'FEATURE', where: 'request_id IN (SELECT id FROM legacy.api_requests WHERE collection_id IN (SELECT id FROM legacy.api_collections WHERE project_id = @pid))' },
   { table: 'api_regression_runs', cls: 'FEATURE', where: 'collection_id IN (SELECT id FROM legacy.api_collections WHERE project_id = @pid)' },
+  // API docs (172) — guide pages join via collection; examples via request (like api_request_history).
+  { table: 'api_doc_pages', cls: 'FEATURE', where: 'collection_id IN (SELECT id FROM legacy.api_collections WHERE project_id = @pid)' },
+  { table: 'api_request_examples', cls: 'FEATURE', where: 'request_id IN (SELECT id FROM legacy.api_requests WHERE collection_id IN (SELECT id FROM legacy.api_collections WHERE project_id = @pid))' },
   // Builder checkpoints (144), doc suggestions (096), doc links (134) — direct.
   { table: 'builder_checkpoints', cls: 'FEATURE' },
   { table: 'doc_source_suggestions', cls: 'FEATURE' },
@@ -81,6 +84,17 @@ export const FEATURE_TABLES: ManifestEntry[] = [
   { table: 'training_runs', cls: 'FEATURE', where: 'dataset_id IN (SELECT id FROM legacy.training_datasets WHERE project_id = @pid)' },
   // Per-project runtime/shell config (168) — direct project_id; travels with the folder.
   { table: 'project_runtime_config', cls: 'FEATURE' },
+  // SSH client (173) — identities/hosts/snippets are direct; forwards join via host.
+  // Order: identities before hosts (host.identity_id), hosts before forwards/db (FK).
+  { table: 'ssh_identities', cls: 'FEATURE' },
+  { table: 'ssh_hosts', cls: 'FEATURE' },
+  { table: 'ssh_snippets', cls: 'FEATURE' },
+  { table: 'ssh_port_forwards', cls: 'FEATURE', where: 'host_id IN (SELECT id FROM legacy.ssh_hosts WHERE project_id = @pid)' },
+  // DB client (174) — all direct project_id. connections before its children, and
+  // after ssh_hosts (db_connections.ssh_tunnel_host_id → ssh_hosts).
+  { table: 'db_connections', cls: 'FEATURE' },
+  { table: 'db_query_history', cls: 'FEATURE' },
+  { table: 'db_saved_queries', cls: 'FEATURE' },
 ];
 
 /** The default WHERE for a manifest entry (direct project_id) unless overridden. */

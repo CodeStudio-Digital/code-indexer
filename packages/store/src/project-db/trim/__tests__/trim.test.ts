@@ -105,3 +105,39 @@ describe('trimProjectSchema (C2)', () => {
     }
   });
 });
+
+/**
+ * Regression for the indexer-worker crash-loop: a NEW migration that mutates a
+ * central table (here `provider_models`, mig 175) ran against a project DB that
+ * was created under an older build and already trimmed that table away. The
+ * unguarded `ALTER TABLE` threw `Migration 175 ... no such table: provider_models`
+ * on every boot. The `tableExists` guard in such migrations makes them a no-op
+ * on trimmed project DBs.
+ */
+describe('central-table migration on a trimmed project DB (mig 175 regression)', () => {
+  it('a pending central-table migration after trim is a no-op, not a crash', () => {
+    const { db } = buildFullSchema();
+    try {
+      // A real project DB: full schema, then trimmed → provider_models is gone.
+      trimProjectSchema(db);
+      expect(userTables(db)).not.toContain('provider_models');
+
+      // Simulate a DB created under a build whose newest migration was ≤174:
+      // migration 175 is now "pending" against the already-trimmed DB. (Only 175
+      // is removed, so runMigrations re-runs exactly that one.)
+      db.prepare('DELETE FROM schema_version WHERE version = ?').run(175);
+
+      // Pre-fix this threw and crash-looped the indexer-worker; the guard makes
+      // the central-table ALTER a clean no-op on a project DB.
+      expect(() => runMigrations(db)).not.toThrow();
+
+      // The trimmed table stays absent, and 175 is recorded so it never retries.
+      expect(userTables(db)).not.toContain('provider_models');
+      expect(
+        db.prepare('SELECT version FROM schema_version WHERE version = 175').get(),
+      ).toBeTruthy();
+    } finally {
+      db.close();
+    }
+  });
+});

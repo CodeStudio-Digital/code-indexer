@@ -15,7 +15,16 @@ import { INDEX_TABLES, FEATURE_TABLES } from '../../db-split/manifest.js';
  *  symbols_fts/file_contents_fts) are NOT here. */
 export const CENTRAL_FTS_VTABS = ['snapshots_fts', 'doc_chunks_fts'] as const;
 
-/** Central tables present in the full schema but never used by a project DB. */
+/**
+ * Central tables present in the full schema but never used by a project DB.
+ *
+ * CONVENTION: any migration that mutates one of these tables (ADD COLUMN, CREATE
+ * INDEX, INSERT, …) MUST guard with `tableExists(db, table)` and no-op when absent.
+ * A project DB runs the full central migration lineage but trims these tables
+ * away, so on upgrade a fresh central-table migration runs against a DB where the
+ * table is already gone — an unguarded statement throws `no such table` and
+ * crash-loops the boot. See migration 175 (and the guarded helper in mig 065).
+ */
 export const CENTRAL_DROP_TABLES: readonly string[] = [
   // session runtime + telemetry (central per the final scope decision)
   'coder_sessions', 'coder_messages', 'coder_plans', 'coder_tasks_state', 'coder_tool_calls',
