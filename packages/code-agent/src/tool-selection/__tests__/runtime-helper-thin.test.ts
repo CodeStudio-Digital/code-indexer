@@ -26,6 +26,17 @@ const toyEmbed: EmbeddingFn = async (text: string) => {
   return arr;
 };
 
+/**
+ * Constant unit embedding — every text maps to the same vector, so all
+ * candidates tie on taskAffinity. This isolates the policy nudge: only the
+ * toolPolicy delta can change the ranking of non-essentials.
+ */
+const constEmbed: EmbeddingFn = async () => {
+  const arr = new Float32Array(4);
+  arr[0] = 1;
+  return arr;
+};
+
 function makeTool(name: string, desc?: string): ThinTool {
   return { name, description: desc ?? `${name} description`, parameters: { type: 'object', properties: {} } };
 }
@@ -151,6 +162,72 @@ describe('applyToolSelectionThin', () => {
     });
     const names = new Set(out.map((t) => t.name));
     expect(names.has('Kanban')).toBe(true);
+  });
+
+  // ── toolPolicy nudge (Agent Decision Engine wiring) ──────────────────
+  it('toolPolicy.preferred lifts a non-essential tool into the single slot', async () => {
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'meaningful task text here',
+      embed: constEmbed, // all tie on affinity → only the policy delta matters
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9, // 8 essentials + exactly 1 non-essential slot
+      toolPolicy: { preferred: ['Jira'] },
+    });
+    expect(new Set(out.map((t) => t.name)).has('Jira')).toBe(true);
+  });
+
+  it('toolPolicy.discouraged sinks a tool affinity ties would otherwise pick', async () => {
+    const baseline = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'meaningful task text here',
+      embed: constEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9,
+    });
+    // With ties broken by original order, the first non-essential wins the slot.
+    expect(new Set(baseline.map((t) => t.name)).has('DesignSystem')).toBe(true);
+
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'meaningful task text here',
+      embed: constEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9,
+      toolPolicy: { discouraged: ['DesignSystem'] },
+    });
+    expect(new Set(out.map((t) => t.name)).has('DesignSystem')).toBe(false);
+  });
+
+  it('matches policy names canonically (snake_case engine name ↔ PascalCase candidate)', async () => {
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'meaningful task text here',
+      embed: constEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9,
+      toolPolicy: { preferred: ['web_fetch'] }, // candidate name is 'WebFetch'
+    });
+    expect(new Set(out.map((t) => t.name)).has('WebFetch')).toBe(true);
+  });
+
+  it('omitting toolPolicy vs passing an empty one yields identical selection', async () => {
+    const base = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend bug fix in login flow',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+    });
+    const empty = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend bug fix in login flow',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+      toolPolicy: {},
+    });
+    expect(empty.map((t) => t.name)).toEqual(base.map((t) => t.name));
   });
 
   // ── Task embedding cache (A4) ────────────────────────────────────────

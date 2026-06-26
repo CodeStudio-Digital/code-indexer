@@ -163,4 +163,45 @@ describe('ToolSelectionPipeline', () => {
     expect(embedCalls).toBe(1);
     expect(firstRunCalls).toBeGreaterThanOrEqual(allTools.length + 1);
   });
+
+  it('uses optional toolPolicy preferred hints to lift a non-essential tool into top-K', async () => {
+    const pipeline = makePipeline(9);
+    const result = await selectTools(pipeline, {
+      queryId: 'q',
+      taskText: 'totally unrelated topic about astronomy and stars',
+      toolPolicy: { preferred: ['WebFetch'] },
+    });
+
+    const selectedNames = new Set(result.selected.map((t) => t.name));
+    expect(selectedNames.has('WebFetch')).toBe(true);
+  });
+
+  it('uses optional toolPolicy discouraged hints to sink a non-essential tool', async () => {
+    const pipeline = makePipeline(18);
+    const result = await selectTools(pipeline, {
+      queryId: 'q',
+      taskText: 'git status commit repository branch release',
+      toolPolicy: { discouraged: ['GitCommit'] },
+    });
+
+    const selectedNames = new Set(result.selected.map((t) => t.name));
+    expect(selectedNames.has('GitStatus')).toBe(true);
+    expect(selectedNames.has('GitCommit')).toBe(false);
+  });
+
+  it('keeps legacy behaviour when toolPolicy is omitted', async () => {
+    const baseline = await selectTools(makePipeline(12), {
+      queryId: 'baseline',
+      taskText: 'fetch web content',
+    });
+    const explicitEmptyPolicy = await selectTools(makePipeline(12), {
+      queryId: 'explicit-empty',
+      taskText: 'fetch web content',
+      toolPolicy: {},
+    });
+
+    expect(explicitEmptyPolicy.selected.map((t) => t.name)).toEqual(
+      baseline.selected.map((t) => t.name),
+    );
+  });
 });

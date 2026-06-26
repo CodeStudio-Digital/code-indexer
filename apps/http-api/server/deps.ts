@@ -105,6 +105,7 @@ import {
 import type {
   ToolSelectionQuery,
 } from '@mcp/code-agent/tool-selection/index.js';
+import { toolPolicyForTask } from '@mcp/code-agent/agents/decision-engine.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { LshIndexStore } from '@mcp/store/lsh-index-store.js';
 import { LSHIndex } from '@mcp/indexer/search/lsh-index.js';
@@ -1112,6 +1113,11 @@ export function createDeps(): ServerDeps {
   // later via `observeToolSelectionOutcome` when the runtime sees what
   // tools were actually called.
   const toolSelectionFilterEnabled = process.env.MCP_PIPELINES_TOOL_SELECTION === '1';
+  // Agent Decision Engine → tool-selection bridge. Default OFF: when enabled,
+  // the classified task intent nudges preferred/discouraged tools in the thin
+  // selection path. Off (or low classifier confidence) → byte-identical to the
+  // pre-bridge behavior, so this is safe to ship dark and enable per-env.
+  const agentDecisionToolPolicyEnabled = process.env.MCP_AGENT_DECISION_TOOL_POLICY === '1';
 
   /**
    * FNV-1a hash of the task text — deterministic shadow-sampling key
@@ -1139,6 +1145,9 @@ export function createDeps(): ServerDeps {
         recentToolCalls: ctx.recentToolCalls,
         embed: toolSelectionEmbed,
         embeddingStore: toolEmbeddingStore,
+        toolPolicy: agentDecisionToolPolicyEnabled
+          ? toolPolicyForTask(ctx.taskText)
+          : undefined,
       });
       // Shadow producer — fires only when MCP_SHADOW_TOOL_SELECTION_RATE > 0
       // and the task hash falls inside the sample. Off-path via setImmediate.

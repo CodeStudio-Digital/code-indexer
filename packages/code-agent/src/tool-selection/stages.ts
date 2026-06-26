@@ -22,7 +22,7 @@ import {
   recencyDecay,
   batchFrequencyBoost,
 } from '@mcp/candidate-pipeline';
-import { ESSENTIAL_TOOL_NAMES, toCandidate } from './helpers.js';
+import { ESSENTIAL_TOOL_NAMES, toCandidate, canonicalToolName } from './helpers.js';
 import type { ToolCandidate, ToolSelectionQuery } from './types.js';
 import type { CoderTool } from '../core/tool.js';
 
@@ -248,6 +248,54 @@ export class WeightedFusionScorer implements Scorer<ToolSelectionQuery, ToolCand
   }
   update(candidate: ToolCandidate, scored: ToolCandidate): void {
     candidate.score = scored.score;
+  }
+}
+
+/**
+ * Policy affinity: nudge the final fused score using the Agent Decision
+ * Engine's intent/phase-aware tool policy. Tools in `preferred` get a bump,
+ * tools in `discouraged` get a penalty.
+ *
+ * Runs AFTER {@link WeightedFusionScorer} so it adjusts the already-fused
+ * `score` directly (a small, comparable-magnitude nudge — not a hard filter).
+ * Essentials are still always kept by the selector, so a discouraged essential
+ * is never stranded — it just sinks in the ranking of non-essentials.
+ *
+ * Crucially, `enable()` returns false when no policy is supplied, so callers
+ * that don't pass `toolPolicy` get byte-identical selection — this scorer is a
+ * pure, backward-compatible add-on (shadow-mode friendly).
+ */
+export class PolicyAffinityScorer implements Scorer<ToolSelectionQuery, ToolCandidate> {
+  readonly name = 'policy_affinity';
+  constructor(private preferBoost = 0.5, private discouragePenalty = 0.5) {}
+  enable(query: ToolSelectionQuery): boolean {
+    const p = query.toolPolicy;
+    return !!p && ((p.preferred?.length ?? 0) > 0 || (p.discouraged?.length ?? 0) > 0);
+  }
+  async score(
+    query: ToolSelectionQuery,
+    candidates: readonly ToolCandidate[],
+  ): Promise<CandidateResult<ToolCandidate>[]> {
+    const preferred = new Set((query.toolPolicy?.preferred ?? []).map(canonicalToolName));
+    const discouraged = new Set((query.toolPolicy?.discouraged ?? []).map(canonicalToolName));
+    return candidates.map((c): CandidateResult<ToolCandidate> => {
+      const name = canonicalToolName(c.name);
+      let delta = 0;
+      if (preferred.has(name)) delta += this.preferBoost;
+      if (discouraged.has(name)) delta -= this.discouragePenalty;
+      return {
+        ok: true,
+        candidate: {
+          ...c,
+          score: c.score + delta,
+          signals: { ...c.signals, policyAffinity: delta },
+        },
+      };
+    });
+  }
+  update(candidate: ToolCandidate, scored: ToolCandidate): void {
+    candidate.score = scored.score;
+    candidate.signals = scored.signals;
   }
 }
 

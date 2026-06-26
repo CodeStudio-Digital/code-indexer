@@ -42,11 +42,7 @@ interface UpsertBody {
   priority?: number;
 }
 
-interface PatchBody {
-  enabled?: boolean;
-  priority?: number;
-  config?: Record<string, unknown>;
-}
+interface PatchBody extends Partial<UpsertBody> {}
 
 const VALID_SCOPES: BindingScopeType[] = ['global', 'template', 'session'];
 
@@ -161,23 +157,31 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
       return c.json({ error: 'invalid_json' }, 400);
     }
 
-    if (body.enabled !== undefined) {
-      pipelineBindingsStore.setEnabled(id, body.enabled);
+    const scopeType = body.scope_type ?? existing.scope_type;
+    if (!isValidScope(scopeType)) return c.json({ error: 'scope_type must be global|template|session' }, 400);
+    const scopeId = scopeType === 'global' ? null : (body.scope_id !== undefined ? body.scope_id : existing.scope_id);
+    if (scopeType !== 'global' && scopeId == null) {
+      return c.json({ error: 'scope_id is required for template/session scopes' }, 400);
     }
-    if (body.priority !== undefined || body.config !== undefined) {
-      pipelineBindingsStore.upsert({
-        pipeline_name: existing.pipeline_name,
-        binding_role:  existing.binding_role,
-        provider_id:   existing.provider_id,
-        model_id:      existing.model_id,
-        model_mode:    existing.model_mode,
-        config:        body.config ?? existing.config,
-        scope_type:    existing.scope_type,
-        scope_id:      existing.scope_id,
-        enabled:       body.enabled ?? existing.enabled,
-        priority:      body.priority ?? existing.priority,
-      });
+
+    const providerId = body.provider_id ?? existing.provider_id;
+    if (!providerStore.getProvider(providerId)) {
+      return c.json({ error: 'provider_not_found', provider_id: providerId }, 404);
     }
+
+    const input: PipelineProviderBindingInput = {
+      pipeline_name: body.pipeline_name ?? existing.pipeline_name,
+      binding_role:  body.binding_role ?? existing.binding_role,
+      provider_id:   providerId,
+      model_id:      body.model_id ?? existing.model_id,
+      model_mode:    body.model_mode ?? existing.model_mode,
+      config:        body.config ?? existing.config,
+      scope_type:    scopeType,
+      scope_id:      scopeId,
+      enabled:       body.enabled ?? existing.enabled,
+      priority:      body.priority ?? existing.priority,
+    };
+    pipelineBindingsStore.update(id, input);
     return c.json({ binding: pipelineBindingsStore.get(id) });
   });
 

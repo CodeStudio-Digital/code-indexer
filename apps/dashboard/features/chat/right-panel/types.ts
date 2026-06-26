@@ -15,8 +15,7 @@ export type BuiltinRightPanelId =
   | 'metrics'     // Token / cost / turn metrics (was SessionMetricsModal)
   | 'tool-stats'  // Aggregated coder_tool_calls breakdown (was ToolStatsModal)
   | 'plans'       // submit_plan history (was the Details "Planos" tab)
-  | 'tasks'       // todo_write history (was the Details "Tarefas" tab)
-  | 'details'     // Session summary + inputs (was SessionDetailsModal; plans/tasks split out)
+  | 'details'     // Session summary + inputs (was SessionDetailsModal; plans split out)
   | 'diagram'     // Live embedded draw.io editor (wide panel) for the diagram agent
   | 'notifications' // Session notification center: loop/run/quality notices + history
   | 'worker-log'; // Endpoint/hook/tool inspector (was WorkerLogPanel inline 440px)

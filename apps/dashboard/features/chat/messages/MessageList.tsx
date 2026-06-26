@@ -6,7 +6,7 @@ import { Alert, AlertDescription } from '../../../components/ui/alert.js';
 import { cn } from '../../../lib/utils.js';
 import { INITIAL_PAGE_SIZE, LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
-import { collectLatestPersistedGateSignatures, groupMessages, visibleLiveBlocks } from '../utils.js';
+import { collectLatestPersistedInteractivePromptSignatures, groupMessages, visibleLiveBlocks } from '../utils.js';
 import { AssistantBubble } from './AssistantBubble.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
@@ -389,7 +389,7 @@ const LiveTurn = React.memo(function LiveTurn({
   handlers,
   hidden,
   persistedToolUseIds,
-  persistedGateSignatures,
+  persistedInteractivePromptSignatures,
 }: {
   currentTurn: AssistantTurn | null;
   streaming: boolean;
@@ -398,12 +398,12 @@ const LiveTurn = React.memo(function LiveTurn({
   handlers: PromptHandlers;
   hidden: boolean;
   persistedToolUseIds: Set<string>;
-  persistedGateSignatures: Set<string>;
+  persistedInteractivePromptSignatures: Set<string>;
 }) {
   // Drop live blocks already rendered by the persisted history (gate cards on a
   // paused turn, or a tool call the refetch landed before currentTurn cleared).
   const allBlocks = currentTurn?.blocks ?? [];
-  const visible = visibleLiveBlocks(allBlocks, persistedToolUseIds, persistedGateSignatures);
+  const visible = visibleLiveBlocks(allBlocks, persistedToolUseIds, persistedInteractivePromptSignatures);
   const hasBlocks = visible.length > 0 && !hidden;
   if (hasBlocks) {
     return (
@@ -535,8 +535,8 @@ export function MessageList({
   }, [sessionData, currentTurn, streaming]);
 
   const providerId = sessionData?.session.provider ?? fallbackProviderId;
-  const persistedGateSignatures = useMemo(
-    () => collectLatestPersistedGateSignatures(sessionData?.messages ?? []),
+  const persistedInteractivePromptSignatures = useMemo(
+    () => collectLatestPersistedInteractivePromptSignatures(sessionData?.messages ?? []),
     [sessionData],
   );
 
@@ -564,7 +564,7 @@ export function MessageList({
         handlers={handlers}
         hidden={liveTurnDuplicatedInHistory}
         persistedToolUseIds={persistedToolUseIds}
-        persistedGateSignatures={persistedGateSignatures}
+        persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
       />
 
       {error && (

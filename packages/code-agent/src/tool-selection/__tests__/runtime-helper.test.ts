@@ -21,6 +21,17 @@ const toyEmbed: EmbeddingFn = async (text: string) => {
   return arr;
 };
 
+/**
+ * Constant unit embedding — every text maps to the same vector, so all
+ * candidates tie on taskAffinity. This isolates the policy nudge: only the
+ * toolPolicy delta can change the ranking, making the assertion deterministic.
+ */
+const constEmbed: EmbeddingFn = async () => {
+  const arr = new Float32Array(4);
+  arr[0] = 1; // already unit length
+  return arr;
+};
+
 function makeTool(name: string): CoderTool {
   return {
     name,
@@ -86,6 +97,46 @@ describe('applyToolSelection', () => {
     expect(onResult).toHaveBeenCalled();
     const diag = onResult.mock.calls[0][0];
     expect(diag.estimatedTokensSaved).toBeGreaterThan(0);
+  });
+
+  it('forwards toolPolicy.preferred to the pipeline (lifts a preferred tool)', async () => {
+    const pipeline = createToolSelectionPipeline({
+      getAllTools: () => ALL_TOOLS,
+      embed: constEmbed,
+      toolEmbeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9, // 8 essentials + exactly 1 slot for a non-essential
+    });
+    const out = await applyToolSelection({
+      allTools: ALL_TOOLS,
+      taskText: 'meaningful task text here',
+      pipeline,
+      toolPolicy: { preferred: ['Jira'] },
+    });
+    const names = new Set(out.map((t) => t.name));
+    // With all affinities tied, the +preferred nudge wins the single slot.
+    expect(names.has('Jira')).toBe(true);
+  });
+
+  it('omitting toolPolicy vs passing an empty one yields identical selection', async () => {
+    const mk = () =>
+      createToolSelectionPipeline({
+        getAllTools: () => ALL_TOOLS,
+        embed: toyEmbed,
+        toolEmbeddingStore: new InMemoryToolEmbeddingStore(),
+        k: 12,
+      });
+    const base = await applyToolSelection({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend React bug fix in login flow',
+      pipeline: mk(),
+    });
+    const emptyPolicy = await applyToolSelection({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend React bug fix in login flow',
+      pipeline: mk(),
+      toolPolicy: {},
+    });
+    expect(emptyPolicy.map((t) => t.name)).toEqual(base.map((t) => t.name));
   });
 
   it('falls back to allTools when pipeline throws', async () => {

@@ -20,7 +20,6 @@ import {
   GitCompare,
   HardDrive,
   Info,
-  ListChecks,
   ScrollText,
   Settings,
   Workflow,
@@ -87,7 +86,6 @@ export const ChatRightRail = memo(function ChatRightRail({
     () => [
       { id: 'meta', icon: Compass, labelKey: 'rightRail.meta', kind: 'panel' },
       { id: 'plans', icon: ClipboardList, labelKey: 'rightRail.plans', kind: 'panel' },
-      { id: 'tasks', icon: ListChecks, labelKey: 'rightRail.tasks', kind: 'panel' },
       { id: 'drive', icon: HardDrive, labelKey: 'rightRail.drive', kind: 'panel' },
       { id: 'diagram', icon: Workflow, labelKey: 'rightRail.diagram', kind: 'panel' },
     ],

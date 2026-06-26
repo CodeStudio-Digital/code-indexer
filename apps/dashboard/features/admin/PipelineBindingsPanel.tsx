@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Pencil, Layers, Eraser } from 'lucide-react';
+import { Loader2, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Pencil, Layers, Eraser, Settings2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
@@ -129,6 +129,69 @@ function draftFromBinding(b: PipelineBinding): EditingState['draft'] {
   };
 }
 
+const PIPELINE_LABELS: Record<string, string> = {
+  indexer_search: 'Busca de código',
+  tool_selection: 'Seleção de ferramentas',
+  context_relevance: 'Relevância de contexto',
+  todo_priority: 'Prioridade de checklist',
+  sub_agent_cache: 'Cache de subagentes',
+  role_pipeline: 'Recomendação de papéis',
+  kanban_priority: 'Agrupamento Kanban',
+  quality_off_topic: 'Qualidade: escopo da tarefa',
+  quality_completeness: 'Qualidade: completude',
+  quality_code: 'Qualidade: código',
+  quality_policy: 'Qualidade: política',
+  quality_tool_misuse: 'Qualidade: uso de ferramentas',
+  snapshot_review: 'Revisão de snapshot',
+  doc_ingest: 'Ingestão de documentação',
+  doc_search: 'Busca em documentação',
+  docs_research: 'Pesquisa em documentação',
+  memory_extraction: 'Extração de memória',
+  memory_recall: 'Filtro de memórias',
+  goal_verification: 'Verificação de conclusão',
+  'code-agent': 'Chat e multimodal',
+  editor: 'Editor',
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  embedder: 'Embeddings',
+  reranker: 'Reranking',
+  hyde: 'Expansão HyDE',
+  classifier: 'Classificador',
+  scorer_llm: 'LLM principal',
+  reviewer: 'Revisor',
+  link_extractor: 'Extrator de links',
+  distiller: 'Destilador',
+  vision: 'Visão',
+  transcription: 'Transcrição',
+  preflight: 'Pré-análise',
+  fallback: 'Fallback',
+  planner: 'Planejamento',
+  summarizer: 'Resumo',
+  rewriter: 'Reescrita de consulta',
+};
+
+function pipelineLabel(entry: PipelineCatalogEntry): string {
+  return PIPELINE_LABELS[entry.pipelineName] ?? entry.pipelineName.replace(/[-_]/g, ' ');
+}
+
+function roleLabel(entry: PipelineCatalogEntry): string {
+  return ROLE_LABELS[entry.bindingRole] ?? entry.bindingRole.replace(/[-_]/g, ' ');
+}
+
+function bindingSummary(row: PipelineBinding): string {
+  const provider = row.provider_name ?? row.provider_id;
+  const kind = row.provider_kind ? `${row.provider_kind}/` : '';
+  const mode = row.model_mode ? ` · ${row.model_mode}` : '';
+  return `${kind}${provider} · ${row.model_id}${mode}`;
+}
+
+function configSummary(config: Record<string, unknown>): string {
+  return Object.entries(config)
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join(' · ');
+}
+
 export function PipelineBindingsPanel() {
   const { t } = useTranslation(['admin', 'common']);
   const notify = useNotify();
@@ -215,6 +278,21 @@ export function PipelineBindingsPanel() {
       saving: false,
       error: null,
     });
+    void fetchProviderModels(binding.provider_id)
+      .then((models) => {
+        setEditing((s) =>
+          s?.binding?.id === binding.id
+            ? { ...s, modelsByProvider: { ...s.modelsByProvider, [binding.provider_id]: models } }
+            : s,
+        );
+      })
+      .catch((e) => {
+        setEditing((s) =>
+          s?.binding?.id === binding.id
+            ? { ...s, error: t('admin:pipelines.loadModelsFailed', { message: (e as Error).message }) }
+            : s,
+        );
+      });
   };
 
   const onProviderSelected = async (providerId: string) => {
@@ -272,7 +350,11 @@ export function PipelineBindingsPanel() {
     };
 
     try {
-      await upsertBinding(input);
+      if (editing.binding) {
+        await patchBinding(editing.binding.id, input);
+      } else {
+        await upsertBinding(input);
+      }
       setEditing(null);
       await load();
     } catch (e) {
@@ -492,95 +574,103 @@ export function PipelineBindingsPanel() {
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="grid gap-3 xl:grid-cols-2">
         {grouped.map(([key, group]) => {
           const enabledCount = group.rows.filter((r) => r.enabled).length;
+          const statusVariant = group.catalog.comingSoon ? 'warning' : enabledCount > 0 ? 'success' : 'muted';
+          const statusLabel = group.catalog.comingSoon
+            ? t('admin:pipelines.status.preconfigurable')
+            : enabledCount > 0
+              ? t('admin:pipelines.status.configured')
+              : t('admin:pipelines.status.notConfigured');
           return (
-            <Card key={key} className="border">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex flex-col gap-1">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <span className="font-mono text-sm">{group.catalog.pipelineName}</span>
-                      <span className="text-muted-foreground text-xs">/</span>
-                      <span className="font-mono text-sm">{group.catalog.bindingRole}</span>
-                      {group.catalog.comingSoon && (
-                        <Badge variant="outline" className="text-xs">
-                          {t('admin:pipelines.comingSoonPhase', { phase: group.catalog.introducedInPhase })}
-                        </Badge>
-                      )}
-                      {!group.catalog.comingSoon && (
-                        <Badge variant="outline" className="text-xs">
-                          {t('admin:pipelines.phase', { phase: group.catalog.introducedInPhase })}
-                        </Badge>
-                      )}
+            <Card key={key} className="border bg-card/70">
+              <CardHeader className="space-y-3 pb-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1.5">
+                    <CardTitle className="text-base leading-tight flex flex-wrap items-center gap-2">
+                      <span>{pipelineLabel(group.catalog)}</span>
+                      <Badge variant="secondary" className="normal-case tracking-normal">
+                        {roleLabel(group.catalog)}
+                      </Badge>
+                      <Badge variant={statusVariant} className="normal-case tracking-normal">
+                        {statusLabel}
+                      </Badge>
                     </CardTitle>
-                    <div className="text-xs text-muted-foreground">
-                      {group.catalog.description}
-                      {group.catalog.recommendedDefault && (
-                        <div className="mt-0.5">
-                          {t('admin:pipelines.suggested')}{' '}
-                          <span className="font-mono">
-                            {group.catalog.recommendedDefault.providerKind} / {group.catalog.recommendedDefault.modelHint}
-                          </span>
-                        </div>
-                      )}
+                    <div className="text-[11px] text-muted-foreground font-mono truncate">
+                      {group.catalog.pipelineName} / {group.catalog.bindingRole}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={enabledCount > 0 ? 'default' : 'outline'} className="text-xs">
-                      {t('admin:pipelines.enabledCount', { enabled: enabledCount, total: group.rows.length })}
-                    </Badge>
-                    <Button size="sm" variant="outline" onClick={() => openNew(group.catalog)}>
-                      <Plus className="h-3 w-3 mr-1" /> {t('admin:pipelines.addBinding')}
-                    </Button>
-                  </div>
+                  <Button size="sm" variant={group.rows.length === 0 ? 'default' : 'outline'} onClick={() => openNew(group.catalog)}>
+                    <Plus className="h-3 w-3 mr-1" /> {group.rows.length === 0 ? t('admin:pipelines.configure') : t('admin:pipelines.addBinding')}
+                  </Button>
                 </div>
+                <p className="text-xs text-muted-foreground line-clamp-2">
+                  {group.catalog.description}
+                </p>
+                {group.catalog.recommendedDefault && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span>{t('admin:pipelines.suggested')}</span>
+                    <Badge variant="outline" className="normal-case tracking-normal font-mono">
+                      {group.catalog.recommendedDefault.providerKind} / {group.catalog.recommendedDefault.modelHint}
+                    </Badge>
+                  </div>
+                )}
               </CardHeader>
               <CardContent className="pt-0">
                 {group.rows.length === 0 ? (
-                  <div className="text-xs text-muted-foreground italic px-2 py-3">{t('admin:pipelines.noBinding')}</div>
+                  <div className="rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground">
+                    {t('admin:pipelines.noBinding')}
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {group.rows.map((row) => {
                       const test = testResults[row.id];
+                      const configText = configSummary(row.config ?? {});
                       return (
-                        <div key={row.id} className="flex items-center gap-3 p-2 rounded border bg-muted/30 text-sm">
-                          <div className="flex-1 min-w-0">
-                            <div className="font-mono text-xs truncate">
-                              {row.scope_type}{row.scope_id != null && row.scope_type !== 'global' ? `(#${row.scope_id})` : ''}
-                              {' → '}
-                              <span className="font-semibold">{row.provider_kind ?? '?'}/{row.provider_name ?? row.provider_id}</span>
-                              {' · '}
-                              <span>{row.model_id}{row.model_mode ? `[${row.model_mode}]` : ''}</span>
+                        <div key={row.id} className="rounded-lg border bg-background/60 p-3 text-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={row.enabled ? 'success' : 'muted'} className="normal-case tracking-normal">
+                                  {row.enabled ? t('admin:pipelines.enabled') : t('admin:pipelines.disabled')}
+                                </Badge>
+                                <Badge variant="outline" className="normal-case tracking-normal">
+                                  {row.scope_type}{row.scope_id != null && row.scope_type !== 'global' ? ` #${row.scope_id}` : ''}
+                                </Badge>
+                                <Badge variant="outline" className="normal-case tracking-normal">
+                                  {t('admin:pipelines.priorityShort', { priority: row.priority })}
+                                </Badge>
+                              </div>
+                              <div className="font-medium truncate">{bindingSummary(row)}</div>
+                              {configText && (
+                                <div className="text-[11px] text-muted-foreground font-mono truncate">
+                                  <Settings2 className="inline h-3 w-3 mr-1 align-[-2px]" />
+                                  {configText}
+                                </div>
+                              )}
+                              {test && (
+                                <div className={`text-xs ${test.ok ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  {test.ok ? (
+                                    <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> {test.model?.name ?? 'OK'}</span>
+                                  ) : (
+                                    <span className="flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> {test.reason}</span>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                            {Object.keys(row.config ?? {}).length > 0 && (
-                              <div className="text-xs text-muted-foreground mt-0.5 font-mono truncate">
-                                {Object.entries(row.config).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' · ')}
-                              </div>
-                            )}
-                            {test && (
-                              <div className={`text-xs mt-1 ${test.ok ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                {test.ok ? (
-                                  <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> {test.model?.name ?? 'OK'}</span>
-                                ) : (
-                                  <span className="flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> {test.reason}</span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Switch checked={row.enabled} onCheckedChange={() => onToggleEnabled(row)} disabled={busy === row.id} />
-                            <Badge variant="outline" className="text-xs">{t('admin:pipelines.priorityShort', { priority: row.priority })}</Badge>
-                            <Button size="sm" variant="ghost" onClick={() => openEdit(group.catalog, row)} disabled={busy === row.id}>
-                              <Pencil className="h-3 w-3" />
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => onTest(row)} disabled={busy === row.id}>
-                              <PlayCircle className="h-3 w-3" />
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => onDelete(row)} disabled={busy === row.id}>
-                              <Trash2 className="h-3 w-3 text-red-500" />
-                            </Button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <Switch checked={row.enabled} onCheckedChange={() => onToggleEnabled(row)} disabled={busy === row.id} />
+                              <Button size="sm" variant="ghost" onClick={() => openEdit(group.catalog, row)} disabled={busy === row.id} title={t('admin:pipelines.dialog.editTitle')}>
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => onTest(row)} disabled={busy === row.id} title={t('admin:pipelines.test')}>
+                                <PlayCircle className="h-3 w-3" />
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => onDelete(row)} disabled={busy === row.id} title={t('common:actions.delete')}>
+                                <Trash2 className="h-3 w-3 text-red-500" />
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       );
@@ -598,7 +688,7 @@ export function PipelineBindingsPanel() {
           <DialogContent className="max-w-xl">
             <DialogHeader>
               <DialogTitle>
-                {editing.binding ? t('admin:pipelines.dialog.editTitle') : t('admin:pipelines.dialog.newTitle')} — {editing.catalog.pipelineName}/{editing.catalog.bindingRole}
+                {editing.binding ? t('admin:pipelines.dialog.editTitle') : t('admin:pipelines.dialog.newTitle')} — {pipelineLabel(editing.catalog)} · {roleLabel(editing.catalog)}
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-3 py-2 text-sm">

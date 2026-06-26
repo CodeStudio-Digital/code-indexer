@@ -24,8 +24,25 @@ export interface ToolSelectionQuery extends PipelineQuery {
    * tools verbatim — these are the essentials (Read/Edit/Bash/TodoWrite/etc.).
    */
   tier?: 'bootstrap' | 'navigate' | 'full';
+  /**
+   * Optional tool policy from the Agent Decision Engine (intent/phase aware).
+   * `preferred` tools get a score bump; `discouraged` ones get a penalty.
+   * Structurally compatible with `ToolPolicy` in agents/decision-types.ts so
+   * the engine's output can be passed straight through. When omitted, tool
+   * selection behaves EXACTLY as before (the PolicyAffinityScorer disables
+   * itself) — this keeps the field a pure, backward-compatible add-on.
+   */
+  toolPolicy?: ToolSelectionPolicy;
   /** Top-K cap (default 12). */
   k?: number;
+}
+
+/** Optional preferred/discouraged tool hints for {@link ToolSelectionQuery}. */
+export interface ToolSelectionPolicy {
+  /** Tool names to bump (the engine's `toolPolicy.preferred`). */
+  preferred?: readonly string[];
+  /** Tool names to penalize (the engine's `toolPolicy.discouraged`). */
+  discouraged?: readonly string[];
 }
 
 export interface ToolCandidate extends PipelineCandidate {

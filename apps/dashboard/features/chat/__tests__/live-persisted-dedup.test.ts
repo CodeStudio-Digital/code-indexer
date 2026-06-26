@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
-  collectLatestPersistedGateSignatures,
+  collectLatestPersistedInteractivePromptSignatures,
   collectPersistedToolUseIds,
   isLiveTurnDuplicatedInHistory,
   liveBlockPersistedId,
@@ -23,9 +23,44 @@ import {
 import type { DecisionPrompt, DecisionQuestion } from '../../../hooks/agent-stream/types.js';
 import type { PersistedMessage } from '../types.js';
 
+const approvalTasks = [
+  {
+    id: 'tsk_1',
+    title: 'Map interactive prompts',
+    description: 'Find prompts that pause for user input',
+    files: ['apps/dashboard/features/chat/utils.ts'],
+    references: [],
+    depends_on: [],
+    suggested_mode: 'inline',
+    estimated_complexity: 'small',
+  },
+];
 const tasksBlock = (id: string): StreamBlock =>
   ({ type: 'tasks', tasks: { tool_use_id: id, summary: '', tasks: [], version: 1 } }) as StreamBlock;
+const approvalTasksBlock = (id: string): StreamBlock =>
+  ({
+    type: 'tasks',
+    tasks: { tool_use_id: id, summary: 'Approve these tasks', tasks: approvalTasks, version: 1 },
+  }) as unknown as StreamBlock;
 const planBlock = (id: string): StreamBlock => ({ type: 'plan', plan: { id, plan: 'do x' } }) as StreamBlock;
+const roadmapPlanBlock = (id: string): StreamBlock =>
+  ({ type: 'plan', plan: { id, plan: '1. Map prompts\n2. Fix dedup', kind: 'mutating' } }) as StreamBlock;
+const questionBlock = (id: string): StreamBlock =>
+  ({
+    type: 'question',
+    question: {
+      id,
+      header: 'Scope',
+      question: 'Which scope should I use?',
+      options: [{ label: 'Focused', value: 'focused' }, { label: 'Broad', value: 'broad' }],
+      allowFreeform: true,
+    },
+  }) as StreamBlock;
+const specBlock = (id: string): StreamBlock =>
+  ({
+    type: 'spec',
+    spec: { id, name: 'Chat dedup', body: '# Spec\nFix prompt dedup.', spec_path: '.mcp/specs/chat-dedup.md' },
+  }) as StreamBlock;
 const decisionBlock = (id: string): StreamBlock =>
   ({ type: 'decision', decision: { id, questions: [] } }) as StreamBlock;
 const roadmapDecisionBlock = (id: string): StreamBlock =>
@@ -67,6 +102,19 @@ const assistantTextAndTool = (text: string, id: string): PersistedMessage => ({
   role: 'assistant',
   content: [{ type: 'text', text }, { type: 'tool_use', id, name: 'submit_tasks', input: {} }],
 });
+const assistantTextAndInteractiveTool = (text: string, id: string, name: string, input: Record<string, unknown>): PersistedMessage => ({
+  role: 'assistant',
+  content: [{ type: 'text', text }, { type: 'tool_use', id, name, input }],
+});
+const planInput = { plan: '1. Map prompts\n2. Fix dedup', kind: 'mutating' };
+const questionInput = {
+  header: 'Scope',
+  question: 'Which scope should I use?',
+  options: [{ label: 'Focused', value: 'focused' }, { label: 'Broad', value: 'broad' }],
+  allow_freeform: true,
+};
+const specInput = { name: 'Chat dedup', body: '# Spec\nFix prompt dedup.' };
+const tasksInput = { summary: 'Approve these tasks', tasks: approvalTasks };
 const assistantTextAndDecisionGate = (text: string, id: string): PersistedMessage => ({
   role: 'assistant',
   content: [
@@ -150,9 +198,24 @@ describe('visibleLiveBlocks', () => {
         'toolu_123',
       ),
     ];
-    const signatures = collectLatestPersistedGateSignatures(persisted);
+    const signatures = collectLatestPersistedInteractivePromptSignatures(persisted);
 
     expect(visibleLiveBlocks([roadmapDecisionBlock('dg_live_456')], new Set(), signatures)).toEqual([]);
+  });
+
+  it('drops all interactive prompts when the latest persisted turn has the same prompt but a different tool_use id', () => {
+    const cases: Array<[StreamBlock, PersistedMessage]> = [
+      [roadmapPlanBlock('plan_live'), assistantTextAndInteractiveTool('Please review', 'toolu_plan', 'submit_plan', planInput)],
+      [questionBlock('q_live'), assistantTextAndInteractiveTool('Need input', 'toolu_ask', 'ask_user', questionInput)],
+      [specBlock('spec_live'), assistantTextAndInteractiveTool('Review spec', 'toolu_spec', 'submit_spec', specInput)],
+      [approvalTasksBlock('tasks_live'), assistantTextAndInteractiveTool('Review tasks', 'toolu_tasks', 'submit_tasks', tasksInput)],
+      [approvalTasksBlock('task_list_live'), assistantTextAndInteractiveTool('Review tasks', 'toolu_task_list', 'task_list', { gate: 'approve', ...tasksInput })],
+    ];
+
+    for (const [live, persisted] of cases) {
+      const signatures = collectLatestPersistedInteractivePromptSignatures([persisted]);
+      expect(visibleLiveBlocks([live], new Set(), signatures)).toEqual([]);
+    }
   });
 
   it('returns the input unchanged when nothing is persisted yet (fast path)', () => {
@@ -196,13 +259,19 @@ describe('isLiveTurnDuplicatedInHistory', () => {
     ).toBe(false);
   });
 
-  it('detects a live decision_gate already persisted as text + matching prompt even when ids differ', () => {
-    expect(
-      isLiveTurnDuplicatedInHistory(
-        { blocks: [roadmapDecisionBlock('dg_live_456')] },
-        [assistantTextAndDecisionGate('Vou pedir uma escolha estratégica única para calibrar o roadmap antes do plano final.', 'toolu_123')],
-      ),
-    ).toBe(true);
+  it('detects live interactive prompts already persisted as matching prompts even when ids differ', () => {
+    const cases: Array<[StreamBlock, PersistedMessage]> = [
+      [roadmapDecisionBlock('dg_live_456'), assistantTextAndDecisionGate('Vou pedir uma escolha estratégica única para calibrar o roadmap antes do plano final.', 'toolu_123')],
+      [roadmapPlanBlock('plan_live'), assistantTextAndInteractiveTool('Please review', 'toolu_plan', 'submit_plan', planInput)],
+      [questionBlock('q_live'), assistantTextAndInteractiveTool('Need input', 'toolu_ask', 'ask_user', questionInput)],
+      [specBlock('spec_live'), assistantTextAndInteractiveTool('Review spec', 'toolu_spec', 'submit_spec', specInput)],
+      [approvalTasksBlock('tasks_live'), assistantTextAndInteractiveTool('Review tasks', 'toolu_tasks', 'submit_tasks', tasksInput)],
+      [approvalTasksBlock('task_list_live'), assistantTextAndInteractiveTool('Review tasks', 'toolu_task_list', 'task_list', { gate: 'approve', ...tasksInput })],
+    ];
+
+    for (const [live, persisted] of cases) {
+      expect(isLiveTurnDuplicatedInHistory({ blocks: [live] }, [persisted])).toBe(true);
+    }
   });
 
   it('keeps live-only visualizations visible because they have no persisted identity', () => {

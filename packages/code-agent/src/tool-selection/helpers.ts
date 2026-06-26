@@ -44,6 +44,22 @@ export function categorizeTool(name: string): string {
 }
 
 /**
+ * Canonical form of a tool name for policy matching: lowercased with every
+ * non-alphanumeric character removed. This lets the Agent Decision Engine's
+ * policy names (snake_case, e.g. `web_fetch`) match candidate names regardless
+ * of the casing/separator convention actually in use (`WebFetch`, `web_fetch`,
+ * `web-fetch` all collapse to `webfetch`).
+ *
+ * It deliberately does NOT strip the `mcp__` prefix: the engine always emits
+ * the full prefixed name (`mcp__search`), and candidates carry the same prefix,
+ * so prefix-aware matching is exact while avoiding cross-tool collisions (a bare
+ * `search` policy entry must not silently match `mcp__search`).
+ */
+export function canonicalToolName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
  * Build a ToolCandidate from a CoderTool. The text concatenation is what
  * gets embedded — name + description + first-line of each parameter to
  * help disambiguate similar tools (e.g. Read vs. ReadFile vs. NotebookRead).

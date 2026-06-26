@@ -19,7 +19,6 @@ import {
   Gauge,
   HardDrive,
   Info,
-  ListChecks,
   ScrollText,
   Settings,
   Workflow,
@@ -33,7 +32,6 @@ import { SessionMetricsView } from '../SessionMetricsModal.js';
 import { ToolStatsView } from '../ToolStatsModal.js';
 import { SessionDetailsView } from '../SessionDetailsModal.js';
 import { PlansPanel } from './PlansPanel.js';
-import { TasksPanel } from './TasksPanel.js';
 import { DiagramPanel } from './diagram/DiagramPanel.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
 import { NotificationsPanel } from '../notifications/NotificationsPanel.js';
@@ -88,7 +86,7 @@ export function RightPanelHost(props: RightPanelHostProps) {
           namespace={win.pluginNs}
           title={win.title}
           entry={win.entry}
-          projectId={props.projectId}
+          {...(props.projectId == null ? {} : { projectId: props.projectId })}
           chromeless
         />
       </PanelChrome>
@@ -143,12 +141,6 @@ export function RightPanelHost(props: RightPanelHostProps) {
       return (
         <PanelChrome title={t('chat:rightRail.plans', 'Plans')} icon={ClipboardList} onClose={onClose}>
           <PlansPanel sessionId={sessionId} active />
-        </PanelChrome>
-      );
-    case 'tasks':
-      return (
-        <PanelChrome title={t('chat:rightRail.tasks', 'Tasks')} icon={ListChecks} onClose={onClose}>
-          <TasksPanel sessionId={sessionId} active />
         </PanelChrome>
       );
     case 'notifications':

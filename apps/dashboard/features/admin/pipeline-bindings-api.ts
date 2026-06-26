@@ -116,13 +116,18 @@ export async function upsertBinding(input: UpsertBindingInput): Promise<{ id: nu
   return (await r.json()) as { id: number; binding: PipelineBinding | null };
 }
 
-export async function patchBinding(id: number, patch: { enabled?: boolean; priority?: number; config?: Record<string, unknown> }): Promise<{ binding: PipelineBinding | null }> {
+export type PatchBindingInput = Partial<UpsertBindingInput>;
+
+export async function patchBinding(id: number, patch: PatchBindingInput): Promise<{ binding: PipelineBinding | null }> {
   const r = await fetch(`/api/admin/pipeline-bindings/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string; details?: string[]; detail?: string };
+    throw new Error(err.details?.join(', ') ?? err.detail ?? err.error ?? `HTTP ${r.status}`);
+  }
   return (await r.json()) as { binding: PipelineBinding | null };
 }
 

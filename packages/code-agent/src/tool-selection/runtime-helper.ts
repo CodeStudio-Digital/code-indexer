@@ -29,6 +29,12 @@ export interface ApplyToolSelectionOptions {
   recentToolEvents?: ToolSelectionQuery['recentToolEvents'];
   tier?: ToolSelectionQuery['tier'];
   k?: number;
+  /**
+   * Optional intent/phase tool policy from the Agent Decision Engine. Passed
+   * straight through to the pipeline query, where PolicyAffinityScorer nudges
+   * preferred/discouraged tools. Omitted → byte-identical legacy behavior.
+   */
+  toolPolicy?: ToolSelectionQuery['toolPolicy'];
   /** When undefined or null, returns `allTools` unchanged. */
   pipeline?: CandidatePipeline<ToolSelectionQuery, ToolCandidate> | null;
   /** Callback fired with the pipeline diagnostics — surface in telemetry. */
@@ -54,6 +60,7 @@ export async function applyToolSelection(options: ApplyToolSelectionOptions): Pr
       recentToolEvents: options.recentToolEvents,
       tier: options.tier,
       k: options.k,
+      toolPolicy: options.toolPolicy,
     });
     options.onResult?.(result.diag);
     // Sanity: never return EMPTY. If the pipeline somehow strips

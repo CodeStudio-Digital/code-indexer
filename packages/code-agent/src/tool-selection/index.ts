@@ -15,6 +15,7 @@ export {
 export type {
   ToolCandidate,
   ToolSelectionQuery,
+  ToolSelectionPolicy,
 } from './types.js';
 export { DEFAULT_TOP_K } from './types.js';
 
@@ -27,6 +28,7 @@ export {
   FrequencyBoostScorer,
   RecencyScorer,
   WeightedFusionScorer,
+  PolicyAffinityScorer,
   EssentialAwareTopKSelector,
   type EmbeddingFn,
   type ToolEmbeddingStore,

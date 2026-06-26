@@ -23,7 +23,7 @@ import {
   LruCache,
   weightedSum,
 } from '@mcp/candidate-pipeline';
-import { ESSENTIAL_TOOL_NAMES } from './helpers.js';
+import { ESSENTIAL_TOOL_NAMES, canonicalToolName } from './helpers.js';
 import type { EmbeddingFn, ToolEmbeddingStore } from './stages.js';
 import type { JsonSchema } from '../core/tool.js';
 
@@ -78,6 +78,16 @@ export interface ApplyToolSelectionThinOptions {
   k?: number;
   /** Skip selection when task text is shorter than this. Default 8. */
   minTaskLength?: number;
+  /**
+   * Optional intent/phase tool policy from the Agent Decision Engine. When
+   * present, `preferred` tool names get a small score boost and `discouraged`
+   * ones a penalty (mirrors PolicyAffinityScorer in the full pipeline). The
+   * thin path bypasses the framework pipeline, so this re-implements the same
+   * nudge here. Omitted/empty → byte-identical behavior. Names are matched
+   * canonically (case/separator-insensitive) so snake_case engine names like
+   * `web_fetch` match real candidate names like `WebFetch`/`web_fetch`.
+   */
+  toolPolicy?: { preferred?: readonly string[]; discouraged?: readonly string[] };
   /** Telemetry callback — receives the selection diagnostics. */
   onResult?: (diag: {
     consideredCount: number;
@@ -94,6 +104,9 @@ const DEFAULT_MIN_TASK_LENGTH = 8;
 const DEFAULT_K = 12;
 const FREQUENCY_WINDOW_MS = 10 * 60 * 1000;
 const FREQUENCY_SATURATION = 5;
+// Policy nudge magnitudes — kept in sync with PolicyAffinityScorer (stages.ts).
+const POLICY_PREFER_BOOST = 0.5;
+const POLICY_DISCOURAGE_PENALTY = 0.5;
 
 function descriptionText(tool: ThinTool): string {
   const params = tool.parameters as { properties?: Record<string, unknown> } | undefined;
@@ -142,6 +155,11 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
     const now = Date.now();
     const events = options.recentToolCalls ?? [];
 
+    // Optional policy nudge (Agent Decision Engine). Empty/omitted → no effect.
+    const preferredPolicy = new Set((options.toolPolicy?.preferred ?? []).map(canonicalToolName));
+    const discouragedPolicy = new Set((options.toolPolicy?.discouraged ?? []).map(canonicalToolName));
+    const hasPolicy = preferredPolicy.size > 0 || discouragedPolicy.size > 0;
+
     // Compute (or fetch) embeddings for each tool. Cache by descriptionText.
     type Scored = { tool: ThinTool; isEssential: boolean; score: number };
     const scored: Scored[] = [];
@@ -162,7 +180,13 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
         { name: 'taskAffinity',   value: taskAffinity, weight: 1.0 },
         { name: 'frequencyBoost', value: freq,         weight: 0.4 },
       ]);
-      scored.push({ tool, isEssential, score: fused.score });
+      let policyDelta = 0;
+      if (hasPolicy) {
+        const cname = canonicalToolName(tool.name);
+        if (preferredPolicy.has(cname)) policyDelta += POLICY_PREFER_BOOST;
+        if (discouragedPolicy.has(cname)) policyDelta -= POLICY_DISCOURAGE_PENALTY;
+      }
+      scored.push({ tool, isEssential, score: fused.score + policyDelta });
     }
 
     const essentials = scored.filter((s) => s.isEssential);

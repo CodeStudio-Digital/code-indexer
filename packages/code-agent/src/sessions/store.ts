@@ -200,7 +200,6 @@ export class SessionStore {
   resolvePlan(toolUseId: string, status: CoderPlanStatus, feedback?: string): void { plans.resolve(this.db, toolUseId, status, feedback); }
   listPlans(sessionId: number): CoderPlanRow[] { return plans.list(this.db, sessionId); }
   getPlan(id: number): CoderPlanRow | null { return plans.get(this.db, id); }
-  listTodoHistory(sessionId: number): { id: number; args_json: string; created_at: string }[] { return plans.listTodoHistory(this.db, sessionId); }
 
   // ─── Session inputs / hidden-prompt log (migration 061) ────────
   recordSessionInput(input: inputs.RecordSessionInput): SessionInputRow | null { return inputs.record(this.db, input); }

@@ -147,66 +147,188 @@ function boolish(value: unknown): boolean {
   return value === true;
 }
 
+function cleanStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
+}
+
+function promptSignature(kind: string, payload: unknown): string {
+  return `${kind}:${JSON.stringify(payload)}`;
+}
+
+function normalizedOptions(value: unknown): Array<{ label: string; value: string; summary?: string; tradeoffs?: string }> {
+  const rawOptions = Array.isArray(value) ? value : [];
+  return rawOptions.map((oValue) => {
+    const o = asDict(oValue);
+    const summary = cleanText(o.summary);
+    const tradeoffs = cleanText(o.tradeoffs);
+    return {
+      label: cleanText(o.label),
+      value: cleanText(o.value),
+      ...(summary ? { summary } : {}),
+      ...(tradeoffs ? { tradeoffs } : {}),
+    };
+  });
+}
+
+function submitPlanSignature(input: unknown): string | undefined {
+  const raw = asDict(input);
+  const plan = cleanText(raw.plan);
+  if (!plan) return undefined;
+  return promptSignature('submit_plan', { plan, kind: cleanText(raw.kind) || 'mutating' });
+}
+
+function askUserSignature(input: unknown): string | undefined {
+  const raw = asDict(input);
+  const question = cleanText(raw.question);
+  if (!question) return undefined;
+  return promptSignature('ask_user', {
+    header: cleanText(raw.header),
+    question,
+    options: normalizedOptions(raw.options),
+    allowFreeform: boolish(raw.allowFreeform) || boolish(raw.allow_freeform),
+  });
+}
+
 function decisionGateSignature(input: unknown): string | undefined {
   const raw = asDict(input);
   const rawQuestions = Array.isArray(raw.questions) ? raw.questions : [];
   if (rawQuestions.length === 0) return undefined;
   const questions = rawQuestions.map((qValue, qi) => {
     const q = asDict(qValue);
-    const rawOptions = Array.isArray(q.options) ? q.options : [];
     return {
       id: cleanText(q.id) || `q_${qi}`,
       header: cleanText(q.header),
       question: cleanText(q.question),
       multiSelect: boolish(q.multiSelect) || boolish(q.multi_select),
-      options: rawOptions.map((oValue) => {
-        const o = asDict(oValue);
-        return {
-          label: cleanText(o.label),
-          value: cleanText(o.value),
-          summary: cleanText(o.summary),
-          tradeoffs: cleanText(o.tradeoffs),
-        };
-      }),
+      options: normalizedOptions(q.options),
     };
   });
-  return `decision_gate:${JSON.stringify({
+  return promptSignature('decision_gate', {
     header: cleanText(raw.header),
     allowFreeform: boolish(raw.allowFreeform) || boolish(raw.allow_freeform),
     questions,
-  })}`;
+  });
+}
+
+function submitSpecSignature(input: unknown): string | undefined {
+  const raw = asDict(input);
+  const name = cleanText(raw.name);
+  const body = cleanText(raw.body);
+  if (!name || !body) return undefined;
+  return promptSignature('submit_spec', { name, body, parentId: cleanText(raw.parent_id) || cleanText(raw.parentId) });
+}
+
+function normalizedTaskItems(input: unknown): unknown[] {
+  const raw = asDict(input);
+  if (Array.isArray(raw.items)) return raw.items;
+  if (Array.isArray(raw.tasks)) return raw.tasks;
+  return [];
+}
+
+function normalizedTaskItem(value: unknown, index: number) {
+  const task = asDict(value);
+  const references = Array.isArray(task.references)
+    ? task.references.map((refValue) => {
+        const ref = asDict(refValue);
+        return {
+          type: cleanText(ref.type),
+          value: cleanText(ref.value),
+          file: cleanText(ref.file),
+          lines: cleanText(ref.lines),
+          note: cleanText(ref.note),
+        };
+      })
+    : [];
+  return {
+    id: cleanText(task.id) || `alias_${index + 1}`,
+    title: cleanText(task.title),
+    description: cleanText(task.description),
+    files: cleanStringArray(task.files),
+    references,
+    depends_on: cleanStringArray(task.depends_on),
+    suggested_mode: cleanText(task.suggested_mode) || 'inline',
+    estimated_complexity: cleanText(task.estimated_complexity),
+  };
+}
+
+function tasksPromptSignature(input: unknown): string | undefined {
+  const tasks = normalizedTaskItems(input).map(normalizedTaskItem);
+  if (tasks.length === 0) return undefined;
+  return promptSignature('task_list_approve', { summary: cleanText(asDict(input).summary), tasks });
+}
+
+function taskListInputIsApprove(input: unknown): boolean {
+  const raw = asDict(input);
+  if (cleanText(raw.gate) === 'approve') return true;
+  return normalizedTaskItems(input).some((item) => {
+    const task = asDict(item);
+    return !!cleanText(task.title) || Array.isArray(task.files);
+  });
+}
+
+function persistedInteractivePromptSignature(name: string | undefined, input: unknown): string | undefined {
+  switch (name) {
+    case 'submit_plan':
+      return submitPlanSignature(input);
+    case 'ask_user':
+      return askUserSignature(input);
+    case 'decision_gate':
+      return decisionGateSignature(input);
+    case 'submit_spec':
+      return submitSpecSignature(input);
+    case 'submit_tasks':
+      return tasksPromptSignature(input);
+    case 'task_list':
+      return taskListInputIsApprove(input) ? tasksPromptSignature(input) : undefined;
+    default:
+      return undefined;
+  }
 }
 
 function liveBlockPersistedSignature(block: StreamBlock): string | undefined {
-  if (block.type !== 'decision') return undefined;
-  return decisionGateSignature(block.decision);
+  switch (block.type) {
+    case 'tasks':
+      return tasksPromptSignature({ summary: block.tasks.summary, tasks: block.tasks.tasks });
+    case 'plan':
+      return submitPlanSignature(block.plan);
+    case 'spec':
+      return submitSpecSignature(block.spec);
+    case 'question':
+      return askUserSignature(block.question);
+    case 'decision':
+      return decisionGateSignature(block.decision);
+    default:
+      return undefined;
+  }
 }
 
-/** Signatures of gate prompts in the latest persisted assistant turn. */
-export function collectLatestPersistedGateSignatures(messages: PersistedMessage[]): Set<string> {
+/** Signatures of interactive prompts in the latest persisted assistant turn. */
+export function collectLatestPersistedInteractivePromptSignatures(messages: PersistedMessage[]): Set<string> {
   const signatures = new Set<string>();
   const latestAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
   if (!latestAssistant) return signatures;
   for (const b of latestAssistant.content) {
-    if (b.type !== 'tool_use' || b.name !== 'decision_gate') continue;
-    const signature = decisionGateSignature(b.input);
+    if (b.type !== 'tool_use') continue;
+    const signature = persistedInteractivePromptSignature(b.name, b.input);
     if (signature) signatures.add(signature);
   }
   return signatures;
 }
 
+export const collectLatestPersistedGateSignatures = collectLatestPersistedInteractivePromptSignatures;
+
 /** Live blocks NOT yet represented in persisted history (dedup by id or prompt signature). */
 export function visibleLiveBlocks(
   blocks: StreamBlock[],
   persistedIds: Set<string>,
-  persistedGateSignatures: Set<string> = new Set(),
+  persistedInteractivePromptSignatures: Set<string> = new Set(),
 ): StreamBlock[] {
-  if (persistedIds.size === 0 && persistedGateSignatures.size === 0) return blocks;
+  if (persistedIds.size === 0 && persistedInteractivePromptSignatures.size === 0) return blocks;
   return blocks.filter((b) => {
     const id = liveBlockPersistedId(b);
     if (id && persistedIds.has(id)) return false;
     const signature = liveBlockPersistedSignature(b);
-    return !(signature && persistedGateSignatures.has(signature));
+    return !(signature && persistedInteractivePromptSignatures.has(signature));
   });
 }
 
@@ -223,7 +345,7 @@ export function isLiveTurnDuplicatedInHistory(
   const persistedText = getPersistedAssistantText(lastAssistant).trim();
   const liveThinking = getCurrentTurnThinkingText(turn).trim();
   const persistedThinking = getPersistedAssistantThinkingText(lastAssistant).trim();
-  const persistedGateSignatures = collectLatestPersistedGateSignatures(messages);
+  const persistedInteractivePromptSignatures = collectLatestPersistedInteractivePromptSignatures(messages);
   let checkedText = false;
   let checkedThinking = false;
 
@@ -247,7 +369,7 @@ export function isLiveTurnDuplicatedInHistory(
     if (id) {
       if (persistedIds.has(id)) continue;
       const signature = liveBlockPersistedSignature(block);
-      if (signature && persistedGateSignatures.has(signature)) continue;
+      if (signature && persistedInteractivePromptSignatures.has(signature)) continue;
       return false;
     }
 

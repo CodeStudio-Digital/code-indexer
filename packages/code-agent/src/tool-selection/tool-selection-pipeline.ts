@@ -14,6 +14,7 @@ import { CandidatePipeline, type TelemetrySink } from '@mcp/candidate-pipeline';
 import {
   EssentialAwareTopKSelector,
   FrequencyBoostScorer,
+  PolicyAffinityScorer,
   RecencyScorer,
   TaskEmbeddingHydrator,
   TierFilter,
@@ -57,6 +58,9 @@ export function createToolSelectionPipeline(
         new FrequencyBoostScorer(),
         new RecencyScorer(),
         new WeightedFusionScorer(),
+        // After fusion: nudge the final score with the Decision Engine's
+        // intent/phase tool policy. No-op when no policy is passed.
+        new PolicyAffinityScorer(),
       ],
       selector: new EssentialAwareTopKSelector(options.k ?? DEFAULT_TOP_K),
     },

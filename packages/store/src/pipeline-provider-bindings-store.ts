@@ -204,6 +204,39 @@ export class PipelineProviderBindingsStore {
     return Number(result.lastInsertRowid);
   }
 
+  update(id: number, input: PipelineProviderBindingInput): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE pipeline_provider_bindings
+            SET pipeline_name = @pipeline_name,
+                binding_role  = @binding_role,
+                provider_id   = @provider_id,
+                model_id      = @model_id,
+                model_mode    = @model_mode,
+                config_json   = @config_json,
+                scope_type    = @scope_type,
+                scope_id      = @scope_id,
+                enabled       = @enabled,
+                priority      = @priority,
+                updated_at    = datetime('now')
+          WHERE id = @id`,
+      )
+      .run({
+        id,
+        pipeline_name: input.pipeline_name,
+        binding_role: input.binding_role,
+        provider_id: input.provider_id,
+        model_id: input.model_id,
+        model_mode: input.model_mode ?? '',
+        config_json: JSON.stringify(input.config ?? {}),
+        scope_type: input.scope_type,
+        scope_id: input.scope_id ?? null,
+        enabled: input.enabled === false ? 0 : 1,
+        priority: input.priority ?? 0,
+      });
+    return Number(result.changes) > 0;
+  }
+
   setEnabled(id: number, enabled: boolean): boolean {
     const result = this.db
       .prepare(

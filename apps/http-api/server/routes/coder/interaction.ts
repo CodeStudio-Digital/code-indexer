@@ -428,12 +428,6 @@ export function mountCoderInteractionRoutes(
     return c.json(sessionStore.listPlans(id));
   });
 
-  /** Chronological trace of every todo_write call in a session. */
-  app.get('/api/coder/sessions/:id/todo-history', (c) => {
-    const id = parseIdParam(c);
-    return c.json(sessionStore.listTodoHistory(id));
-  });
-
   /**
    * Hidden-prompt log for a session — system prompt at run-start, skill
    * bodies fetched mid-conversation, runtime system-reminders, and

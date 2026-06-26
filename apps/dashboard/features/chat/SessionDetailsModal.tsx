@@ -71,8 +71,8 @@ interface SessionDetailsModalProps {
 /**
  * Headless body of the session-details surface. Reused by the legacy
  * modal AND the right-rail `details` panel. `active` gates the fetches
- * when the panel is collapsed. Plans and tasks moved to their own rail
- * panels (`PlansPanel` / `TasksPanel`); this keeps Summary + Inputs.
+ * when the panel is collapsed. Plans moved to their own rail panel;
+ * this keeps Summary + Inputs.
  */
 export function SessionDetailsView({
   sessionId,
