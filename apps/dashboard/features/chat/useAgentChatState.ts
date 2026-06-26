@@ -9,7 +9,7 @@ import type {
   SessionData,
 } from './types.js';
 import { PROVIDERS } from './constants.js';
-import { collectPersistedToolUseIds, getCurrentTurnText, getPersistedAssistantText } from './utils.js';
+import { collectPersistedToolUseIds, isLiveTurnDuplicatedInHistory } from './utils.js';
 
 interface UseAgentChatStateArgs {
   selectedId: number | null;
@@ -148,27 +148,22 @@ export function useAgentChatState({
     [providerOptions, provider],
   );
 
-  // Detect whether the current live turn was just persisted to the DB. When
-  // true, the message list hides the live AssistantBubble to avoid showing
-  // the same content twice during the brief refetch window.
-  const liveTurnDuplicatedInHistory = (() => {
-    if (!sessionData || !currentTurn || currentTurn.blocks.length === 0) return false;
-    const lastAssistant = [...sessionData.messages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistant) return false;
-    const persistedText = getPersistedAssistantText(lastAssistant).trim();
-    const liveText = getCurrentTurnText(currentTurn).trim();
-    if (!persistedText || !liveText) return false;
-    return persistedText === liveText;
-  })();
-
   // The set of assistant tool_use ids already in persisted history. Lets the
   // live turn suppress gate cards (submit_tasks/submit_plan/decision_gate/…)
-  // that the refetched history already renders — the text-only guard above
-  // misses these because gate turns carry no text. Memoized on sessionData so
-  // it does NOT recompute on every token flush (currentTurn churn).
+  // that the refetched history already renders. Memoized on sessionData so it
+  // does NOT recompute on every token flush (currentTurn churn).
   const persistedToolUseIds = useMemo(
     () => collectPersistedToolUseIds(sessionData?.messages ?? []),
     [sessionData],
+  );
+
+  // Detect whether the current live turn was just persisted to the DB. When
+  // true, the message list hides the live AssistantBubble and editor rail clears
+  // currentTurn to avoid showing the same text/tool/gate sequence twice during
+  // the brief refetch window.
+  const liveTurnDuplicatedInHistory = useMemo(
+    () => isLiveTurnDuplicatedInHistory(currentTurn, sessionData?.messages ?? [], persistedToolUseIds),
+    [currentTurn, persistedToolUseIds, sessionData],
   );
 
   // Stable identity (deps: providerOptions) so passing it to the memoized

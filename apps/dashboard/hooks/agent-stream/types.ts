@@ -90,7 +90,7 @@ export interface DecisionQuestion {
   multiSelect?: boolean;
   options: DecisionOption[];
 }
-/** User's choices, keyed by question id. `selected` holds chosen option values. */
+/** User's choices, keyed by question id. `selected` holds chosen option values; `freeform` may be the whole answer when no option was selected. */
 export type DecisionAnswers = Record<string, { selected: string[]; freeform?: string }>;
 export interface DecisionPrompt {
   id: string;

@@ -69,6 +69,22 @@ export function getCurrentTurnText(turn: AssistantTurn | null): string {
     .join('\n');
 }
 
+function getPersistedAssistantThinkingText(message: PersistedMessage): string {
+  if (message.role !== 'assistant') return '';
+  return message.content
+    .filter((b) => (b as { type?: string }).type === 'thinking')
+    .map((b) => (b as { text?: string }).text ?? '')
+    .join('\n');
+}
+
+function getCurrentTurnThinkingText(turn: AssistantTurn | null): string {
+  if (!turn) return '';
+  return turn.blocks
+    .filter((b): b is StreamBlock & { type: 'thinking'; text: string } => b.type === 'thinking')
+    .map((b) => b.text)
+    .join('\n');
+}
+
 // ─── Live ⇄ persisted block dedup ───────────────────────────────
 //
 // A gate tool (submit_tasks / submit_plan / decision_gate / ask_user /
@@ -80,7 +96,9 @@ export function getCurrentTurnText(turn: AssistantTurn | null): string {
 // `liveTurnDuplicatedInHistory` guard can't catch this (gate turns carry no
 // text). We dedup at the block level: if a live block's tool_use id already
 // exists in persisted history, the persisted card is canonical and the live
-// copy is suppressed.
+// copy is suppressed. We also detect a whole current turn that is already fully
+// represented by persisted history (text/thinking plus any persisted tool ids),
+// so the live buffer can be hidden/cleared instead of duplicating the final turn.
 
 /** The persisted tool_use id a live block corresponds to, if any.
  *  Live-only visualizations (text/thinking/activity/task_run/agents) return undefined. */
@@ -115,13 +133,130 @@ export function collectPersistedToolUseIds(messages: PersistedMessage[]): Set<st
   return ids;
 }
 
-/** Live blocks NOT yet represented in persisted history (dedup by id). */
-export function visibleLiveBlocks(blocks: StreamBlock[], persistedIds: Set<string>): StreamBlock[] {
-  if (persistedIds.size === 0) return blocks;
+type Dict = Record<string, unknown>;
+
+function asDict(value: unknown): Dict {
+  return value && typeof value === 'object' ? (value as Dict) : {};
+}
+
+function cleanText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function boolish(value: unknown): boolean {
+  return value === true;
+}
+
+function decisionGateSignature(input: unknown): string | undefined {
+  const raw = asDict(input);
+  const rawQuestions = Array.isArray(raw.questions) ? raw.questions : [];
+  if (rawQuestions.length === 0) return undefined;
+  const questions = rawQuestions.map((qValue, qi) => {
+    const q = asDict(qValue);
+    const rawOptions = Array.isArray(q.options) ? q.options : [];
+    return {
+      id: cleanText(q.id) || `q_${qi}`,
+      header: cleanText(q.header),
+      question: cleanText(q.question),
+      multiSelect: boolish(q.multiSelect) || boolish(q.multi_select),
+      options: rawOptions.map((oValue) => {
+        const o = asDict(oValue);
+        return {
+          label: cleanText(o.label),
+          value: cleanText(o.value),
+          summary: cleanText(o.summary),
+          tradeoffs: cleanText(o.tradeoffs),
+        };
+      }),
+    };
+  });
+  return `decision_gate:${JSON.stringify({
+    header: cleanText(raw.header),
+    allowFreeform: boolish(raw.allowFreeform) || boolish(raw.allow_freeform),
+    questions,
+  })}`;
+}
+
+function liveBlockPersistedSignature(block: StreamBlock): string | undefined {
+  if (block.type !== 'decision') return undefined;
+  return decisionGateSignature(block.decision);
+}
+
+/** Signatures of gate prompts in the latest persisted assistant turn. */
+export function collectLatestPersistedGateSignatures(messages: PersistedMessage[]): Set<string> {
+  const signatures = new Set<string>();
+  const latestAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+  if (!latestAssistant) return signatures;
+  for (const b of latestAssistant.content) {
+    if (b.type !== 'tool_use' || b.name !== 'decision_gate') continue;
+    const signature = decisionGateSignature(b.input);
+    if (signature) signatures.add(signature);
+  }
+  return signatures;
+}
+
+/** Live blocks NOT yet represented in persisted history (dedup by id or prompt signature). */
+export function visibleLiveBlocks(
+  blocks: StreamBlock[],
+  persistedIds: Set<string>,
+  persistedGateSignatures: Set<string> = new Set(),
+): StreamBlock[] {
+  if (persistedIds.size === 0 && persistedGateSignatures.size === 0) return blocks;
   return blocks.filter((b) => {
     const id = liveBlockPersistedId(b);
-    return !(id && persistedIds.has(id));
+    if (id && persistedIds.has(id)) return false;
+    const signature = liveBlockPersistedSignature(b);
+    return !(signature && persistedGateSignatures.has(signature));
   });
+}
+
+export function isLiveTurnDuplicatedInHistory(
+  turn: AssistantTurn | null,
+  messages: PersistedMessage[],
+  persistedIds: Set<string> = collectPersistedToolUseIds(messages),
+): boolean {
+  if (!turn || turn.blocks.length === 0) return false;
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+  if (!lastAssistant) return false;
+
+  const liveText = getCurrentTurnText(turn).trim();
+  const persistedText = getPersistedAssistantText(lastAssistant).trim();
+  const liveThinking = getCurrentTurnThinkingText(turn).trim();
+  const persistedThinking = getPersistedAssistantThinkingText(lastAssistant).trim();
+  const persistedGateSignatures = collectLatestPersistedGateSignatures(messages);
+  let checkedText = false;
+  let checkedThinking = false;
+
+  for (const block of turn.blocks) {
+    if (block.type === 'text') {
+      if (!checkedText) {
+        if (!liveText || persistedText !== liveText) return false;
+        checkedText = true;
+      }
+      continue;
+    }
+    if (block.type === 'thinking') {
+      if (!checkedThinking) {
+        if (!liveThinking || persistedThinking !== liveThinking) return false;
+        checkedThinking = true;
+      }
+      continue;
+    }
+
+    const id = liveBlockPersistedId(block);
+    if (id) {
+      if (persistedIds.has(id)) continue;
+      const signature = liveBlockPersistedSignature(block);
+      if (signature && persistedGateSignatures.has(signature)) continue;
+      return false;
+    }
+
+    // activity/task_run/agents are live-only visualizations; keep them visible
+    // unless a future persisted identity can prove they are duplicates too.
+    return false;
+  }
+
+  return true;
 }
 
 // ─── Visual grouping ────────────────────────────────────────────

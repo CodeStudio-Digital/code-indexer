@@ -82,24 +82,24 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
   );
 
   return (
-    <div className="flex gap-3 items-start">
-      <Avatar className="h-8 w-8 shrink-0">
-        <AvatarFallback className={cn('text-white text-[10px]', providerAccent(providerId))}>
-          <Bot className="h-4 w-4" />
-        </AvatarFallback>
-      </Avatar>
-      <div className="flex-1 min-w-0 max-w-[100%]">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
-          <span>
-            {t('messages.assistant')}
+    <div className="group/msg w-full">
+      <article className="w-full min-w-0 px-3 py-2 transition-colors hover:bg-muted/[0.018]">
+        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Avatar className="h-4 w-4 shrink-0 opacity-90">
+              <AvatarFallback className={cn('text-white text-[8px]', providerAccent(providerId))}>
+                <Bot className="h-2.5 w-2.5" />
+              </AvatarFallback>
+            </Avatar>
+            <span className="font-semibold text-foreground/60">{t('messages.assistant')}</span>
             {!group.hasText && toolCount > 0 && (
-              <span className="normal-case ml-1 opacity-70">({t('messages.toolCount', { count: toolCount })})</span>
+              <span className="normal-case tracking-normal opacity-70">{t('messages.toolCount', { count: toolCount })}</span>
             )}
             {tokenBadge}
-          </span>
+          </div>
           {allText && <CopyMarkdownButton text={allText} />}
         </div>
-        <div className="rounded-2xl rounded-tl-sm border bg-card px-4 py-3 shadow-sm max-h-[60vh] overflow-y-auto">
+        <div className="max-h-[60vh] overflow-y-auto">
           {group.messages.map((msg, mi) =>
             msg.content.map((b: ContentBlock, bi: number) =>
               renderAssistantBlock(
@@ -113,7 +113,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
             ),
           )}
         </div>
-      </div>
+      </article>
     </div>
   );
 });

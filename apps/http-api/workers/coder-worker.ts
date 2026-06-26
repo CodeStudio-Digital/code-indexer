@@ -100,6 +100,7 @@ import { buildWorkerMemoryShims } from './memory-shims.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
+import { installWorkerQualityWiring } from './quality-wiring.js';
 
 interface CoderWorkerData {
   sessionId: number;
@@ -115,6 +116,13 @@ const dbConn = openWorkerDb({ dbPath });
 
 // Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
 hydrateWorkerCapabilities(dbConn.handle, `coder-worker ${sessionId}`);
+
+// Quality classifiers — worker_threads don't share module state, so the
+// quality globals installed in server.ts (main thread) are NULL here. The
+// CoderRunner that fires the per-turn classifiers runs INSIDE this worker
+// when MCP_CODER_WORKER=1, so without this re-install the Telemetry →
+// Quality dashboard stays empty. See quality-wiring.ts for the gaps vs main.
+installWorkerQualityWiring(dbConn.handle, `coder-worker ${sessionId}`);
 
 // Overlay declarative plugin providers into this worker's registry so the agent
 // can resolve a plugin-contributed provider kind (best-effort; built-ins always work).

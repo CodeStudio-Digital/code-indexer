@@ -22,10 +22,12 @@ export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
   const { qualityClassificationStore, qualityInterventionStore, counterfactualLogStore } = deps;
 
   // ─── Runtime on/off toggle ─────────────────────────────────────────────
-  // The classifiers run in THIS (main) process — the global is only ever set
-  // here, never in the coder/company workers — so toggling it here is enough;
-  // no worker RPC needed. Persists only for the process lifetime (the boot
-  // default is the MCP_PIPELINES_QUALITY_CLASSIFIERS env flag).
+  // Runtime toggle for the quality classifiers. In in-process coder mode this
+  // flips the main-process global directly. In worker-thread coder mode, new
+  // workers inherit process.env at spawn, so we also mirror the value into the
+  // env flag below; already-spawned workers keep their current boot snapshot
+  // until they are recreated. Persists only for the process lifetime (the boot
+  // default is the MCP_PIPELINES_QUALITY_CLASSIFIERS env/app-setting flag).
   app.get('/api/admin/quality/enabled', (c) =>
     c.json({ enabled: isGlobalQualityClassifierEnabled() }),
   );
@@ -36,6 +38,7 @@ export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
     if (typeof body.enabled !== 'boolean') {
       return c.json({ error: 'enabled (boolean) required' }, 400);
     }
+    process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS = body.enabled ? '1' : '0';
     setGlobalQualityClassifierPipeline(deps.qualityClassifierPipeline, body.enabled);
     return c.json({ enabled: isGlobalQualityClassifierEnabled() });
   });

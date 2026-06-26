@@ -151,18 +151,21 @@ function MessageViewInner({
     .join('\n\n');
 
   return (
-    <div className="flex gap-3 items-start group/msg">
-      <Avatar className="h-8 w-8 shrink-0">
-        <AvatarFallback className={cn('text-white', providerAccent(providerId))}>
-          <Bot className="h-4 w-4" />
-        </AvatarFallback>
-      </Avatar>
-      <div className="flex-1 min-w-0 max-w-[100%]">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
-          <span>{t('messages.assistant')}{tokenBadge}</span>
+    <div className="group/msg w-full">
+      <article className="w-full min-w-0 px-3 py-2 transition-colors hover:bg-muted/[0.018]">
+        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Avatar className="h-4 w-4 shrink-0 opacity-90">
+              <AvatarFallback className={cn('text-white', providerAccent(providerId))}>
+                <Bot className="h-2.5 w-2.5" />
+              </AvatarFallback>
+            </Avatar>
+            <span className="font-semibold text-foreground/60">{t('messages.assistant')}</span>
+            {tokenBadge}
+          </div>
           {assistantMarkdown && <CopyMarkdownButton text={assistantMarkdown} />}
         </div>
-        <div className="rounded-2xl rounded-tl-sm border bg-card px-4 py-3 shadow-sm max-h-[60vh] overflow-y-auto">
+        <div className="max-h-[60vh] overflow-y-auto">
           {message.content.map((b, i) =>
             renderAssistantBlock(
               b,
@@ -174,7 +177,7 @@ function MessageViewInner({
             ),
           )}
         </div>
-      </div>
+      </article>
     </div>
   );
 }
@@ -245,46 +248,93 @@ function UserMessage({
   };
 
   const appliedSkills = message.selectedSkillIds ?? [];
+  const hasUserBody = !!text || docs.length > 0 || !!fetchError;
 
   return (
-    <div className="flex gap-3 items-start justify-end group/user group/msg">
-      <div className="flex-1 min-w-0 max-w-[100%] flex flex-col items-end">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
-          {onFork && (
-            <button
-              type="button"
-              onClick={onFork}
-              title="Fork a new session from this message"
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground transition-opacity"
-            >
-              <GitBranch className="h-3 w-3" />
-              Fork from here
-            </button>
-          )}
-          {onRollback && (
-            <button
-              type="button"
-              onClick={onRollback}
-              title={t('messages.rollbackTitle')}
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground transition-opacity"
-            >
-              <RotateCcw className="h-3 w-3" />
-              {t('messages.rollback')}
-            </button>
-          )}
-          {text && <CopyMarkdownButton text={text} />}
-          <span>you{tokenBadge}</span>
+    <div className="group/user group/msg w-full">
+      <article className="w-full min-w-0 px-3 py-2">
+        <div className="mb-1 flex items-center justify-end gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/75">
+          <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/user:opacity-100 focus-within:opacity-100">
+            {onFork && (
+              <button
+                type="button"
+                onClick={onFork}
+                title="Fork a new session from this message"
+                className="group/action inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all duration-200"
+              >
+                <GitBranch className="h-3 w-3" />
+                <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/action:max-w-24 group-hover/action:opacity-100 group-focus/action:max-w-24 group-focus/action:opacity-100">Fork</span>
+              </button>
+            )}
+            {onRollback && (
+              <button
+                type="button"
+                onClick={onRollback}
+                title={t('messages.rollbackTitle')}
+                className="group/action inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all duration-200"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/action:max-w-24 group-hover/action:opacity-100 group-focus/action:max-w-24 group-focus/action:opacity-100">{t('messages.rollback')}</span>
+              </button>
+            )}
+            {text && <CopyMarkdownButton text={text} />}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-semibold text-primary/80">Você</span>
+            {tokenBadge}
+            <Avatar className="h-4 w-4 shrink-0 opacity-90">
+              <AvatarFallback className="bg-primary/10 text-primary">
+                <User className="h-2.5 w-2.5" />
+              </AvatarFallback>
+            </Avatar>
+          </div>
         </div>
+        {hasUserBody && (
+          <div className="max-h-[60vh] overflow-y-auto rounded-xl bg-primary/[0.055] px-3 py-2 text-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)]">
+            {text && (
+              <div className="text-[13px] leading-5">
+                <Markdown text={text} />
+              </div>
+            )}
+            {docs.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {docs.map((d, i) => (
+                  <AttachmentDoc
+                    key={`doc-${i}`}
+                    block={resolveBlock(d, i)}
+                    loading={loading}
+                    onNeedsFetch={ensureFull}
+                  />
+                ))}
+              </div>
+            )}
+            {fetchError && (
+              <div className="text-[11px] text-destructive mt-1">attachment fetch failed: {fetchError}</div>
+            )}
+          </div>
+        )}
+        {images.length > 0 && (
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            {images.map((img, i) => (
+              <AttachmentImage
+                key={`img-${i}`}
+                block={resolveBlock(img, i)}
+                loading={loading}
+                onNeedsFetch={ensureFull}
+              />
+            ))}
+          </div>
+        )}
         {appliedSkills.length > 0 && (
           <div
-            className="flex flex-wrap gap-1 mb-1 justify-end max-w-[100%]"
+            className="mt-1 flex flex-wrap justify-end gap-1"
             aria-label="Skills applied to this turn"
           >
             {appliedSkills.map((id) => (
               <span
                 key={id}
                 title={id}
-                className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-violet-600 dark:text-violet-300"
+                className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-violet-600 dark:text-violet-300"
               >
                 <Sparkles className="h-2.5 w-2.5" />
                 <span className="max-w-[140px] truncate">{id}</span>
@@ -292,46 +342,7 @@ function UserMessage({
             ))}
           </div>
         )}
-        <div className="rounded-2xl rounded-tr-sm bg-gray-50 dark:bg-gray-900 border border-primary/40 text-foreground px-4 py-2.5 shadow-sm max-h-[60vh] max-w-[100%] overflow-y-auto">
-          {text && (
-            <div className="text-sm">
-              <Markdown text={text} />
-            </div>
-          )}
-          {images.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-2">
-              {images.map((img, i) => (
-                <AttachmentImage
-                  key={`img-${i}`}
-                  block={resolveBlock(img, i)}
-                  loading={loading}
-                  onNeedsFetch={ensureFull}
-                />
-              ))}
-            </div>
-          )}
-          {docs.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {docs.map((d, i) => (
-                <AttachmentDoc
-                  key={`doc-${i}`}
-                  block={resolveBlock(d, i)}
-                  loading={loading}
-                  onNeedsFetch={ensureFull}
-                />
-              ))}
-            </div>
-          )}
-          {fetchError && (
-            <div className="text-[11px] text-destructive mt-1">attachment fetch failed: {fetchError}</div>
-          )}
-        </div>
-      </div>
-      <Avatar className="h-8 w-8 shrink-0">
-        <AvatarFallback className="bg-muted text-muted-foreground">
-          <User className="h-4 w-4" />
-        </AvatarFallback>
-      </Avatar>
+      </article>
     </div>
   );
 }
@@ -378,17 +389,17 @@ function AttachmentImage({
       <button
         type="button"
         onClick={handleClick}
-        className="relative rounded-lg border border-primary-foreground/20 overflow-hidden cursor-zoom-in hover:opacity-90 transition-opacity"
+        className="relative h-20 w-20 overflow-hidden rounded-md border border-border/45 bg-card/75 cursor-zoom-in transition-all duration-150 hover:border-primary/45 hover:opacity-95 hover:shadow-sm"
         title={hasData ? 'Open preview' : 'Load preview'}
       >
         {src ? (
-          <img src={src} alt="attachment" className="max-h-48 block" />
+          <img src={src} alt="attachment" className="h-full w-full object-cover" />
         ) : (
-          <div className="flex flex-col items-center justify-center gap-1 w-32 h-32 bg-muted/50 text-muted-foreground">
+          <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-muted-foreground">
             {loading || pendingOpen ? (
-              <Loader2 className="h-6 w-6 animate-spin" />
+              <Loader2 className="h-5 w-5 animate-spin" />
             ) : (
-              <ImageIcon className="h-6 w-6" />
+              <ImageIcon className="h-5 w-5" />
             )}
             <span className="text-[10px]">
               {loading || pendingOpen ? 'Loading…' : 'Preview'}
@@ -513,12 +524,13 @@ export function renderAssistantBlock(
   tasksState: PersistedTasksState | null | undefined,
   activeTasksToolUseId?: string | null,
 ) {
-  if (b.type === 'thinking') {
-    return <ThinkingBlockView key={`think-${i}`} text={b.text ?? ''} />;
+  const maybeThinking = b as unknown as { type?: string; text?: string };
+  if (maybeThinking.type === 'thinking') {
+    return <ThinkingBlockView key={`think-${i}`} text={maybeThinking.text ?? ''} />;
   }
   if (b.type === 'text') {
     return (
-      <div key={i} className="text-sm text-foreground/90">
+      <div key={i} className="text-[13px] leading-5 text-foreground/90">
         <Markdown text={b.text ?? ''} />
       </div>
     );

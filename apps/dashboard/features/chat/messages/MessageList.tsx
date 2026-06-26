@@ -6,7 +6,7 @@ import { Alert, AlertDescription } from '../../../components/ui/alert.js';
 import { cn } from '../../../lib/utils.js';
 import { INITIAL_PAGE_SIZE, LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
-import { groupMessages, visibleLiveBlocks } from '../utils.js';
+import { collectLatestPersistedGateSignatures, groupMessages, visibleLiveBlocks } from '../utils.js';
 import { AssistantBubble } from './AssistantBubble.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
@@ -389,6 +389,7 @@ const LiveTurn = React.memo(function LiveTurn({
   handlers,
   hidden,
   persistedToolUseIds,
+  persistedGateSignatures,
 }: {
   currentTurn: AssistantTurn | null;
   streaming: boolean;
@@ -397,11 +398,12 @@ const LiveTurn = React.memo(function LiveTurn({
   handlers: PromptHandlers;
   hidden: boolean;
   persistedToolUseIds: Set<string>;
+  persistedGateSignatures: Set<string>;
 }) {
   // Drop live blocks already rendered by the persisted history (gate cards on a
   // paused turn, or a tool call the refetch landed before currentTurn cleared).
   const allBlocks = currentTurn?.blocks ?? [];
-  const visible = visibleLiveBlocks(allBlocks, persistedToolUseIds);
+  const visible = visibleLiveBlocks(allBlocks, persistedToolUseIds, persistedGateSignatures);
   const hasBlocks = visible.length > 0 && !hidden;
   if (hasBlocks) {
     return (
@@ -533,11 +535,15 @@ export function MessageList({
   }, [sessionData, currentTurn, streaming]);
 
   const providerId = sessionData?.session.provider ?? fallbackProviderId;
+  const persistedGateSignatures = useMemo(
+    () => collectLatestPersistedGateSignatures(sessionData?.messages ?? []),
+    [sessionData],
+  );
 
   return (
     <div
       ref={scrollRef}
-      className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-6 py-5 space-y-5 min-h-0"
+      className="flex-1 overflow-y-auto overscroll-contain px-0 py-2 space-y-2 min-h-0"
     >
       {sessionData && (
         <PersistedMessages
@@ -558,6 +564,7 @@ export function MessageList({
         handlers={handlers}
         hidden={liveTurnDuplicatedInHistory}
         persistedToolUseIds={persistedToolUseIds}
+        persistedGateSignatures={persistedGateSignatures}
       />
 
       {error && (

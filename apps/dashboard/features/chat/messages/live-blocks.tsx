@@ -20,7 +20,7 @@ import { Markdown } from './Markdown.js';
 export const LiveTextBlock = memo(function LiveTextBlock({ text }: { text: string }) {
   const deferred = useDeferredValue(text);
   return (
-    <div className="text-sm text-foreground/90">
+    <div className="text-[13px] leading-5 text-foreground/90">
       <Markdown text={deferred} />
     </div>
   );
@@ -35,18 +35,18 @@ export const LiveThinkingBlock = memo(function LiveThinkingBlock({ text }: { tex
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(true);
   return (
-    <div className="my-1">
+    <div className="my-1 rounded-md border border-dashed border-border/40 bg-muted/15">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground hover:text-foreground transition-colors"
       >
-        <Brain className="h-3.5 w-3.5 animate-pulse" />
+        <Brain className="h-3 w-3 animate-pulse" />
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <span className="font-medium">{t('messages.thinking')}</span>
       </button>
       {open && (
-        <div className="mt-1 ml-5 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap max-h-[40vh] overflow-y-auto">
+        <div className="border-t border-dashed border-border/40 px-2.5 py-1.5 text-[11px] leading-[1.15rem] text-muted-foreground italic whitespace-pre-wrap max-h-[32vh] overflow-y-auto">
           {text}
         </div>
       )}
