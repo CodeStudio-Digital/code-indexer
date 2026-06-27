@@ -17,6 +17,13 @@ export type DbEngine =
   | 'redis'
   | 'oracle';
 
+/**
+ * Engine category. Relational engines (pg/mysql/sqlite/mssql/oracle) speak the
+ * full SQL/table/column surface; document (Mongo) and key-value (Redis) stores
+ * don't — they go through `runCommand` and skip the relational methods.
+ */
+export type DbEngineKind = 'relational' | 'document' | 'keyvalue';
+
 export type DbSslMode = 'disable' | 'require' | 'verify-ca' | 'verify-full';
 
 /** Object kinds listed lazily in the tree (beyond tables/views/columns). */
@@ -62,6 +69,23 @@ export interface QueryResult {
   command?: string;
   /** True when rows were capped by `maxRows`. */
   truncated?: boolean;
+}
+
+/** Column sort for a table preview (column name is quoted by the driver). */
+export interface TableSort {
+  column: string;
+  dir: 'asc' | 'desc';
+}
+
+/** WHERE comparison operator — a closed enum (no injection via operator). */
+export type WhereOp = '=' | '!=' | '<' | '<=' | '>' | '>=' | 'like' | 'isnull' | 'isnotnull';
+
+/** A single WHERE condition for the visual filter (AND-combined, parameterized). */
+export interface WhereCondition {
+  column: string;
+  op: WhereOp;
+  /** Bound value (ignored for isnull/isnotnull). */
+  value?: string;
 }
 
 export interface ColumnInfo {
@@ -125,7 +149,27 @@ export interface RunQueryOptions {
   schema?: string;
 }
 
+/**
+ * A non-relational command (Mongo document op / Redis command). The shape is
+ * engine-specific; the relevant driver narrows it. Carried generically here so
+ * the contract + manager stay engine-agnostic.
+ */
+export interface DbCommand {
+  /** Engine category this command targets (matches the driver's `kind`). */
+  kind: Exclude<DbEngineKind, 'relational'>;
+  /** Mongo: the operation (find/aggregate/insertOne/updateMany/…). */
+  op?: string;
+  /** Mongo: the target collection. */
+  collection?: string;
+  /** Redis: the command + args, e.g. `['GET','key']`. */
+  args?: string[];
+  /** Operation-specific payload (filter/pipeline/document/value/…). */
+  payload?: unknown;
+}
+
 export interface DatabaseDriver {
+  /** Engine category — drives capability gating in the handler/UI. Undefined ⇒ relational. */
+  readonly kind?: DbEngineKind;
   /** Open + ping; returns the server version. Throws on failure. */
   testConnection(): Promise<{ serverVersion?: string }>;
   /** Top-level databases/catalogs reachable on this connection. */
@@ -138,14 +182,16 @@ export interface DatabaseDriver {
   describeTable(schema: string, name: string): Promise<TableInfo>;
   /** Names of schema/table objects of a kind (triggers/functions/sequences) for the tree. */
   listObjects(kind: DbObjectKind, schema?: string, table?: string): Promise<string[]>;
-  /** Paginated `SELECT *` for a table, with engine-correct identifier quoting. */
-  tablePreview(schema: string, table: string, opts: { limit: number; offset: number }): Promise<QueryResult>;
+  /** Paginated `SELECT *` for a table, with engine-correct quoting + optional sort + WHERE filter. */
+  tablePreview(schema: string, table: string, opts: { limit: number; offset: number; orderBy?: TableSort; where?: WhereCondition[] }): Promise<QueryResult>;
   /** Back-compat: all tables in a schema with their columns (agent `db_schema`). */
   schema(schemaName?: string): Promise<TableInfo[]>;
   /** Execute a statement with optional params, row cap, and cancellation. */
   runQuery(sql: string, opts?: RunQueryOptions): Promise<QueryResult>;
   /** Back-compat alias for the agent tools. */
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
+  /** Non-relational entry point (document/key-value). Rows hold documents / KV pairs. */
+  runCommand?(command: DbCommand, opts?: RunQueryOptions): Promise<QueryResult>;
   close(): Promise<void>;
 }
 

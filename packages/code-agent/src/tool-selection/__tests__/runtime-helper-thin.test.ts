@@ -230,6 +230,41 @@ describe('applyToolSelectionThin', () => {
     expect(empty.map((t) => t.name)).toEqual(base.map((t) => t.name));
   });
 
+  it('forwards optional agentDecision metadata to diagnostics without changing selection', async () => {
+    const agentDecision = {
+      recommendedAgent: 'build' as const,
+      intent: 'edit' as const,
+      phase: 'editing' as const,
+      riskBudget: 'write' as const,
+      costBudget: 'medium' as const,
+      delegation: 'inline' as const,
+      confidence: 0.9,
+      requiresExplicitUserIntent: false,
+      toolPolicyPreferredCount: 5,
+      toolPolicyDiscouragedCount: 3,
+    };
+    const baseline = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend bug fix in login flow',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+    });
+    const onResult = vi.fn();
+    const withTelemetry = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend bug fix in login flow',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+      agentDecision,
+      onResult,
+    });
+
+    expect(withTelemetry.map((t) => t.name)).toEqual(baseline.map((t) => t.name));
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ agentDecision }));
+  });
+
   // ── Task embedding cache (A4) ────────────────────────────────────────
   describe('task embedding cache', () => {
     it('first call misses → calls embed for taskText; second call with same text hits', async () => {

@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import type { LLMProvider } from '@mcp/indexer/indexer/providers/base.js';
 import { SYSTEM_PROMPT, buildUserPrompt, parseAnalysisResponse } from '@mcp/indexer/indexer/providers/base.js';
 import type { AnalysisResult } from '@mcp/shared/types.js';
+import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 
 export class ChatGPTProvider implements LLMProvider {
   readonly name = 'chatgpt';
@@ -39,6 +40,8 @@ export class ChatGPTProvider implements LLMProvider {
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
       defaultHeaders: headers,
+      // Use undici (native fetch) instead of bundled node-fetch@2.
+      fetch: nativeFetch(),
     });
   }
 

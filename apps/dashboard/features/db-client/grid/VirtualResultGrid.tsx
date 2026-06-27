@@ -1,13 +1,19 @@
 /**
- * Virtualized read-only results grid (@tanstack/react-virtual) — renders only
- * the visible rows so 10k+ result sets stay smooth. Click a header to sort,
- * drag its right edge to resize, click a cell to open the value viewer, and
- * export/copy from the toolbar. Mirrors the ProblemsPanel virtualizer pattern.
+ * The single results grid (@tanstack/react-virtual) — used everywhere: the query
+ * console (read-only) and the table-data tab (editable when the table has a PK).
+ * Only the visible rows render so 10k+ result sets stay smooth.
+ *
+ *   - Click a header to sort (server-side via `onSort`, else client-side).
+ *   - Drag a header's right edge to resize.
+ *   - READ-ONLY cell: click → value viewer. EDITABLE cell: click → inline edit,
+ *     double-click → value viewer. Edited cells amber, new rows green, deleted
+ *     struck-through; all go through the `useGridEdits` changeset.
+ *   - Export/copy from the toolbar.
  */
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronUp, ChevronDown, Download, Copy } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Ban } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { downloadBlob } from '../../api-client/download.js';
@@ -18,7 +24,8 @@ import {
 import { columnNames, cellText } from './grid-utils.js';
 import { CellValuePanel } from './CellValuePanel.js';
 import { toCsv, toJson, toInsertSql, cellToCopy } from './grid-export.js';
-import type { DbQueryResult } from '../types.js';
+import { rowKeyOf, type GridEdits } from './use-grid-edits.js';
+import type { DbQueryResult, DbTableSort } from '../types.js';
 
 const ROW_H = 24;
 const ROWNUM_W = 52;
@@ -38,27 +45,49 @@ export function VirtualResultGrid({
   result,
   error,
   tableName,
+  edits,
+  pkCols,
+  sort,
+  onSort,
+  hiddenColumns,
 }: {
   result: DbQueryResult | null;
   error?: string | null;
   tableName?: string;
+  /** Editable mode: pending-changeset state. Requires `pkCols`. */
+  edits?: GridEdits;
+  /** Primary-key columns — when present + non-empty, the grid is editable. */
+  pkCols?: string[];
+  /** Controlled (server-side) sort indicator; pair with `onSort`. */
+  sort?: DbTableSort | null;
+  /** Header click → server-side sort. When omitted, the grid sorts client-side. */
+  onSort?: (col: string) => void;
+  /** Columns to hide from display/export (the data still carries them). */
+  hiddenColumns?: Set<string>;
 }) {
   const { t } = useTranslation('dbClient');
-  const [sort, setSort] = useState<SortState>(null);
+  const [internalSort, setInternalSort] = useState<SortState>(null);
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [cellView, setCellView] = useState<{ col: string; value: unknown } | null>(null);
+  const [active, setActive] = useState<string | null>(null); // `${rowId}:${col}`
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const columns = result ? columnNames(result) : [];
-  const rows = useMemo(() => {
+  const editable = !!(edits && pkCols && pkCols.length > 0);
+  const columns = (result ? columnNames(result) : []).filter((c) => !hiddenColumns?.has(c));
+
+  // Server-sorted when controlled; otherwise sort the page client-side.
+  const baseRows = useMemo(() => {
     if (!result) return [];
-    if (!sort) return result.rows;
-    const dir = sort.dir === 'asc' ? 1 : -1;
-    return [...result.rows].sort((a, b) => cmp(a[sort.col], b[sort.col]) * dir);
-  }, [result, sort]);
+    if (onSort || !internalSort) return result.rows;
+    const dir = internalSort.dir === 'asc' ? 1 : -1;
+    return [...result.rows].sort((a, b) => cmp(a[internalSort.col], b[internalSort.col]) * dir);
+  }, [result, internalSort, onSort]);
+
+  const newRows = editable ? edits!.newRows : [];
+  const total = baseRows.length + newRows.length;
 
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: total,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_H,
     overscan: 16,
@@ -66,12 +95,14 @@ export function VirtualResultGrid({
 
   const colW = (c: string): number => widths[c] ?? DEFAULT_COL_W;
   const totalW = ROWNUM_W + columns.reduce((w, c) => w + colW(c), 0);
+  const sortCol = onSort ? sort?.column : internalSort?.col;
+  const sortDir = onSort ? sort?.dir : internalSort?.dir;
 
   if (error) {
     return <div className="m-2 rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-400">{error}</div>;
   }
   if (!result) return null;
-  if (columns.length === 0 || result.rows.length === 0) {
+  if (columns.length === 0 || (result.rows.length === 0 && newRows.length === 0)) {
     return (
       <div className="p-3 text-xs text-muted-foreground">
         {result.command ? `${result.command} · ${result.rowCount} ${t('query.affected')}` : t('query.empty')}
@@ -79,8 +110,9 @@ export function VirtualResultGrid({
     );
   }
 
-  function toggleSort(col: string): void {
-    setSort((s) => (s?.col !== col ? { col, dir: 'asc' } : s.dir === 'asc' ? { col, dir: 'desc' } : null));
+  function header(col: string): void {
+    if (onSort) onSort(col);
+    else setInternalSort((s) => (s?.col !== col ? { col, dir: 'asc' } : s.dir === 'asc' ? { col, dir: 'desc' } : null));
   }
 
   function startResize(col: string, e: React.MouseEvent): void {
@@ -99,10 +131,10 @@ export function VirtualResultGrid({
 
   async function exportAs(kind: 'csv' | 'json' | 'sql' | 'copy'): Promise<void> {
     const base = tableName || 'result';
-    if (kind === 'csv') downloadBlob(`${base}.csv`, new Blob([toCsv(columns, rows)], { type: 'text/csv' }));
-    else if (kind === 'json') downloadBlob(`${base}.json`, new Blob([toJson(columns, rows)], { type: 'application/json' }));
-    else if (kind === 'sql') downloadBlob(`${base}.sql`, new Blob([toInsertSql(base, columns, rows)], { type: 'text/plain' }));
-    else if (await copyText(toCsv(columns, rows))) toast.success(t('grid.copied'));
+    if (kind === 'csv') downloadBlob(`${base}.csv`, new Blob([toCsv(columns, baseRows)], { type: 'text/csv' }));
+    else if (kind === 'json') downloadBlob(`${base}.json`, new Blob([toJson(columns, baseRows)], { type: 'application/json' }));
+    else if (kind === 'sql') downloadBlob(`${base}.sql`, new Blob([toInsertSql(base, columns, baseRows)], { type: 'text/plain' }));
+    else if (await copyText(toCsv(columns, baseRows))) toast.success(t('grid.copied'));
   }
 
   return (
@@ -139,11 +171,12 @@ export function VirtualResultGrid({
                 key={c}
                 className="group/h relative flex shrink-0 cursor-pointer items-center gap-1 border-b border-r px-2 py-1 font-medium text-muted-foreground hover:bg-muted/40"
                 style={{ width: colW(c) }}
-                onClick={() => toggleSort(c)}
+                onClick={() => header(c)}
                 title={c}
               >
                 <span className="min-w-0 flex-1 truncate">{c}</span>
-                {sort?.col === c && (sort.dir === 'asc' ? <ChevronUp className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />)}
+                {pkCols?.includes(c) && <span className="shrink-0 text-amber-400">★</span>}
+                {sortCol === c && (sortDir === 'asc' ? <ChevronUp className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />)}
                 <span
                   className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-primary/40"
                   onMouseDown={(e) => startResize(c, e)}
@@ -153,32 +186,80 @@ export function VirtualResultGrid({
             ))}
           </div>
 
-          {/* Virtualized body */}
+          {/* Virtualized body (existing rows then new rows) */}
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((v) => {
-              const row = rows[v.index];
+              const isNew = v.index >= baseRows.length;
+              const style: React.CSSProperties = { top: 0, transform: `translateY(${v.start}px)`, height: v.size, width: totalW };
+
+              if (isNew) {
+                const nr = newRows[v.index - baseRows.length];
+                return (
+                  <div key={nr.tempId} className="absolute left-0 flex bg-emerald-500/5" style={style}>
+                    <div className="flex shrink-0 items-center justify-center border-b border-r" style={{ width: ROWNUM_W }}>
+                      <button type="button" className="rounded p-0.5 text-muted-foreground hover:text-red-400" title={t('edit.deleteRow')} onClick={() => edits!.removeNewRow(nr.tempId)}>
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                    {columns.map((c) => (
+                      <BodyCell
+                        key={c}
+                        cellId={`${nr.tempId}:${c}`}
+                        value={nr.values[c]}
+                        width={colW(c)}
+                        edited={c in nr.values}
+                        active={active === `${nr.tempId}:${c}`}
+                        editable
+                        onActivate={() => setActive(`${nr.tempId}:${c}`)}
+                        onCommit={(val) => { edits!.setNewCell(nr.tempId, c, val); setActive(null); }}
+                        onCancel={() => setActive(null)}
+                        onNull={() => { edits!.setNewCell(nr.tempId, c, null); setActive(null); }}
+                        onView={() => setCellView({ col: c, value: nr.values[c] })}
+                        t={t}
+                      />
+                    ))}
+                  </div>
+                );
+              }
+
+              const row = baseRows[v.index];
+              const rk = editable ? rowKeyOf(row, pkCols!) : String(v.index);
+              const isDeleted = editable && edits!.deleted.has(rk);
               return (
-                <div
-                  key={v.index}
-                  className="absolute left-0 flex hover:bg-muted/30"
-                  style={{ top: 0, transform: `translateY(${v.start}px)`, height: v.size, width: totalW }}
-                >
-                  <div className="shrink-0 border-b border-r px-2 py-0.5 text-right text-muted-foreground/40 tabular-nums" style={{ width: ROWNUM_W }}>
-                    {v.index + 1}
+                <div key={rk} className={cn('group absolute left-0 flex hover:bg-muted/30', isDeleted && 'opacity-50')} style={style}>
+                  <div className="flex shrink-0 items-center justify-end gap-1 border-b border-r px-1 text-right text-muted-foreground/40 tabular-nums" style={{ width: ROWNUM_W }}>
+                    {editable ? (
+                      <button
+                        type="button"
+                        className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-red-400 group-hover:opacity-100"
+                        title={isDeleted ? t('edit.restoreRow') : t('edit.deleteRow')}
+                        onClick={() => edits!.toggleDelete(rk)}
+                      >
+                        {isDeleted ? <Undo2 className="h-3 w-3" /> : <Trash2 className="h-3 w-3" />}
+                      </button>
+                    ) : (
+                      v.index + 1
+                    )}
                   </div>
                   {columns.map((c) => {
-                    const value = row[c];
-                    const isNull = value === null;
+                    const value = editable ? edits!.cellValue(rk, c, row[c]) : row[c];
                     return (
-                      <div
+                      <BodyCell
                         key={c}
-                        className={cn('shrink-0 cursor-text truncate border-b border-r px-2 py-0.5 font-mono', isNull && 'italic text-muted-foreground/50')}
-                        style={{ width: colW(c) }}
-                        title={cellText(value)}
-                        onClick={() => setCellView({ col: c, value })}
-                      >
-                        {cellText(value)}
-                      </div>
+                        cellId={`${rk}:${c}`}
+                        value={value}
+                        width={colW(c)}
+                        edited={editable && edits!.isEdited(rk, c)}
+                        deleted={isDeleted}
+                        active={active === `${rk}:${c}`}
+                        editable={editable && !isDeleted}
+                        onActivate={() => editable && !isDeleted && setActive(`${rk}:${c}`)}
+                        onCommit={(val) => { edits!.setCell(rk, c, val); setActive(null); }}
+                        onCancel={() => setActive(null)}
+                        onNull={() => { edits!.setCell(rk, c, null); setActive(null); }}
+                        onView={() => setCellView({ col: c, value })}
+                        t={t}
+                      />
                     );
                   })}
                 </div>
@@ -189,6 +270,68 @@ export function VirtualResultGrid({
       </div>
 
       {cellView && <CellValuePanel open column={cellView.col} value={cellView.value} onClose={() => setCellView(null)} />}
+    </div>
+  );
+}
+
+/** One body cell — read-only (click → view) or editable (click → inline edit, dbl-click → view). */
+function BodyCell({
+  cellId, value, width, edited, deleted, active, editable, onActivate, onCommit, onCancel, onNull, onView, t,
+}: {
+  cellId: string;
+  value: unknown;
+  width: number;
+  edited?: boolean;
+  deleted?: boolean;
+  active: boolean;
+  editable?: boolean;
+  onActivate: () => void;
+  onCommit: (v: string) => void;
+  onCancel: () => void;
+  onNull: () => void;
+  onView: () => void;
+  t: (k: string) => string;
+}) {
+  const isNull = value === null;
+  const initial = isNull ? '' : cellText(value);
+  // Only record an edit when the text actually changed.
+  const commit = (raw: string): void => (raw === initial ? onCancel() : onCommit(raw));
+
+  if (active) {
+    return (
+      <div className="flex shrink-0 items-center border-b border-r p-0" style={{ width }} data-cell={cellId}>
+        <input
+          autoFocus
+          defaultValue={initial}
+          className="min-w-0 flex-1 bg-background px-2 py-0.5 font-mono text-xs outline-none ring-1 ring-primary"
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
+            else if (e.key === 'Escape') onCancel();
+          }}
+        />
+        <button type="button" className="shrink-0 px-1 text-muted-foreground hover:text-amber-400" title={t('edit.setNull')} onMouseDown={(e) => { e.preventDefault(); onNull(); }}>
+          <Ban className="h-3 w-3" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-cell={cellId}
+      className={cn(
+        'shrink-0 cursor-text truncate border-b border-r px-2 py-0.5 font-mono',
+        deleted && 'line-through',
+        edited && 'bg-amber-500/15',
+        isNull && 'italic text-muted-foreground/50',
+      )}
+      style={{ width }}
+      title={cellText(value)}
+      onClick={() => (editable ? onActivate() : onView())}
+      onDoubleClick={editable ? onView : undefined}
+    >
+      {isNull ? '∅' : cellText(value)}
     </div>
   );
 }

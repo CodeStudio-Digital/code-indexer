@@ -18,7 +18,7 @@ import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { ModelDiscovery } from '@mcp/indexer/indexer/providers/model-discovery.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
-import { SessionStore } from '@mcp/code-agent/index.js';
+import { SessionStore, type RunCoderOptions } from '@mcp/code-agent/index.js';
 import { setInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { CompanyStore } from '@mcp/store/company-store.js';
 import { CompanySandboxStore } from '@mcp/store/company-sandbox-store.js';
@@ -105,7 +105,7 @@ import {
 import type {
   ToolSelectionQuery,
 } from '@mcp/code-agent/tool-selection/index.js';
-import { toolPolicyForTask } from '@mcp/code-agent/agents/decision-engine.js';
+import { decisionTelemetryForTask, toolPolicyForTask } from '@mcp/code-agent/agents/decision-engine.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { LshIndexStore } from '@mcp/store/lsh-index-store.js';
 import { LSHIndex } from '@mcp/indexer/search/lsh-index.js';
@@ -449,6 +449,14 @@ export interface PipelineDeps {
    * feature is off (no-op).
    */
   observeToolSelectionOutcome: (taskText: string, toolsCalled: ReadonlyArray<string>) => void;
+  /** Default-off Agent Decision Engine runtime flags forwarded to runCoder. */
+  buildAgentDecisionRuntimeOptions: () => Pick<RunCoderOptions,
+    | 'agentDecisionTelemetryEnabled'
+    | 'agentDecisionGuidanceEnabled'
+    | 'agentDecisionSoftGuardrail'
+    | 'agentDecisionSoftGuardrailMinConfidence'
+    | 'agentDecisionAskBeforeSwitch'
+  >;
 }
 
 export interface DocCorpusDeps {
@@ -1118,6 +1126,25 @@ export function createDeps(): ServerDeps {
   // selection path. Off (or low classifier confidence) → byte-identical to the
   // pre-bridge behavior, so this is safe to ship dark and enable per-env.
   const agentDecisionToolPolicyEnabled = process.env.MCP_AGENT_DECISION_TOOL_POLICY === '1';
+  // Observability-only Agent Decision Engine metadata in tool-selection shadow
+  // rows/outcomes. Default OFF and stored inside existing JSON columns (no DB
+  // migration). This lets us compare recommendation vs. actual tool use before
+  // enforcing routing/guardrails.
+  const agentDecisionTelemetryEnabled = process.env.MCP_AGENT_DECISION_TELEMETRY === '1';
+  const agentDecisionGuidanceEnabled = process.env.MCP_AGENT_DECISION_GUIDANCE === '1';
+  const agentDecisionSoftGuardrailEnabled = process.env.MCP_AGENT_DECISION_SOFT_GUARDRAIL === '1';
+  const agentDecisionAskBeforeSwitchEnabled = process.env.MCP_AGENT_DECISION_ASK_BEFORE_SWITCH === '1';
+  const guardrailMinConfidenceRaw = Number.parseFloat(process.env.MCP_AGENT_DECISION_GUARDRAIL_MIN_CONFIDENCE ?? '');
+  const agentDecisionSoftGuardrailMinConfidence = Number.isFinite(guardrailMinConfidenceRaw)
+    ? guardrailMinConfidenceRaw
+    : undefined;
+  const buildAgentDecisionRuntimeOptions = (): ReturnType<PipelineDeps['buildAgentDecisionRuntimeOptions']> => ({
+    agentDecisionTelemetryEnabled,
+    agentDecisionGuidanceEnabled,
+    agentDecisionSoftGuardrail: agentDecisionSoftGuardrailEnabled,
+    agentDecisionSoftGuardrailMinConfidence,
+    agentDecisionAskBeforeSwitch: agentDecisionAskBeforeSwitchEnabled,
+  });
 
   /**
    * FNV-1a hash of the task text — deterministic shadow-sampling key
@@ -1139,6 +1166,9 @@ export function createDeps(): ServerDeps {
   ) => Promise<ThinTool[]>) => {
     if (!toolSelectionFilterEnabled) return undefined;
     return async (tools, ctx) => {
+      const agentDecision = agentDecisionTelemetryEnabled
+        ? decisionTelemetryForTask(ctx.taskText)
+        : undefined;
       const selected = await applyToolSelectionThin({
         allTools: tools,
         taskText: ctx.taskText,
@@ -1148,6 +1178,7 @@ export function createDeps(): ServerDeps {
         toolPolicy: agentDecisionToolPolicyEnabled
           ? toolPolicyForTask(ctx.taskText)
           : undefined,
+        agentDecision,
       });
       // Shadow producer — fires only when MCP_SHADOW_TOOL_SELECTION_RATE > 0
       // and the task hash falls inside the sample. Off-path via setImmediate.
@@ -1161,9 +1192,10 @@ export function createDeps(): ServerDeps {
               taskText: ctx.taskText,
               recentToolEvents: ctx.recentToolCalls,
               k: 12,
+              agentDecision,
             },
           },
-          { toolNames: selected.map((t) => t.name) },
+          { toolNames: selected.map((t) => t.name), agentDecision },
         );
       } catch {
         // Shadow traffic must never affect production.
@@ -1184,6 +1216,9 @@ export function createDeps(): ServerDeps {
       feedbackCollector.observe('tool_selection', {
         queryHash: toolSelectionQueryHash(taskText),
         toolsCalled: [...toolsCalled],
+        agentDecision: agentDecisionTelemetryEnabled
+          ? decisionTelemetryForTask(taskText)
+          : undefined,
       });
     } catch {
       // Best-effort.
@@ -1286,6 +1321,7 @@ export function createDeps(): ServerDeps {
     feedbackCollector,
     buildToolSelectionFilter,
     observeToolSelectionOutcome,
+    buildAgentDecisionRuntimeOptions,
     embeddingKind,
     vectorStoreKind,
     docStore,

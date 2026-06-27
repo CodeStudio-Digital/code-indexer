@@ -39,7 +39,12 @@ export function buildErXml(tables: DbTableInfo[]): string {
         return c.isPrimaryKey ? `<b>🔑 ${label}</b>` : label;
       })
       .join('<br/>');
-    const value = `<b>${esc(t.name)}</b><br/>${lines}`;
+    // draw.io's `value` attribute carries HTML (html=1) but the attribute itself
+    // is XML — the `<b>`/`<br/>` markup must be entity-escaped or the parser
+    // rejects the unescaped `<`. (Names inside are already esc'd → double-escaped,
+    // which is exactly the form draw.io un-escapes back to HTML.)
+    const html = `<b>${esc(t.name)}</b><br/>${lines}`;
+    const value = esc(html);
     const style =
       'rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;fillColor=#1e293b;strokeColor=#475569;fontColor=#e2e8f0;';
     cells.push(

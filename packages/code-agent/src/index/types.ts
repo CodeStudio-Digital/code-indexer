@@ -3,6 +3,7 @@ import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
+import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
 import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
 
 export interface CoderAttachment {
@@ -28,6 +29,8 @@ export interface PreflightSeed {
   /** Skills the agent should consider loading before starting (ids, validated). */
   suggestedSkills?: Array<{ id: string; reason: string }>;
   taskKind?: string;
+  /** Optional Agent Decision Engine guidance, rendered into the tail preflight block. */
+  agentDecisionGuidance?: AgentDecisionGuidance;
 }
 
 export interface RunCoderOptions {
@@ -304,6 +307,16 @@ export interface RunCoderOptions {
    * verbatim to `RunnerOptions.toolSelectionFilter`.
    */
   toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
+  /** Default-off: record compact Agent Decision Engine recommendation/outcome telemetry. */
+  agentDecisionTelemetryEnabled?: boolean;
+  /** Default-off: render Agent Decision Engine guidance into the preflight/tail reminder. */
+  agentDecisionGuidanceEnabled?: boolean;
+  /** Default-off: block only high-risk deviations from confident AgentDecision guidance. */
+  agentDecisionSoftGuardrail?: boolean;
+  /** Optional confidence threshold for the soft guardrail. */
+  agentDecisionSoftGuardrailMinConfidence?: number;
+  /** Default-off: ask the user before switching agents when the recommendation diverges. */
+  agentDecisionAskBeforeSwitch?: boolean;
   /**
    * Skill IDs the user pre-selected in the chat sidebar. Persisted on the
    * first user message of this run (migration 095) and re-resolved by the

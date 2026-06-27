@@ -15,20 +15,37 @@ const tables: DbTableInfo[] = [
   },
 ];
 
+/** Every `value="..."` payload (delimited by real quotes; inner quotes are &quot;). */
+function valueAttrs(xml: string): string[] {
+  return [...xml.matchAll(/value="([^"]*)"/g)].map((m) => m[1]);
+}
+
 describe('buildErXml', () => {
   it('emits a mxGraphModel with a vertex per table and an edge per FK', () => {
     const xml = buildErXml(tables);
     expect(xml).toContain('<mxGraphModel');
     expect(xml).toContain('vertex="1"');
-    expect(xml).toContain('>users<'); // escaped table name in label
+    expect(xml).toContain('users'); // table name present as label text
     expect(xml).toContain('🔑 id : int');
-    // One FK edge from posts → users.
     expect((xml.match(/edge="1"/g) ?? []).length).toBe(1);
   });
 
-  it('escapes html-special characters in names', () => {
+  it('entity-escapes the HTML markup so the value attribute is valid XML', () => {
+    const xml = buildErXml(tables);
+    const values = valueAttrs(xml);
+    expect(values.length).toBeGreaterThan(0);
+    // The bug: raw `<b>`/`<br/>` inside value="..." → "Unescaped '<' in attribute".
+    for (const v of values) expect(v).not.toContain('<');
+    // Markup is present, but escaped.
+    expect(xml).toContain('&lt;b&gt;');
+    expect(xml).toContain('&lt;br/&gt;');
+  });
+
+  it('double-escapes special characters in names without breaking the attribute', () => {
     const xml = buildErXml([{ schema: 's', name: 'a<b>&"c', columns: [], foreignKeys: [] }]);
-    expect(xml).toContain('a&lt;b&gt;&amp;&quot;c');
+    for (const v of valueAttrs(xml)) expect(v).not.toContain('<');
+    // name esc'd for HTML then the whole value esc'd for XML → `<` becomes `&amp;lt;`.
+    expect(xml).toContain('a&amp;lt;b&amp;gt;&amp;amp;&amp;quot;c');
   });
 
   it('skips FK edges to tables outside the set', () => {

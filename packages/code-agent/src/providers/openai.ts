@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { nativeFetch } from '@mcp/code-agent/providers/native-fetch.js';
+import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 

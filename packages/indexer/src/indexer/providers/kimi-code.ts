@@ -8,6 +8,7 @@ import {
   parseAnalysisResponse,
 } from '@mcp/indexer/indexer/providers/base.js';
 import type { AnalysisResult } from '@mcp/shared/types.js';
+import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import { shouldOmitKimiTemperature } from '@mcp/code-agent/providers/kimi-code.js';
 
 export class KimiCodeProvider implements LLMProvider {
@@ -26,6 +27,8 @@ export class KimiCodeProvider implements LLMProvider {
       apiKey,
       baseURL: baseURL ?? 'https://api.kimi.com/coding/v1',
       ...(defaultHeaders ? { defaultHeaders } : {}),
+      // Use undici (native fetch) instead of bundled node-fetch@2.
+      fetch: nativeFetch(),
     });
   }
 

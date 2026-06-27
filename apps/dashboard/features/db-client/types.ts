@@ -33,6 +33,14 @@ export type {
   DbEditResult,
   DbObjectKind,
   DbGenerateKind,
+  DbRowBatch,
+  DbEngineKind,
+  DbCommand,
+  DbDriverStatus,
+  DbDriverInstallFrame,
+  DbTableSort,
+  DbWhereOp,
+  DbWhereCondition,
 } from '@mcp/api-bus';
 
 /** A node in the connection tree (lazy-expanded). */
@@ -82,6 +90,8 @@ export interface WorkTab {
   /** Display title — for data/structure it's the table; for query it's empty (the bar shows "Query N"). */
   title: string;
   connectionId: number;
+  /** Live-op routing key — `id` or `id@db` (Postgres multi-database). */
+  connKey: string;
   schema?: string;
   table?: string;
   /** Sequence number for unnamed query tabs. */

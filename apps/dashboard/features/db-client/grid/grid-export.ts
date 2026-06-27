@@ -17,8 +17,12 @@ function csvCell(v: unknown): string {
 export function toCsv(columns: string[], rows: Row[]): string {
   const head = columns.map(csvCell).join(',');
   if (rows.length === 0) return head;
-  const body = rows.map((r) => columns.map((c) => csvCell(r[c])).join(',')).join('\n');
-  return `${head}\n${body}`;
+  return `${head}\n${toCsvBody(columns, rows)}`;
+}
+
+/** CSV rows without the header line — for appending streamed batches. */
+export function toCsvBody(columns: string[], rows: Row[]): string {
+  return rows.map((r) => columns.map((c) => csvCell(r[c])).join(',')).join('\n');
 }
 
 export function toJson(columns: string[], rows: Row[]): string {
@@ -56,4 +60,20 @@ export function toInsertSql(table: string, columns: string[], rows: Row[]): stri
 /** Single cell as a copyable string (NULL → empty). */
 export function cellToCopy(v: unknown): string {
   return asText(v);
+}
+
+/**
+ * Engine-aware INSERT statements for a `.sql` dump — MySQL/MariaDB quote with
+ * backticks, everyone else with double-quotes. (Kept here, dep-free, rather than
+ * importing the driver's quoteIdent to avoid pulling native modules into the bundle.)
+ */
+export function toDumpInserts(engine: string, table: string, columns: string[], rows: Row[]): string {
+  const mysql = engine === 'mysql' || engine === 'mariadb';
+  const q = mysql
+    ? (s: string) => '`' + s.replace(/`/g, '``') + '`'
+    : (s: string) => '"' + s.replace(/"/g, '""') + '"';
+  const cols = columns.map(q).join(', ');
+  return rows
+    .map((r) => `INSERT INTO ${q(table)} (${cols}) VALUES (${columns.map((c) => sqlLiteral(r[c])).join(', ')});`)
+    .join('\n');
 }

@@ -96,6 +96,58 @@ export interface AgentDecision {
   requiresExplicitUserIntent: boolean;
 }
 
+/**
+ * Compact, JSON-safe decision metadata for telemetry/shadow payloads. It omits
+ * long tool-name arrays and the human-readable rationale; those can be derived
+ * from the intent profile when needed.
+ */
+export interface AgentDecisionTelemetry {
+  recommendedAgent: AgentId;
+  intent: TaskIntent;
+  phase: TaskPhase;
+  riskBudget: RiskBudget;
+  costBudget: CostBudget;
+  delegation: DelegationPolicy;
+  confidence: number;
+  requiresExplicitUserIntent: boolean;
+  toolPolicyPreferredCount: number;
+  toolPolicyDiscouragedCount: number;
+}
+
+/** Coarse confidence bucket for prompt/guardrail consumers. */
+export type DecisionConfidenceBand = 'low' | 'medium' | 'high';
+
+/**
+ * Compact runtime guidance derived from an {@link AgentDecision}. This is the
+ * shape injected into preflight/system-reminder blocks for weaker models and
+ * consulted by soft guardrails. It is advisory by itself: callers decide whether
+ * to merely render it, ask the user to switch agents, or enforce a risk guard.
+ */
+export interface AgentDecisionGuidance {
+  recommendedAgent: AgentId;
+  currentAgent?: AgentId | null;
+  intent: TaskIntent;
+  phase: TaskPhase;
+  riskBudget: RiskBudget;
+  costBudget: CostBudget;
+  delegation: DelegationPolicy;
+  confidence: number;
+  confidenceBand: DecisionConfidenceBand;
+  requiresExplicitUserIntent: boolean;
+  /** True when a confident recommendation differs from the current agent. */
+  agentMismatch: boolean;
+  /** True when the UI/runtime should ask before switching to `recommendedAgent`. */
+  shouldAskBeforeAgentSwitch: boolean;
+  /** Short, user-safe reason for the optional switch prompt. */
+  agentSwitchReason?: string;
+  /** Capped preferred tool hints, preserving source-of-truth order. */
+  preferredTools: readonly string[];
+  /** Capped discouraged tool hints, preserving source-of-truth order. */
+  discouragedTools: readonly string[];
+  /** One-line compact reminder suitable for `<preflight>` or `<system-reminder>`. */
+  reminder: string;
+}
+
 /** Result of intent classification, before it is mapped to a full decision. */
 export interface IntentClassification {
   intent: TaskIntent;

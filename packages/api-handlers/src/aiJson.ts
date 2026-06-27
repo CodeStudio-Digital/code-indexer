@@ -4,11 +4,21 @@
  * `getGeneralDefault()`, else fall through to any enabled Anthropic /
  * OpenAI / OpenRouter / Z.AI / DeepSeek provider with an api_key.
  *
+ * The actual LLM call is delegated to the SAME provider engine the chat
+ * uses (`createCoderProvider`), so every provider-specific routing detail
+ * is inherited automatically: Z.AI's `extra.zai_mode='coding'` plan
+ * endpoint, OpenRouter's base URL, vendor-specific body shaping, and
+ * stream resilience. The previous hand-rolled OpenAI/Anthropic clients
+ * ignored `extra.zai_mode`, so Coding-Plan users hit the pay-as-you-go
+ * general endpoint and got `429 Insufficient balance`.
+ *
  * Returns the raw model text (caller strips fences + parses) or a
  * `refusal` string when no provider is usable / the call fails — so
  * callers surface an actionable message instead of throwing a 500.
  */
 import type { HandlerDeps } from './types.js';
+import { createCoderProvider } from '@mcp/services/providers/factory.js';
+import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 
 type ProviderCfg =
   | { kind?: string; api_key?: string | null; enabled?: boolean; base_url?: string | null }
@@ -17,6 +27,11 @@ type ProviderCfg =
 export interface AiJsonRequest {
   system: string;
   user: string;
+  /**
+   * Soft hint only. The streaming `ChatProvider` contract has no max-tokens
+   * field, so this is no longer forwarded to the wire — kept for caller
+   * source-compat. These calls are short (commit msg / pipeline / script).
+   */
   maxTokens?: number;
 }
 
@@ -38,63 +53,39 @@ export async function callGeneralAiJson(
 ): Promise<AiJsonResult> {
   const { providerStore } = deps;
 
+  // Resolve which provider + model to use (kept here so the "not configured"
+  // refusal strings stay stable — callers match them to surface a 412).
   const def = providerStore.getGeneralDefault();
-  let cfg = (def ? providerStore.getProvider(def.providerId) : null) as ProviderCfg;
+  const defCfg = (def ? providerStore.getProvider(def.providerId) : null) as ProviderCfg;
+  let providerId = def?.providerId ?? '';
   let modelId = def?.modelId ?? '';
-  if (!isUsable(cfg) || !modelId) {
+  if (!isUsable(defCfg) || !modelId) {
     const fallback = providerStore.listProviders({ enabled: true }).find((p) => isUsable(p));
     if (!fallback) {
       return { refusal: 'No usable AI provider — set an API key for Anthropic / OpenAI / Z.AI / DeepSeek in Settings → Providers.' };
     }
-    cfg = fallback;
+    providerId = fallback.id;
     modelId = providerStore.listModels(fallback.id, true)[0]?.model_id ?? '';
     if (!modelId) return { refusal: 'Fallback provider has no enabled models.' };
   }
-  if (!cfg) return { refusal: 'Provider config missing after selection.' };
 
-  // Strip the ::mode suffix the dashboard appends; route Z.AI base URLs.
-  let modelMode: string | undefined;
-  if (modelId.includes('::')) [modelId, modelMode] = modelId.split('::', 2);
-  let baseUrl: string | undefined = cfg.base_url ?? undefined;
-  if (cfg.kind === 'zai') {
-    if (process.env.ZAI_BASE_URL) baseUrl = process.env.ZAI_BASE_URL;
-    else if (modelMode === 'coding') baseUrl = 'https://api.z.ai/api/coding/paas/v4/';
-    else if (modelMode === 'general') baseUrl = 'https://api.z.ai/api/paas/v4/';
-    else if (!baseUrl) baseUrl = 'https://api.z.ai/api/paas/v4/';
-  } else if (cfg.kind === 'openrouter' && !baseUrl) {
-    baseUrl = 'https://openrouter.ai/api/v1';
-  }
-
-  const maxTokens = req.maxTokens ?? 1500;
+  // Delegate to the real engine — it resolves the Z.AI coding endpoint,
+  // OpenRouter base, vendor shaping, and stream resilience for us.
   try {
-    if (cfg.kind === 'anthropic') {
-      const { default: Anthropic } = await import('@anthropic-ai/sdk');
-      const client = new Anthropic({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}) });
-      const resp = await client.messages.create({
-        model: modelId,
-        max_tokens: maxTokens,
-        system: req.system,
-        messages: [{ role: 'user', content: req.user }],
-      });
-      return {
-        raw: resp.content
-          .filter((b) => b.type === 'text')
-          .map((b) => (b as { text: string }).text)
-          .join(''),
-      };
+    const provider = await createCoderProvider(providerId, modelId);
+    const messages: AgentMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: req.user }] },
+    ];
+    let raw = '';
+    for await (const d of provider.chat({
+      system: req.system,
+      messages,
+      tools: [],
+      inference: { temperature: 0 },
+    })) {
+      if (d.type === 'text_delta') raw += d.text;
     }
-    const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}) });
-    const resp = await client.chat.completions.create({
-      model: modelId,
-      max_tokens: maxTokens,
-      temperature: 0,
-      messages: [
-        { role: 'system', content: req.system },
-        { role: 'user', content: req.user },
-      ],
-    });
-    return { raw: resp.choices[0]?.message?.content ?? '' };
+    return { raw };
   } catch (e) {
     return { refusal: `AI call failed: ${e instanceof Error ? e.message : String(e)}` };
   }

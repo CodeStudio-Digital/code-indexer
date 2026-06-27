@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '../../../lib/utils.js';
 import { ResearchMarkdown } from '../../docs/research/ResearchMarkdown.js';
 import { METHOD_COLOR } from '../collection/row-format.js';
+import { DocBodyViewer } from './DocBodyViewer.js';
 import type { DocEndpoint } from './types.js';
 
 function statusTone(s: number | null): string {
@@ -77,7 +78,7 @@ export function EndpointView({ endpoint }: { endpoint: DocEndpoint }) {
                 {ex.status != null && <span className={cn('font-mono', statusTone(ex.status))}>{ex.status} {ex.statusText}</span>}
                 {ex.contentType && <span className="ml-auto text-[10px] text-muted-foreground">{ex.contentType}</span>}
               </div>
-              {ex.body && <pre className="text-[11px] font-mono whitespace-pre-wrap break-words p-2 max-h-72 overflow-auto">{ex.body}</pre>}
+              {ex.body && <DocBodyViewer body={ex.body} contentType={ex.contentType} />}
             </div>
           ))}
         </section>

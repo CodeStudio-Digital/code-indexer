@@ -8,6 +8,7 @@
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { buildTablePreview } from './sql/preview.js';
 import type {
   ColumnInfo,
   DatabaseDriver,
@@ -117,6 +118,7 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
   }
 
   const driver: DatabaseDriver = {
+    kind: 'relational',
     testConnection() {
       const row = db.prepare('SELECT sqlite_version() AS v').get() as { v: string };
       return Promise.resolve({ serverVersion: `SQLite ${row.v}` });
@@ -148,10 +150,10 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
         : db.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`).all()) as Array<{ name: string }>;
       return Promise.resolve(rows.map((r) => r.name));
     },
-    tablePreview(_schema, name, { limit, offset }) {
+    tablePreview(_schema, name, opts) {
       const rel = `"${name.replace(/"/g, '""')}"`;
-      // Fetch one extra row so `truncated` reflects that more rows exist past the page.
-      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit + 1, offset], maxRows: limit });
+      const { sql, params } = buildTablePreview('sqlite', rel, opts);
+      return runQuery(sql, { params, maxRows: opts.limit });
     },
     async schema() {
       const tables = await driver.listTables();

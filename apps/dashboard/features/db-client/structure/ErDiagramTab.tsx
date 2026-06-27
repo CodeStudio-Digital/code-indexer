@@ -14,9 +14,9 @@ import type { DbTableInfo } from '../types.js';
 
 const MAX_TABLES = 40;
 
-export function ErDiagramTab({ connectionId, schema }: { connectionId: number; schema?: string }) {
+export function ErDiagramTab({ connKey, schema }: { connKey: string; schema?: string }) {
   const { t } = useTranslation('dbClient');
-  const cid = String(connectionId);
+  const cid = connKey;
   const [xml, setXml] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [capped, setCapped] = useState(false);

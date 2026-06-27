@@ -10,7 +10,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import { classifyIntent } from '../task-intent.js';
-import { decide, intentProfile, toolPolicyForTask } from '../decision-engine.js';
+import {
+  decide,
+  decisionGuidance,
+  decisionGuidanceForTask,
+  decisionTelemetryForTask,
+  intentProfile,
+  toolPolicyForTask,
+} from '../decision-engine.js';
 
 describe('classifyIntent', () => {
   const cases: Array<[string, string]> = [
@@ -106,6 +113,96 @@ describe('decide', () => {
   it('exposes the same routing table via intentProfile', () => {
     expect(intentProfile('git_admin').requiresExplicitUserIntent).toBe(true);
     expect(intentProfile('answer').agent).toBe('explore');
+  });
+});
+
+describe('decision guidance bridge', () => {
+  it('returns compact prompt guidance with capped tool hints', () => {
+    const g = decisionGuidanceForTask('implement the new endpoint handler', { currentAgent: 'plan' });
+    expect(g.intent).toBe('edit');
+    expect(g.recommendedAgent).toBe('build');
+    expect(g.currentAgent).toBe('plan');
+    expect(g.riskBudget).toBe('write');
+    expect(g.confidenceBand).toBe('medium');
+    expect(g.agentMismatch).toBe(true);
+    expect(g.shouldAskBeforeAgentSwitch).toBe(true);
+    expect(g.agentSwitchReason).toContain('build');
+    expect(g.preferredTools).toEqual([
+      'mcp__get_symbol_body',
+      'mcp__prepare_edit',
+      'edit_file',
+      'multi_edit',
+    ]);
+    expect(g.discouragedTools).toEqual(['git_commit', 'git_push', 'mcp__index_project']);
+    expect(g.reminder).toContain('agent_decision: intent=edit');
+    expect(g.reminder).toContain('ask-switch=plan→build');
+  });
+
+  it('keeps low-confidence triage conservative and does not ask to switch', () => {
+    const g = decisionGuidanceForTask('zzzphlnt qwwx', { currentAgent: 'build' });
+    expect(g.phase).toBe('triage');
+    expect(g.confidenceBand).toBe('low');
+    expect(g.agentMismatch).toBe(false);
+    expect(g.shouldAskBeforeAgentSwitch).toBe(false);
+    expect(g.reminder).not.toContain('ask-switch=');
+  });
+
+  it('preserves specialized preview routing to builder', () => {
+    const g = decisionGuidanceForTask('the component layout looks broken in the preview', { currentAgent: 'build' });
+    expect(g.intent).toBe('preview');
+    expect(g.recommendedAgent).toBe('builder');
+    expect(g.shouldAskBeforeAgentSwitch).toBe(true);
+    expect(g.reminder).toContain('agent=builder');
+  });
+
+  it('marks explicit admin intent and allows asking before switching to admin', () => {
+    const g = decisionGuidanceForTask('commit and push the changes', { currentAgent: 'build' });
+    expect(g.intent).toBe('git_admin');
+    expect(g.recommendedAgent).toBe('admin');
+    expect(g.riskBudget).toBe('admin');
+    expect(g.requiresExplicitUserIntent).toBe(true);
+    expect(g.shouldAskBeforeAgentSwitch).toBe(true);
+    expect(g.reminder).toContain('explicit-user-intent-required');
+  });
+
+  it('does not ask to switch to admin without explicit user intent', () => {
+    const d = decide('implement the new endpoint handler');
+    const unsafeAdmin = {
+      ...d,
+      recommendedAgent: 'admin' as const,
+      riskBudget: 'admin' as const,
+      requiresExplicitUserIntent: false,
+      confidence: 0.9,
+    };
+    const g = decisionGuidance(unsafeAdmin, { currentAgent: 'build' });
+    expect(g.recommendedAgent).toBe('admin');
+    expect(g.shouldAskBeforeAgentSwitch).toBe(false);
+    expect(g.reminder).not.toContain('ask-switch=');
+  });
+
+  it('is deterministic', () => {
+    expect(decisionGuidanceForTask('refactor the scorer', { currentAgent: 'plan' })).toEqual(
+      decisionGuidanceForTask('refactor the scorer', { currentAgent: 'plan' }),
+    );
+  });
+});
+
+describe('decision telemetry bridge', () => {
+  it('returns compact telemetry without long tool arrays or rationale', () => {
+    const t = decisionTelemetryForTask('implement the new endpoint handler');
+    expect(t.intent).toBe('edit');
+    expect(t.recommendedAgent).toBe('build');
+    expect(t.phase).toBe('editing');
+    expect(t.toolPolicyPreferredCount).toBeGreaterThan(0);
+    expect(t.toolPolicyDiscouragedCount).toBeGreaterThan(0);
+    expect('toolPolicy' in t).toBe(false);
+    expect('rationale' in t).toBe(false);
+  });
+
+  it('still records low-confidence triage telemetry', () => {
+    const t = decisionTelemetryForTask('zzzphlnt qwwx');
+    expect(t.phase).toBe('triage');
+    expect(t.confidence).toBeLessThan(0.3);
   });
 });
 

@@ -4,7 +4,8 @@
     "title": "Connections",
     "add": "New connection",
     "empty": "No saved connections",
-    "search": "Filter connections…",
+    "search": "Search connections, databases, schemas, and tables…",
+    "noSearchResults": "No loaded item found for “{{query}}”.",
     "connect": "Connect",
     "disconnect": "Disconnect",
     "edit": "Edit…",
@@ -83,7 +84,8 @@
     "statementsN": "{{n}} statements",
     "idle": "Ready",
     "explain": "Explain",
-    "plan": "Plan"
+    "plan": "Plan",
+    "format": "Format SQL"
   },
   "aux": {
     "history": "History",
@@ -98,7 +100,8 @@
     "panel": "History & saved queries"
   },
   "tree": {
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "filterTables": "Filter tables…"
   },
   "er": {
     "building": "Building diagram…",
@@ -122,6 +125,10 @@
     "copyDdl": "Copy CREATE statement",
     "genSelect": "Generate SELECT",
     "genInsert": "Generate INSERT",
+    "importCsv": "Import CSV…",
+    "dumpSql": "Export as SQL…",
+    "exportCsv": "Export as CSV…",
+    "dumpDone": "Exported {{n}} rows",
     "truncate": "Truncate",
     "truncateConfirm": "Delete ALL rows from {{name}}? This cannot be undone.",
     "truncated": "Table truncated",
@@ -188,6 +195,16 @@
     "noMatch": "No tabs match",
     "list": "Open tabs"
   },
+  "filter": {
+    "columns": "Columns",
+    "addCondition": "Add condition",
+    "apply": "Apply",
+    "value": "value",
+    "remove": "Remove",
+    "sql": "SQL",
+    "sqlMode": "Switch to SQL editor",
+    "filterMode": "Filter"
+  },
   "data": {
     "reload": "Reload",
     "prev": "Previous",
@@ -214,5 +231,32 @@
     "applied": "Changes applied",
     "applyError": "Failed to apply changes",
     "nothing": "No changes to apply"
+  },
+  "driver": {
+    "needed": "This engine's driver isn't installed yet ({{size}}).",
+    "install": "Download driver",
+    "installed": "Driver installed",
+    "installFailed": "Driver install failed"
+  },
+  "import": {
+    "title": "Import CSV",
+    "selectFile": "Choose file…",
+    "hasHeader": "First row is header",
+    "delimiter": "Delimiter",
+    "comma": "Comma",
+    "tab": "Tab",
+    "semicolon": "Semicolon",
+    "rowsParsed": "{{n}} data rows parsed",
+    "capped": "importing the first {{n}}",
+    "csvColumn": "CSV column",
+    "targetColumn": "Target column",
+    "sample": "Sample",
+    "skip": "— skip —",
+    "import": "Import",
+    "cancel": "Cancel",
+    "nothing": "Map at least one column",
+    "done": "Inserted {{n}} rows",
+    "doneErrors": "Inserted {{ok}}, {{errors}} failed",
+    "errorsN": "{{n}} errors"
   }
 }

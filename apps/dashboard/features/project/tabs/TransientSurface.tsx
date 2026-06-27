@@ -1,7 +1,8 @@
 /**
- * Abas transitórias do ProjectView (W4 decompose): tudo que NÃO é keep-alive
- * (chat/files/git). São conditional-render (montam ao entrar, desmontam ao sair) e
- * as pesadas (charts/diff/drawio/http/xterm) são chunks LAZY — fora do chunk inicial.
+ * Superfícies lazy do ProjectView (W4 decompose): abas realmente transitórias
+ * seguem conditional-render (montam ao entrar, desmontam ao sair), enquanto o DB
+ * client é chamado pelo keep-alive de TabContent. As pesadas
+ * (charts/diff/drawio/http/xterm) seguem em chunks LAZY — fora do chunk inicial.
  */
 import { Suspense, lazy } from 'react';
 import { Loader2 } from 'lucide-react';

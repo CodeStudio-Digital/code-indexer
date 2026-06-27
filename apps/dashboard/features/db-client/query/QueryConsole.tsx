@@ -10,7 +10,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Play, Square, Loader2, Save, Network } from 'lucide-react';
+import { Play, Square, Loader2, Save, Network, WandSparkles } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Button } from '../../../components/ui/button.js';
 import { prompt, toast } from '../../../components/ui/prompt-dialog.js';
@@ -19,7 +19,8 @@ import { VirtualResultGrid } from '../grid/VirtualResultGrid.js';
 import { SubTabs } from '../../api-client/SubTabs.js';
 import { SqlEditor } from './SqlEditor.js';
 import { splitStatements } from './sql-split.js';
-import type { DbQueryResult } from '../types.js';
+import { formatSql } from './format-sql.js';
+import type { DbEngine, DbQueryResult } from '../types.js';
 
 interface ResultSet {
   sql: string;
@@ -30,14 +31,20 @@ interface ResultSet {
 export function QueryConsole({
   projectId,
   connectionId,
+  connKey,
   suggestions = [],
+  engine,
   schema,
   initialSql,
   onSaved,
 }: {
   projectId: number;
   connectionId: number | null;
+  /** Live-op routing key (`id` or `id@db`); falls back to the numeric id. */
+  connKey?: string;
   suggestions?: string[];
+  /** Engine — feeds dialect-specific autocomplete. */
+  engine?: DbEngine;
   /** When set, the console is scoped to this schema (pg search_path / mysql USE). */
   schema?: string;
   /** Initial SQL when opened from history / a saved query. */
@@ -60,7 +67,7 @@ export function QueryConsole({
       if (statements.length === 0) return;
       runningRef.current = true;
       setRunning(true);
-      const cid = String(connectionId);
+      const cid = connKey ?? String(connectionId);
       const out: ResultSet[] = [];
       const started = Date.now();
       let totalRows = 0;
@@ -96,19 +103,21 @@ export function QueryConsole({
         })
         .catch(() => void 0);
     },
-    [connectionId, projectId, schema],
+    [connectionId, connKey, projectId, schema],
   );
 
   const cancel = useCallback(() => {
-    if (connectionId != null && queryIdRef.current) void api.cancelQuery(String(connectionId), queryIdRef.current);
-  }, [connectionId]);
+    if (connectionId != null && queryIdRef.current) void api.cancelQuery(connKey ?? String(connectionId), queryIdRef.current);
+  }, [connectionId, connKey]);
+
+  const format = useCallback(() => setSql((s) => formatSql(s)), []);
 
   const explain = useCallback(async () => {
     if (connectionId == null || !sql.trim() || runningRef.current) return;
     runningRef.current = true;
     setRunning(true);
     try {
-      const res = await api.explain(String(connectionId), sql);
+      const res = await api.explain(connKey ?? String(connectionId), sql);
       setResults([{ sql, result: res }]);
     } catch (e) {
       setResults([{ sql, error: e instanceof Error ? e.message : String(e) }]);
@@ -117,7 +126,7 @@ export function QueryConsole({
       setRunning(false);
       setActiveIdx(0);
     }
-  }, [connectionId, sql]);
+  }, [connectionId, connKey, sql]);
 
   const save = useCallback(async () => {
     if (!sql.trim()) return;
@@ -157,6 +166,9 @@ export function QueryConsole({
           <Network className="mr-1.5 h-3 w-3" />
           {t('query.explain')}
         </Button>
+        <Button size="sm" variant="ghost" onClick={format} disabled={!sql.trim()} title={t('query.format')}>
+          <WandSparkles className="h-3 w-3" />
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => void save()} disabled={!sql.trim()} title={t('query.saveTitle')}>
           <Save className="h-3 w-3" />
         </Button>
@@ -169,7 +181,9 @@ export function QueryConsole({
             onChange={setSql}
             onRun={(s) => void run(s)}
             onRunAll={(s) => void run(s)}
+            onFormat={format}
             suggestions={suggestions}
+            engine={engine}
             height="100%"
           />
         </Panel>

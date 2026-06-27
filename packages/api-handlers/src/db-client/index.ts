@@ -11,11 +11,14 @@
  * carry only a `connectionId`.
  */
 
-import { ApiError, type DbClientApi, type DbConnectSpec, type DbTableInfo } from '@mcp/api-bus';
+import { ApiError, type DbClientApi, type DbConnectSpec, type DbEngineKind, type DbTableInfo } from '@mcp/api-bus';
 import {
   buildDdl,
   buildDml,
+  buildSqliteRebuild,
+  sqliteAlterNeedsRebuild,
   createDriver,
+  isWriteCommand,
   quoteIdent,
   quoteRelation,
   sharedDbConnectionManager,
@@ -24,6 +27,7 @@ import {
   type DbEngine,
   type RowChange,
 } from '@mcp/db-drivers';
+import { installDbDriver, listDbDriverStatus } from '@mcp/services/db/driver-installer.js';
 import type { HandlerDeps } from '../types.js';
 
 /** Pool key for a UI connection — distinct keyspace from the agent pools. */
@@ -113,6 +117,14 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
     }
   }
 
+  /** Guard a relational-only op (SQL/tables/DDL) against a document/key-value connection. */
+  function assertRelational(connectionId: string, op: string): void {
+    const kind = mgr.getMeta(keyFor(connectionId))?.kind ?? 'relational';
+    if (kind !== 'relational') {
+      throw new ApiError('db_op_unsupported', 422, `${op} is not supported for a ${kind} store — use runCommand.`);
+    }
+  }
+
   return {
     async testConnection({ spec }) {
       const driver = await createDriver(toConfig(spec));
@@ -131,7 +143,8 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       // A fresh Connect uses fresh credentials — drop any prior pool first.
       await mgr.closeKey(key);
       const driver = await mgr.acquire(key, toConfig(spec), { pinned: true });
-      mgr.setMeta(key, { engine: spec.engine, readOnly: !!spec.readOnly });
+      const kind: DbEngineKind = driver.kind ?? 'relational';
+      mgr.setMeta(key, { engine: spec.engine, readOnly: !!spec.readOnly, kind });
       let serverVersion: string | undefined;
       try {
         serverVersion = (await driver.testConnection()).serverVersion;
@@ -140,7 +153,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
         await mgr.closeKey(key);
         throw new ApiError('db_connect_failed', 502, err instanceof Error ? err.message : String(err));
       }
-      return { sessionToken: `dbsess:${spec.connectionId}`, serverVersion };
+      return { sessionToken: `dbsess:${spec.connectionId}`, serverVersion, kind };
     },
 
     async disconnect({ connectionId }) {
@@ -164,9 +177,9 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return info as DbTableInfo;
     },
 
-    async tableRows({ connectionId, schema, table, limit, offset }) {
+    async tableRows({ connectionId, schema, table, limit, offset, orderBy, where }) {
       const started = Date.now();
-      const res = await requireDriver(connectionId).tablePreview(schema, table, { limit, offset });
+      const res = await requireDriver(connectionId).tablePreview(schema, table, { limit, offset, orderBy, where });
       return { ...res, durationMs: Date.now() - started };
     },
 
@@ -227,6 +240,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
     },
 
     async explain({ connectionId, sql }) {
+      assertRelational(connectionId, 'explain');
       const engine = requireEngine(connectionId);
       // A trailing statement would EXECUTE (EXPLAIN binds only the first); refuse it.
       if (hasMultipleStatements(sql)) throw new ApiError('db_explain_multi', 400, 'Explain expects a single statement.');
@@ -235,6 +249,9 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       if (mgr.getMeta(keyFor(connectionId))?.readOnly && !isReadStatement(sql)) {
         throw new ApiError('db_read_only', 403, 'Connection is read-only — only read statements can be explained.');
       }
+      // SQL Server has no single-statement EXPLAIN; SHOWPLAN is a session toggle
+      // that would leak into the pooled connection, so skip it cleanly.
+      if (engine === 'mssql') throw new ApiError('db_explain_unsupported', 422, 'Execution plans are not yet supported for SQL Server in this client.');
       const prefix = engine === 'sqlite' ? 'EXPLAIN QUERY PLAN ' : 'EXPLAIN ';
       const started = Date.now();
       const res = await requireDriver(connectionId).runQuery(prefix + sql, { maxRows: 2000 });
@@ -243,6 +260,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
 
     async editRow({ connectionId, op, schema, table, pk, values, dryRun }) {
       assertWritable(connectionId);
+      assertRelational(connectionId, 'editRow');
       const engine = requireEngine(connectionId);
       const change: RowChange = { op, schema, table, pk, values };
       const built = buildDml(engine, change);
@@ -253,23 +271,82 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
 
     async ddl({ connectionId, op, spec, dryRun }) {
       assertWritable(connectionId);
+      assertRelational(connectionId, 'ddl');
       const engine = requireEngine(connectionId);
-      const statements = buildDdl(engine, op, spec);
+      const driver = requireDriver(connectionId);
+
+      // SQLite can't modify a column or add/drop a FK in place — it needs a full
+      // table rebuild built from the live schema. Detect that case and swap the
+      // (comment-only) buildDdl output for the real rebuild statement list.
+      const rebuild = engine === 'sqlite' && op === 'alter' && !!spec.alter && sqliteAlterNeedsRebuild(spec.alter);
+      const statements = rebuild
+        ? buildSqliteRebuild(await driver.describeTable(spec.alter!.schema ?? '', spec.alter!.table), spec.alter!)
+        : buildDdl(engine, op, spec);
       const sql = statements.join(';\n') + ';';
       if (dryRun) return { sql };
-      // An all-comment set means the engine can't express the change (e.g. SQLite
-      // modify-column / FK needs a table rebuild). Surface it instead of silently
-      // reporting success after touching nothing.
+      // An all-comment set means the engine can't express the change. Surface it
+      // instead of silently reporting success after touching nothing.
       if (statements.every((s) => /^\s*--/.test(s))) {
         throw new ApiError('db_ddl_unsupported', 422, statements.join('\n').replace(/^\s*--\s?/gm, '') || 'Unsupported DDL.');
       }
-      const driver = requireDriver(connectionId);
       let result;
-      for (const stmt of statements) {
-        if (/^\s*--/.test(stmt)) continue; // skip comment lines mixed into a larger set
-        result = await driver.runQuery(stmt);
+      try {
+        for (const stmt of statements) {
+          if (/^\s*--/.test(stmt)) continue; // skip comment lines mixed into a larger set
+          result = await driver.runQuery(stmt);
+        }
+      } catch (e) {
+        // The rebuild runs inside BEGIN…COMMIT; on a mid-way failure roll back so
+        // the connection isn't stranded in an open transaction (and re-enable FKs).
+        if (rebuild) {
+          await driver.runQuery('ROLLBACK').catch(() => undefined);
+          await driver.runQuery('PRAGMA foreign_keys=ON').catch(() => undefined);
+        }
+        throw e;
       }
       return { sql, result };
+    },
+
+    async *exportStream({ connectionId, schema, table, batchRows }) {
+      const driver = requireDriver(connectionId);
+      // Page with the engine-correct, quoted SELECT * (tablePreview); the client
+      // formats + writes each batch, so a huge table never lands in memory whole.
+      const page = Math.min(Math.max(batchRows ?? 1000, 100), 10_000);
+      let offset = 0;
+      let total = 0;
+      let columns: string[] = [];
+      for (;;) {
+        const res = await driver.tablePreview(schema ?? '', table, { limit: page, offset });
+        if (columns.length === 0) {
+          columns = res.fields.length > 0 ? res.fields.map((f) => f.name) : res.rows[0] ? Object.keys(res.rows[0]) : [];
+        }
+        total += res.rows.length;
+        offset += res.rows.length;
+        // tablePreview fetches limit+1 internally, so `truncated` means more rows.
+        const done = !res.truncated;
+        yield { columns, rows: res.rows, total, done };
+        if (done) break;
+      }
+    },
+
+    async runCommand({ connectionId, command, maxRows }) {
+      const driver = requireDriver(connectionId);
+      if (!driver.runCommand) {
+        throw new ApiError('db_op_unsupported', 422, 'This connection does not support commands (relational — use query).');
+      }
+      // The SQL read-only valve can't classify Mongo/Redis — use the per-kind one.
+      if (mgr.getMeta(keyFor(connectionId))?.readOnly && isWriteCommand(command)) {
+        throw new ApiError('db_read_only', 403, 'Connection is read-only — write commands are blocked.');
+      }
+      return driver.runCommand(command, { maxRows });
+    },
+
+    async driverStatus() {
+      return listDbDriverStatus();
+    },
+
+    async *installDriverStream({ engine }) {
+      yield* installDbDriver(engine);
     },
   };
 }

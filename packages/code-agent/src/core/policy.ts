@@ -24,6 +24,7 @@
  * how downstream code can extend it.
  */
 
+import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
 import type {
   CoderTool,
   ToolRiskLevel,
@@ -222,6 +223,78 @@ export type PolicyDecision =
       detail: string;
       metadata: ResolvedToolMetadata;
     };
+
+export type SoftGuardrailReason = 'read_only_risk_budget' | 'admin_escalation';
+
+export type SoftGuardrailDecision =
+  | { allowed: true; metadata: ResolvedToolMetadata }
+  | {
+      allowed: false;
+      reason: SoftGuardrailReason;
+      detail: string;
+      metadata: ResolvedToolMetadata;
+    };
+
+export interface SoftGuardrailContext {
+  /** Default-off switch owned by the host/runner. */
+  enabled: boolean;
+  /** Compact decision guidance for the current task/turn. */
+  guidance?: AgentDecisionGuidance | null;
+  /** Confidence below which the guardrail observes but does not block. Default 0.6. */
+  minConfidence?: number;
+}
+
+const DEFAULT_SOFT_GUARDRAIL_CONFIDENCE = 0.6;
+
+/**
+ * Soft AgentDecision guardrail. Default-off and intentionally narrow: it only
+ * blocks high-risk deviations that are almost certainly wrong for the current
+ * decision. It does NOT replace plan/spec/task-scope policy and never removes
+ * tools from the model's visible list; callers surface this as a normal gate
+ * refusal before invocation.
+ */
+export function evaluateSoftAgentDecisionGuardrail(
+  tool: CoderTool,
+  ctx: SoftGuardrailContext,
+): SoftGuardrailDecision {
+  const metadata = resolveToolMetadata(tool);
+  const g = ctx.guidance;
+  if (!ctx.enabled || !g) return { allowed: true, metadata };
+  const minConfidence = ctx.minConfidence ?? DEFAULT_SOFT_GUARDRAIL_CONFIDENCE;
+  if (g.confidence < minConfidence) return { allowed: true, metadata };
+
+  // Never allow a non-admin decision to wander into admin-risk tooling. This
+  // catches direct git/snapshot/index/admin calls from weaker models without
+  // relying on the prompt alone.
+  if (metadata.riskLevel === 'admin' && g.riskBudget !== 'admin') {
+    return {
+      allowed: false,
+      reason: 'admin_escalation',
+      detail:
+        `[agent-decision-guardrail: ${tool.name} is admin-risk, but the current task was classified as ` +
+        `${g.intent}/${g.phase} with risk<=${g.riskBudget}. Ask the user explicitly before admin work.]`,
+      metadata,
+    };
+  }
+
+  // For confident read-only decisions, block mutations/admin escalation before
+  // they run. Execute-risk tools such as `run_command` may still be legitimate
+  // read-only inspection in plan/explore flows; shell-specific safety remains in
+  // the shell handler / permission gate.
+  const irreversible = isIrreversibleTool(tool.name);
+  if (g.riskBudget === 'read' && (metadata.mutates || metadata.riskLevel === 'admin' || irreversible)) {
+    return {
+      allowed: false,
+      reason: 'read_only_risk_budget',
+      detail:
+        `[agent-decision-guardrail: ${tool.name} risk=${metadata.riskLevel} exceeds ` +
+        `the read-only budget for ${g.intent}/${g.phase}. Use read/search/planning tools or ask the user to switch scope.]`,
+      metadata,
+    };
+  }
+
+  return { allowed: true, metadata };
+}
 
 /**
  * Internal tools that ALWAYS require user confirmation when the active

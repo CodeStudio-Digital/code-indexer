@@ -87,8 +87,8 @@ describe('task id generation', () => {
     expect(typeof result).not.toBe('string');
     if (typeof result === 'string') throw new Error(result);
     expect(result.tasks).toHaveLength(2);
-    expect(result.tasks[0].id).toMatch(/^tsk_/);
-    expect(result.tasks[1].id).toMatch(/^tsk_/);
+    expect(result.tasks[0].id).toMatch(/^tsk_[0-9a-f]{8}$/);
+    expect(result.tasks[1].id).toMatch(/^tsk_[0-9a-f]{8}$/);
     expect(result.tasks[0].id).not.toBe('task_1');
     expect(result.tasks[1].depends_on).toEqual([result.tasks[0].id]);
   });
@@ -117,8 +117,8 @@ describe('task id generation', () => {
 
     expect(typeof result).not.toBe('string');
     if (typeof result === 'string') throw new Error(result);
-    expect(result.tasks[0].id).toMatch(/^tsk_/);
-    expect(result.tasks[1].id).toMatch(/^tsk_/);
+    expect(result.tasks[0].id).toMatch(/^tsk_[0-9a-f]{8}$/);
+    expect(result.tasks[1].id).toMatch(/^tsk_[0-9a-f]{8}$/);
     expect(new Set(result.tasks.map((t) => t.id)).size).toBe(2);
     expect(result.tasks[1].depends_on).toEqual([result.tasks[0].id]);
   });

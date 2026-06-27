@@ -26,6 +26,7 @@ import {
 } from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
 import { callGeneralAiJson } from '../aiJson.js';
+import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import { createConflictHandlers } from './conflicts.js';
 import { createGitOptimizationHandlers } from './git-optimizations.js';
 import { selectHunks } from './hunk-stage.js';
@@ -1345,7 +1346,7 @@ ${intent}`;
   try {
     if (cfg.kind === 'anthropic') {
       const { default: Anthropic } = await import('@anthropic-ai/sdk');
-      const client = new Anthropic({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}) });
+      const client = new Anthropic({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}), fetch: nativeFetch() });
       const resp = await client.messages.create({
         model: modelId,
         max_tokens: 800,
@@ -1355,7 +1356,7 @@ ${intent}`;
       raw = resp.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('');
     } else {
       const { default: OpenAI } = await import('openai');
-      const client = new OpenAI({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}) });
+      const client = new OpenAI({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}), fetch: nativeFetch() });
       const resp = await client.chat.completions.create({
         model: modelId,
         max_tokens: 800,

@@ -159,6 +159,12 @@ export interface RunFreshOpts {
    * across the MessagePort. Forwarded verbatim to `runCoder({ preflight })`.
    */
   preflight?: import('@mcp/code-agent/index.js').PreflightSeed;
+  /** Default-off Agent Decision Engine runtime flags forwarded to runCoder. */
+  agentDecisionTelemetryEnabled?: boolean;
+  agentDecisionGuidanceEnabled?: boolean;
+  agentDecisionSoftGuardrail?: boolean;
+  agentDecisionSoftGuardrailMinConfidence?: number;
+  agentDecisionAskBeforeSwitch?: boolean;
   /**
    * When true, the worker calls `runCoder({ resume: true })` so the runner
    * picks up from history (last DB message must be `role:'tool'`) instead

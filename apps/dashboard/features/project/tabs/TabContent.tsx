@@ -1,11 +1,12 @@
 /**
  * Roteador de conteúdo das abas do ProjectView (W4 decompose + W2 keep-alive).
  *
- * Keep-alive (flag ON por padrão): as três abas caras — `chat`, `files`, `git` —
- * ficam MONTADAS e apenas escondidas via CSS ao trocar de aba, em vez de
- * desmontar/remontar. Isso preserva o estado do Monaco (cursor/scroll/undo) e a
- * sessão de chat (SSE) através da navegação. Files e Git compartilham UM editor
- * (CodeSurface), então no máximo 1 Monaco + 1 AgentChat ficam vivos.
+ * Keep-alive (flag ON por padrão): as abas caras/estadoful — `chat`, `files`,
+ * `git` e `databases` — ficam MONTADAS e apenas escondidas via CSS ao trocar de
+ * aba, em vez de desmontar/remontar. Isso preserva o estado do Monaco
+ * (cursor/scroll/undo), a sessão de chat (SSE) e o client de DB (conexões,
+ * árvore, abas/query editors) através da navegação. Files e Git compartilham UM
+ * editor (CodeSurface), então no máximo 1 Monaco + 1 AgentChat ficam vivos.
  *
  * As abas transitórias (snapshots/api/preview/diagrams/analytics/plugin) seguem
  * conditional-render (montam ao entrar, desmontam ao sair) por cima das escondidas.
@@ -24,7 +25,7 @@ import { TransientSurface } from './TransientSurface.js';
 import type { PreviewFramework } from '../builder/useSelectorMode.js';
 
 /** Abas mantidas vivas (escondidas via CSS) na troca de aba. */
-const KEEP_ALIVE = new Set<ProjectTabId>(['chat', 'files', 'git']);
+const KEEP_ALIVE = new Set<ProjectTabId>(['chat', 'files', 'git', 'databases']);
 
 const KEEPALIVE_FLAG = 'mcp-ide:tab-keepalive';
 /** Default ON. `'0'` no localStorage desliga (rollback). Espelha nsModelUrisEnabled. */
@@ -70,16 +71,19 @@ function KeepAlivePane({ hidden, children }: { hidden: boolean; children: ReactN
 export function TabContent(props: TabContentProps) {
   const { tab, projectId } = props;
   const isCode = tab === 'files' || tab === 'git';
+  const isDatabases = tab === 'databases';
 
   // Hooks chamados INCONDICIONALMENTE (rules of hooks) — só usados no caminho keep-alive.
   const [codeSeen, setCodeSeen] = useState(isCode);
   const [chatSeen, setChatSeen] = useState(tab === 'chat');
+  const [databasesSeen, setDatabasesSeen] = useState(isDatabases);
   // Último modo de código (files/git) — preserva o painel esquerdo quando escondido.
   const lastCodeMode = useRef<'files' | 'git'>(isCode ? (tab as 'files' | 'git') : 'files');
   if (isCode) lastCodeMode.current = tab as 'files' | 'git';
   useEffect(() => {
     if (tab === 'files' || tab === 'git') setCodeSeen(true);
     if (tab === 'chat') setChatSeen(true);
+    if (tab === 'databases') setDatabasesSeen(true);
   }, [tab]);
   useEffect(() => {
     markRouteEvent('TabContent:mounted', { projectId, tab });
@@ -106,6 +110,16 @@ export function TabContent(props: TabContentProps) {
       framework={props.framework}
     />
   );
+  const renderDatabases = (): ReactNode => (
+    <TransientSurface
+      tab="databases"
+      projectId={props.projectId}
+      projectName={props.projectName}
+      contribWindows={props.contribWindows}
+      builderJson={props.builderJson}
+      framework={props.framework}
+    />
+  );
   const renderTransient = (): ReactNode => (
     <TransientSurface
       tab={tab}
@@ -124,11 +138,12 @@ export function TabContent(props: TabContentProps) {
     return <>{renderTransient()}</>;
   }
 
-  // Keep-alive: chat + code (files/git) montados (escondidos via CSS); transitórias por cima.
+  // Keep-alive: chat + code (files/git) + databases montados (escondidos via CSS); transitórias por cima.
   return (
     <div className="relative h-full min-h-0">
       {codeSeen && <KeepAlivePane hidden={!isCode}>{renderCode()}</KeepAlivePane>}
       {chatSeen && <KeepAlivePane hidden={tab !== 'chat'}>{renderChat()}</KeepAlivePane>}
+      {databasesSeen && <KeepAlivePane hidden={!isDatabases}>{renderDatabases()}</KeepAlivePane>}
       {!KEEP_ALIVE.has(tab) && <div className="absolute inset-0">{renderTransient()}</div>}
     </div>
   );

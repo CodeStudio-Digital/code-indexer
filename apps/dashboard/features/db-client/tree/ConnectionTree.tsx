@@ -7,7 +7,7 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronRight, ChevronDown, Database, Table2, Eye, Columns3, Box, Loader2,
-  Plus, RefreshCw, MoreVertical, Plug, PlugZap, Folder, KeyRound, Link2, Zap, Braces, Hash,
+  Plus, RefreshCw, MoreVertical, Plug, PlugZap, Folder, KeyRound, Link2, Zap, Braces, Hash, Search,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
@@ -15,9 +15,52 @@ import {
 import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import { useContextMenu, type ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { copyText } from '../../../lib/clipboard.js';
+import { downloadBlob } from '../../api-client/download.js';
+import { toCsv, toCsvBody, toDumpInserts } from '../grid/grid-export.js';
 import * as api from '../api.js';
 import type { UseDbClient } from '../useDbClient.js';
 import type { DbConnection, DbConnectionStatus, DbTreeNode } from '../types.js';
+
+/**
+ * Export a whole table to a downloaded file, streaming server-paged batches so
+ * neither side holds the table at once and there's no row cap. SQL prepends a
+ * CREATE; CSV writes the header once then appends each batch's rows.
+ */
+async function exportTable(
+  node: DbTreeNode,
+  cid: string,
+  db: UseDbClient,
+  format: 'sql' | 'csv',
+  t: (k: string, o?: Record<string, unknown>) => string,
+): Promise<void> {
+  const tbl = node.table ?? '';
+  const engine = db.connections.find((c) => c.id === node.connectionId)?.engine ?? 'postgres';
+  try {
+    const parts: string[] = [];
+    if (format === 'sql') {
+      const { sql: createSql } = await api.generateSql(cid, node.schema, tbl, 'create');
+      parts.push(`${createSql.trim()}\n`);
+    }
+    let total = 0;
+    let csvHeaderDone = false;
+    for await (const batch of api.exportStream(cid, node.schema, tbl, 2000)) {
+      total = batch.total;
+      if (batch.rows.length === 0) continue;
+      if (format === 'csv') {
+        parts.push(csvHeaderDone ? toCsvBody(batch.columns, batch.rows) : toCsv(batch.columns, batch.rows));
+        csvHeaderDone = true;
+      } else {
+        parts.push(toDumpInserts(engine, tbl, batch.columns, batch.rows));
+      }
+    }
+    const ext = format === 'csv' ? 'csv' : 'sql';
+    const mime = format === 'csv' ? 'text/csv' : 'application/sql';
+    downloadBlob(`${tbl}.${ext}`, new Blob([`${parts.join('\n')}\n`], { type: mime }));
+    toast.success(t('node.dumpDone', { n: total }));
+  } catch (e) {
+    toast.error(t('node.dumpSql'), { description: e instanceof Error ? e.message : String(e) });
+  }
+}
 
 /** Context-menu items per node kind (table/schema/etc). Empty for connection roots (they have a kebab). */
 function buildNodeMenu(
@@ -31,19 +74,19 @@ function buildNodeMenu(
     onSelect: () => void navigator.clipboard.writeText(node.name ?? node.table ?? node.label).catch(() => undefined),
   };
   if (node.kind === 'table' || node.kind === 'view') {
-    const cid = String(node.connectionId);
+    const cid = db.connKeyFor(node.connectionId, node.database);
     const tbl = node.table ?? '';
     return [
       { id: 'data', label: t('node.viewData'), onSelect: () => void db.openTableData(node) },
       { id: 'structure', label: t('node.editStructure'), onSelect: () => void db.openStructureTab(node) },
-      { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId) },
+      { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId, node.schema, undefined, node.database) },
       {
         id: 'gen-select',
         label: t('node.genSelect'),
         separatorBefore: true,
         onSelect: async () => {
           const { sql } = await api.generateSql(cid, node.schema, tbl, 'select');
-          db.openQueryTab(node.connectionId, node.schema, sql);
+          db.openQueryTab(node.connectionId, node.schema, sql, node.database);
         },
       },
       {
@@ -51,7 +94,7 @@ function buildNodeMenu(
         label: t('node.genInsert'),
         onSelect: async () => {
           const { sql } = await api.generateSql(cid, node.schema, tbl, 'insert');
-          db.openQueryTab(node.connectionId, node.schema, sql);
+          db.openQueryTab(node.connectionId, node.schema, sql, node.database);
         },
       },
       {
@@ -63,6 +106,21 @@ function buildNodeMenu(
         },
       },
       copyName,
+      {
+        id: 'import-csv',
+        label: t('node.importCsv'),
+        onSelect: () => db.requestImportCsv(node),
+      },
+      {
+        id: 'dump-sql',
+        label: t('node.dumpSql'),
+        onSelect: () => void exportTable(node, cid, db, 'sql', t),
+      },
+      {
+        id: 'export-csv',
+        label: t('node.exportCsv'),
+        onSelect: () => void exportTable(node, cid, db, 'csv', t),
+      },
       {
         id: 'rename',
         label: t('node.rename'),
@@ -102,7 +160,7 @@ function buildNodeMenu(
           const name = node.table ?? node.label;
           if (!(await confirm({ title: t('node.dropConfirmTitle', { name }), description: t('node.dropConfirmBody'), tone: 'destructive' }))) return;
           try {
-            await api.ddl({ connectionId: String(node.connectionId), op: 'drop', spec: { drop: { schema: node.schema, table: node.table ?? '' } } });
+            await api.ddl({ connectionId: cid, op: 'drop', spec: { drop: { schema: node.schema, table: node.table ?? '' } } });
             db.invalidateTables(node.connectionId, node.schema);
           } catch (e) {
             toast.error(t('node.dropTable'), { description: e instanceof Error ? e.message : String(e) });
@@ -114,15 +172,15 @@ function buildNodeMenu(
   if (node.kind === 'schema') {
     return [
       // Console scoped to this schema (pg search_path / mysql USE).
-      { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId, node.schema) },
-      { id: 'newtable', label: t('node.newTable'), onSelect: () => void db.openNewTable(node.connectionId, node.schema) },
-      { id: 'er', label: t('node.erDiagram'), onSelect: () => void db.openErDiagram(node.connectionId, node.schema) },
+      { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId, node.schema, undefined, node.database) },
+      { id: 'newtable', label: t('node.newTable'), onSelect: () => void db.openNewTable(node.connectionId, node.schema, node.database) },
+      { id: 'er', label: t('node.erDiagram'), onSelect: () => void db.openErDiagram(node.connectionId, node.schema, node.database) },
       { id: 'refresh', label: t('node.refresh'), onSelect: () => db.refreshNode(node.id) },
     ];
   }
   if (node.kind === 'database') {
     return [
-      { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId) },
+      { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId, undefined, undefined, node.database) },
       { id: 'refresh', label: t('node.refresh'), onSelect: () => db.refreshNode(node.id) },
     ];
   }
@@ -148,6 +206,29 @@ const STATUS_DOT: Record<DbConnectionStatus, string> = {
   connected: 'bg-emerald-500',
   error: 'bg-red-500',
 };
+
+function normalizeSearchText(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function nodeSearchText(node: DbTreeNode, conn?: DbConnection): string {
+  return normalizeSearchText([
+    node.kind,
+    node.label,
+    node.name,
+    node.database,
+    node.schema,
+    node.table,
+    node.groupKind,
+    conn?.label,
+    conn?.engine,
+    conn?.database_name,
+    conn?.group_name,
+  ].filter(Boolean).join(' '));
+}
 
 function NodeIcon({ node }: { node: DbTreeNode }) {
   if (node.depth === 0) return <Database className="h-3.5 w-3.5 text-sky-500" />;
@@ -188,15 +269,56 @@ export function ConnectionTree({
 }) {
   const { t } = useTranslation('dbClient');
   const [filter, setFilter] = useState('');
+  // Per-schema table filter (keyed by the schema node id) — the input that
+  // appears right above a schema's tables once it's expanded.
+  const [schemaFilters, setSchemaFilters] = useState<Record<string, string>>({});
 
   const visibleRows = useMemo(() => {
-    if (!filter.trim()) return db.treeRows;
-    const q = filter.toLowerCase();
-    // Filter on the root connection label; keep a root + its expanded children.
-    const keepConn = new Set(
-      db.connections.filter((c) => c.label.toLowerCase().includes(q)).map((c) => c.id),
-    );
-    return db.treeRows.filter((r) => keepConn.has(r.connectionId));
+    const q = normalizeSearchText(filter.trim());
+    if (!q) return db.treeRows;
+
+    const connById = new Map(db.connections.map((conn) => [conn.id, conn]));
+    const parentById = new Map<string, string>();
+    const stack: DbTreeNode[] = [];
+    const matchingIds = new Set<string>();
+    const includeIds = new Set<string>();
+
+    for (const node of db.treeRows) {
+      stack.length = node.depth;
+      const parent = stack[stack.length - 1];
+      if (parent) parentById.set(node.id, parent.id);
+      stack.push(node);
+    }
+
+    const includeWithAncestors = (id: string) => {
+      let current: string | undefined = id;
+      while (current) {
+        includeIds.add(current);
+        current = parentById.get(current);
+      }
+    };
+
+    for (const node of db.treeRows) {
+      const haystack = nodeSearchText(node, connById.get(node.connectionId));
+      if (!haystack.includes(q)) continue;
+      matchingIds.add(node.id);
+      includeWithAncestors(node.id);
+    }
+
+    if (matchingIds.size === 0) return [];
+
+    for (const node of db.treeRows) {
+      let current: string | undefined = node.id;
+      while (current) {
+        if (matchingIds.has(current)) {
+          includeIds.add(node.id);
+          break;
+        }
+        current = parentById.get(current);
+      }
+    }
+
+    return db.treeRows.filter((row) => includeIds.has(row.id));
   }, [filter, db.treeRows, db.connections]);
 
   return (
@@ -227,10 +349,23 @@ export function ConnectionTree({
         {db.connections.length === 0 && !db.loading && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">{t('connections.empty')}</div>
         )}
+        {filter.trim() && visibleRows.length === 0 && db.connections.length > 0 && (
+          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+            {t('connections.noSearchResults', { query: filter.trim() })}
+          </div>
+        )}
         {(() => {
           const els: React.ReactNode[] = [];
           let lastGroup = '';
+          // Active expanded-schema filter context + a prefix to skip the subtree
+          // of any table hidden by that filter.
+          let schemaCtx: { id: string; q: string } | null = null;
+          let hiddenPrefix: string | null = null;
           for (const node of visibleRows) {
+            if (hiddenPrefix && node.id.startsWith(`${hiddenPrefix}/`)) continue;
+            hiddenPrefix = null;
+            if (schemaCtx && node.id !== schemaCtx.id && !node.id.startsWith(`${schemaCtx.id}/`)) schemaCtx = null;
+
             if (node.depth === 0) {
               const g = db.connections.find((c) => c.id === node.connectionId)?.group_name?.trim() ?? '';
               if (g && g !== lastGroup) {
@@ -242,11 +377,66 @@ export function ConnectionTree({
               }
               lastGroup = g;
             }
+
+            if (node.kind === 'schema') {
+              els.push(<Row key={node.id} node={node} db={db} t={t} onEdit={onEdit} />);
+              if (db.expanded.has(node.id)) {
+                const cur = schemaFilters[node.id] ?? '';
+                schemaCtx = { id: node.id, q: cur.trim().toLowerCase() };
+                els.push(
+                  <SchemaFilterRow
+                    key={`flt:${node.id}`}
+                    value={cur}
+                    depth={node.depth + 1}
+                    placeholder={t('tree.filterTables')}
+                    onChange={(v) => setSchemaFilters((s) => ({ ...s, [node.id]: v }))}
+                  />,
+                );
+              } else {
+                schemaCtx = null;
+              }
+              continue;
+            }
+
+            // Filter the direct tables/views of the active schema; hide their subtree too.
+            if (schemaCtx?.q && (node.kind === 'table' || node.kind === 'view')) {
+              const name = (node.name ?? node.label).toLowerCase();
+              if (!name.includes(schemaCtx.q)) {
+                hiddenPrefix = node.id;
+                continue;
+              }
+            }
+
             els.push(<Row key={node.id} node={node} db={db} t={t} onEdit={onEdit} />);
           }
           return els;
         })()}
       </div>
+    </div>
+  );
+}
+
+/** Quick table filter rendered just above a schema's tables once it's expanded. */
+function SchemaFilterRow({
+  value,
+  onChange,
+  depth,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  depth: number;
+  placeholder: string;
+}) {
+  return (
+    <div className="flex items-center py-0.5" style={{ paddingLeft: 4 + depth * 12 }} onClick={(e) => e.stopPropagation()}>
+      <Search className="mr-1 h-3 w-3 shrink-0 text-muted-foreground/50" />
+      <input
+        className="h-5 w-[80%] rounded border bg-background px-1.5 text-[11px] outline-none"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
     </div>
   );
 }

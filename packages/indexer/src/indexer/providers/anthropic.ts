@@ -1,4 +1,5 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk';
+import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { LLMProvider } from '@mcp/indexer/indexer/providers/base.js';
 import { SYSTEM_PROMPT, SUMMARY_ONLY_SYSTEM_PROMPT, buildUserPrompt, buildSummaryUserPrompt, parseAnalysisResponse } from '@mcp/indexer/indexer/providers/base.js';
 import type { AnalysisResult } from '@mcp/shared/types.js';
@@ -65,7 +66,9 @@ export class AnthropicProvider implements LLMProvider {
       ...(opts?.dangerouslyAllowBrowser !== undefined
         ? { dangerouslyAllowBrowser: opts.dangerouslyAllowBrowser }
         : {}),
-      ...(opts?.fetch ? { fetch: opts.fetch as unknown as ClientOptions['fetch'] } : {}),
+      // Default to undici (native fetch) so the SDK avoids bundled node-fetch@2
+      // and installLlmDispatcher's bodyTimeout:0 applies. Explicit opts.fetch wins.
+      fetch: (opts?.fetch ?? nativeFetch()) as unknown as ClientOptions['fetch'],
     });
   }
 

@@ -2,6 +2,7 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { AgentDecisionGuidance, AgentDecisionTelemetry } from '@mcp/code-agent/agents/decision-types.js';
 import type { CoderTunables } from '@mcp/code-agent/core/tunables.js';
 import type { CoderProfile, ToolTier } from '@mcp/code-agent/tools/tiers.js';
 
@@ -123,6 +124,16 @@ export interface RunnerOptions {
    */
   preflightHint?: string;
   sessionToolCap?: number;
+  /** Compact Agent Decision Engine guidance for this task/turn, when enabled by the host. */
+  agentDecisionGuidance?: AgentDecisionGuidance | null;
+  /** Compact Agent Decision Engine telemetry for recommendation-vs-outcome logging. */
+  agentDecisionTelemetry?: AgentDecisionTelemetry | null;
+  /** Default-off soft guardrail that blocks only high-risk deviations from `agentDecisionGuidance`. */
+  agentDecisionSoftGuardrail?: boolean;
+  /** Optional confidence threshold for the soft guardrail. Defaults in policy.ts. */
+  agentDecisionSoftGuardrailMinConfidence?: number;
+  /** Default-off UX gate: ask before switching when guidance confidently recommends another agent. */
+  agentDecisionAskBeforeSwitch?: boolean;
   /**
    * Profile shorthand — expanded into `activeTiers` if not explicitly set.
    * 'bootstrap' → ~13 essentials; 'navigate' adds edit/git read; 'full' adds admin.

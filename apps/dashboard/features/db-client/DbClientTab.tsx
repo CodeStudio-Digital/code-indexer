@@ -20,6 +20,7 @@ import { TableStructureEditor } from './structure/TableStructureEditor.js';
 import { ErDiagramTab } from './structure/ErDiagramTab.js';
 import { WorkAreaTabBar } from './workarea/WorkAreaTabBar.js';
 import { ConnectionDialog } from './dialogs/ConnectionDialog.js';
+import { CsvImportDialog } from './dialogs/CsvImportDialog.js';
 import type { DbConnection, DbEngine, WorkTab } from './types.js';
 
 export function DbClientTab({ projectId }: { projectId: number }) {
@@ -127,6 +128,17 @@ export function DbClientTab({ projectId }: { projectId: number }) {
           onSaved={() => void db.refresh()}
         />
       )}
+
+      {db.importRequest && (
+        <CsvImportDialog
+          open
+          connKey={db.importRequest.connKey}
+          schema={db.importRequest.schema}
+          table={db.importRequest.table}
+          onClose={db.clearImportRequest}
+          onDone={() => db.invalidateTables(db.importRequest!.connectionId, db.importRequest!.schema)}
+        />
+      )}
     </div>
   );
 }
@@ -148,15 +160,15 @@ function TabContent({
   onSaved: () => void;
 }) {
   if (tab.kind === 'data' && tab.table) {
-    return <DataGridTab connectionId={tab.connectionId} schema={tab.schema ?? ''} table={tab.table} />;
+    return <DataGridTab connKey={tab.connKey} schema={tab.schema ?? ''} table={tab.table} engine={engine} />;
   }
   if (tab.kind === 'er') {
-    return <ErDiagramTab connectionId={tab.connectionId} schema={tab.schema} />;
+    return <ErDiagramTab connKey={tab.connKey} schema={tab.schema} />;
   }
   if (tab.kind === 'structure') {
     return (
       <TableStructureEditor
-        connectionId={tab.connectionId}
+        connKey={tab.connKey}
         engine={engine}
         schema={tab.schema}
         table={tab.table || undefined}
@@ -168,7 +180,9 @@ function TabContent({
     <QueryConsole
       projectId={projectId}
       connectionId={tab.connectionId}
+      connKey={tab.connKey}
       suggestions={suggestions}
+      engine={engine}
       schema={tab.schema}
       initialSql={tab.initialSql}
       onSaved={onSaved}

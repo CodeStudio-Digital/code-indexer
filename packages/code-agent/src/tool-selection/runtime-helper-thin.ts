@@ -25,6 +25,7 @@ import {
 } from '@mcp/candidate-pipeline';
 import { ESSENTIAL_TOOL_NAMES, canonicalToolName } from './helpers.js';
 import type { EmbeddingFn, ToolEmbeddingStore } from './stages.js';
+import type { AgentDecisionTelemetry } from '../agents/decision-types.js';
 import type { JsonSchema } from '../core/tool.js';
 
 /**
@@ -88,6 +89,11 @@ export interface ApplyToolSelectionThinOptions {
    * `web_fetch` match real candidate names like `WebFetch`/`web_fetch`.
    */
   toolPolicy?: { preferred?: readonly string[]; discouraged?: readonly string[] };
+  /**
+   * Optional compact Agent Decision Engine metadata for diagnostics/shadow logs.
+   * This is observational only: it never affects selection.
+   */
+  agentDecision?: AgentDecisionTelemetry;
   /** Telemetry callback — receives the selection diagnostics. */
   onResult?: (diag: {
     consideredCount: number;
@@ -97,6 +103,8 @@ export interface ApplyToolSelectionThinOptions {
     durationMs: number;
     /** True when the task embedding came from the LRU instead of `embed(taskText)`. */
     taskEmbeddingCacheHit: boolean;
+    /** Compact shadow-mode decision metadata, when provided by the caller. */
+    agentDecision?: AgentDecisionTelemetry;
   }) => void;
 }
 
@@ -209,6 +217,7 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
       estimatedTokensSaved,
       durationMs: Date.now() - startedAt,
       taskEmbeddingCacheHit,
+      agentDecision: options.agentDecision,
     });
 
     return selected;

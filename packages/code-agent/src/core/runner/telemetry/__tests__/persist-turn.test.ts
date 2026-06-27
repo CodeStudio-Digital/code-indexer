@@ -13,6 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ChatUsage, ContentBlock, ToolUseBlock } from '@mcp/code-agent/core/messages.js';
 import { persistTurnTelemetry } from '../persist-turn.js';
+import { decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
 
 interface RecordedRow {
   session_id: number | null;
@@ -27,6 +28,7 @@ interface RecordedRow {
   estimated_cost_usd: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  response_meta: unknown;
 }
 
 function makeMockStore() {
@@ -205,5 +207,105 @@ describe('persistTurnTelemetry — pure function', () => {
     });
     expect(rows[0].compaction_triggered).toBe(true);
     expect(rows[0].summarizer_ran).toBe(true);
+  });
+});
+
+/**
+ * Telemetry-first rollout guard: the Agent Decision Engine telemetry path must
+ * be OBSERVABILITY-ONLY. With the telemetry flag off the persisted row is
+ * byte-identical to before (response_meta passes through untouched); with it on
+ * the recommendation/outcome is recorded INSIDE the existing response_meta JSON
+ * without dropping any pre-existing field and without mutating the caller's
+ * object. These tests lock that contract so the flag stays safe to ship dark.
+ */
+describe('persistTurnTelemetry — Agent Decision telemetry merge (telemetry-first)', () => {
+  // A real, deterministic telemetry object from the pure engine.
+  const telemetry = decisionTelemetryForTask('implement the new endpoint handler');
+
+  const baseArgs = {
+    sessionId: 1, runId: 'r', isSubagent: false,
+    provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+    turn: 1, usage: baseUsage,
+    toolResultBlocks: [] as ContentBlock[],
+    historyChars: 0, compactionTriggered: false, summarizerRan: false,
+  };
+
+  it('telemetry OFF: passes an existing response_meta through by reference (unchanged)', () => {
+    const { store, rows } = makeMockStore();
+    const responseMeta = { path: '/v1/messages', response: { status: 200 } } as never;
+    persistTurnTelemetry({
+      store: store as never,
+      ...baseArgs,
+      toolUseBlocks: [toolUse('edit_file', { path: 'a.ts' })],
+      responseMeta,
+    });
+    // Same object, and no agent_decision injected.
+    expect(rows[0].response_meta).toBe(responseMeta);
+    expect((rows[0].response_meta as Record<string, unknown>).agent_decision).toBeUndefined();
+  });
+
+  it('telemetry OFF + no response_meta: writes null (baseline preserved)', () => {
+    const { store, rows } = makeMockStore();
+    persistTurnTelemetry({
+      store: store as never,
+      ...baseArgs,
+      toolUseBlocks: [],
+    });
+    expect(rows[0].response_meta).toBeNull();
+  });
+
+  it('telemetry ON: merges agent_decision while preserving every existing response_meta field', () => {
+    const { store, rows } = makeMockStore();
+    const responseMeta = { path: '/v1/messages', response: { status: 200, ok: true } } as never;
+    persistTurnTelemetry({
+      store: store as never,
+      ...baseArgs,
+      toolUseBlocks: [toolUse('edit_file', { path: 'a.ts' }), toolUse('grep_code')],
+      responseMeta,
+      agentDecisionTelemetry: telemetry,
+      actualAgent: 'build',
+    });
+    const meta = rows[0].response_meta as Record<string, unknown> & {
+      agent_decision: Record<string, unknown>;
+      response: unknown;
+    };
+    // Pre-existing fields survive untouched.
+    expect(meta.path).toBe('/v1/messages');
+    expect(meta.response).toEqual({ status: 200, ok: true });
+    // Recommendation + outcome recorded together.
+    expect(meta.agent_decision.recommendedAgent).toBe(telemetry.recommendedAgent);
+    expect(meta.agent_decision.intent).toBe(telemetry.intent);
+    expect(meta.agent_decision.actualAgent).toBe('build');
+    expect(meta.agent_decision.toolsCalled).toEqual(['edit_file', 'grep_code']);
+  });
+
+  it('telemetry ON + no response_meta: creates a meta object carrying only agent_decision', () => {
+    const { store, rows } = makeMockStore();
+    persistTurnTelemetry({
+      store: store as never,
+      ...baseArgs,
+      toolUseBlocks: [],
+      agentDecisionTelemetry: telemetry,
+      // actualAgent omitted → null
+    });
+    const meta = rows[0].response_meta as { agent_decision: Record<string, unknown> };
+    expect(meta.agent_decision.actualAgent).toBeNull();
+    expect(meta.agent_decision.toolsCalled).toEqual([]);
+    expect(meta.agent_decision.recommendedAgent).toBe(telemetry.recommendedAgent);
+  });
+
+  it('telemetry ON: does NOT mutate the caller-provided responseMeta (no aliasing)', () => {
+    const { store, rows } = makeMockStore();
+    const responseMeta = { path: '/v1/messages' } as never;
+    persistTurnTelemetry({
+      store: store as never,
+      ...baseArgs,
+      toolUseBlocks: [],
+      responseMeta,
+      agentDecisionTelemetry: telemetry,
+    });
+    // Caller's object stays clean; the row got a fresh merged copy.
+    expect((responseMeta as Record<string, unknown>).agent_decision).toBeUndefined();
+    expect(rows[0].response_meta).not.toBe(responseMeta);
   });
 });

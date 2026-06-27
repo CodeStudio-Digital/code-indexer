@@ -4,7 +4,8 @@
     "title": "Conexões",
     "add": "Nova conexão",
     "empty": "Nenhuma conexão salva",
-    "search": "Filtrar conexões…",
+    "search": "Buscar conexões, bancos, schemas e tabelas…",
+    "noSearchResults": "Nenhum item carregado encontrado para “{{query}}”.",
     "connect": "Conectar",
     "disconnect": "Desconectar",
     "edit": "Editar…",
@@ -83,7 +84,8 @@
     "statementsN": "{{n}} comandos",
     "idle": "Pronto",
     "explain": "Explain",
-    "plan": "Plano"
+    "plan": "Plano",
+    "format": "Formatar SQL"
   },
   "aux": {
     "history": "Histórico",
@@ -98,7 +100,8 @@
     "panel": "Histórico & consultas salvas"
   },
   "tree": {
-    "loading": "Carregando…"
+    "loading": "Carregando…",
+    "filterTables": "Filtrar tabelas…"
   },
   "er": {
     "building": "Gerando diagrama…",
@@ -122,6 +125,10 @@
     "copyDdl": "Copiar comando CREATE",
     "genSelect": "Gerar SELECT",
     "genInsert": "Gerar INSERT",
+    "importCsv": "Importar CSV…",
+    "dumpSql": "Exportar como SQL…",
+    "exportCsv": "Exportar como CSV…",
+    "dumpDone": "Exportadas {{n}} linhas",
     "truncate": "Truncar",
     "truncateConfirm": "Apagar TODAS as linhas de {{name}}? Não dá pra desfazer.",
     "truncated": "Tabela truncada",
@@ -188,6 +195,16 @@
     "noMatch": "Nenhuma aba corresponde",
     "list": "Abas abertas"
   },
+  "filter": {
+    "columns": "Colunas",
+    "addCondition": "Adicionar condição",
+    "apply": "Aplicar",
+    "value": "valor",
+    "remove": "Remover",
+    "sql": "SQL",
+    "sqlMode": "Abrir editor SQL",
+    "filterMode": "Filtro"
+  },
   "data": {
     "reload": "Recarregar",
     "prev": "Anterior",
@@ -214,5 +231,32 @@
     "applied": "Alterações aplicadas",
     "applyError": "Falha ao aplicar alterações",
     "nothing": "Nenhuma alteração para aplicar"
+  },
+  "driver": {
+    "needed": "O driver deste motor ainda não está instalado ({{size}}).",
+    "install": "Baixar driver",
+    "installed": "Driver instalado",
+    "installFailed": "Falha ao instalar o driver"
+  },
+  "import": {
+    "title": "Importar CSV",
+    "selectFile": "Escolher arquivo…",
+    "hasHeader": "Primeira linha é cabeçalho",
+    "delimiter": "Delimitador",
+    "comma": "Vírgula",
+    "tab": "Tab",
+    "semicolon": "Ponto e vírgula",
+    "rowsParsed": "{{n}} linhas de dados lidas",
+    "capped": "importando as primeiras {{n}}",
+    "csvColumn": "Coluna do CSV",
+    "targetColumn": "Coluna de destino",
+    "sample": "Amostra",
+    "skip": "— ignorar —",
+    "import": "Importar",
+    "cancel": "Cancelar",
+    "nothing": "Mapeie ao menos uma coluna",
+    "done": "Inseridas {{n}} linhas",
+    "doneErrors": "Inseridas {{ok}}, {{errors}} com falha",
+    "errorsN": "{{n}} erros"
   }
 }

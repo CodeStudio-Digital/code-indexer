@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import type { LLMProvider } from '@mcp/indexer/indexer/providers/base.js';
 import { SYSTEM_PROMPT, SUMMARY_ONLY_SYSTEM_PROMPT, buildUserPrompt, buildSummaryUserPrompt, parseAnalysisResponse } from '@mcp/indexer/indexer/providers/base.js';
 import type { AnalysisResult } from '@mcp/shared/types.js';
+import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 
 export class OpenAIProvider implements LLMProvider {
   readonly name = 'openai';
@@ -36,6 +37,9 @@ export class OpenAIProvider implements LLMProvider {
       apiKey: apiKey ?? '',
       ...(baseURL ? { baseURL } : {}),
       ...(defaultHeaders ? { defaultHeaders } : {}),
+      // Use undici (native fetch) instead of bundled node-fetch@2 — see
+      // @mcp/shared native-fetch.ts.
+      fetch: nativeFetch(),
     });
   }
 

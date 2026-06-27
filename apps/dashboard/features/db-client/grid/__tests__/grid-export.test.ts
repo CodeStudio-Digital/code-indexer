@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toCsv, toJson, toTsv, toInsertSql, cellToCopy } from '../grid-export.js';
+import { toCsv, toCsvBody, toJson, toTsv, toInsertSql, toDumpInserts, cellToCopy } from '../grid-export.js';
 
 const cols = ['id', 'name', 'meta'];
 const rows = [
@@ -34,6 +34,20 @@ describe('grid-export', () => {
     expect(sql).toContain('INSERT INTO "users" ("id", "name", "meta") VALUES');
     expect(sql).toContain("'Ada, \"the count\"'");
     expect(sql).toContain('NULL'); // row 2 meta
+  });
+
+  it('dump INSERTs quote idents per engine (mysql backticks, else double-quotes)', () => {
+    expect(toDumpInserts('mysql', 'users', cols, rows)).toContain('INSERT INTO `users` (`id`, `name`, `meta`) VALUES');
+    expect(toDumpInserts('postgres', 'users', cols, rows)).toContain('INSERT INTO "users" ("id", "name", "meta") VALUES');
+    expect(toDumpInserts('sqlite', 'users', cols, rows)).toContain('NULL');
+  });
+
+  it('toCsvBody emits rows without the header (for streamed batches)', () => {
+    const body = toCsvBody(cols, rows);
+    expect(body.startsWith('id,name,meta')).toBe(false);
+    // toCsv === header line + the body, so appending batches reproduces the file.
+    expect(toCsv(cols, rows)).toBe(`id,name,meta\n${body}`);
+    expect(toCsvBody(cols, [{ id: 1, name: 'Ada', meta: null }])).toBe('1,Ada,');
   });
 
   it('cellToCopy renders null as empty', () => {

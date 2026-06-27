@@ -17,7 +17,10 @@ import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import { classifyIntent } from '@mcp/code-agent/agents/task-intent.js';
 import type {
   AgentDecision,
+  AgentDecisionGuidance,
+  AgentDecisionTelemetry,
   CostBudget,
+  DecisionConfidenceBand,
   DelegationPolicy,
   RiskBudget,
   TaskIntent,
@@ -256,6 +259,96 @@ export function intentProfile(intent: TaskIntent): Readonly<IntentProfile> {
 
 /** Confidence below which policy hints are suppressed (treated as "unsure"). */
 const MIN_POLICY_CONFIDENCE = 0.3;
+const MIN_SWITCH_PROMPT_CONFIDENCE = 0.6;
+const GUIDANCE_TOOL_HINT_LIMIT = 4;
+
+function isSafeSwitchPromptTarget(decision: AgentDecision): boolean {
+  if (decision.recommendedAgent !== 'admin') return true;
+  return decision.requiresExplicitUserIntent;
+}
+
+function confidenceBand(confidence: number): DecisionConfidenceBand {
+  if (confidence < MIN_POLICY_CONFIDENCE) return 'low';
+  if (confidence >= 0.75) return 'high';
+  return 'medium';
+}
+
+function capToolHints(tools: readonly string[]): readonly string[] {
+  return tools.slice(0, GUIDANCE_TOOL_HINT_LIMIT);
+}
+
+function guidanceReminder(g: Omit<AgentDecisionGuidance, 'reminder'>): string {
+  const preferred = g.preferredTools.length > 0
+    ? ` use-first=${g.preferredTools.join(',')}`
+    : '';
+  const discouraged = g.discouragedTools.length > 0
+    ? ` avoid=${g.discouragedTools.join(',')}`
+    : '';
+  const switchHint = g.shouldAskBeforeAgentSwitch
+    ? ` ask-switch=${g.currentAgent ?? 'unknown'}→${g.recommendedAgent}`
+    : '';
+  const explicit = g.requiresExplicitUserIntent ? ' explicit-user-intent-required' : '';
+  return [
+    `agent_decision: intent=${g.intent}`,
+    `agent=${g.recommendedAgent}`,
+    `phase=${g.phase}`,
+    `risk<=${g.riskBudget}`,
+    `confidence=${g.confidenceBand}`,
+    `delegation=${g.delegation}`,
+    preferred,
+    discouraged,
+    switchHint,
+    explicit,
+  ].filter(Boolean).join('; ');
+}
+
+/** Convert a full decision to compact runtime guidance for prompts/guardrails. */
+export function decisionGuidance(
+  decision: AgentDecision,
+  ctx: DecisionContext = {},
+): AgentDecisionGuidance {
+  const band = confidenceBand(decision.confidence);
+  const currentAgent = ctx.currentAgent ?? null;
+  const confidentEnoughToSwitch = decision.confidence >= MIN_SWITCH_PROMPT_CONFIDENCE;
+  const safeSwitchTarget = isSafeSwitchPromptTarget(decision);
+  const agentMismatch = Boolean(
+    currentAgent &&
+    currentAgent !== decision.recommendedAgent &&
+    confidentEnoughToSwitch &&
+    safeSwitchTarget,
+  );
+  const shouldAskBeforeAgentSwitch = agentMismatch;
+  const preferredTools = capToolHints(decision.toolPolicy.preferred);
+  const discouragedTools = capToolHints(decision.toolPolicy.discouraged);
+  const guidanceBase: Omit<AgentDecisionGuidance, 'reminder'> = {
+    recommendedAgent: decision.recommendedAgent,
+    currentAgent,
+    intent: decision.intent,
+    phase: decision.phase,
+    riskBudget: decision.riskBudget,
+    costBudget: decision.costBudget,
+    delegation: decision.delegation,
+    confidence: decision.confidence,
+    confidenceBand: band,
+    requiresExplicitUserIntent: decision.requiresExplicitUserIntent,
+    agentMismatch,
+    shouldAskBeforeAgentSwitch,
+    ...(shouldAskBeforeAgentSwitch
+      ? { agentSwitchReason: `${decision.intent} work fits ${decision.recommendedAgent} better than ${currentAgent}.` }
+      : {}),
+    preferredTools,
+    discouragedTools,
+  };
+  return { ...guidanceBase, reminder: guidanceReminder(guidanceBase) };
+}
+
+/** Compute compact runtime guidance directly from a task message. */
+export function decisionGuidanceForTask(
+  message: string,
+  ctx: DecisionContext = {},
+): AgentDecisionGuidance {
+  return decisionGuidance(decide(message, ctx), ctx);
+}
 
 /**
  * Bridge to the tool-selection runtime: derive optional preferred/discouraged
@@ -277,4 +370,33 @@ export function toolPolicyForTask(
   const { preferred, discouraged } = decision.toolPolicy;
   if (preferred.length === 0 && discouraged.length === 0) return undefined;
   return { preferred, discouraged };
+}
+
+/**
+ * Compact, JSON-safe telemetry summary for a task decision. Unlike
+ * `toolPolicyForTask`, this returns a value even for low-confidence triage so
+ * shadow logs can measure "unknown/weak" classifications too. It intentionally
+ * omits long tool arrays and rationale to keep counterfactual rows small.
+ */
+export function decisionTelemetryForTask(
+  message: string,
+  ctx: DecisionContext = {},
+): AgentDecisionTelemetry {
+  return decisionTelemetry(decide(message, ctx));
+}
+
+/** Convert a full decision to its compact telemetry form. */
+export function decisionTelemetry(decision: AgentDecision): AgentDecisionTelemetry {
+  return {
+    recommendedAgent: decision.recommendedAgent,
+    intent: decision.intent,
+    phase: decision.phase,
+    riskBudget: decision.riskBudget,
+    costBudget: decision.costBudget,
+    delegation: decision.delegation,
+    confidence: decision.confidence,
+    requiresExplicitUserIntent: decision.requiresExplicitUserIntent,
+    toolPolicyPreferredCount: decision.toolPolicy.preferred.length,
+    toolPolicyDiscouragedCount: decision.toolPolicy.discouraged.length,
+  };
 }

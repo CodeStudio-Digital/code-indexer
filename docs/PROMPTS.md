@@ -135,6 +135,32 @@ pointer), notes saved via `save_note`, and a `recall_investigations` nudge once
 prior investigations exist. Because it never touches the cached prefix, it's free
 to change every turn.
 
+### Agent Decision runtime guidance (default-off)
+
+The Agent Decision Engine can optionally add compact runtime guidance for weak
+models without changing the cache-stable system prompt prefix:
+
+- `MCP_AGENT_DECISION_GUIDANCE=1` computes `AgentDecisionGuidance` from the user
+  task and renders it through `PreflightSeed.agentDecisionGuidance` in
+  `core/runner/assembly/preflight-hint.ts`. The same preflight block is preserved
+  by dynamic injection after compaction, so guidance survives long sessions while
+  staying below `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`.
+- Guidance is intentionally short: intent, recommended agent, phase, risk budget,
+  delegation, a few `use-first` / `avoid` tool hints, and an `ask-switch` hint
+  when the current agent confidently differs from the recommendation.
+- The UX switch gate is separate (`MCP_AGENT_DECISION_ASK_BEFORE_SWITCH=1`): the
+  runner asks the user whether to keep the current agent or switch. A switch is
+  persisted via `setSessionAgent`, taking effect on the live runner/next turn;
+  the code does **not** rewrite the system prompt in the middle of a provider
+  call. Admin switches are only prompted for explicit admin intent.
+- The soft risk guardrail is also separate (`MCP_AGENT_DECISION_SOFT_GUARDRAIL=1`)
+  and lives in policy/dispatch, not prompt text. Keep prompt guidance advisory;
+  enforcement must remain flag-gated and reversible.
+
+When editing this area, preserve the same cache rule as every other dynamic
+hint: no task-specific decision text above the dynamic boundary, and no long tool
+lists or rationale in the prompt.
+
 ---
 
 ## 5. Prompt inventory

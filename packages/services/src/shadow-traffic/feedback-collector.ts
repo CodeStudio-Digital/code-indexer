@@ -137,6 +137,12 @@ export interface ToolSelectionObservedEvent {
   queryHash: string;
   /** Tool names the agent ACTUALLY called after the selection. */
   toolsCalled: string[];
+  /**
+   * Optional compact Agent Decision Engine metadata. Kept as unknown here to
+   * avoid coupling the generic shadow-traffic service to code-agent types;
+   * callers pass the JSON-safe AgentDecisionTelemetry shape.
+   */
+  agentDecision?: unknown;
 }
 
 export class ToolSelectionOutcomeMatcher implements OutcomeMatcher<ToolSelectionObservedEvent> {
@@ -149,7 +155,9 @@ export class ToolSelectionOutcomeMatcher implements OutcomeMatcher<ToolSelection
       if (row.query_hash !== observed.queryHash) continue;
       matched.push({
         id: row.id,
-        true_outcome: { toolsCalled: observed.toolsCalled },
+        true_outcome: observed.agentDecision === undefined
+          ? { toolsCalled: observed.toolsCalled }
+          : { toolsCalled: observed.toolsCalled, agentDecision: observed.agentDecision },
       });
     }
     return matched;

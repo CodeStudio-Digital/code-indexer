@@ -16,7 +16,7 @@
  * so the renderer bundle never pulls the native driver implementation.
  */
 
-import type { ApiContext } from './common.js';
+import type { ApiContext, AsyncStream } from './common.js';
 
 export type DbEngine =
   | 'postgres'
@@ -27,6 +27,51 @@ export type DbEngine =
   | 'mongodb'
   | 'redis'
   | 'oracle';
+
+/** Engine category — relational (SQL/tables) vs document (Mongo) vs key-value (Redis). */
+export type DbEngineKind = 'relational' | 'document' | 'keyvalue';
+
+/** Column sort for a table preview. */
+export interface DbTableSort {
+  column: string;
+  dir: 'asc' | 'desc';
+}
+
+/** WHERE comparison operator for the visual filter — a closed enum. */
+export type DbWhereOp = '=' | '!=' | '<' | '<=' | '>' | '>=' | 'like' | 'isnull' | 'isnotnull';
+
+/** A single WHERE condition (AND-combined, value bound as a parameter). */
+export interface DbWhereCondition {
+  column: string;
+  op: DbWhereOp;
+  value?: string;
+}
+
+/** A non-relational command (Mongo document op / Redis command). Engine-specific shape. */
+export interface DbCommand {
+  kind: Exclude<DbEngineKind, 'relational'>;
+  op?: string;
+  collection?: string;
+  args?: string[];
+  payload?: unknown;
+}
+
+/** Install status for an on-demand (lazily-downloaded) driver. */
+export interface DbDriverStatus {
+  engine: DbEngine;
+  package: string;
+  version: string;
+  installed: boolean;
+  sizeLabel: string;
+  pureJs: boolean;
+}
+
+/** Progress frame while a driver downloads/installs. */
+export type DbDriverInstallFrame =
+  | { phase: 'start'; engine: DbEngine; version: string; targetDir: string }
+  | { phase: 'log'; line: string }
+  | { phase: 'done'; installDir: string }
+  | { phase: 'error'; message: string };
 
 export type DbSslMode = 'disable' | 'require' | 'verify-ca' | 'verify-full';
 
@@ -204,7 +249,7 @@ export interface DbClientApi {
   connect(
     input: { spec: DbConnectSpec },
     ctx: ApiContext,
-  ): Promise<{ sessionToken: string; serverVersion?: string }>;
+  ): Promise<{ sessionToken: string; serverVersion?: string; kind?: DbEngineKind }>;
 
   /** Drop the pool for a connection (called on tab close / project switch). */
   disconnect(input: { connectionId: string }, ctx: ApiContext): Promise<void>;
@@ -224,9 +269,9 @@ export interface DbClientApi {
     ctx: ApiContext,
   ): Promise<DbTableInfo>;
 
-  /** Paginated `SELECT *` for a table (double-click → data tab). */
+  /** Paginated `SELECT *` for a table (double-click → data tab), with optional column sort + WHERE filter. */
   tableRows(
-    input: { connectionId: string; schema: string; table: string; limit: number; offset: number },
+    input: { connectionId: string; schema: string; table: string; limit: number; offset: number; orderBy?: DbTableSort; where?: DbWhereCondition[] },
     ctx: ApiContext,
   ): Promise<DbQueryResult>;
 
@@ -287,4 +332,40 @@ export interface DbClientApi {
     input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean },
     ctx: ApiContext,
   ): Promise<DbEditResult>;
+
+  /**
+   * Stream a whole table out in row batches (server-paged, so neither the DB
+   * driver nor the renderer ever holds the full table at once). The client
+   * formats each batch (CSV / SQL INSERTs) and writes incrementally. Unbounded —
+   * unlike the row-capped `query`/`tableRows`.
+   */
+  exportStream(
+    input: { connectionId: string; schema?: string; table: string; batchRows?: number },
+    ctx: ApiContext,
+  ): AsyncStream<DbRowBatch>;
+
+  /**
+   * Run a non-relational command (document/key-value). Rejected for relational
+   * connections (use `query`) and, on a read-only connection, for write commands.
+   */
+  runCommand(
+    input: { connectionId: string; command: DbCommand; maxRows?: number },
+    ctx: ApiContext,
+  ): Promise<DbQueryResult>;
+
+  /** Install status of the lazily-downloaded drivers (Oracle/Mongo/Redis). */
+  driverStatus(input: Record<string, never>, ctx: ApiContext): Promise<DbDriverStatus[]>;
+
+  /** Download + install an on-demand driver, streaming progress. */
+  installDriverStream(input: { engine: DbEngine }, ctx: ApiContext): AsyncStream<DbDriverInstallFrame>;
+}
+
+export interface DbRowBatch {
+  /** Column names (stable across batches; sent on every frame for convenience). */
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  /** Running total of rows emitted so far. */
+  total: number;
+  /** True on the final frame (no more rows). */
+  done: boolean;
 }

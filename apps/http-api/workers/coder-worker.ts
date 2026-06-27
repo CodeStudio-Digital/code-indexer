@@ -606,6 +606,12 @@ interface RunFreshPayload {
   selectedSkillIds?: string[];
   /** Task-preflight seed — forwarded verbatim to `runCoder({ preflight })`. */
   preflight?: import('@mcp/code-agent/index.js').PreflightSeed;
+  /** Default-off Agent Decision Engine runtime flags forwarded to runCoder. */
+  agentDecisionTelemetryEnabled?: boolean;
+  agentDecisionGuidanceEnabled?: boolean;
+  agentDecisionSoftGuardrail?: boolean;
+  agentDecisionSoftGuardrailMinConfidence?: number;
+  agentDecisionAskBeforeSwitch?: boolean;
   /**
    * Apêndice 4 Fase 2 — propagate `resume:true` to `runCoder` so the
    * worker can pick up from history when the previous worker died
@@ -645,6 +651,11 @@ bridge.handle('runFresh', async (payload) => {
       previewAvailable: opts.previewAvailable,
       selectedSkillIds: opts.selectedSkillIds,
       preflight: opts.preflight,
+      agentDecisionTelemetryEnabled: opts.agentDecisionTelemetryEnabled,
+      agentDecisionGuidanceEnabled: opts.agentDecisionGuidanceEnabled,
+      agentDecisionSoftGuardrail: opts.agentDecisionSoftGuardrail,
+      agentDecisionSoftGuardrailMinConfidence: opts.agentDecisionSoftGuardrailMinConfidence,
+      agentDecisionAskBeforeSwitch: opts.agentDecisionAskBeforeSwitch,
       resume: opts.resume,
       signal: run.ctrl.signal,
       // Mem C — same wiring as the in-process path (routes/coder/stream.ts):

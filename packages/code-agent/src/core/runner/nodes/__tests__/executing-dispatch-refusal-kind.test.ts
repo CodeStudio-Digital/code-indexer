@@ -45,6 +45,25 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.results[0].refusalKind).toBe('gate');
   });
 
+  it('toolGate refusals happen before tuple-hash dedup accounting', async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool('some_tool'));
+    const dupCalls = new Map<string, DupCallEntry>();
+    const r = await dispatchTools(baseArgs(registry, {
+      dupCalls,
+      toolGate: () => '[agent-decision-guardrail: blocked]',
+      toolUses: [
+        { id: 't1', name: 'some_tool', input: { a: 1 } },
+        { id: 't2', name: 'some_tool', input: { a: 1 } },
+        { id: 't3', name: 'some_tool', input: { a: 1 } },
+      ],
+    }));
+    expect(r.results).toHaveLength(3);
+    expect(r.results.every((x) => x.refusalKind === 'gate')).toBe(true);
+    expect(dupCalls.size).toBe(0);
+    expect(r.toolLoopDetected).toBe(false);
+  });
+
   it("enforcePreRead refusal → 'pre-read'; auto-downgrade (isError=false) stays untagged", async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool'));

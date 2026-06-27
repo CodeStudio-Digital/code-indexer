@@ -93,6 +93,30 @@ O runner capa o tools array no topo quando o modelo estiver abaixo do count tota
 | `CODER_TOOL_OUTPUT_TTL_DAYS` | 7 | GC dos side-files |
 | `CODER_MODEL_CAPS` | (built-in) | JSON override do capability map |
 | `CODER_PROMPTS_WATCH=1` | off | Hot-reload de prompts em dev |
+| `MCP_AGENT_DECISION_TELEMETRY=1` | off | Registra recomendacao do Agent Decision Engine vs agente/tools reais em `coder_turn_telemetry.response_meta.agent_decision` |
+| `MCP_AGENT_DECISION_GUIDANCE=1` | off | Injeta guidance compacto no preflight/dynamic reminder para orientar modelos fracos sem mexer no prefixo cache-stable |
+| `MCP_AGENT_DECISION_SOFT_GUARDRAIL=1` | off | Ativa guardrail soft no dispatch para bloquear apenas desvios mutantes/admin de decisoes read-only confiantes |
+| `MCP_AGENT_DECISION_GUARDRAIL_MIN_CONFIDENCE` | `0.6` | Override do limiar minimo do guardrail soft |
+| `MCP_AGENT_DECISION_ASK_BEFORE_SWITCH=1` | off | Pergunta ao usuario antes de trocar quando o agent recomendado diverge do atual; nunca auto-switch |
+
+### Agent Decision runtime rollout
+
+Todos os recursos do Agent Decision Engine runtime sao **default-off**, independentes e reversiveis. A ordem recomendada de promocao e:
+
+1. **Telemetry-only**: habilitar `MCP_AGENT_DECISION_TELEMETRY=1` para medir `recommendedAgent`, intent, risco, confidence e tools reais chamadas, sem mudar prompt nem comportamento.
+2. **Guidance**: habilitar `MCP_AGENT_DECISION_GUIDANCE=1` para adicionar hints compactos no preflight/tail reminder. Confirmar que nao ha regressao de prompt-cache e que modelos fracos seguem melhor `use-first`/`avoid`.
+3. **Soft guardrails**: habilitar `MCP_AGENT_DECISION_SOFT_GUARDRAIL=1` depois que a telemetria mostrar baixo falso positivo. O guardrail e estreito: bloqueia mutacoes/admin em decisoes read-only confiantes; `run_command` nao-mutante continua dependendo dos gates proprios.
+4. **Agent switch ask**: habilitar `MCP_AGENT_DECISION_ASK_BEFORE_SWITCH=1` por ultimo. O sistema pergunta ao usuario entre manter o agent atual ou trocar; a escolha persiste via `setSessionAgent` para o runner/turn seguinte, sem reescrever prompt no meio de uma chamada.
+
+Matriz operacional:
+
+| Risco | Impacto | Mitigacao |
+|---|---|---|
+| Falso positivo do classificador | Guidance/guardrail pode sugerir agent ou risco errado | Comecar por telemetry-only; manter `MIN_CONFIDENCE`; guardrail default-off e estreito |
+| Prompt-cache | Texto variavel acima de `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` quebraria cache | Guidance entra via preflight/tail dynamic injection, nunca no prefixo estavel |
+| Interrupcao de UX | Perguntas de switch podem pausar o fluxo | Switch ask e flag separado; baixa confianca nao pergunta; usuario pode manter agent atual |
+| Admin escalation | Troca indevida para `admin` poderia expor tools destrutivas | Nunca auto-switch; prompt para admin so com intent admin explicita; admin tools continuam em tier/gate separado |
+| SQLite/native ABI em testes | Suites que carregam SQLite nativo podem falhar em ambientes com ABI desalinhada | Preferir tests focados/pure unit em CI leve; rebuild/reinstall native deps antes de suites DB end-to-end |
 
 ### Total de tools por tier
 - **bootstrap**: 17 (`mcp__get_project_pulse`, `mcp__search`, `mcp__grep_code`, `read_file`, `expand_toolset`, `get_tool_output`, `ask_user`, `submit_plan`, `submit_tasks`, etc.)

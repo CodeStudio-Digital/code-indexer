@@ -7,6 +7,7 @@
  * For MySQL a "schema" is a database, so `listSchemas` returns the database.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { buildTablePreview } from './sql/preview.js';
 import type {
   ColumnInfo,
   DatabaseDriver,
@@ -52,7 +53,9 @@ function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
 function sslConfig(config: DbConnectConfig): Record<string, unknown> | undefined {
   const mode = config.ssl?.mode;
   if (!mode || mode === 'disable') return undefined;
-  if (mode === 'require') return { rejectUnauthorized: false };
+  // MySQL (unlike libpq) verifies the server cert under REQUIRED — keep that
+  // guarantee so 'require' isn't a silent MITM downgrade. Use verify-ca/-full
+  // with a CA for self-signed servers.
   return { rejectUnauthorized: true, ca: config.ssl?.ca, cert: config.ssl?.cert, key: config.ssl?.key };
 }
 
@@ -194,6 +197,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
   }
 
   const driver: DatabaseDriver = {
+    kind: 'relational',
     async testConnection() {
       const rows = await poolRows<{ v: string }>('SELECT VERSION() AS v');
       return { serverVersion: rows[0]?.v };
@@ -238,11 +242,11 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       );
       return rows.map((r) => r.ROUTINE_NAME);
     },
-    tablePreview(schemaName, name, { limit, offset }) {
+    tablePreview(schemaName, name, opts) {
       const target = schemaName || config.database;
       const rel = target ? `${qIdent(target)}.${qIdent(name)}` : qIdent(name);
-      // Fetch one extra row so `truncated` reflects that more rows exist past the page.
-      return runQuery(`SELECT * FROM ${rel} LIMIT ? OFFSET ?`, { params: [limit + 1, offset], maxRows: limit });
+      const { sql, params } = buildTablePreview('mysql', rel, opts);
+      return runQuery(sql, { params, maxRows: opts.limit });
     },
     async schema(schemaName) {
       const tables = await driver.listTables(schemaName);

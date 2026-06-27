@@ -81,3 +81,8 @@ export function qaReportsDir(env: NodeJS.ProcessEnv = process.env): string {
 export function lspServersBaseDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(mcpDataDir(env), 'lsp-servers');
 }
+
+/** Base dir for on-demand database drivers (`<base>/<engine>@<version>/node_modules/...`). */
+export function dbDriversBaseDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(mcpDataDir(env), 'db-drivers');
+}

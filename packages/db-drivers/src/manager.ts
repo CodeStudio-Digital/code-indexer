@@ -10,13 +10,15 @@
  * open DB tab keeps its connection.
  */
 import { createDriver } from './factory.js';
-import type { DatabaseDriver, DbConnectConfig, DbEngine } from './types.js';
+import type { DatabaseDriver, DbConnectConfig, DbEngine, DbEngineKind } from './types.js';
 
 /** Per-connection metadata co-located with the pool so EVERY handler instance
  *  (IPC + Hono fallback + agent path) resolves it from one shared source. */
 export interface ConnMeta {
   engine?: DbEngine;
   readOnly?: boolean;
+  /** Engine category — lets the handler/UI gate relational vs document/keyvalue ops. */
+  kind?: DbEngineKind;
 }
 
 interface PoolEntry {

@@ -161,8 +161,13 @@ function validateReference(r: unknown): TaskReference | string {
   return ref;
 }
 
-function makeTaskId(): string {
-  return `tsk_${randomUUID()}`;
+function makeTaskId(usedIds?: Set<string>): string {
+  let id: string;
+  do {
+    id = `tsk_${randomUUID().slice(0, 8)}`;
+  } while (usedIds?.has(id));
+  usedIds?.add(id);
+  return id;
 }
 
 function looksLikeGeneratedTaskId(id: string): boolean {
@@ -262,8 +267,9 @@ export function validateTasksInput(raw: unknown): { summary: string; tasks: Code
   }
 
   const idMap = new Map<string, string>();
+  const generatedIds = new Set<string>();
   for (const t of tasks) {
-    idMap.set(t.id, makeTaskId());
+    idMap.set(t.id, makeTaskId(generatedIds));
   }
   const generated = tasks.map((t) => ({
     ...t,

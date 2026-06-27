@@ -4,7 +4,7 @@
   "description": "Codebase indexing platform powered by LLMs with hybrid search, MCP Server, and web dashboard",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "bin": {
     "mcp-code-indexer": "./dist/apps/cli/index.js",
@@ -92,6 +92,7 @@
     "lucide-react": "^1.7.0",
     "minimatch": "^10.0.1",
     "monaco-editor": "^0.52.2",
+    "mssql": "^12.6.0",
     "mysql2": "^3.11.5",
     "node-fetch": "^3.3.2",
     "node-pty": "^1.1.0",
@@ -132,12 +133,12 @@
     "@types/ssh2": "^1.15.5",
     "@types/turndown": "^5.0.6",
     "@types/ws": "^8.5.13",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.0.0",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.1.2",
     "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.28.0",
     "knip": "^5.64.4",
     "rcedit": "^5.0.2",
     "react": "^19.0.0",
@@ -146,7 +147,7 @@
     "tsc-alias": "^1.8.17",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
-    "vite": "^6.2.4",
+    "vite": "^8.0.16",
     "vitest": "^4.1.2"
   },
   "keywords": [

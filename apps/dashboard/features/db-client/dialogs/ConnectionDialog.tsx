@@ -19,6 +19,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../../components/ui
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { decryptSecret } from '@mcp/secret-box';
 import { AVAILABLE_ENGINES, engineMeta } from '../engines.js';
+import { DriverInstallGate } from './DriverInstallGate.js';
 import * as api from '../api.js';
 import type { DbConnection, DbConnectSpec, DbEngine, DbSslMode } from '../types.js';
 
@@ -236,12 +237,16 @@ export function ConnectionDialog({
               </select>
             </Field>
             <div className="flex items-end pb-1.5">
-              <span className="flex items-center gap-1 text-[11px] text-emerald-500">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                {t('dialog.driverBundled')}
-              </span>
+              {!meta?.lazyDriver && (
+                <span className="flex items-center gap-1 text-[11px] text-emerald-500">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  {t('dialog.driverBundled')}
+                </span>
+              )}
             </div>
           </div>
+
+          {meta?.lazyDriver && <DriverInstallGate engine={form.engine} />}
 
           {usesFile ? (
             <Field label={t('dialog.filePath')}>

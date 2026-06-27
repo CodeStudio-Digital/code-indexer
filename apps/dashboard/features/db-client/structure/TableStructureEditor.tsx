@@ -115,20 +115,20 @@ function diffFks(fks: EditorFk[], schema?: string): DbAlterAction[] {
 }
 
 export function TableStructureEditor({
-  connectionId,
+  connKey,
   engine,
   schema,
   table,
   onApplied,
 }: {
-  connectionId: number;
+  connKey: string;
   engine?: DbEngine;
   schema?: string;
   table?: string;
   onApplied?: () => void;
 }) {
   const { t } = useTranslation('dbClient');
-  const cid = String(connectionId);
+  const cid = connKey;
   const isNew = !table;
   const [tab, setTab] = useState<'columns' | 'indexes' | 'fks'>('columns');
   const [tableName, setTableName] = useState(table ?? '');

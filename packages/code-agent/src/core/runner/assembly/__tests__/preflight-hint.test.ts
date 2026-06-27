@@ -52,4 +52,33 @@ describe('renderPreflightHint', () => {
     expect(hint).not.toContain('recall_memory');
     expect(hint).not.toContain('get_skill_content');
   });
+
+  it('renders optional Agent Decision guidance inside the preflight block', () => {
+    const hint = renderPreflightHint({
+      taskKind: 'edit',
+      agentDecisionGuidance: {
+        recommendedAgent: 'build',
+        currentAgent: 'plan',
+        intent: 'edit',
+        phase: 'editing',
+        riskBudget: 'write',
+        costBudget: 'medium',
+        delegation: 'inline',
+        confidence: 0.7,
+        confidenceBand: 'medium',
+        requiresExplicitUserIntent: false,
+        agentMismatch: true,
+        shouldAskBeforeAgentSwitch: true,
+        agentSwitchReason: 'edit work fits build better than plan.',
+        preferredTools: ['mcp__get_symbol_body', 'edit_file'],
+        discouragedTools: ['git_commit'],
+        reminder: 'agent_decision: intent=edit; agent=build; phase=editing; risk<=write; confidence=medium',
+      },
+    });
+
+    expect(hint).toContain('<preflight>');
+    expect(hint).toContain('agent decision guidance: agent_decision: intent=edit; agent=build');
+    expect(hint).toContain('agent switch: ask_user before switching plan → build — edit work fits build better than plan.');
+    expect(hint).toContain('</preflight>');
+  });
 });

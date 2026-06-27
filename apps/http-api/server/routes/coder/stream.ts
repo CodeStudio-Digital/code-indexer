@@ -459,6 +459,7 @@ export function mountCoderStreamRoutes(
           previewAvailable: resolvePreviewAvailable(id),
           selectedSkillIds,
           preflight,
+          ...deps.buildAgentDecisionRuntimeOptions(),
           // Apêndice 4 Fase 2 — when the dashboard is resuming via the
           // worker-fallback path, the synthetic tool_result is already
           // in history. runCoder({resume:true}) picks up from there
@@ -619,10 +620,10 @@ export function mountCoderStreamRoutes(
           // `new McpServerManager()` path.
           externalMcpManager: getGlobalMcpExternalPool() ?? undefined,
           onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
-          // Wire the ToolSelectionPipeline filter. Returns `undefined` when
-          // MCP_PIPELINES_TOOL_SELECTION is off, so the runner skips the
-          // hook with zero overhead.
+          // Wire optional runtime decision/tool-selection hooks. Every helper is
+          // default-off, so env flags disabled preserve the old runner options.
           toolSelectionFilter: deps.buildToolSelectionFilter(),
+          ...deps.buildAgentDecisionRuntimeOptions(),
           // Inject docs_deep_research — the DocsAgent escalation tool.
           // The bridge singleton is installed in server.ts at boot; the
           // helper returns false when unset (e.g. headless tests) so the
@@ -752,6 +753,7 @@ export function mountCoderStreamRoutes(
             installDocsDeepResearch(runner);
           },
           toolSelectionFilter: deps.buildToolSelectionFilter(),
+          ...deps.buildAgentDecisionRuntimeOptions(),
         });
         setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);

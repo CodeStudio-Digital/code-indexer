@@ -1,0 +1,39 @@
+/**
+ * Read/write classification for NON-relational commands. The relational
+ * read-only valve is a SQL-keyword classifier (in the handler) and does not
+ * apply to Mongo/Redis — those must be classified per engine here, or a
+ * read-only connection would silently allow writes.
+ *
+ * Conservative by design: an UNKNOWN op/command counts as a WRITE, so a
+ * read-only connection refuses anything we can't prove is read-only.
+ */
+import type { DbCommand } from './types.js';
+
+/** Mongo operations that read only (everything else — insert/update/delete/drop/createIndex/… — is a write). */
+const MONGO_READ_OPS = new Set([
+  'find', 'findone', 'aggregate', 'count', 'countdocuments', 'estimateddocumentcount',
+  'distinct', 'listcollections', 'listindexes', 'stats', 'explain',
+]);
+
+/** Redis commands that read only. Anything not here is treated as a write. */
+const REDIS_READ_CMDS = new Set([
+  'GET', 'MGET', 'STRLEN', 'EXISTS', 'TYPE', 'TTL', 'PTTL', 'KEYS', 'SCAN', 'RANDOMKEY', 'DBSIZE',
+  'HGET', 'HMGET', 'HGETALL', 'HKEYS', 'HVALS', 'HLEN', 'HEXISTS', 'HSCAN', 'HSTRLEN',
+  'LRANGE', 'LINDEX', 'LLEN',
+  'SMEMBERS', 'SISMEMBER', 'SCARD', 'SSCAN', 'SRANDMEMBER',
+  'ZRANGE', 'ZRANGEBYSCORE', 'ZREVRANGE', 'ZSCORE', 'ZCARD', 'ZRANK', 'ZREVRANK', 'ZSCAN', 'ZCOUNT',
+  'GETRANGE', 'BITCOUNT', 'GETBIT', 'MEMORY', 'OBJECT', 'DEBUG', 'INFO', 'PING', 'ECHO', 'XRANGE', 'XLEN', 'XREVRANGE',
+]);
+
+/** True when a non-relational command MUTATES state (used by the read-only guard). */
+export function isWriteCommand(command: DbCommand): boolean {
+  if (command.kind === 'document') {
+    const op = (command.op ?? '').toLowerCase();
+    return !MONGO_READ_OPS.has(op);
+  }
+  if (command.kind === 'keyvalue') {
+    const cmd = (command.args?.[0] ?? '').toUpperCase();
+    return !REDIS_READ_CMDS.has(cmd);
+  }
+  return true;
+}

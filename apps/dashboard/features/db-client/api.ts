@@ -11,7 +11,7 @@
  * plaintext password lives only in renderer memory and crosses only the
  * in-process IPC channel.
  */
-import { apiBaseUrl, apiCall } from '../../lib/api-client.js';
+import { apiBaseUrl, apiCall, apiStream } from '../../lib/api-client.js';
 import { encryptSecret, decryptSecret } from '@mcp/secret-box';
 import type {
   DbConnection,
@@ -27,6 +27,12 @@ import type {
   DbEditResult,
   DbObjectKind,
   DbGenerateKind,
+  DbRowBatch,
+  DbEngine,
+  DbDriverStatus,
+  DbDriverInstallFrame,
+  DbTableSort,
+  DbWhereCondition,
 } from './types.js';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -109,6 +115,15 @@ export function parseConnOptions(conn: DbConnection): Record<string, unknown> {
   }
 }
 
+/**
+ * URL-mode connections carry the whole DSN (with the database baked in) as one
+ * encrypted blob — there's no separate `database` to override, so Postgres
+ * per-database browsing doesn't apply to them.
+ */
+export function isUrlMode(conn: DbConnection): boolean {
+  return parseConnOptions(conn).urlMode === true;
+}
+
 /** The subset of options passed to the driver pool (timeout / app name). */
 function pickConnectOptions(options: Record<string, unknown>): Record<string, unknown> | undefined {
   const out: Record<string, unknown> = {};
@@ -133,13 +148,18 @@ async function resolveSsl(conn: DbConnection): Promise<DbConnectSpec['ssl']> {
  * (which carries the password, so it stays device-bound encrypted at rest).
  * The plaintext never leaves this process.
  */
-export async function resolveSpec(conn: DbConnection): Promise<DbConnectSpec> {
+export async function resolveSpec(conn: DbConnection, dbOverride?: string): Promise<DbConnectSpec> {
   const options = parseConnOptions(conn);
   const secret = conn.enc_password ? await decryptSecret(conn.enc_password) : '';
   const ssl = await resolveSsl(conn);
   const connectOptions = pickConnectOptions(options);
+  // Postgres binds one connection to one database; browsing another db needs a
+  // separate pool. Key it `id@db` so the manager keeps it distinct. URL mode
+  // bakes the db into the DSN with no field to override, so it's field-mode only
+  // — otherwise we'd mint an `id@db` pool that still connects to the URL's db.
+  const useDb = options.urlMode !== true && dbOverride && dbOverride !== conn.database_name ? dbOverride : undefined;
   const base = {
-    connectionId: String(conn.id),
+    connectionId: useDb ? `${conn.id}@${useDb}` : String(conn.id),
     engine: conn.engine,
     ssl,
     options: connectOptions,
@@ -154,9 +174,43 @@ export async function resolveSpec(conn: DbConnection): Promise<DbConnectSpec> {
     port: conn.port ?? undefined,
     username: conn.username ?? undefined,
     password: secret || undefined,
-    database: conn.database_name ?? undefined,
+    database: dbOverride ?? conn.database_name ?? undefined,
     filePath: conn.file_path ?? undefined,
   };
+}
+
+/** Split a routing key (`5` or `5@otherdb`) into its numeric id + optional db. */
+export function parseConnKey(connKey: string): { id: number; database?: string } {
+  const at = connKey.indexOf('@');
+  if (at < 0) return { id: Number(connKey) };
+  return { id: Number(connKey.slice(0, at)), database: connKey.slice(at + 1) };
+}
+
+// ─── Auto-reconnect safety net ───────────────────────────────────────────
+// A live pool can vanish (main-process restart, manual disconnect). The hook
+// registers a resolver that rebuilds a connect spec from the saved row so a
+// failed op can transparently reconnect + retry once instead of dead-ending.
+let specResolver: ((connectionId: string) => Promise<DbConnectSpec | null>) | null = null;
+export function setSpecResolver(fn: ((connectionId: string) => Promise<DbConnectSpec | null>) | null): void {
+  specResolver = fn;
+}
+
+function isNotConnected(e: unknown): boolean {
+  const code = (e as { code?: string } | null)?.code;
+  const msg = e instanceof Error ? e.message : String(e);
+  return code === 'db_not_connected' || /not connected/i.test(msg);
+}
+
+async function withReconnect<T>(connectionId: string, op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (e) {
+    if (!isNotConnected(e) || !specResolver) throw e;
+    const spec = await specResolver(connectionId).catch(() => null);
+    if (!spec) throw e;
+    await connect(spec);
+    return op(); // retry once after reconnecting
+  }
 }
 
 export const testConnection = (spec: DbConnectSpec) =>
@@ -171,13 +225,13 @@ export const disconnect = (connectionId: string) =>
   apiCall<void>('dbClient.disconnect', { connectionId });
 
 export const listDatabases = (connectionId: string) =>
-  apiCall<string[]>('dbClient.listDatabases', { connectionId });
+  withReconnect(connectionId, () => apiCall<string[]>('dbClient.listDatabases', { connectionId }));
 
 export const introspect = (connectionId: string, database?: string, schema?: string) =>
-  apiCall<DbIntrospectResult>('dbClient.introspect', { connectionId, database, schema });
+  withReconnect(connectionId, () => apiCall<DbIntrospectResult>('dbClient.introspect', { connectionId, database, schema }));
 
 export const describeTable = (connectionId: string, schema: string, table: string) =>
-  apiCall<DbTableInfo>('dbClient.describeTable', { connectionId, schema, table });
+  withReconnect(connectionId, () => apiCall<DbTableInfo>('dbClient.describeTable', { connectionId, schema, table }));
 
 export const tableRows = (
   connectionId: string,
@@ -185,29 +239,31 @@ export const tableRows = (
   table: string,
   limit: number,
   offset: number,
-) => apiCall<DbQueryResult>('dbClient.tableRows', { connectionId, schema, table, limit, offset });
+  orderBy?: DbTableSort,
+  where?: DbWhereCondition[],
+) => withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.tableRows', { connectionId, schema, table, limit, offset, orderBy, where }));
 
 export const listObjects = (
   connectionId: string,
   kind: DbObjectKind,
   schema?: string,
   table?: string,
-) => apiCall<string[]>('dbClient.listObjects', { connectionId, kind, schema, table });
+) => withReconnect(connectionId, () => apiCall<string[]>('dbClient.listObjects', { connectionId, kind, schema, table }));
 
 export const generateSql = (connectionId: string, schema: string | undefined, table: string, kind: DbGenerateKind) =>
-  apiCall<{ sql: string }>('dbClient.generateSql', { connectionId, schema, table, kind });
+  withReconnect(connectionId, () => apiCall<{ sql: string }>('dbClient.generateSql', { connectionId, schema, table, kind }));
 
 export const runQuery = (
   connectionId: string,
   sql: string,
   opts?: { params?: unknown[]; maxRows?: number; queryId?: string; schema?: string },
-) => apiCall<DbQueryResult>('dbClient.query', { connectionId, sql, ...opts });
+) => withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.query', { connectionId, sql, ...opts }));
 
 export const cancelQuery = (connectionId: string, queryId: string) =>
   apiCall<void>('dbClient.cancel', { connectionId, queryId });
 
 export const explain = (connectionId: string, sql: string) =>
-  apiCall<DbQueryResult>('dbClient.explain', { connectionId, sql });
+  withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.explain', { connectionId, sql }));
 
 export const editRow = (input: {
   connectionId: string;
@@ -217,7 +273,25 @@ export const editRow = (input: {
   pk?: Record<string, unknown>;
   values?: Record<string, unknown>;
   dryRun?: boolean;
-}) => apiCall<DbEditResult>('dbClient.editRow', input);
+}) => withReconnect(input.connectionId, () => apiCall<DbEditResult>('dbClient.editRow', input));
 
 export const ddl = (input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean }) =>
-  apiCall<DbEditResult>('dbClient.ddl', input);
+  withReconnect(input.connectionId, () => apiCall<DbEditResult>('dbClient.ddl', input));
+
+/** Install status of the lazily-downloaded drivers (Oracle/Mongo/Redis). */
+export const driverStatus = () => apiCall<DbDriverStatus[]>('dbClient.driverStatus', {});
+
+/** Download + install an on-demand driver, streaming progress frames. */
+export function installDriverStream(engine: DbEngine): AsyncIterable<DbDriverInstallFrame> {
+  return apiStream<DbDriverInstallFrame>('dbClient.installDriverStream', { engine });
+}
+
+/** Stream a whole table out in row batches (server-paged, unbounded). */
+export function exportStream(
+  connectionId: string,
+  schema: string | undefined,
+  table: string,
+  batchRows?: number,
+): AsyncIterable<DbRowBatch> {
+  return apiStream<DbRowBatch>('dbClient.exportStream', { connectionId, schema, table, batchRows });
+}

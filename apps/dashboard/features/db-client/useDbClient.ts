@@ -36,7 +36,15 @@ export interface UseDbClient {
   /** Open a blank "create table" structure tab for a connection/schema. */
   openNewTable: (connectionId: number, schema?: string) => Promise<void>;
   /** Open an ER-diagram tab for a schema. */
-  openErDiagram: (connectionId: number, schema?: string) => Promise<void>;
+  openErDiagram: (connectionId: number, schema?: string, database?: string) => Promise<void>;
+  /** Live-op routing key for a node — `id`, or `id@db` for a non-default Postgres database. */
+  connKeyFor: (connectionId: number, database?: string) => string;
+  /** Pending "import CSV into this table" request (drives the import dialog). */
+  importRequest: { connectionId: number; connKey: string; schema?: string; table: string } | null;
+  /** Ask to import a CSV into a table node. */
+  requestImportCsv: (node: DbTreeNode) => void;
+  /** Dismiss the import dialog. */
+  clearImportRequest: () => void;
   /** Refetch a node's children (after DDL/DML changed the schema). */
   refreshNode: (nodeId: string) => void;
   /** Invalidate cached tables under a connection/schema after a DDL change. */
@@ -106,9 +114,14 @@ export function useDbClient(projectId: number): UseDbClient {
   const [activeConnectionId, setActiveConnectionId] = useState<number | null>(null);
   const [workTabs, setWorkTabs] = useState<WorkTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [importRequest, setImportRequest] = useState<{ connectionId: number; connKey: string; schema?: string; table: string } | null>(null);
 
   const connectedRef = useRef<Set<number>>(new Set());
+  /** Extra Postgres per-database pools (keyed `id@db`), separate from the root. */
+  const connectedDbPoolsRef = useRef<Set<string>>(new Set());
   const querySeqRef = useRef(0);
+  const connectionsRef = useRef<DbConnection[]>([]);
+  connectionsRef.current = connections;
   /** Cache TableInfo so columns + Indexes + FKs folders don't each refetch. */
   const tableInfoRef = useRef<Map<string, DbTableInfo>>(new Map());
 
@@ -133,8 +146,22 @@ export function useDbClient(projectId: number): UseDbClient {
   useEffect(() => {
     return () => {
       for (const id of connectedRef.current) void api.disconnect(String(id));
+      for (const key of connectedDbPoolsRef.current) void api.disconnect(key);
       connectedRef.current.clear();
+      connectedDbPoolsRef.current.clear();
     };
+  }, []);
+
+  // Auto-reconnect: let the api layer rebuild a connect spec from the saved row
+  // (parsing an `id@db` Postgres key) so a live op that lands on a vanished pool
+  // reconnects + retries instead of failing with "not connected".
+  useEffect(() => {
+    api.setSpecResolver(async (cid) => {
+      const { id, database } = api.parseConnKey(cid);
+      const conn = connectionsRef.current.find((c) => c.id === id);
+      return conn ? api.resolveSpec(conn, database) : null;
+    });
+    return () => api.setSpecResolver(null);
   }, []);
 
   const setStatus = useCallback((id: number, status: DbConnectionStatus) => {
@@ -173,6 +200,13 @@ export function useDbClient(projectId: number): UseDbClient {
     async (conn: DbConnection) => {
       await api.disconnect(String(conn.id)).catch(() => void 0);
       connectedRef.current.delete(conn.id);
+      // Drop any Postgres per-database pools opened under this connection.
+      for (const key of [...connectedDbPoolsRef.current]) {
+        if (api.parseConnKey(key).id === conn.id) {
+          void api.disconnect(key).catch(() => void 0);
+          connectedDbPoolsRef.current.delete(key);
+        }
+      }
       setStatus(conn.id, 'idle');
       // Collapse the whole subtree of this connection.
       setExpanded((prev) => {
@@ -183,13 +217,52 @@ export function useDbClient(projectId: number): UseDbClient {
     [setStatus],
   );
 
+  /** Routing key for a node: `id@db` only for a non-default Postgres database (field mode). */
+  const connKeyFor = useCallback((connectionId: number, database?: string): string => {
+    const conn = connectionsRef.current.find((c) => c.id === connectionId);
+    if (conn?.engine === 'postgres' && !api.isUrlMode(conn) && database && database !== conn.database_name) {
+      return `${connectionId}@${database}`;
+    }
+    return String(connectionId);
+  }, []);
+
+  /** Ensure the pool behind a routing key is live (connects a pg per-db pool lazily). */
+  const ensureDbConnected = useCallback(
+    async (connKey: string): Promise<boolean> => {
+      const { id, database } = api.parseConnKey(connKey);
+      const conn = connectionsRef.current.find((c) => c.id === id);
+      if (!conn) return false;
+      if (!database) {
+        // Default database → the root pool (status-tracked).
+        if (!connectedRef.current.has(conn.id)) {
+          try {
+            await connectConn(conn);
+          } catch {
+            return false;
+          }
+        }
+        return true;
+      }
+      if (connectedDbPoolsRef.current.has(connKey)) return true;
+      try {
+        await api.connect(await api.resolveSpec(conn, database));
+        connectedDbPoolsRef.current.add(connKey);
+        return true;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return false;
+      }
+    },
+    [connectConn],
+  );
+
   /** Describe a table, memoized so columns + index/FK folders don't each refetch. */
   const getTableInfo = useCallback(
-    async (connId: number, schema: string | undefined, table: string): Promise<DbTableInfo> => {
-      const key = `${connId}:${schema ?? ''}:${table}`;
+    async (connKey: string, schema: string | undefined, table: string): Promise<DbTableInfo> => {
+      const key = `${connKey}:${schema ?? ''}:${table}`;
       const cached = tableInfoRef.current.get(key);
       if (cached) return cached;
-      const info = await api.describeTable(String(connId), schema ?? 'public', table);
+      const info = await api.describeTable(connKey, schema ?? 'public', table);
       tableInfoRef.current.set(key, info);
       return info;
     },
@@ -198,17 +271,28 @@ export function useDbClient(projectId: number): UseDbClient {
 
   /** Fetch the children of a node (connect-aware, engine-aware). */
   const fetchChildren = useCallback(async (node: DbTreeNode): Promise<DbTreeNode[]> => {
-    const cid = String(node.connectionId);
+    // Root lists databases on the root pool; deeper nodes route by `id@db` so a
+    // non-default Postgres database hits its own pool.
+    const cid = node.depth === 0 ? String(node.connectionId) : connKeyFor(node.connectionId, node.database);
     if (node.depth === 0) {
-      // Connection root → databases.
+      // Connection root → databases. Postgres lists every database (each browsed
+      // through its own lazily-connected pool); the others switch db in place.
       const conn = connections.find((c) => c.id === node.connectionId);
-      let dbs = await api.listDatabases(cid);
-      // Postgres binds a connection to ONE database; switching needs a new
-      // connection. Show only the connected db so the tree never lists databases
-      // whose schemas it can't actually browse. (Multi-db = a connection each.)
-      if (conn?.engine === 'postgres' && conn.database_name) {
-        dbs = [conn.database_name];
+      // URL-mode Postgres can't switch db (the DSN fixes it) — expose ONLY the
+      // connected database (database:undefined → routes to the root pool), so we
+      // never render a sibling db node whose content/ops silently hit the URL's db.
+      if (conn?.engine === 'postgres' && api.isUrlMode(conn)) {
+        return [{
+          id: `conn:${node.connectionId}/db:default`,
+          kind: 'database' as const,
+          label: conn.database_name || conn.label,
+          connectionId: node.connectionId,
+          database: undefined,
+          depth: 1,
+          expandable: true,
+        }];
       }
+      const dbs = await api.listDatabases(cid);
       return dbs.map((db) => ({
         id: `conn:${node.connectionId}/db:${db}`,
         kind: 'database' as const,
@@ -220,6 +304,8 @@ export function useDbClient(projectId: number): UseDbClient {
       }));
     }
     if (node.kind === 'database') {
+      // A non-default Postgres database needs its own pool before introspection.
+      if (!(await ensureDbConnected(cid))) return [];
       const { schemas } = await api.introspect(cid, node.database);
       return schemas.map((s) => ({
         id: `${node.id}/schema:${s}`,
@@ -253,7 +339,7 @@ export function useDbClient(projectId: number): UseDbClient {
       return [...tableNodes, ...groups];
     }
     if (node.kind === 'table' || node.kind === 'view') {
-      const info = await getTableInfo(node.connectionId, node.schema, node.table ?? '');
+      const info = await getTableInfo(cid, node.schema, node.table ?? '');
       const colNodes: DbTreeNode[] = info.columns.map((c) => ({
         id: `${node.id}/col:${c.name}`,
         kind: 'column' as const,
@@ -270,13 +356,13 @@ export function useDbClient(projectId: number): UseDbClient {
     }
     if (node.kind === 'group') {
       if (node.groupKind === 'indexes') {
-        const info = await getTableInfo(node.connectionId, node.schema, node.table ?? '');
+        const info = await getTableInfo(cid, node.schema, node.table ?? '');
         return (info.indexes ?? []).map((ix) =>
           leaf(node, 'index', ix.name, `${ix.name}${ix.unique ? ' (unique)' : ''}${ix.primary ? ' [PK]' : ''} (${ix.columns.join(', ')})`),
         );
       }
       if (node.groupKind === 'fks') {
-        const info = await getTableInfo(node.connectionId, node.schema, node.table ?? '');
+        const info = await getTableInfo(cid, node.schema, node.table ?? '');
         return (info.foreignKeys ?? []).map((fk) =>
           leaf(node, 'fk', fk.name, `${fk.columns.join(', ')} → ${fk.refTable} (${fk.refColumns.join(', ')})`),
         );
@@ -286,7 +372,7 @@ export function useDbClient(projectId: number): UseDbClient {
       return names.map((n) => leaf(node, kind, n, n));
     }
     return [];
-  }, [connections, getTableInfo]);
+  }, [connections, getTableInfo, connKeyFor, ensureDbConnected]);
 
   const toggleExpand = useCallback(
     async (node: DbTreeNode) => {
@@ -353,27 +439,21 @@ export function useDbClient(projectId: number): UseDbClient {
     });
   }, []);
 
-  const openQueryTab = useCallback((connectionId: number, schema?: string, initialSql?: string) => {
+  const openQueryTab = useCallback((connectionId: number, schema?: string, initialSql?: string, database?: string) => {
     querySeqRef.current += 1;
     const id = `query:${connectionId}:${querySeqRef.current}:${Date.now()}`;
-    const tab: WorkTab = { id, kind: 'query', title: '', connectionId, schema, initialSql, seq: querySeqRef.current };
+    const tab: WorkTab = { id, kind: 'query', title: '', connectionId, connKey: connKeyFor(connectionId, database), schema, initialSql, seq: querySeqRef.current };
     setWorkTabs((tabs) => [...tabs, tab]);
     setActiveTabId(id);
     setActiveConnectionId(connectionId);
-  }, []);
+  }, [connKeyFor]);
 
   const openTableData = useCallback(
     async (node: DbTreeNode) => {
       if (node.kind !== 'table' && node.kind !== 'view') return;
-      const conn = connections.find((c) => c.id === node.connectionId);
-      if (conn && !connectedRef.current.has(conn.id)) {
-        try {
-          await connectConn(conn);
-        } catch {
-          return;
-        }
-      }
-      const id = `data:${node.connectionId}:${node.schema ?? ''}:${node.table ?? ''}`;
+      const connKey = connKeyFor(node.connectionId, node.database);
+      if (!(await ensureDbConnected(connKey))) return;
+      const id = `data:${connKey}:${node.schema ?? ''}:${node.table ?? ''}`;
       setWorkTabs((tabs) => {
         if (tabs.some((t) => t.id === id)) return tabs;
         return [
@@ -383,6 +463,7 @@ export function useDbClient(projectId: number): UseDbClient {
             kind: 'data',
             title: node.table ?? node.label,
             connectionId: node.connectionId,
+            connKey,
             schema: node.schema,
             table: node.table,
           },
@@ -391,69 +472,63 @@ export function useDbClient(projectId: number): UseDbClient {
       setActiveTabId(id);
       setActiveConnectionId(node.connectionId);
     },
-    [connections, connectConn],
-  );
-
-  const ensureConnected = useCallback(
-    async (connectionId: number): Promise<boolean> => {
-      const conn = connections.find((c) => c.id === connectionId);
-      if (conn && !connectedRef.current.has(conn.id)) {
-        try {
-          await connectConn(conn);
-        } catch {
-          return false;
-        }
-      }
-      return true;
-    },
-    [connections, connectConn],
+    [connKeyFor, ensureDbConnected],
   );
 
   const openStructureTab = useCallback(
     async (node: DbTreeNode) => {
       if (node.kind !== 'table' && node.kind !== 'view') return;
-      if (!(await ensureConnected(node.connectionId))) return;
-      const id = `structure:${node.connectionId}:${node.schema ?? ''}:${node.table ?? ''}`;
+      const connKey = connKeyFor(node.connectionId, node.database);
+      if (!(await ensureDbConnected(connKey))) return;
+      const id = `structure:${connKey}:${node.schema ?? ''}:${node.table ?? ''}`;
       setWorkTabs((tabs) => {
         if (tabs.some((t) => t.id === id)) return tabs;
         return [
           ...tabs,
-          { id, kind: 'structure', title: node.table ?? node.label, connectionId: node.connectionId, schema: node.schema, table: node.table },
+          { id, kind: 'structure', title: node.table ?? node.label, connectionId: node.connectionId, connKey, schema: node.schema, table: node.table },
         ];
       });
       setActiveTabId(id);
       setActiveConnectionId(node.connectionId);
     },
-    [ensureConnected],
+    [connKeyFor, ensureDbConnected],
   );
 
   const openNewTable = useCallback(
-    async (connectionId: number, schema?: string) => {
-      if (!(await ensureConnected(connectionId))) return;
-      const id = `structure:new:${connectionId}:${schema ?? ''}:${Date.now()}`;
+    async (connectionId: number, schema?: string, database?: string) => {
+      const connKey = connKeyFor(connectionId, database);
+      if (!(await ensureDbConnected(connKey))) return;
+      const id = `structure:new:${connKey}:${schema ?? ''}:${Date.now()}`;
       setWorkTabs((tabs) => [
         ...tabs,
-        { id, kind: 'structure', title: '', connectionId, schema, table: '' },
+        { id, kind: 'structure', title: '', connectionId, connKey, schema, table: '' },
       ]);
       setActiveTabId(id);
       setActiveConnectionId(connectionId);
     },
-    [ensureConnected],
+    [connKeyFor, ensureDbConnected],
   );
 
   const openErDiagram = useCallback(
-    async (connectionId: number, schema?: string) => {
-      if (!(await ensureConnected(connectionId))) return;
-      const id = `er:${connectionId}:${schema ?? ''}`;
+    async (connectionId: number, schema?: string, database?: string) => {
+      const connKey = connKeyFor(connectionId, database);
+      if (!(await ensureDbConnected(connKey))) return;
+      const id = `er:${connKey}:${schema ?? ''}`;
       setWorkTabs((tabs) => {
         if (tabs.some((t) => t.id === id)) return tabs;
-        return [...tabs, { id, kind: 'er', title: `ER · ${schema ?? ''}`, connectionId, schema }];
+        return [...tabs, { id, kind: 'er', title: `ER · ${schema ?? ''}`, connectionId, connKey, schema }];
       });
       setActiveTabId(id);
       setActiveConnectionId(connectionId);
     },
-    [ensureConnected],
+    [connKeyFor, ensureDbConnected],
   );
+
+  const requestImportCsv = useCallback((node: DbTreeNode) => {
+    if (!node.table) return;
+    setImportRequest({ connectionId: node.connectionId, connKey: connKeyFor(node.connectionId, node.database), schema: node.schema, table: node.table });
+  }, [connKeyFor]);
+  const clearImportRequest = useCallback(() => setImportRequest(null), []);
 
   const refreshNode = useCallback((nodeId: string) => {
     tableInfoRef.current.clear();
@@ -560,6 +635,10 @@ export function useDbClient(projectId: number): UseDbClient {
     openStructureTab,
     openNewTable,
     openErDiagram,
+    connKeyFor,
+    importRequest,
+    requestImportCsv,
+    clearImportRequest,
     refreshNode,
     invalidateTables,
     treeSuggestions,

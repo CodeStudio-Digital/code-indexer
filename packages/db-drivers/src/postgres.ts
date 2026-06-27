@@ -6,6 +6,7 @@
  * `pg_cancel_backend(pid)`. Rows are capped by `maxRows` (streaming is P4).
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { buildTablePreview } from './sql/preview.js';
 import type {
   ColumnInfo,
   DatabaseDriver,
@@ -220,6 +221,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
   }
 
   const driver: DatabaseDriver = {
+    kind: 'relational',
     async testConnection() {
       const res = await pool.query('SELECT version() AS v');
       return { serverVersion: (res.rows[0] as { v: string } | undefined)?.v };
@@ -276,10 +278,10 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       );
       return (res.rows as Array<{ sequence_name: string }>).map((r) => r.sequence_name);
     },
-    tablePreview(schemaName, name, { limit, offset }) {
+    tablePreview(schemaName, name, opts) {
       const rel = `${qIdent(schemaName)}.${qIdent(name)}`;
-      // Fetch one extra row so `truncated` can signal there are more rows past the page.
-      return runQuery(`SELECT * FROM ${rel} LIMIT $1 OFFSET $2`, { params: [limit + 1, offset], maxRows: limit });
+      const { sql, params } = buildTablePreview('postgres', rel, opts);
+      return runQuery(sql, { params, maxRows: opts.limit });
     },
     async schema(schemaName = 'public') {
       const tables = await driver.listTables(schemaName);

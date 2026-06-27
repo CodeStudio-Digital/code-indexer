@@ -87,6 +87,7 @@ import {
   interleaveLabeled,
 } from '@mcp/code-agent/core/runner/assembly/union-memory.js';
 import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
+import { decisionGuidanceForTask, decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { ToolOutputStore } from '@mcp/code-agent/overlay/tool-output-store.js';
 import { toolOutputTools } from '@mcp/code-agent/tools/tool-output.js';
@@ -1078,11 +1079,40 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     }
   }
+  // Agent Decision Engine runtime guidance. Default-off at the host layer: the
+  // value is only computed when a caller explicitly enabled guidance, guardrail,
+  // or ask-before-switch. It is pure/cheap, but keeping it gated preserves the
+  // prior byte shape for sessions with all flags off.
+  const agentDecisionContext = {
+    currentAgent: effectiveAgentId,
+    hasHistory: hasHistory0,
+  };
+  const agentDecisionGuidance = (
+    opts.agentDecisionGuidanceEnabled ||
+    opts.agentDecisionSoftGuardrail ||
+    opts.agentDecisionAskBeforeSwitch
+  )
+    ? decisionGuidanceForTask(opts.userMessage ?? '', agentDecisionContext)
+    : undefined;
+  const agentDecisionTelemetry = opts.agentDecisionTelemetryEnabled
+    ? decisionTelemetryForTask(opts.userMessage ?? '', agentDecisionContext)
+    : undefined;
+
   // Task-preflight seed — meaningful only for a FRESH session; a resumed
   // conversation carries better signals (history profile + re-pins). The
   // seed's profile beats the turn-1 keyword heuristic but loses to any
   // explicit choice (opts.profile / CODER_PROFILE / agentDef).
   const preflightSeed = !hasHistory0 ? opts.preflight : undefined;
+  // Runtime guidance may render as a preflight reminder even when the host did
+  // not provide a real preflight seed. Keep it separate so guidance-only does
+  // not accidentally activate seeded tool caps, profile hints, or pinned tools.
+  const preflightHintSeed = !hasHistory0
+    ? (
+      agentDecisionGuidance && opts.agentDecisionGuidanceEnabled
+        ? { ...(preflightSeed ?? {}), agentDecisionGuidance }
+        : preflightSeed
+    )
+    : undefined;
   // Sticky toolset (mig 142): profile/pins/cap persist on the session and
   // only ever WIDEN. Re-inferring from the loaded history tail every run
   // made the visible tool array flip between runs (118 ↔ ~60 observed in
@@ -1843,8 +1873,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           } catch { /* best-effort */ }
         }
       : undefined,
-    preflightHint: preflightSeed ? renderPreflightHint(preflightSeed) : undefined,
+    preflightHint: preflightHintSeed ? renderPreflightHint(preflightHintSeed) : undefined,
     sessionToolCap,
+    agentDecisionGuidance,
+    agentDecisionTelemetry,
+    agentDecisionSoftGuardrail: opts.agentDecisionSoftGuardrail,
+    agentDecisionSoftGuardrailMinConfidence: opts.agentDecisionSoftGuardrailMinConfidence,
+    agentDecisionAskBeforeSwitch: opts.agentDecisionAskBeforeSwitch,
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
     externalToolTiers,

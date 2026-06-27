@@ -21,6 +21,7 @@
  * same question are free.
  */
 import type { ProviderStore, ProviderConfig } from '@mcp/store/provider-store.js';
+import { nativeFetch, type CrossFetch } from '@mcp/shared/utils/native-fetch.js';
 
 export class HyDEService {
   private store: ProviderStore | null;
@@ -90,7 +91,7 @@ export class HyDEService {
 
   private async callAnthropic(cfg: ProviderConfig, prompt: string): Promise<string> {
     const { default: Anthropic } = (await import('@anthropic-ai/sdk')) as {
-      default: new (opts: { apiKey: string; baseURL?: string }) => {
+      default: new (opts: { apiKey: string; baseURL?: string; fetch?: CrossFetch }) => {
         messages: {
           create(req: {
             model: string;
@@ -100,9 +101,12 @@ export class HyDEService {
         };
       };
     };
+    const fetchImpl = nativeFetch();
     const client = new Anthropic({
       apiKey: cfg.api_key ?? '',
       ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
+      // Use undici (native fetch) instead of bundled node-fetch@2.
+      ...(fetchImpl ? { fetch: fetchImpl } : {}),
     });
     const resp = await client.messages.create({
       model: (cfg.extra?.hyde_model as string) || 'claude-haiku-4-5-20251001',
@@ -117,7 +121,7 @@ export class HyDEService {
 
   private async callOpenAICompat(cfg: ProviderConfig, prompt: string): Promise<string> {
     const { default: OpenAI } = (await import('openai')) as {
-      default: new (opts: { apiKey: string; baseURL?: string }) => {
+      default: new (opts: { apiKey: string; baseURL?: string; fetch?: CrossFetch }) => {
         chat: {
           completions: {
             create(req: {
@@ -136,9 +140,12 @@ export class HyDEService {
     const model = extraModel ?? this.defaultModelFor(cfg.kind);
 
     const baseURL = cfg.base_url ?? (cfg.kind === 'openrouter' ? 'https://openrouter.ai/api/v1' : undefined);
+    const fetchImpl = nativeFetch();
     const client = new OpenAI({
       apiKey: cfg.api_key ?? '',
       ...(baseURL ? { baseURL } : {}),
+      // Use undici (native fetch) instead of bundled node-fetch@2.
+      ...(fetchImpl ? { fetch: fetchImpl } : {}),
     });
     const resp = await client.chat.completions.create({
       model,

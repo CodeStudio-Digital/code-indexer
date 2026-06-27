@@ -36,6 +36,16 @@ export function renderPreflightHint(seed: PreflightSeed): string {
     }
   }
 
+  if (seed.agentDecisionGuidance) {
+    const g = seed.agentDecisionGuidance;
+    lines.push(`agent decision guidance: ${g.reminder}`);
+    if (g.shouldAskBeforeAgentSwitch) {
+      const from = g.currentAgent ?? 'unknown';
+      const reason = g.agentSwitchReason ? ` — ${g.agentSwitchReason}` : '';
+      lines.push(`agent switch: ask_user before switching ${from} → ${g.recommendedAgent}${reason}`);
+    }
+  }
+
   lines.push(
     'note: these are suggestions from a cheap pre-analysis run before any code was read. Verify against the code; ' +
       'if a memory conflicts with what you observe, trust the code (memories age when files change); ' +

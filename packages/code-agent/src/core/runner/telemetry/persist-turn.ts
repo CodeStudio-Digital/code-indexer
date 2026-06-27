@@ -22,6 +22,7 @@
  * which wraps THIS function and runs the class-bound side effects after.
  * The BT's `ExecutingNode` only sees the bridge callback.
  */
+import type { AgentDecisionTelemetry } from '@mcp/code-agent/agents/decision-types.js';
 import type {
   ChatProviderResponseMeta,
   ChatUsage,
@@ -72,6 +73,10 @@ export interface PersistTurnTelemetryArgs {
   reducerStats?: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null;
   /** Sanitized provider request/response metadata (mig 093). */
   responseMeta?: ChatProviderResponseMeta | null;
+  /** Optional Agent Decision Engine telemetry, stored inside response_meta JSON. */
+  agentDecisionTelemetry?: AgentDecisionTelemetry | null;
+  /** Actual session agent at execution time, paired with the recommendation. */
+  actualAgent?: string | null;
 }
 
 /**
@@ -124,6 +129,16 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
   // COALESCE(request_api_model, model) grouping and the backfill.
   const apiModel = args.responseMeta?.request?.api_model ?? args.model;
   const cost = estimateCost(args.provider ?? '', apiModel ?? '', args.usage);
+  const responseMeta = args.agentDecisionTelemetry
+    ? ({
+      ...(args.responseMeta ?? {}),
+      agent_decision: {
+        ...args.agentDecisionTelemetry,
+        actualAgent: args.actualAgent ?? null,
+        toolsCalled: args.toolUseBlocks.map((b) => b.name),
+      },
+    } as ChatProviderResponseMeta)
+    : (args.responseMeta ?? null);
 
   try {
     return args.store.recordTurnTelemetry({
@@ -154,7 +169,7 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
       reducer_freed_chars: args.reducerStats?.freedChars ?? null,
       reducer_pending_chars: args.reducerStats?.pendingChars ?? null,
       estimated_cost_usd: cost > 0 ? cost : null,
-      response_meta: args.responseMeta ?? null,
+      response_meta: responseMeta,
     });
   } catch {
     return null;

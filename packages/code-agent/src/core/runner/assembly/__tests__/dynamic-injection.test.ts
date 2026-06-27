@@ -362,6 +362,16 @@ describe('computeDynamicInjection — preflight hint', () => {
     expect(out!.includedPreflightHash).toBe('p1');
   });
 
+  it('preserves Agent Decision guidance carried inside the preflight block', () => {
+    const withGuidance = {
+      text: '<preflight>\nagent decision guidance: agent_decision: intent=edit; agent=build\n</preflight>',
+      hash: 'p2',
+    };
+    const out = computeDynamicInjection(baseCtx({ turn: 1, preflightHint: withGuidance }));
+    expect(out!.reminder).toContain('agent decision guidance: agent_decision: intent=edit; agent=build');
+    expect(out!.includedPreflightHash).toBe('p2');
+  });
+
   it('does NOT re-inject on a steady mid-session turn once injected', () => {
     expect(computeDynamicInjection(baseCtx({
       preflightHint: hint,

@@ -38,7 +38,14 @@ import {
   buildRichRefusal,
   buildAutoDowngradeResponse,
 } from "@mcp/code-agent/core/compaction.js";
-import { evaluateToolInvocation, findScopeViolations, isIrreversibleTool, isPlanModeWorkflowTool, type PolicyContext } from '@mcp/code-agent/core/policy.js';
+import {
+  evaluateSoftAgentDecisionGuardrail,
+  evaluateToolInvocation,
+  findScopeViolations,
+  isIrreversibleTool,
+  isPlanModeWorkflowTool,
+  type PolicyContext,
+} from '@mcp/code-agent/core/policy.js';
 import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from '@mcp/code-agent/core/summarizer.js';
@@ -576,6 +583,7 @@ export class CoderRunner extends EventEmitter {
   private readonly injectedToolErrors: Map<string, string> = new Map();
   private static readonly DEFAULT_INPUT_KEY = '__default__';
   private pendingUserMessages: Array<{ text: string; selectedSkillIds?: string[] }> = [];
+  private agentDecisionSwitchAsked = false;
   private planApproved = false;
   /** Set by `approveSpec()` after the user accepts a `submit_spec` submission. */
   private specApproved = false;
@@ -1901,6 +1909,54 @@ export class CoderRunner extends EventEmitter {
     this.opts = { ...this.opts, toolPermissionMode: mode };
   }
 
+  private async maybeAskAgentDecisionSwitch(): Promise<RunResult | null> {
+    if (this.agentDecisionSwitchAsked) return null;
+    if (this.opts.agentDecisionAskBeforeSwitch !== true) return null;
+    const g = this.opts.agentDecisionGuidance;
+    if (!g?.shouldAskBeforeAgentSwitch) return null;
+    if (!this.opts.toolContext.setSessionAgent) return null;
+    if (this.isSubagent) return null;
+    if (g.recommendedAgent === 'admin' && !g.requiresExplicitUserIntent) return null;
+    const current = g.currentAgent ?? this.opts.agentId ?? null;
+    if (!current || current === g.recommendedAgent) return null;
+
+    this.agentDecisionSwitchAsked = true;
+    const id = `q_agent_switch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const reason = g.agentSwitchReason ?? `${g.intent} work fits ${g.recommendedAgent} better than ${current}.`;
+    this.emit('question_posted', {
+      type: 'question',
+      id,
+      header: 'Agent suggestion',
+      question: `This task looks better suited for the ${g.recommendedAgent} agent. Switch from ${current}?`,
+      options: [
+        { label: `Switch to ${g.recommendedAgent}`, value: 'switch_agent' },
+        { label: `Stay on ${current}`, value: 'keep_current' },
+      ],
+      allowFreeform: false,
+    } satisfies QuestionBlock);
+
+    const raw = await this.waitForUserInput();
+    let parsed: { answer?: string; aborted?: boolean; interrupted?: boolean };
+    try { parsed = JSON.parse(raw); } catch { parsed = { answer: raw }; }
+    if (parsed.aborted || parsed.interrupted) return null;
+    if ((parsed.answer ?? raw) !== 'switch_agent') return null;
+
+    this.opts.toolContext.setSessionAgent(g.recommendedAgent);
+    this.appendSystemReminder(
+      `Agent switched to ${g.recommendedAgent} after user approval. Reason: ${reason}. ` +
+      `Restart or continue this session so the next run is built with the new agent prompt/tool profile.`,
+    );
+    return this.finishWith(
+      {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      'completed',
+    );
+  }
+
   /**
    * Delegate to the Behavior Tree orchestrator. Bridges the legacy
    * `EventEmitter` interface to the BT's typed `emit` callback so listeners
@@ -1913,6 +1969,8 @@ export class CoderRunner extends EventEmitter {
    * temperature resolution, Responses-API state, plan/spec gates.
    */
   private async runViaBehaviorTree(): Promise<RunResult> {
+    const switchResult = await this.maybeAskAgentDecisionSwitch();
+    if (switchResult) return switchResult;
     console.log(
       `[coder/bt] runViaBehaviorTree session=${this.sessionId ?? '-'} ` +
       `provider=${this.opts.provider.name} model=${this.opts.provider.model} ` +
@@ -2003,6 +2061,12 @@ export class CoderRunner extends EventEmitter {
           if (this.opts.specMode && !this.specApproved && mutates) {
             return '[spec-mode: mutating tool blocked. Call `submit_spec` first; tools unlock after approval.]';
           }
+          const softGuard = evaluateSoftAgentDecisionGuardrail(tool, {
+            enabled: this.opts.agentDecisionSoftGuardrail === true,
+            guidance: this.opts.agentDecisionGuidance,
+            minConfidence: this.opts.agentDecisionSoftGuardrailMinConfidence,
+          });
+          if (!softGuard.allowed) return softGuard.detail;
           return null;
         },
         enforcePreRead: (toolName, input, turn, toolUseId) =>
@@ -2156,6 +2220,8 @@ export class CoderRunner extends EventEmitter {
       prefixHeadHash: input.prefixHeadHash,
       reducerStats: input.reducerStats,
       responseMeta: input.responseMeta,
+      agentDecisionTelemetry: this.opts.agentDecisionTelemetry,
+      actualAgent: this.opts.agentId ?? null,
     });
     this.lastTurnTelemetryId = id;
 

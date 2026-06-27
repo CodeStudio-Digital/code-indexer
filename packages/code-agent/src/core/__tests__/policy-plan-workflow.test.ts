@@ -8,10 +8,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  evaluateSoftAgentDecisionGuardrail,
   evaluateToolInvocation,
   isPlanModeWorkflowTool,
   type PolicyContext,
 } from '@mcp/code-agent/core/policy.js';
+import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
 function makeTool(overrides: Partial<CoderTool> = {}): CoderTool {
@@ -36,6 +38,27 @@ function makeCtx(overrides: Partial<PolicyContext> = {}): PolicyContext {
     strict: false,
     adminOverride: true,
     sandboxBound: true,
+    ...overrides,
+  };
+}
+
+function makeGuidance(overrides: Partial<AgentDecisionGuidance> = {}): AgentDecisionGuidance {
+  return {
+    recommendedAgent: 'explore',
+    currentAgent: 'explore',
+    intent: 'answer',
+    phase: 'exploration',
+    riskBudget: 'read',
+    costBudget: 'low',
+    delegation: 'inline',
+    confidence: 0.8,
+    confidenceBand: 'high',
+    requiresExplicitUserIntent: false,
+    agentMismatch: false,
+    shouldAskBeforeAgentSwitch: false,
+    preferredTools: ['mcp__search'],
+    discouragedTools: ['edit_file'],
+    reminder: 'agent_decision: intent=answer; risk<=read',
     ...overrides,
   };
 }
@@ -65,5 +88,54 @@ describe('policy — plan-mode workflow exemption', () => {
     const decision = evaluateToolInvocation(tool, {}, makeCtx({ specMode: true, specApproved: false }));
     expect(decision.allowed).toBe(false);
     if (!decision.allowed) expect(decision.reason).toBe('spec_mode');
+  });
+});
+
+describe('policy — soft AgentDecision guardrail', () => {
+  it('is default-off when disabled or guidance is missing', () => {
+    const tool = makeTool({ name: 'edit_file', mutates: true, riskLevel: 'write' });
+    expect(evaluateSoftAgentDecisionGuardrail(tool, { enabled: false, guidance: makeGuidance() }).allowed).toBe(true);
+    expect(evaluateSoftAgentDecisionGuardrail(tool, { enabled: true, guidance: null }).allowed).toBe(true);
+  });
+
+  it('does not block low-confidence guidance', () => {
+    const tool = makeTool({ name: 'edit_file', mutates: true, riskLevel: 'write' });
+    const decision = evaluateSoftAgentDecisionGuardrail(tool, {
+      enabled: true,
+      guidance: makeGuidance({ confidence: 0.25, confidenceBand: 'low' }),
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('blocks mutating tools for confident read-only decisions', () => {
+    const write = evaluateSoftAgentDecisionGuardrail(
+      makeTool({ name: 'edit_file', mutates: true, riskLevel: 'write' }),
+      { enabled: true, guidance: makeGuidance() },
+    );
+    expect(write.allowed).toBe(false);
+    if (!write.allowed) expect(write.reason).toBe('read_only_risk_budget');
+  });
+
+  it('allows non-mutating execute-risk tools because shell handlers still self-gate', () => {
+    const exec = evaluateSoftAgentDecisionGuardrail(
+      makeTool({ name: 'run_command', mutates: false, riskLevel: 'execute' }),
+      { enabled: true, guidance: makeGuidance() },
+    );
+    expect(exec.allowed).toBe(true);
+  });
+
+  it('blocks admin-risk tools unless the decision budget is admin', () => {
+    const blocked = evaluateSoftAgentDecisionGuardrail(
+      makeTool({ name: 'git_commit', mutates: true, riskLevel: 'admin' }),
+      { enabled: true, guidance: makeGuidance({ riskBudget: 'write', intent: 'edit', phase: 'editing' }) },
+    );
+    expect(blocked.allowed).toBe(false);
+    if (!blocked.allowed) expect(blocked.reason).toBe('admin_escalation');
+
+    const allowed = evaluateSoftAgentDecisionGuardrail(
+      makeTool({ name: 'git_commit', mutates: true, riskLevel: 'admin' }),
+      { enabled: true, guidance: makeGuidance({ riskBudget: 'admin', intent: 'git_admin', recommendedAgent: 'admin' }) },
+    );
+    expect(allowed.allowed).toBe(true);
   });
 });

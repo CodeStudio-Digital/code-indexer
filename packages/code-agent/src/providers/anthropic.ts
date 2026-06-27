@@ -1,4 +1,5 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk';
+import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type {
   AgentMessage,
@@ -114,7 +115,10 @@ export class AnthropicChatProvider implements ChatProvider {
       ...(opts.dangerouslyAllowBrowser !== undefined
         ? { dangerouslyAllowBrowser: opts.dangerouslyAllowBrowser }
         : {}),
-      ...(opts.fetch ? { fetch: opts.fetch as unknown as ClientOptions['fetch'] } : {}),
+      // Default to undici (native fetch) so installLlmDispatcher's bodyTimeout:0
+      // applies during the reasoning phase and the SDK avoids bundled
+      // node-fetch@2. An explicit opts.fetch (proxy/OAuth) still wins.
+      fetch: (opts.fetch ?? nativeFetch()) as unknown as ClientOptions['fetch'],
     });
   }
 
