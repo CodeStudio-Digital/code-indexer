@@ -281,6 +281,18 @@ export const api = {
     return `${API_BASE}/v1/auth/oauth/${provider}/start?flow=portal`;
   },
 
+  // sso (per-org OIDC, Enterprise)
+  ssoStartUrl: (orgId: string): string => `${API_BASE}/v1/auth/sso/${encodeURIComponent(orgId)}/start?flow=portal`,
+  ssoCallbackUrl: (): string => `${API_BASE}/v1/auth/sso/callback`,
+  ssoGetConfig: (orgId: string) =>
+    request<
+      { configured: false } | { configured: true; issuer: string; clientId: string; allowedDomains: string[]; enabled: boolean }
+    >(`/v1/auth/sso/${encodeURIComponent(orgId)}/config`),
+  ssoSetConfig: (
+    orgId: string,
+    body: { issuer: string; clientId: string; clientSecret: string; allowedDomains: string[]; enabled: boolean },
+  ) => request<{ ok: true }>(`/v1/auth/sso/${encodeURIComponent(orgId)}/config`, { body }),
+
   // account
   me: () => request<{ account: Account }>('/v1/auth/me'),
   sessions: () => request<{ sessions: CloudSessionInfo[] }>('/v1/auth/sessions'),
@@ -300,10 +312,16 @@ export const api = {
   twofaConfirm: (code: string) => request<{ recoveryCodes: string[] }>('/v1/auth/2fa/confirm', { body: { code } }),
   twofaDisable: (password: string, code: string) => request<{ ok: true }>('/v1/auth/2fa/disable', { body: { password, code } }),
 
+  // account
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: true }>('/v1/account/password', { body: { currentPassword, newPassword } }),
+
   // billing
   entitlements: () => request<Entitlements>('/v1/billing/entitlements'),
   billingCheckout: () => request<{ url: string }>('/v1/billing/checkout', { method: 'POST' }),
   billingPortal: () => request<{ url: string }>('/v1/billing/portal', { method: 'POST' }),
+  // Self-heal a missed checkout webhook (called by the post-purchase success page).
+  billingSync: () => request<{ applied: boolean }>('/v1/billing/sync', { method: 'POST' }),
 
   // docs
   docsList: () => request<{ docs: HostedDoc[]; baseUrl: string }>('/v1/docs'),

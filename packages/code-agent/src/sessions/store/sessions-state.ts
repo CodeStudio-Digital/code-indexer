@@ -41,6 +41,37 @@ export function setPlanDepth(db: DB, id: number, depth: string | null): void {
 }
 
 /**
+ * Persist the per-session sticky response-language override (migration 177).
+ * A concrete language name feeds the `# Language` system-prompt block; pass
+ * `null` to clear (the runner falls back to the project default, then the
+ * neutral "respond in the user's language" form). The write path trims/bounds
+ * the value; this setter is permissive.
+ */
+export function setResponseLanguage(db: DB, id: number, language: string | null): void {
+  db.prepare("UPDATE coder_sessions SET response_language_override = ?, updated_at = datetime('now') WHERE id = ?").run(language, id);
+}
+
+/**
+ * Persist the per-session sticky output style (migration 178): `proactive` |
+ * `explanatory` | `learning`. Pass `null` to clear (back to `proactive`, which
+ * renders no extra block). Membership validation lives at the HTTP write path;
+ * this setter is permissive.
+ */
+export function setOutputStyle(db: DB, id: number, style: string | null): void {
+  db.prepare("UPDATE coder_sessions SET output_style_override = ?, updated_at = datetime('now') WHERE id = ?").run(style, id);
+}
+
+/**
+ * Persist (or clear) the cached task-preflight seed (migration 180). Pass a
+ * JSON string of the `PreflightSeed` to cache it for reuse on the next fresh
+ * POST; pass `null` to clear. Permissive — validation/serialization lives at
+ * the http-api write path.
+ */
+export function setPreflightSeed(db: DB, id: number, seedJson: string | null): void {
+  db.prepare("UPDATE coder_sessions SET preflight_seed_json = ?, updated_at = datetime('now') WHERE id = ?").run(seedJson, id);
+}
+
+/**
  * Persist the per-session "unrestricted tool output" toggle. Pass `null` to
  * clear (back to the production cap defaults). Stored as 0|1|NULL.
  */

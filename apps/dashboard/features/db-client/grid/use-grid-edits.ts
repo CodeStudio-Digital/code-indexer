@@ -39,7 +39,7 @@ export interface GridEdits {
   /** Effective value for a cell (edit override → original). */
   cellValue: (rowKey: string, col: string, original: unknown) => unknown;
   isEdited: (rowKey: string, col: string) => boolean;
-  buildChanges: (rows: Row[], pkCols: string[], schema: string | undefined, table: string) => RowChangeInput[];
+  buildChanges: (rows: Row[], pkCols: string[]) => RowChangeInput[];
 }
 
 let tempSeq = 0;
@@ -92,7 +92,8 @@ export function useGridEdits(): GridEdits {
   const isEdited = useCallback((rowKey: string, col: string) => !!edited[rowKey] && col in edited[rowKey], [edited]);
 
   const buildChanges = useCallback(
-    (rows: Row[], pkCols: string[], schema: string | undefined, table: string): RowChangeInput[] => {
+    (rows: Row[], pkCols: string[]): RowChangeInput[] => {
+      // schema/table are attached by the caller when it builds the editRow input.
       const out: RowChangeInput[] = [];
       for (const row of rows) {
         const rk = rowKeyOf(row, pkCols);
@@ -107,8 +108,7 @@ export function useGridEdits(): GridEdits {
         const values = Object.fromEntries(Object.entries(nr.values).filter(([, v]) => v !== undefined));
         if (Object.keys(values).length > 0) out.push({ op: 'insert', values });
       }
-      // schema/table are attached by the caller (editRow input needs them).
-      return out.map((c) => ({ ...c }));
+      return out;
     },
     [edited, deleted, newRows],
   );

@@ -16,6 +16,9 @@ const MONGO_READ_OPS = new Set([
 ]);
 
 /** Redis commands that read only. Anything not here is treated as a write. */
+/** Op-style keyvalue verbs the driver emits that only READ (everything else writes). */
+const REDIS_READ_OPS = new Set(['scan', 'get', 'type', 'ttl', 'pttl', 'exists', 'keys']);
+
 const REDIS_READ_CMDS = new Set([
   'GET', 'MGET', 'STRLEN', 'EXISTS', 'TYPE', 'TTL', 'PTTL', 'KEYS', 'SCAN', 'RANDOMKEY', 'DBSIZE',
   'HGET', 'HMGET', 'HGETALL', 'HKEYS', 'HVALS', 'HLEN', 'HEXISTS', 'HSCAN', 'HSTRLEN',
@@ -32,6 +35,11 @@ export function isWriteCommand(command: DbCommand): boolean {
     return !MONGO_READ_OPS.has(op);
   }
   if (command.kind === 'keyvalue') {
+    // The driver/UI send op-style commands (scan/get/set/del/expire/hset/…). The
+    // RESP console sends op 'raw' carrying the real command in args[0] — classify
+    // THAT (so e.g. GET is allowed, FLUSHDB blocked, on a read-only connection).
+    const op = (command.op ?? '').toLowerCase();
+    if (op && op !== 'raw') return !REDIS_READ_OPS.has(op);
     const cmd = (command.args?.[0] ?? '').toUpperCase();
     return !REDIS_READ_CMDS.has(cmd);
   }

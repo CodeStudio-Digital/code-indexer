@@ -194,6 +194,35 @@ export interface PromptContext {
    * fallback even on vision-capable models.
    */
   modelCanSeeImages?: boolean;
+  /**
+   * Response-language directive. When set to a concrete language name
+   * (e.g. "Português (Brasil)", "English"), a `# Language` block is rendered
+   * above the dynamic boundary instructing the model to answer in that
+   * language and preserve orthography (accents). When unset/empty/"auto" the
+   * block falls back to the neutral "respond in the user's language" form.
+   * Session-fixed → cache-stable, lives in the static prefix. Resolved from
+   * the per-session `response_language_override` column (mig 177), which is
+   * seeded from a per-project default.
+   */
+  responseLanguage?: string;
+  /**
+   * Output style — `proactive` (default) | `explanatory` | `learning`. Mirrors
+   * Claude Code's selectable response styles. `proactive` renders no extra
+   * block (the default behaviour); `explanatory` adds an educational-insight
+   * directive; `learning` adds a `TODO(human)` hand-off directive. Session-
+   * fixed → cache-stable, above the dynamic boundary. Resolved from the
+   * per-session `output_style_override` column (mig 178).
+   */
+  outputStyle?: 'proactive' | 'explanatory' | 'learning';
+  /**
+   * True when the run is UNSUPERVISED — no human watching in real time (cron /
+   * scheduled / company subordinate). Adds an `# Operating autonomously` block
+   * that tells the model not to ask blocking questions: proceed on reversible
+   * actions, stop only for destructive ones or genuine scope changes, and do
+   * pending work instead of ending the turn with a promise. Set from the run
+   * context (not a user picker), so it is session-fixed → cache-stable.
+   */
+  unsupervised?: boolean;
 }
 
 /**
@@ -373,6 +402,19 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
 `
     : '';
 
+  // Session-fixed directives (cache-stable, static prefix): response language,
+  // output style, and autonomous (unsupervised) framing. Each collapses to ''
+  // when not applicable so the prefix stays byte-stable for sessions that share
+  // the same (project, provider, profile, language, style, unsupervised) tuple.
+  const languageBlock = languageSection(ctx.responseLanguage);
+  // 'learning' injects a `TODO(human)` hand-off — meaningless and directly
+  // contradictory in an unsupervised run (autonomousSection says "no human is
+  // watching, do the work instead of stopping"). Suppress it there.
+  const effectiveStyle =
+    ctx.unsupervised && ctx.outputStyle === 'learning' ? 'proactive' : ctx.outputStyle;
+  const outputStyleBlock = outputStyleSection(effectiveStyle);
+  const autonomousBlock = autonomousSection(ctx.unsupervised);
+
   // ─── DYNAMIC SUFFIX ────────────────────────────────────────────────
   // Everything below the boundary marker can vary across sessions of the
   // same (project, provider, profile, ...) tuple. Cache logic that splits
@@ -410,7 +452,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${autonomousBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
 }
 
 /**
@@ -468,6 +510,62 @@ The runner refuses identical-content tool results after the second duplicate. Re
 
 # Active context
 Each turn you will receive a final user message wrapped in \`<active-context>...</active-context>\` containing the live goal, todo list, and any active task scope. Read it before acting — it is the source of truth, more authoritative than older history.`;
+}
+
+/**
+ * `# Language` directive. Session-fixed → cache-stable (stays in the static
+ * prefix). A concrete language name produces an explicit "always respond in X"
+ * block with an orthography guard (never strip accents); the neutral form
+ * ("auto"/unset) just tells the model to match the user's language. Mirrors
+ * Claude Code's injected language template.
+ */
+function languageSection(lang?: string): string {
+  const trimmed = (lang ?? '').trim();
+  // Unset / "auto" → no block: don't bloat every prompt or churn the cache for
+  // sessions that never configured a language (the default model behaviour of
+  // matching the user's language already applies). Only inject when explicitly set.
+  if (!trimmed || trimmed.toLowerCase() === 'auto') return '';
+  return `
+
+# Language
+Always respond in ${trimmed}. Use ${trimmed} for all user-facing explanations and summaries; keep code, identifiers, and file paths unchanged. Maintain full orthographic correctness — never substitute accented characters with their ASCII equivalents (never write "nao" for "não", "voce" for "você").`;
+}
+
+/**
+ * Output-style block. `proactive` (default) renders nothing — the base prompt
+ * already biases toward action. `explanatory` adds an educational-insight
+ * directive; `learning` adds a single-`TODO(human)` hand-off. Session-fixed →
+ * cache-stable. Mirrors Claude Code's proactive/explanatory/learning styles.
+ */
+function outputStyleSection(style?: 'proactive' | 'explanatory' | 'learning'): string {
+  if (style === 'explanatory') {
+    return `
+
+# Explanatory output
+Alongside completing the task, give brief educational insight into the codebase patterns you touch and the reasoning behind your implementation choices. Balance teaching with task completion — stay relevant and don't pad. You may slightly exceed the usual terseness when an insight earns it.`;
+  }
+  if (style === 'learning') {
+    return `
+
+# Learning output
+Complete the task, but pause at ONE well-chosen design decision and ask the user to write that small piece themselves. Add exactly one \`TODO(human)\` section framed as a design decision (with enough context to act), then stop and hand off — do not fill it in yourself.`;
+  }
+  return '';
+}
+
+/**
+ * `# Operating autonomously` block — only when the run is unsupervised (cron /
+ * scheduled / company subordinate). Flips the loop's stop discipline: don't ask
+ * blocking questions, proceed on reversible actions, and do pending work rather
+ * than ending the turn with a promise. Mirrors Claude Code's autonomous-mode
+ * directive. Session-fixed → cache-stable.
+ */
+function autonomousSection(unsupervised?: boolean): string {
+  if (!unsupervised) return '';
+  return `
+
+# Operating autonomously
+No human is watching this run in real time, so a question like "Want me to…?" or "Shall I…?" blocks the work indefinitely. For reversible actions that follow from the request, proceed without asking — do NOT call \`ask_user\`. Stop only for destructive actions (delete/reset/force-push/deploy) or a genuine scope change the user must own; otherwise report what you found and what you could not resolve, and stop there. Before ending your turn, check your last paragraph: if it is a plan, a question, or a promise ("I'll…", "next I would…"), do that work now with tool calls instead of stopping. Don't stop because the context or session is long.`;
 }
 
 /**
@@ -608,6 +706,7 @@ function memorySection(sessionDrive?: boolean): string {
     return `
 # Long-term memory
 When you make an important architectural decision or identify a reusable pattern, save it via \`mcp__save_memory\` (\`category: decision | convention | gotcha | architecture\`). It lives in the \`navigate\` tier; future sessions retrieve it via \`mcp__search_memory\`. (\`mcp__add_snapshot\` is a separate, \`admin\`-tier tool for curated project snapshots — not for routine memory.)
+Recalled memories can be stale — before relying on one that names a file, symbol, or flag, verify it against the current code and trust what you read now over the note.
 `;
   }
   return `
@@ -618,5 +717,6 @@ This session has a durable working memory (Session Drive) plus a cross-session P
 - \`list_notes\` / \`read_plan\` — review your saved notes / re-read your submitted plan.
 - \`recall_investigations({query})\` — BEFORE spawning an explore subagent, reuse past auto-saved findings instead of paying to re-investigate.
 The runner re-injects plan/notes/session state after compaction. \`mcp__save_memory\` (navigate tier) also persists durable decisions/conventions/gotchas; \`mcp__add_snapshot\` is admin-tier for curated snapshots, not routine memory.
+Recalled memories can be stale — before relying on one that names a file, symbol, or flag, verify it against the current code and trust what you read now over the note.
 `;
 }

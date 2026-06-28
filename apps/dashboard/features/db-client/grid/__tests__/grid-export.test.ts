@@ -1,58 +1,202 @@
-import { describe, it, expect } from 'vitest';
-import { toCsv, toCsvBody, toJson, toTsv, toInsertSql, toDumpInserts, cellToCopy } from '../grid-export.js';
+import { describe, it, expect } from "vitest";
+import {
+  toCsv,
+  toCsvBody,
+  toJson,
+  toTsv,
+  toInsertSql,
+  toDumpInserts,
+  cellToCopy,
+} from "../grid-export.js";
 
-const cols = ['id', 'name', 'meta'];
-const rows = [
-  { id: 1, name: 'Ada, "the count"', meta: { a: 1 } },
-  { id: 2, name: 'Linus\nTorvalds', meta: null },
-];
+describe("grid-export serializers", () => {
+  describe("toCsv / toCsvBody", () => {
+    it("emits a header line followed by rows", () => {
+      const csv = toCsv(["id", "name"], [{ id: 1, name: "Alice" }]);
+      expect(csv).toBe("id,name\n1,Alice");
+    });
 
-describe('grid-export', () => {
-  it('CSV quotes commas/quotes/newlines and stringifies objects', () => {
-    const csv = toCsv(cols, rows);
-    expect(csv.split('\n')[0]).toBe('id,name,meta');
-    expect(csv).toContain('"Ada, ""the count"""'); // comma + escaped quotes
-    expect(csv).toContain('"Linus\nTorvalds"'); // newline quoted
-    expect(csv).toContain('"{""a"":1}"'); // object → JSON, quoted
+    it("returns only the header when there are no rows", () => {
+      expect(toCsv(["id", "name"], [])).toBe("id,name");
+    });
+
+    it("toCsvBody omits the header line", () => {
+      const body = toCsvBody(
+        ["id", "name"],
+        [
+          { id: 1, name: "Alice" },
+          { id: 2, name: "Bob" },
+        ],
+      );
+      expect(body).toBe("1,Alice\n2,Bob");
+    });
+
+    it("quotes and escapes cells containing commas", () => {
+      const body = toCsvBody(["v"], [{ v: "a,b" }]);
+      expect(body).toBe('"a,b"');
+    });
+
+    it("quotes and doubles embedded double-quotes", () => {
+      const body = toCsvBody(["v"], [{ v: 'he said "hi"' }]);
+      expect(body).toBe('"he said ""hi"""');
+    });
+
+    it("quotes cells containing newlines", () => {
+      const body = toCsvBody(["v"], [{ v: "line1\nline2" }]);
+      expect(body).toBe('"line1\nline2"');
+      const cr = toCsvBody(["v"], [{ v: "a\rb" }]);
+      expect(cr).toBe('"a\rb"');
+    });
+
+    it("renders null/undefined as an empty cell", () => {
+      const body = toCsvBody(["a", "b"], [{ a: null, b: undefined }]);
+      expect(body).toBe(",");
+    });
   });
 
-  it('JSON emits an array of objects with nulls preserved', () => {
-    const parsed = JSON.parse(toJson(cols, rows)) as Array<Record<string, unknown>>;
-    expect(parsed).toHaveLength(2);
-    expect(parsed[1].meta).toBeNull();
-    expect(parsed[0].meta).toEqual({ a: 1 });
+  describe("toJson", () => {
+    it("normalizes nullish values to null and pretty-prints", () => {
+      const json = toJson(["a", "b", "c"], [{ a: 1, b: null, c: undefined }]);
+      const parsed = JSON.parse(json);
+      expect(parsed).toEqual([{ a: 1, b: null, c: null }]);
+      // pretty-printed with 2-space indentation (object keys nested under the
+      // array element are indented 4 spaces).
+      expect(json).toContain('\n    "a": 1');
+    });
+
+    it("projects only the requested columns", () => {
+      const json = toJson(["id"], [{ id: 7, extra: "ignored" }]);
+      expect(JSON.parse(json)).toEqual([{ id: 7 }]);
+    });
   });
 
-  it('TSV collapses tabs/newlines for clipboard', () => {
-    const tsv = toTsv(cols, rows);
-    expect(tsv.split('\n')[0]).toBe('id\tname\tmeta');
-    expect(tsv).toContain('Linus Torvalds'); // newline collapsed to space
+  describe("toTsv", () => {
+    it("emits a tab-separated header and rows", () => {
+      const tsv = toTsv(["id", "name"], [{ id: 1, name: "Alice" }]);
+      expect(tsv).toBe("id\tname\n1\tAlice");
+    });
+
+    it("returns only the header when there are no rows", () => {
+      expect(toTsv(["id", "name"], [])).toBe("id\tname");
+    });
+
+    it("collapses embedded tabs and newlines into a single space", () => {
+      const tsv = toTsv(["v"], [{ v: "a\tb\nc\r\nd" }]);
+      expect(tsv).toBe("v\na b c d");
+    });
   });
 
-  it('INSERT SQL escapes strings + renders NULL', () => {
-    const sql = toInsertSql('users', cols, rows);
-    expect(sql).toContain('INSERT INTO "users" ("id", "name", "meta") VALUES');
-    expect(sql).toContain("'Ada, \"the count\"'");
-    expect(sql).toContain('NULL'); // row 2 meta
+  describe("toInsertSql (ANSI double-quoted idents)", () => {
+    it("double-quotes the table and column identifiers", () => {
+      const sql = toInsertSql("users", ["id", "name"], [{ id: 1, name: "Alice" }]);
+      expect(sql).toBe(
+        'INSERT INTO "users" ("id", "name") VALUES (1, \'Alice\');',
+      );
+    });
+
+    it("escapes embedded double-quotes in identifiers", () => {
+      const sql = toInsertSql('we"ird', ['c"ol'], [{ 'c"ol': 1 }]);
+      expect(sql).toBe('INSERT INTO "we""ird" ("c""ol") VALUES (1);');
+    });
+
+    it("leaves numbers, bigints, and booleans unquoted; NULL for null", () => {
+      const sql = toInsertSql(
+        "t",
+        ["n", "big", "bt", "bf", "nul"],
+        [{ n: 42, big: 9007199254740993n, bt: true, bf: false, nul: null }],
+      );
+      expect(sql).toBe(
+        'INSERT INTO "t" ("n", "big", "bt", "bf", "nul") VALUES (42, 9007199254740993, TRUE, FALSE, NULL);',
+      );
+    });
+
+    it("single-quotes strings and escapes embedded single-quotes", () => {
+      const sql = toInsertSql("t", ["v"], [{ v: "O'Brien" }]);
+      expect(sql).toBe("INSERT INTO \"t\" (\"v\") VALUES ('O''Brien');");
+    });
+
+    it("emits one statement per row", () => {
+      const sql = toInsertSql("t", ["id"], [{ id: 1 }, { id: 2 }]);
+      expect(sql).toBe(
+        'INSERT INTO "t" ("id") VALUES (1);\nINSERT INTO "t" ("id") VALUES (2);',
+      );
+    });
   });
 
-  it('dump INSERTs quote idents per engine (mysql backticks, else double-quotes)', () => {
-    expect(toDumpInserts('mysql', 'users', cols, rows)).toContain('INSERT INTO `users` (`id`, `name`, `meta`) VALUES');
-    expect(toDumpInserts('postgres', 'users', cols, rows)).toContain('INSERT INTO "users" ("id", "name", "meta") VALUES');
-    expect(toDumpInserts('sqlite', 'users', cols, rows)).toContain('NULL');
+  describe("toDumpInserts (engine-aware quoting)", () => {
+    it("uses backticks for mysql", () => {
+      const sql = toDumpInserts("mysql", "users", ["id"], [{ id: 1 }]);
+      expect(sql).toBe("INSERT INTO `users` (`id`) VALUES (1);");
+    });
+
+    it("uses backticks for mariadb and doubles embedded backticks", () => {
+      const sql = toDumpInserts("mariadb", "ta`ble", ["co`l"], [{ "co`l": 1 }]);
+      expect(sql).toBe("INSERT INTO `ta``ble` (`co``l`) VALUES (1);");
+    });
+
+    it("uses ANSI double-quotes for non-mysql engines (e.g. postgres)", () => {
+      const sql = toDumpInserts("postgres", "users", ["id"], [{ id: 1 }]);
+      expect(sql).toBe('INSERT INTO "users" ("id") VALUES (1);');
+    });
+
+    it("shares the same literal rules as toInsertSql", () => {
+      const sql = toDumpInserts(
+        "postgres",
+        "t",
+        ["s", "n", "nul"],
+        [{ s: "O'Brien", n: 5, nul: null }],
+      );
+      expect(sql).toBe(
+        "INSERT INTO \"t\" (\"s\", \"n\", \"nul\") VALUES ('O''Brien', 5, NULL);",
+      );
+    });
   });
 
-  it('toCsvBody emits rows without the header (for streamed batches)', () => {
-    const body = toCsvBody(cols, rows);
-    expect(body.startsWith('id,name,meta')).toBe(false);
-    // toCsv === header line + the body, so appending batches reproduces the file.
-    expect(toCsv(cols, rows)).toBe(`id,name,meta\n${body}`);
-    expect(toCsvBody(cols, [{ id: 1, name: 'Ada', meta: null }])).toBe('1,Ada,');
+  describe("cellToCopy", () => {
+    it("renders null/undefined as an empty string", () => {
+      expect(cellToCopy(null)).toBe("");
+      expect(cellToCopy(undefined)).toBe("");
+    });
+
+    it("stringifies primitives and serializes objects as JSON", () => {
+      expect(cellToCopy(42)).toBe("42");
+      expect(cellToCopy(true)).toBe("true");
+      expect(cellToCopy({ a: 1 })).toBe('{"a":1}');
+    });
   });
 
-  it('cellToCopy renders null as empty', () => {
-    expect(cellToCopy(null)).toBe('');
-    expect(cellToCopy(42)).toBe('42');
-    expect(cellToCopy({ a: 1 })).toBe('{"a":1}');
+  describe("Date serialization regression (no extra double-quotes)", () => {
+    // JSON.stringify(date) yields a quote-wrapped ISO string ("...Z") which would
+    // corrupt a bare CSV cell and an SQL string literal. asText must emit the
+    // bare ISO timestamp instead.
+    const fixed = new Date("2024-03-14T09:26:53.589Z");
+    const iso = "2024-03-14T09:26:53.589Z";
+
+    it("sanity: JSON.stringify would wrap the date in quotes", () => {
+      expect(JSON.stringify(fixed)).toBe(`"${iso}"`);
+    });
+
+    it("CSV cell contains the bare ISO timestamp without surrounding quotes", () => {
+      const body = toCsvBody(["ts"], [{ ts: fixed }]);
+      expect(body).toBe(iso);
+      expect(body).not.toContain('"');
+    });
+
+    it("TSV cell contains the bare ISO timestamp", () => {
+      const tsv = toTsv(["ts"], [{ ts: fixed }]);
+      expect(tsv).toBe(`ts\n${iso}`);
+    });
+
+    it("INSERT literal wraps the bare ISO in single quotes only (no double quotes)", () => {
+      const sql = toInsertSql("t", ["ts"], [{ ts: fixed }]);
+      expect(sql).toBe(`INSERT INTO "t" ("ts") VALUES ('${iso}');`);
+      // the only quotes around the value are the SQL single-quotes
+      expect(sql).not.toContain(`"${iso}"`);
+      expect(sql).not.toContain(`'"${iso}"'`);
+    });
+
+    it("cellToCopy returns the bare ISO timestamp", () => {
+      expect(cellToCopy(fixed)).toBe(iso);
+    });
   });
 });

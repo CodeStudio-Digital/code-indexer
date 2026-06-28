@@ -143,7 +143,22 @@ export function update(db: DB, id: number, updates: ProjectUpdates): void {
 
 export function del(db: DB, id: number): void {
   pruneLocalHistory(db, id);
-  db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  // `DELETE FROM projects` cascades (ON DELETE CASCADE) into `files`/`snapshots`,
+  // firing their AFTER-DELETE FTS triggers. A corrupt FTS5 index throws
+  // SQLITE_CORRUPT_VTAB from those triggers even though the base tables are fine.
+  // Mirror clearData(): rebuild the derived index from the base tables and retry
+  // once, so a stale FTS doesn't turn project deletion into a 500.
+  try {
+    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  } catch (e) {
+    const code = (e as { code?: string }).code ?? '';
+    if (code.startsWith('SQLITE_CORRUPT') || /malformed|SQLITE_CORRUPT/i.test((e as Error).message)) {
+      repairCodeFtsIndexes(db);
+      db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    } else {
+      throw e;
+    }
+  }
 }
 
 /**

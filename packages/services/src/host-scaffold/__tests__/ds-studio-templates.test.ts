@@ -2,16 +2,16 @@
  * Dry-run dos templates do DS Studio — trava o shape do workspace sem
  * tocar disco/CLI: root workspaces + script dev, pkg/package.json
  * publicável (exports/files/peerDeps, sem storybook), vite.config com
- * porta pinada + strictPort + aliases @/@ds + stamp, e o glob do pkg no
- * Tailwind da galeria (o replace cirúrgico sobre TAILWIND_CONFIG_CJS
- * no-opa silenciosamente se o upstream mudar a linha — este teste acusa).
+ * porta pinada + strictPort + aliases @/@ds + stamp, e o @source do pkg
+ * no index.css da galeria (Tailwind v4 não varre fora do root do app — o
+ * @source supre; este teste trava a presença dele).
  */
 import { describe, it, expect } from 'vitest';
 import {
   buildReactWorkspaceFiles,
   renderDsStudioViteConfig,
 } from '../ds-studio/react-inject.js';
-import { DS_TAILWIND_CONFIG_CJS, APP_INDEX_CSS } from '../ds-studio/templates-react-gallery.js';
+import { APP_INDEX_CSS } from '../ds-studio/templates-react-gallery.js';
 import { buildVueWorkspaceFiles } from '../ds-studio/templates-vue.js';
 import { angularCliSteps } from '../ds-studio/templates-angular.js';
 import { getSourceStampPlugin } from '../../sandbox/builder/source-stamp/registry.js';
@@ -63,8 +63,8 @@ describe('ds-studio react workspace templates', () => {
     expect(APP_INDEX_CSS).toContain(`@import '@ds/tokens.css';`);
   });
 
-  it('gallery tailwind config also scans ../pkg/src (surgical replace held)', () => {
-    expect(DS_TAILWIND_CONFIG_CJS).toContain(`'../pkg/src/**/*.{ts,tsx,js,jsx}'`);
+  it('gallery css adds an @source for ../pkg/src (Tailwind v4 cross-package scan)', () => {
+    expect(APP_INDEX_CSS).toContain(`@source '../../pkg/src/**/*.{ts,tsx,js,jsx}';`);
   });
 });
 

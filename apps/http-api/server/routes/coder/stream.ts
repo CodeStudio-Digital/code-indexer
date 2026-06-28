@@ -37,6 +37,17 @@ import {
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
 
+/**
+ * Cheap, stable content fingerprint for the preflight-seed cache (mig 180). A
+ * collision only means a slightly-off seed is reused — same blast radius as the
+ * best-effort cache itself — so a fast non-crypto hash is fine.
+ */
+function hashPreflightContent(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (((h << 5) + h) + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
 interface SendMessageBody {
   content: string;
   max_turns?: number;
@@ -186,6 +197,25 @@ export function mountCoderStreamRoutes(
         : activeRuns.get(id);
       if (liveBus && !liveBus.ended) return undefined;
 
+      // Idempotent reuse (mig 180): a prior fresh POST already computed + cached
+      // the seed. Reuse it (no recompute, no new trail — telemetry is
+      // intentionally skipped on the cache hit) so the analyzer runs at most once
+      // per fresh session AND the agent still receives the <preflight> hint even
+      // if an earlier run failed before persisting its first message (the symptom
+      // behind "preflight em loop"). Reuse ONLY when the cached entry matches the
+      // CURRENT prompt — an edit-and-resend on a still-fresh session must not
+      // deliver a seed scoped to the discarded text. Corrupt / shape-drifted /
+      // content-mismatched cache → clear + recompute.
+      if (session.preflight_seed_json) {
+        try {
+          const cached = JSON.parse(session.preflight_seed_json) as { h?: string; seed?: PreflightSeed };
+          if (cached && cached.seed && cached.h === hashPreflightContent(body.content)) {
+            return cached.seed;
+          }
+        } catch { /* fall through to clear + recompute */ }
+        try { sessionStore.setSessionPreflightSeed(id, null); } catch { /* best-effort */ }
+      }
+
       const result = await deps.taskPreflight.run({
         sessionId: id,
         projectId: session.project_id,
@@ -220,6 +250,17 @@ export function mountCoderStreamRoutes(
           },
         });
       } catch { /* input log is best-effort */ }
+
+      // Cache the seed for reuse on the next fresh POST (mig 180). Best-effort —
+      // a failed cache write just means the next POST recomputes.
+      if (result.status === 'ok' && result.seed) {
+        try {
+          sessionStore.setSessionPreflightSeed(
+            id,
+            JSON.stringify({ h: hashPreflightContent(body.content), seed: result.seed }),
+          );
+        } catch { /* cache is best-effort */ }
+      }
 
       return result.status === 'ok' ? result.seed : undefined;
     } catch {

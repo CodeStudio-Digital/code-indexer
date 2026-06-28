@@ -10,6 +10,8 @@ import { AuthDonePage } from './pages/AuthDone.js';
 import { OverviewPage } from './pages/Overview.js';
 import { DevicesPage } from './pages/Devices.js';
 import { BillingPage } from './pages/Billing.js';
+import { BillingSuccessPage } from './pages/BillingSuccess.js';
+import { BillingCancelPage } from './pages/BillingCancel.js';
 import { ProjectsPage } from './pages/Projects.js';
 import { ApisPage } from './pages/Apis.js';
 import { TeamsPage } from './pages/Teams.js';
@@ -43,6 +45,8 @@ export function App() {
         <Route path="/apis" element={<ApisPage />} />
         <Route path="/teams" element={<TeamsPage />} />
         <Route path="/billing" element={<BillingPage />} />
+        <Route path="/billing/success" element={<BillingSuccessPage />} />
+        <Route path="/billing/cancel" element={<BillingCancelPage />} />
         <Route path="/security" element={<SecurityPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

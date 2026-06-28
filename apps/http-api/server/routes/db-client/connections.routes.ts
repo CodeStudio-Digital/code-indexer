@@ -71,6 +71,13 @@ export function mountDbConnectionRoutes(app: Hono, deps: ServerDeps): void {
     const cid = parseIdParam(c, 'cid');
     if (!connectionInProject(store, projectId, cid)) return notFound(c, `Connection ${cid} not found`);
     const patch = await parseJsonBody<DbConnectionPatch>(c);
+    // Validate the same fields the POST route guards (a PATCH can set them too).
+    if (patch.engine !== undefined && !patch.engine) {
+      return c.json({ error: 'engine cannot be empty' }, 400);
+    }
+    if (patch.ssh_tunnel_host_id != null && typeof patch.ssh_tunnel_host_id !== 'number') {
+      return c.json({ error: 'ssh_tunnel_host_id must be a number' }, 400);
+    }
     store.updateConnection(cid, patch);
     return c.json(store.getConnection(cid));
   });

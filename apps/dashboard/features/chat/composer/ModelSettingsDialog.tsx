@@ -11,7 +11,7 @@
  * immediately to the next turn.
  */
 import { useTranslation } from 'react-i18next';
-import { Gauge, Layers, Repeat, Thermometer } from 'lucide-react';
+import { BookOpen, Gauge, Languages, Layers, Repeat, Thermometer } from 'lucide-react';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
@@ -62,6 +62,12 @@ interface ModelSettingsDialogProps {
   reasoningLevels?: string[];
   planDepth?: string | null;
   setPlanDepth?: (v: string | null) => void;
+  /** Per-session response language (migration 177). null/'' → auto (user's language). */
+  responseLanguage?: string | null;
+  setResponseLanguage?: (v: string | null) => void;
+  /** Per-session output style (migration 178): proactive | explanatory | learning. */
+  outputStyle?: string | null;
+  setOutputStyle?: (v: string | null) => void;
   fallbackProvider: string | null;
   fallbackModel: string | null;
   onFallbackChange: (provider: string | null, model: string | null) => void;
@@ -90,6 +96,10 @@ export function ModelSettingsDialog({
   reasoningLevels,
   planDepth,
   setPlanDepth,
+  responseLanguage,
+  setResponseLanguage,
+  outputStyle,
+  setOutputStyle,
   fallbackProvider,
   fallbackModel,
   onFallbackChange,
@@ -224,6 +234,55 @@ export function ModelSettingsDialog({
                   <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
                   <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
                   <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
+                </select>
+              </div>
+            </div>
+          )}
+          {setResponseLanguage && (
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">{t('chat:toolbar.language', { defaultValue: 'Response language' })}</label>
+              <div className="flex items-center gap-1.5">
+                <Languages className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <select
+                  aria-label={t('chat:toolbar.language', { defaultValue: 'Response language' })}
+                  className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
+                  value={responseLanguage ?? ''}
+                  onChange={(e) => setResponseLanguage(e.target.value === '' ? null : e.target.value)}
+                >
+                  <option value="">{t('chat:toolbar.languageAuto', { defaultValue: "Auto (user's language)" })}</option>
+                  <option value="Português (Brasil)">Português (Brasil)</option>
+                  <option value="English">English</option>
+                  <option value="Español">Español</option>
+                  <option value="Français">Français</option>
+                  <option value="Deutsch">Deutsch</option>
+                  <option value="Italiano">Italiano</option>
+                  <option value="中文">中文</option>
+                  <option value="日本語">日本語</option>
+                  {/* An externally-set value (project default / seed / future locale) may
+                      not be in the list above — render it so the select reflects the real
+                      override instead of silently falling back to "Auto". */}
+                  {responseLanguage &&
+                    !['Português (Brasil)', 'English', 'Español', 'Français', 'Deutsch', 'Italiano', '中文', '日本語'].includes(
+                      responseLanguage,
+                    ) && <option value={responseLanguage}>{responseLanguage}</option>}
+                </select>
+              </div>
+            </div>
+          )}
+          {setOutputStyle && (
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">{t('chat:toolbar.outputStyle', { defaultValue: 'Output style' })}</label>
+              <div className="flex items-center gap-1.5">
+                <BookOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <select
+                  aria-label={t('chat:toolbar.outputStyle', { defaultValue: 'Output style' })}
+                  className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
+                  value={outputStyle ?? ''}
+                  onChange={(e) => setOutputStyle(e.target.value === '' ? null : e.target.value)}
+                >
+                  <option value="">{t('chat:toolbar.outputStyleProactive', { defaultValue: 'Proactive (default)' })}</option>
+                  <option value="explanatory">{t('chat:toolbar.outputStyleExplanatory', { defaultValue: 'Explanatory' })}</option>
+                  <option value="learning">{t('chat:toolbar.outputStyleLearning', { defaultValue: 'Learning' })}</option>
                 </select>
               </div>
             </div>

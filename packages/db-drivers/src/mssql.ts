@@ -19,14 +19,19 @@ import type {
   ForeignKeyInfo,
   IndexInfo,
   QueryResult,
+  RunBatchOptions,
   RunQueryOptions,
   TableInfo,
   TableRef,
 } from './types.js';
 
+interface MssqlQueryOutput {
+  recordset?: Array<Record<string, unknown>> & { columns?: Record<string, unknown> };
+  rowsAffected?: number[];
+}
 interface MssqlRequest {
   input(name: string, value: unknown): MssqlRequest;
-  query(sql: string): Promise<{ recordset?: Array<Record<string, unknown>> & { columns?: Record<string, unknown> }; rowsAffected?: number[] }>;
+  query(sql: string): Promise<MssqlQueryOutput>;
   cancel(): void;
 }
 interface MssqlPool {
@@ -34,33 +39,47 @@ interface MssqlPool {
   request(): MssqlRequest;
   close(): Promise<void>;
 }
+/** node-mssql Transaction — drives an explicit BEGIN/COMMIT on one connection. */
+interface MssqlTransaction {
+  begin(): Promise<void>;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+}
 
 const SYSTEM_SCHEMAS = new Set(['sys', 'INFORMATION_SCHEMA', 'guest', 'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin', 'db_backupoperator', 'db_datareader', 'db_datawriter', 'db_denydatareader', 'db_denydatawriter']);
 
 function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
   const opts = config.options ?? {};
   const mode = config.ssl?.mode;
-  const base: Record<string, unknown> = {
+  const ssl = config.ssl;
+  const options: Record<string, unknown> = {
+    // Azure/modern SQL Server default to encrypted; trust self-signed unless a
+    // CA is supplied (verify-ca/-full keep the check on).
+    encrypt: mode !== 'disable',
+    trustServerCertificate: mode === 'require' || !mode,
+  };
+  // Honor a user-supplied CA/cert/key (verify-ca/verify-full) — Tedious feeds
+  // cryptoCredentialsDetails to Node's tls.createSecureContext.
+  if (ssl?.ca || ssl?.cert || ssl?.key) {
+    options.cryptoCredentialsDetails = { ca: ssl.ca, cert: ssl.cert, key: ssl.key };
+  }
+  return {
     server: config.host ?? 'localhost',
     port: config.port ?? 1433,
     user: config.user,
     password: config.password,
     database: config.database || undefined,
     pool: { max: 3, min: 0, idleTimeoutMillis: 30_000 },
-    options: {
-      // Azure/modern SQL Server default to encrypted; trust self-signed unless a
-      // CA is supplied (verify-ca/-full keep the check on).
-      encrypt: mode !== 'disable',
-      trustServerCertificate: mode === 'require' || !mode,
-    },
+    options,
     connectionTimeout: typeof opts.connectTimeoutMs === 'number' ? opts.connectTimeoutMs : 10_000,
   };
-  return base;
 }
 
 export async function createMssqlDriver(config: DbConnectConfig): Promise<DatabaseDriver> {
   const mssql = (await import('mssql')) as unknown as {
     ConnectionPool: new (c: unknown) => MssqlPool;
+    Transaction: new (pool: MssqlPool) => MssqlTransaction;
+    Request: new (txn: MssqlTransaction) => MssqlRequest;
   };
   // node-mssql only parses a connection string when it's passed as a bare STRING
   // (an object's `connectionString` property is ignored, unlike pg/mysql2). So in
@@ -79,20 +98,47 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
       (opts.params ?? []).forEach((p, i) => request.input(`p${i}`, p ?? null));
-      const result = await request.query(sql);
-      const rs = result.recordset;
-      if (rs) {
-        const arr = rs as Array<Record<string, unknown>>;
-        const truncated = arr.length > max;
-        const fields = rs.columns
-          ? Object.keys(rs.columns).map((name) => ({ name }))
-          : arr[0]
-            ? Object.keys(arr[0]).map((name) => ({ name }))
-            : [];
-        return { rows: truncated ? arr.slice(0, max) : arr, rowCount: arr.length, fields, truncated };
+      return shapeMssqlResult(await request.query(sql), max);
+    } finally {
+      if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    // A node-mssql Transaction pins a single connection for begin→commit; every
+    // Request built from it runs there. SQL Server rolls back DDL too, so a
+    // mid-batch failure undoes the whole list (unlike MySQL/Oracle).
+    const txn = new mssql.Transaction(pool);
+    let onAbort: (() => void) | null = null;
+    let current: MssqlRequest | null = null;
+    let inTxn = false;
+    try {
+      if (opts.signal) {
+        if (opts.signal.aborted) throw new Error('query cancelled');
+        onAbort = (): void => {
+          try {
+            current?.cancel();
+          } catch {
+            /* no request in flight */
+          }
+        };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
       }
-      const affected = Array.isArray(result.rowsAffected) ? result.rowsAffected.reduce((a, b) => a + b, 0) : 0;
-      return { rows: [], rowCount: affected, fields: [], command: 'OK' };
+      await txn.begin();
+      inTxn = true;
+      let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
+      for (const stmt of statements) {
+        const request = new mssql.Request(txn);
+        current = request;
+        last = shapeMssqlResult(await request.query(stmt), max);
+      }
+      await txn.commit();
+      inTxn = false;
+      return last;
+    } catch (err) {
+      if (inTxn) await txn.rollback().catch(() => void 0);
+      throw err;
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
     }
@@ -234,6 +280,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
       return out;
     },
     runQuery,
+    runBatch,
     query(sql, params) {
       return runQuery(sql, { params });
     },
@@ -242,6 +289,23 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
     },
   };
   return driver;
+}
+
+/** Shape a node-mssql query output into a capped QueryResult. */
+function shapeMssqlResult(result: MssqlQueryOutput, max: number): QueryResult {
+  const rs = result.recordset;
+  if (rs) {
+    const arr = rs as Array<Record<string, unknown>>;
+    const truncated = arr.length > max;
+    const fields = rs.columns
+      ? Object.keys(rs.columns).map((name) => ({ name }))
+      : arr[0]
+        ? Object.keys(arr[0]).map((name) => ({ name }))
+        : [];
+    return { rows: truncated ? arr.slice(0, max) : arr, rowCount: arr.length, fields, truncated };
+  }
+  const affected = Array.isArray(result.rowsAffected) ? result.rowsAffected.reduce((a, b) => a + b, 0) : 0;
+  return { rows: [], rowCount: affected, fields: [], command: 'OK' };
 }
 
 function groupIndexes(rows: Array<{ INDEX_NAME: string; IS_UNIQUE: number; IS_PRIMARY: number; COLUMN_NAME: string }>): IndexInfo[] {

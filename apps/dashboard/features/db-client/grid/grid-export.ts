@@ -6,6 +6,9 @@ type Row = Record<string, unknown>;
 
 function asText(v: unknown): string {
   if (v == null) return '';
+  // Date → ISO string (JSON.stringify would wrap it in extra double-quotes,
+  // which corrupts CSV cells and SQL string literals).
+  if (v instanceof Date) return v.toISOString();
   return typeof v === 'object' ? JSON.stringify(v) : String(v);
 }
 
@@ -41,11 +44,15 @@ export function toTsv(columns: string[], rows: Row[]): string {
   return `${head}\n${rows.map((r) => columns.map((c) => clean(r[c])).join('\t')).join('\n')}`;
 }
 
-function sqlLiteral(v: unknown): string {
+function sqlLiteral(v: unknown, engine?: string): string {
   if (v == null) return 'NULL';
   if (typeof v === 'number' || typeof v === 'bigint') return String(v);
-  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  return `'${asText(v).replace(/'/g, "''")}'`;
+  // SQL Server / Oracle have no boolean literal (bit/NUMBER 0/1).
+  if (typeof v === 'boolean') return engine === 'mssql' || engine === 'oracle' ? (v ? '1' : '0') : v ? 'TRUE' : 'FALSE';
+  // MySQL/MariaDB also treat backslash as a string escape — double it so a restore round-trips.
+  const s = asText(v);
+  const escaped = engine === 'mysql' || engine === 'mariadb' ? s.replace(/\\/g, '\\\\').replace(/'/g, "''") : s.replace(/'/g, "''");
+  return `'${escaped}'`;
 }
 
 /** ANSI-style INSERT statements (double-quoted idents). Good enough for export/copy. */
@@ -53,7 +60,7 @@ export function toInsertSql(table: string, columns: string[], rows: Row[]): stri
   const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const cols = columns.map(q).join(', ');
   return rows
-    .map((r) => `INSERT INTO ${q(table)} (${cols}) VALUES (${columns.map((c) => sqlLiteral(r[c])).join(', ')});`)
+    .map((r) => `INSERT INTO ${q(table)} (${cols}) VALUES (${columns.map((c) => sqlLiteral(r[c], engine)).join(', ')});`)
     .join('\n');
 }
 

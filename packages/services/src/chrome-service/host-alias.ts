@@ -30,8 +30,8 @@
  *   4. operators with a running Chrome Service must restart it from
  *      the Admin Panel so the new image is pulled.
  */
-export const DEFAULT_CHROME_SERVICE_IMAGE = 'mcr.microsoft.com/playwright:v1.60.0-jammy';
-export const PINNED_PLAYWRIGHT_TEST_VERSION = '1.60.0';
+export const DEFAULT_CHROME_SERVICE_IMAGE = 'mcr.microsoft.com/playwright:v1.61.1-jammy';
+export const PINNED_PLAYWRIGHT_TEST_VERSION = '1.61.1';
 
 /** Default port the run-server binds inside the container (and via -p on the host). */
 export const DEFAULT_CHROME_SERVICE_PORT = 9222;

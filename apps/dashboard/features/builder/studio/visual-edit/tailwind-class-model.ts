@@ -1,7 +1,7 @@
 /**
  * Pure model behind the visual-edit panel: maps a className list onto a
- * fixed set of Tailwind v3 control groups (the builder scaffold pins
- * tailwindcss@3) and produces the next class list when a group changes.
+ * fixed set of Tailwind v4 control groups (the builder scaffold ships
+ * tailwindcss@4) and produces the next class list when a group changes.
  *
  * Classes outside the known groups (variants like `md:p-4`, arbitrary
  * values like `w-[37px]`, plugins) are NEVER touched — the panel only
@@ -51,8 +51,10 @@ export const STYLE_GROUPS: ClassGroup[] = [
   { id: 'font-weight', label: 'Weight', prefix: 'font', values: ['light', 'normal', 'medium', 'semibold', 'bold'] },
   { id: 'text-color', label: 'Text color', prefix: 'text', values: TEXT_COLORS },
   { id: 'bg', label: 'Background', prefix: 'bg', values: BG_COLORS },
-  { id: 'rounded', label: 'Radius', prefix: 'rounded', values: ['none', 'sm', '', 'md', 'lg', 'xl', '2xl', 'full'] },
-  { id: 'shadow', label: 'Shadow', prefix: 'shadow', values: ['none', 'sm', '', 'md', 'lg', 'xl'] },
+  // Tailwind v4 renamed the small steps (`rounded`/`shadow` bare were
+  // dropped; old `sm` shifted to `xs`). These scales match v4 utilities.
+  { id: 'rounded', label: 'Radius', prefix: 'rounded', values: ['none', 'xs', 'sm', 'md', 'lg', 'xl', '2xl', 'full'] },
+  { id: 'shadow', label: 'Shadow', prefix: 'shadow', values: ['none', 'xs', 'sm', 'md', 'lg', 'xl', '2xl'] },
 ];
 
 export const ALL_GROUPS: ClassGroup[] = [...LAYOUT_GROUPS, ...STYLE_GROUPS];

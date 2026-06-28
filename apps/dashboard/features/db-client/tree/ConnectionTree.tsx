@@ -17,7 +17,9 @@ import { useContextMenu, type ContextMenuItem } from '../../../components/ui/con
 import { copyText } from '../../../lib/clipboard.js';
 import { downloadBlob } from '../../api-client/download.js';
 import { toCsv, toCsvBody, toDumpInserts } from '../grid/grid-export.js';
+import { splitStatements } from '../query/sql-split.js';
 import * as api from '../api.js';
+import { engineKindFor } from '../engines.js';
 import type { UseDbClient } from '../useDbClient.js';
 import type { DbConnection, DbConnectionStatus, DbTreeNode } from '../types.js';
 
@@ -62,6 +64,99 @@ async function exportTable(
   }
 }
 
+/** Open a native file picker and resolve the chosen file (or null if cancelled). */
+function pickFile(accept: string): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    // `cancel` fires when the dialog is dismissed (supported in modern Chromium/Electron).
+    input.addEventListener('cancel', () => resolve(null));
+    input.click();
+  });
+}
+
+/**
+ * Dump a whole schema (CREATE + INSERTs) to a .sql file. Streams each frame
+ * straight to disk via the File System Access API so a huge dump never sits in
+ * renderer memory; falls back to an in-memory Blob download where that API is
+ * unavailable (browser-dev).
+ */
+async function dumpSchema(node: DbTreeNode, cid: string, t: (k: string, o?: Record<string, unknown>) => string): Promise<void> {
+  const suggestedName = `${node.schema || 'dump'}.sql`;
+  const picker = (window as unknown as {
+    showSaveFilePicker?: (o: unknown) => Promise<{ createWritable: () => Promise<{ write: (s: string) => Promise<void>; close: () => Promise<void> }> }>;
+  }).showSaveFilePicker;
+  try {
+    let total = 0;
+    if (typeof picker === 'function') {
+      let handle;
+      try {
+        handle = await picker({ suggestedName, types: [{ description: 'SQL', accept: { 'application/sql': ['.sql'] } }] });
+      } catch {
+        return; // user dismissed the save dialog
+      }
+      const writable = await handle.createWritable();
+      try {
+        for await (const frame of api.dumpStream(cid, { schema: node.schema })) {
+          if (frame.sql) await writable.write(frame.sql);
+          total = frame.total;
+          if (frame.done) break;
+        }
+      } finally {
+        await writable.close();
+      }
+    } else {
+      const parts: string[] = [];
+      for await (const frame of api.dumpStream(cid, { schema: node.schema })) {
+        if (frame.sql) parts.push(frame.sql);
+        total = frame.total;
+        if (frame.done) break;
+      }
+      downloadBlob(suggestedName, new Blob([parts.join('')], { type: 'application/sql' }));
+    }
+    toast.success(t('node.dumpDone', { n: total }));
+  } catch (e) {
+    toast.error(t('node.dumpSchema'), { description: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/** Restore: pick a .sql file, split into statements, run them on one pinned connection. */
+async function restoreScript(node: DbTreeNode, cid: string, db: UseDbClient, t: (k: string, o?: Record<string, unknown>) => string): Promise<void> {
+  const file = await pickFile('.sql,application/sql,text/plain');
+  if (!file) return;
+  try {
+    const stmts = splitStatements(await file.text());
+    if (stmts.length === 0) { toast.warning(t('node.restoreEmpty')); return; }
+    if (!(await confirm({ title: t('node.restore'), description: t('node.restoreConfirm', { n: stmts.length }), tone: 'destructive' }))) return;
+    await api.runScript(cid, stmts);
+    toast.success(t('node.restoreDone', { n: stmts.length }));
+    db.refreshNode(node.id);
+  } catch (e) {
+    toast.error(t('node.restore'), { description: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/** Import a JSON file (array of docs, or a single doc) into a Mongo collection. */
+async function importJson(node: DbTreeNode, cid: string, t: (k: string, o?: Record<string, unknown>) => string): Promise<void> {
+  const file = await pickFile('.json,application/json');
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text()) as unknown;
+    const docs = Array.isArray(parsed) ? parsed : [parsed];
+    const res = await api.runCommand(cid, {
+      kind: 'document',
+      op: 'insertMany',
+      collection: node.table ?? node.name ?? node.label,
+      payload: { database: node.database, documents: docs },
+    });
+    toast.success(t('node.importDone', { n: res.rowCount }));
+  } catch (e) {
+    toast.error(t('node.importJson'), { description: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 /** Context-menu items per node kind (table/schema/etc). Empty for connection roots (they have a kebab). */
 function buildNodeMenu(
   node: DbTreeNode,
@@ -74,6 +169,21 @@ function buildNodeMenu(
     onSelect: () => void navigator.clipboard.writeText(node.name ?? node.table ?? node.label).catch(() => undefined),
   };
   if (node.kind === 'table' || node.kind === 'view') {
+    const engine = db.connections.find((c) => c.id === node.connectionId)?.engine;
+    const ek = engine ? engineKindFor(engine) : 'relational';
+    // Document collections / key-value DBs only get "open" — the relational items
+    // (structure, generate SQL, CSV, dump, truncate, drop) make no sense there.
+    if (ek !== 'relational') {
+      const ncid = db.connKeyFor(node.connectionId, node.database);
+      return [
+        { id: 'data', label: t('node.viewData'), onSelect: () => void db.openTableData(node) },
+        ...(ek === 'document'
+          ? [{ id: 'import-json', label: t('node.importJson'), separatorBefore: true, onSelect: () => void importJson(node, ncid, t) }]
+          : []),
+        { id: 'refresh', label: t('node.refresh'), separatorBefore: true, onSelect: () => db.refreshNode(node.id) },
+        copyName,
+      ];
+    }
     const cid = db.connKeyFor(node.connectionId, node.database);
     const tbl = node.table ?? '';
     return [
@@ -175,7 +285,9 @@ function buildNodeMenu(
       { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId, node.schema, undefined, node.database) },
       { id: 'newtable', label: t('node.newTable'), onSelect: () => void db.openNewTable(node.connectionId, node.schema, node.database) },
       { id: 'er', label: t('node.erDiagram'), onSelect: () => void db.openErDiagram(node.connectionId, node.schema, node.database) },
-      { id: 'refresh', label: t('node.refresh'), onSelect: () => db.refreshNode(node.id) },
+      { id: 'dump-schema', label: t('node.dumpSchema'), separatorBefore: true, onSelect: () => void dumpSchema(node, db.connKeyFor(node.connectionId, node.database), t) },
+      { id: 'restore', label: t('node.restore'), onSelect: () => void restoreScript(node, db.connKeyFor(node.connectionId, node.database), db, t) },
+      { id: 'refresh', label: t('node.refresh'), separatorBefore: true, onSelect: () => db.refreshNode(node.id) },
     ];
   }
   if (node.kind === 'database') {

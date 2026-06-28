@@ -211,6 +211,15 @@ export interface RunCoderOptions {
   /** Company orchestrator context — when present, company tools are registered. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /**
+   * Force the UNSUPERVISED system-prompt framing (`# Operating autonomously`).
+   * Set ONLY by callers that run with no human reachable in real time (cron /
+   * scheduled / CI). NOT set for company subordinates: they lack `ask_user` but
+   * have `ask_master` (which blocks until the master — ultimately a human —
+   * answers), so they are supervised and the autonomous framing would
+   * contradict their escalation model. Defaults to false.
+   */
+  unsupervised?: boolean;
+  /**
    * Whether the preview DevTools backend is available (the desktop app wired
    * a `PreviewWindowService`). When true the `preview` tool tier activates so
    * the agent can open a dedicated preview window + read console/network/etc.

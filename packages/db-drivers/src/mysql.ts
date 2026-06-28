@@ -15,6 +15,7 @@ import type {
   ForeignKeyInfo,
   IndexInfo,
   QueryResult,
+  RunBatchOptions,
   RunQueryOptions,
   TableInfo,
   TableRef,
@@ -83,20 +84,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
         await conn.query(`USE ${qIdent(opts.schema)}`);
       }
       const [rows, fields] = await conn.query(sql, opts.params);
-      if (Array.isArray(rows)) {
-        const arr = rows as Array<Record<string, unknown>>;
-        const truncated = arr.length > max;
-        return {
-          rows: truncated ? arr.slice(0, max) : arr,
-          rowCount: arr.length,
-          fields: Array.isArray(fields)
-            ? (fields as Array<{ name: string }>).map((f) => ({ name: f.name }))
-            : [],
-          truncated,
-        };
-      }
-      const ok = rows as { affectedRows?: number };
-      return { rows: [], rowCount: ok.affectedRows ?? 0, fields: [], command: 'OK' };
+      return shapeMysqlResult(rows, fields, max);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
       // A `USE <schema>` switch must not leak to the next pooled borrower. Restore
@@ -116,6 +104,51 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       } else {
         conn.release();
       }
+    }
+  }
+
+  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    // ONE pooled connection for the whole batch so START TRANSACTION/COMMIT and
+    // every statement share a backend (a runQuery loop could pool-hop between them).
+    // CAVEAT: MySQL/MariaDB implicitly COMMIT on DDL, so this rolls back DML only —
+    // a mid-batch failure after a DDL statement can't undo the already-applied DDL.
+    const conn = await pool.getConnection();
+    let onAbort: (() => void) | null = null;
+    let inTxn = false;
+    let dirty = false;
+    try {
+      if (opts.signal) {
+        if (opts.signal.aborted) throw new Error('query cancelled');
+        const threadId = Number(conn.threadId);
+        onAbort = (): void => {
+          pool.query(`KILL QUERY ${threadId}`).catch(() => void 0);
+        };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
+      await conn.query('START TRANSACTION');
+      inTxn = true;
+      let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
+      for (const stmt of statements) {
+        const [rows, fields] = await conn.query(stmt);
+        last = shapeMysqlResult(rows, fields, max);
+      }
+      await conn.query('COMMIT');
+      inTxn = false;
+      return last;
+    } catch (err) {
+      if (inTxn) {
+        try {
+          await conn.query('ROLLBACK');
+        } catch {
+          dirty = true; // rollback failed — don't recycle a connection mid-txn
+        }
+      }
+      throw err;
+    } finally {
+      if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      if (dirty) conn.destroy();
+      else conn.release();
     }
   }
 
@@ -255,6 +288,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       return out;
     },
     runQuery,
+    runBatch,
     query(sql, params) {
       return runQuery(sql, { params });
     },
@@ -263,6 +297,22 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
     },
   };
   return driver;
+}
+
+/** Shape a mysql2 `[rows, fields]` pair into a capped QueryResult. */
+function shapeMysqlResult(rows: unknown, fields: unknown, max: number): QueryResult {
+  if (Array.isArray(rows)) {
+    const arr = rows as Array<Record<string, unknown>>;
+    const truncated = arr.length > max;
+    return {
+      rows: truncated ? arr.slice(0, max) : arr,
+      rowCount: arr.length,
+      fields: Array.isArray(fields) ? (fields as Array<{ name: string }>).map((f) => ({ name: f.name })) : [],
+      truncated,
+    };
+  }
+  const ok = rows as { affectedRows?: number };
+  return { rows: [], rowCount: ok.affectedRows ?? 0, fields: [], command: 'OK' };
 }
 
 /** MySQL identifier quoting: wrap in backticks, escaping embedded backticks. */

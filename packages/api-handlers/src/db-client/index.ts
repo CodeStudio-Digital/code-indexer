@@ -18,6 +18,7 @@ import {
   buildSqliteRebuild,
   sqliteAlterNeedsRebuild,
   createDriver,
+  insertLiteral,
   isWriteCommand,
   quoteIdent,
   quoteRelation,
@@ -188,6 +189,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
     },
 
     async generateSql({ connectionId, schema, table, kind }) {
+      assertRelational(connectionId, 'generateSql');
       const driver = requireDriver(connectionId);
       const engine = requireEngine(connectionId);
       const rel = quoteRelation(engine, schema, table);
@@ -202,6 +204,11 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       const info = await driver.describeTable(effSchema ?? '', table);
       if (kind === 'insert') {
         const cols = info.columns.filter((c) => !c.isAutoIncrement);
+        if (cols.length === 0) {
+          // Every column is auto-increment/identity → an all-defaults insert.
+          // MySQL/MariaDB use `() VALUES ()`; the rest use `DEFAULT VALUES`.
+          return { sql: engine === 'mysql' || engine === 'mariadb' ? `INSERT INTO ${rel} () VALUES ();` : `INSERT INTO ${rel} DEFAULT VALUES;` };
+        }
         const colList = cols.map((c) => quoteIdent(engine, c.name)).join(', ');
         const values = cols.map(() => 'NULL').join(', ');
         return { sql: `INSERT INTO ${rel} (${colList})\nVALUES (${values});` };
@@ -279,9 +286,24 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       // table rebuild built from the live schema. Detect that case and swap the
       // (comment-only) buildDdl output for the real rebuild statement list.
       const rebuild = engine === 'sqlite' && op === 'alter' && !!spec.alter && sqliteAlterNeedsRebuild(spec.alter);
-      const statements = rebuild
-        ? buildSqliteRebuild(await driver.describeTable(spec.alter!.schema ?? '', spec.alter!.table), spec.alter!)
-        : buildDdl(engine, op, spec);
+      let statements: string[];
+      if (rebuild) {
+        const alter = spec.alter!;
+        const info = await driver.describeTable(alter.schema ?? '', alter.table);
+        // TableInfo can't reproduce CHECK constraints / generated columns / WITHOUT
+        // ROWID — refuse rather than silently drop them in the table rewrite.
+        const ddlRow = await driver.runQuery(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, { params: [alter.table] });
+        const createSql = String(ddlRow.rows[0]?.sql ?? '');
+        if (/\bCHECK\s*\(|\bGENERATED\s+ALWAYS\b|\bWITHOUT\s+ROWID\b/i.test(createSql)) {
+          throw new ApiError('db_ddl_unsupported', 422, 'This table uses CHECK constraints, generated columns or WITHOUT ROWID — in-place column/FK changes would drop them. Recreate the table manually.');
+        }
+        // DROP TABLE drops the table's triggers — capture their DDL to recreate.
+        const trg = await driver.runQuery(`SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?`, { params: [alter.table] });
+        const triggers = trg.rows.map((r) => String(r.sql)).filter((s) => s && s !== 'null');
+        statements = buildSqliteRebuild(info, alter, { triggers });
+      } else {
+        statements = buildDdl(engine, op, spec);
+      }
       const sql = statements.join(';\n') + ';';
       if (dryRun) return { sql };
       // An all-comment set means the engine can't express the change. Surface it
@@ -290,33 +312,54 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
         throw new ApiError('db_ddl_unsupported', 422, statements.join('\n').replace(/^\s*--\s?/gm, '') || 'Unsupported DDL.');
       }
       let result;
-      try {
-        for (const stmt of statements) {
-          if (/^\s*--/.test(stmt)) continue; // skip comment lines mixed into a larger set
-          result = await driver.runQuery(stmt);
-        }
-      } catch (e) {
-        // The rebuild runs inside BEGIN…COMMIT; on a mid-way failure roll back so
-        // the connection isn't stranded in an open transaction (and re-enable FKs).
-        if (rebuild) {
+      if (rebuild) {
+        // The SQLite rebuild list wraps itself in PRAGMA + BEGIN…COMMIT and runs on
+        // the single sqlite handle, so apply it statement-by-statement as authored;
+        // on a mid-way failure roll back so the connection isn't stranded in an open
+        // transaction (and re-enable FKs).
+        try {
+          for (const stmt of statements) {
+            if (/^\s*--/.test(stmt)) continue; // skip comment lines mixed into a larger set
+            result = await driver.runQuery(stmt);
+          }
+        } catch (e) {
           await driver.runQuery('ROLLBACK').catch(() => undefined);
           await driver.runQuery('PRAGMA foreign_keys=ON').catch(() => undefined);
+          throw e;
         }
-        throw e;
+      } else {
+        // Multi-statement DDL on one connection in a single transaction: a runQuery
+        // loop could hand each statement a different pooled backend (so BEGIN/COMMIT
+        // wouldn't share a transaction) and a mid-list failure would leave a partial
+        // apply. runBatch pins one connection + rolls back on error (DDL rollback is
+        // engine-dependent — MySQL/Oracle implicitly commit DDL).
+        const toRun = statements.filter((s) => !/^\s*--/.test(s));
+        if (driver.runBatch) {
+          result = await driver.runBatch(toRun);
+        } else {
+          // Fallback for any relational driver without runBatch (none today).
+          for (const stmt of toRun) result = await driver.runQuery(stmt);
+        }
       }
       return { sql, result };
     },
 
     async *exportStream({ connectionId, schema, table, batchRows }) {
+      assertRelational(connectionId, 'exportStream');
       const driver = requireDriver(connectionId);
       // Page with the engine-correct, quoted SELECT * (tablePreview); the client
       // formats + writes each batch, so a huge table never lands in memory whole.
       const page = Math.min(Math.max(batchRows ?? 1000, 100), 10_000);
+      // OFFSET paging without a stable ORDER BY can skip/duplicate rows across
+      // pages — order by the primary key (fallback: first column).
+      const info = await driver.describeTable(schema ?? '', table).catch(() => null);
+      const pkCol = info?.columns.find((c) => c.isPrimaryKey)?.name ?? info?.columns[0]?.name;
+      const orderBy = pkCol ? ({ column: pkCol, dir: 'asc' as const }) : undefined;
       let offset = 0;
       let total = 0;
       let columns: string[] = [];
       for (;;) {
-        const res = await driver.tablePreview(schema ?? '', table, { limit: page, offset });
+        const res = await driver.tablePreview(schema ?? '', table, { limit: page, offset, orderBy });
         if (columns.length === 0) {
           columns = res.fields.length > 0 ? res.fields.map((f) => f.name) : res.rows[0] ? Object.keys(res.rows[0]) : [];
         }
@@ -327,6 +370,60 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
         yield { columns, rows: res.rows, total, done };
         if (done) break;
       }
+    },
+
+    async *dumpStream({ connectionId, schema, tables, includeData, batchRows }) {
+      assertRelational(connectionId, 'dumpStream');
+      const engine = requireEngine(connectionId);
+      const driver = requireDriver(connectionId);
+      const effSchema = schema ?? (engine === 'postgres' ? 'public' : undefined);
+      // Selected tables, or every base table in the schema (skip views).
+      const list = tables && tables.length
+        ? tables
+        : (await driver.listTables(effSchema)).filter((t) => t.kind === 'table').map((t) => t.name);
+      const page = Math.min(Math.max(batchRows ?? 1000, 100), 10_000);
+      let total = 0;
+      yield { sql: `-- Dump of ${effSchema ?? 'database'} — ${list.length} table(s)\n`, total, done: false };
+      for (const table of list) {
+        const info = await driver.describeTable(effSchema ?? '', table);
+        const columns: ColumnSpec[] = info.columns.map((c) => ({
+          name: c.name, type: c.dataType, nullable: c.nullable,
+          default: c.defaultValue ?? null, primaryKey: c.isPrimaryKey, autoIncrement: c.isAutoIncrement,
+        }));
+        const createSql = buildDdl(engine, 'create', { create: { schema: effSchema, table, columns } }).join(';\n') + ';\n';
+        yield { sql: `\n-- Table: ${table}\n${createSql}`, table, total, done: false };
+        if (includeData === false) continue;
+        const colNames = info.columns.map((c) => c.name);
+        // Stable ORDER BY (PK, else first column) so OFFSET paging can't skip/dupe.
+        const pkCol = info.columns.find((c) => c.isPrimaryKey)?.name ?? info.columns[0]?.name;
+        const orderBy = pkCol ? ({ column: pkCol, dir: 'asc' as const }) : undefined;
+        let offset = 0;
+        for (;;) {
+          const res = await driver.tablePreview(effSchema ?? '', table, { limit: page, offset, orderBy });
+          if (res.rows.length > 0) {
+            total += res.rows.length;
+            yield { sql: insertLiteral(engine, effSchema, table, colNames, res.rows) + '\n', table, total, done: false };
+          }
+          offset += res.rows.length;
+          if (!res.truncated) break; // tablePreview fetches limit+1 → truncated = more rows
+        }
+      }
+      yield { sql: '', total, done: true };
+    },
+
+    async runScript({ connectionId, statements }) {
+      assertRelational(connectionId, 'runScript');
+      const driver = requireDriver(connectionId);
+      if (mgr.getMeta(keyFor(connectionId))?.readOnly) {
+        throw new ApiError('db_read_only', 403, 'Connection is read-only — cannot run a restore script.');
+      }
+      const toRun = statements.filter((s) => s && s.trim() && !/^\s*--/.test(s));
+      if (toRun.length === 0) return { rows: [], rowCount: 0, fields: [] };
+      // One pinned connection + transaction where the engine allows DDL rollback.
+      if (driver.runBatch) return driver.runBatch(toRun);
+      let result = { rows: [], rowCount: 0, fields: [] } as Awaited<ReturnType<typeof driver.runQuery>>;
+      for (const stmt of toRun) result = await driver.runQuery(stmt);
+      return result;
     },
 
     async runCommand({ connectionId, command, maxRows }) {

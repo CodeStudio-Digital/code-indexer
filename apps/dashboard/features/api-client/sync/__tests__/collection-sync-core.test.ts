@@ -7,6 +7,8 @@ import {
   collectionToBody,
   planCollectionPush,
   planCollectionApply,
+  mergeRequestForApply,
+  requestMatchKey,
   type CollectionBody,
 } from '../api-sync-core.js';
 
@@ -138,5 +140,70 @@ describe('planCollectionApply', () => {
     const a = actions.find((x) => x.clientDocId === 'ws1:a')!;
     expect(a.body?.name).toBe('A');
     expect(actions.some((x) => x.clientDocId === 'ws2:c')).toBe(false); // never cross-workspace
+  });
+});
+
+describe('requestMatchKey', () => {
+  it('is stable across method case and matches a redacted body to its local row', () => {
+    const local = mkReq({ method: 'get', name: 'List', path_template: '/v1/x' });
+    expect(requestMatchKey(local)).toBe(requestMatchKey({ method: 'GET', name: 'List', path_template: '/v1/x' }));
+    // The synced (redacted) body keys identically to the local request it came from.
+    expect(requestMatchKey(redactRequestForSync(local))).toBe(requestMatchKey(local));
+  });
+
+  it('differs when name/method/path differ', () => {
+    const a = requestMatchKey(mkReq({ name: 'A' }));
+    expect(a).not.toBe(requestMatchKey(mkReq({ name: 'B' })));
+    expect(a).not.toBe(requestMatchKey(mkReq({ name: 'A', method: 'POST' })));
+  });
+});
+
+describe('mergeRequestForApply (non-destructive, secret-preserving)', () => {
+  it('restores a blanked auth token from the local request', () => {
+    const local = mkReq({ auth_type: 'bearer', auth_json: '{"type":"bearer","token":"sk-LOCALSECRET"}' });
+    const merged = mergeRequestForApply(redactRequestForSync(local), local);
+    expect(JSON.parse(merged.auth_json!)).toEqual({ type: 'bearer', token: 'sk-LOCALSECRET' });
+  });
+
+  it('restores blanked credential header/query values, keeps non-credential ones', () => {
+    const local = mkReq({
+      headers_json: '[{"key":"Authorization","value":"Bearer abc","enabled":true},{"key":"Accept","value":"application/json","enabled":true}]',
+      query_json: '[{"key":"api_key","value":"xyz123","enabled":true},{"key":"page","value":"1","enabled":true}]',
+    });
+    const merged = mergeRequestForApply(redactRequestForSync(local), local);
+    const headers = JSON.parse(merged.headers_json!) as { key: string; value: string }[];
+    expect(headers.find((h) => h.key === 'Authorization')!.value).toBe('Bearer abc');
+    expect(headers.find((h) => h.key === 'Accept')!.value).toBe('application/json');
+    const query = JSON.parse(merged.query_json!) as { key: string; value: string }[];
+    expect(query.find((q) => q.key === 'api_key')!.value).toBe('xyz123');
+    expect(query.find((q) => q.key === 'page')!.value).toBe('1');
+  });
+
+  it('keeps the local body when the incoming one differs only by redaction', () => {
+    const local = mkReq({ body_kind: 'json', body_json: '{"jwt":"eyJhbGciOi.aaaaaaa.bbbbbbb","name":"ok"}' });
+    const merged = mergeRequestForApply(redactRequestForSync(local), local);
+    expect(merged.body_json).toBe('{"jwt":"eyJhbGciOi.aaaaaaa.bbbbbbb","name":"ok"}');
+  });
+
+  it('honors a genuine remote body edit', () => {
+    const local = mkReq({ body_kind: 'json', body_json: '{"name":"local"}' });
+    const incoming = redactRequestForSync(mkReq({ body_kind: 'json', body_json: '{"name":"REMOTE"}' }));
+    const merged = mergeRequestForApply(incoming, local);
+    expect(merged.body_json).toBe('{"name":"REMOTE"}');
+  });
+
+  it('takes non-credential fields from the incoming body', () => {
+    const local = mkReq({ description: 'old', folder: 'A' });
+    const incoming = redactRequestForSync(mkReq({ description: 'new', folder: 'B', method: 'POST' }));
+    const merged = mergeRequestForApply(incoming, local);
+    expect(merged.description).toBe('new');
+    expect(merged.folder).toBe('B');
+    expect(merged.method).toBe('POST');
+  });
+
+  it('preserves the host-local binary path (never carried by sync)', () => {
+    const local = mkReq({ body_kind: 'binary', body_binary_path: '/home/me/file.bin' });
+    const merged = mergeRequestForApply(redactRequestForSync(local), local);
+    expect(merged.body_binary_path).toBe('/home/me/file.bin');
   });
 });

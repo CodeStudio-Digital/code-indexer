@@ -80,24 +80,30 @@ function buildAlter(engine: DbEngine, spec: AlterTableSpec): string[] {
       case 'dropColumn':
         out.push(`ALTER TABLE ${rel} DROP COLUMN ${quoteIdent(engine, action.name)}`);
         break;
-      case 'renameColumn':
+      case 'renameColumn': {
         if (engine === 'mssql') {
-          out.push(`EXEC sp_rename ${sqlStr(`${spec.schema ? `${spec.schema}.` : ''}${spec.table}.${action.from}`)}, ${sqlStr(action.to)}, 'COLUMN'`);
+          // sp_rename's source is a string literal — bracket-quote each part so
+          // names with dots/special chars parse correctly. The new name is bare.
+          const src = `${spec.schema ? `${quoteIdent(engine, spec.schema)}.` : ''}${quoteIdent(engine, spec.table)}.${quoteIdent(engine, action.from)}`;
+          out.push(`EXEC sp_rename ${sqlStr(src)}, ${sqlStr(action.to)}, 'COLUMN'`);
         } else {
           out.push(`ALTER TABLE ${rel} RENAME COLUMN ${quoteIdent(engine, action.from)} TO ${quoteIdent(engine, action.to)}`);
         }
         break;
+      }
       case 'modifyColumn':
         out.push(...renderModify(engine, rel, action.name, action.column));
         break;
-      case 'renameTable':
+      case 'renameTable': {
         // SQL Server renames via sp_rename, not ALTER … RENAME TO.
         if (engine === 'mssql') {
-          out.push(`EXEC sp_rename ${sqlStr(`${spec.schema ? `${spec.schema}.` : ''}${spec.table}`)}, ${sqlStr(action.to)}`);
+          const src = `${spec.schema ? `${quoteIdent(engine, spec.schema)}.` : ''}${quoteIdent(engine, spec.table)}`;
+          out.push(`EXEC sp_rename ${sqlStr(src)}, ${sqlStr(action.to)}`);
         } else {
           out.push(`ALTER TABLE ${rel} RENAME TO ${quoteIdent(engine, action.to)}`);
         }
         break;
+      }
       case 'addIndex': {
         const cols = action.index.columns.map((c) => quoteIdent(engine, c)).join(', ');
         out.push(`CREATE ${action.index.unique ? 'UNIQUE ' : ''}INDEX ${quoteIdent(engine, action.index.name)} ON ${rel} (${cols})`);
@@ -195,7 +201,7 @@ function renderInlineFk(engine: DbEngine, fk: ForeignKeySpec): string {
  * Used when an alter contains modifyColumn / add|dropForeignKey; it applies the
  * WHOLE action list so a mixed alter still resolves in one rebuild.
  */
-export function buildSqliteRebuild(info: TableInfo, spec: AlterTableSpec): string[] {
+export function buildSqliteRebuild(info: TableInfo, spec: AlterTableSpec, opts: { triggers?: string[] } = {}): string[] {
   const engine: DbEngine = 'sqlite';
   interface WorkCol { spec: ColumnSpec; src: string | null }
   let cols: WorkCol[] = (info.columns ?? []).map((c) => ({
@@ -305,6 +311,9 @@ export function buildSqliteRebuild(info: TableInfo, spec: AlterTableSpec): strin
     `DROP TABLE ${quoteIdent(engine, spec.table)}`,
     `ALTER TABLE ${quoteIdent(engine, tmp)} RENAME TO ${quoteIdent(engine, finalName)}`,
     ...idxStmts,
+    // DROP TABLE drops the table's triggers — recreate them (captured from
+    // sqlite_master by the handler) so they survive the rebuild.
+    ...(opts.triggers ?? []),
     'COMMIT',
     'PRAGMA foreign_keys=ON',
   ];

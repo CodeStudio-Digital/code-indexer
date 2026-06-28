@@ -45,11 +45,13 @@ describe('mssql DDL', () => {
     expect(mod[0]).toBe('ALTER TABLE [dbo].[Users] ALTER COLUMN [age] BIGINT NOT NULL');
   });
 
-  it('renames go through sp_rename; dropIndex is scoped to the table', () => {
+  it('renames go through sp_rename (bracket-quoted source); dropIndex is scoped to the table', () => {
+    // sp_rename's source object is a string literal whose parts are bracket-quoted
+    // so names with dots/special chars parse correctly; the new name stays bare.
     const rc = buildDdl('mssql', 'alter', { alter: { schema: 'dbo', table: 'Users', actions: [{ kind: 'renameColumn', from: 'email', to: 'mail' }] } });
-    expect(rc[0]).toBe("EXEC sp_rename 'dbo.Users.email', 'mail', 'COLUMN'");
+    expect(rc[0]).toBe("EXEC sp_rename '[dbo].[Users].[email]', 'mail', 'COLUMN'");
     const rt = buildDdl('mssql', 'alter', { alter: { schema: 'dbo', table: 'Users', actions: [{ kind: 'renameTable', to: 'Accounts' }] } });
-    expect(rt[0]).toBe("EXEC sp_rename 'dbo.Users', 'Accounts'");
+    expect(rt[0]).toBe("EXEC sp_rename '[dbo].[Users]', 'Accounts'");
     const di = buildDdl('mssql', 'alter', { alter: { schema: 'dbo', table: 'Users', actions: [{ kind: 'dropIndex', name: 'ix_email' }] } });
     expect(di[0]).toBe('DROP INDEX [ix_email] ON [dbo].[Users]');
   });

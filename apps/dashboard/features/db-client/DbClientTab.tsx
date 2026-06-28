@@ -16,6 +16,8 @@ import { ConnectionTree } from './tree/ConnectionTree.js';
 import { QueryConsole } from './query/QueryConsole.js';
 import { QueryAuxPanel } from './query/QueryAuxPanel.js';
 import { DataGridTab } from './data/DataGridTab.js';
+import { DocumentsTab } from './data/DocumentsTab.js';
+import { KeyValueTab } from './data/KeyValueTab.js';
 import { TableStructureEditor } from './structure/TableStructureEditor.js';
 import { ErDiagramTab } from './structure/ErDiagramTab.js';
 import { WorkAreaTabBar } from './workarea/WorkAreaTabBar.js';
@@ -159,6 +161,12 @@ function TabContent({
   onStructureApplied: () => void;
   onSaved: () => void;
 }) {
+  if (tab.kind === 'documents' && tab.table) {
+    return <DocumentsTab connKey={tab.connKey} database={tab.database} collection={tab.table} />;
+  }
+  if (tab.kind === 'keyvalue') {
+    return <KeyValueTab connKey={tab.connKey} db={tab.database ?? '0'} />;
+  }
   if (tab.kind === 'data' && tab.table) {
     return <DataGridTab connKey={tab.connKey} schema={tab.schema ?? ''} table={tab.table} engine={engine} />;
   }

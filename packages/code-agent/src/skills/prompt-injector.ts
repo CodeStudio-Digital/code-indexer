@@ -41,6 +41,7 @@ const DISCOVERY_INSTRUCTIONS = [
   '3. `get_skill_content({skill_id: "Y"})` — load full instructions before starting that work',
   '',
   'Skip ahead if you already know the right pack or skill. The hierarchy exists to keep token cost low — do not list everything just to browse.',
+  'When a skill clearly matches the request, loading and following it is a BLOCKING REQUIREMENT — do it BEFORE any other tool call or prose. Only use a skill id that appears in your active list or one the user typed as `/<name>`; never invent or guess a skill id from memory.',
 ].join('\n');
 
 function buildNamespaceSummary(skills: ResolvedSkill[]): string {
@@ -162,7 +163,7 @@ export function buildMatchedSkillsPromptSection(
   if (suggested.length > 0) {
     blocks.push('# Suggested skills (load on demand)');
     blocks.push(
-      'The following skills may apply to your current context. Call `get_skill_content` with a skill ID to load full instructions before starting that work.',
+      'The following skills may apply to your current context. If one clearly matches the request, loading and following it is a BLOCKING REQUIREMENT — call `get_skill_content` with its ID to load the full instructions BEFORE any other tool call or prose. Use only the IDs listed here or in your active skills; never invent a skill id.',
     );
     const lines = suggested.map((s) => {
       const desc = s.description ? `: ${s.description}` : '';

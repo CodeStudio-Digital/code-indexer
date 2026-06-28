@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
-import { savedQueryInProject } from './_ownership.js';
+import { savedQueryInProject, connectionInProject } from './_ownership.js';
 import type { CreateDbSavedQueryInput, DbSavedQueryPatch } from '@mcp/store/db-client-store-types.js';
 
 /**
@@ -22,6 +22,10 @@ export function mountDbSavedQueryRoutes(app: Hono, deps: ServerDeps): void {
     if (!body.name?.trim() || !body.sql?.trim()) {
       return c.json({ error: 'name and sql are required' }, 400);
     }
+    // A connection pointer must belong to this project (no cross-project ref).
+    if (body.connection_id != null && !connectionInProject(store, projectId, body.connection_id)) {
+      return c.json({ error: 'connection_id not found in project' }, 400);
+    }
     return c.json(
       store.createSavedQuery({
         project_id: projectId,
@@ -39,6 +43,9 @@ export function mountDbSavedQueryRoutes(app: Hono, deps: ServerDeps): void {
     const sqid = parseIdParam(c, 'sqid');
     if (!savedQueryInProject(store, projectId, sqid)) return notFound(c, `Saved query ${sqid} not found`);
     const patch = await parseJsonBody<DbSavedQueryPatch>(c);
+    if (patch.connection_id != null && !connectionInProject(store, projectId, patch.connection_id)) {
+      return c.json({ error: 'connection_id not found in project' }, 400);
+    }
     store.updateSavedQuery(sqid, patch);
     return c.json(store.getSavedQuery(sqid));
   });

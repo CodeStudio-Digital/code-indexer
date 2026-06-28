@@ -111,6 +111,25 @@
     "upgrade": "Assinar o Pro",
     "manage": "Gerenciar assinatura"
   },
+  "activation": {
+    "title": "Tudo certo!",
+    "body": "Sua assinatura está ativa — aproveite o CodeStudio."
+  },
+  "plans": {
+    "heading": "Comparar planos",
+    "current": "Atual",
+    "localFree": "O IDE local é sempre grátis — o Pro e o Teams liberam os recursos de nuvem abaixo.",
+    "feature": {
+      "sharing": "Compartilhamento de conversas",
+      "sync": "Sincronização multi-dispositivo",
+      "apiDocs": "Documentação de API hospedada",
+      "backup": "Backups na nuvem",
+      "sshVault": "Sincronização do cofre SSH",
+      "teamApis": "Workspaces de equipe compartilhados",
+      "teamMemory": "Base de conhecimento da equipe",
+      "teamSshVault": "Cofre SSH da equipe"
+    }
+  },
   "feedback": {
     "title": "Enviar feedback",
     "kind": { "bug": "Bug", "idea": "Ideia", "other": "Outro" },

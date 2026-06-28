@@ -10,10 +10,10 @@
  *     struck-through; all go through the `useGridEdits` changeset.
  *   - Export/copy from the toolbar.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Ban } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Ban, Pencil } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { downloadBlob } from '../../api-client/download.js';
@@ -50,6 +50,7 @@ export function VirtualResultGrid({
   sort,
   onSort,
   hiddenColumns,
+  onRowOpen,
 }: {
   result: DbQueryResult | null;
   error?: string | null;
@@ -64,6 +65,8 @@ export function VirtualResultGrid({
   onSort?: (col: string) => void;
   /** Columns to hide from display/export (the data still carries them). */
   hiddenColumns?: Set<string>;
+  /** Read-only row action (document store) — pencil per row → open the full record. */
+  onRowOpen?: (row: Record<string, unknown>) => void;
 }) {
   const { t } = useTranslation('dbClient');
   const [internalSort, setInternalSort] = useState<SortState>(null);
@@ -237,6 +240,15 @@ export function VirtualResultGrid({
                       >
                         {isDeleted ? <Undo2 className="h-3 w-3" /> : <Trash2 className="h-3 w-3" />}
                       </button>
+                    ) : onRowOpen ? (
+                      <button
+                        type="button"
+                        className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-primary group-hover:opacity-100"
+                        title={t('docs.openRow')}
+                        onClick={() => onRowOpen(row)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
                     ) : (
                       v.index + 1
                     )}
@@ -292,15 +304,27 @@ function BodyCell({
   onView: () => void;
   t: (k: string) => string;
 }) {
-  const isNull = value === null;
+  const isNull = value == null; // treat undefined (unset new-row cell) like null
   const initial = isNull ? '' : cellText(value);
   // Only record an edit when the text actually changed.
   const commit = (raw: string): void => (raw === initial ? onCancel() : onCommit(raw));
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // Commit the in-flight value if the cell is torn down while editing (the
+  // virtualizer unmounts rows scrolled out of view, which wouldn't fire blur).
+  useEffect(() => {
+    if (!active) return;
+    return () => {
+      const el = inputRef.current;
+      if (el && el.value !== initial) onCommit(el.value);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   if (active) {
     return (
       <div className="flex shrink-0 items-center border-b border-r p-0" style={{ width }} data-cell={cellId}>
         <input
+          ref={inputRef}
           autoFocus
           defaultValue={initial}
           className="min-w-0 flex-1 bg-background px-2 py-0.5 font-mono text-xs outline-none ring-1 ring-primary"

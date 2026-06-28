@@ -110,6 +110,10 @@ export interface CoderSession {
    * only while the `plan` agent is active.
    */
   plan_depth_override?: string | null;
+  /** Per-session response language (migration 177). NULL → auto (user's language). */
+  response_language_override?: string | null;
+  /** Per-session output style (migration 178): proactive | explanatory | learning. NULL → proactive. */
+  output_style_override?: string | null;
   created_at: string;
   updated_at: string;
 }

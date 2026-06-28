@@ -28,6 +28,7 @@ export function LoginPage() {
   const [code, setCode] = useState('');
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [resetNonce, setResetNonce] = useState(0);
+  const [ssoOrg, setSsoOrg] = useState<string | null>(null); // null = hidden; string = SSO org input shown
   const submitting = useRef(false); // synchronous guard against rapid double Enter
 
   const finish = async () => {
@@ -120,6 +121,30 @@ export function LoginPage() {
                     Continue with {p.label}
                   </Button>
                 ))}
+                {ssoOrg === null ? (
+                  <Button variant="outline" className="w-full" onClick={() => setSsoOrg('')}>
+                    Sign in with SSO
+                  </Button>
+                ) : (
+                  <form
+                    className="space-y-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const id = ssoOrg.trim();
+                      if (id) window.location.href = api.ssoStartUrl(id);
+                    }}
+                  >
+                    <Input autoFocus value={ssoOrg} onChange={(e) => setSsoOrg(e.target.value)} placeholder="Organization ID" />
+                    <div className="flex gap-2">
+                      <Button type="submit" className="flex-1" disabled={!ssoOrg.trim()}>
+                        Continue
+                      </Button>
+                      <Button type="button" variant="ghost" onClick={() => setSsoOrg(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                )}
               </div>
 
               <div className="flex items-center gap-2 text-xs text-muted-foreground">

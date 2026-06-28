@@ -1,67 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { buildDml } from '../sql/dml.js';
 import { buildDdl } from '../ddl/build.js';
-import { quoteRelation, orderBySql } from '../sql/identifiers.js';
-import { buildTablePreview } from '../sql/preview.js';
+import { quoteRelation } from '../sql/identifiers.js';
 
 /**
  * Pure builder tests — no native module, so these are NOT ABI-gated and run
  * everywhere. They pin the dialect quoting, placeholder style, and the
  * parameterized/display split.
+ *
+ * NOTE: buildTablePreview + orderBySql have dedicated, broader suites in
+ * preview.test.ts and identifiers.test.ts — this file owns the DML/DDL builders.
  */
-describe('buildTablePreview', () => {
-  it('pg: WHERE (parameterized) + ORDER BY + LIMIT/OFFSET with continuous $-numbering', () => {
-    const { sql, params } = buildTablePreview('postgres', '"public"."t"', {
-      limit: 100, offset: 200,
-      orderBy: { column: 'created', dir: 'desc' },
-      where: [{ column: 'name', op: 'like', value: '%ada%' }, { column: 'age', op: '>=', value: '18' }],
-    });
-    expect(sql).toBe('SELECT * FROM "public"."t" WHERE "name" LIKE $1 AND "age" >= $2 ORDER BY "created" DESC LIMIT $3 OFFSET $4');
-    expect(params).toEqual(['%ada%', '18', 101, 200]);
-  });
-
-  it('mysql: ? placeholders, where params then limit/offset', () => {
-    const { sql, params } = buildTablePreview('mysql', '`db`.`t`', {
-      limit: 50, offset: 0, where: [{ column: 'id', op: '=', value: '7' }],
-    });
-    expect(sql).toBe('SELECT * FROM `db`.`t` WHERE `id` = ? LIMIT ? OFFSET ?');
-    expect(params).toEqual(['7', 51, 0]);
-  });
-
-  it('mssql: OFFSET/FETCH, where then offset then fetch (@pN continuous)', () => {
-    const { sql, params } = buildTablePreview('mssql', '[dbo].[t]', {
-      limit: 25, offset: 50, where: [{ column: 'x', op: '=', value: 'a' }],
-    });
-    expect(sql).toBe('SELECT * FROM [dbo].[t] WHERE [x] = @p0 ORDER BY (SELECT NULL) OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY');
-    expect(params).toEqual(['a', 50, 26]);
-  });
-
-  it('isnull/isnotnull bind no params; unknown op is dropped', () => {
-    const { sql, params } = buildTablePreview('postgres', '"t"', {
-      limit: 10, offset: 0,
-      where: [{ column: 'a', op: 'isnull' }, { column: 'b', op: 'isnotnull' }, { column: 'c', op: 'bogus' as 'like' }],
-    });
-    expect(sql).toBe('SELECT * FROM "t" WHERE "a" IS NULL AND "b" IS NOT NULL LIMIT $1 OFFSET $2');
-    expect(params).toEqual([11, 0]);
-  });
-
-  it('no filter/sort → plain paginated select', () => {
-    const { sql, params } = buildTablePreview('sqlite', '"t"', { limit: 100, offset: 0 });
-    expect(sql).toBe('SELECT * FROM "t" LIMIT ? OFFSET ?');
-    expect(params).toEqual([101, 0]);
-  });
-});
-
-describe('orderBySql', () => {
-  it('quotes the column + closes the direction enum (no injection)', () => {
-    expect(orderBySql('postgres', { column: 'name', dir: 'asc' })).toBe('"name" ASC');
-    expect(orderBySql('mysql', { column: 'created_at', dir: 'desc' })).toBe('`created_at` DESC');
-    expect(orderBySql('mssql', { column: 'id', dir: 'asc' })).toBe('[id] ASC');
-    // A malicious column name is quoted, not interpolated; an odd dir falls back to ASC.
-    expect(orderBySql('postgres', { column: 'x"; DROP TABLE t;--', dir: 'evil' as 'asc' })).toBe('"x""; DROP TABLE t;--" ASC');
-    expect(orderBySql('postgres', undefined)).toBeNull();
-  });
-});
 describe('DML builder', () => {
   it('postgres UPDATE is PK-scoped with $-placeholders', () => {
     const built = buildDml('postgres', {

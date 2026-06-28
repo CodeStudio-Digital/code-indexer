@@ -1296,6 +1296,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       opts.planDepth
       ?? (session.plan_depth_override as 'simple' | 'normal' | 'complex' | null)
       ?? 'normal',
+    // Response-language directive (mig 177): session override wins, else the
+    // per-project default, else the neutral "user's language" form. Cache-stable
+    // axis above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
+    responseLanguage:
+      session.response_language_override
+      ?? (project as { default_response_language?: string | null }).default_response_language
+      ?? undefined,
+    // Output style (mig 178): proactive (default → no block) | explanatory | learning.
+    outputStyle:
+      (session.output_style_override as 'proactive' | 'explanatory' | 'learning' | null)
+      ?? undefined,
+    // Unsupervised framing (G3): ONLY when a caller explicitly marks the run as
+    // headless (cron / scheduled / CI). NOT derived from company-subordinate
+    // status: subordinates lack `ask_user` but DO have `ask_master` (blocks
+    // until the master — and ultimately a human — answers), so they are NOT
+    // unsupervised, and the autonomous "no human is watching, don't ask" framing
+    // would contradict their escalation model.
+    unsupervised: opts.unsupervised ?? false,
     sessionDrive: !opts.companyContext,
     // "Images & vision" section is only rendered when the model can't see
     // images natively (or the composer forces the describe-images path).

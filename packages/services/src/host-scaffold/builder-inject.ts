@@ -15,7 +15,6 @@ import { createServer } from 'node:net';
 import { getSourceStampPlugin } from '../sandbox/builder/source-stamp/registry.js';
 import type { ViteStampContribution } from '../sandbox/types.js';
 import {
-  TAILWIND_CONFIG_CJS,
   POSTCSS_CONFIG_CJS,
   UTILS_TS,
   COMPONENTS_JSON,
@@ -24,8 +23,11 @@ import {
 
 /** npm deps a builder project needs (installed by the scaffold flow).
  *  `@babel/core` powers the dev-only element-selection stamp Vite plugin
- *  (`.mcp/vite-mcp-stamp.mjs`) — plugin-react no longer brings Babel. */
-export const BUILDER_DEV_DEPS = ['@babel/core', 'tailwindcss@3', 'postcss', 'autoprefixer', 'tailwindcss-animate'];
+ *  (`.mcp/vite-mcp-stamp.mjs`) — plugin-react no longer brings Babel.
+ *  Tailwind v4 is CSS-first: `@tailwindcss/postcss` replaces the standalone
+ *  `postcss`/`autoprefixer`, and `tw-animate-css` is the v4-compatible
+ *  successor to `tailwindcss-animate`. */
+export const BUILDER_DEV_DEPS = ['@babel/core', 'tailwindcss@4', '@tailwindcss/postcss', 'tw-animate-css'];
 export const BUILDER_DEPS = ['class-variance-authority', 'clsx', 'tailwind-merge', 'lucide-react'];
 
 /** Render the host `vite.config.ts` — react+babel-stamp + `@` alias + a
@@ -103,10 +105,10 @@ function writeStampInstrumentation(targetDir: string, stack: string, port: numbe
  * Idempotent on the entry append.
  */
 export function injectBuilderStampHost(targetDir: string, stack: string, port: number): void {
-  // Tailwind + shadcn config files. First scaffold only — `repairBuilderStampHost`
-  // deliberately skips these so it never clobbers files the user has edited.
+  // Tailwind (v4, CSS-first) + shadcn config files. First scaffold only —
+  // `repairBuilderStampHost` deliberately skips these so it never clobbers
+  // files the user has edited.
   const shadcn: Array<[string, string]> = [
-    ['tailwind.config.cjs', TAILWIND_CONFIG_CJS],
     ['postcss.config.cjs', POSTCSS_CONFIG_CJS],
     ['components.json', COMPONENTS_JSON],
     ['src/lib/utils.ts', UTILS_TS],

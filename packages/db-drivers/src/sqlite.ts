@@ -16,6 +16,7 @@ import type {
   ForeignKeyInfo,
   IndexInfo,
   QueryResult,
+  RunBatchOptions,
   RunQueryOptions,
   TableInfo,
   TableRef,
@@ -30,29 +31,58 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
   if (!filePath) throw new Error('sqlite: filePath is required');
   const db: DB = new Database(filePath, { readonly: false, fileMustExist: false });
 
-  function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
-    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+  /** Run ONE statement synchronously, returning a capped QueryResult. */
+  function execStatement(sql: string, params: unknown[], max: number): QueryResult {
     try {
       const stmt = db.prepare(sql);
-      const params = (opts.params ?? []) as unknown[];
       if (stmt.reader) {
         const all = stmt.all(...params) as Array<Record<string, unknown>>;
         const truncated = all.length > max;
         const fields = (stmt.columns() as Array<{ name: string }>).map((c) => ({ name: c.name }));
-        return Promise.resolve({
-          rows: truncated ? all.slice(0, max) : all,
-          rowCount: all.length,
-          fields,
-          truncated,
-        });
+        return { rows: truncated ? all.slice(0, max) : all, rowCount: all.length, fields, truncated };
       }
       const info = stmt.run(...params);
-      return Promise.resolve({ rows: [], rowCount: info.changes, fields: [], command: 'OK' });
+      return { rows: [], rowCount: info.changes, fields: [], command: 'OK' };
     } catch (err) {
-      // better-sqlite3 can't prepare multiple statements — fall back to exec (no rows).
-      if (err instanceof Error && /multiple statements|cannot.*prepare/i.test(err.message)) {
+      // better-sqlite3 can't prepare multiple statements — its real message is
+      // "...contains more than one statement..." — fall back to exec (no rows).
+      if (err instanceof Error && /more than one statement|multiple statements|cannot.*prepare/i.test(err.message)) {
         db.exec(sql);
-        return Promise.resolve({ rows: [], rowCount: 0, fields: [], command: 'OK' });
+        return { rows: [], rowCount: 0, fields: [], command: 'OK' };
+      }
+      throw err;
+    }
+  }
+
+  function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    try {
+      return Promise.resolve(execStatement(sql, (opts.params ?? []) as unknown[], max));
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    // One synchronous db handle (no pool to hop), but wrap the list in an explicit
+    // transaction so a mid-list failure rolls back instead of leaving a partial apply.
+    let inTxn = false;
+    try {
+      db.exec('BEGIN');
+      inTxn = true;
+      let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
+      for (const stmt of statements) last = execStatement(stmt, [], max);
+      db.exec('COMMIT');
+      inTxn = false;
+      return Promise.resolve(last);
+    } catch (err) {
+      if (inTxn) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          /* nothing open to roll back */
+        }
       }
       return Promise.reject(err);
     }
@@ -162,6 +192,7 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
       return out;
     },
     runQuery,
+    runBatch,
     query(sql, params) {
       return runQuery(sql, { params });
     },

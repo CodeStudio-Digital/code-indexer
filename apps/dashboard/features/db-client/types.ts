@@ -34,6 +34,7 @@ export type {
   DbObjectKind,
   DbGenerateKind,
   DbRowBatch,
+  DbDumpFrame,
   DbEngineKind,
   DbCommand,
   DbDriverStatus,
@@ -82,7 +83,7 @@ export interface DbTreeNode {
 export type DbConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
 /** A tab in the center work area (like the editor's file tabs). */
-export type WorkTabKind = 'query' | 'data' | 'structure' | 'er';
+export type WorkTabKind = 'query' | 'data' | 'structure' | 'er' | 'documents' | 'keyvalue';
 
 export interface WorkTab {
   id: string;
@@ -92,6 +93,8 @@ export interface WorkTab {
   connectionId: number;
   /** Live-op routing key — `id` or `id@db` (Postgres multi-database). */
   connKey: string;
+  /** Database/catalog the tab targets (Mongo: the db holding the collection). */
+  database?: string;
   schema?: string;
   table?: string;
   /** Sequence number for unnamed query tabs. */

@@ -6,7 +6,7 @@
  * be redacted (the capture route redacts on write), so the result is safe to ship.
  */
 import type { ApiCollection, ApiRequest, ApiDocPage, ApiRequestExample } from '@mcp/store/api-client-types.js';
-import { exportOpenApi } from '../codegen/export-openapi.js';
+import { exportOpenApi, pathOf, type ExportOpenApiExtras, type OpenApiResponseExample } from '../codegen/export-openapi.js';
 import type { ExportRequest } from '../codegen/export-postman.js';
 import { buildCodegenRequest, generate, languageFor, type CodegenTarget } from '../codegen/index.js';
 import type { ExecRequest } from '../execute-request.js';
@@ -38,6 +38,17 @@ export function buildDocModel(input: BuildDocModelInput): DocModel {
 
   const endpoints: DocEndpoint[] = requests.map((r) => buildEndpoint(r, input.examplesByRequest.get(r.id) ?? [], targets));
 
+  // Fold the authored docs into the OpenAPI too, so the Reference pane (Scalar)
+  // matches exactly what the published Swagger-UI shows after publish.
+  const extras: ExportOpenApiExtras = {
+    description: collection.description,
+    overview: collection.overview_md,
+    guides: guides.map((g) => ({ title: g.title, body: g.body })),
+    folderDocs,
+    links: branding.links,
+    examplesByKey: exampleKeyMap(requests, input.examplesByRequest),
+  };
+
   return {
     schemaVersion: 1,
     meta: { title: collection.name, description: collection.description, updatedAt: collection.updated_at },
@@ -46,8 +57,22 @@ export function buildDocModel(input: BuildDocModelInput): DocModel {
     guides,
     folders,
     endpoints,
-    openapi: exportOpenApi(collection.name, requests as unknown as ExportRequest[]),
+    openapi: exportOpenApi(collection.name, requests as unknown as ExportRequest[], extras),
   };
+}
+
+/** Group saved examples by `${METHOD} ${path}` so `exportOpenApi` can attach them. */
+function exampleKeyMap(requests: ApiRequest[], byRequest: Map<number, ApiRequestExample[]>): Record<string, OpenApiResponseExample[]> {
+  const out: Record<string, OpenApiResponseExample[]> = {};
+  for (const r of requests) {
+    const exs = byRequest.get(r.id);
+    if (!exs?.length) continue;
+    const key = `${(r.method || 'GET').toUpperCase()} ${pathOf(r.path_template)}`;
+    (out[key] ??= []).push(...exs.map((e) => ({
+      name: e.name, status: e.resp_status, statusText: e.resp_status_text, contentType: e.resp_content_type, body: e.resp_body,
+    })));
+  }
+  return out;
 }
 
 function buildEndpoint(r: ApiRequest, examples: ApiRequestExample[], targets: CodegenTarget[]): DocEndpoint {
@@ -99,11 +124,4 @@ function parseRecord(json: string | null): Record<string, string> {
     for (const [k, v] of Object.entries(o)) if (typeof v === 'string') out[k] = v;
     return out;
   } catch { return {}; }
-}
-
-function pathOf(template: string): string {
-  let p = template.replace(/^https?:\/\/[^/]+/i, '');
-  const q = p.indexOf('?');
-  if (q >= 0) p = p.slice(0, q);
-  return p.startsWith('/') ? p : `/${p || ''}`;
 }

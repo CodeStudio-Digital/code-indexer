@@ -81,9 +81,15 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Images & vision': 500,
   '# Session overlay (automatic freshness)': 730,
   '# Subagents (isolated delegation)': 1120,
-  '# Long-term memory': 440,
-  '# Memory (session + project)': 1300,
+  '# Long-term memory': 620, // + memory-staleness caveat (G4)
+  '# Memory (session + project)': 1450, // + memory-staleness caveat (G4)
   '# Style': 290,
+  // Session-fixed directives (only rendered when configured): language (G1),
+  // output style (G8), unsupervised framing (G3).
+  '# Language': 420,
+  '# Explanatory output': 420,
+  '# Learning output': 420,
+  '# Operating autonomously': 760,
   '# Plan mode is ACTIVE': 5480, // plan.txt + ## Plan depth block + decision-gate step/section; complex variant ≈ 4974 + ~10%
 
   '# Explore mode is ACTIVE': 2420,
@@ -100,7 +106,7 @@ const SECTION_BUDGETS: Record<string, number> = {
 
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
-  default: 11000,   // zai · navigate · no plan · no agentId · loop v2 · drive
+  default: 11500,   // zai · navigate · no plan · no agentId · loop v2 · drive (+ G4 memory-staleness caveat; ~10943 measured)
   planMode: 16100,  // same + specialist plan.txt + ## Plan depth block + decision-gate guidance + Track G agent-loop additions (~15858 measured)
 };
 
@@ -128,6 +134,12 @@ MATRIX.push({ label: 'zai|company (no drive)', ctx: { ...BASE_CTX, sessionDrive:
 // Plan-depth variants (migration 151): `complex` is the longest plan-section
 // payload, so it sets the "# Plan mode is ACTIVE" ceiling.
 MATRIX.push({ label: 'zai|plan=true|depth=complex', ctx: { ...BASE_CTX, planMode: true, planDepth: 'complex' } });
+// Session-fixed directive variants: language (G1), output style (G8),
+// unsupervised framing (G3). Each adds one section above the boundary.
+MATRIX.push({ label: 'zai|lang=pt-BR', ctx: { ...BASE_CTX, responseLanguage: 'Português (Brasil)' } });
+MATRIX.push({ label: 'zai|style=explanatory', ctx: { ...BASE_CTX, outputStyle: 'explanatory' } });
+MATRIX.push({ label: 'zai|style=learning', ctx: { ...BASE_CTX, outputStyle: 'learning' } });
+MATRIX.push({ label: 'zai|unsupervised', ctx: { ...BASE_CTX, unsupervised: true } });
 
 describe('prompt-budget — per-section ceilings', () => {
   it('every section is registered and within budget across the matrix', () => {
@@ -200,5 +212,33 @@ describe('prompt-budget — cache boundary guarantees', () => {
     expect(staticPrefix).not.toContain('# External tool groups');
     expect(dynamicSuffix).toContain('# Tool visibility (model-adapted)');
     expect(dynamicSuffix).toContain('# External tool groups (hidden, on-demand)');
+  });
+});
+
+describe('session-fixed directive gating (G1 language / G8 style / G3 autonomous)', () => {
+  it('language block renders only when a concrete language is set', () => {
+    expect(buildSystemPrompt(BASE_CTX)).not.toContain('# Language');
+    expect(buildSystemPrompt({ ...BASE_CTX, responseLanguage: 'auto' })).not.toContain('# Language');
+    const pt = buildSystemPrompt({ ...BASE_CTX, responseLanguage: 'Português (Brasil)' });
+    expect(pt).toContain('# Language');
+    expect(pt).toContain('Português (Brasil)');
+  });
+
+  it('output-style block reflects the selected style', () => {
+    expect(buildSystemPrompt(BASE_CTX)).not.toContain('# Explanatory output');
+    expect(buildSystemPrompt({ ...BASE_CTX, outputStyle: 'proactive' })).not.toContain('# Explanatory output');
+    expect(buildSystemPrompt({ ...BASE_CTX, outputStyle: 'explanatory' })).toContain('# Explanatory output');
+    expect(buildSystemPrompt({ ...BASE_CTX, outputStyle: 'learning' })).toContain('# Learning output');
+  });
+
+  it('autonomous block renders only when unsupervised', () => {
+    expect(buildSystemPrompt(BASE_CTX)).not.toContain('# Operating autonomously');
+    expect(buildSystemPrompt({ ...BASE_CTX, unsupervised: true })).toContain('# Operating autonomously');
+  });
+
+  it('suppresses the learning hand-off under unsupervised (no TODO(human) with no human)', () => {
+    const p = buildSystemPrompt({ ...BASE_CTX, unsupervised: true, outputStyle: 'learning' });
+    expect(p).toContain('# Operating autonomously');
+    expect(p).not.toContain('# Learning output');
   });
 });

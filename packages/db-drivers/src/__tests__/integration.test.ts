@@ -145,6 +145,54 @@ function suite(engine: DbEngine, url: string | undefined, schema: string) {
 suite('postgres', PG_URL, 'public');
 suite('mysql', MYSQL_URL, mysqlSchemaFromUrl(MYSQL_URL));
 
+/**
+ * runBatch transaction semantics — Postgres-specific (it rolls back DDL+DML, and
+ * pg leaves a failed transaction in the "aborted" state until ROLLBACK, so this
+ * also proves the connection recovers). Env-gated like the rest: set DB_IT_PG_URL
+ * (the RUN_DB_IT live-database harness) or the block is skipped.
+ */
+describe.skipIf(!PG_URL)('postgres runBatch transaction', () => {
+  let driver: DatabaseDriver;
+  const table = 'it_dbclient_batch';
+
+  beforeAll(async () => {
+    driver = await createDriver({ engine: 'postgres', connectionString: PG_URL } as DbConnectConfig);
+    await driver.runQuery(`DROP TABLE IF EXISTS ${table}`).catch(() => void 0);
+    await driver.runQuery(`CREATE TABLE ${table} (id serial PRIMARY KEY, n int NOT NULL)`);
+  });
+
+  afterAll(async () => {
+    if (!driver) return;
+    await driver.runQuery(`DROP TABLE IF EXISTS ${table}`).catch(() => void 0);
+    await driver.close();
+  });
+
+  const count = async (): Promise<number> => {
+    const r = await driver.runQuery(`SELECT COUNT(*) AS c FROM ${table}`);
+    return Number((r.rows[0] as { c: number | string }).c);
+  };
+
+  it('commits every statement of a successful batch', async () => {
+    await driver.runBatch!([`INSERT INTO ${table} (n) VALUES (1)`, `INSERT INTO ${table} (n) VALUES (2)`]);
+    expect(await count()).toBe(2);
+  });
+
+  it('rolls back the whole batch when the 2nd statement fails', async () => {
+    const start = await count();
+    await expect(
+      driver.runBatch!([
+        `INSERT INTO ${table} (n) VALUES (99)`, // applies inside the txn…
+        `INSERT INTO ${table} (n) VALUES (NULL)`, // …then a NOT NULL violation aborts it
+      ]),
+    ).rejects.toThrow();
+    // The first insert was rolled back — no partial apply.
+    expect(await count()).toBe(start);
+    // And the pooled connection recovered (ROLLBACK cleared the aborted txn state).
+    await driver.runBatch!([`INSERT INTO ${table} (n) VALUES (3)`]);
+    expect(await count()).toBe(start + 1);
+  });
+});
+
 /** MySQL "schema" == database; pull it from the URL path (default 'test'). */
 function mysqlSchemaFromUrl(url: string | undefined): string {
   if (!url) return 'test';

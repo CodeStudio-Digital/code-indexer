@@ -189,6 +189,10 @@ import { sshHosts173 } from './173_ssh_hosts.js';
 import { dbClient174 } from './174_db_client.js';
 import { modelContextWindowOverride175 } from './175_model_context_window_override.js';
 import { projectLoose176 } from './176_project_loose.js';
+import { sessionResponseLanguage177 } from './177_session_response_language.js';
+import { sessionOutputStyle178 } from './178_session_output_style.js';
+import { chromeServiceImageBump161_179 } from './179_chrome_service_image_bump_161.js';
+import { sessionPreflightSeed180 } from './180_session_preflight_seed.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -394,6 +398,10 @@ export const MIGRATIONS: Migration[] = [
   dbClient174,
   modelContextWindowOverride175,
   projectLoose176,
+  sessionResponseLanguage177,
+  sessionOutputStyle178,
+  chromeServiceImageBump161_179,
+  sessionPreflightSeed180,
 ];
 
 /**

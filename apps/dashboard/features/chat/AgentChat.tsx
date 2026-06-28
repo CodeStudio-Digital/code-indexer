@@ -137,6 +137,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   const [planDepth, setPlanDepth] = useState<string | null>(null);
+  const [responseLanguage, setResponseLanguage] = useState<string | null>(null);
+  const [outputStyle, setOutputStyle] = useState<string | null>(null);
   const [outputCapLevel, setOutputCapLevel] = useState<OutputCapLevel>('economic');
   const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
   const [summarizing, setSummarizing] = useState<boolean>(false);
@@ -745,6 +747,19 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setPlanDepth(typeof d === 'string' && d.length > 0 ? d : null);
   }, [sessionData?.session]);
 
+  // Response-language override (migration 177). Sticky per session; NULL → the
+  // project default then the neutral "respond in the user's language" form.
+  useEffect(() => {
+    const v = sessionData?.session?.response_language_override;
+    setResponseLanguage(typeof v === 'string' && v.length > 0 ? v : null);
+  }, [sessionData?.session]);
+
+  // Output style (migration 178). NULL → 'proactive' (no extra prompt block).
+  useEffect(() => {
+    const v = sessionData?.session?.output_style_override;
+    setOutputStyle(typeof v === 'string' && v.length > 0 ? v : null);
+  }, [sessionData?.session]);
+
   // Tool-output cap level (migration 153; legacy migration-078 boolean → 'max'
   // fallback). Reads from the session row, writes via PATCH /tool-output-cap-level.
   useEffect(() => {
@@ -808,6 +823,26 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (!selectedId) return;
     try {
       await apiPatch(`/coder/sessions/${selectedId}/plan-depth`, { depth: next });
+    } catch {
+      /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  }, [selectedId]);
+
+  const handleResponseLanguageChange = useCallback(async (next: string | null) => {
+    setResponseLanguage(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/response-language`, { language: next });
+    } catch {
+      /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  }, [selectedId]);
+
+  const handleOutputStyleChange = useCallback(async (next: string | null) => {
+    setOutputStyle(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/output-style`, { style: next });
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
@@ -1469,6 +1504,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 reasoningLevels={reasoningLevels}
                 planDepth={planDepth}
                 setPlanDepth={handlePlanDepthChange}
+                responseLanguage={responseLanguage}
+                setResponseLanguage={handleResponseLanguageChange}
+                outputStyle={outputStyle}
+                setOutputStyle={handleOutputStyleChange}
                 outputCapLevel={outputCapLevel}
                 setOutputCapLevel={handleOutputCapLevelChange}
                 toolPermissionMode={toolPermissionMode}

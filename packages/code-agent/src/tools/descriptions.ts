@@ -25,13 +25,15 @@ export const WRITE_FILE_DESC =
   "USE: replacing the entire contents of a file you have already read.\n" +
   "DON'T: create a new file (use create_file — write_file fails if the file is missing on some configs, and it's clearer intent).\n" +
   "DON'T: make a small targeted change (use edit_file — rewriting the whole file for a 2-line fix burns tokens and risks collateral damage).\n" +
-  "DON'T: write without reading first. Always read_file / mcp__read_file / mcp__get_symbol_body BEFORE overwriting.";
+  "DON'T: write without reading first. Always read_file / mcp__read_file / mcp__get_symbol_body BEFORE overwriting.\n" +
+  "DON'T: add emojis to file content unless the user used them first or explicitly asked.";
 
 export const CREATE_FILE_DESC =
   'Create a brand-new file. Fails cleanly if the path already exists.\n' +
   "USE: adding a new source file, test, or config.\n" +
   "DON'T: use this to replace an existing file — it will error. Use write_file for replacements.\n" +
-  "DON'T: create placeholder/empty files speculatively. Create only when you have the final content ready.";
+  "DON'T: create placeholder/empty files speculatively. Create only when you have the final content ready.\n" +
+  "DON'T: create *.md or README/documentation files unless the user explicitly asked for docs. Don't add emojis to file content unless the user used them first.";
 
 export const MANAGE_PATH_DESC =
   'Create directories, move/rename paths, or delete files/directories with safeguards.\n' +
@@ -137,6 +139,7 @@ export const ASK_USER_DESC =
   "USE: when you need a decision/preference the user alone can make (which library, scope of refactor, naming, focus area).\n" +
   "USE: when critical context is missing and guessing would waste work.\n" +
   'PREFER: 2–8 mutually-exclusive `options` so the user clicks instead of types. Buttons render in a 2-column grid. Free-form is for open answers only.\n' +
+  'PREFER: if one option is your recommendation, list it FIRST and end its label with " (Recommended)" so the user sees the default at a glance.\n' +
   "DON'T: ask things you can verify yourself (file existence, type signatures, config values — READ them).\n" +
   "DON'T: ask for confirmation of obvious next steps ('should I now run the tests?'). Just do it.\n" +
   "DON'T: ask multiple small questions in sequence. Batch them into one question with options or a multi-line prompt.\n" +

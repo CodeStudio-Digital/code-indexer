@@ -6,6 +6,7 @@ import type { CloudTier } from '@mcp/api-bus';
 import { Button } from '../../components/ui/button.js';
 import { cloudCall } from '../../lib/cloud/cloud-client.js';
 import { useCloudAction } from '../../lib/cloud/use-cloud-action.js';
+import { markCheckoutPending } from '../../lib/cloud/checkout-pending.js';
 
 function openExternal(url: string): void {
   (globalThis as { electronAPI?: { openExternal?: (u: string) => void } }).electronAPI?.openExternal?.(url);
@@ -23,7 +24,7 @@ export function SubscriptionSection({ tier }: { tier: CloudTier }) {
           {t('subscription.manage')}
         </Button>
       ) : (
-        <Button size="sm" disabled={busy} onClick={() => void run(async () => openExternal((await cloudCall('billing.checkout', undefined)).url))}>
+        <Button size="sm" disabled={busy} onClick={() => void run(async () => { markCheckoutPending(); openExternal((await cloudCall('billing.checkout', undefined)).url); })}>
           {t('subscription.upgrade')}
         </Button>
       )}

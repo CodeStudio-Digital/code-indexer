@@ -2,6 +2,7 @@
  *  /disable), data export, and account deletion. The API exposes no "is 2FA on?"
  *  flag, so both the enable and disable flows are always offered. */
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Download, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
@@ -120,22 +121,46 @@ function EmailCard({ verified, onVerified }: { verified: boolean; onVerified: ()
 }
 
 function PasswordCard({ email }: { email: string | null }) {
+  const { signOut } = useAuth();
+  const navigate = useNavigate();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkDone, setLinkDone] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (next.length < 12) return setError('New password must be at least 12 characters.');
+    if (next !== confirm) return setError('Passwords do not match.');
+    setBusy(true);
+    try {
+      await api.changePassword(current, next);
+      // The change revokes every session (incl. this one) → sign out + back to login.
+      await signOut();
+      navigate('/login');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not change your password.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const sendLink = async () => {
     if (!email) return;
-    setBusy(true);
+    setLinkBusy(true);
+    setLinkDone(null);
     setError(null);
-    setDone(null);
     try {
       await api.forgotPassword(email);
-      setDone('Check your inbox.');
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not send the email.');
+      setLinkDone('Check your inbox.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not send the email.');
     } finally {
-      setBusy(false);
+      setLinkBusy(false);
     }
   };
 
@@ -143,14 +168,35 @@ function PasswordCard({ email }: { email: string | null }) {
     <Card>
       <CardHeader>
         <CardTitle>Password</CardTitle>
-        <CardDescription>Password changes are done through an emailed reset link, not in this portal.</CardDescription>
+        <CardDescription>Change your password. You'll be signed out of all devices.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <Button size="sm" variant="outline" loading={busy} disabled={!email} onClick={() => void sendLink()}>
-          Email me a reset link
-        </Button>
-        {error ? <Alert>{error}</Alert> : null}
-        {done ? <p className="text-xs text-muted-foreground">{done}</p> : null}
+      <CardContent className="space-y-4">
+        <form className="space-y-3" onSubmit={(e) => void submit(e)}>
+          <div className="space-y-1">
+            <Label htmlFor="cur-pw">Current password</Label>
+            <Input id="cur-pw" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="new-pw">New password</Label>
+            <Input id="new-pw" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+            <p className="text-xs text-muted-foreground">At least 12 characters.</p>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="confirm-pw">Confirm new password</Label>
+            <Input id="confirm-pw" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </div>
+          {error ? <Alert>{error}</Alert> : null}
+          <Button size="sm" type="submit" loading={busy} disabled={!current || !next || !confirm}>
+            Update password
+          </Button>
+        </form>
+        <div className="border-t pt-3">
+          <p className="mb-2 text-xs text-muted-foreground">Forgot your current password?</p>
+          <Button size="sm" variant="outline" loading={linkBusy} disabled={!email} onClick={() => void sendLink()}>
+            Email me a reset link
+          </Button>
+          {linkDone ? <p className="mt-2 text-xs text-muted-foreground">{linkDone}</p> : null}
+        </div>
       </CardContent>
     </Card>
   );

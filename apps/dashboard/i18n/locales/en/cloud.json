@@ -111,6 +111,25 @@
     "upgrade": "Upgrade to Pro",
     "manage": "Manage subscription"
   },
+  "activation": {
+    "title": "You're all set",
+    "body": "Your subscription is now active — enjoy CodeStudio."
+  },
+  "plans": {
+    "heading": "Compare plans",
+    "current": "Current",
+    "localFree": "The local IDE is always free — Pro and Team unlock the cloud features below.",
+    "feature": {
+      "sharing": "Conversation sharing",
+      "sync": "Multi-device sync",
+      "apiDocs": "Hosted API docs",
+      "backup": "Cloud backups",
+      "sshVault": "SSH vault sync",
+      "teamApis": "Shared team workspaces",
+      "teamMemory": "Team knowledge base",
+      "teamSshVault": "Team SSH vault"
+    }
+  },
   "feedback": {
     "title": "Send feedback",
     "kind": { "bug": "Bug", "idea": "Idea", "other": "Other" },

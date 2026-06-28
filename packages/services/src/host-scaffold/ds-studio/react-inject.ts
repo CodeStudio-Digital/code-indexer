@@ -30,7 +30,6 @@ import {
   APP_TSCONFIG_JSON,
 } from './templates-react.js';
 import {
-  DS_TAILWIND_CONFIG_CJS,
   APP_INDEX_CSS,
   APP_MAIN_TSX,
   APP_APP_TSX,
@@ -106,10 +105,10 @@ export function renderDsStudioViteConfig(stamp: ViteStampContribution, port: num
 }
 
 /**
- * Escreve no `app/`: shadcn base (tailwind com glob do pkg, postcss,
- * components.json, utils, index.css com tokens), os arquivos do stamp
- * (babel plugin, vite plugin, inspector runtime), o vite.config e o
- * import do inspector no entry. Idempotente no append do entry.
+ * Escreve no `app/`: shadcn base (postcss Tailwind v4, components.json,
+ * utils, index.css com @source do pkg), os arquivos do stamp (babel
+ * plugin, vite plugin, inspector runtime), o vite.config e o import do
+ * inspector no entry. Idempotente no append do entry.
  */
 export function injectDsStudioReactInstrumentation(appDir: string, port: number): void {
   const plugin = getSourceStampPlugin('react-ts');
@@ -117,7 +116,6 @@ export function injectDsStudioReactInstrumentation(appDir: string, port: number)
   const c = plugin.contribution();
 
   const shadcn: Array<[string, string]> = [
-    ['tailwind.config.cjs', DS_TAILWIND_CONFIG_CJS],
     ['postcss.config.cjs', POSTCSS_CONFIG_CJS],
     ['components.json', COMPONENTS_JSON],
     ['src/lib/utils.ts', UTILS_TS],

@@ -28,11 +28,13 @@ import type {
   DbObjectKind,
   DbGenerateKind,
   DbRowBatch,
+  DbDumpFrame,
   DbEngine,
   DbDriverStatus,
   DbDriverInstallFrame,
   DbTableSort,
   DbWhereCondition,
+  DbCommand,
 } from './types.js';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -278,6 +280,10 @@ export const editRow = (input: {
 export const ddl = (input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean }) =>
   withReconnect(input.connectionId, () => apiCall<DbEditResult>('dbClient.ddl', input));
 
+/** Run a non-relational command (Mongo document op / Redis command). */
+export const runCommand = (connectionId: string, command: DbCommand, maxRows?: number) =>
+  withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.runCommand', { connectionId, command, maxRows }));
+
 /** Install status of the lazily-downloaded drivers (Oracle/Mongo/Redis). */
 export const driverStatus = () => apiCall<DbDriverStatus[]>('dbClient.driverStatus', {});
 
@@ -295,3 +301,15 @@ export function exportStream(
 ): AsyncIterable<DbRowBatch> {
   return apiStream<DbRowBatch>('dbClient.exportStream', { connectionId, schema, table, batchRows });
 }
+
+/** Stream a `.sql` dump (CREATE + INSERTs) for a whole schema or selected tables. */
+export function dumpStream(
+  connectionId: string,
+  opts: { schema?: string; tables?: string[]; includeData?: boolean; batchRows?: number },
+): AsyncIterable<DbDumpFrame> {
+  return apiStream<DbDumpFrame>('dbClient.dumpStream', { connectionId, ...opts });
+}
+
+/** Run a restore/import script (statement list) on one pinned connection. */
+export const runScript = (connectionId: string, statements: string[]) =>
+  withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.runScript', { connectionId, statements }));

@@ -29,8 +29,8 @@ export const ENGINES: EngineMeta[] = [
   { id: 'sqlite', label: 'SQLite', usesFile: true, available: true, engineKind: 'relational' },
   { id: 'mssql', label: 'SQL Server', defaultPort: 1433, available: true, engineKind: 'relational' },
   { id: 'oracle', label: 'Oracle', defaultPort: 1521, available: true, engineKind: 'relational', lazyDriver: true },
-  { id: 'mongodb', label: 'MongoDB', defaultPort: 27017, available: false, engineKind: 'document', lazyDriver: true },
-  { id: 'redis', label: 'Redis', defaultPort: 6379, available: false, engineKind: 'keyvalue', lazyDriver: true },
+  { id: 'mongodb', label: 'MongoDB', defaultPort: 27017, available: true, engineKind: 'document', lazyDriver: true },
+  { id: 'redis', label: 'Redis', defaultPort: 6379, available: true, engineKind: 'keyvalue', lazyDriver: true },
 ];
 
 export const AVAILABLE_ENGINES = ENGINES.filter((e) => e.available);

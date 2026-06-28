@@ -1,11 +1,11 @@
 /** Teams — organizations the user belongs to, with members, invites, and role
  *  management. Owners/admins can invite (emailed or link) and remove members. */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Users, ShieldCheck } from 'lucide-react';
+import { Users, ShieldCheck, KeyRound } from 'lucide-react';
 import type { OrgMemberPublic, OrgPublic, OrgRolePublic } from '@mcp/api-bus';
 import { api, ApiError } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
-import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Spinner } from '../lib/ui.js';
+import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Spinner } from '../lib/ui.js';
 
 type Membership = { org: OrgPublic; role: OrgRolePublic };
 
@@ -185,8 +185,121 @@ function OrgCard({
 
         {canManage ? <InviteForm orgId={org.id} /> : null}
         {canManage ? <VaultSection orgId={org.id} /> : null}
+        {canManage ? <SsoSection orgId={org.id} /> : null}
       </CardContent>
     </Card>
+  );
+}
+
+/** Single sign-on (OIDC) config for the org admin. Self-hides when the server
+ *  doesn't offer SSO; shows an Enterprise hint when the org isn't entitled; else a
+ *  config form. The client secret is write-only (never echoed back). */
+function SsoSection({ orgId }: { orgId: string }) {
+  const [state, setState] = useState<'loading' | 'unavailable' | 'needsEnterprise' | 'ready'>('loading');
+  const [configured, setConfigured] = useState(false);
+  const [issuer, setIssuer] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [domains, setDomains] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const r = await api.ssoGetConfig(orgId);
+      if (r.configured) {
+        setConfigured(true);
+        setIssuer(r.issuer);
+        setClientId(r.clientId);
+        setDomains(r.allowedDomains.join(', '));
+        setEnabled(r.enabled);
+      }
+      setState('ready');
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'sso_unconfigured') setState('unavailable');
+      else if (e instanceof ApiError && e.code === 'entitlement_required') setState('needsEnterprise');
+      else {
+        setState('ready');
+        setError(e instanceof ApiError ? e.message : 'Could not load SSO.');
+      }
+    }
+  }, [orgId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = async () => {
+    setError(null);
+    setMsg(null);
+    if (!issuer.trim() || !clientId.trim()) return setError('Issuer and client ID are required.');
+    if (!clientSecret) return setError('Re-enter the client secret to save.');
+    const allowedDomains = domains.split(',').map((d) => d.trim()).filter(Boolean);
+    if (allowedDomains.length === 0) return setError('Add at least one allowed email domain.');
+    setBusy(true);
+    try {
+      await api.ssoSetConfig(orgId, { issuer: issuer.trim(), clientId: clientId.trim(), clientSecret, allowedDomains, enabled });
+      setClientSecret('');
+      setConfigured(true);
+      setMsg('SSO settings saved.');
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Could not save SSO.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (state === 'loading' || state === 'unavailable') return null;
+  if (state === 'needsEnterprise') {
+    return (
+      <div className="space-y-1 rounded-md border p-3">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" /> Single sign-on
+        </div>
+        <p className="text-xs text-muted-foreground">SSO is available on the Enterprise plan.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" /> Single sign-on (OIDC)
+        {configured ? <Badge tone={enabled ? 'success' : 'muted'}>{enabled ? 'enabled' : 'disabled'}</Badge> : null}
+      </div>
+      {error ? <Alert>{error}</Alert> : null}
+      <p className="text-xs text-muted-foreground">Register this redirect URI with your identity provider:</p>
+      <div className="break-all rounded bg-muted px-2 py-1 font-mono text-xs select-all">{api.ssoCallbackUrl()}</div>
+      <div className="space-y-2">
+        <div className="space-y-1">
+          <Label htmlFor={`sso-issuer-${orgId}`}>Issuer URL</Label>
+          <Input id={`sso-issuer-${orgId}`} value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="https://idp.example.com" />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`sso-client-${orgId}`}>Client ID</Label>
+          <Input id={`sso-client-${orgId}`} value={clientId} onChange={(e) => setClientId(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`sso-secret-${orgId}`}>Client secret</Label>
+          <Input id={`sso-secret-${orgId}`} type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={configured ? 'Re-enter to change' : ''} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`sso-domains-${orgId}`}>Allowed email domains</Label>
+          <Input id={`sso-domains-${orgId}`} value={domains} onChange={(e) => setDomains(e.target.value)} placeholder="acme.com, acme.io" />
+          <p className="text-xs text-muted-foreground">Only verified emails on these domains may sign in via SSO.</p>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
+        </label>
+      </div>
+      <Button size="sm" loading={busy} onClick={() => void save()}>
+        Save SSO
+      </Button>
+      {msg ? <p className="text-xs text-emerald-600">{msg}</p> : null}
+    </div>
   );
 }
 

@@ -9,6 +9,7 @@ import { Sparkles, Loader2 } from 'lucide-react';
 import { Button } from './ui/button.js';
 import { cloudCall } from '../lib/cloud/cloud-client.js';
 import { CloudError } from '../lib/cloud/cloud-errors.js';
+import { markCheckoutPending } from '../lib/cloud/checkout-pending.js';
 
 function openExternal(url: string): void {
   (globalThis as { electronAPI?: { openExternal?: (u: string) => void } }).electronAPI?.openExternal?.(url);
@@ -23,6 +24,7 @@ export function UpgradeNotice({ message, cta }: { message: string; cta: string }
     setError(null);
     try {
       const { url } = await cloudCall('billing.checkout', undefined);
+      markCheckoutPending();
       openExternal(url);
     } catch (e) {
       setError(e instanceof CloudError ? e.message : String(e));

@@ -17,6 +17,7 @@ import { PORTAL_URL } from '../../lib/cloud/cloud-config.js';
 import { useCloudAuth } from './useCloudAuth.js';
 import { TwoFactorSection } from './TwoFactorSection.js';
 import { SubscriptionSection } from './SubscriptionSection.js';
+import { PlanMatrix } from './PlanMatrix.js';
 import { TeamsSection } from './TeamsSection.js';
 import { SessionsSection } from './SessionsSection.js';
 import { FeedbackForm } from './FeedbackForm.js';
@@ -95,6 +96,11 @@ export function CloudStatusButton() {
                     </button>
                   )
                 ) : null}
+                {tier === 'free' ? (
+                  <Button size="sm" className="mt-2 w-full" onClick={() => openDialog('subscription')}>
+                    {t('subscription.upgrade')}
+                  </Button>
+                ) : null}
               </div>
               <div className="my-1 h-px bg-border" />
               <MenuRow icon={ShieldCheck} label={t('menu.twofa')} onClick={() => openDialog('2fa')} />
@@ -138,8 +144,11 @@ export function CloudStatusButton() {
       <Modal open={dialog === '2fa'} onClose={closeDialog} title={t('twofaManage.title')}>
         <TwoFactorSection />
       </Modal>
-      <Modal open={dialog === 'subscription'} onClose={closeDialog} title={t('subscription.title')}>
-        <SubscriptionSection tier={tier} />
+      <Modal open={dialog === 'subscription'} onClose={closeDialog} title={t('subscription.title')} wide>
+        <div className="space-y-4">
+          <PlanMatrix tier={tier} />
+          <SubscriptionSection tier={tier} />
+        </div>
       </Modal>
       <Modal open={dialog === 'teams'} onClose={closeDialog} title={t('teams.title')} wide>
         <TeamsSection selfAccountId={account?.id ?? null} />

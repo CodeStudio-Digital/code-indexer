@@ -164,6 +164,8 @@ export interface DbQueryResult {
   fields: DbQueryField[];
   command?: string;
   truncated?: boolean;
+  /** Redis SCAN continuation cursor ('0' = end). */
+  cursor?: string;
   /** Wall-clock execution time in ms (filled by the handler). */
   durationMs?: number;
 }
@@ -345,6 +347,26 @@ export interface DbClientApi {
   ): AsyncStream<DbRowBatch>;
 
   /**
+   * Stream a `.sql` dump (CREATE + INSERT literals) for a whole schema or a
+   * selected table list. Server-paged so a huge table never lands in memory; the
+   * client appends each `sql` chunk to a file. Relational connections only.
+   */
+  dumpStream(
+    input: { connectionId: string; schema?: string; tables?: string[]; includeData?: boolean; batchRows?: number },
+    ctx: ApiContext,
+  ): AsyncStream<DbDumpFrame>;
+
+  /**
+   * Run a list of statements (a restore/import script) on one pinned connection,
+   * transactional where the engine allows DDL rollback. Relational only; blocked
+   * on a read-only connection. Returns the last statement's result.
+   */
+  runScript(
+    input: { connectionId: string; statements: string[] },
+    ctx: ApiContext,
+  ): Promise<DbQueryResult>;
+
+  /**
    * Run a non-relational command (document/key-value). Rejected for relational
    * connections (use `query`) and, on a read-only connection, for write commands.
    */
@@ -367,5 +389,16 @@ export interface DbRowBatch {
   /** Running total of rows emitted so far. */
   total: number;
   /** True on the final frame (no more rows). */
+  done: boolean;
+}
+
+export interface DbDumpFrame {
+  /** A chunk of `.sql` text to append to the output file (may be empty on the final frame). */
+  sql: string;
+  /** The table this chunk belongs to (absent for the header frame). */
+  table?: string;
+  /** Running total of data rows dumped so far. */
+  total: number;
+  /** True on the final frame. */
   done: boolean;
 }

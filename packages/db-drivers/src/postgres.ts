@@ -14,6 +14,7 @@ import type {
   ForeignKeyInfo,
   IndexInfo,
   QueryResult,
+  RunBatchOptions,
   RunQueryOptions,
   TableInfo,
   TableRef,
@@ -93,16 +94,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
         await client.query({ text: `SET search_path TO ${qIdent(opts.schema)}, public` });
       }
       const raw = await client.query({ text: sql, values: opts.params });
-      const result = Array.isArray(raw) ? lastWithRows(raw) : raw;
-      const rows = result.rows ?? [];
-      const truncated = rows.length > max;
-      return {
-        rows: truncated ? rows.slice(0, max) : rows,
-        rowCount: result.rowCount ?? rows.length,
-        fields: (result.fields ?? []).map((f) => ({ name: f.name, dataTypeId: f.dataTypeID })),
-        command: result.command,
-        truncated,
-      };
+      return shapePgResult(raw, max);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
       // Reset the search_path so the pooled client is clean for the next borrower.
@@ -118,6 +110,52 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       } else {
         client.release();
       }
+    }
+  }
+
+  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    // ONE pinned client for the whole batch — a runQuery loop could hand each
+    // statement a different pooled backend, so BEGIN/COMMIT wouldn't share one
+    // transaction. Here BEGIN…COMMIT and every statement land on this client.
+    const client = await pool.connect();
+    let onAbort: (() => void) | null = null;
+    let inTxn = false;
+    let dirty = false;
+    try {
+      if (opts.signal) {
+        if (opts.signal.aborted) throw new Error('query cancelled');
+        const pidRes = (await client.query({ text: 'SELECT pg_backend_pid() AS pid' })) as PgResult;
+        const pid = Number((pidRes.rows[0] as { pid: number }).pid);
+        onAbort = (): void => {
+          // Side connection so the cancel isn't blocked behind the running batch.
+          pool.query('SELECT pg_cancel_backend($1)', [pid]).catch(() => void 0);
+        };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
+      await client.query({ text: 'BEGIN' });
+      inTxn = true;
+      let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
+      for (const stmt of statements) {
+        last = shapePgResult(await client.query({ text: stmt }), max);
+      }
+      await client.query({ text: 'COMMIT' });
+      inTxn = false;
+      return last;
+    } catch (err) {
+      // A failed statement leaves the txn in the aborted state — ROLLBACK clears
+      // it so the connection recycles clean. If even ROLLBACK fails, evict it.
+      if (inTxn) {
+        try {
+          await client.query({ text: 'ROLLBACK' });
+        } catch {
+          dirty = true;
+        }
+      }
+      throw err;
+    } finally {
+      if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      client.release(dirty ? new Error('db-batch: rollback failed') : undefined);
     }
   }
 
@@ -290,6 +328,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       return out;
     },
     runQuery,
+    runBatch,
     query(sql, params) {
       return runQuery(sql, { params });
     },
@@ -310,6 +349,20 @@ function lastWithRows(results: PgResult[]): PgResult {
     if (results[i].rows && results[i].rows.length > 0) return results[i];
   }
   return results[results.length - 1] ?? { rows: [], rowCount: 0 };
+}
+
+/** Shape a raw pg result (or multi-statement array) into a capped QueryResult. */
+function shapePgResult(raw: PgResult | PgResult[], max: number): QueryResult {
+  const result = Array.isArray(raw) ? lastWithRows(raw) : raw;
+  const rows = result.rows ?? [];
+  const truncated = rows.length > max;
+  return {
+    rows: truncated ? rows.slice(0, max) : rows,
+    rowCount: result.rowCount ?? rows.length,
+    fields: (result.fields ?? []).map((f) => ({ name: f.name, dataTypeId: f.dataTypeID })),
+    command: result.command,
+    truncated,
+  };
 }
 
 function groupIndexes(

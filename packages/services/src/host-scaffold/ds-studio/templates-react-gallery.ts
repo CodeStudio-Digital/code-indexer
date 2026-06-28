@@ -3,32 +3,33 @@
  * viva do design system: TokensPage renderiza os tokens correntes e o
  * `registry.tsx` é o mapa nome→demo que o agente estende a cada componente.
  */
-import { TAILWIND_CONFIG_CJS } from '../../sandbox/builder/scaffold/shadcn-files.js';
+import { THEME_INLINE } from '../../sandbox/builder/scaffold/shadcn-files.js';
 
 /**
- * Tailwind da galeria — igual ao do builder, mas o `content` também varre
- * `../pkg/src` (componentes da lib usam classes Tailwind; sem esse glob o
- * JIT não gera as classes deles). Replace cirúrgico + teste que trava a
- * presença do glob — se o upstream mudar a linha, o teste acusa.
+ * index.css da galeria (Tailwind v4, CSS-first). Tokens da LIB primeiro
+ * (`@ds/tokens.css`), depois o Tailwind. Como a lib (`../pkg/src`) vive
+ * FORA do root do `app/`, a auto-detecção de conteúdo do v4 não a varre —
+ * por isso o `@source` explícito (substitui o glob que ficava no
+ * `tailwind.config.cjs` do v3). Path é relativo a este CSS (`app/src/`).
+ * O teste trava a presença do `@source` — se sumir, ele acusa.
  */
-export const DS_TAILWIND_CONFIG_CJS = TAILWIND_CONFIG_CJS.replace(
-  `content: ['./index.html', './src/**/*.{ts,tsx,js,jsx}'],`,
-  `content: ['./index.html', './src/**/*.{ts,tsx,js,jsx}', '../pkg/src/**/*.{ts,tsx,js,jsx}'],`,
-);
-
-/** index.css da galeria — tokens da LIB primeiro, depois Tailwind. */
 export const APP_INDEX_CSS = String.raw`@import '@ds/tokens.css';
+@import "tailwindcss";
+@import "tw-animate-css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@source '../../pkg/src/**/*.{ts,tsx,js,jsx}';
+
+@custom-variant dark (&:is(.dark *));
+
+${THEME_INLINE}
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: hsl(var(--border));
   }
   body {
-    @apply bg-background text-foreground;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
   }
 }
 `;

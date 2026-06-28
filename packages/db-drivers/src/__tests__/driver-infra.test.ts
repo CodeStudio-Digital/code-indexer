@@ -40,11 +40,30 @@ describe('non-relational read/write classification', () => {
     expect(isWriteCommand({ kind: 'document', op: 'whoKnows' })).toBe(true);
   });
 
-  it('classifies Redis commands (reads vs writes), defaulting unknown to write', () => {
+  it('classifies Redis op-style commands (the real contract), defaulting unknown to write', () => {
+    // The driver/UI send { kind:'keyvalue', op:'scan'|'get'|'set'|'del'|'expire' }.
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'scan' })).toBe(false);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'get' })).toBe(false);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'set' })).toBe(true);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'del' })).toBe(true);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'expire' })).toBe(true);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'whoKnows' })).toBe(true);
+    // Fallback: a raw RESP command via args[0] still classifies.
     expect(isWriteCommand({ kind: 'keyvalue', args: ['GET', 'k'] })).toBe(false);
-    expect(isWriteCommand({ kind: 'keyvalue', args: ['hgetall', 'h'] })).toBe(false);
-    expect(isWriteCommand({ kind: 'keyvalue', args: ['SET', 'k', 'v'] })).toBe(true);
     expect(isWriteCommand({ kind: 'keyvalue', args: ['FLUSHDB'] })).toBe(true);
-    expect(isWriteCommand({ kind: 'keyvalue', args: [] })).toBe(true);
+  });
+
+  it('classifies the RESP console (op:raw) by its real command, not the op name', () => {
+    // op 'raw' must defer to args[0] so reads run on a read-only connection.
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['GET', 'k'] })).toBe(false);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['HGETALL', 'h'] })).toBe(false);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['SET', 'k', 'v'] })).toBe(true);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['FLUSHALL'] })).toBe(true);
+  });
+
+  it('classifies complex-type + rename writers as writes', () => {
+    for (const op of ['hset', 'hdel', 'lset', 'lpush', 'rpush', 'lrem', 'sadd', 'srem', 'zadd', 'zrem', 'rename']) {
+      expect(isWriteCommand({ kind: 'keyvalue', op })).toBe(true);
+    }
   });
 });

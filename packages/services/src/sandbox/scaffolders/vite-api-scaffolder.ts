@@ -145,12 +145,12 @@ function renderPackageJson(): string {
         start: 'node dist/index.js',
       },
       dependencies: {
-        hono: '^4.12.14',
+        hono: '^4.12.27',
       },
       devDependencies: {
-        '@hono/vite-dev-server': '^0.25.1',
-        typescript: '^5.9.0',
-        vite: '^8.0.8',
+        '@hono/vite-dev-server': '^0.26.0',
+        typescript: '^6.0.0',
+        vite: '^8.1.0',
       },
     },
     null,

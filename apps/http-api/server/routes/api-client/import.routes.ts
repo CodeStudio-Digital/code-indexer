@@ -4,8 +4,9 @@ import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { collectionInProject } from './_ownership.js';
 import { parseCurl, type CurlBody } from '@mcp/services/api-client/import-curl/index.js';
 import { exportPostman, type ExportRequest } from '@mcp/services/api-client/codegen/export-postman.js';
-import { exportOpenApi } from '@mcp/services/api-client/codegen/export-openapi.js';
-import type { CreateRequestInput } from '@mcp/store/api-client-types.js';
+import { exportOpenApi, pathOf, type ExportOpenApiExtras, type OpenApiResponseExample } from '@mcp/services/api-client/codegen/export-openapi.js';
+import type { ApiClientStore } from '@mcp/store/api-client-store.js';
+import type { ApiCollection, CreateRequestInput } from '@mcp/store/api-client-types.js';
 
 /**
  * Import a request from a curl/bash command, and export a collection to Postman
@@ -46,11 +47,53 @@ export function mountApiImportRoutes(app: Hono, deps: ServerDeps): void {
     // A stale cid must not export another project's full request set.
     const col = collectionInProject(store, projectId, cid);
     if (!col) return notFound(c, `Collection ${cid} not found`);
-    const requests = store.listRequests(cid) as unknown as ExportRequest[];
-    const format = c.req.query('format') === 'openapi' ? 'openapi' : 'postman';
-    const doc = format === 'openapi' ? exportOpenApi(col.name, requests) : exportPostman(col.name, requests);
-    return c.json(doc);
+    const rows = store.listRequests(cid);
+    const requests = rows as unknown as ExportRequest[];
+    if (c.req.query('format') !== 'openapi') return c.json(exportPostman(col.name, requests));
+    // OpenAPI carries the authored Docs Studio content (overview/guides/folder
+    // docs/branding links/examples) so the published page is more than a bare spec.
+    return c.json(exportOpenApi(col.name, requests, buildDocExtras(store, col, rows)));
   });
+}
+
+/** Gather the authored, collection-level documentation for the OpenAPI export. */
+function buildDocExtras(store: ApiClientStore, col: ApiCollection, rows: { id: number; method: string; path_template: string }[]): ExportOpenApiExtras {
+  const examplesByKey: Record<string, OpenApiResponseExample[]> = {};
+  for (const r of rows) {
+    const exs = store.listExamples(r.id);
+    if (!exs.length) continue;
+    const key = `${(r.method || 'GET').toUpperCase()} ${pathOf(r.path_template)}`;
+    (examplesByKey[key] ??= []).push(...exs.map((e) => ({
+      name: e.name, status: e.resp_status, statusText: e.resp_status_text, contentType: e.resp_content_type, body: e.resp_body,
+    })));
+  }
+  return {
+    description: col.description,
+    overview: col.overview_md,
+    guides: store.listDocPages(col.id).map((p) => ({ title: p.title, body: p.body_md })),
+    folderDocs: parseStringRecord(col.folder_docs_json),
+    links: parseBrandingLinks(col.branding_json),
+    examplesByKey,
+  };
+}
+
+function parseStringRecord(json: string | null): Record<string, string> {
+  if (!json) return {};
+  try {
+    const o = JSON.parse(json) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(o)) if (typeof v === 'string') out[k] = v;
+    return out;
+  } catch { return {}; }
+}
+
+function parseBrandingLinks(json: string | null): { label: string; url: string }[] {
+  if (!json) return [];
+  try {
+    const b = JSON.parse(json) as { links?: { label?: string; url?: string }[] };
+    return (b.links ?? []).filter((l): l is { label: string; url: string } => !!l && typeof l.url === 'string' && !!l.url)
+      .map((l) => ({ label: l.label ?? l.url, url: l.url }));
+  } catch { return []; }
 }
 
 function mapBody(body: CurlBody): Partial<CreateRequestInput> {

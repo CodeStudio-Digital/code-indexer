@@ -90,6 +90,27 @@ export interface CoderSession {
    */
   plan_depth_override: string | null;
   /**
+   * Per-session sticky response-language override (migration 177). A concrete
+   * language name (e.g. "Português (Brasil)", "English") feeds the `# Language`
+   * block of the SYSTEM PROMPT (cache-stable axis). NULL/"auto" → falls back to
+   * the project default then the neutral "respond in the user's language" form.
+   */
+  response_language_override: string | null;
+  /**
+   * Per-session sticky output style (migration 178): `proactive` (default) |
+   * `explanatory` | `learning`. Feeds the SYSTEM PROMPT (cache-stable axis).
+   * NULL/`proactive` → no extra block.
+   */
+  output_style_override: string | null;
+  /**
+   * Cached task-preflight seed (migration 180), JSON of `PreflightSeed`. Set by
+   * the http-api on a FRESH session's first POST and reused on subsequent fresh
+   * POSTs so the pre-analysis runs at most once while the agent still receives
+   * the `<preflight>` hint. NULL when no preflight ran. Obsolete once the
+   * session has its first persisted message.
+   */
+  preflight_seed_json: string | null;
+  /**
    * Per-session toggle that lifts the per-tool-call truncation caps when true.
    * When null/false, the runner uses the production defaults
    * (PUSH_TIME_CAP=24k, MCP_OUTPUT_HARD_CAP=16k, code_exec MAX_OUTPUT_BYTES=50k).

@@ -202,6 +202,12 @@ export function ConnectionDialog({
         if (form.sslCa) body.enc_ssl_ca = await api.encryptSecretValue(form.sslCa);
         if (form.sslCert) body.enc_ssl_cert = await api.encryptSecretValue(form.sslCert);
         if (form.sslKey) body.enc_ssl_key = await api.encryptSecretValue(form.sslKey);
+      } else if (existing) {
+        // SSL turned off (or switched to a file DB) — clear any stored cert blobs
+        // so they don't linger encrypted in metadata after the user disabled SSL.
+        body.enc_ssl_ca = null;
+        body.enc_ssl_cert = null;
+        body.enc_ssl_key = null;
       }
       if (existing) await api.patchConnection(projectId, existing.id, body);
       else await api.createConnection(projectId, body);

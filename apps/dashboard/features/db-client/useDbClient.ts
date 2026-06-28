@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from './api.js';
-import { engineLabel } from './engines.js';
+import { engineLabel, engineKindFor } from './engines.js';
 import type { DbConnection, DbConnectionStatus, DbTableInfo, DbTreeGroupKind, DbTreeNode, WorkTab } from './types.js';
 
 export interface UseDbClient {
@@ -34,7 +34,7 @@ export interface UseDbClient {
   /** Open a table's structure editor tab. */
   openStructureTab: (node: DbTreeNode) => Promise<void>;
   /** Open a blank "create table" structure tab for a connection/schema. */
-  openNewTable: (connectionId: number, schema?: string) => Promise<void>;
+  openNewTable: (connectionId: number, schema?: string, database?: string) => Promise<void>;
   /** Open an ER-diagram tab for a schema. */
   openErDiagram: (connectionId: number, schema?: string, database?: string) => Promise<void>;
   /** Live-op routing key for a node — `id`, or `id@db` for a non-default Postgres database. */
@@ -54,7 +54,7 @@ export interface UseDbClient {
   // ─── Work-area tabs ──────────────────────────────────────────────────
   workTabs: WorkTab[];
   activeTabId: string | null;
-  openQueryTab: (connectionId: number, schema?: string, initialSql?: string) => void;
+  openQueryTab: (connectionId: number, schema?: string, initialSql?: string, database?: string) => void;
   activateTab: (id: string) => void;
   closeTab: (id: string) => void;
   reorderTab: (id: string, beforeId: string | null) => void;
@@ -278,6 +278,22 @@ export function useDbClient(projectId: number): UseDbClient {
       // Connection root → databases. Postgres lists every database (each browsed
       // through its own lazily-connected pool); the others switch db in place.
       const conn = connections.find((c) => c.id === node.connectionId);
+      // Key-value (Redis): logical DBs ARE the browse unit — list them as leaf
+      // "table" nodes (double-click → key browser), skipping the schema level.
+      if (conn && engineKindFor(conn.engine) === 'keyvalue') {
+        const dbs = await api.listDatabases(cid);
+        return dbs.map((db) => ({
+          id: `conn:${node.connectionId}/kvdb:${db}`,
+          kind: 'table' as const,
+          label: `DB ${db}`,
+          name: `DB ${db}`,
+          connectionId: node.connectionId,
+          database: db,
+          table: db,
+          depth: 1,
+          expandable: false,
+        }));
+      }
       // URL-mode Postgres can't switch db (the DSN fixes it) — expose ONLY the
       // connected database (database:undefined → routes to the root pool), so we
       // never render a sibling db node whose content/ops silently hit the URL's db.
@@ -304,6 +320,22 @@ export function useDbClient(projectId: number): UseDbClient {
       }));
     }
     if (node.kind === 'database') {
+      // Document stores (Mongo) have no schema layer — list collections directly.
+      const eng = connections.find((c) => c.id === node.connectionId)?.engine;
+      if (eng && engineKindFor(eng) === 'document') {
+        const res = await api.runCommand(cid, { kind: 'document', op: 'listCollections', payload: { database: node.database } });
+        return res.rows.map((r) => ({
+          id: `${node.id}/coll:${String(r.name)}`,
+          kind: 'table' as const,
+          label: String(r.name),
+          name: String(r.name),
+          connectionId: node.connectionId,
+          database: node.database,
+          table: String(r.name),
+          depth: node.depth + 1,
+          expandable: false,
+        }));
+      }
       // A non-default Postgres database needs its own pool before introspection.
       if (!(await ensureDbConnected(cid))) return [];
       const { schemas } = await api.introspect(cid, node.database);
@@ -414,6 +446,13 @@ export function useDbClient(projectId: number): UseDbClient {
     async (conn: DbConnection) => {
       await api.disconnect(String(conn.id)).catch(() => void 0);
       connectedRef.current.delete(conn.id);
+      // Also drop this connection's lazily-opened Postgres per-database pools.
+      for (const key of [...connectedDbPoolsRef.current]) {
+        if (api.parseConnKey(key).id === conn.id) {
+          void api.disconnect(key).catch(() => void 0);
+          connectedDbPoolsRef.current.delete(key);
+        }
+      }
       await api.deleteConnection(projectId, conn.id);
       if (activeConnectionId === conn.id) setActiveConnectionId(null);
       // Drop any open work tabs belonging to this connection.
@@ -453,17 +492,24 @@ export function useDbClient(projectId: number): UseDbClient {
       if (node.kind !== 'table' && node.kind !== 'view') return;
       const connKey = connKeyFor(node.connectionId, node.database);
       if (!(await ensureDbConnected(connKey))) return;
-      const id = `data:${connKey}:${node.schema ?? ''}:${node.table ?? ''}`;
+      // Engine category drives which surface opens: document → JSON view,
+      // key-value → key browser, relational → the editable grid.
+      const eng = connectionsRef.current.find((c) => c.id === node.connectionId)?.engine;
+      const ek = eng ? engineKindFor(eng) : 'relational';
+      const prefix = ek === 'document' ? 'docs' : ek === 'keyvalue' ? 'kv' : 'data';
+      const kind: WorkTab['kind'] = ek === 'document' ? 'documents' : ek === 'keyvalue' ? 'keyvalue' : 'data';
+      const id = `${prefix}:${connKey}:${node.database ?? ''}:${node.schema ?? ''}:${node.table ?? ''}`;
       setWorkTabs((tabs) => {
         if (tabs.some((t) => t.id === id)) return tabs;
         return [
           ...tabs,
           {
             id,
-            kind: 'data',
+            kind,
             title: node.table ?? node.label,
             connectionId: node.connectionId,
             connKey,
+            database: node.database,
             schema: node.schema,
             table: node.table,
           },

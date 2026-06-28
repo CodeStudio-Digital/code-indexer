@@ -35,6 +35,13 @@ import {
 const PLAN_DEPTHS = ['simple', 'normal', 'complex'] as const;
 type PlanDepth = (typeof PLAN_DEPTHS)[number];
 
+/** Allowed output-style values (migration 178). */
+const OUTPUT_STYLES = ['proactive', 'explanatory', 'learning'] as const;
+type OutputStyle = (typeof OUTPUT_STYLES)[number];
+
+/** Upper bound on a response-language label (migration 177) — a language name, not prose. */
+const MAX_RESPONSE_LANGUAGE_LEN = 64;
+
 const TRIM_TOOL_RESULT = 4000;
 function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(messages: M[]): M[] {
   return messages.map((m) => {
@@ -617,6 +624,56 @@ export function mountCoderSessionsRoutes(
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
     sessionStore.setSessionPlanDepth(id, depth);
+    const updated = sessionStore.getSession(id);
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
+  /**
+   * Per-session sticky response-language override (migration 177). A concrete
+   * language name (e.g. "Português (Brasil)", "English") feeds the `# Language`
+   * system-prompt block. `null` or empty clears back to the project default and
+   * then the neutral "respond in the user's language" form. No live-runner push
+   * — the language is baked into the system prompt at the next runner construction.
+   */
+  app.patch('/api/coder/sessions/:id/response-language', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ language?: string | null }>(c);
+    const raw = typeof body.language === 'string' ? body.language.trim() : null;
+    if (raw !== null && raw.length > MAX_RESPONSE_LANGUAGE_LEN) {
+      return c.json({ error: `language: at most ${MAX_RESPONSE_LANGUAGE_LEN} chars` }, 400);
+    }
+    // Store NULL for empty/"auto" so the resolution chain (project default →
+    // neutral form) kicks in rather than an empty override short-circuiting it.
+    const language = raw && raw.toLowerCase() !== 'auto' ? raw : null;
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    sessionStore.setSessionResponseLanguage(id, language);
+    const updated = sessionStore.getSession(id);
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
+  /**
+   * Per-session sticky output style (migration 178): proactive | explanatory |
+   * learning. `null` or `proactive` clears back to the default (no extra prompt
+   * block). Validated against the fixed set; no model gate. No live-runner push
+   * — baked into the system prompt at the next runner construction.
+   */
+  app.patch('/api/coder/sessions/:id/output-style', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ style?: string | null }>(c);
+    // Treat empty/whitespace as a clear-to-NULL (parity with /response-language)
+    // so a client resetting via `style:''` doesn't get a 400.
+    const trimmed = typeof body.style === 'string' ? body.style.trim() : body.style;
+    const style = trimmed ? trimmed : null;
+    if (style !== null && !OUTPUT_STYLES.includes(style as OutputStyle)) {
+      return c.json({ error: `style: one of ${OUTPUT_STYLES.join('|')}|null required` }, 400);
+    }
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    // Persist NULL for the default so the column stays clean (proactive = no block).
+    sessionStore.setSessionOutputStyle(id, style === 'proactive' ? null : style);
     const updated = sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);

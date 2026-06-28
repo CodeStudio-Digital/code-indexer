@@ -19,9 +19,9 @@ describe('tailwind-class-model', () => {
     expect(currentValue(classes, group('text-color'))).toBe('primary');
   });
 
-  it('reads bare-prefix values (rounded / shadow)', () => {
-    expect(currentValue(['rounded', 'shadow-md'], group('rounded'))).toBe('');
-    expect(currentValue(['rounded', 'shadow-md'], group('shadow'))).toBe('md');
+  it('reads radius / shadow values by scale membership (Tailwind v4)', () => {
+    expect(currentValue(['rounded-xs', 'shadow-md'], group('rounded'))).toBe('xs');
+    expect(currentValue(['rounded-xs', 'shadow-md'], group('shadow'))).toBe('md');
     expect(currentValue(['p-4'], group('shadow'))).toBeNull();
   });
 

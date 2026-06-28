@@ -118,6 +118,9 @@ export class SessionStore {
   setSessionTemperature(id: number, temperature: number | null): void { state.setTemperature(this.db, id, temperature); }
   setSessionReasoningEffort(id: number, effort: string | null): void { state.setReasoningEffort(this.db, id, effort); }
   setSessionPlanDepth(id: number, depth: string | null): void { state.setPlanDepth(this.db, id, depth); }
+  setSessionResponseLanguage(id: number, language: string | null): void { state.setResponseLanguage(this.db, id, language); }
+  setSessionOutputStyle(id: number, style: string | null): void { state.setOutputStyle(this.db, id, style); }
+  setSessionPreflightSeed(id: number, seedJson: string | null): void { state.setPreflightSeed(this.db, id, seedJson); }
   setSessionUnrestrictedToolOutput(id: number, enabled: boolean | null): void { state.setUnrestrictedToolOutput(this.db, id, enabled); }
   setSessionToolOutputCapLevel(id: number, level: ToolOutputCapLevel | null): void { state.setToolOutputCapLevel(this.db, id, level); }
   setSessionToolPermissionMode(id: number, mode: 'ask' | 'auto' | 'unrestricted' | null): void { state.setToolPermissionMode(this.db, id, mode); }

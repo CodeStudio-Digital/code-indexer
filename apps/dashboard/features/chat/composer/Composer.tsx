@@ -101,6 +101,12 @@ interface ComposerProps {
    */
   planDepth?: string | null;
   setPlanDepth?: (v: string | null) => void;
+  /** Per-session response-language override (migration 177). NULL → auto. */
+  responseLanguage?: string | null;
+  setResponseLanguage?: (v: string | null) => void;
+  /** Per-session output style (migration 178): proactive | explanatory | learning. */
+  outputStyle?: string | null;
+  setOutputStyle?: (v: string | null) => void;
   /**
    * Per-session "unrestricted tool output" toggle (migration 078). When true,
    * the runner / mcp-bridge / code_exec lift their per-tool-call truncation
@@ -695,6 +701,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             reasoningLevels={props.reasoningLevels ?? []}
             planDepth={props.planDepth ?? null}
             setPlanDepth={props.setPlanDepth}
+            responseLanguage={props.responseLanguage ?? null}
+            setResponseLanguage={props.setResponseLanguage}
+            outputStyle={props.outputStyle ?? null}
+            setOutputStyle={props.setOutputStyle}
             fallbackProvider={props.fallbackProvider ?? null}
             fallbackModel={props.fallbackModel ?? null}
             onFallbackChange={props.onFallbackChange ?? (() => {})}

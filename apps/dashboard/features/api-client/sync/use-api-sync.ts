@@ -13,10 +13,12 @@ import type { ApiRequest } from '../types.js';
 import * as api from '../api.js';
 import {
   bodyToUpsert,
+  mergeRequestForApply,
   planEnvApply,
   planEnvPush,
   planCollectionApply,
   planCollectionPush,
+  requestMatchKey,
   type CollectionBody,
 } from './api-sync-core.js';
 
@@ -63,9 +65,12 @@ function load(projectId: number): SyncState {
   return { workspaceId: newId(), map: {}, versions: {}, colMap: {}, colVersions: {}, cursor: 0 };
 }
 
-/** Apply a pulled collection locally: create it (or patch name/desc) then rebuild
- *  its requests from the redacted body (wholesale — runs only when the remote
- *  version advanced). Seeds `colMap` for a freshly-created collection. */
+/** Apply a pulled collection locally, NON-destructively. A fresh collection is
+ *  created and its requests inserted as-is. For an existing one we match incoming
+ *  requests to local ones by a stable key and PATCH them (merging so blanked
+ *  credentials keep their real local value); unmatched incoming requests are
+ *  created. Local-only requests are intentionally left in place — wiping them is
+ *  what destroyed unpushed work + secrets before. Seeds `colMap` when created. */
 async function applyCollection(
   projectId: number,
   body: CollectionBody,
@@ -73,18 +78,24 @@ async function applyCollection(
   colMap: Record<string, string>,
   clientDocId: string,
 ): Promise<void> {
-  let cid = localId;
-  if (cid == null) {
+  if (localId == null) {
     const created = await api.createCollection(projectId, body.name, body.description);
-    cid = created.id;
-    colMap[String(cid)] = clientDocId;
-  } else {
-    await api.patchCollection(projectId, cid, { name: body.name, description: body.description });
-    const existing = await api.listRequests(projectId, cid);
-    for (const e of existing) await api.deleteRequest(projectId, e.id);
+    colMap[String(created.id)] = clientDocId;
+    for (const r of body.requests) {
+      await api.createRequest(projectId, created.id, r as Partial<ApiRequest> & { name: string });
+    }
+    return;
   }
+  await api.patchCollection(projectId, localId, { name: body.name, description: body.description });
+  const existing = await api.listRequests(projectId, localId);
+  const byKey = new Map(existing.map((e) => [requestMatchKey(e), e]));
   for (const r of body.requests) {
-    await api.createRequest(projectId, cid, r as Partial<ApiRequest> & { name: string });
+    const local = byKey.get(requestMatchKey(r));
+    if (local) {
+      await api.patchRequest(projectId, local.id, mergeRequestForApply(r, local));
+    } else {
+      await api.createRequest(projectId, localId, r as Partial<ApiRequest> & { name: string });
+    }
   }
 }
 

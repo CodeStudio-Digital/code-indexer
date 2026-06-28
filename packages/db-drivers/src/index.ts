@@ -10,6 +10,7 @@ export { createMysqlDriver } from './mysql.js';
 export { createSqliteDriver } from './sqlite.js';
 export { quoteIdent, quoteRelation, placeholder, renderLiteral } from './sql/identifiers.js';
 export { buildDml, type RowChange, type RowChangeKind, type BuiltDml } from './sql/dml.js';
+export { insertLiteral } from './sql/dump.js';
 export { buildDdl, buildSqliteRebuild, sqliteAlterNeedsRebuild } from './ddl/build.js';
 export { isWriteCommand } from './command-classify.js';
 export {

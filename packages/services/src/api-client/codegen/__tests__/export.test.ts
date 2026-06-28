@@ -63,4 +63,57 @@ describe('exportOpenApi', () => {
     expect(doc.tags).toEqual([{ name: 'Users' }]);
     expect(doc.paths['/u'].get.tags).toEqual(['Users']);
   });
+
+  it('folds overview + guides + links into info.description', () => {
+    const doc = exportOpenApi('API', [req()], {
+      overview: 'Welcome to the API.',
+      guides: [{ title: 'Getting started', body: 'Do this first.' }],
+      links: [{ label: 'Home', url: 'https://x.test' }],
+    }) as any;
+    expect(doc.info.description).toContain('Welcome to the API.');
+    expect(doc.info.description).toContain('## Getting started');
+    expect(doc.info.description).toContain('Do this first.');
+    expect(doc.info.description).toContain('[Home](https://x.test)');
+  });
+
+  it('uses collection description as the lead when there is no overview', () => {
+    const doc = exportOpenApi('API', [req()], { description: 'Short tagline.' }) as any;
+    expect(doc.info.description).toBe('Short tagline.');
+  });
+
+  it('adds folder docs as tag descriptions (and omits when absent)', () => {
+    const doc = exportOpenApi('API', [req({ folder: 'Users', path_template: '/u' }), req({ folder: 'Bare', path_template: '/b' })], {
+      folderDocs: { Users: 'Everything about users.' },
+    }) as any;
+    expect(doc.tags).toContainEqual({ name: 'Users', description: 'Everything about users.' });
+    expect(doc.tags).toContainEqual({ name: 'Bare' });
+  });
+
+  it('embeds saved examples as per-operation responses keyed by status', () => {
+    const doc = exportOpenApi('API', [req({ method: 'GET', path_template: '/users' })], {
+      examplesByKey: {
+        'GET /users': [
+          { name: 'ok', status: 200, statusText: 'OK', contentType: 'application/json', body: '{"id":1}' },
+          { name: 'denied', status: 401, statusText: 'Unauthorized', contentType: 'application/json', body: '{"error":"nope"}' },
+        ],
+      },
+    }) as any;
+    const responses = doc.paths['/users'].get.responses;
+    expect(responses['200'].content['application/json'].examples.ok.value).toEqual({ id: 1 });
+    expect(responses['401'].content['application/json'].examples.denied.value).toEqual({ error: 'nope' });
+  });
+
+  it('keeps the bare 200 when no examples are supplied for an op', () => {
+    const doc = exportOpenApi('API', [req({ path_template: '/users' })], { examplesByKey: {} }) as any;
+    expect(doc.paths['/users'].get.responses).toEqual({ '200': { description: 'OK' } });
+  });
+
+  it('is JSON-serializable with full extras', () => {
+    const doc = exportOpenApi('API', [req()], {
+      overview: 'o', guides: [{ title: 't', body: 'b' }], folderDocs: { X: 'y' },
+      links: [{ label: 'L', url: 'https://l.test' }],
+      examplesByKey: { 'GET /users': [{ name: 'e', status: 200, contentType: 'application/json', body: '{"a":1}' }] },
+    });
+    expect(() => JSON.stringify(doc)).not.toThrow();
+  });
 });

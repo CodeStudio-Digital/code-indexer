@@ -57,7 +57,12 @@
 // destructive-action evidence directive in build.txt/admin.txt/IMPLEMENT &
 // EXPLORE/REVIEW no-fork lines; explore.txt unindexed fallback pointer. Static
 // prefix mudou → invalida fingerprints stale.
-export const SYSTEM_PROMPT_VERSION = '20260624.2';
+// 2026-06-27.1 bump — docs_claude audit adoption: skill BLOCKING/anti-invent
+// wording (prompt-injector); memory-staleness caveat in memorySection; new
+// session-fixed directives (G1 # Language / G8 output style / G3 # Operating
+// autonomously) above the boundary; ask_user recommended-first + write-tool
+// docs/emoji guardrails. Static prefix mudou → invalida fingerprints stale.
+export const SYSTEM_PROMPT_VERSION = '20260627.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

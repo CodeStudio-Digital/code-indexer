@@ -16,7 +16,7 @@ import { resolveDriverEntry } from './driver-registry.js';
 import { quoteRelation } from './sql/identifiers.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
-  ColumnInfo, DatabaseDriver, DbConnectConfig, ForeignKeyInfo, IndexInfo, QueryResult, RunQueryOptions, TableInfo, TableRef,
+  ColumnInfo, DatabaseDriver, DbConnectConfig, ForeignKeyInfo, IndexInfo, QueryResult, RunBatchOptions, RunQueryOptions, TableInfo, TableRef,
 } from './types.js';
 
 interface OraResult {
@@ -26,6 +26,8 @@ interface OraResult {
 }
 interface OraConn {
   execute(sql: string, binds?: unknown[], opts?: Record<string, unknown>): Promise<OraResult>;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
   break(): Promise<void>;
   close(): Promise<void>;
 }
@@ -80,19 +82,43 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
         outFormat: oracledb.OUT_FORMAT_OBJECT,
         autoCommit: true,
       });
-      const rows = res.rows ?? [];
-      if (rows.length > 0 || (res.metaData?.length ?? 0) > 0) {
-        const truncated = rows.length > max;
-        return {
-          rows: truncated ? rows.slice(0, max) : rows,
-          rowCount: rows.length,
-          fields: (res.metaData ?? []).map((m) => ({ name: m.name })),
-          truncated,
-        };
-      }
-      return { rows: [], rowCount: res.rowsAffected ?? 0, fields: [], command: 'OK' };
+      return shapeOracleResult(res, max);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      await conn.close().catch(() => undefined);
+    }
+  }
+
+  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    // ONE pooled connection with autoCommit OFF for the whole batch, so the list
+    // shares a session (a runQuery loop opens a fresh autoCommit connection per
+    // statement). CAVEAT: Oracle implicitly COMMITs on DDL, so the rollback covers
+    // DML only — a DDL already applied mid-batch can't be undone.
+    const conn = await pool.getConnection();
+    let onAbort: (() => void) | null = null;
+    let committed = false;
+    try {
+      if (opts.signal) {
+        if (opts.signal.aborted) throw new Error('query cancelled');
+        onAbort = (): void => void conn.break().catch(() => undefined);
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
+      let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
+      for (const stmt of statements) {
+        const res = await conn.execute(stmt, [], {
+          maxRows: max + 1,
+          outFormat: oracledb.OUT_FORMAT_OBJECT,
+          autoCommit: false,
+        });
+        last = shapeOracleResult(res, max);
+      }
+      await conn.commit();
+      committed = true;
+      return last;
+    } finally {
+      if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      if (!committed) await conn.rollback().catch(() => undefined);
       await conn.close().catch(() => undefined);
     }
   }
@@ -182,9 +208,10 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
       const r = await rows<{ NAME: string; KIND: string }>(
         `SELECT table_name AS name, 'table' AS kind FROM all_tables WHERE owner = :1
           UNION ALL
-         SELECT view_name AS name, 'view' AS kind FROM all_views WHERE owner = :1
+         SELECT view_name AS name, 'view' AS kind FROM all_views WHERE owner = :2
          ORDER BY 1`,
-        [schemaName ?? ''],
+        // oracledb binds an ARRAY by position — one value per placeholder occurrence.
+        [schemaName ?? '', schemaName ?? ''],
       );
       return r.map((x) => ({ schema: schemaName ?? '', name: x.NAME, kind: x.KIND === 'view' ? ('view' as const) : ('table' as const) })) satisfies TableRef[];
     },
@@ -220,6 +247,7 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
       return out;
     },
     runQuery,
+    runBatch,
     query(sql, params) {
       return runQuery(sql, { params });
     },
@@ -228,6 +256,21 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
     },
   };
   return driver;
+}
+
+/** Shape an oracledb execute result into a capped QueryResult. */
+function shapeOracleResult(res: OraResult, max: number): QueryResult {
+  const rows = res.rows ?? [];
+  if (rows.length > 0 || (res.metaData?.length ?? 0) > 0) {
+    const truncated = rows.length > max;
+    return {
+      rows: truncated ? rows.slice(0, max) : rows,
+      rowCount: rows.length,
+      fields: (res.metaData ?? []).map((m) => ({ name: m.name })),
+      truncated,
+    };
+  }
+  return { rows: [], rowCount: res.rowsAffected ?? 0, fields: [], command: 'OK' };
 }
 
 /** Render an Oracle type with its length/precision for display. */

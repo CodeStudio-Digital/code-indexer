@@ -69,6 +69,8 @@ export interface QueryResult {
   command?: string;
   /** True when rows were capped by `maxRows`. */
   truncated?: boolean;
+  /** Redis SCAN continuation cursor ('0' = end). Set by the keyvalue driver. */
+  cursor?: string;
 }
 
 /** Column sort for a table preview (column name is quoted by the driver). */
@@ -149,6 +151,13 @@ export interface RunQueryOptions {
   schema?: string;
 }
 
+export interface RunBatchOptions {
+  /** Abort signal — the driver cancels the in-flight batch when it fires. */
+  signal?: AbortSignal;
+  /** Hard cap on rows for any statement in the batch that returns rows. */
+  maxRows?: number;
+}
+
 /**
  * A non-relational command (Mongo document op / Redis command). The shape is
  * engine-specific; the relevant driver narrows it. Carried generically here so
@@ -188,6 +197,21 @@ export interface DatabaseDriver {
   schema(schemaName?: string): Promise<TableInfo[]>;
   /** Execute a statement with optional params, row cap, and cancellation. */
   runQuery(sql: string, opts?: RunQueryOptions): Promise<QueryResult>;
+  /**
+   * Execute a list of statements on a SINGLE pinned connection wrapped in one
+   * transaction (BEGIN…/COMMIT, ROLLBACK on any failure), returning the LAST
+   * statement's result. Relational engines only — document/key-value stores omit
+   * it. Use this (not a `runQuery` loop) whenever statements must share a
+   * connection and/or be applied atomically: a `runQuery` loop can hop pooled
+   * connections between statements, so manual BEGIN/COMMIT issued as separate
+   * statements aren't guaranteed to land on the same backend.
+   *
+   * Engine caveat: MySQL/MariaDB and Oracle implicitly COMMIT on DDL, so a
+   * mid-batch failure after a DDL statement can't be rolled back — runBatch still
+   * pins every statement to one connection (no pool hop), but the transactional
+   * rollback only covers DML there. Postgres, SQL Server and SQLite roll back DDL.
+   */
+  runBatch?(statements: string[], opts?: RunBatchOptions): Promise<QueryResult>;
   /** Back-compat alias for the agent tools. */
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
   /** Non-relational entry point (document/key-value). Rows hold documents / KV pairs. */
