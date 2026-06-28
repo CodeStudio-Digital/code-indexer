@@ -30,7 +30,6 @@ import {
   type StoredRefreshToken,
   type TotpPort,
   type TwoFactorRepo,
-  type LoginThrottle,
 } from '@cloudstudio/cloud-identity';
 
 let seq = 0;
