@@ -9,7 +9,14 @@
  * it is fully unit-testable without the Stripe SDK or a live account.
  */
 import { asAccountId } from '@cloudstudio/cloud-kernel';
-import type { CheckoutSession, PaymentGateway, PlanId, SubStatus, SubscriptionEvent } from '@cloudstudio/cloud-billing';
+import type {
+  CheckoutSession,
+  PaymentGateway,
+  PlanId,
+  SubStatus,
+  SubscriptionEvent,
+  SubscriptionSnapshot,
+} from '@cloudstudio/cloud-billing';
 
 export interface StripeConfig {
   secretKey?: string;
@@ -19,6 +26,10 @@ export interface StripeConfig {
   /** Stripe Price id for the per-seat Teams plan (quantity = writer seats). */
   teamsPriceId?: string;
   appBaseUrl: string;
+  /** Base URL the success/cancel pages live on (the account portal). Falls back to
+   *  appBaseUrl when unset. The checkout return MUST land on a real page that
+   *  reconciles + refreshes entitlements — NOT the bare app origin. */
+  portalBaseUrl?: string;
   /** Tolerance for the webhook timestamp, ms. Default 5 min (Stripe's window). */
   toleranceMs?: number;
 }
@@ -45,27 +56,15 @@ export function createStripeGateway(cfg: StripeConfig): PaymentGateway {
   return {
     configured,
 
-    async createCheckout({ accountId, email, plan }) {
-      const body = new URLSearchParams({
-        mode: 'subscription',
-        'line_items[0][price]': cfg.proPriceId ?? '',
-        'line_items[0][quantity]': '1',
-        customer_email: email,
-        client_reference_id: accountId,
-        'subscription_data[metadata][accountId]': accountId,
-        'metadata[accountId]': accountId,
-        'metadata[plan]': plan,
-        success_url: `${cfg.appBaseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${cfg.appBaseUrl}/billing/cancel`,
-      });
-      const session = await stripePost(cfg.secretKey!, '/checkout/sessions', body);
+    async createCheckout(input) {
+      const session = await stripePost(cfg.secretKey!, '/checkout/sessions', buildCheckoutParams(cfg, input));
       return { url: String(session.url) };
     },
 
     async createPortal({ stripeCustomerId }) {
       const body = new URLSearchParams({
         customer: stripeCustomerId,
-        return_url: `${cfg.appBaseUrl}/billing`,
+        return_url: `${returnBase(cfg)}/billing`,
       });
       const session = await stripePost(cfg.secretKey!, '/billing_portal/sessions', body);
       return { url: String(session.url) };
@@ -77,7 +76,70 @@ export function createStripeGateway(cfg: StripeConfig): PaymentGateway {
       const event = JSON.parse(rawBody) as StripeEvent;
       return mapEvent(event);
     },
+
+    async ensureCustomer({ accountId, email }) {
+      const existing = await findStripeCustomerByEmail(cfg.secretKey!, email);
+      if (existing) return { stripeCustomerId: existing };
+      const created = await stripePost(
+        cfg.secretKey!,
+        '/customers',
+        new URLSearchParams({ email, 'metadata[accountId]': accountId }),
+      );
+      return { stripeCustomerId: String(created.id) };
+    },
+
+    async findCustomerByEmail(email) {
+      const id = await findStripeCustomerByEmail(cfg.secretKey!, email);
+      return id ? { stripeCustomerId: id } : null;
+    },
+
+    async listSubscriptions(stripeCustomerId) {
+      const res = await stripeGet(
+        cfg.secretKey!,
+        `/subscriptions?customer=${encodeURIComponent(stripeCustomerId)}&status=all&limit=100`,
+      );
+      const data = (res.data as Array<Record<string, unknown>> | undefined) ?? [];
+      return data.map((obj) => mapSubscriptionFields(obj));
+    },
   };
+}
+
+/** Build the personal-checkout form body (pure → unit-testable offline). Reuses a
+ *  saved Stripe customer when present (so the subscription is tied to the same
+ *  customer reconciliation will look up); the success/cancel return lands on the
+ *  portal, never the bare app origin. */
+export function buildCheckoutParams(
+  cfg: StripeConfig,
+  input: { accountId: string; email: string; plan: PlanId; stripeCustomerId?: string; returnBaseUrl?: string },
+): URLSearchParams {
+  const base = input.returnBaseUrl ?? returnBase(cfg);
+  const body = new URLSearchParams({
+    mode: 'subscription',
+    'line_items[0][price]': cfg.proPriceId ?? '',
+    'line_items[0][quantity]': '1',
+    client_reference_id: input.accountId,
+    'subscription_data[metadata][accountId]': input.accountId,
+    'metadata[accountId]': input.accountId,
+    'metadata[plan]': input.plan,
+    success_url: `${base}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${base}/billing/cancel`,
+  });
+  if (input.stripeCustomerId) body.set('customer', input.stripeCustomerId);
+  else body.set('customer_email', input.email);
+  return body;
+}
+
+/** Where the checkout/portal flows return to — the portal (real pages) over the
+ *  bare app origin. */
+function returnBase(cfg: StripeConfig): string {
+  return cfg.portalBaseUrl ?? cfg.appBaseUrl;
+}
+
+/** GET /customers?email= → the first matching customer id, or null. */
+async function findStripeCustomerByEmail(secret: string, email: string): Promise<string | null> {
+  const res = await stripeGet(secret, `/customers?email=${encodeURIComponent(email)}&limit=1`);
+  const data = (res.data as Array<Record<string, unknown>> | undefined) ?? [];
+  return data.length > 0 ? String(data[0].id) : null;
 }
 
 /** Thrown by parseWebhook on a bad signature; the route maps it to 400. */
@@ -103,8 +165,8 @@ export async function orgCheckout(
     client_reference_id: input.orgId,
     'subscription_data[metadata][orgId]': input.orgId,
     'metadata[orgId]': input.orgId,
-    success_url: `${cfg.appBaseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${cfg.appBaseUrl}/billing/cancel`,
+    success_url: `${returnBase(cfg)}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${returnBase(cfg)}/billing/cancel`,
   });
   if (input.stripeCustomerId) body.set('customer', input.stripeCustomerId);
   else body.set('customer_email', input.email);
@@ -113,7 +175,7 @@ export async function orgCheckout(
 }
 
 export async function orgPortal(cfg: StripeConfig, stripeCustomerId: string): Promise<CheckoutSession> {
-  const body = new URLSearchParams({ customer: stripeCustomerId, return_url: `${cfg.appBaseUrl}/billing` });
+  const body = new URLSearchParams({ customer: stripeCustomerId, return_url: `${returnBase(cfg)}/billing` });
   const session = await stripePost(cfg.secretKey!, '/billing_portal/sessions', body);
   return { url: String(session.url) };
 }
@@ -151,6 +213,16 @@ export async function stripePost(secret: string, path: string, body: URLSearchPa
     method: 'POST',
     headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/x-www-form-urlencoded' },
     body,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`stripe_${res.status}`);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+export async function stripeGet(secret: string, path: string): Promise<Record<string, unknown>> {
+  const res = await fetch(`${STRIPE_API}${path}`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${secret}` },
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`stripe_${res.status}`);
@@ -215,13 +287,19 @@ function mapEvent(event: StripeEvent): SubscriptionEvent | null {
   const obj = event.data.object;
   const accountId = (obj.metadata as Record<string, string> | undefined)?.accountId;
   if (!accountId) return null;
-  const stripeStatus = String(obj.status ?? '');
-  const status = mapStatus(stripeStatus, event.type);
+  return { eventId: event.id, accountId: asAccountId(accountId), ...mapSubscriptionFields(obj, event.type) };
+}
+
+/** Project a Stripe subscription object → the provider-neutral, owner-independent
+ *  fields. Shared by the webhook (which wraps it with accountId + eventId) and
+ *  reconciliation (which lists subscriptions for a known customer). A single
+ *  projection means the two paths can NEVER drift. `eventType` is only used to
+ *  force `deleted` → canceled; reconciliation passes none. */
+export function mapSubscriptionFields(obj: Record<string, unknown>, eventType?: string): SubscriptionSnapshot {
+  const status = mapStatus(String(obj.status ?? ''), eventType);
   const plan: PlanId = status === 'active' || status === 'trialing' ? 'pro' : 'free';
   const periodEnd = obj.current_period_end;
   return {
-    eventId: event.id,
-    accountId: asAccountId(accountId),
     plan,
     status,
     periodEndMs: typeof periodEnd === 'number' ? periodEnd * 1000 : null,
@@ -229,7 +307,7 @@ function mapEvent(event: StripeEvent): SubscriptionEvent | null {
   };
 }
 
-function mapStatus(stripeStatus: string, eventType: string): SubStatus {
+function mapStatus(stripeStatus: string, eventType?: string): SubStatus {
   if (eventType === 'customer.subscription.deleted') return 'canceled';
   switch (stripeStatus) {
     case 'trialing':

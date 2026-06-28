@@ -39,6 +39,8 @@ export interface StatePayload {
   nonce: string;
   /** Desktop loopback port (desktop flow only). */
   port?: number;
+  /** Org id for the SSO flow (provider === 'sso'); the callback is org-agnostic. */
+  orgId?: string;
   /** PKCE code verifier (carried server-side via the signed state). */
   cv: string;
   /** Issued-at epoch ms (TTL check). */

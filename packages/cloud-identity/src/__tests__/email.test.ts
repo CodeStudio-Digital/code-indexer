@@ -11,6 +11,7 @@ import {
   VerifyEmailUseCase,
   RequestPasswordResetUseCase,
   ResetPasswordUseCase,
+  ChangePasswordUseCase,
   type AccountRepo,
   type EmailSender,
   type MailComposer,
@@ -187,5 +188,59 @@ describe('email verification + password reset', () => {
     const r = await t.resetPassword.execute({ token, newPasswordRaw: 'short' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('password_too_weak');
+  });
+});
+
+// A hasher that actually checks `hashed:<plain>`, so the wrong-password path is real.
+const realHasher: PasswordHasher = {
+  hash: async (p) => `hashed:${p}`,
+  verify: async (plain, phc) => phc === `hashed:${plain}`,
+  needsRehash: () => false,
+  dummyVerify: async () => {},
+};
+
+describe('ChangePasswordUseCase (authenticated change)', () => {
+  function seed() {
+    const accounts = new FakeAccountRepo();
+    const id = asAccountId('acc-pw');
+    accounts.store.set('acc-pw', { id, email: 'p@e.com', canon: 'p@e.com', hash: 'hashed:current-strong-pass', verifiedAt: null });
+    const uc = new ChangePasswordUseCase(accounts, realHasher, sessions, refresh, clock);
+    sessionsRevoked = 0;
+    refreshRevoked = 0;
+    return { accounts, id, uc };
+  }
+
+  it('rejects a wrong current password (no write, no revoke)', async () => {
+    const { accounts, id, uc } = seed();
+    const r = await uc.execute({ accountId: id, currentPassword: 'wrong-password', newPasswordRaw: 'a-brand-new-strong-pass' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('invalid_credentials');
+    expect(accounts.store.get('acc-pw')?.hash).toBe('hashed:current-strong-pass'); // unchanged
+    expect(sessionsRevoked).toBe(0);
+    expect(refreshRevoked).toBe(0);
+  });
+
+  it('rejects a weak new password even with the correct current one', async () => {
+    const { uc, id } = seed();
+    const r = await uc.execute({ accountId: id, currentPassword: 'current-strong-pass', newPasswordRaw: 'short' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('password_too_weak');
+    expect(sessionsRevoked).toBe(0);
+  });
+
+  it('changes the password and revokes every session + refresh token', async () => {
+    const { accounts, id, uc } = seed();
+    const r = await uc.execute({ accountId: id, currentPassword: 'current-strong-pass', newPasswordRaw: 'a-brand-new-strong-pass' });
+    expect(r.ok).toBe(true);
+    expect(accounts.store.get('acc-pw')?.hash).toBe('hashed:a-brand-new-strong-pass');
+    expect(sessionsRevoked).toBe(1);
+    expect(refreshRevoked).toBe(1);
+  });
+
+  it('rejects when the account does not exist', async () => {
+    const { uc } = seed();
+    const r = await uc.execute({ accountId: asAccountId('ghost'), currentPassword: 'x', newPasswordRaw: 'a-brand-new-strong-pass' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('invalid_credentials');
   });
 });

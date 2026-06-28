@@ -11,3 +11,4 @@ export * from './domain/ports.js';
 export * from './application/get-entitlements.js';
 export * from './application/handle-webhook.js';
 export * from './application/checkout.js';
+export * from './application/reconcile.js';

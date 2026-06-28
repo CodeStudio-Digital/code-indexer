@@ -9,6 +9,7 @@ import {
   CreatePortalUseCase,
   GetEntitlementsUseCase,
   HandleSubscriptionEventUseCase,
+  ReconcileSubscriptionUseCase,
   type BillingRepo,
   type PaymentGateway,
 } from '@cloudstudio/cloud-billing';
@@ -27,6 +28,7 @@ export function stripeConfig(env: Env): StripeConfig {
     proPriceId: env.STRIPE_PRO_PRICE_ID,
     teamsPriceId: env.STRIPE_TEAMS_PRICE_ID,
     appBaseUrl: env.APP_BASE_URL,
+    portalBaseUrl: env.PORTAL_BASE_URL ?? env.APP_BASE_URL,
   };
 }
 
@@ -35,6 +37,7 @@ export interface BillingBundle {
   handleWebhook: HandleSubscriptionEventUseCase;
   createCheckout: CreateCheckoutUseCase;
   createPortal: CreatePortalUseCase;
+  reconcile: ReconcileSubscriptionUseCase;
   gateway: PaymentGateway;
   billing: BillingRepo;
 }
@@ -46,8 +49,9 @@ export function createBillingBundle(env: Env): BillingBundle {
   return {
     getEntitlements: new GetEntitlementsUseCase(billing, systemClock),
     handleWebhook: new HandleSubscriptionEventUseCase(billing),
-    createCheckout: new CreateCheckoutUseCase(gateway),
+    createCheckout: new CreateCheckoutUseCase(gateway, billing),
     createPortal: new CreatePortalUseCase(gateway, billing),
+    reconcile: new ReconcileSubscriptionUseCase(gateway, billing),
     gateway,
     billing,
   };

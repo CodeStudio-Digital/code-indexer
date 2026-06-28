@@ -61,8 +61,13 @@ export function authRouter(): Hono<{ Bindings: Env }> {
       return c.json({ code: 'password_mismatch', message: 'Passwords do not match.' }, 400);
     }
     const { ua, ipHash } = await reqCtx(c);
-    // Signup fires a verification email → rate-limit per IP (email-bomb / cost guard).
-    const limited = await enforceRateLimit(c, [{ key: `signup:ip:${ipHash}`, limit: 20, windowMs: HOUR }]);
+    // Signup fires a verification email → rate-limit per IP AND per email (an
+    // attacker rotating IPs can't email-bomb one address; mirrors password reset).
+    const emailHash = await hashPii(parsed.data.email.toLowerCase(), c.env.IP_HASH_SALT ?? '');
+    const limited = await enforceRateLimit(c, [
+      { key: `signup:ip:${ipHash}`, limit: 20, windowMs: HOUR },
+      { key: `signup:email:${emailHash}`, limit: 5, windowMs: HOUR },
+    ]);
     if (limited) return limited;
     // Bot check (active only once TURNSTILE_SECRET is set; no-op otherwise).
     const bot = createBotVerifier(c.env.TURNSTILE_SECRET);

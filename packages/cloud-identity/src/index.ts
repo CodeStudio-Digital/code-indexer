@@ -20,3 +20,4 @@ export * from './application/two-factor.js';
 export * from './application/challenge-2fa.js';
 export * from './application/email-verification.js';
 export * from './application/password-reset.js';
+export * from './application/change-password.js';

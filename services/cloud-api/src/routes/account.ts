@@ -17,11 +17,16 @@ import { createD1Executor } from '../infra/d1/d1-executor.js';
 import { createVaultKeysRepo } from '../infra/d1/vault-keys-repo.js';
 import { pbkdf2Hasher } from '../infra/pbkdf2-hasher.js';
 import { requireClaims, unauthorized, isVerified, emailNotVerified } from '../middleware/auth.js';
+import { respondError } from './_respond.js';
 import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
 import { recordAudit, recordAuditNow } from '../middleware/audit.js';
 
 const deleteSchema = z.object({ password: z.string().min(1).max(512), confirm: z.literal('DELETE') });
 const vaultKeySchema = z.object({ publicSpki: z.string().min(1).max(2048) });
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(512),
+  newPassword: z.string().min(1).max(512),
+});
 
 export function accountRouter(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
@@ -35,6 +40,32 @@ export function accountRouter(): Hono<{ Bindings: Env }> {
     if (!claims) return unauthorized(c);
     if (!isVerified(claims)) return emailNotVerified(c); // cloud WRITE (R3)
     await createVaultKeysRepo(createD1Executor(c.env.DB)).putMemberKey(claims.sub, parsed.data.publicSpki, Date.now());
+    return c.json({ ok: true }, 200);
+  });
+
+  // POST /v1/account/password — change the password (authenticated). Reauths the
+  // CURRENT password, then revokes every session (logout-everywhere, like reset).
+  // No email-verified gate: a user must be able to fix a weak password before
+  // verifying. Rate-limited because this path skips LoginThrottle.
+  app.post('/password', async (c) => {
+    const parsed = changePasswordSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid request.' }, 400);
+    const identity = createIdentityBundle(c.env);
+    const claims = await requireClaims(c, identity);
+    if (!claims) return unauthorized(c);
+    const accountId = asAccountId(claims.sub);
+    const limited = await enforceRateLimit(c, [{ key: `pwchange:${accountId}`, limit: 10, windowMs: HOUR }]);
+    if (limited) return limited;
+    const r = await identity.changePassword.execute({
+      accountId,
+      currentPassword: parsed.data.currentPassword,
+      newPasswordRaw: parsed.data.newPassword,
+    });
+    if (!r.ok) {
+      recordAudit(c, 'password_change_denied', r.error.code === 'invalid_credentials' ? 401 : 400, { accountId, reason: r.error.code });
+      return respondError(c, r.error);
+    }
+    await recordAuditNow(c, 'password_changed', 200, { accountId });
     return c.json({ ok: true }, 200);
   });
 

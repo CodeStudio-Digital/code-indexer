@@ -36,6 +36,17 @@ export function createBillingRepo(db: DbExecutor): BillingRepo {
       );
     },
 
+    async setStripeCustomerId(accountId: AccountId, stripeCustomerId: string) {
+      // UPDATE-only (never INSERT): creating a row here would make GetEntitlements'
+      // `if (!sub)` first-touch check see an existing row and SKIP the 14-day trial,
+      // robbing a user who clicks "Upgrade" then abandons. If no row exists yet,
+      // this no-ops and reconciliation falls back to findCustomerByEmail.
+      await db.run(
+        `UPDATE subscriptions SET stripe_customer_id = ?, updated_at = datetime('now') WHERE account_id = ?`,
+        [stripeCustomerId, accountId],
+      );
+    },
+
     async startTrial(accountId: AccountId, periodEndMs: number) {
       // Atomic one-shot: create/flip to trialing only if no trial was ever used.
       // The WHERE guard on the conflict path makes a concurrent double-grant a no-op.

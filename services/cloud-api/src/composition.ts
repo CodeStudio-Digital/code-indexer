@@ -6,6 +6,7 @@
  */
 import {
   Challenge2faUseCase,
+  ChangePasswordUseCase,
   Confirm2faUseCase,
   Disable2faUseCase,
   Enroll2faUseCase,
@@ -57,6 +58,7 @@ export interface IdentityBundle {
   verifyEmail: VerifyEmailUseCase;
   requestPasswordReset: RequestPasswordResetUseCase;
   resetPassword: ResetPasswordUseCase;
+  changePassword: ChangePasswordUseCase;
   resolveOAuth: ResolveOAuthIdentityUseCase;
   accounts: AccountRepo;
   sessions: SessionRepo;
@@ -110,6 +112,7 @@ export function createIdentityBundle(env: Env): IdentityBundle {
       refreshTokens,
       systemClock,
     ),
+    changePassword: new ChangePasswordUseCase(accounts, pbkdf2Hasher, sessions, refreshTokens, systemClock),
     resolveOAuth: new ResolveOAuthIdentityUseCase(accounts, createOAuthIdentityRepo(db), cryptoIdGen, systemClock),
     accounts,
     sessions,

@@ -5,14 +5,22 @@ import type { BillingRepo, CheckoutSession, PaymentGateway } from '../domain/por
 import type { PlanId } from '../domain/subscription.js';
 
 export class CreateCheckoutUseCase {
-  constructor(private readonly gateway: PaymentGateway) {}
+  constructor(
+    private readonly gateway: PaymentGateway,
+    private readonly billing: BillingRepo,
+  ) {}
   async execute(input: {
     accountId: AccountId;
     email: string;
     plan: PlanId;
   }): Promise<Result<CheckoutSession, BillingError>> {
     if (!this.gateway.configured) return err(BillingErrors.notConfigured());
-    return ok(await this.gateway.createCheckout(input));
+    // Persist the Stripe customer id BEFORE sending the user to checkout, so a
+    // dropped `checkout.session.completed` webhook can still be reconciled by
+    // looking the subscription up against this customer (see ReconcileSubscription).
+    const { stripeCustomerId } = await this.gateway.ensureCustomer({ accountId: input.accountId, email: input.email });
+    await this.billing.setStripeCustomerId(input.accountId, stripeCustomerId);
+    return ok(await this.gateway.createCheckout({ ...input, stripeCustomerId }));
   }
 }
 

@@ -152,10 +152,14 @@ export interface CloudContract {
   'twofa.confirm': { input: { code: string }; output: { recoveryCodes: string[] } };
   'twofa.disable': { input: { password: string; code: string }; output: { ok: true } };
   'account.entitlements': { input: void; output: Entitlements };
+  'account.changePassword': { input: { currentPassword: string; newPassword: string }; output: { ok: true } };
   'account.export': { input: void; output: Record<string, unknown> };
   'account.delete': { input: { password: string; confirm: 'DELETE' }; output: { deleted: true } };
   'billing.checkout': { input: void; output: { url: string } };
   'billing.portal': { input: void; output: { url: string } };
+  // Self-heal a missed checkout webhook: re-read live Stripe state into D1 (only
+  // ever upgrades). Called by the post-purchase success page + desktop on focus.
+  'billing.sync': { input: void; output: { applied: boolean } };
   'sharing.create': { input: { snapshot: unknown; visibility?: 'public' | 'unlisted'; expiresInDays?: number | null }; output: { shareId: string; slug: string; url: string } };
   'sharing.list': { input: void; output: { shares: unknown[] } };
   'sharing.revoke': { input: { id: string }; output: { revoked: true } };

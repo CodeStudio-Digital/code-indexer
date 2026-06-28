@@ -8,6 +8,7 @@ import { bodyLimit } from 'hono/body-limit';
 import type { Env } from './env.js';
 import { authRouter } from './routes/auth.js';
 import { oauthRouter } from './routes/oauth.js';
+import { ssoRouter } from './routes/sso.js';
 import { sessionsRouter } from './routes/sessions.js';
 import { twoFactorRouter } from './routes/two-factor.js';
 import { emailRouter } from './routes/email.js';
@@ -19,6 +20,7 @@ import { backupsRouter } from './routes/backups.js';
 import { teamsRouter } from './routes/teams.js';
 import { feedbackRouter } from './routes/feedback.js';
 import { accountRouter } from './routes/account.js';
+import { adminRouter } from './routes/admin.js';
 import { securityHeaders, docsSecurityHeaders, corsAllowlist } from './middleware/security.js';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -64,6 +66,7 @@ app.use('/v1/feedback', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge })); /
 app.use('/v1/feedback/*', bodyLimit({ maxSize: 6 * 1024 * 1024, onError: tooLarge })); // attachment ≤ 5 MB
 app.use('/v1/account', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 app.use('/v1/account/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
+app.use('/v1/admin/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 
 app.get('/v1/health', (c) =>
   c.json({
@@ -76,6 +79,7 @@ app.get('/v1/health', (c) =>
 
 app.route('/v1/auth', authRouter());
 app.route('/v1/auth', oauthRouter());
+app.route('/v1/auth', ssoRouter());
 app.route('/v1/auth', sessionsRouter());
 app.route('/v1/auth', twoFactorRouter());
 app.route('/v1/auth', emailRouter());
@@ -89,6 +93,7 @@ app.route('/v1/backups', backupsRouter());
 app.route('/v1/orgs', teamsRouter());
 app.route('/v1/feedback', feedbackRouter());
 app.route('/v1/account', accountRouter());
+app.route('/v1/admin', adminRouter());
 
 // JSON-only API: never render HTML, even for 404s.
 app.notFound((c) => c.json({ code: 'not_found', message: 'Not found' }, 404));

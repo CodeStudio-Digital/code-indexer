@@ -60,4 +60,12 @@ export interface Env {
   OAUTH_PUBLIC_BASE_URL?: string;
   /** Web portal base URL (Cloudflare Pages) for the `flow=portal` handoff. */
   PORTAL_BASE_URL?: string;
+  /** Platform-operator bearer token for the /v1/admin surface (sales-led Enterprise
+   *  grants). Absent/short ⇒ the admin router 404s (fail-soft). Set via
+   *  `wrangler secret put ADMIN_API_TOKEN`. This is an OPS token, not a user role. */
+  ADMIN_API_TOKEN?: string;
+  /** Passphrase used to encrypt per-org OIDC SSO client secrets at rest (AES-GCM,
+   *  key = SHA-256 of this). Absent ⇒ org SSO config/login 404s (fail-soft). Set via
+   *  `wrangler secret put SSO_CONFIG_KEY`. Rotating it invalidates stored secrets. */
+  SSO_CONFIG_KEY?: string;
 }

@@ -15,6 +15,7 @@ import { WebhookSignatureError, mapOrgEvent, type StripeEvent } from '../infra/s
 import { createTeamsRepo } from '../infra/d1/teams-repo.js';
 import { createD1Executor } from '../infra/d1/d1-executor.js';
 import { requireClaims, unauthorized } from '../middleware/auth.js';
+import { enforceRateLimit, HOUR } from '../middleware/rate-limit.js';
 import { recordAudit } from '../middleware/audit.js';
 
 function respondBillingError(c: Context<{ Bindings: Env }>, error: BillingError) {
@@ -54,6 +55,23 @@ export function billingRouter(): Hono<{ Bindings: Env }> {
     const claims = await requireClaims(c, identity);
     if (!claims) return unauthorized(c);
     const r = await createBillingBundle(c.env).createPortal.execute({ accountId: asAccountId(claims.sub) });
+    return r.ok ? c.json(r.value, 200) : respondBillingError(c, r.error);
+  });
+
+  // Reconcile from Stripe — self-heal a missed `checkout.session.completed` webhook.
+  // The success page (and the desktop on window-focus) calls this so a paid user is
+  // never stranded on the lapsing trial. Rate-limited: it makes live (billable)
+  // Stripe reads, and it only ever UPGRADES (never downgrades) the local row.
+  app.post('/sync', async (c) => {
+    const identity = createIdentityBundle(c.env);
+    const claims = await requireClaims(c, identity);
+    if (!claims) return unauthorized(c);
+    const limited = await enforceRateLimit(c, [{ key: `billingsync:${claims.sub}`, limit: 12, windowMs: HOUR }]);
+    if (limited) return limited;
+    const account = await identity.accounts.findById(asAccountId(claims.sub));
+    if (!account) return unauthorized(c);
+    const r = await createBillingBundle(c.env).reconcile.execute({ accountId: asAccountId(claims.sub), email: account.email });
+    if (r.ok && r.value.applied) recordAudit(c, 'billing_reconciled', 200, { accountId: claims.sub });
     return r.ok ? c.json(r.value, 200) : respondBillingError(c, r.error);
   });
 

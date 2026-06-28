@@ -12,11 +12,14 @@ import {
   HandleSubscriptionEventUseCase,
   CreateCheckoutUseCase,
   CreatePortalUseCase,
+  ReconcileSubscriptionUseCase,
+  pickActive,
   type BillingRepo,
   type CheckoutSession,
   type PaymentGateway,
   type Subscription,
   type SubscriptionEvent,
+  type SubscriptionSnapshot,
 } from '@cloudstudio/cloud-billing';
 
 const NOW = 1_700_000_000_000;
@@ -44,6 +47,12 @@ class FakeBillingRepo implements BillingRepo {
   async upsertSubscription(s: Subscription) {
     this.store.set(s.accountId, s);
   }
+  async setStripeCustomerId(accountId: AccountId, stripeCustomerId: string) {
+    // UPDATE-only (mirrors the D1 repo): never creates a row, so the auto-trial
+    // first-touch signal in GetEntitlements stays intact.
+    const existing = this.store.get(accountId);
+    if (existing) this.store.set(accountId, { ...existing, stripeCustomerId });
+  }
   async startTrial(accountId: AccountId, periodEndMs: number) {
     const existing = this.store.get(accountId);
     if (existing?.trialUsed) return false; // one-shot latch
@@ -58,7 +67,11 @@ class FakeBillingRepo implements BillingRepo {
 }
 
 class FakeGateway implements PaymentGateway {
-  constructor(public configured: boolean) {}
+  ensured: { accountId: string; email: string }[] = [];
+  constructor(
+    public configured: boolean,
+    private readonly opts: { subs?: SubscriptionSnapshot[]; customerByEmail?: string } = {},
+  ) {}
   async createCheckout(): Promise<CheckoutSession> {
     return { url: 'https://checkout.stripe.test/c/1' };
   }
@@ -68,6 +81,20 @@ class FakeGateway implements PaymentGateway {
   async parseWebhook(): Promise<SubscriptionEvent | null> {
     return null;
   }
+  async ensureCustomer(input: { accountId: AccountId; email: string }) {
+    this.ensured.push({ accountId: input.accountId, email: input.email });
+    return { stripeCustomerId: 'cus_ensured' };
+  }
+  async findCustomerByEmail(_email: string) {
+    return this.opts.customerByEmail ? { stripeCustomerId: this.opts.customerByEmail } : null;
+  }
+  async listSubscriptions(_stripeCustomerId: string) {
+    return this.opts.subs ?? [];
+  }
+}
+
+function snap(p: Partial<SubscriptionSnapshot>): SubscriptionSnapshot {
+  return { plan: 'pro', status: 'active', periodEndMs: null, stripeCustomerId: 'cus_1', ...p };
 }
 
 describe('deriveEntitlements (projection truth table)', () => {
@@ -180,14 +207,20 @@ describe('HandleSubscriptionEventUseCase (idempotent projection)', () => {
 
 describe('checkout / portal guards', () => {
   it('checkout returns billing_not_configured when Stripe is absent', async () => {
-    const r = await new CreateCheckoutUseCase(new FakeGateway(false)).execute({ accountId: acc, email: 'u@e.com', plan: 'pro' });
+    const r = await new CreateCheckoutUseCase(new FakeGateway(false), new FakeBillingRepo()).execute({ accountId: acc, email: 'u@e.com', plan: 'pro' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('billing_not_configured');
   });
-  it('checkout returns a url when configured', async () => {
-    const r = await new CreateCheckoutUseCase(new FakeGateway(true)).execute({ accountId: acc, email: 'u@e.com', plan: 'pro' });
+  it('checkout ensures + persists the customer, then returns a url', async () => {
+    const gw = new FakeGateway(true);
+    const repo = new FakeBillingRepo();
+    // A pre-existing (trial) row so the UPDATE-only setStripeCustomerId persists.
+    await repo.upsertSubscription(sub({ plan: 'pro', status: 'trialing', trialUsed: true }));
+    const r = await new CreateCheckoutUseCase(gw, repo).execute({ accountId: acc, email: 'u@e.com', plan: 'pro' });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.url).toContain('checkout.stripe.test');
+    expect(gw.ensured).toHaveLength(1); // customer was ensured up-front
+    expect((await repo.getSubscription(acc))?.stripeCustomerId).toBe('cus_ensured'); // persisted for reconcile
   });
   it('portal returns no_customer before any checkout', async () => {
     const repo = new FakeBillingRepo();
@@ -201,5 +234,61 @@ describe('checkout / portal guards', () => {
     const r = await new CreatePortalUseCase(new FakeGateway(true), repo).execute({ accountId: acc });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.url).toContain('billing.stripe.test');
+  });
+});
+
+describe('pickActive (reconciliation winner selection)', () => {
+  it('returns null for an empty list (caller must leave D1 untouched)', () => {
+    expect(pickActive([])).toBeNull();
+  });
+  it('returns null when nothing is live (only canceled/past_due)', () => {
+    expect(pickActive([snap({ status: 'canceled' }), snap({ status: 'past_due' })])).toBeNull();
+  });
+  it('prefers active over trialing', () => {
+    const winner = pickActive([snap({ status: 'trialing', periodEndMs: NOW + 999 }), snap({ status: 'active' })]);
+    expect(winner?.status).toBe('active');
+  });
+  it('among same status, the later period end wins (null = unbounded beats finite)', () => {
+    expect(pickActive([snap({ periodEndMs: NOW + 10 }), snap({ periodEndMs: NOW + 99 })])?.periodEndMs).toBe(NOW + 99);
+    expect(pickActive([snap({ periodEndMs: NOW + 99 }), snap({ periodEndMs: null })])?.periodEndMs).toBeNull();
+  });
+});
+
+describe('ReconcileSubscriptionUseCase (self-heal a missed webhook)', () => {
+  it('returns billing_not_configured when Stripe is absent', async () => {
+    const r = await new ReconcileSubscriptionUseCase(new FakeGateway(false), new FakeBillingRepo()).execute({ accountId: acc, email: 'u@e.com' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('billing_not_configured');
+  });
+  it('heals a lapsed-trial row that actually paid → active pro', async () => {
+    const repo = new FakeBillingRepo();
+    // D1 still shows the trial (webhook was dropped); Stripe says active.
+    await repo.upsertSubscription(sub({ plan: 'pro', status: 'trialing', periodEndMs: NOW - 1, trialUsed: true, stripeCustomerId: 'cus_1' }));
+    const gw = new FakeGateway(true, { subs: [snap({ status: 'active', periodEndMs: NOW + 86_400_000 })] });
+    const r = await new ReconcileSubscriptionUseCase(gw, repo).execute({ accountId: acc, email: 'u@e.com' });
+    expect(r.ok && r.value.applied).toBe(true);
+    expect((await repo.getSubscription(acc))?.status).toBe('active');
+  });
+  it('NEVER wipes a paid row from an empty/transient Stripe read', async () => {
+    const repo = new FakeBillingRepo();
+    await repo.upsertSubscription(sub({ plan: 'pro', status: 'active', periodEndMs: NOW + 86_400_000, trialUsed: true, stripeCustomerId: 'cus_1' }));
+    const gw = new FakeGateway(true, { subs: [] }); // transient empty read
+    const r = await new ReconcileSubscriptionUseCase(gw, repo).execute({ accountId: acc, email: 'u@e.com' });
+    expect(r.ok && r.value.applied).toBe(false);
+    expect((await repo.getSubscription(acc))?.status).toBe('active'); // untouched
+  });
+  it('falls back to findCustomerByEmail when no local customer id', async () => {
+    const repo = new FakeBillingRepo(); // no row at all
+    const gw = new FakeGateway(true, { customerByEmail: 'cus_email', subs: [snap({ status: 'active', stripeCustomerId: 'cus_email' })] });
+    const r = await new ReconcileSubscriptionUseCase(gw, repo).execute({ accountId: acc, email: 'u@e.com' });
+    expect(r.ok && r.value.applied).toBe(true);
+    expect((await repo.getSubscription(acc))?.stripeCustomerId).toBe('cus_email');
+  });
+  it('no customer anywhere → applied:false (no write)', async () => {
+    const repo = new FakeBillingRepo();
+    const gw = new FakeGateway(true, {}); // no local id, no customer by email
+    const r = await new ReconcileSubscriptionUseCase(gw, repo).execute({ accountId: acc, email: 'u@e.com' });
+    expect(r.ok && r.value.applied).toBe(false);
+    expect(await repo.getSubscription(acc)).toBeNull();
   });
 });
