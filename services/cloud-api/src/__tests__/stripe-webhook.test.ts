@@ -6,7 +6,15 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { createStripeGateway, verifyStripeSignature, WebhookSignatureError, mapOrgEvent, type StripeEvent } from '../infra/stripe-gateway.js';
+import {
+  createStripeGateway,
+  verifyStripeSignature,
+  WebhookSignatureError,
+  mapOrgEvent,
+  mapSubscriptionFields,
+  buildCheckoutParams,
+  type StripeEvent,
+} from '../infra/stripe-gateway.js';
 
 const SECRET = 'whsec_test_secret';
 const sign = (t: number, payload: string) => createHmac('sha256', SECRET).update(`${t}.${payload}`).digest('hex');
@@ -141,6 +149,41 @@ describe('mapOrgEvent (per-seat org projection)', () => {
     const e = mapOrgEvent(orgEvt({ status: 'canceled' }) as StripeEvent)!;
     expect(e.plan).toBe('free');
     expect(e.status).toBe('canceled');
+  });
+});
+
+describe('projection parity (webhook ↔ reconcile share mapSubscriptionFields)', () => {
+  it('the webhook event and the reconcile snapshot agree on plan/status/period/customer', async () => {
+    const t = Math.floor(Date.now() / 1000);
+    const obj = { status: 'active', current_period_end: 1_800_000_000, customer: 'cus_1', metadata: { accountId: 'acc1' } };
+    const payload = JSON.stringify({ id: 'evt_x', type: 'customer.subscription.updated', data: { object: obj } });
+    const event = (await gateway().parseWebhook(payload, header(t, payload)))!;
+    const snapshot = mapSubscriptionFields(obj, 'customer.subscription.updated');
+    expect({ plan: event.plan, status: event.status, periodEndMs: event.periodEndMs, stripeCustomerId: event.stripeCustomerId }).toEqual(snapshot);
+  });
+});
+
+describe('buildCheckoutParams (return base lands on the portal, never the bare app)', () => {
+  it('success/cancel use portalBaseUrl when set; email when no saved customer', () => {
+    const params = buildCheckoutParams(
+      { appBaseUrl: 'https://app.test', portalBaseUrl: 'https://account.test' },
+      { accountId: 'acc1', email: 'u@e.com', plan: 'pro' },
+    );
+    expect(params.get('success_url')).toBe('https://account.test/billing/success?session_id={CHECKOUT_SESSION_ID}');
+    expect(params.get('cancel_url')).toBe('https://account.test/billing/cancel');
+    expect(params.get('customer_email')).toBe('u@e.com');
+  });
+  it('uses a saved customer id over the email when present', () => {
+    const params = buildCheckoutParams(
+      { appBaseUrl: 'https://app.test', portalBaseUrl: 'https://account.test' },
+      { accountId: 'acc1', email: 'u@e.com', plan: 'pro', stripeCustomerId: 'cus_9' },
+    );
+    expect(params.get('customer')).toBe('cus_9');
+    expect(params.get('customer_email')).toBeNull();
+  });
+  it('falls back to appBaseUrl only when no portal base configured', () => {
+    const params = buildCheckoutParams({ appBaseUrl: 'https://app.test' }, { accountId: 'acc1', email: 'u@e.com', plan: 'pro' });
+    expect(params.get('success_url')).toContain('https://app.test/billing/success');
   });
 });
 
