@@ -4,6 +4,7 @@ import type {
   FileSnapshot, VectorIdRecord, ProjectStats, DiscoveredModel, SnapshotCategory,
   SnapshotVersion, LLMSymbol, DBFileDependency, DBFileDependent,
   DBSymbolReference, DBSymbolRelation, RunKind,
+  AgentMemoryRow, AgentMemoryScope, AgentMemoryType,
 } from '@mcp/shared/types.js';
 import { Database, type DB, type PathAlias } from './db/types.js';
 import { applyTuningPragmas } from './db/pragmas.js';
@@ -31,6 +32,8 @@ import * as symbolRelations from './db/symbol-relations.js';
 import * as runs from './db/runs.js';
 import * as snapshots from './db/snapshots.js';
 import * as snapshotsArchive from './db/snapshots-archive.js';
+import * as agentMemory from './db/agent-memory.js';
+import * as agentMemoryConsolidation from './db/agent-memory-consolidation.js';
 import * as memoryConsolidation from './db/memory-consolidation.js';
 import * as memoryDistillLog from './db/memory-distill-log.js';
 import * as costs from './db/costs.js';
@@ -690,6 +693,26 @@ export class CodeIndexDB {
   // ─── Snapshots ──────────────────────────────────────────────────
   createSnapshot(projectId: number, data: snapshots.CreateSnapshotData): ContextSnapshot { return snapshots.create(this.db, projectId, data); }
   markSnapshotAccessed(ids: number[]): void { snapshots.markAccessed(this.db, ids); }
+  createAgentMemory(data: agentMemory.CreateAgentMemoryData): AgentMemoryRow { return agentMemory.create(this.db, data); }
+  archiveAgentMemory(id: number, reason = 'forgotten'): void { agentMemory.archive(this.db, id, reason); }
+  replaceAgentMemory(id: number, data: agentMemory.CreateAgentMemoryData): AgentMemoryRow { return agentMemory.replace(this.db, id, data); }
+  getAgentMemoryById(id: number): AgentMemoryRow | undefined { return agentMemory.getById(this.db, id); }
+  getAgentMemoryByName(scope: AgentMemoryScope, projectId: number, name: string): AgentMemoryRow | undefined { return agentMemory.getByName(this.db, scope, projectId, name); }
+  listAgentMemoryIndex(scope: AgentMemoryScope, projectId: number, limit = 12, type?: AgentMemoryType): agentMemory.AgentMemoryIndexEntry[] { return agentMemory.listMemoryIndex(this.db, scope, projectId, limit, type); }
+  searchAgentMemoryFts(scope: AgentMemoryScope, projectId: number, query: string, limit = 15): AgentMemoryRow[] { return agentMemory.searchFts(this.db, scope, projectId, query, limit); }
+  bumpAgentMemoryAccess(ids: number[]): void { agentMemory.bumpAccess(this.db, ids); }
+  updateAgentMemoryEmbedding(id: number, hash: string, vectorId: string | null): void { agentMemory.updateEmbedding(this.db, id, hash, vectorId); }
+  listAgentMemoryMissingEmbedding(projectId?: number): AgentMemoryRow[] { return agentMemory.listMissingEmbedding(this.db, projectId); }
+  countAgentMemory(scope: AgentMemoryScope, projectId: number): number { return agentMemory.count(this.db, scope, projectId); }
+  findAgentMemoryBySourceSnapshot(snapshotId: number): AgentMemoryRow | undefined { return agentMemory.findBySourceSnapshot(this.db, snapshotId); }
+  recordAgentMemoryEvent(event: agentMemory.AgentMemoryEvent): void { agentMemory.recordEvent(this.db, event); }
+  pruneAgentMemoryEvents(maxAgeDays = 30, maxRows = 50_000): number { return agentMemory.pruneEvents(this.db, maxAgeDays, maxRows); }
+  getAgentMemoryStaleBatch(ids: number[]): Map<number, { stale: string[]; total: number }> { return agentMemory.getStaleBatch(this.db, ids); }
+  setAgentMemoryImportance(id: number, importance: number): void { agentMemory.setImportance(this.db, id, importance); }
+  /** WS8 — conservative consolidation (collapse exact-duplicate live memories). */
+  consolidateAgentMemory(scope: AgentMemoryScope, projectId: number): agentMemoryConsolidation.ConsolidationResult { return agentMemoryConsolidation.consolidateProject(this.db, scope, projectId); }
+  /** WS10 — aggregate memory-health stats (live counts + telemetry by event). */
+  getAgentMemoryStats(projectId?: number): agentMemory.AgentMemoryStats { return agentMemory.getStats(this.db, projectId); }
   /** Per-project memory toggle (migration 115). Default ON. */
   getProjectMemoryEnabled(projectId: number): boolean {
     const row = this.db.prepare('SELECT memory_enabled FROM projects WHERE id = ?')

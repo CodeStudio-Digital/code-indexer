@@ -7,7 +7,9 @@ import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
 import { ProjectIndexService, createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
 import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
-import { MemoryRetriever } from '@mcp/services/memory/retriever.js';
+import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
+import { AgentMemoryRetriever } from '@mcp/services/memory/agent-memory-retriever.js';
+import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory/agent-memory-writer.js';
 import { LlmRecallFilter } from '@mcp/services/memory/recall-filter.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
@@ -174,8 +176,19 @@ export interface SearchDeps {
   embeddingService: EmbeddingService;
   vectorStore: VectorStore;
   hybridSearch: HybridSearch;
-  /** Mem C — project-memory retrieval over snapshots (relevance × importance). */
-  memoryRetriever: MemoryRetriever;
+  /** Mem C — project-memory retrieval over agent_memory (relevance × importance).
+   *  Structural port the runner consumes (project scope, no `setRecallFilter`). */
+  memoryRetriever: {
+    retrieve(
+      projectId: number,
+      projectName: string,
+      taskText: string,
+    ): Promise<ReadonlyArray<{ id: string; title: string; content: string; importance?: number; staleNote?: string }>>;
+  };
+  /** Dedicated Agent Memory service + retriever (migration 181) — used for
+   *  user-scope recall, embedding backfill and the consolidation sweeper. */
+  agentMemoryService: AgentMemoryService;
+  agentMemoryRetriever: AgentMemoryRetriever;
   /** Mem C write-back — end-of-run durable-memory distillation (facts + gotchas). */
   runEndMemory: RunEndMemory;
   /** Direct agent ports: save_note scope 'project' (dedup'd write) + recall_memory
@@ -195,6 +208,17 @@ export interface SearchDeps {
       id: string; title: string; content: string;
       category?: string; source?: string; importance?: number; staleNote?: string;
     }>>;
+    list(
+      projectId: number,
+      projectName: string,
+      limit?: number,
+      type?: string,
+    ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
+    forget(
+      projectId: number,
+      projectName: string,
+      target: string,
+    ): Promise<{ archived: number }>;
   };
   /**
    * I2 — process-wide hot cache of recently-touched files. Always
@@ -703,24 +727,36 @@ export function createDeps(): ServerDeps {
   // exit + SIGKILL fallback. The manager is lazy (wired on first LSP call);
   // a never-wired manager is just a null here.
   registerShutdownTask('lsp-servers-stop', () => getLspServerManager()?.stopAll() ?? Promise.resolve());
-  // Mem C — project-memory retriever over the snapshot store (reuses the
-  // admin-configured embedding/vector backend via hybridSearch). Passed into
-  // runCoder so the runner proactively injects relevant memory per turn.
-  // topK 5 (was the default 3) + diagnostics on the silent-skip paths so an
-  // empty injection is explainable from the logs.
-  const memoryRetriever = new MemoryRetriever(hybridSearch, db, {
+  // Mem C — Agent Memory (migration 181): a dedicated store SEPARATE from
+  // snapshots. The service does embed-on-write + hybrid (FTS+vector RRF) search
+  // over the admin-configured backend; the retriever blends importance/recency/
+  // staleness and applies the conservative selector. `memoryRetriever` below is
+  // the project-scope port the runner consumes.
+  const agentMemoryService = new AgentMemoryService(db, embeddingService, searchableVectorStore);
+  const agentMemoryRetriever = new AgentMemoryRetriever(agentMemoryService, db, {
     topK: 5,
-    // D1 — opt-in relevance floor (CODER_MEMORY_MIN_RELEVANCE, e.g. 0.2): drops
-    // tangential hits instead of padding topK, and recalls user/feedback memory
-    // more conservatively. Off by default → legacy behavior.
+    // Relevance floor (CODER_MEMORY_MIN_RELEVANCE, e.g. 0.2): drops tangential
+    // hits instead of padding topK; broad `preference` memories must clear a
+    // stricter bar. Off by default → no floor.
     ...(process.env.CODER_MEMORY_MIN_RELEVANCE
       ? {
           minRelevance: Number(process.env.CODER_MEMORY_MIN_RELEVANCE),
-          conservativeCategories: new Set(['user', 'feedback', 'project-overview']),
+          conservativeTypes: new Set(['preference']),
         }
       : {}),
     log: (event, data) => console.debug(`[memory] retriever ${event}`, data),
   });
+  const memoryRetriever = {
+    // projectId 0 = global user memory (scope 'user'); any real id = that
+    // project (scope 'project') — the same convention as the write path.
+    retrieve: async (projectId: number, _projectName: string, taskText: string) => {
+      const scope = projectId === 0 ? 'user' : 'project';
+      const rows = await agentMemoryRetriever.retrieve(scope, projectId, taskText);
+      // WS10 telemetry — proves proactive recall is firing (and how often it's empty).
+      try { db.recordAgentMemoryEvent({ eventType: 'recall', scope, projectId, kept: rows.length }); } catch { /* best-effort */ }
+      return rows;
+    },
+  };
   // Share the same underlying better-sqlite3 handle that CodeIndexDB
   // opened — re-opening the file (the old `new XStore(config.dbPath)`) added
   // extra writers on the central file and serialized every session/company
@@ -801,8 +837,8 @@ export function createDeps(): ServerDeps {
       try {
         if (!db.getProjectMemoryEnabled(projectId)) return [];
         return db
-          .listMemoryIndex(projectId, 20)
-          .map((m) => ({ title: m.title, category: m.category, excerpt: m.excerpt }));
+          .listAgentMemoryIndex('project', projectId, 20)
+          .map((m) => ({ title: m.description || m.name, category: m.type, excerpt: m.excerpt }));
       } catch {
         return [];
       }
@@ -812,20 +848,23 @@ export function createDeps(): ServerDeps {
   // retrieved memories CLEARLY about the task (CC's aboutness selector). Reuses
   // the `memory_recall` binding; unset binding → fail-open (no filtering). The
   // structural relevance floor (CODER_MEMORY_MIN_RELEVANCE) applies regardless.
-  if (process.env.CODER_MEMORY_LLM_FILTER === '1') {
+  // DEFAULT-ON now (set CODER_MEMORY_LLM_FILTER=0 to disable). Fail-open when no
+  // `memory_recall` binding resolves; the retriever only invokes it when there
+  // are more candidates than topK (something to actually discriminate).
+  if (process.env.CODER_MEMORY_LLM_FILTER !== '0') {
     const recallFilter = new LlmRecallFilter({
       resolver: pipelineProviderResolver,
       getFallbackDefault: () => generalDefaultAsFallback(providerStore),
     });
-    memoryRetriever.setRecallFilter((task, items) => recallFilter.filter(task, items));
+    agentMemoryRetriever.setRecallFilter((task, items) => recallFilter.filter(task, items));
   }
   // Mem C write-back — distills durable memory (facts + `gotcha` lessons) at
   // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
   // `memory_extraction` binding; when no binding is set it falls back to the
   // general default AI model (zero-config). Passed into runCoder as `runEndMemory`.
   const runEndMemoryRaw = createRunEndMemory({
-    writer: snapshotService,
-    search: hybridSearch,
+    writer: new AgentMemoryWriter(db, agentMemoryService),
+    search: new AgentMemoryDedupeSearch(agentMemoryService),
     resolver: pipelineProviderResolver,
     getFallbackDefault: () => generalDefaultAsFallback(providerStore),
     // Memory-health diagnostics (migration 136) — every pass lands a row so
@@ -856,6 +895,8 @@ export function createDeps(): ServerDeps {
   // via SnapshotService, zero new dedup code.
   const VALID_MEMORY_CATEGORIES = new Set([
     'architecture', 'decision', 'convention', 'pattern', 'todo', 'note', 'gotcha', 'procedure',
+    // user/feedback ride the same port (projectId 0) and map to type 'preference'.
+    'user', 'feedback',
   ]);
   const projectMemory: SearchDeps['projectMemory'] = {
     save: async (projectId, projectName, entry) => {
@@ -873,17 +914,49 @@ export function createDeps(): ServerDeps {
       };
       const literal = new MemoryExtractor(
         { distill: async () => [candidate] },
-        snapshotService,
-        hybridSearch,
+        new AgentMemoryWriter(db, agentMemoryService),
+        new AgentMemoryDedupeSearch(agentMemoryService),
       );
       const res = await literal.extractAndPersist(projectId, projectName, 'agent', {});
       try {
         db.insertMemoryDistillLog(projectId, { trigger: 'agent', status: 'ok', ...res });
+        db.recordAgentMemoryEvent({
+          eventType: 'remember',
+          scope: projectId === 0 ? 'user' : 'project',
+          projectId,
+          kept: res.created,
+          dropped: res.skipped,
+        });
       } catch { /* diagnostics are best-effort */ }
       return res;
     },
-    recall: (projectId, projectName, query, limit) =>
-      memoryRetriever.recall(projectId, projectName, query, limit),
+    recall: (projectId, _projectName, query, limit) =>
+      agentMemoryRetriever.recall(projectId === 0 ? 'user' : 'project', projectId, query, limit ?? 5),
+    list: async (projectId, _projectName, limit, type) => {
+      const tgt = db.resolveMemoryWriteProject(projectId);
+      const scope = tgt.id === 0 ? 'user' : 'project';
+      return db
+        .listAgentMemoryIndex(scope, tgt.id, limit ?? 12, type as import('@mcp/shared/types.js').AgentMemoryType | undefined)
+        .map((m) => ({
+          name: m.name,
+          description: m.description,
+          type: m.type,
+          importance: m.importance,
+          created_at: m.created_at,
+        }));
+    },
+    forget: async (projectId, _projectName, target) => {
+      const tgt = db.resolveMemoryWriteProject(projectId);
+      const scope = tgt.id === 0 ? 'user' : 'project';
+      const row = db.getAgentMemoryByName(scope, tgt.id, target);
+      if (!row) return { archived: 0 };
+      db.archiveAgentMemory(row.id, 'forgotten:agent');
+      await agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
+      try {
+        db.recordAgentMemoryEvent({ eventType: 'forget', scope, projectId: tgt.id, memoryId: row.id });
+      } catch { /* best-effort */ }
+      return { archived: 1 };
+    },
   };
 
   // Tool-selection plumbing. The embed adapter wraps the existing indexer
@@ -1275,6 +1348,8 @@ export function createDeps(): ServerDeps {
     vectorStore,
     hybridSearch,
     memoryRetriever,
+    agentMemoryService,
+    agentMemoryRetriever,
     runEndMemory,
     projectMemory,
     recentFilesSource,

@@ -156,6 +156,12 @@ describe('requestMatchKey', () => {
     expect(a).not.toBe(requestMatchKey(mkReq({ name: 'B' })));
     expect(a).not.toBe(requestMatchKey(mkReq({ name: 'A', method: 'POST' })));
   });
+
+  it('includes folder so same-named requests in different folders do not collide', () => {
+    const a = requestMatchKey(mkReq({ name: 'Get', method: 'GET', path_template: '/x', folder: 'A' }));
+    const b = requestMatchKey(mkReq({ name: 'Get', method: 'GET', path_template: '/x', folder: 'B' }));
+    expect(a).not.toBe(b);
+  });
 });
 
 describe('mergeRequestForApply (non-destructive, secret-preserving)', () => {
@@ -190,6 +196,28 @@ describe('mergeRequestForApply (non-destructive, secret-preserving)', () => {
     const incoming = redactRequestForSync(mkReq({ body_kind: 'json', body_json: '{"name":"REMOTE"}' }));
     const merged = mergeRequestForApply(incoming, local);
     expect(merged.body_json).toBe('{"name":"REMOTE"}');
+  });
+
+  it('never writes the redaction placeholder over a real local secret (keeps local)', () => {
+    // Local has a JWT in the body; the remote genuinely edited a sibling field, but
+    // its pushed body carries the «redacted» mask for the token. Applying must NOT
+    // clobber the real local token with the placeholder → keep local verbatim.
+    const local = mkReq({ body_kind: 'json', body_json: '{"token":"eyJabc.def123.ghi456","name":"old"}' });
+    const incoming = { ...redactRequestForSync(local), body_json: '{"token":"«redacted»","name":"new"}' };
+    const merged = mergeRequestForApply(incoming, local);
+    expect(merged.body_json).toContain('eyJabc.def123.ghi456');
+    expect(merged.body_json).not.toContain('«redacted»');
+  });
+
+  it('does not graft a credential field from a different local auth type', () => {
+    // incoming is bearer (token blanked); local is basic (has password). The merge
+    // must not add a stray `password` to the bearer auth.
+    const local = mkReq({ auth_type: 'basic', auth_json: '{"type":"basic","username":"u","password":"p"}' });
+    const incoming = { ...redactRequestForSync(mkReq({ auth_type: 'bearer', auth_json: '{"type":"bearer","token":"sk-x"}' })), } ;
+    const merged = mergeRequestForApply(incoming, local);
+    const auth = JSON.parse(merged.auth_json!);
+    expect(auth.type).toBe('bearer');
+    expect('password' in auth).toBe(false);
   });
 
   it('takes non-credential fields from the incoming body', () => {

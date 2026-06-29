@@ -84,6 +84,13 @@ export interface WorkerMemoryShims {
       query: string,
       limit?: number,
     ): Promise<ShimRecalledMemory[]>;
+    list(
+      projectId: number,
+      projectName: string,
+      limit?: number,
+      type?: string,
+    ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
+    forget(projectId: number, projectName: string, target: string): Promise<{ archived: number }>;
   };
 }
 
@@ -164,6 +171,28 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
           );
         } catch {
           return [];
+        }
+      },
+      list: async (projectId, projectName, limit, type) => {
+        try {
+          return await bridge.request<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>(
+            'memoryList',
+            { projectId, projectName, limit, type },
+            { timeoutMs: 10_000 },
+          );
+        } catch {
+          return [];
+        }
+      },
+      forget: async (projectId, projectName, target) => {
+        try {
+          return await bridge.request<{ archived: number }>(
+            'memoryForget',
+            { projectId, projectName, target },
+            { timeoutMs: 10_000 },
+          );
+        } catch {
+          return { archived: 0 };
         }
       },
     },

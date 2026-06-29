@@ -337,6 +337,10 @@ export interface ToolContext {
       importance?: number;
       staleNote?: string;
     }>>;
+    /** Project memory index (frontmatter) for `recall_memory(mode:'list')`. */
+    list?(limit?: number, type?: string): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
+    /** Archive a project memory by name/title (logical delete). Backs `forget_memory`. */
+    forget?(target: string): Promise<{ archived: number }>;
   };
   /**
    * Global USER memory port (migration 145) — durable facts about who the user
@@ -351,6 +355,8 @@ export interface ToolContext {
       content: string;
       category: string;
     }): Promise<{ created: number; merged: number; skipped: number } | null>;
+    /** Archive a user-scope memory by name/title (logical delete). */
+    forget?(target: string): Promise<{ archived: number }>;
   };
   /** Company orchestrator context — present when this runner is part of a company session. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;

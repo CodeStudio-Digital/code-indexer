@@ -39,17 +39,27 @@ export function DocBodyViewer({ body, contentType }: { body: string; contentType
         ))}
       </div>
       <div className="max-h-72 overflow-auto">
-        {mode === 'pretty' && <pre className="text-[11px] font-mono whitespace-pre-wrap break-words p-2">{pretty}</pre>}
+        {mode === 'pretty' && (heavy ? <TooBig body={body} /> : <pre className="text-[11px] font-mono whitespace-pre-wrap break-words p-2">{pretty}</pre>)}
         {mode === 'raw' && <pre className="text-[11px] font-mono whitespace-pre-wrap break-words p-2">{body}</pre>}
-        {mode === 'preview' && <DocPreview kind={previewKind} body={body} />}
+        {mode === 'preview' && <DocPreview kind={previewKind} body={body} heavy={heavy} />}
       </div>
     </div>
   );
 }
 
-function DocPreview({ kind, body }: { kind: ReturnType<typeof responsePreviewKind>; body: string }) {
+function TooBig({ body }: { body: string }) {
+  const { t } = useTranslation('apiClient');
+  return (
+    <div className="h-full grid place-items-center text-xs text-muted-foreground p-4 text-center">
+      {t('body.tooBig', { size: (body.length / 1024 / 1024).toFixed(1) })}
+    </div>
+  );
+}
+
+function DocPreview({ kind, body, heavy }: { kind: ReturnType<typeof responsePreviewKind>; body: string; heavy: boolean }) {
   const { t } = useTranslation('apiClient');
   if (kind === 'html') return <iframe sandbox="" srcDoc={body} className="w-full h-64 bg-white" title={t('body.htmlPreview')} />;
-  if (kind === 'json') return <div className="p-2"><JsonTree body={body} /></div>;
+  if (kind === 'image') return <div className="h-full grid place-items-center text-xs text-muted-foreground p-4 text-center">{t('body.imageNotice')}</div>;
+  if (kind === 'json') return heavy ? <TooBig body={body} /> : <div className="p-2"><JsonTree body={body} /></div>;
   return <pre className="text-[11px] font-mono whitespace-pre-wrap break-words p-2">{body}</pre>;
 }

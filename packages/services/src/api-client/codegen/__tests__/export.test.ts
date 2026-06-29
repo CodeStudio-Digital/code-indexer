@@ -116,4 +116,51 @@ describe('exportOpenApi', () => {
     });
     expect(() => JSON.stringify(doc)).not.toThrow();
   });
+
+  it('truncates an oversized JSON example to a marked string (never silent broken JSON)', () => {
+    const big = `{"blob":"${'x'.repeat(70 * 1024)}"}`;
+    const doc = exportOpenApi('API', [req({ path_template: '/users' })], {
+      examplesByKey: { 'GET /users': [{ name: 'big', status: 200, contentType: 'application/json', body: big }] },
+    }) as any;
+    const value = doc.paths['/users'].get.responses['200'].content['application/json'].examples.big.value;
+    expect(typeof value).toBe('string');
+    expect(value).toContain('… (truncated)');
+  });
+
+  it('normalizes the media key, dropping the charset parameter', () => {
+    const doc = exportOpenApi('API', [req({ path_template: '/users' })], {
+      examplesByKey: { 'GET /users': [{ name: 'ok', status: 200, contentType: 'application/json; charset=utf-8', body: '{"a":1}' }] },
+    }) as any;
+    const content = doc.paths['/users'].get.responses['200'].content;
+    expect(content['application/json'].examples.ok.value).toEqual({ a: 1 });
+    expect(content['application/json; charset=utf-8']).toBeUndefined();
+  });
+
+  it('keeps a text/plain body as a string even if it looks like JSON', () => {
+    const doc = exportOpenApi('API', [req({ path_template: '/u' })], {
+      examplesByKey: { 'GET /u': [{ name: 't', status: 200, contentType: 'text/plain', body: '{"a":1}' }] },
+    }) as any;
+    expect(doc.paths['/u'].get.responses['200'].content['text/plain'].examples.t.value).toBe('{"a":1}');
+  });
+
+  it('maps a non-HTTP status (0) to the default response', () => {
+    const doc = exportOpenApi('API', [req({ path_template: '/u' })], {
+      examplesByKey: { 'GET /u': [{ name: 'err', status: 0, contentType: 'application/json', body: '{"e":1}' }] },
+    }) as any;
+    const responses = doc.paths['/u'].get.responses;
+    expect(responses.default).toBeTruthy();
+    expect(responses['0']).toBeUndefined();
+  });
+
+  it('embeds only safe link schemes (drops javascript:)', () => {
+    const doc = exportOpenApi('API', [req()], {
+      links: [{ label: 'Bad', url: 'javascript:alert(1)' }, { label: 'Good', url: 'https://x.test' }],
+    }) as any;
+    expect(doc.info.description).toContain('[Good](https://x.test)');
+    expect(doc.info.description).not.toContain('javascript:');
+  });
+
+  it('does not crash when links is not an array (malformed branding)', () => {
+    expect(() => exportOpenApi('API', [req()], { links: 'oops' as any })).not.toThrow();
+  });
 });

@@ -141,6 +141,22 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       if (distilled > 0) {
         console.log(`[memory/sweeper] swept — distilled=${distilled}/${candidates.length} idle session(s)`);
       }
+      // WS8 — background hygiene: collapse exact-duplicate memories (a safety net
+      // on top of write-time dedup) for the projects touched this sweep + the
+      // user scope, and prune the telemetry events table (retention). All
+      // deterministic + best-effort; never wedges a sweep.
+      try {
+        const projects = new Set(candidates.map((c) => c.project_id));
+        let archived = 0;
+        for (const pid of projects) archived += db.consolidateAgentMemory('project', pid).archived;
+        archived += db.consolidateAgentMemory('user', 0).archived;
+        const prunedEvents = db.pruneAgentMemoryEvents();
+        if (archived > 0 || prunedEvents > 0) {
+          console.log(`[memory/sweeper] hygiene — archived=${archived} dup memories, pruned=${prunedEvents} events`);
+        }
+      } catch (e) {
+        console.warn(`[memory/sweeper] hygiene failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
       return distilled;
     } catch (e) {
       console.warn(`[memory/sweeper] sweep failed: ${e instanceof Error ? e.message : String(e)}`);

@@ -203,6 +203,12 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // (Phase B) — 0 calls in 12k turns.
   // (Session-scoped notes — distinct from project-wide mcp__save_memory.)
   'save_note',
+  // WS5/WS6: the durable Agent Memory write (`remember`) + read (`recall_memory`)
+  // are BOTH on the turn-1 surface — the old asymmetry (a visible write via
+  // save_note, a hidden read) was a root cause of memory going unused. save_note
+  // is now session-scratchpad only; `forget_memory` lives in navigate.
+  'remember',
+  'recall_memory',
   'recall_investigations',
   'get_tool_output',
   'glob',
@@ -351,7 +357,7 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'update_todo',
   'read_plan',
   'list_notes',
-  'recall_memory',
+  'forget_memory',
   'get_goal',
   'mcp__query_snapshots',
   'mcp__search_memory',

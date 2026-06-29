@@ -62,7 +62,11 @@
 // session-fixed directives (G1 # Language / G8 output style / G3 # Operating
 // autonomously) above the boundary; ask_user recommended-first + write-tool
 // docs/emoji guardrails. Static prefix mudou → invalida fingerprints stale.
-export const SYSTEM_PROMPT_VERSION = '20260627.1';
+// 2026-06-28.1 bump — Agent Memory overhaul (migration 181): memorySection
+// rewritten into three behaviour-triggering layers (recall-first / save-as-you-
+// learn / ignore-memory), recall_memory promoted to the bootstrap tier. Static
+// prefix changed → invalidates stale fingerprints.
+export const SYSTEM_PROMPT_VERSION = '20260628.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

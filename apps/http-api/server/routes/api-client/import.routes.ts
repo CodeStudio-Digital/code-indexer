@@ -40,6 +40,12 @@ export function mountApiImportRoutes(app: Hono, deps: ServerDeps): void {
     return c.json({ request: store.createRequest(input) });
   });
 
+  // Export a collection as a FILE for the owner of this project. This is the user's
+  // own data leaving on their own request (like Postman/Insomnia export), so inline
+  // values (header/query examples, request bodies, saved examples) are emitted as-is
+  // — NOT redacted — so the file stays replayable. Redaction is the PUBLISH path's
+  // job (cloud `redactJson` re-scrubs before the spec is hosted publicly); this
+  // local download is deliberately unredacted and owner-scoped (ownership-guarded).
   app.get(`${base}/collections/:cid/export`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
     const store = deps.apiClientFor(projectId);

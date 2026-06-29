@@ -15,11 +15,17 @@
  * Failure posture: memory must never break a run — missing deps degrade to
  * empty retrieval / skipped distillation instead of throwing.
  */
-import type { MemoryRetriever } from '@mcp/services/memory/retriever.js';
 import type { RunEndMemory } from '@mcp/services/memory/run-end.js';
 
 export interface WorkerMemoryDeps {
-  memoryRetriever?: MemoryRetriever | null;
+  /** Structural project-memory retrieval port (agent_memory-backed in deps.ts). */
+  memoryRetriever?: {
+    retrieve(
+      projectId: number,
+      projectName: string,
+      taskText: string,
+    ): Promise<ReadonlyArray<{ id: string; title: string; content: string; importance?: number; staleNote?: string }>>;
+  } | null;
   runEndMemory?: RunEndMemory | null;
   /** Direct project-memory ports (save_note scope 'project' + recall_memory).
    *  Structural mirror of `RunCoderOptions.projectMemory` (host impl in deps.ts). */
@@ -38,6 +44,17 @@ export interface WorkerMemoryDeps {
       id: string; title: string; content: string;
       category?: string; source?: string; importance?: number; staleNote?: string;
     }>>;
+    list?(
+      projectId: number,
+      projectName: string,
+      limit?: number,
+      type?: string,
+    ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
+    forget?(
+      projectId: number,
+      projectName: string,
+      target: string,
+    ): Promise<{ archived: number }>;
   } | null;
 }
 
@@ -108,11 +125,31 @@ export function registerWorkerMemoryHandlers(
     return pm.recall(projectId, projectName, query, limit);
   });
 
+  const offList = bridge.handle('memoryList', async (payload) => {
+    const pm = getDeps()?.projectMemory;
+    if (!pm?.list) return [];
+    const { projectId, projectName, limit, type } = payload as {
+      projectId: number; projectName: string; limit?: number; type?: string;
+    };
+    return pm.list(projectId, projectName, limit, type);
+  });
+
+  const offForget = bridge.handle('memoryForget', async (payload) => {
+    const pm = getDeps()?.projectMemory;
+    if (!pm?.forget) return { archived: 0 };
+    const { projectId, projectName, target } = payload as {
+      projectId: number; projectName: string; target: string;
+    };
+    return pm.forget(projectId, projectName, target);
+  });
+
   return (): void => {
     try { offRetrieve(); } catch { /* best-effort */ }
     try { offExtract(); } catch { /* best-effort */ }
     try { offIsConfigured(); } catch { /* best-effort */ }
     try { offSave(); } catch { /* best-effort */ }
     try { offRecall(); } catch { /* best-effort */ }
+    try { offList(); } catch { /* best-effort */ }
+    try { offForget(); } catch { /* best-effort */ }
   };
 }

@@ -77,10 +77,13 @@ async function applyCollection(
   localId: number | undefined,
   colMap: Record<string, string>,
   clientDocId: string,
+  checkpoint?: () => void,
 ): Promise<void> {
   if (localId == null) {
     const created = await api.createCollection(projectId, body.name, body.description);
     colMap[String(created.id)] = clientDocId;
+    checkpoint?.(); // persist the new id→clientDocId mapping BEFORE inserting requests,
+    // so a throw mid-insert can't strand the collection as an un-mapped duplicate.
     for (const r of body.requests) {
       await api.createRequest(projectId, created.id, r as Partial<ApiRequest> & { name: string });
     }
@@ -132,6 +135,12 @@ export function useApiSync(projectId: number) {
       const colMap = { ...cur.colMap };
       const colVersions = { ...cur.colVersions };
       const now = Date.now();
+      // Persist the running maps after each applied doc so a throw mid-apply can't
+      // lose a just-created mapping/version (which would duplicate it on retry).
+      // The cursor stays un-advanced until the very end; re-pulled already-applied
+      // docs are skipped by their persisted version, so retry is idempotent.
+      const persistProgress = (cursor: number): void =>
+        persist({ workspaceId: cur.workspaceId, map, versions, colMap, colVersions, cursor });
 
       // 1) PUSH environments + collections (structure only — secrets stripped).
       const envs = await api.listEnvironments(projectId);
@@ -182,6 +191,7 @@ export function useApiSync(projectId: number) {
           map[String(saved.id)] = a.clientDocId;
         }
         versions[a.clientDocId] = a.version;
+        persistProgress(cur.cursor);
       }
 
       const colActions = planCollectionApply(pull.documents, cur.workspaceId, (cid) => colVersions[cid] ?? 0);
@@ -197,9 +207,10 @@ export function useApiSync(projectId: number) {
             delete colMap[String(localId)];
           }
         } else if (a.body) {
-          await applyCollection(projectId, a.body, localId, colMap, a.clientDocId);
+          await applyCollection(projectId, a.body, localId, colMap, a.clientDocId, () => persistProgress(cur.cursor));
         }
         colVersions[a.clientDocId] = a.version;
+        persistProgress(cur.cursor);
       }
 
       persist({ workspaceId: cur.workspaceId, map, versions, colMap, colVersions, cursor: Math.max(cur.cursor, pull.cursor) });

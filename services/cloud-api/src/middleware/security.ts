@@ -26,9 +26,14 @@ export function securityHeaders(): MiddlewareHandler<{ Bindings: Env }> {
  * Relaxed-but-scoped headers for the hosted-docs viewer (`/d/*`) — the ONE HTML
  * surface of this otherwise JSON-only API. It loads Swagger-UI from jsdelivr and
  * fetches the same-origin spec; the strict `default-src 'none'` would block all
- * of it. The page renders only our own redacted spec (Swagger-UI shows values as
- * text, never executes them), so a CDN script-src + 'unsafe-inline' init is an
- * acceptable, narrow surface. Framing is still denied.
+ * of it. NOTE: the spec's DESCRIPTION fields (info/tags/operations) ARE rendered
+ * as markdown→HTML by Swagger-UI (only example/parameter VALUES are shown as inert
+ * text), so those author-controlled strings rely on Swagger-UI's built-in
+ * sanitizer. Defense-in-depth already done upstream: the exporter only emits
+ * http(s)/mailto link schemes and escapes label delimiters, and publish re-redacts
+ * the spec. FOLLOW-UP hardening (separate task): pin Swagger-UI via SRI, replace
+ * the inline bootstrap with a nonce so `'unsafe-inline'` can be dropped, and add a
+ * server-side HTML sanitizer at publish time. Framing is still denied.
  */
 export function docsSecurityHeaders(): MiddlewareHandler<{ Bindings: Env }> {
   const CDN = 'https://cdn.jsdelivr.net';

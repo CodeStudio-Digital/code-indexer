@@ -6,7 +6,10 @@
  * false-positive) — they mask obvious credential shapes and credential-named
  * query params, and never touch `{{template}}` placeholders.
  */
-const REDACTED = '«redacted»';
+/** The placeholder substituted for a stripped secret. Exported so the sync apply
+ *  path can detect a redacted body and avoid clobbering a real local value. */
+export const REDACTION_PLACEHOLDER = '«redacted»';
+const REDACTED = REDACTION_PLACEHOLDER;
 
 export function redactSecrets(input: string | null | undefined): string {
   if (!input) return input ?? '';

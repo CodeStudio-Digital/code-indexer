@@ -71,20 +71,12 @@ function userCategoryForKind(kind: string): string {
 export const saveNoteTool: CoderTool = {
   name: 'save_note',
   description:
-    'Save a note. Default scope "session": a working-scratchpad note for THIS session, ' +
-    're-surfaced to you after context compaction and shown in the Session Drive panel.\n' +
-    'Scope "project": a DURABLE PROJECT MEMORY — persists across sessions and is retrieved in ' +
-    'future work on this codebase (a decision and its why, a confirmed convention, a non-obvious ' +
-    'gotcha you hit, a reusable how-to). Save project memory THE MOMENT you learn something a ' +
-    'future agent would otherwise rediscover the hard way — not at the end.\n' +
-    'Scope "user": a GLOBAL fact about the USER or how they want you to work — applies to EVERY ' +
-    'project, not just this one (e.g. "always keep files under 200 LOC", "never git stash my WIP", ' +
-    '"prefers PT-BR"). Save when the user states a preference or repeats a correction. Use kind ' +
-    '"fact" for who-they-are, any other kind for a working preference.\n' +
-    "DON'T: dump file contents, transient task state, or progress notes into project scope.\n" +
-    '`title` is the key for session notes (re-saving updates); project notes are deduplicated ' +
-    'against existing memory. Review session notes with `list_notes`; search project memory with ' +
-    '`recall_memory`.',
+    'Save a SESSION note — a working-scratchpad fact/decision/risk/TODO for THIS session, ' +
+    're-surfaced to you after context compaction and shown in the Session Drive panel. ' +
+    '`title` is the key (re-saving updates it); review with `list_notes`.\n' +
+    'This is NOT durable memory. For a fact FUTURE sessions should recall (a decision and its why, a ' +
+    'convention, a gotcha, a recipe) use `remember`; for a global fact about the user, ' +
+    '`remember({scope:"user"})`.',
   source: 'native',
   mutates: false,
   parallelSafe: false,
@@ -100,14 +92,6 @@ export const saveNoteTool: CoderTool = {
         description: 'Soft tag. For scope "project" it maps to the memory category. Default "fact".',
       },
       pinned: { type: 'boolean', description: 'Pin to always surface it after compaction (use sparingly).' },
-      scope: {
-        type: 'string',
-        enum: ['session', 'project', 'user'],
-        description:
-          'Where the note lives. "session" (default): this session only. ' +
-          '"project": durable cross-session PROJECT MEMORY for this codebase. ' +
-          '"user": GLOBAL fact about the user / how they want you to work, applied to every project.',
-      },
     },
     required: ['title', 'body'],
     additionalProperties: false,

@@ -140,8 +140,16 @@ export class ExecutingNode implements BehaviorNode {
     // first turn or when the task text materially changes, so we don't re-query
     // (or re-inject) every turn.
     ctx.injectionState.pendingMemory = undefined;
-    if (ctx.bridge?.getRelevantProjectMemory) {
-      const taskText = latestUserTaskText(ctx.messages);
+    // Honor an explicit "ignore / don't use memory" instruction this turn — skip
+    // proactive recall so no remembered facts are surfaced or applied (CC's
+    // ignore-memory rule). EN + PT-BR phrasings.
+    const memoryTaskText = latestUserTaskText(ctx.messages);
+    const ignoreMemory =
+      /\b(ignore|disregard|skip|don'?t use|do not use|n[aã]o use|n[aã]o usar|sem)\b[\s\S]{0,20}mem(o|ó)r(y|ia)/i.test(
+        memoryTaskText ?? '',
+      );
+    if (!ignoreMemory && ctx.bridge?.getRelevantProjectMemory) {
+      const taskText = memoryTaskText;
       if (taskText && (ctx.turn === 1 || taskText !== ctx.injectionState.lastMemoryQuery)) {
         try {
           ctx.injectionState.pendingMemory = await ctx.bridge.getRelevantProjectMemory(taskText, ctx.turn);
@@ -202,7 +210,7 @@ export class ExecutingNode implements BehaviorNode {
         } catch (e) {
           dbg('session-state render failed', (e as Error).message);
         }
-        if (policy.memoryIndexChars > 0) {
+        if (!ignoreMemory && policy.memoryIndexChars > 0) {
           try {
             const entries = ctx.bridge?.getProjectMemoryIndex?.() ?? null;
             const text = entries ? renderMemoryIndex(entries, policy.memoryIndexChars) : null;
@@ -213,7 +221,7 @@ export class ExecutingNode implements BehaviorNode {
         }
         // Global user preferences (migration 145) — NOT gated by the project's
         // memory toggle; carried even on minimal windows.
-        if (policy.userMemoryChars > 0) {
+        if (!ignoreMemory && policy.userMemoryChars > 0) {
           try {
             const entries = ctx.bridge?.getUserMemoryIndex?.() ?? null;
             const text = entries ? renderUserMemoryBlock(entries, policy.userMemoryChars) : null;

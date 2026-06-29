@@ -1016,13 +1016,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
               );
               return interleaveLabeled(perProject, limit);
             },
+            ...(opts.projectMemory.list
+              ? { list: (limit, type) => opts.projectMemory!.list!(project.id, project.name, limit, type) }
+              : {}),
+            ...(opts.projectMemory.forget
+              ? { forget: (target) => opts.projectMemory!.forget!(project.id, project.name, target) }
+              : {}),
           }
         : undefined,
     // Global USER memory (save_note scope 'user') — NOT gated by the project
     // toggle. Reuses the project-memory host port pointed at the reserved user
     // project (id 0); db.create derives scope='user' from the category.
     userMemory: opts.projectMemory
-      ? { save: (entry) => opts.projectMemory!.save(0, '__user__', entry) }
+      ? {
+          save: (entry) => opts.projectMemory!.save(0, '__user__', entry),
+          ...(opts.projectMemory.forget
+            ? { forget: (target) => opts.projectMemory!.forget!(0, '__user__', target) }
+            : {}),
+        }
       : undefined,
     companyContext: opts.companyContext,
     // Coder session id — keys per-agent resources (preview/devtools window).
@@ -1840,7 +1851,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             try {
               const per = perProjectIndexLimit(memoryReadProjects.length);
               return mergeMemoryIndex(
-                memoryReadProjects.map((p) => ({ name: p.name, entries: db.listMemoryIndex(p.id, per) })),
+                memoryReadProjects.map((p) => ({
+                  name: p.name,
+                  entries: db
+                    .listAgentMemoryIndex('project', p.id, per)
+                    .map((m) => ({ title: m.name, category: m.type, importance: m.importance })),
+                })),
               );
             } catch {
               return null;
@@ -1854,7 +1870,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       !opts.companyContext
         ? () => {
             try {
-              return db.listMemoryIndex(0, 12);
+              return db
+                .listAgentMemoryIndex('user', 0, 12)
+                .map((m) => ({ title: m.name, category: m.type, excerpt: m.excerpt }));
             } catch {
               return null;
             }

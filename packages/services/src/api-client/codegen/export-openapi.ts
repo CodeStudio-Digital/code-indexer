@@ -88,25 +88,40 @@ function responsesOf(examples: OpenApiResponseExample[] | undefined): Record<str
   if (!examples?.length) return { '200': { description: 'OK' } };
   const responses: Record<string, { description: string; content?: Record<string, { examples: Record<string, unknown> }> }> = {};
   for (const ex of examples.slice(0, MAX_EXAMPLES_PER_OP)) {
-    const code = ex.status != null ? String(ex.status) : 'default';
+    // OpenAPI response keys must be a valid HTTP status or 'default'; a non-HTTP
+    // status (0 from a transport error, or out of range) maps to 'default'.
+    const code = ex.status != null && ex.status >= 100 && ex.status <= 599 ? String(ex.status) : 'default';
     const resp = (responses[code] ??= { description: ex.statusText || 'Response' });
     if (ex.body == null || ex.body === '') continue;
-    const ct = ex.contentType || 'application/json';
-    const media = ((resp.content ??= {})[ct] ??= { examples: {} });
-    const body = ex.body.length > MAX_EXAMPLE_BODY ? ex.body.slice(0, MAX_EXAMPLE_BODY) : ex.body;
-    media.examples[uniqueKey(media.examples, ex.name || 'example')] = { value: parseMaybeJson(body, ct) };
+    // Normalize the media-type key (drop `; charset=…`) so one logical type is one
+    // entry; the FULL content-type still drives JSON detection.
+    const ctFull = ex.contentType || 'application/json';
+    const ctKey = ctFull.split(';')[0].trim().toLowerCase() || 'application/json';
+    const media = ((resp.content ??= {})[ctKey] ??= { examples: {} });
+    media.examples[uniqueKey(media.examples, ex.name || 'example')] = { value: exampleValue(ex.body, ctFull) };
   }
   return Object.keys(responses).length ? responses : { '200': { description: 'OK' } };
 }
 
-/** Parse a JSON body to an object (so Swagger-UI renders it structured); fall
- *  back to the raw string for non-JSON or unparseable bodies. */
-function parseMaybeJson(body: string, contentType: string): unknown {
-  if (/json/i.test(contentType) || /^\s*[[{]/.test(body)) {
-    try { return JSON.parse(body); } catch { /* keep raw */ }
+/** Resolve an example body to its OpenAPI `value`. Parses the FULL body so small
+ *  JSON stays structured (Swagger-UI renders it nicely); only an oversized body is
+ *  truncated — to a clearly-marked string, never a silently-broken JSON fragment.
+ *  The DECLARED content-type wins: a non-JSON type stays a string even if it starts
+ *  with `{`/`[`; the bracket sniff is only a fallback when the type is absent. */
+function exampleValue(body: string, contentType: string): unknown {
+  const ct = contentType.toLowerCase();
+  const isJson = /\bjson\b/.test(ct) || /\+json/.test(ct);
+  const unknown = !ct.includes('/');
+  const big = body.length > MAX_EXAMPLE_BODY;
+  if (!big && (isJson || (unknown && /^\s*[[{]/.test(body)))) {
+    try { return JSON.parse(body); } catch { /* fall through to string */ }
   }
-  return body;
+  return big ? `${body.slice(0, MAX_EXAMPLE_BODY)}\n… (truncated)` : body;
 }
+
+// Only http(s)/mailto links are embedded — a defense-in-depth block against a
+// `javascript:`/`data:` URL becoming a clickable link in the public viewer.
+const SAFE_LINK_SCHEME = /^(?:https?:|mailto:)/i;
 
 /** Compose the markdown `info.description` from overview + guides + links. */
 function composeDescription(extras?: ExportOpenApiExtras): string {
@@ -120,9 +135,16 @@ function composeDescription(extras?: ExportOpenApiExtras): string {
     if (!title && !bodyMd) continue;
     parts.push(title ? `## ${title}\n\n${bodyMd}`.trim() : bodyMd);
   }
-  const links = (extras.links ?? []).filter((l) => l && l.url);
-  if (links.length) parts.push(['## Links', ...links.map((l) => `- [${l.label || l.url}](${l.url})`)].join('\n'));
+  const links = (Array.isArray(extras.links) ? extras.links : [])
+    .filter((l) => l && typeof l.url === 'string' && SAFE_LINK_SCHEME.test(l.url));
+  if (links.length) parts.push(['## Links', ...links.map((l) => `- [${mdEscapeLabel(l.label || l.url)}](${l.url})`)].join('\n'));
   return parts.join('\n\n').trim();
+}
+
+/** Escape markdown link-label delimiters so a crafted label can't break out of
+ *  the `[label](url)` syntax. */
+function mdEscapeLabel(s: string): string {
+  return s.replace(/[\\[\]]/g, (c) => `\\${c}`);
 }
 
 function uniqueKey(obj: Record<string, unknown>, base: string): string {

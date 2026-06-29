@@ -1,7 +1,7 @@
 import type { VectorIdRecord } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 
-export type VectorType = 'file' | 'symbol' | 'symbol_body' | 'snapshot';
+export type VectorType = 'file' | 'symbol' | 'symbol_body' | 'snapshot' | 'agent_memory';
 
 export interface VectorIdInput {
   vectorId: string;

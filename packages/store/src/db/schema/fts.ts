@@ -53,6 +53,22 @@ export function createFtsTables(db: DB): void {
       INSERT INTO snapshots_fts(snapshots_fts, rowid, title, content, tags)
       VALUES ('delete', old.id, old.title, old.content, old.tags);
     END;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS agent_memory_fts USING fts5(
+      name, description, content,
+      content='agent_memory', content_rowid='id',
+      tokenize='unicode61 remove_diacritics 2'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS agent_memory_ai AFTER INSERT ON agent_memory BEGIN
+      INSERT INTO agent_memory_fts(rowid, name, description, content)
+      VALUES (new.id, new.name, new.description, new.content);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS agent_memory_ad AFTER DELETE ON agent_memory BEGIN
+      INSERT INTO agent_memory_fts(agent_memory_fts, rowid, name, description, content)
+      VALUES ('delete', old.id, old.name, old.description, old.content);
+    END;
   `);
 
   createFileContentsFts(db);
@@ -60,8 +76,9 @@ export function createFtsTables(db: DB): void {
 
 const CODE_FTS_TRIGGERS = [
   'files_ai', 'files_ad', 'symbols_ai', 'symbols_ad', 'snapshots_ai', 'snapshots_ad',
+  'agent_memory_ai', 'agent_memory_ad',
 ] as const;
-const CODE_FTS_TABLES = ['files_fts', 'symbols_fts', 'snapshots_fts'] as const;
+const CODE_FTS_TABLES = ['files_fts', 'symbols_fts', 'snapshots_fts', 'agent_memory_fts'] as const;
 
 /** Force-drop a (possibly corrupt) FTS5 vtab. DROP TABLE usually works even on
  *  a malformed index; if the vtab module can't open it, remove its sqlite_master

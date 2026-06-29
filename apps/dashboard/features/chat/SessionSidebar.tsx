@@ -442,7 +442,7 @@ export const SessionSidebar = memo(function SessionSidebar({
       )}
 
       <ScrollArea className="flex-1 w-full chat-scroll">
-        <div className="p-2 space-y-2">
+        <div className="px-1.5 py-2 space-y-3">
           {sessions?.length === 0 && (
             <div className="p-4 text-xs text-muted-foreground text-center">
               {isArchivedView
@@ -455,32 +455,37 @@ export const SessionSidebar = memo(function SessionSidebar({
             const collapsed = collapsedGroups.has(key);
             const headerLabel = label ?? (group ? group.name : t('chat:sidebar.ungrouped'));
             return (
-              <div key={key} className="space-y-1">
-                <div className="flex items-center gap-1 px-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+              <div key={key} className="space-y-0.5">
+                <div className="group/hdr flex items-center gap-1.5 px-1.5 h-6 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
                   <button
                     type="button"
                     onClick={() => toggleGroupCollapse(key)}
-                    className="flex min-w-0 items-center gap-1 hover:text-foreground transition-colors"
+                    className="flex min-w-0 items-center gap-1.5"
                   >
                     {collapsed ? (
-                      <ChevronRight className="h-3 w-3 shrink-0" />
+                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/60" />
                     ) : (
-                      <ChevronDown className="h-3 w-3 shrink-0" />
+                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/60" />
                     )}
                     {accent && (
                       <span
-                        className="h-2 w-2 shrink-0 rounded-full"
+                        className="h-1.5 w-1.5 shrink-0 rounded-full"
                         style={{ backgroundColor: accent.solid }}
                         aria-hidden="true"
                       />
                     )}
-                    <span className="font-semibold truncate normal-case" title={headerLabel}>
+                    <span
+                      className="font-semibold truncate normal-case tracking-normal text-muted-foreground/90 group-hover/hdr:text-foreground transition-colors"
+                      title={headerLabel}
+                    >
                       {headerLabel}
                     </span>
-                    <span className="text-muted-foreground/60 shrink-0">({items.length})</span>
+                    <span className="shrink-0 ml-1 font-mono tabular-nums text-muted-foreground/45">
+                      {items.length}
+                    </span>
                   </button>
                   {group && (
-                    <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+                    <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover/hdr:opacity-100 transition-opacity">
                       <button
                         type="button"
                         onClick={() => onRenameGroup(group)}
@@ -532,6 +537,18 @@ export const SessionSidebar = memo(function SessionSidebar({
   );
 });
 
+/** Compact, software-style token figure: 13_796_002 → "13.8M", 1_839_937 → "1.8M",
+ *  9_412 → "9.4K", 945 → "945". The exact value lives in the row's native title. */
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) {
+    const v = n / 1000;
+    return `${(v < 10 ? v.toFixed(1) : Math.round(v).toString()).replace(/\.0$/, '')}K`;
+  }
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+}
+
 const SessionRow = memo(function SessionRow({
   session: s,
   selected,
@@ -578,49 +595,92 @@ const SessionRow = memo(function SessionRow({
     if (selectMode) onToggle(s.id);
     else onSelect(s.id);
   };
+  // Visual states. `isActive` paints the soft tint + primary left rule for the
+  // open session; `isChecked` is the assertive multi-select band (outranks
+  // active). Hover only when neither is set so the states never fight.
+  const isActive = selected && !selectMode;
+  const isChecked = selectMode && checked;
   return (
     <div
       onClick={handleClick}
       className={cn(
-        'group rounded-lg px-2.5 py-2 cursor-pointer transition-colors',
-        selected && !selectMode ? 'bg-accent text-accent-foreground' : 'hover:bg-muted',
-        selectMode && checked && 'ring-1 ring-primary bg-accent/60',
+        // Two-line row. The 2px left accent rule is a `before:` pseudo-element
+        // (transparent at rest) — a quiet edge marker instead of a heavy fill,
+        // and GPU-cheap (no per-row shadow) across a long list.
+        'group relative flex items-center gap-2 min-w-0 rounded-md pl-3 pr-2 py-1.5 cursor-pointer transition-colors',
+        "before:content-[''] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors",
+        !isActive && !isChecked && 'hover:bg-muted/50',
+        isActive && 'bg-accent/40 before:bg-primary hover:bg-accent/40',
+        isChecked && 'bg-accent/30 before:bg-primary/70 ring-1 ring-inset ring-primary/40',
       )}
     >
-      <div className="flex items-start gap-2 min-w-0">
-        {selectMode ? (
-          <div className="h-7 w-7 flex items-center justify-center shrink-0 mt-0.5">
-            {checked ? (
-              <CheckSquare className="h-4 w-4 text-primary" />
-            ) : (
-              <Square className="h-4 w-4 text-muted-foreground" />
-            )}
-          </div>
-        ) : (
+      {selectMode ? (
+        <div className="h-6 w-6 flex items-center justify-center shrink-0">
+          {checked ? (
+            <CheckSquare className="h-3.5 w-3.5 text-primary" />
+          ) : (
+            <Square className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
+      ) : (
+        <div className="relative shrink-0">
           <div
             className={cn(
-              'h-7 w-7 rounded-md flex items-center justify-center text-white text-[10px] font-bold uppercase shrink-0 mt-0.5',
+              // Lit-from-above avatar: inner hairline ring + 1px top highlight.
+              'h-6 w-6 rounded-[5px] flex items-center justify-center text-white text-[9px] font-bold uppercase tracking-tight tabular-nums ring-1 ring-inset ring-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)]',
               providerAccent(s.provider),
             )}
-            style={accent ? { boxShadow: `0 0 0 2px ${accent.solid}` } : undefined}
           >
             {s.provider.slice(0, 2)}
           </div>
-        )}
-        <div className="flex-1 min-w-0 overflow-hidden">
-          {/* Native title (was a per-row Radix Tooltip wrapping the static
-              title) — removes N tooltip providers/portals from a long list. */}
-          <div className="font-medium text-xs truncate" title={s.title}>
-            {s.title}
-          </div>
-          <div className="text-[10px] text-muted-foreground truncate font-mono mt-0.5">{s.model}</div>
-          <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
-            <span className="tabular-nums">{tokens.toLocaleString()} tok</span>
-            <span>·</span>
-            <span>{formatRelativeTime(s.updated_at)}</span>
-          </div>
+          {/* Workspace presence dot — ties the session to its group/header
+              without the old chunky 2px ring stealing avatar width. */}
+          {accent && (
+            <span
+              className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-2 ring-card"
+              style={{ backgroundColor: accent.solid }}
+              aria-hidden="true"
+            />
+          )}
         </div>
-        {!selectMode && (
+      )}
+
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Line 1: title + right-floated token figure (Linear-style numerals).
+            Native title carries the exact count; the row shows it compacted. */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className="font-medium text-[11px] leading-tight truncate text-foreground/95 group-hover:text-foreground"
+            title={s.title}
+          >
+            {s.title}
+          </span>
+          <span className="ml-auto flex items-center gap-1 shrink-0">
+            {!selectMode && s.is_favorite && (
+              <Star className="h-3 w-3 fill-current text-yellow-500" aria-hidden="true" />
+            )}
+            <span
+              className="font-mono text-[10px] tabular-nums text-muted-foreground/70 tracking-tight"
+              title={`${tokens.toLocaleString()} tokens`}
+            >
+              {formatTokenCount(tokens)}
+              <span className="text-muted-foreground/40"> tok</span>
+            </span>
+          </span>
+        </div>
+        {/* Line 2: model · relative time, all mono so it reads as metadata. */}
+        <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground tabular-nums min-w-0">
+          <span className="text-muted-foreground/80 truncate min-w-0">{s.model}</span>
+          <span className="text-muted-foreground/40 shrink-0">·</span>
+          <span className="shrink-0">{formatRelativeTime(s.updated_at)}</span>
+        </div>
+      </div>
+
+      {/* Hover actions overlay the token figure (slides over on hover with a
+          from-card fade), so the resting row stays calm and tokens reclaim the
+          width an always-on action column would waste. */}
+      {!selectMode && (
+        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pl-5 bg-gradient-to-l from-card via-card to-transparent opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <button
             type="button"
             aria-label={s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
@@ -629,21 +689,19 @@ const SessionRow = memo(function SessionRow({
               onFavorite(s.id, !s.is_favorite);
             }}
             className={cn(
-              'shrink-0 rounded p-1 transition-colors',
+              'inline-flex h-5 w-5 items-center justify-center rounded transition-colors',
               s.is_favorite
                 ? 'text-yellow-500 hover:text-yellow-600'
-                : 'text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-background/60',
+                : 'text-muted-foreground hover:text-foreground hover:bg-background/60',
             )}
           >
             <Star className={cn('h-3.5 w-3.5', s.is_favorite && 'fill-current')} />
           </button>
-        )}
-        {!selectMode && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
               <button
                 aria-label={t('chat:sidebar.sessionActions')}
-                className="shrink-0 text-muted-foreground hover:text-foreground hover:bg-background/60 rounded p-1 transition-colors"
+                className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-background/60 transition-colors"
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
@@ -696,8 +754,8 @@ const SessionRow = memo(function SessionRow({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 });

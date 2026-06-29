@@ -353,6 +353,57 @@ export interface ContextSnapshot {
   scope?: SnapshotScope;
 }
 
+// ─── Agent Memory (migration 181) ─────────────────────────────────
+// Dedicated durable memory store, SEPARATE from snapshots. Single-fact rows
+// the agent writes for future sessions, with a logical frontmatter
+// (name/description/type) and logical-immutable archive/supersede.
+
+/** Closed taxonomy of agent-memory types — keep small so the recall selector
+ *  doesn't degrade. */
+export type AgentMemoryType =
+  | 'preference'
+  | 'convention'
+  | 'procedure'
+  | 'architecture'
+  | 'gotcha'
+  | 'external_pointer'
+  | 'pattern'
+  | 'decision'
+  | 'note';
+
+/** Agent-memory scope: project-bound, global-user, or machine-local. */
+export type AgentMemoryScope = 'project' | 'user' | 'local';
+
+export interface AgentMemoryRow {
+  id: number;
+  scope: AgentMemoryScope;
+  /** 0 for user/global memory; a real project id otherwise. */
+  project_id: number;
+  /** kebab-case slug derived from the title — the stable identity key. */
+  name: string;
+  description: string;
+  type: AgentMemoryType;
+  content: string;
+  /** Provenance: agent | user | distill | migrated-snapshot | ... */
+  source: string;
+  /** Source snapshot id when migrated from a legacy snapshot (idempotency). */
+  source_snapshot_id: number | null;
+  importance: number;
+  /** JSON array of project-relative paths this memory depends on (staleness). */
+  referenced_files: string | null;
+  embedding_hash: string | null;
+  vector_id: string | null;
+  /** Sync intent (cloud push). local scope is forced to 0; entitlement-gated. */
+  sync: number;
+  archived_at: string | null;
+  archived_reason: string | null;
+  superseded_by_id: number | null;
+  last_accessed_at: string | null;
+  access_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Webhooks ─────────────────────────────────────────────────────
 
 export interface Webhook {

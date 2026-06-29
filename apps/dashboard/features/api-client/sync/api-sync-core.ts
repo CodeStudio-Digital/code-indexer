@@ -12,7 +12,7 @@
  */
 import type { SyncPullItem, SyncPushItem } from '@mcp/api-bus';
 import type { ApiCollection, ApiEnvironment, ApiRequest, KvRow } from '../types.js';
-import { redactSecrets } from '../ai/redact.js';
+import { redactSecrets, REDACTION_PLACEHOLDER } from '../ai/redact.js';
 
 export interface EnvBody {
   name: string;
@@ -94,7 +94,10 @@ export function planEnvApply(
 // The synced collection doc embeds its redacted requests as a tree.
 
 /** Request fields carried in a synced collection (mirror ApiRequest column names so
- *  the apply path can hand them straight to `createRequest`). */
+ *  the apply path can hand them straight to `createRequest`).
+ *  Deliberately EXCLUDED from sync (local/derived state, never round-tripped):
+ *  `param_docs_json`, `verified`, `expected_status`, `assert_json`, `last_status`,
+ *  `last_run_at`, `source`, and the host-local `body_binary_path`. */
 export interface RequestBody {
   name: string;
   method: string;
@@ -202,8 +205,8 @@ export function collectionToBody(collection: ApiCollection, requests: ApiRequest
 
 /** Stable identity for matching a synced request against a local one: method +
  *  path + name. Works on both `ApiRequest` and the synced `RequestBody`. */
-export function requestMatchKey(r: { name: string; method: string; path_template: string }): string {
-  return `${(r.method || 'GET').toUpperCase()} ${r.path_template} ${r.name}`;
+export function requestMatchKey(r: { name: string; method: string; path_template: string; folder?: string | null }): string {
+  return `${(r.method || 'GET').toUpperCase()}${r.path_template}${r.folder ?? ''}${r.name}`;
 }
 
 /** Restore blanked credential-named values in an incoming KvRow JSON from the
@@ -239,7 +242,11 @@ function mergeAuthSecrets(incomingJson: string | null, localJson: string | null)
     const inc = JSON.parse(incomingJson) as Record<string, unknown>;
     const loc = localJson ? (JSON.parse(localJson) as Record<string, unknown>) : {};
     for (const f of AUTH_SECRET_FIELDS) {
-      if (!inc[f] && typeof loc[f] === 'string' && loc[f]) inc[f] = loc[f];
+      // Only restore a field the incoming auth actually HAS and that was blanked
+      // (redactAuthJson keeps the key, sets ''). `f in inc` avoids adding a stray
+      // field from a different local auth type; the explicit empty/null check
+      // avoids treating a falsy non-string (0/false) as "blank".
+      if (f in inc && (inc[f] === '' || inc[f] == null) && typeof loc[f] === 'string' && loc[f]) inc[f] = loc[f];
     }
     return JSON.stringify(inc);
   } catch {
@@ -247,12 +254,17 @@ function mergeAuthSecrets(incomingJson: string | null, localJson: string | null)
   }
 }
 
-/** A text body is carried redacted. If re-redacting the local body reproduces the
- *  incoming one, the remote didn't actually change it → keep the (un-redacted)
- *  local value. Otherwise honor the genuine remote edit. */
+/** A text body is carried redacted. Resolve the apply value without ever writing
+ *  the redaction placeholder over a real local secret:
+ *   - remote unchanged (incoming === our own redaction of local) → keep local;
+ *   - genuine remote edit that still carries a `«redacted»` mask → keep local
+ *     (we forgo the remote structural edit; the safe trade-off, since taking it
+ *     would clobber the local secret with the placeholder);
+ *   - genuine remote edit with no mask → honor it. */
 function mergeRedactedText(incoming: string | null, local: string | null): string | null {
-  if (incoming == null) return incoming;
-  if (local != null && redactSecrets(local) === incoming) return local;
+  if (incoming == null || local == null) return incoming;
+  if (redactSecrets(local) === incoming) return local;
+  if (incoming.includes(REDACTION_PLACEHOLDER)) return local;
   return incoming;
 }
 

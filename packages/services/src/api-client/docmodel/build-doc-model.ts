@@ -113,7 +113,15 @@ function parseParamDocs(json: string | null): DocParam[] {
 
 function parseBranding(json: string | null): DocBranding {
   if (!json) return {};
-  try { return JSON.parse(json) as DocBranding; } catch { return {}; }
+  try {
+    const b = JSON.parse(json);
+    if (!b || typeof b !== 'object') return {};
+    const branding = b as DocBranding;
+    // Guard the one field the exporter iterates: a non-array `links` (corrupt or
+    // hand-edited branding_json) would otherwise throw on `.filter` downstream.
+    if (!Array.isArray(branding.links)) delete (branding as { links?: unknown }).links;
+    return branding;
+  } catch { return {}; }
 }
 
 function parseRecord(json: string | null): Record<string, string> {

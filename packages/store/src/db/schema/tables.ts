@@ -92,6 +92,44 @@ export function createBaseTables(db: DB): void {
       created_by TEXT NOT NULL DEFAULT 'manual'
     );
 
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL DEFAULT 'project',
+      project_id INTEGER NOT NULL DEFAULT 0,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT 'note',
+      content TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'agent',
+      source_snapshot_id INTEGER,
+      importance REAL NOT NULL DEFAULT 0.5,
+      referenced_files TEXT,
+      embedding_hash TEXT,
+      vector_id TEXT,
+      sync INTEGER NOT NULL DEFAULT 1,
+      archived_at TEXT,
+      archived_reason TEXT,
+      superseded_by_id INTEGER,
+      last_accessed_at TEXT,
+      access_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_memory_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      scope TEXT,
+      project_id INTEGER,
+      memory_id INTEGER,
+      session_id INTEGER,
+      kept INTEGER,
+      dropped INTEGER,
+      query_hash TEXT,
+      meta_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS costs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -205,6 +243,15 @@ export function createBaseTables(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent);
     CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
     CREATE INDEX IF NOT EXISTS idx_snapshots_project ON snapshots(project_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_memory_live_name
+      ON agent_memory(scope, project_id, name) WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_scope_project ON agent_memory(scope, project_id, archived_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_source_snapshot ON agent_memory(source_snapshot_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_type ON agent_memory(type);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_sync ON agent_memory(sync);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_embedding ON agent_memory(embedding_hash);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_events_type ON agent_memory_events(event_type, created_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_events_project ON agent_memory_events(project_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_costs_project ON costs(project_id);
     CREATE INDEX IF NOT EXISTS idx_costs_run ON costs(run_id);
     CREATE INDEX IF NOT EXISTS idx_file_snapshots_run ON file_snapshots(run_id);

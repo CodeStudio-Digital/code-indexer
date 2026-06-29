@@ -117,6 +117,20 @@ export interface RunCoderOptions {
       importance?: number;
       staleNote?: string;
     }>>;
+    /** Logical-frontmatter index for `recall_memory(mode:'list')` / auditing. */
+    list?(
+      projectId: number,
+      projectName: string,
+      limit?: number,
+      type?: string,
+    ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
+    /** Archive a live memory by name/title within the scope (logical delete).
+     *  Returns how many rows were archived (0 when no match). */
+    forget?(
+      projectId: number,
+      projectName: string,
+      target: string,
+    ): Promise<{ archived: number }>;
   };
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;

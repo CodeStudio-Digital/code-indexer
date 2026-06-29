@@ -537,6 +537,19 @@ export function createApp() {
   // quiet (the moment most sessions actually "end"). Same lifecycle posture
   // as the watchdog: unref()-ed timer, best-effort, flag-gated
   // (MCP_MEMORY_SWEEPER=0 disables).
+  // One-shot Agent Memory embedding back-fill — migrated/legacy rows (and any
+  // saved while no embedding backend was configured) get their vectors so
+  // semantic recall works, not just FTS. Best-effort, bounded, off the hot path.
+  if (deps.agentMemoryService.hasEmbeddingBackend()) {
+    void deps.agentMemoryService
+      .backfillEmbeddings(undefined, 1000)
+      .then((r) => {
+        if (r.embedded > 0 || r.failed > 0) {
+          console.log(`[memory] agent-memory embedding backfill — embedded=${r.embedded} failed=${r.failed}`);
+        }
+      })
+      .catch((e) => console.warn(`[memory] backfill failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
   if (memorySweeperEnabled()) {
     try {
       startMemorySweeper({

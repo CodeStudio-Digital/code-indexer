@@ -363,6 +363,11 @@ mcp-code-indexer hierarchy meu-projeto IndexAgent
 
 ### Snapshots (Memoria de Contexto)
 
+> **Snapshots ≠ Agent Memory.** Snapshots são contexto curado/indexado para review.
+> A memória durável do agente (decisões, gotchas, convenções, recipes) vive numa
+> tabela dedicada `agent_memory` (migração 181) — ver [memory-system.md](memory-system.md).
+> Não use snapshots como memória de rotina.
+
 ```bash
 # Listar snapshots
 mcp-code-indexer snapshots list meu-projeto
