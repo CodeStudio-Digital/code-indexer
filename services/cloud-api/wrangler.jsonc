@@ -54,12 +54,14 @@
     "EMAIL_FROM": "no-reply@public.codestudio.digital",
     // Explicit CORS allowlist (auditable). The desktop app is not a browser origin;
     // these are the future web viewer / dashboard origins.
-    "ALLOWED_ORIGINS": "https://share.codestudio.dev,https://app.codestudio.dev,https://account.codestudio.dev",
+    "ALLOWED_ORIGINS": "https://share.codestudio.dev,https://app.codestudio.dev,https://account.codestudio.dev,https://codestudio-account-portal.pages.dev",
     // Browser OAuth (P7-B/C) — public config. The per-provider client id/secret +
     // OAUTH_STATE_SECRET are SECRETS (set via `wrangler secret put`), not here.
     // OAUTH_PUBLIC_BASE_URL is where providers redirect back (this Worker); the
     // registered callback is <OAUTH_PUBLIC_BASE_URL>/v1/auth/oauth/<provider>/callback.
     "OAUTH_PUBLIC_BASE_URL": "https://codestudio-cloud-api.maiconspo6792.workers.dev",
-    "PORTAL_BASE_URL": "https://account.codestudio.dev"
+    // Points at the LIVE Pages deployment until account.codestudio.dev is mapped to
+    // the Pages project. Switch back to the custom domain once DNS is set up.
+    "PORTAL_BASE_URL": "https://codestudio-account-portal.pages.dev"
   }
 }

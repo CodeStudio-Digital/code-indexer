@@ -10,5 +10,6 @@ const env = (import.meta as unknown as { env?: Record<string, string | undefined
 export const CLOUD_API_BASE: string = (env.VITE_CLOUD_API_URL ?? '').replace(/\/$/, '');
 
 /** Web account portal (Cloudflare Pages) — email/password sign-in + account
- *  management. Override with `VITE_PORTAL_URL`. */
-export const PORTAL_URL: string = (env.VITE_PORTAL_URL ?? 'https://account.codestudio.dev').replace(/\/$/, '');
+ *  management. Defaults to the LIVE Pages URL until account.codestudio.dev is
+ *  mapped to the Pages project. Override with `VITE_PORTAL_URL`. */
+export const PORTAL_URL: string = (env.VITE_PORTAL_URL ?? 'https://codestudio-account-portal.pages.dev').replace(/\/$/, '');
