@@ -29,8 +29,15 @@ const kindSchema = z.enum([
   'vault_meta',
 ]);
 
-/** Per-record cap (~64KB) so a vault ciphertext batch can't abuse the 4MB body limit. */
-const MAX_BODY_BYTES = 64 * 1024;
+const isVaultKind = (k: SyncKind): boolean => (VAULT_KINDS as readonly string[]).includes(k);
+
+// Per-record caps. Vault records are small ciphertext blobs — keep them tight so a
+// batch can't abuse the 4MB body limit. Structured docs (collections especially)
+// are legitimately large (many requests + scripts + example bodies), so they get a
+// far higher per-item cap; the 4MB request body limit still bounds the whole push.
+const MAX_VAULT_BODY_BYTES = 64 * 1024;
+const MAX_DOC_BODY_BYTES = 1024 * 1024;
+const bodyCapFor = (k: SyncKind): number => (isVaultKind(k) ? MAX_VAULT_BODY_BYTES : MAX_DOC_BODY_BYTES);
 
 const pushItemSchema = z
   .object({
@@ -41,11 +48,9 @@ const pushItemSchema = z
     deleted: z.boolean().optional(),
     body: z.unknown().optional(),
   })
-  .refine((d) => d.body === undefined || JSON.stringify(d.body).length <= MAX_BODY_BYTES, {
-    message: `body exceeds ${MAX_BODY_BYTES} bytes`,
+  .refine((d) => d.body === undefined || JSON.stringify(d.body).length <= bodyCapFor(d.kind), {
+    message: 'body exceeds the per-record size limit',
   });
-
-const isVaultKind = (k: SyncKind): boolean => (VAULT_KINDS as readonly string[]).includes(k);
 
 /**
  * Gate a set of kinds: vault kinds need `sshVault`, everything else needs `sync`.
@@ -75,7 +80,10 @@ export function syncRouter(): Hono<{ Bindings: Env }> {
 
   app.post('/push', async (c) => {
     const parsed = pushSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.json({ code: 'validation_failed', message: 'Invalid push payload.', details: parsed.error.flatten() }, 400);
+    if (!parsed.success) {
+      console.warn('[sync] push validation failed', JSON.stringify(parsed.error.flatten()));
+      return c.json({ code: 'validation_failed', message: 'Invalid push payload.', details: parsed.error.flatten() }, 400);
+    }
     const claims = await requireClaims(c, createIdentityBundle(c.env));
     if (!claims) return unauthorized(c);
     if (!isVerified(claims)) return emailNotVerified(c);
