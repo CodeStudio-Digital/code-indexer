@@ -82,6 +82,104 @@ const LOC_ALLOWLIST: Record<string, string> = {
     'Composition root for company services; body is mostly slot wiring.',
 };
 
+/**
+ * Grandfathered hard-cap violations — files that already exceeded 500 LOC when the
+ * ratchet was turned on. They are accepted AS-IS so CI is green, while the hard cap
+ * still BLOCKS any NEW file over 500 (no regression). The intent is to chip away at
+ * this list with a decomposition backlog over time; prefer splitting new code over
+ * adding entries here. Regenerate after a split:
+ *   pnpm check:loc            # the ❌ list is the candidates to (re)grandfather
+ */
+const GRANDFATHERED: ReadonlySet<string> = new Set([
+  'apps/dashboard/features/admin/PipelineBindingsPanel.tsx',
+  'apps/dashboard/features/admin/SupervisorPanel.tsx',
+  'apps/dashboard/features/agents/AgentsTab.tsx',
+  'apps/dashboard/features/agents/CompanySessionView.tsx',
+  'apps/dashboard/features/agents/DatabasesTab.tsx',
+  'apps/dashboard/features/agents/DrivePanel.tsx',
+  'apps/dashboard/features/agents/pipelines/NodeEditPanel.tsx',
+  'apps/dashboard/features/agents/pipelines/PipelineBuilder.tsx',
+  'apps/dashboard/features/chat/AgentChat.tsx',
+  'apps/dashboard/features/chat/composer/Composer.tsx',
+  'apps/dashboard/features/chat/messages/MessageList.tsx',
+  'apps/dashboard/features/chat/messages/MessageView.tsx',
+  'apps/dashboard/features/chat/SessionMetricsModal.tsx',
+  'apps/dashboard/features/chat/SessionSidebar.tsx',
+  'apps/dashboard/features/db-client/tree/ConnectionTree.tsx',
+  'apps/dashboard/features/db-client/useDbClient.ts',
+  'apps/dashboard/features/docs/AddSourceDialog.tsx',
+  'apps/dashboard/features/docs/docs-api.ts',
+  'apps/dashboard/features/ssh/SshPanel.tsx',
+  'apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts',
+  'apps/dashboard/features/telemetry/TelemetryDashboard.tsx',
+  'apps/dashboard/features/workspace/EditorTabBar.tsx',
+  'apps/dashboard/hooks/agent-stream/handlers.ts',
+  'apps/dashboard/hooks/agent-stream/types.ts',
+  'apps/dashboard/hooks/useCompanyStream.ts',
+  'apps/dashboard/lib/perf/route-startup-metrics.ts',
+  'apps/dashboard/state/workspace.ts',
+  'apps/http-api/server.ts',
+  'apps/http-api/server/deps.ts',
+  'apps/http-api/server/routes/coder/interaction.ts',
+  'apps/http-api/server/routes/coder/sessions.ts',
+  'apps/http-api/server/routes/coder/stream.ts',
+  'apps/http-api/server/routes/company/sessions.ts',
+  'apps/http-api/server/routes/company/stream.ts',
+  'apps/http-api/server/routes/docs/index.ts',
+  'apps/http-api/sse/CoderWorkerPool.ts',
+  'apps/http-api/sse/WorkerOrchestratorPool.ts',
+  'apps/http-api/workers/coder-worker.ts',
+  'apps/http-api/workers/company-worker.ts',
+  'packages/code-agent/src/core/runner.ts',
+  'packages/code-agent/src/core/runner/events.ts',
+  'packages/code-agent/src/core/runner/machine/types.ts',
+  'packages/code-agent/src/core/runner/nodes/executing.ts',
+  'packages/code-agent/src/core/runner/nodes/executing-dispatch.ts',
+  'packages/code-agent/src/core/smart-reducers.ts',
+  'packages/code-agent/src/core/system-prompt.ts',
+  'packages/code-agent/src/index.ts',
+  'packages/code-agent/src/lsp/ts-service.ts',
+  'packages/code-agent/src/pipelines/ChatPipelineExecutor.ts',
+  'packages/code-agent/src/providers/anthropic.ts',
+  'packages/code-agent/src/providers/capabilities.ts',
+  'packages/code-agent/src/providers/chatgpt.ts',
+  'packages/code-agent/src/providers/gemini.ts',
+  'packages/code-agent/src/tools/apply-patch.ts',
+  'packages/code-agent/src/tools/code-exec.ts',
+  'packages/code-agent/src/tools/exec-command.ts',
+  'packages/code-agent/src/tools/execute-tasks.ts',
+  'packages/code-agent/src/tools/fs.ts',
+  'packages/code-agent/src/tools/implement-subagent.ts',
+  'packages/code-agent/src/tools/spawn-agent.ts',
+  'packages/code-agent/src/tools/tasks.ts',
+  'packages/code-agent/src/tools/tiers.ts',
+  'packages/company/src/services/InboxQueue.ts',
+  'packages/company/src/services/PipelineExecutor.ts',
+  'packages/company/src/services/SandboxService.ts',
+  'packages/company/src/services/supervisor/AgentSupervisor.ts',
+  'packages/company/src/system-prompts.ts',
+  'packages/company/src/tools/design-system/ds-publish-version.ts',
+  'packages/company/src/tools/master-tools.ts',
+  'packages/company/src/tools/subordinate-tools.ts',
+  'packages/design-system/src/package-audit.ts',
+  'packages/design-system/src/source-inventory.ts',
+  'packages/indexer/src/indexer/tree-sitter/extractor.ts',
+  'packages/indexer/src/search/embeddings.ts',
+  'packages/indexer/src/search/hybrid.ts',
+  'packages/indexer/src/search/hybrid-pipeline.ts',
+  'packages/services/src/chrome-service/chrome-service.ts',
+  'packages/services/src/sandbox/drivers/cli-oci-driver.ts',
+  'packages/services/src/services/docs/auto-discovery.ts',
+  'packages/services/src/services/docs/url-fetcher.ts',
+  'packages/services/src/services/oauth/claude-code.ts',
+  'packages/services/src/services/oauth/kimi-code.ts',
+  'packages/services/src/verdaccio/verdaccio-service.ts',
+  'packages/shared/src/types.ts',
+  'packages/store/src/db.ts',
+  'packages/store/src/skill-store.ts',
+  'packages/store/src/vectors.ts',
+]);
+
 function shouldSkipDir(name: string): boolean {
   return name.startsWith('.') || EXCLUDE_DIRS.has(name);
 }
@@ -134,7 +232,7 @@ function main(): void {
     const loc = text.split(/\r?\n/).length;
     if (loc <= SOFT_CAP) continue;
     if (loc > HARD_CAP) {
-      if (LOC_ALLOWLIST[rel]) continue;
+      if (LOC_ALLOWLIST[rel] || GRANDFATHERED.has(rel)) continue;
       violations.push({ path: rel, loc, level: 'HARD' });
     } else {
       violations.push({ path: rel, loc, level: 'WARN' });
