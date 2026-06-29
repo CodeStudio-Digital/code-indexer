@@ -8,6 +8,14 @@
  */
 import type { CloudFetchResult, CloudRoute } from '@mcp/api-bus';
 
+/** Sanitize a header value: keep only printable ASCII and trim. A stray control
+ *  char or non-ASCII byte from os.release()/hostname()/app.getVersion() makes the
+ *  Headers/fetch layer throw "invalid header value" (TypeError), which the catch
+ *  below would otherwise surface as a misleading 'offline'. */
+function hv(v: string): string {
+  return String(v).replace(/[^\x20-\x7e]/g, '').trim();
+}
+
 export interface TransportDeps {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
@@ -28,12 +36,14 @@ export function createCloudTransport(deps: TransportDeps) {
   async function once(route: CloudRoute, input: unknown, token: string | null): Promise<Response> {
     const headers: Record<string, string> = {
       'x-cs-client': 'desktop',
-      'x-cs-version': deps.appVersion,
-      'x-cs-os': deps.os,
+      'x-cs-version': hv(deps.appVersion),
+      'x-cs-os': hv(deps.os),
     };
-    if (deps.deviceName) headers['x-cs-device-name'] = deps.deviceName;
-    if (deps.osRelease) headers['x-cs-os-release'] = deps.osRelease;
-    if (token) headers.authorization = `Bearer ${token}`;
+    const dn = hv(deps.deviceName ?? '');
+    const osr = hv(deps.osRelease ?? '');
+    if (dn) headers['x-cs-device-name'] = dn;
+    if (osr) headers['x-cs-os-release'] = osr;
+    if (token) headers.authorization = `Bearer ${hv(token)}`;
     const init: RequestInit = { method: route.method, headers, signal: AbortSignal.timeout(timeout) };
     if (route.method !== 'GET') {
       headers['content-type'] = 'application/json';
