@@ -280,6 +280,9 @@ export const api = {
   oauthStartUrl(provider: ProviderId): string {
     return `${API_BASE}/v1/auth/oauth/${provider}/start?flow=portal`;
   },
+  // Device login: mint a one-time handoff for the desktop loopback from this
+  // (already authenticated) browser session. Used by the /device bridge page.
+  createHandoff: () => request<{ handoff: string }>('/v1/auth/handoff', { method: 'POST' }),
 
   // sso (per-org OIDC, Enterprise)
   ssoStartUrl: (orgId: string): string => `${API_BASE}/v1/auth/sso/${encodeURIComponent(orgId)}/start?flow=portal`,

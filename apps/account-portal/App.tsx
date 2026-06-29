@@ -7,6 +7,7 @@ import { useAuth } from './lib/auth.js';
 import { cn, Spinner } from './lib/ui.js';
 import { LoginPage } from './pages/Login.js';
 import { AuthDonePage } from './pages/AuthDone.js';
+import { DevicePage } from './pages/Device.js';
 import { OverviewPage } from './pages/Overview.js';
 import { DevicesPage } from './pages/Devices.js';
 import { BillingPage } from './pages/Billing.js';
@@ -35,6 +36,7 @@ export function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/auth/done" element={<AuthDonePage />} />
+      <Route path="/device" element={<DevicePage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/forgot" element={<ForgotPage />} />

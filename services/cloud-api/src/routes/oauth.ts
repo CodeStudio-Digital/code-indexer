@@ -9,7 +9,7 @@
  * `session:'establish'` op so the desktop's existing token interception reuses it.
  */
 import { Hono, type Context } from 'hono';
-import { asSessionId } from '@cloudstudio/cloud-kernel';
+import { asAccountId, asSessionId } from '@cloudstudio/cloud-kernel';
 import type { Env } from '../env.js';
 import { createIdentityBundle } from '../composition.js';
 import { createD1Executor } from '../infra/d1/d1-executor.js';
@@ -19,6 +19,7 @@ import { signState, verifyState, newCodeVerifier, codeChallengeS256, type StateP
 import { opaqueTokens } from '../infra/opaque-tokens.js';
 import { cryptoIdGen, systemClock } from '../infra/runtime.js';
 import { hashPii } from '../infra/sha256.js';
+import { requireClaims, unauthorized } from '../middleware/auth.js';
 import { recordAudit } from '../middleware/audit.js';
 
 type Ctx = Context<{ Bindings: Env }>;
@@ -145,6 +146,34 @@ export function oauthRouter(): Hono<{ Bindings: Env }> {
         .catch(() => {}),
     );
     return c.json(result, 200);
+  });
+
+  // Device login bridge: an AUTHENTICATED browser session (the web portal, after
+  // email/password OR OAuth) mints a one-time handoff for the desktop loopback —
+  // so the desktop can sign in via the browser by ANY method, not just OAuth.
+  // Reuses the same handoff table + redeem path; issues a FRESH session for the
+  // desktop (the portal keeps its own).
+  app.post('/handoff', async (c) => {
+    const bundle = createIdentityBundle(c.env);
+    const claims = await requireClaims(c, bundle);
+    if (!claims) return unauthorized(c);
+    const account = await bundle.accounts.findById(asAccountId(claims.sub));
+    if (!account) return unauthorized(c);
+    const ip = c.req.header('cf-connecting-ip') ?? null;
+    const session = await bundle.issuer.issue({
+      accountId: account.id,
+      emailVerified: account.isEmailVerified,
+      userAgent: c.req.header('user-agent') ?? null,
+      ipHash: ip ? await hashPii(ip, c.env.IP_HASH_SALT ?? '') : null,
+    });
+    const handoff = (await opaqueTokens.issue()).token;
+    await createOAuthHandoffRepo(createD1Executor(c.env.DB)).create(
+      handoff,
+      JSON.stringify({ account: account.toPublic(), session }),
+      systemClock.now() + HANDOFF_TTL_MS,
+    );
+    recordAudit(c, 'device_handoff_minted', 200, { accountId: account.id });
+    return c.json({ handoff }, 200);
   });
 
   return app;

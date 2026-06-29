@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { Cloud } from 'lucide-react';
 import { api, ApiError, type ProviderId } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
+import { postLoginTarget } from '../lib/device.js';
 import { TurnstileWidget, turnstileEnabled } from '../lib/turnstile.js';
 import { Alert, Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '../lib/ui.js';
 
@@ -33,7 +34,8 @@ export function LoginPage() {
 
   const finish = async () => {
     await reload();
-    navigate('/', { replace: true });
+    // If the desktop launched this sign-in, return to the device bridge; else home.
+    navigate(postLoginTarget(), { replace: true });
   };
 
   const onSubmit = async (e: FormEvent) => {

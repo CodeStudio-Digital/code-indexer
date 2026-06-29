@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
+import { postLoginTarget } from '../lib/device.js';
 import { Alert, Button, Card, CardContent, Spinner } from '../lib/ui.js';
 
 export function AuthDonePage() {
@@ -28,7 +29,8 @@ export function AuthDonePage() {
       try {
         await api.oauthRedeem(handoff);
         await reload();
-        navigate('/', { replace: true });
+        // Return to the desktop bridge if this sign-in was launched from the app.
+        navigate(postLoginTarget(), { replace: true });
       } catch (e) {
         setError(e instanceof ApiError ? e.message : 'Sign-in could not be completed.');
       }

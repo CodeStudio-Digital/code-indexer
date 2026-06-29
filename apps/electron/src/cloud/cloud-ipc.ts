@@ -15,7 +15,7 @@ import { createSafeStorageTokenStore } from './secure-token-store.js';
 import { createTokenManager, type RefreshOutcome } from './token-manager.js';
 import { parseRefreshResponse } from './refresh-response.js';
 import { createCloudTransport } from './cloud-transport.js';
-import { cloudBaseUrl } from './cloud-config.js';
+import { cloudBaseUrl, portalUrl } from './cloud-config.js';
 import {
   OAUTH_LOOPBACK_PORT,
   startOAuthLoopback,
@@ -212,5 +212,12 @@ export function mountCloudIpc(): void {
     return runBrowserHandoffLogin(
       `${baseUrl}/v1/auth/sso/${encodeURIComponent(id)}/start?flow=desktop&port=${OAUTH_LOOPBACK_PORT}`,
     );
+  });
+
+  // Device login via the browser by ANY method (email/password OR OAuth): open the
+  // web portal's /device bridge; after sign-in there it mints a handoff back to our
+  // loopback. Lets users in WITHOUT OAuth secrets and without a password form here.
+  ipcMain.handle('cloud:startPortalLogin', async (): Promise<{ ok: boolean; error?: string }> => {
+    return runBrowserHandoffLogin(`${portalUrl()}/device?port=${OAUTH_LOOPBACK_PORT}`);
   });
 }
