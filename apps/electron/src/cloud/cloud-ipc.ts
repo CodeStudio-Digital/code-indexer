@@ -165,13 +165,12 @@ export function mountCloudIpc(): void {
     return { ok: true };
   });
 
-  // Browser OAuth login (P7-B). Arm the loopback, open the provider login in the
-  // system browser, await the one-time handoff on 127.0.0.1:7878/cb, then redeem
-  // it through the SAME establish path (handleFetch stores + broadcasts + strips
-  // tokens). No tokens ever cross to the renderer — it only learns ok/error.
-  ipcMain.handle('cloud:startBrowserLogin', async (_e, provider: string): Promise<{ ok: boolean; error?: string }> => {
-    const id = String(provider || '');
-    if (!OAUTH_PROVIDERS.has(id)) return { ok: false, error: 'unknown_provider' };
+  // Browser handoff login (P7-B). Arm the loopback, open the given start URL in the
+  // system browser, await the one-time handoff on 127.0.0.1:7878/cb, then redeem it
+  // through the SAME establish path (handleFetch stores + broadcasts + strips
+  // tokens). Shared by OAuth and org SSO — both end at the loopback handoff. No
+  // tokens ever cross to the renderer; it only learns ok/error.
+  async function runBrowserHandoffLogin(startUrl: string): Promise<{ ok: boolean; error?: string }> {
     const started = await startOAuthLoopback();
     if (!started.ok) return { ok: false, error: started.error ?? 'loopback_failed' };
     const handoff = await new Promise<string | null>((resolve) => {
@@ -184,7 +183,7 @@ export function mountCloudIpc(): void {
         clearTimeout(timer);
         resolve(h);
       });
-      void shell.openExternal(`${baseUrl}/v1/auth/oauth/${id}/start?flow=desktop&port=${OAUTH_LOOPBACK_PORT}`);
+      void shell.openExternal(startUrl);
     });
     stopOAuthLoopback();
     if (!handoff) return { ok: false, error: 'login_timeout' };
@@ -196,5 +195,22 @@ export function mountCloudIpc(): void {
       return { ok: true };
     }
     return { ok: false, error: (res.body as { code?: string })?.code ?? 'redeem_failed' };
+  }
+
+  ipcMain.handle('cloud:startBrowserLogin', async (_e, provider: string): Promise<{ ok: boolean; error?: string }> => {
+    const id = String(provider || '');
+    if (!OAUTH_PROVIDERS.has(id)) return { ok: false, error: 'unknown_provider' };
+    return runBrowserHandoffLogin(`${baseUrl}/v1/auth/oauth/${id}/start?flow=desktop&port=${OAUTH_LOOPBACK_PORT}`);
+  });
+
+  // Enterprise SSO login: same loopback handoff, but the start URL is the org's
+  // OIDC entry (the worker validates the org's entitlement + IdP). orgId is path-
+  // segment-safe; we encode it regardless.
+  ipcMain.handle('cloud:startSsoLogin', async (_e, orgId: string): Promise<{ ok: boolean; error?: string }> => {
+    const id = String(orgId || '').trim();
+    if (!id || id.length > 128 || !/^[A-Za-z0-9_-]+$/.test(id)) return { ok: false, error: 'invalid_org' };
+    return runBrowserHandoffLogin(
+      `${baseUrl}/v1/auth/sso/${encodeURIComponent(id)}/start?flow=desktop&port=${OAUTH_LOOPBACK_PORT}`,
+    );
   });
 }

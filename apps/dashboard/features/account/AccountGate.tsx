@@ -13,8 +13,9 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Cloud, Loader2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { Input } from '../../components/ui/input.js';
 import { useAccountGate } from './useAccountGate.js';
-import { cloudStartBrowserLogin, type OAuthProviderId } from '../../lib/cloud/cloud-client.js';
+import { cloudStartBrowserLogin, cloudStartSsoLogin, type OAuthProviderId } from '../../lib/cloud/cloud-client.js';
 import { PORTAL_URL } from '../../lib/cloud/cloud-config.js';
 
 const PROVIDERS: { id: OAuthProviderId; label: string }[] = [
@@ -50,6 +51,8 @@ function GateLogin() {
   const { t } = useTranslation('cloud');
   const [pending, setPending] = useState<OAuthProviderId | null>(null);
   const [failed, setFailed] = useState(false);
+  const [ssoOrg, setSsoOrg] = useState<string | null>(null); // null = hidden; string = SSO org input shown
+  const [ssoPending, setSsoPending] = useState(false);
 
   const signIn = async (id: OAuthProviderId) => {
     setFailed(false);
@@ -62,6 +65,21 @@ function GateLogin() {
       setFailed(true);
     } finally {
       setPending(null);
+    }
+  };
+
+  const startSso = async () => {
+    const id = (ssoOrg ?? '').trim();
+    if (!id) return;
+    setFailed(false);
+    setSsoPending(true);
+    try {
+      const r = await cloudStartSsoLogin(id);
+      if (!r.ok) setFailed(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setSsoPending(false);
     }
   };
 
@@ -89,6 +107,35 @@ function GateLogin() {
             {t('gate.continueWith', { provider: p.label })}
           </Button>
         ))}
+        {ssoOrg === null ? (
+          <Button
+            variant="outline"
+            className="w-full justify-center"
+            disabled={pending != null}
+            onClick={() => setSsoOrg('')}
+          >
+            {t('sso.signIn')}
+          </Button>
+        ) : (
+          <form
+            className="space-y-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void startSso();
+            }}
+          >
+            <Input autoFocus value={ssoOrg} onChange={(e) => setSsoOrg(e.target.value)} placeholder={t('sso.orgId')} />
+            <div className="flex gap-2">
+              <Button type="submit" className="flex-1 gap-2" disabled={!ssoOrg.trim() || ssoPending}>
+                {ssoPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {t('sso.continue')}
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setSsoOrg(null)}>
+                {t('sso.cancel')}
+              </Button>
+            </div>
+          </form>
+        )}
       </div>
       {pending ? <p className="text-xs text-muted-foreground">{t('gate.signingIn')}</p> : null}
       {failed ? <p className="text-xs text-destructive">{t('gate.oauthFailed')}</p> : null}

@@ -16,6 +16,8 @@ interface CloudBridge {
   logout(): Promise<{ ok: true }>;
   /** Desktop-only: browser OAuth login via the loopback handoff. */
   startBrowserLogin?(provider: string): Promise<{ ok: boolean; error?: string }>;
+  /** Desktop-only: Enterprise SSO login (same loopback handoff, keyed by org id). */
+  startSsoLogin?(orgId: string): Promise<{ ok: boolean; error?: string }>;
   onAuthChanged(cb: (s: CloudAuthState) => void): (() => void) | void;
 }
 
@@ -50,4 +52,12 @@ export async function cloudStartBrowserLogin(provider: OAuthProviderId): Promise
   const bridge = cloudBridge();
   if (!bridge.startBrowserLogin) return { ok: false, error: 'desktop_only' };
   return bridge.startBrowserLogin(provider);
+}
+
+/** Start Enterprise SSO login for an org (desktop only). Same loopback handoff as
+ *  OAuth; the renderer only learns ok/error (tokens stay in main). */
+export async function cloudStartSsoLogin(orgId: string): Promise<{ ok: boolean; error?: string }> {
+  const bridge = cloudBridge();
+  if (!bridge.startSsoLogin) return { ok: false, error: 'desktop_only' };
+  return bridge.startSsoLogin(orgId);
 }

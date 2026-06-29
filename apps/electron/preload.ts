@@ -316,6 +316,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // is redeemed (tokens handled in main). Renderer only learns ok/error.
     startBrowserLogin: (provider: string) =>
       ipcRenderer.invoke('cloud:startBrowserLogin', provider) as Promise<{ ok: boolean; error?: string }>,
+    // Enterprise SSO: same loopback handoff, keyed by org id.
+    startSsoLogin: (orgId: string) =>
+      ipcRenderer.invoke('cloud:startSsoLogin', orgId) as Promise<{ ok: boolean; error?: string }>,
     onAuthChanged: (cb: (state: { state: string; account: unknown }) => void) => subscribe('cloud:auth-changed', cb),
   },
   /**
