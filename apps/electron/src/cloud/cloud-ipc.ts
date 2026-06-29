@@ -5,7 +5,7 @@
  * return, persists them, and STRIPS them from the body before the renderer sees it.
  * The refresh token never crosses the IPC boundary.
  */
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, safeStorage, shell, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { hostname, release } from 'node:os';
@@ -34,6 +34,12 @@ interface SessionBody {
 
 export function mountCloudIpc(): void {
   const baseUrl = cloudBaseUrl();
+  // Use Electron's net.fetch (Chromium network stack) instead of Node's global
+  // fetch: it honors the system proxy, VPN, and OS certificate store — so the main
+  // process reaches the Worker under the same conditions the browser does. With
+  // Node fetch, a corporate proxy/VPN makes main-process calls fail ('offline')
+  // even though the browser (and thus OAuth/portal login) works fine.
+  const netFetch = ((input: string, init?: RequestInit) => net.fetch(input, init)) as unknown as typeof fetch;
   const dir = path.join(app.getPath('userData'), 'cloud');
   const accountPath = path.join(dir, 'account.json');
   const store = createSafeStorageTokenStore({
@@ -83,7 +89,7 @@ export function mountCloudIpc(): void {
       broadcast({ state: 'logged_out', account: null });
     },
     refresh: async (rt): Promise<RefreshOutcome> => {
-      const res = await fetch(`${baseUrl}/v1/auth/refresh`, {
+      const res = await netFetch(`${baseUrl}/v1/auth/refresh`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ refreshToken: rt }),
@@ -103,6 +109,7 @@ export function mountCloudIpc(): void {
     os: `${process.platform}/${process.arch}`,
     deviceName: hostname(),
     osRelease: release(),
+    fetchImpl: netFetch,
   });
 
   async function handleFetch(op: CloudOp, input: unknown): Promise<CloudFetchResult> {
@@ -194,7 +201,9 @@ export function mountCloudIpc(): void {
       win?.focus();
       return { ok: true };
     }
-    return { ok: false, error: (res.body as { code?: string })?.code ?? 'redeem_failed' };
+    const b = (res.body ?? {}) as { code?: string; message?: string };
+    console.error('[cloud] browser-login redeem failed', { status: res.status, ...b });
+    return { ok: false, error: b.message ? `${b.code ?? 'redeem_failed'}: ${b.message}` : b.code ?? 'redeem_failed' };
   }
 
   ipcMain.handle('cloud:startBrowserLogin', async (_e, provider: string): Promise<{ ok: boolean; error?: string }> => {
