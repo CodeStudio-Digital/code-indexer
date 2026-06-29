@@ -49,8 +49,12 @@
   ],
   "vars": {
     "ENVIRONMENT": "production",
-    "APP_BASE_URL": "https://app.codestudio.dev",
-    "SHARE_BASE_URL": "https://share.codestudio.dev",
+    // Until the custom domains are mapped, point user-facing base URLs at the LIVE
+    // surfaces: APP_BASE_URL is used for verify-email/reset-password email links
+    // (portal pages); SHARE_BASE_URL backs the hosted docs (/d) + shares (/s) which
+    // are served by THIS worker. Switch to app./share.codestudio.dev once mapped.
+    "APP_BASE_URL": "https://codestudio-account-portal.pages.dev",
+    "SHARE_BASE_URL": "https://codestudio-cloud-api.maiconspo6792.workers.dev",
     "EMAIL_FROM": "no-reply@public.codestudio.digital",
     // Explicit CORS allowlist (auditable). The desktop app is not a browser origin;
     // these are the future web viewer / dashboard origins.
