@@ -333,12 +333,13 @@ export function AppShell() {
           view.page === 'agents' ||
           view.page === 'global' ||
           view.page === 'design-systems' ||
-          // Settings (/admin) and Docs (/docs) own their own padding + a
-          // fixed-height, independently-scrolling split (IDE-style), so they
-          // opt out of the outer scroll+padding like the other two-pane
-          // surfaces above.
+          // Settings (/admin), Docs (/docs) and Telemetry (/telemetry) own
+          // their own padding + a fixed-height, independently-scrolling body
+          // under a compact top band (IDE-style), so they opt out of the
+          // outer scroll+padding like the other two-pane surfaces above.
           view.page === 'admin' ||
-          view.page === 'docs'
+          view.page === 'docs' ||
+          view.page === 'telemetry'
             ? 'flex flex-col overflow-hidden'
             : 'overflow-auto px-6 py-5',
         )}

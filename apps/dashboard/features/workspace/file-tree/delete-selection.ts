@@ -9,6 +9,7 @@
  * `isDir` por path. Cada delete de arquivo dispara o snapshot `pre-delete`
  * no backend (Local History) → deleção recuperável.
  */
+import i18n from '../../../i18n/index.js';
 import { apiCall } from '../../../lib/api-client.js';
 import { confirm, toast } from '../../../components/ui/prompt-dialog.js';
 import { useSelectionStore } from '../../../state/file-tree-selection.js';
@@ -36,12 +37,9 @@ export async function deleteSelection(
   if (n === 0) return;
 
   const ok = await confirm({
-    title: n === 1 ? 'Delete item?' : `Delete ${n} items?`,
-    description:
-      n === 1
-        ? `"${roots[0]}" will be removed (folders include their contents). This cannot be undone.`
-        : `${n} files/folders will be removed (folders include their contents). This cannot be undone.`,
-    confirmLabel: 'Delete',
+    title: i18n.t('workspace:fileTree.deleteItemsTitle', { count: n }),
+    description: i18n.t('workspace:fileTree.deleteItemsBody', { count: n, path: roots[0] }),
+    confirmLabel: i18n.t('workspace:fileTree.delete'),
     tone: 'destructive',
   });
   if (!ok) return;
@@ -56,8 +54,10 @@ export async function deleteSelection(
 
   const failed = results.filter((r) => r.status === 'rejected').length;
   if (failed === 0) {
-    toast.success(n === 1 ? 'Deleted' : `Deleted ${n} items`);
+    toast.success(i18n.t('workspace:fileTree.deletedItems', { count: n }));
   } else {
-    toast.error(`Deleted ${n - failed} of ${n}`, { description: 'Some items could not be removed.' });
+    toast.error(i18n.t('workspace:fileTree.deletedPartial', { done: n - failed, total: n }), {
+      description: i18n.t('workspace:fileTree.deletedPartialBody'),
+    });
   }
 }

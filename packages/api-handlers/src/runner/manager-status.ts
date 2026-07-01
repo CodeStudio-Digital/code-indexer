@@ -12,6 +12,7 @@ import { execFile } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { promisify } from 'node:util';
 import type { RunnerManager } from '@mcp/api-bus';
+import { wslBash } from '../runtime/wsl-runtime.js';
 
 const pexec = promisify(execFile);
 
@@ -48,4 +49,23 @@ export async function probeManagerStatus(
   } catch {
     return { found: false };
   }
+}
+
+/**
+ * Same probe, but INSIDE a WSL distro — `command -v <manager> && <manager>
+ * --version` under a login shell with the distro-managed runtime bin dirs
+ * prepended. `manager` is allowlisted (KNOWN), so interpolating it into the
+ * bash string carries no injection risk.
+ */
+export async function probeWslManagerStatus(
+  manager: RunnerManager,
+  distro: string,
+  posixPathPrepend: string[],
+): Promise<ManagerStatus> {
+  if (!KNOWN.has(manager)) return { found: false };
+  const prefix = posixPathPrepend.length > 0 ? `export PATH="${posixPathPrepend.join(':')}:$PATH"; ` : '';
+  const out = await wslBash(distro, `${prefix}command -v ${manager} >/dev/null 2>&1 && ${manager} --version 2>/dev/null || true`);
+  if (!out) return { found: false };
+  const m = /(\d+\.\d+(?:\.\d+)?)/.exec(out);
+  return { found: true, version: m ? m[1] : undefined };
 }

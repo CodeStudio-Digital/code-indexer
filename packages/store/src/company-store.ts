@@ -97,6 +97,7 @@ export class CompanyStore {
   createAgentRun(input: agentRuns.CreateAgentRunInput): CompanyAgentRun { return agentRuns.create(this.db, input); }
   getAgentRun(id: number): CompanyAgentRun | null { return agentRuns.get(this.db, id); }
   listAgentRuns(companySessionId: number): CompanyAgentRun[] { return agentRuns.list(this.db, companySessionId); }
+  countActiveSubordinatesGlobal(): number { return agentRuns.countActiveSubordinatesGlobal(this.db); }
   listArchivedAgentRuns(archiveId: number): CompanyAgentRun[] { return agentRuns.listArchived(this.db, archiveId); }
   updateAgentRunProvider(id: number, provider: string, model: string): void { agentRuns.updateProvider(this.db, id, provider, model); }
   updateAgentRunStatus(id: number, status: AgentRunStatus, statusMessage?: string): void { agentRuns.updateStatus(this.db, id, status, statusMessage); }
@@ -185,6 +186,7 @@ export class CompanyStore {
   // ─── Inbox ─────────────────────────────────────────────────────
   createInboxMessage(input: inbox.CreateInboxMessageInput): AgentInboxMessage { return inbox.create(this.db, input); }
   getInboxMessage(id: number): AgentInboxMessage | null { return inbox.get(this.db, id); }
+  getInboxMessageByWaitToken(companySessionId: number, token: string): AgentInboxMessage | null { return inbox.getByWaitToken(this.db, companySessionId, token); }
   listInboxMessages(opts: inbox.ListInboxOptions): AgentInboxMessage[] { return inbox.list(this.db, opts); }
   claimNextInboxForAgent(args: { companySessionId: number; agentRunId: number; role: string }): AgentInboxMessage | null { return inbox.claimNextForAgent(this.db, args); }
   answerInboxMessage(id: number, answer: string): AgentInboxMessage | null { return inbox.answer(this.db, id, answer); }

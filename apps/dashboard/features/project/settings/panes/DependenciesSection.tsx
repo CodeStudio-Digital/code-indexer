@@ -10,9 +10,10 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, CheckCircle2, Download, RefreshCw } from 'lucide-react';
-import type { DetectedGroup, DetectedRunners, ManagerStatus, RuntimeKind } from '@mcp/api-bus';
+import type { DetectedGroup, DetectedRunners, ManagerStatus, RuntimeKind, RuntimeTarget } from '@mcp/api-bus';
 import type { Project } from '@mcp/shared/types.js';
 import { readPackageManager, writePackageManager } from '@mcp/shared/utils/package-managers.js';
+import { readWslPackageManager, writeWslPackageManager, type WslPackageManagerKey } from '@mcp/shared/utils/wsl-package-managers.js';
 import { Button } from '../../../../components/ui/button.js';
 import {
   Select,
@@ -26,7 +27,19 @@ import { launchRun } from '../../../../state/run-launch.js';
 import { MANAGER_KEY, MANAGER_OPTIONS, MANAGERS_FOR_KIND, updateCommand } from '../../../../lib/pkg-manager-cmds.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
 
-export function DependenciesSection({ kind, project, patch }: { kind: RuntimeKind; project: Project; patch: PatchFn }) {
+const HOST: RuntimeTarget = { kind: 'host' };
+
+export function DependenciesSection({
+  kind,
+  project,
+  patch,
+  target = HOST,
+}: {
+  kind: RuntimeKind;
+  project: Project;
+  patch: PatchFn;
+  target?: RuntimeTarget;
+}) {
   const { t } = useTranslation(['projects', 'common']);
   const [group, setGroup] = useState<DetectedGroup | null>(null);
   const [status, setStatus] = useState<ManagerStatus | null>(null);
@@ -36,8 +49,16 @@ export function DependenciesSection({ kind, project, patch }: { kind: RuntimeKin
   // could race ahead of the PATCH write and report the old manager.
   const [tick, setTick] = useState(0);
 
+  const isWsl = target.kind === 'wsl';
+  const distro = target.kind === 'wsl' ? target.distro : '';
+  const tgtKey = isWsl ? `wsl:${distro}` : 'host';
   const key = MANAGER_KEY[kind];
-  const selected = (key ? readPackageManager(project.package_managers, key) : undefined) ?? 'auto';
+  const selected =
+    (key
+      ? isWsl
+        ? readWslPackageManager(project.wsl_package_managers, distro, key as WslPackageManagerKey)
+        : readPackageManager(project.package_managers, key)
+      : undefined) ?? 'auto';
 
   // Detect the group for this runtime. Keyed on `tick` (bumped AFTER a manager
   // change persists), NOT on the optimistic project.package_managers — detect
@@ -46,7 +67,7 @@ export function DependenciesSection({ kind, project, patch }: { kind: RuntimeKin
   useEffect(() => {
     let alive = true;
     setLoaded(false);
-    void apiCall<DetectedRunners>('runner.detect', { projectId: project.id })
+    void apiCall<DetectedRunners>('runner.detect', { projectId: project.id, target })
       .then((d) => {
         if (!alive) return;
         setGroup(d.groups.find((g) => MANAGERS_FOR_KIND[kind].includes(g.manager)) ?? null);
@@ -54,22 +75,28 @@ export function DependenciesSection({ kind, project, patch }: { kind: RuntimeKin
       })
       .catch(() => { if (alive) { setGroup(null); setLoaded(true); } });
     return () => { alive = false; };
-  }, [kind, project.id, tick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, project.id, tgtKey, tick]);
 
   // Is the chosen manager actually on PATH? (warn before an install would fail.)
   useEffect(() => {
     if (!group) { setStatus(null); return; }
     let alive = true;
     setStatus(null);
-    void apiCall<ManagerStatus>('runner.managerStatus', { projectId: project.id, manager: group.manager })
+    void apiCall<ManagerStatus>('runner.managerStatus', { projectId: project.id, manager: group.manager, target })
       .then((s) => { if (alive) setStatus(s); })
       .catch(() => { if (alive) setStatus(null); });
     return () => { alive = false; };
-  }, [group?.manager, project.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group?.manager, project.id, tgtKey]);
 
   async function changeManager(next: string): Promise<void> {
     if (!key) return;
-    await patch({ package_managers: writePackageManager(project.package_managers, key, next) });
+    if (isWsl) {
+      await patch({ wsl_package_managers: writeWslPackageManager(project.wsl_package_managers, distro, key as WslPackageManagerKey, next) });
+    } else {
+      await patch({ package_managers: writePackageManager(project.package_managers, key, next) });
+    }
     setTick((n) => n + 1); // re-detect once the new override is persisted
   }
   function install(): void {

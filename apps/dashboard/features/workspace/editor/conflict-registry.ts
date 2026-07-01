@@ -5,38 +5,65 @@
  * `useIsConflicted`) to decide whether to light up conflict UI on an open
  * file — without threading props through EditorPane.
  *
- * Keyed by projectId so a stale set never bleeds into another project's
- * files. Cleared when no sequencer op is in progress.
+ * Paths are stored PROJECT-relative (the editor opens files project-relative),
+ * grouped by the repo — its `projectRelPrefix`, '' for the main repo — that
+ * reported them. mergeState returns repoRoot-relative paths, so a submodule's
+ * conflicts come back submodule-relative; the caller rebases them to project-
+ * relative before writing here. Grouping by repo makes the lit-up set a UNION,
+ * so a submodule mid-merge AND the main repo mid-merge can both highlight, and
+ * switching the Git window's active repo only updates that repo's slice.
+ *
+ * Keyed by projectId too so a stale set never bleeds into another project.
  */
 
 import { useSyncExternalStore } from 'react';
 
-let state: { projectId: number | null; paths: Set<string> } = { projectId: null, paths: new Set() };
+let state: { projectId: number | null; byRepo: Map<string, Set<string>> } = {
+  projectId: null,
+  byRepo: new Map(),
+};
 const listeners = new Set<() => void>();
 
 function emit(): void {
   for (const l of listeners) l();
 }
 
-export function setConflicts(projectId: number, paths: string[]): void {
-  state = { projectId, paths: new Set(paths) };
+/**
+ * Set the conflicted PROJECT-relative paths for ONE repo, identified by its
+ * `repoPrefix` (projectRelPrefix; '' = main). Replaces only that repo's slice,
+ * leaving other repos' conflicts intact.
+ */
+export function setConflicts(projectId: number, repoPrefix: string, paths: string[]): void {
+  const byRepo = state.projectId === projectId ? new Map(state.byRepo) : new Map<string, Set<string>>();
+  byRepo.set(repoPrefix, new Set(paths));
+  state = { projectId, byRepo };
   emit();
 }
 
 /**
- * Clear the conflict set. Pass a projectId to only clear when it owns the
- * current set (so a different project's clean reload can't wipe this one's
- * highlighting); omit it to force-clear (e.g. on unmount / project switch).
+ * Clear conflicts. With `repoPrefix` → only that repo's slice (when projectId
+ * owns the set). With only `projectId` → that project's whole set. Omit both →
+ * force-clear (unmount / project switch).
  */
-export function clearConflicts(projectId?: number): void {
+export function clearConflicts(projectId?: number, repoPrefix?: string): void {
   if (projectId !== undefined && state.projectId !== projectId) return;
-  if (state.projectId === null && state.paths.size === 0) return;
-  state = { projectId: null, paths: new Set() };
+  if (repoPrefix !== undefined) {
+    if (!state.byRepo.has(repoPrefix)) return;
+    const byRepo = new Map(state.byRepo);
+    byRepo.delete(repoPrefix);
+    state = { projectId: state.projectId, byRepo };
+    emit();
+    return;
+  }
+  if (state.projectId === null && state.byRepo.size === 0) return;
+  state = { projectId: null, byRepo: new Map() };
   emit();
 }
 
 export function isConflicted(projectId: number, path: string): boolean {
-  return state.projectId === projectId && state.paths.has(path);
+  if (state.projectId !== projectId) return false;
+  for (const set of state.byRepo.values()) if (set.has(path)) return true;
+  return false;
 }
 
 function subscribe(cb: () => void): () => void {

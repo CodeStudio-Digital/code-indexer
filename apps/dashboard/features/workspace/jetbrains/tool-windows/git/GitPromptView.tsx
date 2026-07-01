@@ -59,6 +59,8 @@ interface GitRunResult {
 
 interface GitPromptViewProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   onMutated: () => void;
 }
 
@@ -69,7 +71,7 @@ const SUGGESTIONS = [
   'Desfaz o último commit mantendo as mudanças staged',
 ];
 
-export function GitPromptView({ projectId, onMutated }: GitPromptViewProps) {
+export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewProps) {
   const [intent, setIntent] = useState('');
   const [plan, setPlan] = useState<GitPlan | null>(null);
   const [results, setResults] = useState<GitRunResult[] | null>(null);
@@ -88,6 +90,7 @@ export function GitPromptView({ projectId, onMutated }: GitPromptViewProps) {
     try {
       const p = await apiCall<GitPlan>('projectGit.aiPlan', {
         projectId,
+        repoPath,
         intent: intent.trim(),
       });
       setPlan(p);
@@ -106,7 +109,7 @@ export function GitPromptView({ projectId, onMutated }: GitPromptViewProps) {
     try {
       const r = await apiCall<{ results: GitRunResult[]; aborted: boolean }>(
         'projectGit.aiExecute',
-        { projectId, steps: plan.steps },
+        { projectId, repoPath, steps: plan.steps },
       );
       setResults(r.results);
       setAborted(r.aborted);

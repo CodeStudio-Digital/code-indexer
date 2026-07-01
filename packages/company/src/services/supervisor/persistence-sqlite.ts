@@ -74,10 +74,22 @@ export class SqliteSupervisionPersistence implements SupervisionPersistence {
   private readonly stmtResolveIncident: ReturnType<DB['prepare']>;
   private readonly stmtListIncidents: ReturnType<DB['prepare']>;
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
+  /** True only when this instance opened the file itself (string ctor). A
+   *  SHARED handle is owned by CodeIndexDB — closing it here would yank the
+   *  connection out from under every sibling store. */
+  private readonly ownsHandle: boolean;
+
+  constructor(dbPathOrHandle: string | DB) {
+    if (typeof dbPathOrHandle === 'string') {
+      this.db = new Database(dbPathOrHandle);
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('synchronous = NORMAL');
+      this.ownsHandle = true;
+    } else {
+      // Shared handle (CodeIndexDB.raw()): pragmas already set by the owner.
+      this.db = dbPathOrHandle;
+      this.ownsHandle = false;
+    }
 
     this.stmtUpsert = this.db.prepare(`
       INSERT INTO agent_supervision (
@@ -242,6 +254,7 @@ export class SqliteSupervisionPersistence implements SupervisionPersistence {
 
   /** Close the DB handle. Called from supervisor.stop() in production. */
   close(): void {
+    if (!this.ownsHandle) return; // shared handle — owner (CodeIndexDB) closes it
     try {
       this.db.close();
     } catch {

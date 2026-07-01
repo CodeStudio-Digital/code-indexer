@@ -16,7 +16,7 @@
  * — not persisted, so polling is the right primitive). Incidents flow
  * via SSE for near-real-time updates.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePolling } from '../../hooks/usePolling.js';
 import {
@@ -72,12 +72,22 @@ export interface SupervisorPanelProps {
    * shows ALL active sessions (used by the global `/telemetry` tab).
    */
   sessionId?: number;
+  /**
+   * Chrome to render around the panel body:
+   *   - 'rail'      : full-height, compact — for the CompanySessionView
+   *                   right rail (the historical default).
+   *   - 'dashboard' : flows in a scrolling page with a subtitle and
+   *                   naturally-sized cards, matching the sibling
+   *                   `/telemetry` tabs (Overview / Prices / Quality).
+   */
+  variant?: 'rail' | 'dashboard';
 }
 
 type StreamState = 'connecting' | 'live' | 'reconnecting';
 
-export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.Element {
+export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanelProps = {}): JSX.Element {
   const { t } = useTranslation('admin');
+  const dashboard = variant === 'dashboard';
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -92,6 +102,16 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
   useEffect(() => {
     streamStateRef.current = streamState;
   }, [streamState]);
+  // One-shot per-session backfill of persisted incidents from the DB. NOT
+  // gated on streamStateRef: the SSE stream's `connected` callback fires as
+  // soon as the fetch headers land (a local round-trip), while
+  // fetchSupervisorStatus() crosses a worker-thread RPC bridge — measurably
+  // slower. That meant streamStateRef was almost always already 'live' by
+  // the time loadStatus() checked it, so the DB backfill never ran and
+  // historical incidents older than the SSE replay window (60s) never
+  // appeared. Reset when the bound session changes; manual refresh clears
+  // it to force a fresh pull.
+  const incidentsBackfilledRef = useRef(false);
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
@@ -104,15 +124,15 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
           ? { ...s, sessions: s.sessions.filter((row) => row.sessionId === sessionId) }
           : s;
       setStatus(filtered);
-      // Side-load incidents. Prefer the bound session; otherwise fall back
-      // to the first active session (global view). Skip while the SSE stream
-      // is live — it already pushes incidents into `liveBuffer`, so polling
-      // them here would be a duplicate request.
+      // Side-load incidents once per session-bind (see incidentsBackfilledRef
+      // above). Prefer the bound session; otherwise fall back to the first
+      // active session (global view).
       const targetSession = sessionId ?? s.sessions[0]?.sessionId;
-      if (targetSession != null && streamStateRef.current !== 'live') {
+      if (targetSession != null && !incidentsBackfilledRef.current) {
         try {
           const inc = await fetchSupervisorIncidents(targetSession, 30);
           setIncidents(inc.incidents);
+          incidentsBackfilledRef.current = true;
         } catch {
           /* incidents fetch is best-effort */
         }
@@ -124,8 +144,10 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
     }
   }, [sessionId]);
 
-  // Immediate load on mount + whenever the bound session changes.
+  // Immediate load on mount + whenever the bound session changes. Reset the
+  // backfill so switching the bound session re-seeds its incident history.
   useEffect(() => {
+    incidentsBackfilledRef.current = false;
     void loadStatus();
   }, [loadStatus]);
   // Recurring poll (status is in-memory per worker, not pushed by the SSE
@@ -177,6 +199,15 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
     };
   }, [sessionId]);
 
+  // Manual refresh — force a fresh DB pull even if the one-shot backfill
+  // already ran. This is an explicit operator action, not the background
+  // poll, so it should never silently no-op just because the SSE stream is
+  // live.
+  function handleRefresh(): void {
+    incidentsBackfilledRef.current = false;
+    void loadStatus();
+  }
+
   async function handleReleaseQuarantine(sessionId: number, role: string): Promise<void> {
     setActionMsg(null);
     try {
@@ -221,32 +252,58 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
     );
 
   return (
-    <div className="flex flex-col h-full p-3 gap-3 min-h-0">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          {allHealthy ? (
-            <ShieldCheck className="h-5 w-5 text-emerald-500 flex-shrink-0" />
-          ) : (
-            <ShieldOff className="h-5 w-5 flex-shrink-0" />
-          )}
-          <h2 className="text-sm font-semibold truncate">{t('supervisor.title')}</h2>
-          {status?.enabled === false && (
-            <Badge variant="outline" className="ml-1 text-[10px]">
-              {t('supervisor.disabled')}
-            </Badge>
-          )}
+    <div className={dashboard ? 'space-y-4' : 'flex flex-col h-full p-3 gap-3 min-h-0'}>
+      {dashboard ? (
+        // Dashboard tab: subtitle + a borderless controls row, matching the
+        // sibling /telemetry tabs (Overview / Prices / Quality). The tab
+        // label already names the section, so there's no standalone heading;
+        // health is read from the body (session cards + incidents).
+        <>
+          <p className="text-sm text-muted-foreground">{t('supervisor.subtitle')}</p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={loading}
+            >
+              <RefreshCcw className={`h-3.5 w-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} />
+              {t('supervisor.refresh')}
+            </Button>
+            {status?.enabled === false && (
+              <Badge variant="outline" className="text-[10px]">
+                {t('supervisor.disabled')}
+              </Badge>
+            )}
+          </div>
+        </>
+      ) : (
+        // Rail: compact heading row with an at-a-glance health glyph.
+        <div className="flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {allHealthy ? (
+              <ShieldCheck className="h-5 w-5 text-emerald-500 flex-shrink-0" />
+            ) : (
+              <ShieldOff className="h-5 w-5 flex-shrink-0" />
+            )}
+            <h2 className="text-sm font-semibold truncate">{t('supervisor.title')}</h2>
+            {status?.enabled === false && (
+              <Badge variant="outline" className="ml-1 text-[10px]">
+                {t('supervisor.disabled')}
+              </Badge>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={loading}
+            title={t('supervisor.refresh')}
+          >
+            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void loadStatus()}
-          disabled={loading}
-          title={t('supervisor.refresh')}
-        >
-          <RefreshCcw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-        </Button>
-      </div>
+      )}
 
       {error && (
         <div className="text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">
@@ -259,9 +316,9 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
 
       {/* Sessions — flexible: empty state when nothing tracked */}
       {!hasSessions ? (
-        <EmptySessionsHint />
+        <EmptySessionsHint dashboard={dashboard} />
       ) : (
-        <div className="space-y-2 flex-shrink-0">
+        <div className={`space-y-2 ${dashboard ? '' : 'flex-shrink-0'}`}>
           {status!.sessions.map((s) => (
             <SessionStatusCard
               key={s.sessionId}
@@ -274,9 +331,10 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
         </div>
       )}
 
-      {/* Incidents — flex-1 so the card fills remaining space cleanly */}
-      <Card className="flex-1 flex flex-col min-h-0">
-        <CardHeader className="py-2 px-3 flex-shrink-0">
+      {/* Incidents — rail: flex-1 fills remaining height; dashboard: a
+          naturally-sized card whose list scrolls within a capped height. */}
+      <Card className={dashboard ? '' : 'flex-1 flex flex-col min-h-0'}>
+        <CardHeader className={`py-2 px-3 ${dashboard ? '' : 'flex-shrink-0'}`}>
           <CardTitle className="text-xs font-medium flex items-center gap-2 text-muted-foreground">
             <AlertTriangle className="h-3.5 w-3.5" />
             <span>{t('supervisor.incidents')}</span>
@@ -290,11 +348,15 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
             </div>
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0 flex-1 min-h-0">
+        <CardContent className={`p-0 ${dashboard ? '' : 'flex-1 min-h-0'}`}>
           {totalIncidents === 0 ? (
-            <EmptyIncidentsHint />
+            <EmptyIncidentsHint dashboard={dashboard} />
           ) : (
-            <ScrollArea className="h-full">
+            // Rail fills remaining height via the radix ScrollArea (its
+            // viewport resolves `h-full` against the flex parent). The
+            // dashboard tab has no definite height, so it uses a plain
+            // capped-overflow box — the same pattern QualityPanel uses.
+            <IncidentsScroller dashboard={dashboard}>
               <div className="px-3 pb-3 space-y-1">
                 {liveBuffer.map((env, idx) => (
                   <IncidentRowView
@@ -318,7 +380,7 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
                   />
                 ))}
               </div>
-            </ScrollArea>
+            </IncidentsScroller>
           )}
         </CardContent>
       </Card>
@@ -326,10 +388,14 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
   );
 }
 
-function EmptySessionsHint(): JSX.Element {
+function EmptySessionsHint({ dashboard }: { dashboard?: boolean }): JSX.Element {
   const { t } = useTranslation('admin');
   return (
-    <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground space-y-2 flex-shrink-0">
+    <div
+      className={`rounded-md border p-3 text-xs text-muted-foreground space-y-2 ${
+        dashboard ? 'bg-card/50' : 'border-dashed bg-muted/30 flex-shrink-0'
+      }`}
+    >
       <div className="flex items-center gap-2">
         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
         <span className="font-medium text-foreground">{t('supervisor.emptySessions.title')}</span>
@@ -377,13 +443,30 @@ function StreamStateBadge({ state }: { state: StreamState }): JSX.Element {
   );
 }
 
-function EmptyIncidentsHint(): JSX.Element {
+function IncidentsScroller({
+  dashboard,
+  children,
+}: {
+  dashboard: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  if (dashboard) {
+    return <div className="max-h-[28rem] overflow-y-auto">{children}</div>;
+  }
+  return <ScrollArea className="h-full">{children}</ScrollArea>;
+}
+
+function EmptyIncidentsHint({ dashboard }: { dashboard?: boolean }): JSX.Element {
   const { t } = useTranslation('admin');
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center p-4 gap-2">
+    <div
+      className={`flex flex-col items-center justify-center text-center gap-2 ${
+        dashboard ? 'py-10 px-4' : 'h-full p-4'
+      }`}
+    >
       <ShieldCheck className="h-8 w-8 text-emerald-500/70" />
       <p className="text-sm font-medium text-foreground">{t('supervisor.emptyIncidents.title')}</p>
-      <p className="text-xs text-muted-foreground max-w-[24ch]">
+      <p className={`text-xs text-muted-foreground ${dashboard ? 'max-w-md' : 'max-w-[24ch]'}`}>
         {t('supervisor.emptyIncidents.description')}
       </p>
     </div>

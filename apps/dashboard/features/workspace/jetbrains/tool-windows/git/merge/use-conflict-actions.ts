@@ -3,10 +3,11 @@
  * CodeLens "mark resolved" path). Keeps the API calls + toasts in one
  * place so the view stays presentational.
  *
- * NOTE: conflicted paths are repoRoot-relative. The inline/merge editors
- * open them as project-relative — correct when the project IS the repo
- * root (the common case). A project nested under a larger repo is a known
- * v1 limitation.
+ * Paths here are PROJECT-relative. `resolveConflict` / `stage` take no repoPath,
+ * so the backend auto-routes each path to its containing repo — a conflict
+ * inside a submodule resolves against the submodule, not the opaque parent.
+ * ConflictsView rebases mergeState's repoRoot-relative paths to project-relative
+ * before handing them here.
  */
 
 import { useCallback } from 'react';

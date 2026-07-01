@@ -28,6 +28,9 @@ import { ConflictsView } from './git/merge/ConflictsView.js';
 import { requestGitReload } from '../../editor/conflict-registry.js';
 import { GitTabNav } from './git/GitTabNav.js';
 import { useGitWindow } from './git/use-git-window.js';
+import { RepoSelector } from './git/RepoSelector.js';
+import { useProjectRepos } from './git/use-project-repos.js';
+import { useActiveRepoPath } from '../../../../state/git-active-repo.js';
 
 interface GitWindowProps {
   projectId: number;
@@ -37,10 +40,28 @@ interface GitWindowProps {
 
 export function GitWindow({ projectId, active = true, onClose }: GitWindowProps) {
   const { t } = useTranslation('workspace');
+  // Multi-repo: the selected git root (submodule / nested repo) the window acts
+  // on. Fall back to the MAIN repo's explicit absPath when nothing is selected or
+  // the stored selection is stale — the window ALWAYS sends an explicit repoPath
+  // so its (single-repo) status never collides with the explorer's project-wide
+  // aggregate (which is the no-repoPath call). Undefined only until repos load.
+  const { repos, loading: reposLoading } = useProjectRepos(projectId);
+  const storedRepo = useActiveRepoPath(projectId);
+  const repoPath =
+    storedRepo && repos.some((r) => r.absPath === storedRepo)
+      ? storedRepo
+      : repos.find((r) => r.kind === 'main')?.absPath;
+  // The active repo's project-relative prefix ('' = main) — lets useGitWindow
+  // rebase repoRoot-relative conflict paths to project-relative for the editor.
+  // A '..'-based prefix means the project sits BELOW this repo's root (a project
+  // nested under a bigger repo); there's no clean project-relative rebase, so
+  // fall back to '' (the pre-existing project-IS-repo-root behavior).
+  const rawPrefix = repos.find((r) => r.absPath === repoPath)?.projectRelPrefix ?? '';
+  const repoPrefix = rawPrefix.startsWith('..') ? '' : rawPrefix;
   const {
     status, loading, error, openSections, setOpenSections, tab, setTab, mergeState,
     groups, reload, showDiff, onStage, onUnstage, onDiscard,
-  } = useGitWindow(projectId, active);
+  } = useGitWindow(projectId, active, repoPath, repoPrefix, !reposLoading);
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
 
   if (status?.notARepo) {
@@ -64,7 +85,7 @@ export function GitWindow({ projectId, active = true, onClose }: GitWindowProps)
       onClose={onClose}
       actions={
         <>
-          <GitPerfPanel projectId={projectId} />
+          <GitPerfPanel projectId={projectId} repoPath={repoPath} />
           <Button
             variant="ghost"
             size="icon"
@@ -78,6 +99,8 @@ export function GitWindow({ projectId, active = true, onClose }: GitWindowProps)
       }
     >
       <div className="h-full flex flex-col min-h-0">
+        {/* Repo selector — only when the project actually has >1 git root. */}
+        {repos.length > 1 && <RepoSelector projectId={projectId} repos={repos} selected={repoPath} />}
         {/* Branch header — clickable branch switcher (search + switch + actions),
             JetBrains-style; reuses the status-bar branch popover. */}
         {status && (
@@ -99,6 +122,7 @@ export function GitWindow({ projectId, active = true, onClose }: GitWindowProps)
               <PopoverContent side="bottom" align="start" className="p-0 overflow-hidden">
                 <BranchPopover
                   projectId={projectId}
+                  repoPath={repoPath}
                   onMutated={() => void reload()}
                   onClose={() => setBranchSwitcherOpen(false)}
                   onRequestCommit={() => { setTab('changes'); setBranchSwitcherOpen(false); }}
@@ -114,7 +138,7 @@ export function GitWindow({ projectId, active = true, onClose }: GitWindowProps)
 
         {/* Merge/cherry-pick/revert em progresso → banner com Resolve + Abort. */}
         {mergeState?.kind && (
-          <MergeBanner projectId={projectId} state={mergeState} onMutated={requestGitReload} />
+          <MergeBanner projectId={projectId} repoPath={repoPath} state={mergeState} onMutated={requestGitReload} />
         )}
 
         <GitTabNav
@@ -130,6 +154,7 @@ export function GitWindow({ projectId, active = true, onClose }: GitWindowProps)
         {active && tab === 'changes' && (
           <ChangesPane
             projectId={projectId}
+            repoPath={repoPath}
             status={status}
             error={error}
             groups={groups}
@@ -143,18 +168,18 @@ export function GitWindow({ projectId, active = true, onClose }: GitWindowProps)
           />
         )}
         {active && tab === 'branches' && (
-          <BranchesView projectId={projectId} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
+          <BranchesView projectId={projectId} repoPath={repoPath} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
         )}
         {active && tab === 'history' && (
-          <HistoryView projectId={projectId} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
+          <HistoryView projectId={projectId} repoPath={repoPath} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
         )}
         {active && tab === 'stash' && (
-          <StashView projectId={projectId} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
+          <StashView projectId={projectId} repoPath={repoPath} onMutated={() => void reload()} opInProgress={!!mergeState?.kind} />
         )}
         {active && tab === 'conflicts' && mergeState && (
-          <ConflictsView projectId={projectId} state={mergeState} onMutated={requestGitReload} />
+          <ConflictsView projectId={projectId} repoPrefix={repoPrefix} state={mergeState} onMutated={requestGitReload} />
         )}
-        {active && tab === 'ai' && <GitPromptView projectId={projectId} onMutated={() => void reload()} />}
+        {active && tab === 'ai' && <GitPromptView projectId={projectId} repoPath={repoPath} onMutated={() => void reload()} />}
       </div>
     </ToolWindowFrame>
   );

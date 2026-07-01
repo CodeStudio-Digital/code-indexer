@@ -38,7 +38,7 @@ import type {
 } from '@mcp/company/services/MasterInboxRouter.js';
 import { MASTER_INBOX_SENTINEL } from '@mcp/company/services/MasterInboxRouter.js';
 import { raceWithTimeout, isMutexTimeout } from '@mcp/company/services/utils/promiseMutex.js';
-import type { AgentInboxMessage, InboxKind, InboxStatus } from '@mcp/company/types.js';
+import type { AgentInboxMessage, InboxKind, InboxPriority, InboxStatus } from '@mcp/company/types.js';
 
 /**
  * Default ceiling for `wait=true` senders waiting on an inbox answer.
@@ -97,6 +97,15 @@ export interface SendArgs {
    * Global default flipped by `MCP_COMPANY_INBOX_HEALTH_CHECK=1`.
    */
   failFastOnHealth?: boolean;
+  // ─── Threading + priority (migration 184) ───────────────────────
+  /** Delivery priority — 'urgent' claims before 'normal'/'low'. Default 'normal'. */
+  priority?: InboxPriority;
+  /** Conversation this belongs to. Omit → the new message roots its own thread. */
+  threadId?: number | null;
+  /** The message this one replies to / continues. */
+  replyToMessageId?: number | null;
+  /** Small structured context payload (card_id/decision_id/file refs) as JSON. */
+  contextJson?: string | null;
 }
 
 export interface SendResult {
@@ -206,90 +215,6 @@ export class InboxQueue {
     this.masterRouter = router;
   }
 
-  // ─── Send (async with routing pipeline) ───────────────────────
-  //
-  // C7 — async variant that runs the InboxRoutingPipeline BEFORE
-  // delegating to the legacy sync `send()`. The pipeline chooses the
-  // best target (smallest backlog, healthy, etc.) and provides a
-  // failover list — caller can retry with `args.toAgentRunId` set to
-  // a failover id when the first send results in EXPIRED.
-  //
-  // The legacy `send()` stays as-is for backward compat. Callers that
-  // want the smart routing call `sendAsync()` explicitly.
-  //
-  // The pipeline is passed in (not stored on the queue) to keep the
-  // existing constructor signature unchanged. Hosts construct the
-  // pipeline once via `createInboxRoutingPipeline()` and pass it on
-  // each call.
-
-  /**
-   * Smart async send: route via `InboxRoutingPipeline` to pick the
-   * healthiest target, then delegate to the legacy `send()`. Returns
-   * the SendResult enriched with the routing decision so the caller
-   * can inspect `failoverRunIds` if they want to retry on failure.
-   *
-   * When the pipeline can't find ANY healthy target, throws
-   * `TargetHealthCheckError` regardless of `failFastOnHealth` —
-   * there's literally no one to send to.
-   */
-  async sendAsync(
-    args: SendArgs,
-    routingPipeline: import('@mcp/candidate-pipeline').CandidatePipeline<
-      import('./inbox-routing-pipeline.js').InboxRoutingQuery,
-      import('./inbox-routing-pipeline.js').AgentRunCandidate
-    >,
-  ): Promise<SendResult & { routing: import('./inbox-routing-pipeline.js').RoutingDecision }> {
-    // Master-bound short-circuit — same as legacy send().
-    if (args.toRole === MASTER_INBOX_SENTINEL) {
-      const sync = this.send(args);
-      return { ...sync, routing: { targetRunId: null, failoverRunIds: [], rejected: [] } };
-    }
-
-    // Snapshot the current state ONCE for the pipeline. Pipeline
-    // stages don't re-query — keeps decisions deterministic per call.
-    const agentRuns = this.deps.ctx.companyStore.listAgentRuns(this.deps.ctx.companySessionId);
-    const pendingByRunId = new Map<number, ReadonlyArray<AgentInboxMessage>>();
-    for (const run of agentRuns) {
-      const pending = this.deps.ctx.companyStore.listInboxMessages({
-        companySessionId: this.deps.ctx.companySessionId,
-        toAgentRunId: run.id,
-        status: ['pending', 'delivered'],
-      });
-      pendingByRunId.set(run.id, pending);
-    }
-
-    const { routeInbox } = await import('./inbox-routing-pipeline.js');
-    const decision = await routeInbox(routingPipeline, {
-      queryId: `inbox-send-${Date.now()}`,
-      companySessionId: this.deps.ctx.companySessionId,
-      toRole: args.toRole,
-      toAgentRunId: args.toAgentRunId,
-      agentRuns,
-      pendingByRunId,
-    });
-
-    if (decision.targetRunId == null) {
-      // Pipeline rejected every candidate — throw with the assessment
-      // so the caller knows WHY (overloaded vs failed_status).
-      const reason = decision.rejected[0]?.reason ?? 'no_target_run';
-      throw new TargetHealthCheckError({
-        healthy: false,
-        reason: reason === 'overloaded' ? 'overloaded' : reason === 'failed_status' ? 'failed_status' : 'no_target_run',
-        pendingCount: 0,
-        targetStatus: null,
-        alternativeRoles: this.findAlternativeRoles(args.toRole),
-      });
-    }
-
-    // Send via legacy path with the routing decision baked in as
-    // toAgentRunId. This bypasses resolveTargetRunId() — caller's
-    // routing wins.
-    const sync = this.send({
-      ...args,
-      toAgentRunId: decision.targetRunId,
-    });
-    return { ...sync, routing: decision };
-  }
 
   // ─── Send ─────────────────────────────────────────────────────
 
@@ -316,6 +241,7 @@ export class InboxQueue {
         kind: args.kind,
         body: args.body,
         waitToken: args.wait ? makeToken() : null,
+        priority: args.priority ?? 'normal',
       });
       // When the sender asked to wait, register a waiter so
       // `waitForAnswer(token)` resolves once the master answers via
@@ -338,6 +264,50 @@ export class InboxQueue {
       );
     }
 
+    // Dead-letter escalation (Phase 4). A role-addressed message whose role
+    // has NO viable recipient (every agent ended, or none was ever spawned)
+    // would otherwise sit `pending` until it EXPIRES ~20 min later — the
+    // sender's intent silently lost. When enabled, re-route it to the master
+    // inbox instead, wrapped with context, so the master can answer directly
+    // or spawn/forward a suitable agent. Gated `MCP_COMPANY_INBOX_DEADLETTER=1`
+    // (default off — legacy behavior queues and relies on the timeout).
+    if (
+      process.env.MCP_COMPANY_INBOX_DEADLETTER === '1' &&
+      args.toRole &&
+      args.toRole !== MASTER_INBOX_SENTINEL &&
+      typeof args.toAgentRunId !== 'number' &&
+      this.masterRouter
+    ) {
+      const health = this.assessTargetHealth({ toRole: args.toRole, toAgentRunId: args.toAgentRunId });
+      if (!health.healthy && (health.reason === 'no_target_run' || health.reason === 'failed_status')) {
+        const alt = health.alternativeRoles?.length
+          ? ` Alternative roles that could take this: ${health.alternativeRoles.map((r) => `@${r}`).join(', ')}.`
+          : '';
+        const wrapped =
+          `[DEAD-LETTER — no live @${args.toRole} to receive this] ` +
+          `@${args.fromRole} tried to reach @${args.toRole}:\n\n${args.body}\n\n` +
+          `Answer directly, or spawn/forward a @${args.toRole} to handle it.${alt}`;
+        const result = this.masterRouter.enqueueForMaster({
+          fromAgentRunId: args.fromAgentRunId,
+          fromRole: args.fromRole,
+          kind: args.kind,
+          body: wrapped,
+          waitToken: args.wait ? makeToken() : null,
+        });
+        this.deps.publisher.publish('inbox_dead_letter', {
+          toRole: args.toRole,
+          fromRole: args.fromRole,
+          reason: health.reason,
+          escalatedMessageId: result.message.id,
+        });
+        return {
+          message: result.message,
+          deliveredImmediately: result.deliveredImmediately,
+          waitToken: result.message.wait_token ?? undefined,
+        };
+      }
+    }
+
     // C6 — Sprint 3.5. Pre-check target health BEFORE creating an inbox
     // row that would otherwise sit pending and time out. Opt-in:
     //   - SendArgs.failFastOnHealth=true (per-call)
@@ -357,6 +327,27 @@ export class InboxQueue {
       }
     }
 
+    // Backpressure backstop (Phase 4). Never let one target accumulate an
+    // unbounded queue — a generous hard cap (default 50) that only trips on a
+    // genuine runaway, independent of the opt-in fail-fast health check.
+    const hardCapRaw = Number(process.env.MCP_COMPANY_INBOX_HARD_CAP);
+    const hardCap = Number.isFinite(hardCapRaw) && hardCapRaw > 0 ? hardCapRaw : 50;
+    if (args.toRole || typeof args.toAgentRunId === 'number') {
+      const pending = this.deps.ctx.companyStore.listInboxMessages({
+        companySessionId: this.deps.ctx.companySessionId,
+        ...(typeof args.toAgentRunId === 'number'
+          ? { toAgentRunId: args.toAgentRunId }
+          : { toRole: args.toRole }),
+        status: ['pending', 'delivered'],
+      }).length;
+      if (pending >= hardCap) {
+        throw new Error(
+          `inbox backpressure: @${args.toRole ?? `run=${args.toAgentRunId}`} already has ` +
+          `${pending} undelivered message(s) (hard cap ${hardCap}). Let it drain, or escalate to the master.`,
+        );
+      }
+    }
+
     const waitToken = args.wait ? makeToken() : undefined;
     const message = this.deps.ctx.companyStore.createInboxMessage({
       companySessionId: this.deps.ctx.companySessionId,
@@ -367,6 +358,10 @@ export class InboxQueue {
       kind: args.kind,
       body: args.body,
       waitToken: waitToken ?? null,
+      priority: args.priority ?? 'normal',
+      threadId: args.threadId ?? null,
+      replyToMessageId: args.replyToMessageId ?? null,
+      contextJson: args.contextJson ?? null,
     });
 
     this.deps.publisher.publish('inbox_message_sent', {
@@ -446,6 +441,20 @@ export class InboxQueue {
    * (rows flip to `expired` when that happens).
    */
   waitForAnswer(token: string, timeoutMs = DEFAULT_WAIT_TIMEOUT_MS): Promise<string> {
+    // De-race the commit/wake gap: if the target already answered BEFORE this
+    // waiter registers — a fast answer, or an answer that committed to the DB
+    // while the process was down and we're re-entering the wait after a resume —
+    // resolve straight from the DB. Parking a waiter here would miss the
+    // already-fired `inbox_answered` signal and strand until the timeout.
+    const existing = this.findMessageByWaitToken(token);
+    if (existing) {
+      if (existing.status === 'answered') {
+        return Promise.resolve(existing.answer ?? '');
+      }
+      if (existing.status === 'expired' || existing.status === 'cancelled') {
+        return Promise.resolve(existing.answer ?? '(no response from target)');
+      }
+    }
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         const w = this.waiters.get(token);
@@ -921,13 +930,14 @@ export class InboxQueue {
   }
 
   private findMessageByWaitToken(token: string): AgentInboxMessage | null {
-    // Token is unique across pending/answered rows of the session — a
-    // narrow scan is fine here.
-    const rows = this.deps.ctx.companyStore.listInboxMessages({
-      companySessionId: this.deps.ctx.companySessionId,
-      limit: 200,
-    });
-    return rows.find((m) => m.wait_token === token) ?? null;
+    // Direct, uncapped lookup. The old `list({ limit: 200 }).find(...)` scan
+    // silently returned null once a session accumulated >200 messages and the
+    // answered row aged out of the window — stranding the blocked sender until
+    // its 20-min timeout. `wait_token` is unique per session.
+    return this.deps.ctx.companyStore.getInboxMessageByWaitToken(
+      this.deps.ctx.companySessionId,
+      token,
+    );
   }
 }
 

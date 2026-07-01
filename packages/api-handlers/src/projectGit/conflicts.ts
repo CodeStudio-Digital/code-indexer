@@ -39,10 +39,16 @@ export interface ConflictDeps {
     args: string[],
     env?: Record<string, string>,
   ): Promise<GitRunResult>;
-  requireRoot(projectId: number): string;
+  /** Resolve the git cwd for a project + optional selected repo (submodule/nested). */
+  resolveCwd(projectId: number, repoPath?: string): Promise<string>;
   detectRepo(
     root: string,
   ): Promise<{ repoRoot: string | null; gitDir: string | null; notARepo: boolean }>;
+  /** Auto-route a project-relative path to its containing repo (submodule-aware). */
+  resolveRepoForPath(
+    projectId: number,
+    projectRelPath: string,
+  ): Promise<{ cwd: string; repoRelPath: string }>;
 }
 
 type ConflictApi = Pick<
@@ -73,15 +79,30 @@ const NUL = String.fromCharCode(0);
 const looksBinary = (s: string | null): boolean => typeof s === 'string' && s.includes(NUL);
 
 export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
-  async function resolveRepoRoot(projectId: number) {
-    const root = deps.requireRoot(projectId);
+  async function resolveRepoRoot(projectId: number, repoPath?: string) {
+    const root = await deps.resolveCwd(projectId, repoPath);
     return deps.detectRepo(root);
   }
 
+  // Resolve the repo + repo-relative path for one conflicted file. With an
+  // explicit repoPath (the Git window's Conflicts tab) the path is already
+  // relative to that repo; without one (the 3-pane merge editor, which is
+  // decoupled from the window) it's project-relative and auto-routed to its
+  // containing repo — so a conflict inside a submodule resolves correctly.
+  async function resolveFile(projectId: number, repoPath: string | undefined, p: string) {
+    if (repoPath) {
+      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId, repoPath);
+      return { repoRoot, gitDir, notARepo, gitPath: p };
+    }
+    const { cwd, repoRelPath } = await deps.resolveRepoForPath(projectId, p);
+    const { repoRoot, gitDir, notARepo } = await deps.detectRepo(cwd);
+    return { repoRoot, gitDir, notARepo, gitPath: repoRelPath };
+  }
+
   return {
-    async mergeState({ projectId }) {
+    async mergeState({ projectId, repoPath }) {
       const empty = { kind: null as MergeKind | null, conflictedFiles: [], oursLabel: '', theirsLabel: '' };
-      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId);
+      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId, repoPath);
       if (notARepo || !repoRoot) return empty;
       const { kind: seqKind, incomingSha } = await detectMergeKind(gitDir, { runGit: deps.runGit, repoRoot });
       const conflictedFiles = await listConflictedFiles(deps.runGit, repoRoot);
@@ -110,17 +131,17 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
       };
     },
 
-    async conflictFile({ projectId, path: rel }) {
-      const { repoRoot, notARepo } = await resolveRepoRoot(projectId);
+    async conflictFile({ projectId, path: rel, repoPath }) {
+      const { repoRoot, notARepo, gitPath } = await resolveFile(projectId, repoPath, rel);
       if (notARepo || !repoRoot) throw new ApiError('not_a_repo', 400, 'not a git repository');
       const showStage = async (n: 1 | 2 | 3): Promise<string | null> => {
-        const r = await deps.runGit(repoRoot, ['show', `:${n}:${rel}`]);
+        const r = await deps.runGit(repoRoot, ['show', `:${n}:${gitPath}`]);
         return r.code === 0 ? r.stdout : null;
       };
       const [base, ours, theirs] = await Promise.all([showStage(1), showStage(2), showStage(3)]);
       let merged = '';
       try {
-        merged = await fs.readFile(safeJoin(repoRoot, rel), 'utf8');
+        merged = await fs.readFile(safeJoin(repoRoot, gitPath), 'utf8');
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
       }
@@ -136,14 +157,14 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
       };
     },
 
-    async resolveConflict({ projectId, path: rel, resolution }) {
-      const { repoRoot, notARepo } = await resolveRepoRoot(projectId);
+    async resolveConflict({ projectId, path: rel, resolution, repoPath }) {
+      const { repoRoot, notARepo, gitPath } = await resolveFile(projectId, repoPath, rel);
       if (notARepo || !repoRoot) throw new ApiError('not_a_repo', 400, 'not a git repository');
 
       if (resolution === 'ours' || resolution === 'theirs') {
         const flag = resolution === 'ours' ? '--ours' : '--theirs';
         const stage = resolution === 'ours' ? 2 : 3;
-        const co = await deps.runGit(repoRoot, ['checkout', flag, '--', rel]);
+        const co = await deps.runGit(repoRoot, ['checkout', flag, '--', gitPath]);
         if (co.code !== 0) {
           // checkout can fail for two very different reasons. (a) The chosen
           // side has NO blob (modify/delete) — accepting it means staging the
@@ -151,17 +172,17 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
           // write failed (locked/read-only file, hook, …) — here a blind
           // `git rm` would DESTROY content the user asked to keep, so we must
           // surface the real error instead. Distinguish by probing the stage.
-          const sideExists = (await deps.runGit(repoRoot, ['show', `:${stage}:${rel}`])).code === 0;
+          const sideExists = (await deps.runGit(repoRoot, ['show', `:${stage}:${gitPath}`])).code === 0;
           if (sideExists) {
             throw new ApiError('git_resolve_failed', 500, co.stderr.trim() || 'git checkout failed');
           }
-          const rm = await deps.runGit(repoRoot, ['rm', '-f', '--', rel]);
+          const rm = await deps.runGit(repoRoot, ['rm', '-f', '--', gitPath]);
           if (rm.code !== 0) {
             throw new ApiError('git_resolve_failed', 500, (co.stderr || rm.stderr).trim() || 'checkout failed');
           }
           return { ok: true as const };
         }
-        const add = await deps.runGit(repoRoot, ['add', '--', rel]);
+        const add = await deps.runGit(repoRoot, ['add', '--', gitPath]);
         if (add.code !== 0) throw new ApiError('git_resolve_failed', 500, add.stderr.trim() || 'git add failed');
         return { ok: true as const };
       }
@@ -169,16 +190,16 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
       if (looksBinary(resolution.content)) {
         throw new ApiError('binary_conflict', 400, 'cannot write text content to a binary file');
       }
-      const abs = safeJoin(repoRoot, rel);
+      const abs = safeJoin(repoRoot, gitPath);
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, resolution.content, 'utf8');
-      const add = await deps.runGit(repoRoot, ['add', '--', rel]);
+      const add = await deps.runGit(repoRoot, ['add', '--', gitPath]);
       if (add.code !== 0) throw new ApiError('git_resolve_failed', 500, add.stderr.trim() || 'git add failed');
       return { ok: true as const };
     },
 
-    async mergeContinue({ projectId }) {
-      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId);
+    async mergeContinue({ projectId, repoPath }) {
+      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId, repoPath);
       if (notARepo || !repoRoot) throw new ApiError('not_a_repo', 400, 'not a git repository');
       const { kind } = await detectMergeKind(gitDir, { runGit: deps.runGit, repoRoot });
       if (!kind) throw new ApiError('no_merge_in_progress', 409, 'no merge/cherry-pick/revert/rebase in progress');
@@ -194,8 +215,8 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
       });
     },
 
-    async mergeAbort({ projectId }) {
-      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId);
+    async mergeAbort({ projectId, repoPath }) {
+      const { repoRoot, gitDir, notARepo } = await resolveRepoRoot(projectId, repoPath);
       if (notARepo || !repoRoot) throw new ApiError('not_a_repo', 400, 'not a git repository');
       const { kind } = await detectMergeKind(gitDir, { runGit: deps.runGit, repoRoot });
       if (kind) return deps.runAsResult(repoRoot, 'git', [kind, '--abort']);

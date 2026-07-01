@@ -16,7 +16,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import type { TerminalShell } from '@mcp/api-bus';
+import type { RuntimeTarget, TerminalShell } from '@mcp/api-bus';
 
 export function detectShells(): TerminalShell[] {
   try {
@@ -148,6 +148,23 @@ export function resolveShellById(id: string | null | undefined): TerminalShell |
     return { id, label: file.split(/[\\/]/).pop() || file, file };
   }
   return detectShells().find((s) => s.id === id) ?? null;
+}
+
+/**
+ * Classify a resolved shell into its runtime execution target. A `wsl.exe`
+ * shell (its distro carried in `args` as `['-d', <distro>]`) runs commands
+ * INSIDE that Linux distro, so its runtimes are Linux builds — anything else
+ * (PowerShell, cmd, Git Bash — which is Windows-native bash) is the `host`.
+ * Drives target-aware runtime injection at spawn (see runtime-resolve.ts).
+ */
+export function targetForShell(shell: { file: string; args?: string[] } | null | undefined): RuntimeTarget {
+  if (!shell?.file) return { kind: 'host' };
+  const base = shell.file.toLowerCase();
+  if (!/wsl(\.exe)?$/.test(base)) return { kind: 'host' };
+  const args = shell.args ?? [];
+  const i = args.findIndex((a) => a === '-d' || a === '--distribution');
+  const distro = i >= 0 ? args[i + 1] : undefined;
+  return distro ? { kind: 'wsl', distro } : { kind: 'host' };
 }
 
 function fallbackShell(): TerminalShell {

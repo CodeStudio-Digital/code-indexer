@@ -2,6 +2,8 @@ import { defineTool, type McpTool } from '../tool.js';
 import { truncateToTokens } from '../utils.js';
 import type { SnapshotCategory } from '@mcp/shared/types.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
+import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
+import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory/agent-memory-writer.js';
 import { withProject, type ProjectToolHandler } from './_helpers.js';
 
 /**
@@ -376,29 +378,30 @@ const search_memory = defineTool({
     },
     required: ['project_name', 'query'],
   },
-  handler: withProject(withSnapshotErrorHandling(async (args, { db, snapshotService, hybridSearch }, project) => {
+  handler: withProject(withSnapshotErrorHandling(async (args, { db, agentMemoryService }, project) => {
     const query = (args.query as string).trim();
     if (!query) return 'search_memory requires a non-empty query.';
     const limit = (args.limit as number) ?? 5;
-    const raw = await hybridSearch.searchSnapshotsHybrid(project.id, project.name, query, limit);
-    if (raw.length === 0) {
-      const total = db.countSnapshots(project.id);
+    // Bridged to Agent Memory (migration 181) — the SAME store the native
+    // recall_memory reads, so company/external-MCP writes are recalled (no split-brain).
+    const results = await agentMemoryService.search('project', project.id, query, limit);
+    if (results.length === 0) {
+      const total = db.countAgentMemory('project', project.id);
       return total === 0
-        ? 'No project memory yet. Use save_memory to record one, or index the project to auto-generate memory.'
+        ? 'No project memory yet. Use save_memory (or remember) to record one.'
         : `No memory matched "${query}" (${total} entries exist). Try broader terms.`;
     }
-    const results = snapshotService.annotateStaleMany(project.id, raw);
     if (args.format === 'json') {
       return JSON.stringify({
         query,
         total: results.length,
         results: results.map((s) => ({
-          id: s.id, title: s.title, category: s.category, content: s.content,
+          id: s.id, title: s.name, category: s.type, content: s.content,
           source: s.source, importance: s.importance,
         })),
       });
     }
-    return results.map((s) => `## ${s.title} [${s.category}]\n${s.content}`).join('\n\n---\n\n');
+    return results.map((s) => `## ${s.name} [${s.type}]\n${s.content}`).join('\n\n---\n\n');
   })),
 });
 
@@ -421,19 +424,23 @@ const save_memory = defineTool({
     },
     required: ['project_name', 'title', 'category', 'content'],
   },
-  handler: withProject(withSnapshotErrorHandling(async (args, { snapshotService }, project, authCtx) => {
-    const result = await snapshotService.create(project.id, {
-      title: args.title as string,
-      category: args.category as SnapshotCategory,
-      content: args.content as string,
-      referencedFiles: args.referenced_files as string[] | undefined,
-      createdBy: authCtx?.principal ?? 'agent',
-      source: 'agent',
-      importance: typeof args.importance === 'number' ? args.importance : undefined,
-    });
-    const embed = summarizeEmbedError(result.embedError);
-    const embedNote = embed ? ` (warning: vector index failed — pending backfill: ${embed})` : '';
-    return `Memory #${result.snap.id} "${result.snap.title}" saved.${embedNote}`;
+  handler: withProject(withSnapshotErrorHandling(async (args, { db, agentMemoryService }, project) => {
+    // Bridged to Agent Memory — dedup/merge + embed via the SAME path as the
+    // native remember tool (deps.projectMemory.save). No more snapshot writes.
+    const literal = new MemoryExtractor(
+      { distill: async () => [{
+        title: args.title as string,
+        category: args.category as SnapshotCategory,
+        content: args.content as string,
+        importance: typeof args.importance === 'number' ? args.importance : 0.6,
+        referencedFiles: args.referenced_files as string[] | undefined,
+      }] },
+      new AgentMemoryWriter(db, agentMemoryService),
+      new AgentMemoryDedupeSearch(agentMemoryService),
+    );
+    const res = await literal.extractAndPersist(project.id, project.name, 'agent', {});
+    const what = res.merged > 0 ? 'merged into existing memory' : 'saved';
+    return `Memory "${args.title as string}" ${what} (created=${res.created} merged=${res.merged}).`;
   })),
 });
 

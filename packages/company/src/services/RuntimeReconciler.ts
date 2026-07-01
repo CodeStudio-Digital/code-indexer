@@ -30,8 +30,35 @@ import { MASTER_INBOX_SENTINEL } from '@mcp/company/services/MasterInboxRouter.j
 import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
+import type { KanbanService } from '@mcp/company/services/KanbanService.js';
+import { findOrphanedCards } from '@mcp/company/services/scheduler/dispatch-core.js';
 
 const DEFAULT_INTERVAL_MS = 45_000;
+
+/** Max auto-reestablish attempts per subordinate before the reconciler gives up
+ *  and leaves it 'error' — stops a crash-loop from resuming forever. */
+const REESTABLISH_MAX_ATTEMPTS = 3;
+
+/** Auto re-establish a subordinate that was `running` when its runtime vanished
+ *  (worker crash, uncaught throw, OOM) — flip the status so the UI stops showing
+ *  "running", then resume it from its persisted coder session so it finishes the
+ *  task. ON by default; `MCP_COMPANY_AUTO_REESTABLISH=0` falls back to the old
+ *  flip-to-idle behaviour. */
+function autoReestablishEnabled(): boolean {
+  const raw = process.env.MCP_COMPANY_AUTO_REESTABLISH;
+  if (raw == null || raw === '') return true;
+  const v = raw.toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off');
+}
+
+/** Agent-run statuses that count as "still doing useful work". Anything else
+ *  (idle/completed/error/aborted/interrupted/paused) is dead for the purpose
+ *  of the orphaned-card sweep. */
+const ACTIVE_RUN_STATUSES = new Set<string>([
+  'running', 'working',
+  'waiting', 'waiting_plan', 'waiting_question', 'waiting_tasks',
+  'reviewing', 'blocked',
+]);
 
 function readInterval(): number {
   const raw = process.env.MCP_COMPANY_RECONCILE_MS;
@@ -96,6 +123,10 @@ export interface RuntimeReconcilerDeps {
   humanInLoop: HumanInTheLoop;
   /** Attention bus used to re-wake a master parked in `wait_for_subordinates`. */
   attention: MasterAttention;
+  /** Kanban service — when present, the reconciler also frees cards stranded
+   *  `in_progress` by a dead agent (Phase 2 self-repair). Optional so existing
+   *  callers/tests that don't need it stay untouched. */
+  kanban?: KanbanService;
   /** Override for tests. Defaults to `Date.now()`. */
   now?: () => number;
 }
@@ -108,6 +139,9 @@ export class RuntimeReconciler {
   private nudging = false;
   /** Per-key last-nudge wall-clock for cooldown dedup. Bounded LRU. */
   private readonly lastNudgeAt = new Map<string, number>();
+  /** Per-subordinate auto-reestablish attempt counter (crash-loop cap). Reset
+   *  when the subordinate is observed healthy (tracked) again. */
+  private readonly reestablishAttempts = new Map<number, number>();
 
   constructor(private readonly deps: RuntimeReconcilerDeps) {}
 
@@ -160,6 +194,10 @@ export class RuntimeReconciler {
     try {
       await this.reconcileMaster();
       await this.reconcileSubordinates();
+      // Orphaned-card sweep runs AFTER reconcileSubordinates so it reads DB
+      // statuses already flipped to idle for ghost runs — avoids a false reset
+      // during a transient in-memory gap.
+      this.reconcileOrphanedCards();
       await this.heartbeatMasterInbox();
     } catch (e) {
       console.warn(
@@ -207,18 +245,61 @@ export class RuntimeReconciler {
     const runs = this.deps.ctx.companyStore.listAgentRuns(sessionId);
     for (const r of runs) {
       if (r.role === 'master') continue;
-      const dbSaysRunning =
-        r.status === 'running' ||
+      const isRunning = r.status === 'running';
+      const isWaiting =
         r.status === 'waiting_plan' ||
         r.status === 'waiting_question' ||
         r.status === 'waiting_tasks';
-      if (!dbSaysRunning) continue;
+      if (!isRunning && !isWaiting) continue;
       // Subordinate is "live" if SubordinateLifecycle still tracks it.
       // `statusOf` returns null when the agent isn't in the in-memory map.
       const tracked = this.deps.subordinates.statusOf(r.id);
-      if (tracked) continue;
-      // DB says running, but the orchestrator no longer has this run.
-      // Reconcile to idle.
+      if (tracked) {
+        this.reestablishAttempts.delete(r.id); // healthy again — reset the cap
+        continue;
+      }
+
+      // DB says active, but the orchestrator no longer has this run — it's a
+      // GHOST (the "caiu mas fica mostrando rodando" bug). A subordinate that was
+      // `running` (working) when its runner vanished should be RE-ESTABLISHED so
+      // it finishes its task; a `waiting_*` one was merely parked on the master,
+      // so just reconcile it to idle (the original behaviour).
+      if (isRunning && autoReestablishEnabled()) {
+        const attempts = (this.reestablishAttempts.get(r.id) ?? 0) + 1;
+        if (attempts <= REESTABLISH_MAX_ATTEMPTS) {
+          this.reestablishAttempts.set(r.id, attempts);
+          // Flip off 'running' FIRST: the UI stops showing it running AND resume
+          // is permitted (it rejects a 'running' row).
+          this.deps.ctx.companyStore.updateAgentRunStatus(r.id, 'error', 'reconciler: runtime gone — re-establishing');
+          this.deps.publisher.publish('agent_status', {
+            agentRunId: r.id, role: r.role, status: 'error', message: 're-establishing',
+          });
+          const sys =
+            `[SYSTEM] Your run stopped unexpectedly (the runtime went away) and was ` +
+            `automatically re-established (attempt ${attempts}/${REESTABLISH_MAX_ATTEMPTS}). ` +
+            `Continue your task from where you left off; if it was already done, post ` +
+            `your deliverable and stop.`;
+          try {
+            await this.deps.subordinates.resume(r.id, sys);
+            console.log(
+              `[company s=${sessionId}] reconciler: subordinate ${r.id} (${r.role}) was 'running' but runtime gone — re-established (attempt ${attempts})`,
+            );
+          } catch (e) {
+            console.warn(
+              `[company s=${sessionId}] reconciler: re-establish of subordinate ${r.id} failed: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+          continue;
+        }
+        // Crash-loop: exhausted attempts. Leave it 'error' (already flipped on a
+        // prior attempt) so the UI shows it failed instead of resuming forever.
+        console.warn(
+          `[company s=${sessionId}] reconciler: subordinate ${r.id} (${r.role}) crashed ${attempts - 1}× — giving up auto-reestablish, leaving 'error'`,
+        );
+        continue;
+      }
+
+      // waiting_* ghost, or auto-reestablish disabled → reconcile to idle.
       this.deps.ctx.companyStore.updateAgentRunStatus(r.id, 'idle', 'reconciled');
       this.deps.publisher.publish('agent_status', {
         agentRunId: r.id,
@@ -229,6 +310,77 @@ export class RuntimeReconciler {
       console.log(
         `[company s=${sessionId}] reconciler: subordinate ${r.id} (${r.role}) was '${r.status}' but runtime gone — flipped to idle`,
       );
+    }
+  }
+
+  // ── Orphaned cards (Phase 2 self-repair) ──────────────────────────
+
+  /**
+   * Free cards stranded `in_progress` by an agent that died mid-task. Without
+   * this, a worker crash leaves the card showing "in progress" with nobody on
+   * it forever — the dependency graph never unblocks downstream work. We
+   * unassign the dead agent(s) and reset the card to `todo` so the scheduler
+   * (or the master) can re-dispatch it.
+   *
+   * GATED behind `MCP_COMPANY_SCHEDULER=1` (default off) — it mutates board
+   * state autonomously, so it ships opt-in until validated on-device, and only
+   * makes sense paired with the dispatch loop that re-picks the freed card.
+   * No-op when no kanban service was wired.
+   */
+  private reconcileOrphanedCards(): void {
+    if (process.env.MCP_COMPANY_SCHEDULER !== '1') return;
+    const kanban = this.deps.kanban;
+    if (!kanban) return;
+    const sessionId = this.deps.ctx.companySessionId;
+
+    let cardsFull;
+    try {
+      cardsFull = kanban.listCardsFull();
+    } catch {
+      return;
+    }
+    const runs = this.deps.ctx.companyStore.listAgentRuns(sessionId);
+    const liveRunIds = new Set(
+      runs.filter((r) => ACTIVE_RUN_STATUSES.has(r.status)).map((r) => r.id),
+    );
+
+    const schedCards = cardsFull.map((c) => ({
+      id: c.id,
+      column: c.column,
+      blockedBy: c.blocked_by,
+      assignedAgentRunIds: c.agents
+        .filter((a) => !a.unassigned_at)
+        .map((a) => a.agent_run_id),
+    }));
+    const schedRuns = [...new Set(schedCards.flatMap((c) => c.assignedAgentRunIds))].map(
+      (id) => ({ agentRunId: id, live: liveRunIds.has(id) }),
+    );
+
+    const orphanIds = findOrphanedCards(schedCards, schedRuns);
+    if (orphanIds.length === 0) return;
+
+    for (const cardId of orphanIds) {
+      try {
+        const card = cardsFull.find((c) => c.id === cardId);
+        for (const a of card?.agents ?? []) {
+          if (!a.unassigned_at && !liveRunIds.has(a.agent_run_id)) {
+            kanban.unassignAgent(cardId, a.agent_run_id);
+          }
+        }
+        kanban.moveCard(cardId, 'todo');
+        kanban.addComment(
+          cardId,
+          'scheduler',
+          null,
+          '[AUTO] Reset to `todo`: the assigned agent ended without completing the card ' +
+            '(worker died / reconciled away mid-task). Re-dispatching.',
+        );
+        console.log(
+          `[company s=${sessionId}] reconciler: card ${cardId} orphaned (agent died mid-task) — reset to todo`,
+        );
+      } catch {
+        /* best-effort — a single card failure must not abort the sweep */
+      }
     }
   }
 

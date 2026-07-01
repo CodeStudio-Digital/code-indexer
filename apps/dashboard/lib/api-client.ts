@@ -144,10 +144,31 @@ export function apiBaseUrl(): string {
   if (typeof window === 'undefined') return '';
   const override = (window as unknown as { __MCP_API_BASE__?: string }).__MCP_API_BASE__;
   if (typeof override === 'string') return override;
-  if (typeof navigator !== 'undefined' && /\bElectron\//i.test(navigator.userAgent)) {
-    return 'mcp://app';
-  }
+  if (isElectronRenderer()) return 'mcp://app';
   return '';
+}
+
+/**
+ * Detect the Electron desktop shell.
+ *
+ * The UA check is the primary signal, BUT after the Electron 42 upgrade some
+ * renderers no longer carry "Electron/" in `navigator.userAgent` — so the
+ * UA-only check returned false INSIDE the app, `apiBaseUrl()` fell back to ''
+ * (relative), and `/api/*` hit the http loopback / Vite proxy (7317→7333)
+ * instead of the in-process `mcp://app` backend where company orchestrators
+ * live → `/answer` 404'd with "No active orchestrator".
+ *
+ * The reliable fallback is the preload-exposed `electronAPI.invoke` primitive:
+ * a plain function that crosses `contextBridge` (Proxies don't — see
+ * `electronInvoke`) and is present in EVERY app window. A browser never has it,
+ * so there are no false positives. Shared by the fetch interceptor
+ * (install-fetch-base.ts) so the two transports never disagree.
+ */
+export function isElectronRenderer(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (typeof navigator !== 'undefined' && /\bElectron\//i.test(navigator.userAgent)) return true;
+  const electron = (window as unknown as { electronAPI?: { invoke?: unknown } }).electronAPI;
+  return !!electron && typeof electron.invoke === 'function';
 }
 
 /**

@@ -119,6 +119,16 @@ export interface SubordinateLifecycleDeps {
 export class SubordinateLifecycle implements ISubordinateQuery {
   private readonly subordinates = new Map<number, SubordinateHandle>();
   private readonly runningIds = new Set<number>();
+  /**
+   * Synchronous spawn reservations. A spawn passes the concurrency check and
+   * then awaits `runCoder` for a beat before `runningIds` gains its id — so
+   * concurrent spawns (e.g. fan-out via Promise.all) would all read the same
+   * pre-increment `runningIds.size` and blow past the cap (TOCTOU). The cap
+   * check counts `runningIds.size + pendingSpawns.count`; each spawn reserves a
+   * slot the instant it passes and releases it in a `finally`, so the window is
+   * closed. A plain box (not a number) so the spawn helper mutates by reference.
+   */
+  private readonly pendingSpawns = { count: 0 };
   readonly retryPolicy = new RetryPolicy();
   readonly concurrencyPolicy = new ConcurrencyPolicy();
 
@@ -261,6 +271,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       concurrencyPolicy: this.concurrencyPolicy,
       subordinates: this.subordinates,
       runningIds: this.runningIds,
+      pendingSpawns: this.pendingSpawns,
       notifyIdleChanged: () => this.notifyIdleChanged(),
       wireDeps: {
         humanInLoop: this.deps.humanInLoop,

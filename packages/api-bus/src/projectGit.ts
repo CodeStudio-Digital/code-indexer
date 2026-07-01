@@ -23,6 +23,13 @@ export interface GitStatusFile {
     | 'unmerged';
   /** Whether the change is staged for commit. */
   staged: boolean;
+  /**
+   * Which git root this file belongs to, as a project-relative prefix
+   * ('' / undefined = the main repo). Only set on the AGGREGATE status (the
+   * explorer's project-wide view that merges submodules + nested repos); a
+   * single-repo status (Git tool window with an explicit repoPath) omits it.
+   */
+  repo?: string;
 }
 
 export interface GitStatus {
@@ -235,11 +242,60 @@ export interface GitOptimizations {
   fsmonitorSupported: boolean;
 }
 
+/**
+ * Common scope for every project-git call. `projectId` selects the project;
+ * `repoPath` optionally narrows the operation to ONE git root within it — the
+ * absolute path of a repo returned by `listRepos` (the main repo, a submodule,
+ * or a nested repo). The Git tool window ALWAYS sends an explicit `repoPath`
+ * (the main repo root when "main" is selected), so its file paths are
+ * unambiguously relative to that repo. When `repoPath` is omitted, the
+ * explorer/editor allow-list verbs (`baseline`, `diff`, `stageHunk`, `stage`,
+ * `unstage`, `discard`) auto-route each path to its containing repo, and every
+ * other verb falls back to the project's main repo.
+ */
+export interface GitScope {
+  projectId: number;
+  repoPath?: string;
+}
+
+/**
+ * One git root discovered inside a project by `listRepos` — the main repo plus
+ * its submodules and nested independent repos. `projectRelPrefix` is the POSIX
+ * path of this repo's root relative to the project `root_path` ('' when the repo
+ * IS the project root); it's how aggregate status rebases a repo's files to
+ * project-relative paths. `initialized` is false for a declared-but-not-checked-
+ * out submodule (no `.git` yet — git can't run inside it). `ignoredByParent`
+ * flags a nested repo the parent `.gitignore`s (a vendored checkout) so
+ * aggregate status can skip its noise.
+ */
+export interface GitRepoRef {
+  /** Absolute path of the repo root. */
+  absPath: string;
+  /** POSIX path relative to the project root_path; '' when repo === project root. */
+  projectRelPrefix: string;
+  /** Display name (last path segment, or 'main' for the project's own repo). */
+  name: string;
+  kind: 'main' | 'submodule' | 'nested';
+  /** False for a declared submodule that isn't checked out yet. */
+  initialized: boolean;
+  /** True for a nested repo the parent repo's .gitignore excludes. */
+  ignoredByParent: boolean;
+}
+
 export interface ProjectGitApi {
-  status(input: { projectId: number; includeFiles?: boolean }, ctx: ApiContext): Promise<GitStatus>;
+  /**
+   * Discover all git roots inside the project — the main repo plus its
+   * submodules and nested independent repos — so the Git tool window can offer
+   * a repo selector. Cheap + cached server-side; bounded scan (never descends
+   * huge ignored trees). Returns just the main repo for an ordinary single-repo
+   * project.
+   */
+  listRepos(input: { projectId: number }, ctx: ApiContext): Promise<GitRepoRef[]>;
+
+  status(input: GitScope & { includeFiles?: boolean }, ctx: ApiContext): Promise<GitStatus>;
 
   diff(
-    input: { projectId: number; path?: string; staged?: boolean },
+    input: GitScope & { path?: string; staged?: boolean },
     ctx: ApiContext,
   ): Promise<GitDiffResult>;
 
@@ -251,7 +307,7 @@ export interface ProjectGitApi {
    * the whole file as added.
    */
   baseline(
-    input: { projectId: number; path: string },
+    input: GitScope & { path: string },
     ctx: ApiContext,
   ): Promise<{ content: string | null; isRepo: boolean }>;
 
@@ -264,12 +320,12 @@ export interface ProjectGitApi {
    * `git apply --cached`s it. Throws 409 when the hunk no longer applies.
    */
   stageHunk(
-    input: { projectId: number; path: string; newStart: number; newEnd: number },
+    input: GitScope & { path: string; newStart: number; newEnd: number },
     ctx: ApiContext,
-  ): Promise<{ ok: true }>;
+  ): Promise<{ ok: true; repoPath?: string }>;
 
   log(
-    input: { projectId: number; limit?: number; path?: string; branch?: string },
+    input: GitScope & { limit?: number; path?: string; branch?: string },
     ctx: ApiContext,
   ): Promise<GitCommit[]>;
 
@@ -279,7 +335,7 @@ export interface ProjectGitApi {
    * preview panel in the Git log surface.
    */
   commitDetail(
-    input: { projectId: number; sha: string },
+    input: GitScope & { sha: string },
     ctx: ApiContext,
   ): Promise<GitCommitDetail>;
 
@@ -289,7 +345,7 @@ export interface ProjectGitApi {
    * file in the commit preview — opens as a normal diff tab.
    */
   commitFileDiff(
-    input: { projectId: number; sha: string; path: string },
+    input: GitScope & { sha: string; path: string },
     ctx: ApiContext,
   ): Promise<GitDiffResult>;
 
@@ -300,22 +356,22 @@ export interface ProjectGitApi {
    * "Compare with current"). Opens as a normal diff tab.
    */
   branchDiff(
-    input: { projectId: number; branch: string; worktree?: boolean },
+    input: GitScope & { branch: string; worktree?: boolean },
     ctx: ApiContext,
   ): Promise<GitDiffResult>;
 
-  stage(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
-  unstage(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
-  discard(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
+  stage(input: GitScope & { paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
+  unstage(input: GitScope & { paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
+  discard(input: GitScope & { paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
 
   commit(
-    input: { projectId: number; message: string; amend?: boolean },
+    input: GitScope & { message: string; amend?: boolean },
     ctx: ApiContext,
   ): Promise<{ sha: string }>;
 
-  branchList(input: { projectId: number }, ctx: ApiContext): Promise<{ current: string | null; all: string[] }>;
+  branchList(input: GitScope, ctx: ApiContext): Promise<{ current: string | null; all: string[] }>;
   branchCheckout(
-    input: { projectId: number; name: string; create?: boolean },
+    input: GitScope & { name: string; create?: boolean },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
@@ -327,8 +383,7 @@ export interface ProjectGitApi {
    * backwards compatibility with older callers.
    */
   branchesDetailed(
-    input: {
-      projectId: number;
+    input: GitScope & {
       includeRemote?: boolean;
       /**
        * Cache token — the caller's current git-revision. The handler caches
@@ -343,24 +398,24 @@ export interface ProjectGitApi {
   ): Promise<GitBranch[]>;
 
   branchCreate(
-    input: { projectId: number; name: string; from?: string; checkout?: boolean },
+    input: GitScope & { name: string; from?: string; checkout?: boolean },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
   branchDelete(
-    input: { projectId: number; name: string; force?: boolean },
+    input: GitScope & { name: string; force?: boolean },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
   /** Rename a local branch (`git branch -m [--force] <old> <new>`). */
   branchRename(
-    input: { projectId: number; oldName: string; newName: string; force?: boolean },
+    input: GitScope & { oldName: string; newName: string; force?: boolean },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
   // ── History-rewriting / merge ops ──────────────────────────
   merge(
-    input: { projectId: number; branch: string; ffOnly?: boolean; noFf?: boolean; message?: string },
+    input: GitScope & { branch: string; ffOnly?: boolean; noFf?: boolean; message?: string },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
@@ -371,22 +426,22 @@ export interface ProjectGitApi {
    * the existing resolver + `mergeContinue`/`mergeAbort` take over.
    */
   rebase(
-    input: { projectId: number; onto: string },
+    input: GitScope & { onto: string },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
   reset(
-    input: { projectId: number; target: string; mode: 'soft' | 'mixed' | 'hard' },
+    input: GitScope & { target: string; mode: 'soft' | 'mixed' | 'hard' },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
   revert(
-    input: { projectId: number; commit: string; noCommit?: boolean },
+    input: GitScope & { commit: string; noCommit?: boolean },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
   cherryPick(
-    input: { projectId: number; commits: string[]; noCommit?: boolean },
+    input: GitScope & { commits: string[]; noCommit?: boolean },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
@@ -397,7 +452,7 @@ export interface ProjectGitApi {
    * clean tree. Powers the resolver banner + Conflicts tab. Cheap — a
    * couple of `git rev-parse`/`diff` calls.
    */
-  mergeState(input: { projectId: number }, ctx: ApiContext): Promise<GitMergeState>;
+  mergeState(input: GitScope, ctx: ApiContext): Promise<GitMergeState>;
 
   /**
    * The three index stages + working-tree text of one conflicted file.
@@ -405,7 +460,7 @@ export interface ProjectGitApi {
    * inline editor for binary files.
    */
   conflictFile(
-    input: { projectId: number; path: string },
+    input: GitScope & { path: string },
     ctx: ApiContext,
   ): Promise<GitConflictFile>;
 
@@ -415,7 +470,7 @@ export interface ProjectGitApi {
    * the merged text then `git add`. Throws on binary `{ content }`.
    */
   resolveConflict(
-    input: { projectId: number; path: string; resolution: ConflictResolution },
+    input: GitScope & { path: string; resolution: ConflictResolution },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
@@ -425,10 +480,10 @@ export interface ProjectGitApi {
    * suppressed) so it can never hang. Refuses (409) while unmerged files
    * remain. Returns the rich GitRunResult on failure.
    */
-  mergeContinue(input: { projectId: number }, ctx: ApiContext): Promise<GitRunResult>;
+  mergeContinue(input: GitScope, ctx: ApiContext): Promise<GitRunResult>;
 
   /** Abort the in-progress op (`<kind> --abort`), restoring pre-op state. */
-  mergeAbort(input: { projectId: number }, ctx: ApiContext): Promise<GitRunResult>;
+  mergeAbort(input: GitScope, ctx: ApiContext): Promise<GitRunResult>;
 
   // ── Performance ────────────────────────────────────────────
   /**
@@ -436,7 +491,7 @@ export interface ProjectGitApi {
    * core.fsmonitor) plus the git version and fsmonitor support. Powers the
    * "Git performance" toggles' current state.
    */
-  gitOptimizations(input: { projectId: number }, ctx: ApiContext): Promise<GitOptimizations>;
+  gitOptimizations(input: GitScope, ctx: ApiContext): Promise<GitOptimizations>;
 
   /**
    * Enable/disable the repo's accelerators (writes `.git/config`). Omitted
@@ -445,7 +500,7 @@ export interface ProjectGitApi {
    * explicit user toggle.
    */
   configureGitOptimizations(
-    input: { projectId: number; untrackedCache?: boolean; fsmonitor?: boolean },
+    input: GitScope & { untrackedCache?: boolean; fsmonitor?: boolean },
     ctx: ApiContext,
   ): Promise<GitOptimizations>;
 
@@ -458,8 +513,7 @@ export interface ProjectGitApi {
    * of silently overwriting someone else's commits.
    */
   push(
-    input: {
-      projectId: number;
+    input: GitScope & {
       remote?: string;
       branch?: string;
       force?: boolean;
@@ -470,7 +524,7 @@ export interface ProjectGitApi {
 
   /** Fetch refs from a remote. `prune: true` removes stale tracking refs. */
   fetch(
-    input: { projectId: number; remote?: string; prune?: boolean },
+    input: GitScope & { remote?: string; prune?: boolean },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
@@ -480,7 +534,7 @@ export interface ProjectGitApi {
    * keeps history linear when there's nothing local to merge.
    */
   pull(
-    input: { projectId: number; remote?: string; branch?: string; rebase?: boolean },
+    input: GitScope & { remote?: string; branch?: string; rebase?: boolean },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
@@ -492,13 +546,13 @@ export interface ProjectGitApi {
    * ref). Powers the branch menu's "Update" for non-current branches.
    */
   updateBranch(
-    input: { projectId: number; branch: string },
+    input: GitScope & { branch: string },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
   // ── Stash ──────────────────────────────────────────────────
   /** List all stashes in the repo (newest first). Empty array when none. */
-  stashList(input: { projectId: number }, ctx: ApiContext): Promise<GitStashEntry[]>;
+  stashList(input: GitScope, ctx: ApiContext): Promise<GitStashEntry[]>;
 
   /**
    * Create a new stash from the current working tree.
@@ -512,8 +566,7 @@ export interface ProjectGitApi {
    *     useful for "stash everything except what I'm about to commit".
    */
   stashSave(
-    input: {
-      projectId: number;
+    input: GitScope & {
       message?: string;
       includeUntracked?: boolean;
       keepIndex?: boolean;
@@ -522,27 +575,27 @@ export interface ProjectGitApi {
   ): Promise<GitRunResult>;
 
   /** Apply `ref` and remove it from the stash list (`git stash pop`). */
-  stashPop(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitRunResult>;
+  stashPop(input: GitScope & { ref: string }, ctx: ApiContext): Promise<GitRunResult>;
 
   /** Apply `ref` without removing it (`git stash apply`). */
-  stashApply(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitRunResult>;
+  stashApply(input: GitScope & { ref: string }, ctx: ApiContext): Promise<GitRunResult>;
 
   /** Delete `ref` from the stash list (`git stash drop`). */
-  stashDrop(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitRunResult>;
+  stashDrop(input: GitScope & { ref: string }, ctx: ApiContext): Promise<GitRunResult>;
 
   /** Unified diff of `ref` against its parent — for the "view" action. */
-  stashShow(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitDiffResult>;
+  stashShow(input: GitScope & { ref: string }, ctx: ApiContext): Promise<GitDiffResult>;
 
   /**
    * Metadata + changed-file list for a stash entry. Powers the stash
    * preview surface (file list → click to open each file's diff),
    * mirroring `commitDetail` for commits.
    */
-  stashDetail(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitStashDetail>;
+  stashDetail(input: GitScope & { ref: string }, ctx: ApiContext): Promise<GitStashDetail>;
 
   /** Unified diff of one file within a stash (`git stash show -p <ref> -- <path>`). */
   stashFileDiff(
-    input: { projectId: number; ref: string; path: string },
+    input: GitScope & { ref: string; path: string },
     ctx: ApiContext,
   ): Promise<GitDiffResult>;
 
@@ -554,7 +607,7 @@ export interface ProjectGitApi {
    * after the user confirms.
    */
   aiPlan(
-    input: { projectId: number; intent: string },
+    input: GitScope & { intent: string },
     ctx: ApiContext,
   ): Promise<GitPlan>;
 
@@ -565,7 +618,7 @@ export interface ProjectGitApi {
    * escapes) before spawning.
    */
   aiExecute(
-    input: { projectId: number; steps: GitPlanStep[] },
+    input: GitScope & { steps: GitPlanStep[] },
     ctx: ApiContext,
   ): Promise<{ results: GitRunResult[]; aborted: boolean }>;
 
@@ -576,7 +629,7 @@ export interface ProjectGitApi {
    * configured so the UI can point the user at Admin → AI Geral.
    */
   aiCommitMessage(
-    input: { projectId: number },
+    input: GitScope,
     ctx: ApiContext,
   ): Promise<{ message: string }>;
 
@@ -586,5 +639,5 @@ export interface ProjectGitApi {
    * project or when no `origin` remote is configured. On-demand only (NOT called
    * on project open) to avoid a per-open git spawn.
    */
-  detectRemote(input: { projectId: number }): Promise<{ gitRemote: string | null; defaultBranch: string | null }>;
+  detectRemote(input: GitScope): Promise<{ gitRemote: string | null; defaultBranch: string | null }>;
 }

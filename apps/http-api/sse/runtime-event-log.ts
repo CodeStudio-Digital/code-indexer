@@ -19,12 +19,38 @@ const logs = new Map<string, RuntimeEventEnvelope[]>();
 const writeChains = new Map<string, Promise<void>>();
 const ensuredDirs = new Set<string>();
 
+// Anti-freeze: the highest-volume events are per-token text/thinking deltas.
+// They are fully reconstructable from the persisted assistant messages (the
+// same rationale the SSE replay buffer relies on — see coder-bus.ts), so the
+// diagnostic runtime log never needs them. Dropping them here removes the bulk
+// of the per-event enrich + file-append + memory churn this sink does on the
+// MAIN thread during a multi-agent run. Set MCP_RUNTIME_LOG_SKIP_DELTAS=0 to
+// keep them (e.g. when debugging token streaming itself).
+const SKIP_DELTAS = process.env.MCP_RUNTIME_LOG_SKIP_DELTAS !== '0';
+const RECONSTRUCTABLE_DELTAS = new Set(['text_delta', 'thinking_delta']);
+
+/**
+ * True for per-token deltas on either path: the coder path emits the runner
+ * event directly (`ev.event === 'text_delta'`); the company path wraps it as
+ * `agent_event` with the runner event in `ev.data.event`.
+ */
+function isReconstructableDelta(ev: BufferedEvent): boolean {
+  if (RECONSTRUCTABLE_DELTAS.has(ev.event)) return true;
+  if (ev.event === 'agent_event') {
+    const d = ev.data as { event?: unknown } | null;
+    return !!d && typeof d === 'object' && typeof d.event === 'string'
+      && RECONSTRUCTABLE_DELTAS.has(d.event);
+  }
+  return false;
+}
+
 export function installRuntimeEventLog(
   bus: CoderRunBus,
   kind: RuntimeLogKind,
   sessionId: number,
 ): () => void {
   return addBusEventSink(bus, (ev) => {
+    if (SKIP_DELTAS && isReconstructableDelta(ev)) return;
     const env = enrichEvent(ev, kind, sessionId);
     const key = logKey(kind, sessionId);
     const list = logs.get(key) ?? [];

@@ -22,6 +22,7 @@ import { SubordinateCompletionBus } from '../../subordinate/completion-events.js
 
 function makeDeps(over: Partial<AgentSupervisorDeps> = {}): AgentSupervisorDeps {
   return {
+    companySessionId: 100,
     companyEventBus: new CompanyEventBus(),
     completionBus: new SubordinateCompletionBus(),
     tickIntervalMs: 60_000,

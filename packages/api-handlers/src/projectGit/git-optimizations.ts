@@ -18,7 +18,8 @@ interface GitResult {
 /** The slice of index.ts internals the module needs — injected, not re-implemented. */
 export interface GitOptDeps {
   runGit(cwd: string, args: string[]): Promise<GitResult>;
-  requireRoot(projectId: number): string;
+  /** Resolve the git cwd for a project + optional selected repo. */
+  resolveCwd(projectId: number, repoPath?: string): Promise<string>;
 }
 
 type GitOptApi = Pick<ProjectGitApi, 'gitOptimizations' | 'configureGitOptimizations'> & {
@@ -122,12 +123,12 @@ export function createGitOptimizationHandlers(deps: GitOptDeps): GitOptApi {
   }
 
   return {
-    async gitOptimizations({ projectId }) {
-      return read(deps.requireRoot(projectId));
+    async gitOptimizations({ projectId, repoPath }) {
+      return read(await deps.resolveCwd(projectId, repoPath));
     },
 
-    async configureGitOptimizations({ projectId, untrackedCache, fsmonitor }) {
-      const root = deps.requireRoot(projectId);
+    async configureGitOptimizations({ projectId, untrackedCache, fsmonitor, repoPath }) {
+      const root = await deps.resolveCwd(projectId, repoPath);
       await configure(root, { untrackedCache, fsmonitor });
       return read(root);
     },

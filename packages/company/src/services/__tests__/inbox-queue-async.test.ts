@@ -57,6 +57,13 @@ function makeInboxQueue(state: MockState): { queue: InboxQueue; flipStatus: (id:
     getInboxMessage(id: number): AgentInboxMessage | null {
       return state.messagesById.get(id) ?? null;
     },
+    getInboxMessageByWaitToken(companySessionId: number, token: string): AgentInboxMessage | null {
+      if (companySessionId !== COMPANY_SESSION_ID) return null;
+      for (const m of state.messagesById.values()) {
+        if (m.wait_token === token) return m;
+      }
+      return null;
+    },
     getCompanySession() { return null; },
   };
   const publisher = {
@@ -97,6 +104,30 @@ function makeInboxQueue(state: MockState): { queue: InboxQueue; flipStatus: (id:
   };
   return { queue, flipStatus };
 }
+
+describe('InboxQueue.waitForAnswer — commit/wake de-race', () => {
+  it('resolves immediately when the message was already answered', async () => {
+    const msg = makeMessage({ id: 1, status: 'answered', answer: 'the shape is X', wait_token: 'tok-1' });
+    const { queue } = makeInboxQueue({ messagesById: new Map([[1, msg]]) });
+    // No `flipStatus` / signal fired — the answer pre-exists. Without the
+    // de-race, this waiter would park and only reject at the timeout.
+    await expect(queue.waitForAnswer('tok-1', 50)).resolves.toBe('the shape is X');
+  });
+
+  it('resolves an already-expired token from the DB instead of parking', async () => {
+    const msg = makeMessage({ id: 2, status: 'expired', answer: '(no response)', wait_token: 'tok-2' });
+    const { queue } = makeInboxQueue({ messagesById: new Map([[2, msg]]) });
+    await expect(queue.waitForAnswer('tok-2', 50)).resolves.toContain('no response');
+  });
+
+  it('still parks a waiter when the message is pending (normal path)', async () => {
+    const msg = makeMessage({ id: 3, status: 'pending', wait_token: 'tok-3' });
+    const { queue, flipStatus } = makeInboxQueue({ messagesById: new Map([[3, msg]]) });
+    const p = queue.waitForAnswer('tok-3', 1000);
+    flipStatus(3, 'answered', 'late answer'); // fires the inbox_answered signal
+    await expect(p).resolves.toBe('late answer');
+  });
+});
 
 describe('InboxQueue.getMessageStatus', () => {
   it('returns null for unknown id', () => {

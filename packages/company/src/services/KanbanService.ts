@@ -172,8 +172,95 @@ export class KanbanService implements IKanbanNotifier {
     return full;
   }
 
+  /**
+   * Dependency gate. A card must not ADVANCE into an active column
+   * (`in_progress`/`review`/`done`) while any card it `depends_on` is still
+   * unfinished. `blocked_by` is pre-computed by the store as exactly the
+   * subset of dependencies whose column !== 'done', so a non-empty list
+   * means "open blockers".
+   *
+   * This lives at the service layer — the single chokepoint every move
+   * flows through — so automation (spawn auto-move, pipeline fan-out, the
+   * autonomous scheduler, HTTP routes) honors dependencies too. Previously
+   * only the agent-facing `kanban_move_card` batch tool checked, leaving
+   * `kanban_add_dependency` a phantom contract for every programmatic path.
+   *
+   * Returns the blockers when the move should be refused; a redirect (snap
+   * back to the card's current column) keeps moveCard non-throwing for the
+   * many best-effort callers. Reorders within the same column are allowed.
+   * Never throws.
+   */
+  private evaluateDependencyGate(
+    cardId: number,
+    targetColumn: KanbanColumn,
+    fromColumn: KanbanColumn | undefined,
+  ): { blocked: false } | { blocked: true; blockers: Array<{ id: number; title: string; column: string }> } {
+    const ACTIVE: KanbanColumn[] = ['in_progress', 'review', 'done'];
+    if (!ACTIVE.includes(targetColumn)) return { blocked: false };
+    if (fromColumn === targetColumn) return { blocked: false }; // reorder, not an advance
+    try {
+      const full = this.ctx.companyStore.getKanbanCardFull(cardId);
+      if (!full || full.blocked_by.length === 0) return { blocked: false };
+      const blockers = full.blocked_by.map((id) => {
+        const c = this.ctx.companyStore.getKanbanCard(id);
+        return { id, title: c?.title ?? '?', column: c?.column ?? 'unknown' };
+      });
+      return { blocked: true, blockers };
+    } catch {
+      return { blocked: false };
+    }
+  }
+
+  /** Markdown comment explaining a dependency-gate redirect. */
+  private buildDependencyComment(
+    targetColumn: KanbanColumn,
+    blockers: ReadonlyArray<{ id: number; title: string; column: string }>,
+  ): string {
+    const lines: string[] = [
+      `Move to \`${targetColumn}\` refused by the dependency gate — open blockers must reach \`done\` first.`,
+      '',
+      'Blocking cards:',
+    ];
+    for (const b of blockers) {
+      lines.push(`- #${b.id} "${b.title}" — currently in \`${b.column}\``);
+    }
+    lines.push('');
+    lines.push('Move the blockers to `done`, or remove the dependency (`kanban_remove_dependency`), then retry.');
+    return lines.join('\n');
+  }
+
   moveCard(cardId: number, column: KanbanColumn, position?: number): KanbanCard {
     const before = this.ctx.companyStore.getKanbanCard(cardId);
+
+    // Dependency gate runs FIRST: a blocked card isn't advancing, so the
+    // quality gate (which only fires on a move TO `done`) is moot. When
+    // blocked we snap back to the card's current column and explain why.
+    const depBlock = this.evaluateDependencyGate(cardId, column, before?.column);
+    if (depBlock.blocked) {
+      const stayColumn = before?.column ?? 'todo';
+      const card = this.ctx.companyStore.moveKanbanCard(cardId, stayColumn, position);
+      this.bus.publish('kanban_card_moved', {
+        cardId,
+        fromColumn: before?.column,
+        toColumn: stayColumn,
+        position: card.position,
+        requestedColumn: column,
+        dependencyBlocked: true,
+        blockingCardIds: depBlock.blockers.map((b) => b.id),
+      });
+      try {
+        const comment = this.ctx.companyStore.addKanbanComment(
+          cardId,
+          'dependency-gate',
+          null,
+          this.buildDependencyComment(column, depBlock.blockers),
+        );
+        this.bus.publish('kanban_comment_added', { cardId, comment });
+      } catch {
+        /* swallow — already snapped back, comment is best-effort */
+      }
+      return card;
+    }
 
     // Wire #3 — Quality gate. When destination is `done` and we have
     // recent warn/flagged verdicts on this card's agents, redirect to

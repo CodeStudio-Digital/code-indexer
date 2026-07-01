@@ -9,16 +9,16 @@
  * moved to the left rail because they're "what am I editing"; Inbox /
  * Env / Databases came over because they're peek-while-working.
  *
- * Preview is the only icon gated on `builderMode` — the others work
- * against per-session data regardless of sandbox state.
+ * Buttons / edge / separators come from the shared `components/chrome`
+ * rail primitives, so this reads identically to the ProjectView rail —
+ * the selection bar just hugs the right (inner) edge.
  */
 import { useEffect, useState } from 'react';
-import { Building2, ChevronDown, ChevronUp, Database, Inbox, KeyRound, Monitor, Puzzle, ShieldOff } from 'lucide-react';
-import { cn } from '../../../lib/utils.js';
+import { Building2, ChevronDown, ChevronUp, Database, Inbox, KeyRound, Puzzle, ShieldOff } from 'lucide-react';
+import { RailButton, RailContainer, RailSeparator } from '../../../components/chrome/index.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 
 export type SidePanel =
-  | 'preview'
   | 'inbox'
   | 'env'
   | 'databases'
@@ -30,15 +30,13 @@ export type SidePanel =
 interface SidebarRailProps {
   active: SidePanel | null;
   onToggle: (panel: SidePanel) => void;
-  /** Hide the Preview icon when the session has no builder sandbox. */
-  showPreview: boolean;
   /** Contributed tool windows → extra rail icons opening their webview. */
   pluginWindows?: ContribToolWindow[];
 }
 
 interface RailIcon {
   id: SidePanel;
-  Icon: typeof Monitor;
+  Icon: typeof Building2;
   title: string;
   /** Collapsed into the "More" group by default (mirrors LeftTabRail). */
   advanced?: boolean;
@@ -66,7 +64,7 @@ function readStoredAdvanced(): boolean {
   }
 }
 
-export function SidebarRail({ active, onToggle, showPreview, pluginWindows = [] }: SidebarRailProps) {
+export function SidebarRail({ active, onToggle, pluginWindows = [] }: SidebarRailProps) {
   const [expanded, setExpanded] = useState(readStoredAdvanced);
   useEffect(() => {
     try {
@@ -88,7 +86,6 @@ export function SidebarRail({ active, onToggle, showPreview, pluginWindows = [] 
       title: w.title,
     }));
   const icons: RailIcon[] = [
-    ...(showPreview ? [{ id: 'preview' as SidePanel, Icon: Monitor, title: 'Preview' }] : []),
     ...BASE_ICONS,
     ...pluginIcons,
   ];
@@ -97,40 +94,32 @@ export function SidebarRail({ active, onToggle, showPreview, pluginWindows = [] 
   // A panel opened via persisted state / deep link keeps its group visible.
   const showAdvanced = expanded || advanced.some((i) => i.id === active);
 
-  const renderIcon = ({ id, Icon, title }: RailIcon): React.ReactNode => {
-    const isActive = active === id;
-    return (
-      <button
-        key={id}
-        type="button"
-        onClick={() => onToggle(id)}
-        title={title}
-        className={cn(
-          'p-1.5 rounded-md transition-colors',
-          isActive
-            ? 'bg-muted text-foreground'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-        )}
-      >
-        <Icon className="h-4 w-4" />
-      </button>
-    );
-  };
+  const renderIcon = ({ id, Icon, title }: RailIcon): React.ReactNode => (
+    <RailButton
+      key={id}
+      icon={Icon}
+      label={title}
+      active={active === id}
+      side="right"
+      role="toggle"
+      onClick={() => onToggle(id)}
+    />
+  );
 
   return (
-    <div className="w-10 border-l flex flex-col items-center gap-1 py-2 bg-card flex-shrink-0">
+    <RailContainer side="right">
       {core.map(renderIcon)}
-      <div className="w-6 border-t" />
+      <RailSeparator />
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         title="More"
         aria-expanded={showAdvanced}
-        className="p-1.5 rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
       </button>
       {showAdvanced && advanced.map(renderIcon)}
-    </div>
+    </RailContainer>
   );
 }

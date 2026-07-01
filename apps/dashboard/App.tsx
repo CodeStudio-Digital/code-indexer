@@ -27,6 +27,7 @@ import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
 import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
 import { AccountGate } from './features/account/AccountGate.js';
+import { useAccountGate } from './features/account/useAccountGate.js';
 import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/index.js';
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
@@ -123,17 +124,28 @@ function AppRoot() {
   // mount is dead. Returns a disposer.
   useEffect(() => installWebviewBridge(), []);
 
+  // Sign-in gate (lifted here so the app SHELL only mounts once signed in — the
+  // login screen shows BEFORE the app, not as a translucent overlay over it). When
+  // the cloud bridge is absent (browser dev) the gate resolves to 'allow', so the
+  // app renders normally.
+  const gate = useAccountGate();
+  const signedIn = gate.decision === 'allow';
+
   return (
     <>
-      <AppShell />
-      {showPreflight ? (
-        <PreflightWizard onDone={() => setShowPreflight(false)} />
-      ) : (
-        showOnboarding && <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
-      )}
-      {/* Top-most overlay: sign-in / trial / subscription gate. Renders nothing
-          once the account is entitled (or when the cloud bridge is absent). */}
-      <AccountGate />
+      {signedIn ? (
+        <>
+          <AppShell />
+          {showPreflight ? (
+            <PreflightWizard onDone={() => setShowPreflight(false)} />
+          ) : (
+            showOnboarding && <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+          )}
+        </>
+      ) : null}
+      {/* Full-screen sign-in/loading screen until signed in; renders nothing once
+          allowed (then AppShell above is shown). */}
+      <AccountGate gate={gate} />
     </>
   );
 }

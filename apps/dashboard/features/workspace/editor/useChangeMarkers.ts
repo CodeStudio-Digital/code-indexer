@@ -73,9 +73,15 @@ export function useChangeMarkers(
     const stage = async (range: StageRange, message?: string): Promise<void> => {
       try {
         await saveFile(projectId, path);
-        await apiCall('projectGit.stageHunk', { projectId, path, ...range });
+        // stageHunk auto-routes to the repo CONTAINING the file (a submodule may
+        // be its own repo) and returns it, so the follow-up commit targets that
+        // same repo rather than the opaque parent.
+        const { repoPath } = await apiCall<{ ok: true; repoPath?: string }>(
+          'projectGit.stageHunk',
+          { projectId, path, ...range },
+        );
         if (message) {
-          await apiCall('projectGit.commit', { projectId, message });
+          await apiCall('projectGit.commit', { projectId, repoPath, message });
           toast.success(t('git.changeMarker.committed'));
         } else {
           toast.success(t('git.changeMarker.staged'));

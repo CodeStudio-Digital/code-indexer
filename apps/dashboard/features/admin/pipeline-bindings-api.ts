@@ -7,6 +7,15 @@
 
 export type BindingScopeType = 'global' | 'template' | 'session';
 
+/** Mirror of `@mcp/services` CapabilityKind (dashboard is outside the Node tsc graph). */
+export type CapabilityKind =
+  | 'text_llm'
+  | 'embeddings'
+  | 'reranking'
+  | 'vision'
+  | 'voice'
+  | 'autocomplete';
+
 export interface PipelineCatalogEntry {
   pipelineName: string;
   bindingRole: string;
@@ -18,6 +27,14 @@ export interface PipelineCatalogEntry {
   };
   comingSoon?: boolean;
   introducedInPhase: string;
+  /**
+   * Layperson capability bucket (server-derived from the role). Optional on
+   * the frontend because custom (non-catalog) bindings synthesized locally in
+   * the panel omit it — `bucketOf()` falls those back to "outros".
+   */
+  capabilityKind?: CapabilityKind;
+  /** Whether the guided-setup wizard may bind this entry (default true). */
+  setupEligible?: boolean;
 }
 
 export interface PipelineBinding {
@@ -226,4 +243,47 @@ export async function bulkApplyBindings(input: BulkApplyInput): Promise<{ ok: bo
     throw new Error(detail ?? err.error ?? `HTTP ${r.status}`);
   }
   return (await r.json()) as { ok: boolean; applied: number; ids: number[] };
+}
+
+// ─── Guided-setup profile apply ──────────────────────────────────────────
+
+export interface ProfileAssignment {
+  capability_kind: CapabilityKind;
+  provider_id: string;
+  model_id: string;
+  model_mode?: string;
+}
+
+export interface BulkApplyProfileInput {
+  /** The wizard only writes global; kept for symmetry with other bulk calls. */
+  scope_type?: BindingScopeType;
+  scope_id?: number | null;
+  assignments: ProfileAssignment[];
+}
+
+export interface BulkApplyProfileResult {
+  ok: boolean;
+  applied: number;
+  byCapability: Record<string, number>;
+}
+
+/**
+ * Apply a layperson "profile": for each capability assignment the server
+ * fans out to that bucket's setup-eligible catalog targets, stamping each
+ * target's OWN recommendedDefault.config (per-role) and REPLACING any
+ * existing global binding for the (pipeline, role) — so re-running the
+ * wizard never duplicates rows.
+ */
+export async function bulkApplyProfile(input: BulkApplyProfileInput): Promise<BulkApplyProfileResult> {
+  const r = await fetch('/api/admin/pipeline-bindings/bulk/apply-profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string; details?: unknown };
+    const detail = Array.isArray(err.details) ? err.details.join(', ') : (err.details as string | undefined);
+    throw new Error(detail ?? err.error ?? `HTTP ${r.status}`);
+  }
+  return (await r.json()) as BulkApplyProfileResult;
 }

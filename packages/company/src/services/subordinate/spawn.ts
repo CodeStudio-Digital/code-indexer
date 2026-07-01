@@ -75,6 +75,9 @@ export interface SpawnSubordinateDeps {
   concurrencyPolicy: ConcurrencyPolicy;
   subordinates: Map<number, SubordinateHandle>;
   runningIds: Set<number>;
+  /** Synchronous spawn-reservation counter (closes the cap TOCTOU). See
+   *  SubordinateLifecycle.pendingSpawns. */
+  pendingSpawns: { count: number };
   notifyIdleChanged: () => void;
   /** Wire HumanInTheLoop + meta-bus listeners on the runner. */
   wireDeps: {
@@ -123,7 +126,10 @@ export async function spawnSubordinate(
   spec.projectId = projectId;
 
   // ── Concurrency cap ───────────────────────────────────────────────
-  const check = deps.concurrencyPolicy.check(deps.runningIds.size);
+  // Count in-flight reservations too — concurrent spawns (fan-out) reserve a
+  // slot synchronously at this check, before `runningIds` gains their id, so
+  // the cap holds even when N spawns race between the check and runCoder.
+  const check = deps.concurrencyPolicy.check(deps.runningIds.size + deps.pendingSpawns.count);
   if (!check.ok) {
     const running = deps
       .listRunning()
@@ -134,6 +140,27 @@ export async function spawnSubordinate(
       `spawnSubordinate refused (${check.current}/${check.max}). Running: ${running}. ${check.message}`,
     );
   }
+
+  // Global spawn budget (Phase 5 homeostasis). Coarse cross-session backstop so
+  // N sessions don't collectively exhaust the machine / trip provider rate
+  // limits. Reads the shared SQLite directly (every worker shares the file) — no
+  // coordinator, no leak. Opt-in via MCP_COMPANY_GLOBAL_MAX_SUBORDINATES.
+  const globalCapRaw = Number(process.env.MCP_COMPANY_GLOBAL_MAX_SUBORDINATES);
+  if (Number.isFinite(globalCapRaw) && globalCapRaw > 0) {
+    const globalActive = ctx.companyStore.countActiveSubordinatesGlobal();
+    if (globalActive >= globalCapRaw) {
+      throw new Error(
+        `spawnSubordinate refused: global subordinate budget reached ` +
+          `(${globalActive}/${globalCapRaw} active across all company sessions). ` +
+          `Wait for another session's agents to finish before spawning more.`,
+      );
+    }
+  }
+
+  // Reserve the slot for the whole spawn; released in the `finally` at the end
+  // (success transfers the count into `runningIds`, failure just frees it).
+  deps.pendingSpawns.count++;
+  try {
 
   // ── Supervisor role-quarantine check (Phase 2.3) ──────────────────
   // The supervisor's per-role circuit breaker may have quarantined the
@@ -447,4 +474,10 @@ export async function spawnSubordinate(
     coderSessionId: subSession.id,
     status: 'running',
   };
+  } finally {
+    // Release the reservation. On success the run is already in `runningIds`
+    // (added above), so the effective count is unchanged; on any throw between
+    // the cap check and here, this frees the slot we held.
+    deps.pendingSpawns.count--;
+  }
 }

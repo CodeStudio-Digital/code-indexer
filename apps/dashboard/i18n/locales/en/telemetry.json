@@ -1,6 +1,7 @@
 {
   "title": "Telemetry",
   "subtitle": "Per-turn token + tool usage across all sessions. Powered by the coder_turn_telemetry table.",
+  "aboutAria": "About this page",
   "empty": "No telemetry data yet. Run a coder session to populate this dashboard.",
   "overall.sessions": "Sessions",
   "overall.turns": "Turns",
@@ -54,8 +55,9 @@
   "skillsModes.title": "Skills section mode (per session)",
 
   "tabs.overview": "Overview",
-  "tabs.pipeline": "Pipeline Telemetry",
   "tabs.quality": "Quality",
+  "tabs.prices": "Prices",
+  "tabs.supervisor": "Supervisor",
 
   "pipeline.subtitle": "Per-stage execution traces emitted by the candidate-pipeline framework. Each pipeline component (Source / Hydrator / Filter / Scorer / Selector / SideEffect) records its latency, candidate counts, and cache hit/miss totals.",
   "pipeline.filters.pipelineName": "pipeline name filter…",

@@ -1,56 +1,38 @@
 /**
- * Inbox panel — operator-facing view of the inter-agent message queue.
+ * Inbox — the single operator surface for the inter-agent message queue.
  *
- * Lists every `agent_inbox` row for the session, grouped by status, and
- * lets the operator:
- *   - Cancel a stuck message (sender unblocks with a cancellation note)
- *   - Answer on behalf of the target (when an agent dies without
- *     responding to a `wait=true` send)
+ * Merges what used to be two overlapping surfaces (the right-rail Inbox
+ * and the Work-zone Transcript tab) into one panel with a view toggle,
+ * both backed by the same fetch + `inboxSlice`:
+ *   - "Fila" (queue)     → interactive, status-filtered, respond/cancel.
+ *   - "Atividade" (thread) → read-only threaded transcript, ASC by time.
  *
- * Phase 2: messages live in the `inboxSlice`. Each `inbox_message_*`
- * SSE event bumps a sequence counter the panel watches with `useEffect`
- * — when it changes, the panel refetches and hydrates the slice. The
- * 5 s poll stays only as a fallback for when the SSE stream is
- * disconnected (the orchestrator is dormant or the user just opened
- * the tab without starting/reattaching).
+ * Live-update: every `inbox_message_*` SSE event bumps the slice's
+ * `lastEventSeq` and we refetch; a 5 s poll is the fallback while the
+ * stream is disconnected (orchestrator dormant / tab opened cold).
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Inbox, RefreshCw, Send, Square } from 'lucide-react';
-import { Badge } from '../../components/ui/badge.js';
+import { Inbox, MessageCircle, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
-import { Textarea } from '../../components/ui/textarea.js';
-import { apiPost } from '../../hooks/useApi.js';
-import { confirm } from '../../components/ui/prompt-dialog.js';
 import {
   selectInbox,
   selectStream,
   useCompanyStore,
 } from '../../state/company/index.js';
-import type { AgentInboxMessage, InboxStatus } from '@mcp/company-contracts';
+import { InboxQueue } from './InboxQueue.js';
+import { TranscriptThread } from './transcript/TranscriptThread.js';
+import type { AgentInboxMessage } from '@mcp/company-contracts';
+
+type InboxView = 'queue' | 'activity';
 
 interface InboxPanelProps {
   companySessionId: number;
 }
 
-const STATUS_VARIANTS: Record<InboxStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-  pending: 'outline',
-  delivered: 'default',
-  answered: 'secondary',
-  cancelled: 'destructive',
-  expired: 'destructive',
-};
-
 export function InboxPanel({ companySessionId }: InboxPanelProps) {
-  const { t } = useTranslation(['agents', 'common']);
-
-  const [statusFilter, setStatusFilter] = useState<InboxStatus | 'all'>('all');
-  const queryUrl = useMemo(() => {
-    const params = new URLSearchParams();
-    if (statusFilter !== 'all') params.set('status', statusFilter);
-    const q = params.toString();
-    return `/api/company/sessions/${companySessionId}/inbox${q ? `?${q}` : ''}`;
-  }, [companySessionId, statusFilter]);
+  const { t } = useTranslation(['agents']);
+  const [view, setView] = useState<InboxView>('queue');
 
   const slot = useCompanyStore((s) => selectInbox(s, companySessionId));
   const inboxHydrate = useCompanyStore((s) => s.inboxHydrate);
@@ -58,11 +40,13 @@ export function InboxPanel({ companySessionId }: InboxPanelProps) {
   const inboxSetError = useCompanyStore((s) => s.inboxSetError);
   const connected = useCompanyStore((s) => selectStream(s, companySessionId).connected);
 
+  // Fetch the FULL list (no status query param) — both views read the same
+  // slice; the queue filters by status client-side.
   const refresh = useCallback(async () => {
     inboxSetLoading(companySessionId, true);
     inboxSetError(companySessionId, null);
     try {
-      const res = await fetch(queryUrl);
+      const res = await fetch(`/api/company/sessions/${companySessionId}/inbox`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as AgentInboxMessage[];
       inboxHydrate(companySessionId, body);
@@ -71,208 +55,103 @@ export function InboxPanel({ companySessionId }: InboxPanelProps) {
     } finally {
       inboxSetLoading(companySessionId, false);
     }
-  }, [companySessionId, queryUrl, inboxHydrate, inboxSetLoading, inboxSetError]);
+  }, [companySessionId, inboxHydrate, inboxSetLoading, inboxSetError]);
 
-  // Initial load + reload when the status filter changes.
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // SSE-driven refetch — any `inbox_message_*` event bumps the slice's
-  // `lastEventSeq` and we reload the list. Cheaper than polling every
-  // 5 s and tighter than waiting for the user to hit refresh.
+  // SSE-driven refetch — reload whenever an `inbox_message_*` event ticks
+  // the counter. Intentionally omit `refresh` so it fires only on the tick.
   useEffect(() => {
     if (slot.lastEventSeq === 0) return;
     void refresh();
-    // refresh is stable per (companySessionId, queryUrl); intentionally
-    // omit it so the effect runs ONLY when the counter ticks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slot.lastEventSeq]);
 
-  // Poll fallback — only while disconnected, same pattern as DrivePanel.
+  // Poll fallback — only while disconnected.
   useEffect(() => {
     if (connected) return;
-    const handle = setInterval(() => {
-      void refresh();
-    }, 5000);
+    const handle = setInterval(() => void refresh(), 5000);
     return () => clearInterval(handle);
   }, [connected, refresh]);
 
-  const messages = useMemo(
-    () => Array.from(slot.messagesById.values()).sort((a, b) => b.id - a.id),
-    [slot.messagesById],
-  );
-
-  const filtered = useMemo(() => {
-    if (statusFilter === 'all') return messages;
-    return messages.filter((m) => m.status === statusFilter);
-  }, [messages, statusFilter]);
+  const all = useMemo(() => Array.from(slot.messagesById.values()), [slot.messagesById]);
+  const queueMessages = useMemo(() => [...all].sort((a, b) => b.id - a.id), [all]);
+  // ASC by created_at (id tiebreak); newest at the bottom, capped at 200.
+  const activityMessages = useMemo(() => {
+    const list = [...all].sort((a, b) => {
+      const ta = Date.parse(a.created_at) || 0;
+      const tb = Date.parse(b.created_at) || 0;
+      return ta !== tb ? ta - tb : a.id - b.id;
+    });
+    return list.slice(-200);
+  }, [all]);
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Inbox className="h-4 w-4 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">
-            {filtered.length} {t('agents:inbox.messages')}
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Inbox className="h-4 w-4" />
+          <span className="text-xs">
+            {all.length} {t('agents:inbox.messages')}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as InboxStatus | 'all')}
-            className="h-7 rounded border bg-background px-2 text-xs"
-          >
-            <option value="all">{t('agents:inbox.filterAll')}</option>
-            <option value="pending">pending</option>
-            <option value="delivered">delivered</option>
-            <option value="answered">answered</option>
-            <option value="cancelled">cancelled</option>
-            <option value="expired">expired</option>
-          </select>
+        <div className="flex items-center gap-1">
+          <div className="flex rounded-md border p-0.5 text-[11px]">
+            <ViewTab
+              active={view === 'queue'}
+              onClick={() => setView('queue')}
+              icon={Inbox}
+              label={t('agents:inbox.viewQueue', { defaultValue: 'Fila' })}
+            />
+            <ViewTab
+              active={view === 'activity'}
+              onClick={() => setView('activity')}
+              icon={MessageCircle}
+              label={t('agents:inbox.viewActivity', { defaultValue: 'Atividade' })}
+            />
+          </div>
           <Button size="sm" variant="ghost" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto">
-        {slot.initialized && filtered.length === 0 && (
-          <div className="px-6 py-12 text-center text-sm text-muted-foreground">
-            {t('agents:inbox.empty')}
-          </div>
-        )}
-        <ul className="divide-y">
-          {filtered.map((m) => (
-            <InboxRow
-              key={m.id}
-              message={m}
-              companySessionId={companySessionId}
-              onChanged={() => void refresh()}
-            />
-          ))}
-        </ul>
-      </div>
+      {view === 'queue' ? (
+        <InboxQueue
+          messages={queueMessages}
+          companySessionId={companySessionId}
+          initialized={slot.initialized}
+          onChanged={() => void refresh()}
+        />
+      ) : (
+        <TranscriptThread messages={activityMessages} initialized={slot.initialized} />
+      )}
     </div>
   );
 }
 
-function InboxRow({
-  message,
-  companySessionId,
-  onChanged,
+function ViewTab({
+  active,
+  onClick,
+  icon: Icon,
+  label,
 }: {
-  message: AgentInboxMessage;
-  companySessionId: number;
-  onChanged: () => void;
+  active: boolean;
+  onClick: () => void;
+  icon: typeof Inbox;
+  label: string;
 }) {
-  const { t } = useTranslation(['agents', 'common']);
-  const [showRespond, setShowRespond] = useState(false);
-  const [answer, setAnswer] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const handleCancel = async () => {
-    const ok = await confirm({
-      title: t('agents:inbox.confirmCancel'),
-      confirmLabel: t('agents:inbox.cancelAction', { defaultValue: 'Cancel message' }),
-      tone: 'destructive',
-    });
-    if (!ok) return;
-    setBusy(true);
-    try {
-      await apiPost(`/company/sessions/${companySessionId}/inbox/${message.id}/cancel`, {
-        reason: 'cancelled by operator',
-      });
-      onChanged();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRespond = async () => {
-    setBusy(true);
-    try {
-      await apiPost(`/company/sessions/${companySessionId}/inbox/${message.id}/respond`, {
-        answer,
-      });
-      setAnswer('');
-      setShowRespond(false);
-      onChanged();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const target =
-    message.to_role
-      ? `@${message.to_role}`
-      : message.to_agent_run_id
-        ? `run=${message.to_agent_run_id}`
-        : '?';
-
-  const isOpen = message.status === 'pending' || message.status === 'delivered';
-
   return (
-    <li className="px-3 py-3 text-xs">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-medium">@{message.from_role}</span>
-            <Send className="h-3 w-3 text-muted-foreground" />
-            <span className="font-medium">{target}</span>
-            <Badge variant="outline" className="text-[10px]">{message.kind}</Badge>
-            <Badge variant={STATUS_VARIANTS[message.status]} className="text-[10px]">
-              {message.status}
-            </Badge>
-          </div>
-          <pre className="mt-1 whitespace-pre-wrap font-mono text-[11px]">
-            {message.body}
-          </pre>
-          {message.answer && (
-            <div className="mt-2 rounded bg-muted p-2">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                {t('agents:inbox.answer')}
-              </div>
-              <pre className="whitespace-pre-wrap font-mono text-[11px]">{message.answer}</pre>
-            </div>
-          )}
-          <div className="mt-1 text-[10px] text-muted-foreground">
-            {message.created_at}
-            {message.delivered_at && ` · delivered ${message.delivered_at}`}
-            {message.answered_at && ` · answered ${message.answered_at}`}
-          </div>
-        </div>
-        {isOpen && (
-          <div className="flex shrink-0 gap-1">
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setShowRespond((v) => !v)}>
-              {t('agents:inbox.respondAsHuman')}
-            </Button>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={handleCancel}>
-              <Square className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {showRespond && (
-        <div className="mt-2 rounded border bg-muted/50 p-2">
-          <Textarea
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            rows={3}
-            placeholder={t('agents:inbox.answerPlaceholder')}
-            className="text-xs"
-          />
-          <div className="mt-2 flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={() => setShowRespond(false)}>
-              {t('common:actions.cancel')}
-            </Button>
-            <Button size="sm" disabled={busy || !answer.trim()} onClick={handleRespond}>
-              {t('agents:inbox.send')}
-            </Button>
-          </div>
-        </div>
-      )}
-    </li>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-1 rounded px-2 py-0.5 transition-colors ${
+        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      <Icon className="h-3 w-3" /> {label}
+    </button>
   );
 }

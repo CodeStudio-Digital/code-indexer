@@ -1,6 +1,6 @@
-import React, { memo, useState } from 'react';
+import React, { memo, useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Crown, HelpCircle, CheckCircle, XCircle, Send, Ban } from 'lucide-react';
+import { Crown, HelpCircle, CheckCircle, XCircle, Send, Ban, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
@@ -28,6 +28,30 @@ export const MasterPromptCard = memo(function MasterPromptCard({
   const { t } = useTranslation(['agents', 'common']);
   const [text, setText] = useState('');
   const [feedback, setFeedback] = useState('');
+  // Defensive submit guard: one click was registering 3× (no in-flight lock),
+  // spawning duplicate "Human answered" board entries. Lock on first submit,
+  // show a processing state, and ignore further clicks until it settles.
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
+  const submit = (fn: () => void): void => {
+    if (submittingRef.current) return; // already in flight — swallow the extra clicks
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      fn();
+    } finally {
+      // On success the prompt flips to 'answered' and this whole interactive
+      // block unmounts. This safety reset only matters if the answer FAILED
+      // (card stays pending) so the user can retry after a few seconds. The
+      // backend is also idempotent, so a late click can't double-submit.
+      resetTimer.current = setTimeout(() => {
+        submittingRef.current = false;
+        setSubmitting(false);
+      }, 8000);
+    }
+  };
 
   const isPlan = prompt.kind === 'plan';
   const isPending = prompt.status === 'pending';
@@ -86,9 +110,10 @@ export const MasterPromptCard = memo(function MasterPromptCard({
               key={opt.value}
               size="sm"
               variant="outline"
-              onClick={() => onAnswerQuestion(opt.value)}
+              disabled={submitting}
+              onClick={() => submit(() => onAnswerQuestion(opt.value))}
             >
-              {opt.label}
+              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : opt.label}
             </Button>
           ))}
         </div>
@@ -101,23 +126,26 @@ export const MasterPromptCard = memo(function MasterPromptCard({
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={t('agents:company.answerPlaceholder')}
-            className="flex-1 rounded-md border bg-background px-3 py-1.5 text-xs resize-none"
+            disabled={submitting}
+            className="flex-1 rounded-md border bg-background px-3 py-1.5 text-xs resize-none disabled:opacity-60"
             rows={2}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && text.trim()) {
+              if (e.key === 'Enter' && !e.shiftKey && text.trim() && !submitting) {
                 e.preventDefault();
-                onAnswerQuestion(text.trim());
+                submit(() => onAnswerQuestion(text.trim()));
               }
             }}
           />
           <Button
             size="sm"
             variant="default"
-            onClick={() => text.trim() && onAnswerQuestion(text.trim())}
-            disabled={!text.trim()}
+            onClick={() => text.trim() && submit(() => onAnswerQuestion(text.trim()))}
+            disabled={submitting || !text.trim()}
             className="self-end gap-1"
           >
-            <Send className="h-3.5 w-3.5" /> {t('agents:company.answer')}
+            {submitting
+              ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('agents:company.answering', 'Enviando…')}</>
+              : <><Send className="h-3.5 w-3.5" /> {t('agents:company.answer')}</>}
           </Button>
         </div>
       )}
@@ -129,15 +157,16 @@ export const MasterPromptCard = memo(function MasterPromptCard({
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             placeholder={t('agents:company.feedbackPlaceholder')}
-            className="w-full rounded-md border bg-background px-3 py-1.5 text-xs resize-none"
+            disabled={submitting}
+            className="w-full rounded-md border bg-background px-3 py-1.5 text-xs resize-none disabled:opacity-60"
             rows={2}
           />
           <div className="flex gap-2">
-            <Button size="sm" variant="default" onClick={() => onRespondPlan(true, feedback || undefined)} className="gap-1">
-              <CheckCircle className="h-3.5 w-3.5" /> {t('common:actions.approve')}
+            <Button size="sm" variant="default" disabled={submitting} onClick={() => submit(() => onRespondPlan(true, feedback || undefined))} className="gap-1">
+              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />} {t('common:actions.approve')}
             </Button>
-            <Button size="sm" variant="outline" onClick={() => onRespondPlan(false, feedback || undefined)} className="gap-1 text-destructive">
-              <XCircle className="h-3.5 w-3.5" /> {t('common:actions.reject')}
+            <Button size="sm" variant="outline" disabled={submitting} onClick={() => submit(() => onRespondPlan(false, feedback || undefined))} className="gap-1 text-destructive">
+              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />} {t('common:actions.reject')}
             </Button>
           </div>
         </>

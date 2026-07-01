@@ -13,15 +13,22 @@ import { useConflictActions } from './use-conflict-actions.js';
 
 interface ConflictsViewProps {
   projectId: number;
+  /** Active repo's project-relative prefix ('' = main) — rebases mergeState's
+   *  repoRoot-relative conflict paths to project-relative so the editor opens +
+   *  the backend auto-routes them correctly (incl. files inside a submodule). */
+  repoPrefix?: string;
   state: GitMergeState;
   onMutated: () => void;
 }
 
-export function ConflictsView({ projectId, state, onMutated }: ConflictsViewProps) {
+export function ConflictsView({ projectId, repoPrefix, state, onMutated }: ConflictsViewProps) {
   const { t } = useTranslation('workspace');
   const { acceptOurs, acceptTheirs, markResolved, openInEditor, openMergeTab } = useConflictActions(projectId, onMutated);
+  const files = repoPrefix
+    ? state.conflictedFiles.map((f) => `${repoPrefix}/${f}`)
+    : state.conflictedFiles;
 
-  if (state.conflictedFiles.length === 0) {
+  if (files.length === 0) {
     return (
       <div className="flex-1 grid place-items-center px-6 py-10 text-center text-muted-foreground gap-2">
         <Check className="h-5 w-5 text-emerald-500/70" />
@@ -32,7 +39,7 @@ export function ConflictsView({ projectId, state, onMutated }: ConflictsViewProp
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
-      {state.conflictedFiles.map((path) => (
+      {files.map((path) => (
         <ConflictRow
           key={path}
           path={path}

@@ -83,9 +83,14 @@ export class FanOutRunner {
       role: node.role, fanOutBranches: branches.length,
     });
 
-    for (const branch of branches) {
-      await this.spawnBranch(executionId, pipelineName, node, branch, 1, barrier);
-    }
+    // Spawn branches concurrently — the synchronous reservation in
+    // `subordinates.spawn` keeps the concurrency cap honest under the race, so
+    // we no longer pay N× serial boot latency to fan a node out. A branch whose
+    // own spawn rejects is recorded as a failed branch inside spawnBranch
+    // (same as the serial path), so Promise.all never rejects here.
+    await Promise.all(
+      branches.map((branch) => this.spawnBranch(executionId, pipelineName, node, branch, 1, barrier)),
+    );
     barrier.spawning = false;
     this.maybeJoin(executionId);
   }

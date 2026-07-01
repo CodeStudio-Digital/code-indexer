@@ -3,6 +3,7 @@ import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
+import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
 import { DiffService } from '@mcp/services/services/differ.js';
 import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
@@ -22,6 +23,8 @@ export interface ToolContext {
   providerStore: ProviderStore;
   costTracker: CostTracker;
   snapshotService: SnapshotService;
+  /** Dedicated Agent Memory (migration 181) — backs the bridged save_memory/search_memory. */
+  agentMemoryService: AgentMemoryService;
   diffService: DiffService;
   exportService: ExportService;
   webhookDispatcher: WebhookDispatcher;
@@ -48,6 +51,7 @@ export function buildContext(): ToolContext {
     providerStore,
     costTracker: new CostTracker(db),
     snapshotService: new SnapshotService(db, embeddingService, searchableVectorStore),
+    agentMemoryService: new AgentMemoryService(db, embeddingService, searchableVectorStore),
     diffService: new DiffService(db),
     exportService: new ExportService(db),
     webhookDispatcher: new WebhookDispatcher(db),

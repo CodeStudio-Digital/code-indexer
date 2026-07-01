@@ -169,7 +169,12 @@ export const waitAgents: CoderTool = {
     // `targetIds` = this fixed set; the loop's safety poll guarantees we
     // re-check even if a target's `finished` signal is lost. Subordinate
     // callers (isMaster false) only ever resolve on `all_done`/`deadline`.
-    const outcome = await runAgentWaitLoop(orchestrator, { targetIds, isMaster, deadlineMs });
+    const outcome = await runAgentWaitLoop(orchestrator, {
+      targetIds, isMaster, deadlineMs,
+      // Heartbeat the caller's supervisor record so a long, healthy wait isn't
+      // misread as a stuck tool.
+      heartbeatAgentRunId: cc.agentRunId ?? undefined,
+    });
     switch (outcome.kind) {
       case 'attention': {
         const e = outcome.event;

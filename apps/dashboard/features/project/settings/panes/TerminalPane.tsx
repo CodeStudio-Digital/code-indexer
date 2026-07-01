@@ -60,6 +60,11 @@ export function TerminalPane({ project, patch }: { project: Project; patch: Patc
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">{t('runners.shellHint')}</p>
+        {value?.startsWith('wsl:') && (
+          <p className="text-xs text-muted-foreground border-l-2 border-primary/40 pl-2">
+            {t('runners.shellWslRuntimeHint')}
+          </p>
+        )}
       </div>
     </div>
   );

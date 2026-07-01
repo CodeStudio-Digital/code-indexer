@@ -18,6 +18,8 @@ import type { GitStatus, GitStatusFile } from './use-git-window.js';
 
 interface ChangesPaneProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   status: GitStatus | null;
   error: string | null;
   groups: {
@@ -44,6 +46,7 @@ interface ChangesPaneProps {
  */
 export function ChangesPane({
   projectId,
+  repoPath,
   status,
   error,
   groups,
@@ -200,6 +203,7 @@ export function ChangesPane({
       </div>
       <CommitBox
         projectId={projectId}
+        repoPath={repoPath}
         stagedCount={groups.staged.length}
         upstream={status?.upstream ?? null}
         onCommitted={onCommitted}

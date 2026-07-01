@@ -2,8 +2,17 @@ import type { Database as DB } from 'better-sqlite3';
 import type {
   AgentInboxMessage,
   InboxKind,
+  InboxPriority,
   InboxStatus,
 } from '@mcp/company/types.js';
+
+/**
+ * Claim ordering: urgent before normal before low (NULL → normal for pre-184
+ * rows), then oldest-first within a priority. A urgent blocker jumps ahead of a
+ * queue of FYIs instead of waiting behind them.
+ */
+const PRIORITY_ORDER_SQL =
+  "CASE COALESCE(priority, 'normal') WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END ASC";
 
 interface InboxRow {
   id: number;
@@ -20,6 +29,11 @@ interface InboxRow {
   created_at: string;
   delivered_at: string | null;
   answered_at: string | null;
+  // Threading + priority (migration 184). Nullable on rows created before it.
+  thread_id: number | null;
+  reply_to_message_id: number | null;
+  priority: string | null;
+  context_json: string | null;
 }
 
 function mapInboxRow(row: InboxRow): AgentInboxMessage {
@@ -38,6 +52,10 @@ function mapInboxRow(row: InboxRow): AgentInboxMessage {
     created_at: row.created_at,
     delivered_at: row.delivered_at,
     answered_at: row.answered_at,
+    thread_id: row.thread_id,
+    reply_to_message_id: row.reply_to_message_id,
+    priority: (row.priority ?? 'normal') as InboxPriority,
+    context_json: row.context_json,
   };
 }
 
@@ -50,6 +68,14 @@ export interface CreateInboxMessageInput {
   kind: InboxKind;
   body: string;
   waitToken?: string | null;
+  /** Conversation this message belongs to. Omit → the new row roots its own thread. */
+  threadId?: number | null;
+  /** The message this one replies to / continues. */
+  replyToMessageId?: number | null;
+  /** Delivery priority. Default 'normal'. */
+  priority?: InboxPriority;
+  /** Small structured context payload (card_id/decision_id/file refs) as JSON. */
+  contextJson?: string | null;
 }
 
 export interface ListInboxOptions {
@@ -62,26 +88,59 @@ export interface ListInboxOptions {
 }
 
 export function create(db: DB, input: CreateInboxMessageInput): AgentInboxMessage {
-  const stmt = db.prepare(`
-    INSERT INTO agent_inbox
-      (company_session_id, from_agent_run_id, from_role, to_role, to_agent_run_id, kind, body, wait_token)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const r = stmt.run(
-    input.companySessionId,
-    input.fromAgentRunId,
-    input.fromRole,
-    input.toRole ?? null,
-    input.toAgentRunId ?? null,
-    input.kind,
-    input.body,
-    input.waitToken ?? null,
-  );
-  return get(db, Number(r.lastInsertRowid))!;
+  const tx = db.transaction((): number => {
+    const r = db.prepare(`
+      INSERT INTO agent_inbox
+        (company_session_id, from_agent_run_id, from_role, to_role, to_agent_run_id,
+         kind, body, wait_token, thread_id, reply_to_message_id, priority, context_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.companySessionId,
+      input.fromAgentRunId,
+      input.fromRole,
+      input.toRole ?? null,
+      input.toAgentRunId ?? null,
+      input.kind,
+      input.body,
+      input.waitToken ?? null,
+      input.threadId ?? null,
+      input.replyToMessageId ?? null,
+      input.priority ?? 'normal',
+      input.contextJson ?? null,
+    );
+    const id = Number(r.lastInsertRowid);
+    // Root a fresh conversation on itself so every message carries a stable
+    // thread_id (readers never have to coalesce id).
+    if (input.threadId == null) {
+      db.prepare('UPDATE agent_inbox SET thread_id = ? WHERE id = ?').run(id, id);
+    }
+    return id;
+  });
+  return get(db, tx())!;
 }
 
 export function get(db: DB, id: number): AgentInboxMessage | null {
   const row = db.prepare('SELECT * FROM agent_inbox WHERE id = ?').get(id) as InboxRow | undefined;
+  return row ? mapInboxRow(row) : null;
+}
+
+/**
+ * Direct lookup of the message bearing a blocking `wait_token`. `wait_token`
+ * is unique per session, so this returns the single matching row (or null).
+ *
+ * Replaces InboxQueue's old `list({ limit: 200 }).find(...)` scan, which
+ * silently failed to find an answer whose row had aged past the 200
+ * most-recent messages under load. A direct WHERE is both correct (no row
+ * cap) and cheap; an index on `wait_token` lands with the Phase 4 migration.
+ */
+export function getByWaitToken(
+  db: DB,
+  companySessionId: number,
+  token: string,
+): AgentInboxMessage | null {
+  const row = db
+    .prepare('SELECT * FROM agent_inbox WHERE company_session_id = ? AND wait_token = ? LIMIT 1')
+    .get(companySessionId, token) as InboxRow | undefined;
   return row ? mapInboxRow(row) : null;
 }
 
@@ -122,7 +181,7 @@ export function claimNextForAgent(
        WHERE company_session_id = ?
          AND status = 'pending'
          AND (to_agent_run_id = ? OR (to_agent_run_id IS NULL AND to_role = ?))
-       ORDER BY datetime(created_at) ASC, id ASC
+       ORDER BY ${PRIORITY_ORDER_SQL}, datetime(created_at) ASC, id ASC
        LIMIT 1`,
     ).get(args.companySessionId, args.agentRunId, args.role) as InboxRow | undefined;
     if (!row) return null;
@@ -162,7 +221,7 @@ export function claimAllPendingMasterMessages(db: DB, companySessionId: number):
        WHERE company_session_id = ?
          AND to_role = '__master__'
          AND status = 'pending'
-       ORDER BY datetime(created_at) ASC, id ASC`,
+       ORDER BY ${PRIORITY_ORDER_SQL}, datetime(created_at) ASC, id ASC`,
     ).all(companySessionId) as InboxRow[];
     if (rows.length === 0) return [] as AgentInboxMessage[];
     const update = db.prepare(

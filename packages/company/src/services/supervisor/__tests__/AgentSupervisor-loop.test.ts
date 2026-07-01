@@ -20,6 +20,7 @@ function setup() {
   const abort = vi.fn((_agentRunId: number, _reason?: string) => Promise.resolve());
   const resume = vi.fn((_agentRunId: number, _message?: string) => Promise.resolve());
   const deps: AgentSupervisorDeps = {
+    companySessionId: 100,
     companyEventBus: new CompanyEventBus(),
     completionBus: new SubordinateCompletionBus(),
     tickIntervalMs: 60_000,

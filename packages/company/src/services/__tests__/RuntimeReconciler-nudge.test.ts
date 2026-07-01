@@ -62,6 +62,9 @@ function makeReconciler(opts: {
       get isAlive() { return opts.alive; },
       handle: opts.alive ? { runner: { interruptWait: spies.interruptWait } } : null,
       notify: spies.notify,
+      // Dedup guard the reconciler consults before resurrecting — a dead
+      // master in these tests was never recently resurrected.
+      resurrectedWithinMs: () => false,
     },
     subordinates: {},
     masterInbox: { tryDeliverNow: spies.tryDeliverNow },

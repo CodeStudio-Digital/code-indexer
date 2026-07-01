@@ -1,13 +1,16 @@
 /**
  * Activity rail vertical do ProjectView — ícones core/analytics/plugins + toggle de
  * terminal. Extraído do ProjectView (W4 decompose). A config das abas vem do tabs-config.
+ *
+ * Os botões, a borda e os separadores usam as primitivas compartilhadas de
+ * `components/chrome` (as mesmas dos rails do modo Company), garantindo paridade visual.
  */
-import { memo, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Settings2, TerminalSquare } from 'lucide-react';
 import type { Project } from '@mcp/shared/types.js';
-import { cn } from '../../lib/utils.js';
 import { apiCall } from '../../lib/api-client.js';
+import { RailButton, RailContainer, RailSeparator } from '../../components/chrome/index.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
@@ -40,23 +43,44 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
 
   return (
     <>
-    <nav
-      className="flex flex-col w-10 shrink-0 border-r bg-card/40 py-1 gap-0.5 items-center"
-      aria-label="Project sections"
-    >
+    <RailContainer side="left" aria-label="Project sections">
       {core.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
+        <RailButton
+          key={tabDef.id}
+          icon={tabDef.icon}
+          label={tabDef.label}
+          active={activeTab === tabDef.id}
+          onClick={() => onSelect(tabDef.id)}
+        />
       ))}
       {extraCoreTabs.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
+        <RailButton
+          key={tabDef.id}
+          icon={tabDef.icon}
+          label={tabDef.label}
+          active={activeTab === tabDef.id}
+          onClick={() => onSelect(tabDef.id)}
+        />
       ))}
-      <span className="h-px w-6 bg-border my-1.5" aria-hidden />
+      <RailSeparator />
       {analytics.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
+        <RailButton
+          key={tabDef.id}
+          icon={tabDef.icon}
+          label={tabDef.label}
+          active={activeTab === tabDef.id}
+          onClick={() => onSelect(tabDef.id)}
+        />
       ))}
-      {pluginTabs.length > 0 && <span className="h-px w-6 bg-border my-1.5" aria-hidden />}
+      {pluginTabs.length > 0 && <RailSeparator />}
       {pluginTabs.map((tabDef) => (
-        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
+        <RailButton
+          key={tabDef.id}
+          icon={tabDef.icon}
+          label={tabDef.label}
+          active={activeTab === tabDef.id}
+          onClick={() => onSelect(tabDef.id)}
+        />
       ))}
       <div className="mt-auto pb-1 flex flex-col items-center gap-0.5">
         {/* Project-scoped action: link a Design System (auto-hides on
@@ -65,42 +89,25 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
         <LinkDesignSystemDialog projectId={projectId} />
         {/* Project settings — opens the full settings modal (runtimes,
             terminal, general, etc.). Above the terminal toggle. */}
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
+        <RailButton
+          icon={Settings2}
+          label={t('settings.open')}
+          active={false}
           disabled={!project}
-          aria-label={t('settings.open')}
-          title={t('settings.open')}
-          className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40"
-        >
-          <Settings2 className="h-4 w-4" />
-        </button>
+          onClick={() => setSettingsOpen(true)}
+        />
         {/* Terminal toggle — sits at the bottom of the rail mirroring
             VS Code / JetBrains conventions. Active state reflects
             whether the bottom panel is currently open. */}
-        <button
-          type="button"
+        <RailButton
+          icon={TerminalSquare}
+          label="Terminal (Ctrl+J)"
+          role="toggle"
+          active={layout.activeBottom !== null}
           onClick={() => layout.setActiveBottom(layout.activeBottom ? null : 'terminal')}
-          aria-label="Toggle terminal"
-          title="Terminal (Ctrl+J)"
-          aria-pressed={layout.activeBottom !== null}
-          className={cn(
-            'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-            layout.activeBottom
-              ? 'bg-accent text-accent-foreground'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-          )}
-        >
-          <TerminalSquare className="h-4 w-4" />
-          {layout.activeBottom && (
-            <span
-              aria-hidden
-              className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-            />
-          )}
-        </button>
+        />
       </div>
-    </nav>
+    </RailContainer>
     {project && (
       <ProjectSettingsModal
         project={project}
@@ -113,38 +120,3 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
     </>
   );
 }
-
-const RailButton = memo(function RailButton({
-  def,
-  active,
-  onSelect,
-}: {
-  def: TabDef;
-  active: boolean;
-  onSelect: (id: ProjectTabId) => void;
-}) {
-  const Icon = def.icon;
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(def.id)}
-      aria-label={def.label}
-      title={def.label}
-      aria-current={active ? 'page' : undefined}
-      className={cn(
-        'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-        active
-          ? 'bg-accent text-accent-foreground'
-          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-      )}
-    >
-      <Icon className="h-4 w-4" />
-      {active && (
-        <span
-          aria-hidden
-          className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-        />
-      )}
-    </button>
-  );
-});

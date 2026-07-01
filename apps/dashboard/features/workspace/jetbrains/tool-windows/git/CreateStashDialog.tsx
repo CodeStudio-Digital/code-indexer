@@ -34,11 +34,13 @@ interface GitRunResult {
 
 export interface CreateStashDialogProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   onClose: () => void;
   onCreated: () => void;
 }
 
-export function CreateStashDialog({ projectId, onClose, onCreated }: CreateStashDialogProps) {
+export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: CreateStashDialogProps) {
   const [message, setMessage] = useState('');
   const [includeUntracked, setIncludeUntracked] = useState(true);
   const [keepIndex, setKeepIndex] = useState(false);
@@ -51,6 +53,7 @@ export function CreateStashDialog({ projectId, onClose, onCreated }: CreateStash
     try {
       const r = await apiCall<GitRunResult>('projectGit.stashSave', {
         projectId,
+        repoPath,
         message: message.trim() || undefined,
         includeUntracked,
         keepIndex,

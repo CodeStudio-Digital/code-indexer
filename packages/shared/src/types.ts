@@ -104,6 +104,25 @@ export interface Project {
    */
   package_managers: string | null;
   /**
+   * Per-project, per-WSL-distro runtime selection (migration 182) — JSON
+   * `{"Ubuntu":{"node":"managed:20.11.0","python":"managed:3.12.3"}}`. The
+   * runtimes are MCP-managed Linux builds installed INSIDE the distro under
+   * `~/.mcp/runtimes`, injected into the WSL terminal/runner PATH. Distinct
+   * from `runtime_versions` (the Windows-side selection). Lives in the routed
+   * `project_runtime_config` table; populated by the getProject overlay only.
+   * See `@mcp/shared/utils/wsl-runtime-versions`.
+   */
+  wsl_runtime_versions: string | null;
+  /**
+   * Per-project, per-WSL-distro package-manager preference (migration 183) —
+   * JSON `{"Ubuntu":{"node":"npm","python":"pip"}}`. The WSL counterpart of
+   * `package_managers`: a project can use `yarn` on the Windows host and `npm`
+   * inside a distro. Lives in the routed `project_runtime_config` table;
+   * populated by the getProject overlay only. See
+   * `@mcp/shared/utils/wsl-package-managers`.
+   */
+  wsl_package_managers: string | null;
+  /**
    * Git remote URL + default branch (migration 170). Powers the cloud project
    * library: a synced project pointer carries `git_remote`, and "Import from
    * cloud" clones it. Auto-detected on open/scaffold; null when not a git repo.

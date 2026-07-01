@@ -4,16 +4,22 @@
  * progress), and (PHP) manage extensions. Consolidates the old
  * RuntimeVersionSelect + RuntimeVersionsDialog + PhpExtensionsSection.
  *
+ * Target-aware: the `target` prop (default Host) selects between the host
+ * runtimes (node_version / runtime_versions) and a WSL distro's MCP-managed
+ * Linux runtimes (wsl_runtime_versions). For a WSL target the selection is
+ * keyed by distro and PHP is deferred (Fase 2b).
+ *
  * The active selection is controlled by the parent modal (single source), so
- * php/python writes into runtime_versions never clobber each other.
+ * php/python writes never clobber each other.
  */
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, Loader2, Trash2 } from 'lucide-react';
-import type { InstallProgress, RuntimeKind, RuntimeRelease } from '@mcp/api-bus';
+import type { InstallProgress, RuntimeKind, RuntimeRelease, RuntimeTarget } from '@mcp/api-bus';
 import type { Project } from '@mcp/shared/types.js';
 import { readRuntimeVersion, writeRuntimeVersion } from '@mcp/shared/utils/runtime-versions.js';
+import { readWslRuntimeVersion, writeWslRuntimeVersion } from '@mcp/shared/utils/wsl-runtime-versions.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Progress } from '../../../../components/ui/progress.js';
 import {
@@ -25,45 +31,75 @@ import {
   SelectValue,
 } from '../../../../components/ui/select.js';
 import { apiCall, apiStream } from '../../../../lib/api-client.js';
-import { useRuntimes, loadRuntimes } from '../../../../state/runtimes.js';
+import { useRuntimes, loadRuntimes, runtimeCacheKey, runtimeTargetKey } from '../../../../state/runtimes.js';
 import { PhpExtensionsSection } from '../../runtime/PhpExtensionsSection.js';
 import { DependenciesSection } from './DependenciesSection.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
 
 const KIND_LABEL: Record<RuntimeKind, string> = { node: 'Node.js', php: 'PHP', python: 'Python' };
 const SYSTEM = 'system';
+const HOST: RuntimeTarget = { kind: 'host' };
 
-export function RuntimePane({ kind, project, patch }: { kind: RuntimeKind; project: Project; patch: PatchFn }) {
+export function RuntimePane({
+  kind,
+  project,
+  patch,
+  target = HOST,
+}: {
+  kind: RuntimeKind;
+  project: Project;
+  patch: PatchFn;
+  target?: RuntimeTarget;
+}) {
   const { t } = useTranslation(['projects', 'common']);
-  const runtimes = useRuntimes((s) => s.byKind[kind]);
-  const loaded = useRuntimes((s) => s.loaded[kind]);
+  const isWsl = target.kind === 'wsl';
+  const distro = target.kind === 'wsl' ? target.distro : '';
+  const key = runtimeCacheKey(kind, target);
+  const tkey = runtimeTargetKey(target);
+  const runtimes = useRuntimes((s) => s.byKey[key]) ?? [];
+  const loaded = useRuntimes((s) => s.loadedKey[key]) ?? false;
   const [releases, setReleases] = useState<RuntimeRelease[]>([]);
   const [selected, setSelected] = useState<string>('');
   const [progress, setProgress] = useState<InstallProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch installable releases when the KIND changes — NOT keyed on `loaded`,
-  // which this component itself flips (would double-fetch + flicker the list).
+  // PHP-in-WSL is deferred (Fase 2b — static-php). Show a notice, nothing else.
+  const phpInWsl = isWsl && kind === 'php';
+
+  // Fetch installable releases when the kind/target changes — NOT keyed on
+  // `loaded`, which this component itself flips (would double-fetch + flicker).
   useEffect(() => {
+    if (phpInWsl) return;
     setReleases([]);
-    void apiCall<RuntimeRelease[]>('runtime.listReleases', { kind })
+    void apiCall<RuntimeRelease[]>('runtime.listReleases', { kind, target })
       .then((list) => setReleases(Array.isArray(list) ? list : []))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [kind]);
-  // Detect installed runtimes once per kind.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, tkey, phpInWsl]);
+  // Detect installed runtimes once per (kind, target).
   useEffect(() => {
-    if (!loaded) void loadRuntimes(kind);
-  }, [kind, loaded]);
+    if (!phpInWsl && !loaded) void loadRuntimes(kind, target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, loaded, phpInWsl]);
 
   const installed = runtimes.filter((r) => r.isManaged);
   const busy = progress !== null && progress.phase !== 'done';
 
-  const activeValue = kind === 'node' ? (project.node_version ?? null) : (readRuntimeVersion(project.runtime_versions, kind) ?? null);
+  const activeValue = isWsl
+    ? (readWslRuntimeVersion(project.wsl_runtime_versions, distro, kind) ?? null)
+    : kind === 'node'
+      ? (project.node_version ?? null)
+      : (readRuntimeVersion(project.runtime_versions, kind) ?? null);
 
   function changeActive(next: string): void {
     const id = next === SYSTEM ? null : next;
-    if (kind === 'node') void patch({ node_version: id });
-    else void patch({ runtime_versions: writeRuntimeVersion(project.runtime_versions, kind, id) });
+    if (isWsl) {
+      void patch({ wsl_runtime_versions: writeWslRuntimeVersion(project.wsl_runtime_versions, distro, kind, id) });
+    } else if (kind === 'node') {
+      void patch({ node_version: id });
+    } else {
+      void patch({ runtime_versions: writeRuntimeVersion(project.runtime_versions, kind, id) });
+    }
   }
 
   async function handleInstall(): Promise<void> {
@@ -71,8 +107,14 @@ export function RuntimePane({ kind, project, patch }: { kind: RuntimeKind; proje
     setError(null);
     setProgress({ kind, phase: 'download', version: selected });
     try {
-      for await (const ev of apiStream<InstallProgress>('runtime.install', { kind, version: selected })) setProgress(ev);
-      await loadRuntimes(kind);
+      for await (const ev of apiStream<InstallProgress>('runtime.install', { kind, version: selected, target })) setProgress(ev);
+      const list = await loadRuntimes(kind, target);
+      // Activate the just-installed build when nothing is chosen yet, so
+      // "install" → "active" is one step (matches what the user expects).
+      if (!activeValue) {
+        const justInstalled = list.find((r) => r.version === selected || r.id === `managed:${selected}`);
+        if (justInstalled) changeActive(justInstalled.id);
+      }
       setProgress(null);
       setSelected('');
     } catch (e) {
@@ -84,11 +126,20 @@ export function RuntimePane({ kind, project, patch }: { kind: RuntimeKind; proje
   async function handleRemove(version: string): Promise<void> {
     setError(null);
     try {
-      await apiCall('runtime.uninstall', { kind, version });
-      await loadRuntimes(kind);
+      await apiCall('runtime.uninstall', { kind, version, target });
+      await loadRuntimes(kind, target);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  if (phpInWsl) {
+    return (
+      <div className="space-y-3 max-w-xl">
+        <h3 className="text-sm font-semibold">{KIND_LABEL[kind]}</h3>
+        <p className="text-sm text-muted-foreground">{t('runtime.wslPhpSoon')}</p>
+      </div>
+    );
   }
 
   const pct = progress?.receivedBytes && progress.totalBytes ? Math.round((progress.receivedBytes / progress.totalBytes) * 100) : null;
@@ -111,7 +162,7 @@ export function RuntimePane({ kind, project, patch }: { kind: RuntimeKind; proje
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={SYSTEM}>{t('runtime.systemDefault')}</SelectItem>
+            <SelectItem value={SYSTEM}>{isWsl ? t('runtime.wslDistroDefault') : t('runtime.systemDefault')}</SelectItem>
             {runtimes.length > 0 && <SelectSeparator />}
             {runtimes.map((r) => (
               <SelectItem key={r.id} value={r.id}>
@@ -120,7 +171,7 @@ export function RuntimePane({ kind, project, patch }: { kind: RuntimeKind; proje
             ))}
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">{t('runtime.nodeHint')}</p>
+        <p className="text-xs text-muted-foreground">{isWsl ? t('runtime.wslHint', { distro }) : t('runtime.nodeHint')}</p>
       </div>
 
       {/* Installed (managed) */}
@@ -177,12 +228,12 @@ export function RuntimePane({ kind, project, patch }: { kind: RuntimeKind; proje
             <p className="truncate text-[11px] text-muted-foreground">{progressLabel()}</p>
           </div>
         )}
-        <p className="text-[11px] text-muted-foreground">{t('runtime.installHint')}</p>
+        <p className="text-[11px] text-muted-foreground">{isWsl ? t('runtime.wslInstallHint', { distro }) : t('runtime.installHint')}</p>
       </div>
 
-      <DependenciesSection kind={kind} project={project} patch={patch} />
+      <DependenciesSection kind={kind} project={project} patch={patch} target={target} />
 
-      {kind === 'php' && <PhpExtensionsSection installs={installed} />}
+      {kind === 'php' && !isWsl && <PhpExtensionsSection installs={installed} />}
 
       {error && <div className="text-sm text-destructive">{error}</div>}
     </div>

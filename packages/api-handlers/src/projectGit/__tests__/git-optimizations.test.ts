@@ -67,7 +67,7 @@ function fakeGit(version: string, calls: string[][]): typeof runGit {
 describe('git optimizations', () => {
   it('reads defaults off and toggles untrackedCache on/off reversibly (real git)', async () => {
     const dir = await setupRepo();
-    const h = createGitOptimizationHandlers({ runGit, requireRoot: () => dir });
+    const h = createGitOptimizationHandlers({ runGit, resolveCwd: async () => dir });
 
     const before = await h.gitOptimizations({ projectId: 1 }, {} as never);
     expect(before.untrackedCache).toBe(false);
@@ -86,7 +86,7 @@ describe('git optimizations', () => {
 
   it('REFUSES core.fsmonitor on git < 2.37 (would break status); no config write, no daemon', async () => {
     const calls: string[][] = [];
-    const h = createGitOptimizationHandlers({ runGit: fakeGit('2.20.1', calls), requireRoot: () => '/x' });
+    const h = createGitOptimizationHandlers({ runGit: fakeGit('2.20.1', calls), resolveCwd: async () => '/x' });
     const res = await h.configureGitOptimizations({ projectId: 1, fsmonitor: true }, {} as never);
     expect(res.fsmonitorSupported).toBe(false);
     expect(res.fsmonitor).toBe(false);
@@ -96,7 +96,7 @@ describe('git optimizations', () => {
 
   it('enables core.fsmonitor + starts the daemon on git ≥ 2.37', async () => {
     const calls: string[][] = [];
-    const h = createGitOptimizationHandlers({ runGit: fakeGit('2.45.1', calls), requireRoot: () => '/x' });
+    const h = createGitOptimizationHandlers({ runGit: fakeGit('2.45.1', calls), resolveCwd: async () => '/x' });
     const res = await h.configureGitOptimizations({ projectId: 1, fsmonitor: true }, {} as never);
     expect(res.fsmonitorSupported).toBe(true);
     expect(res.fsmonitor).toBe(true);

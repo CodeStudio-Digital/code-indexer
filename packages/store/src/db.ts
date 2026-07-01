@@ -89,15 +89,33 @@ export class CodeIndexDB {
   /** This process's boot time (SQL datetime fmt) — the C3 purge soak gate: only
    *  purge a project whose split landed in a PRIOR session (db_split_at < this). */
   private bootedAt = '';
+  /** True only for the single main-process handle that owns WAL checkpointing. */
+  private readonly checkpointOwner: boolean;
+  /** Periodic PASSIVE-checkpoint timer (checkpoint owner only). */
+  private walCheckpointTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, opts: { checkpointOwner?: boolean } = {}) {
     this.centralDbPath = dbPath;
+    this.checkpointOwner = !!opts.checkpointOwner;
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('cache_size = 10000');
     this.db.pragma('foreign_keys = ON');
     applyTuningPragmas(this.db);
+    // WAL checkpoint ownership (anti-freeze). Heavy worker writes + constant
+    // main-thread polling readers starve SQLite's auto-checkpointer, so the
+    // central `-wal` grows unbounded and every read pages through an ever-larger
+    // WAL — reads slow as a multi-agent run proceeds, then recover when it ends.
+    // Fix: exactly ONE handle (the main-process one) owns checkpointing. It
+    // disables implicit autocheckpoint (so a main-thread write never pays a
+    // surprise checkpoint mid-commit) and instead runs a periodic NON-BLOCKING
+    // PASSIVE checkpoint, plus a full TRUNCATE on close. Worker handles keep
+    // autocheckpoint ON — their PASSIVE checkpoints run off the main thread.
+    if (this.checkpointOwner) {
+      this.db.pragma('wal_autocheckpoint = 0');
+      this.startWalCheckpointer();
+    }
     // Schema must exist before migrations that ALTER it.
     initSchema(this.db);
     runMigrations(this.db);
@@ -124,8 +142,38 @@ export class CodeIndexDB {
   /** better-sqlite3 handle for stores that need direct prepared-statement access. */
   raw(): DB { return this.db; }
   close(): void {
+    if (this.walCheckpointTimer) {
+      clearInterval(this.walCheckpointTimer);
+      this.walCheckpointTimer = null;
+    }
     this.projectPool.closeAll();
+    // Final full checkpoint so the next boot doesn't inherit a large -wal. Only
+    // the checkpoint owner does this; TRUNCATE may block briefly until readers
+    // drain, but at close time there are no more route reads to stall.
+    if (this.checkpointOwner) {
+      try { this.db.pragma('wal_checkpoint(TRUNCATE)'); } catch { /* best-effort */ }
+    }
     this.db.close();
+  }
+
+  /**
+   * Periodic WAL checkpoint for the owning (main-process) handle. PASSIVE never
+   * blocks — it checkpoints as far as it can without waiting on readers, so it
+   * can't reintroduce the stall this is removing; it keeps the checkpoint
+   * pointer advancing so the WAL is reused rather than growing. `unref`'d so it
+   * never keeps the process alive. `MCP_SQLITE_CHECKPOINT_MS=0` disables it.
+   */
+  private startWalCheckpointer(): void {
+    const intervalMs = numEnv('MCP_SQLITE_CHECKPOINT_MS', 30_000);
+    if (intervalMs <= 0) return;
+    this.walCheckpointTimer = setInterval(() => {
+      try {
+        this.db.pragma('wal_checkpoint(PASSIVE)');
+      } catch { /* best-effort; a locked/closing DB just retries next tick */ }
+    }, intervalMs);
+    if (typeof (this.walCheckpointTimer as { unref?: () => void }).unref === 'function') {
+      (this.walCheckpointTimer as { unref: () => void }).unref();
+    }
   }
 
   // ─── Tiered-hybrid per-project DB routing (plan §6/§7) ──────────────
@@ -489,12 +537,14 @@ export class CodeIndexDB {
     // (migrations 168/169) so it travels with the project folder; the rest
     // stays on the central `projects` row. package_managers has NO central
     // column, so it MUST be destructured out (projects.update writes raw keys).
-    const { node_version, runtime_versions, runner_shell, package_managers, ...rest } = updates;
+    const { node_version, runtime_versions, runner_shell, package_managers, wsl_runtime_versions, wsl_package_managers, ...rest } = updates;
     const cfg: Record<string, string | null> = {};
     if ('node_version' in updates) cfg.node_version = node_version ?? null;
     if ('runtime_versions' in updates) cfg.runtime_versions = runtime_versions ?? null;
     if ('runner_shell' in updates) cfg.runner_shell = runner_shell ?? null;
     if ('package_managers' in updates) cfg.package_managers = package_managers ?? null;
+    if ('wsl_runtime_versions' in updates) cfg.wsl_runtime_versions = wsl_runtime_versions ?? null;
+    if ('wsl_package_managers' in updates) cfg.wsl_package_managers = wsl_package_managers ?? null;
     if (Object.keys(cfg).length > 0) this.writeRuntimeConfig(id, cfg);
     if (Object.keys(rest).length > 0) projects.update(this.db, id, rest);
     // Counts/name/config changed → drop this project's cached stats + the list.
@@ -511,10 +561,10 @@ export class CodeIndexDB {
    */
   private overlayRuntimeConfig(project: Project, id: number): Project {
     try {
-      const sql = 'SELECT node_version, runtime_versions, runner_shell, package_managers FROM project_runtime_config WHERE project_id = ?';
+      const sql = 'SELECT node_version, runtime_versions, runner_shell, package_managers, wsl_runtime_versions, wsl_package_managers FROM project_runtime_config WHERE project_id = ?';
       const routed = this.idx(id);
       let cfg = routed.prepare(sql).get(id) as
-        | { node_version: string | null; runtime_versions: string | null; runner_shell: string | null; package_managers: string | null }
+        | { node_version: string | null; runtime_versions: string | null; runner_shell: string | null; package_managers: string | null; wsl_runtime_versions: string | null; wsl_package_managers: string | null }
         | undefined;
       if (!cfg && routed !== this.db) cfg = this.db.prepare(sql).get(id) as typeof cfg;
       if (cfg) {
@@ -522,6 +572,8 @@ export class CodeIndexDB {
         project.runtime_versions = cfg.runtime_versions ?? null;
         project.runner_shell = cfg.runner_shell ?? null;
         project.package_managers = cfg.package_managers ?? null;
+        project.wsl_runtime_versions = cfg.wsl_runtime_versions ?? null;
+        project.wsl_package_managers = cfg.wsl_package_managers ?? null;
       }
     } catch {
       /* pre-168 DB (no table) — keep the legacy central columns as-is */
@@ -540,11 +592,11 @@ export class CodeIndexDB {
       const has = routed.prepare('SELECT 1 FROM project_runtime_config WHERE project_id = ?').get(id);
       if (!has) {
         const c = this.db
-          .prepare('SELECT node_version, runtime_versions, runner_shell, package_managers FROM project_runtime_config WHERE project_id = ?')
-          .get(id) as { node_version: string | null; runtime_versions: string | null; runner_shell: string | null; package_managers: string | null } | undefined;
+          .prepare('SELECT node_version, runtime_versions, runner_shell, package_managers, wsl_runtime_versions, wsl_package_managers FROM project_runtime_config WHERE project_id = ?')
+          .get(id) as { node_version: string | null; runtime_versions: string | null; runner_shell: string | null; package_managers: string | null; wsl_runtime_versions: string | null; wsl_package_managers: string | null } | undefined;
         routed
-          .prepare('INSERT OR IGNORE INTO project_runtime_config (project_id, node_version, runtime_versions, runner_shell, package_managers) VALUES (?, ?, ?, ?, ?)')
-          .run(id, c?.node_version ?? null, c?.runtime_versions ?? null, c?.runner_shell ?? null, c?.package_managers ?? null);
+          .prepare('INSERT OR IGNORE INTO project_runtime_config (project_id, node_version, runtime_versions, runner_shell, package_managers, wsl_runtime_versions, wsl_package_managers) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(id, c?.node_version ?? null, c?.runtime_versions ?? null, c?.runner_shell ?? null, c?.package_managers ?? null, c?.wsl_runtime_versions ?? null, c?.wsl_package_managers ?? null);
       }
     } else {
       routed.prepare('INSERT OR IGNORE INTO project_runtime_config (project_id) VALUES (?)').run(id);

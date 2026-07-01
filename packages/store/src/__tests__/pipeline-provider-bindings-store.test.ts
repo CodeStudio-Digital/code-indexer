@@ -228,3 +228,68 @@ describe('bulkDelete + bulkApply integration', () => {
     expect(new Set(rows.map((r) => r.provider_id))).toEqual(new Set(['new-cf-1']));
   });
 });
+
+describe('PipelineProviderBindingsStore.bulkApplyProfile', () => {
+  let h: Handle;
+  beforeEach(() => { h = setup(); });
+  afterEach(() => teardown(h));
+
+  it('binds each target with its OWN per-role config', () => {
+    h.store.bulkApplyProfile([
+      { pipeline_name: 'quality_off_topic', binding_role: 'classifier', provider_id: 'cf-1', model_id: 'llama-3b', config: { temperature: 0, max_tokens: 256 } },
+      { pipeline_name: 'snapshot_review',   binding_role: 'reviewer',   provider_id: 'cf-1', model_id: 'sonnet',   config: { temperature: 0, max_tokens: 4000, json_mode: true } },
+    ]);
+    const classifier = h.store.list({ pipelineName: 'quality_off_topic' })[0];
+    const reviewer = h.store.list({ pipelineName: 'snapshot_review' })[0];
+    expect((classifier.config as { max_tokens: number }).max_tokens).toBe(256);
+    expect((reviewer.config as { max_tokens: number }).max_tokens).toBe(4000);
+    expect((reviewer.config as { json_mode: boolean }).json_mode).toBe(true);
+  });
+
+  it('is idempotent across re-runs — switching the model never duplicates rows', () => {
+    h.store.bulkApplyProfile([
+      { pipeline_name: 'context_relevance', binding_role: 'embedder', provider_id: 'cf-1', model_id: 'bge-base' },
+    ]);
+    // Re-run with a DIFFERENT model (the layperson "I'll just redo it" path).
+    h.store.bulkApplyProfile([
+      { pipeline_name: 'context_relevance', binding_role: 'embedder', provider_id: 'cf-1', model_id: 'bge-m3' },
+    ]);
+    const rows = h.store.list({ pipelineName: 'context_relevance' });
+    expect(rows.length).toBe(1);              // exactly one — not two
+    expect(rows[0].model_id).toBe('bge-m3');  // latest wins
+    expect(rows[0].enabled).toBe(true);
+  });
+
+  it('cleans up pre-existing duplicate global rows for the same (pipeline, role)', () => {
+    // Simulate the legacy upsert dup bug: two global rows, different models.
+    h.store.upsert({ pipeline_name: 'tool_selection', binding_role: 'embedder', provider_id: 'cf-1', model_id: 'a', scope_type: 'global' });
+    h.store.upsert({ pipeline_name: 'tool_selection', binding_role: 'embedder', provider_id: 'cf-1', model_id: 'b', scope_type: 'global' });
+    expect(h.store.list({ pipelineName: 'tool_selection' }).length).toBe(2);
+    h.store.bulkApplyProfile([
+      { pipeline_name: 'tool_selection', binding_role: 'embedder', provider_id: 'cf-1', model_id: 'c' },
+    ]);
+    const rows = h.store.list({ pipelineName: 'tool_selection' });
+    expect(rows.length).toBe(1);
+    expect(rows[0].model_id).toBe('c');
+  });
+
+  it('never touches template/session bindings', () => {
+    h.store.upsert({ pipeline_name: 'quality_policy', binding_role: 'classifier', provider_id: 'p2', model_id: 'm2', scope_type: 'template', scope_id: 7 });
+    h.store.upsert({ pipeline_name: 'quality_policy', binding_role: 'classifier', provider_id: 'p3', model_id: 'm3', scope_type: 'session',  scope_id: 9 });
+    h.store.bulkApplyProfile([
+      { pipeline_name: 'quality_policy', binding_role: 'classifier', provider_id: 'cf-1', model_id: 'global-m' },
+    ]);
+    expect(h.store.list({ scopeType: 'template' }).length).toBe(1);
+    expect(h.store.list({ scopeType: 'session' }).length).toBe(1);
+    expect(h.store.list({ scopeType: 'global', pipelineName: 'quality_policy' })[0].model_id).toBe('global-m');
+  });
+
+  it('returns inserted ids in input order', () => {
+    const ids = h.store.bulkApplyProfile([
+      { pipeline_name: 'quality_off_topic', binding_role: 'classifier', provider_id: 'cf-1', model_id: 'm' },
+      { pipeline_name: 'quality_code',      binding_role: 'classifier', provider_id: 'cf-1', model_id: 'm' },
+    ]);
+    expect(ids.length).toBe(2);
+    expect(ids[0]).toBeLessThan(ids[1]);
+  });
+});

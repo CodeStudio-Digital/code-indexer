@@ -194,6 +194,9 @@ import { sessionOutputStyle178 } from './178_session_output_style.js';
 import { chromeServiceImageBump161_179 } from './179_chrome_service_image_bump_161.js';
 import { sessionPreflightSeed180 } from './180_session_preflight_seed.js';
 import { agentMemory181 } from './181_agent_memory.js';
+import { projectWslRuntimeVersions182 } from './182_project_wsl_runtime_versions.js';
+import { projectWslPackageManagers183 } from './183_project_wsl_package_managers.js';
+import { agentInboxThreading184 } from './184_agent_inbox_threading.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -404,6 +407,9 @@ export const MIGRATIONS: Migration[] = [
   chromeServiceImageBump161_179,
   sessionPreflightSeed180,
   agentMemory181,
+  projectWslRuntimeVersions182,
+  projectWslPackageManagers183,
+  agentInboxThreading184,
 ];
 
 /**

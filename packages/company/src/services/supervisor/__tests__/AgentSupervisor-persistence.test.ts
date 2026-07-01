@@ -75,6 +75,7 @@ function makeDeps(
   emitted: Array<{ kind: string; detail: string }> = [],
 ): AgentSupervisorDeps {
   return {
+    companySessionId: 100,
     companyEventBus: new CompanyEventBus(),
     completionBus: new SubordinateCompletionBus(),
     tickIntervalMs: 60_000,
@@ -182,6 +183,25 @@ describe('incident mirroring', () => {
     const first = p.incidents[0];
     expect(first.incidentKind).toBe('illegal_transition');
     expect(first.companySessionId).toBe(100);
+  });
+
+  it('persists companySessionId (not null) for incidents with a null agentRunId', () => {
+    // `observation_error` (like `role_quarantined` / `read_only_mode`)
+    // carries agentRunId: null. Regression guard for the bug where
+    // companySessionId was resolved via a per-agent tracker lookup that
+    // returns null whenever agentRunId is null — silently dropping these
+    // incidents from every session-scoped query forever. Triggering
+    // hydrateFromPersistence's loadAll-throws path is the simplest way to
+    // exercise a real agentRunId: null incident.
+    const p = new FakePersistence();
+    p.loadAllImpl = () => {
+      throw new Error('boom');
+    };
+    const sup = new AgentSupervisor(makeDeps({ persistence: p }));
+    sup.hydrateFromPersistence();
+    expect(p.incidents).toHaveLength(1);
+    expect(p.incidents[0].agentRunId).toBeNull();
+    expect(p.incidents[0].companySessionId).toBe(100);
   });
 
   it('listRecentIncidents bridges to persistence', () => {

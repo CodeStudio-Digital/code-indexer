@@ -54,6 +54,8 @@
     "welcome": "Bem-vindo ao CodeStudio",
     "signInToContinue": "Entre para começar seu trial gratuito de 14 dias e usar o CodeStudio.",
     "signInOAuth": "Entre para usar o CodeStudio. Seu ambiente local é sempre gratuito.",
+    "emailLogin": "Entrar com e-mail e senha",
+    "or": "ou",
     "continueWith": "Continuar com {{provider}}",
     "signingIn": "Abrindo seu navegador… conclua o login por lá.",
     "oauthFailed": "O login não foi concluído. Tente novamente.",

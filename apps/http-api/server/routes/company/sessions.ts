@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import { RouteCache, HOT_READ_TTL_MS } from '../../perf/route-cache.js';
 import { removeServiceAndProject } from './service-helpers.js';
 import {
   validateAllowedModels,
@@ -11,6 +12,40 @@ import {
 
 export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore, db } = deps;
+
+  // Collapses the duplicate / SSE-tick-driven `state-snapshot` polls that pile
+  // synchronous DB reads onto the main loop during a multi-agent run. Only the
+  // synchronous DB portion is cached; the live master-status RPC + orchestrator
+  // lookup below always run fresh. See perf/route-cache.ts for the staleness model.
+  const snapshotCache = new RouteCache();
+  const buildSnapshotDbPart = (id: number): {
+    full: NonNullable<ReturnType<typeof companyStore.getCompanySessionFull>>;
+    enrichedProjects: Array<Record<string, unknown>>;
+    pendingMasterInboxCount: number;
+  } | null => {
+    try {
+      companyStore.pruneOrphanCompanySessionProjects(id);
+    } catch {
+      /* same swallow as /sessions/:id */
+    }
+    const full = companyStore.getCompanySessionFull(id);
+    if (!full) return null;
+    const enrichedProjects = full.projects.map((p) => {
+      const proj = db.getProject(p.project_id);
+      return {
+        ...p,
+        project_name: proj?.name ?? `project-${p.project_id}`,
+        root_path: proj?.root_path ?? '',
+      };
+    });
+    const pendingMasterInboxCount = companyStore.listInboxMessages({
+      companySessionId: id,
+      toRole: '__master__',
+      status: 'pending',
+      limit: 50,
+    }).length;
+    return { full, enrichedProjects, pendingMasterInboxCount };
+  };
 
   // Phase 8 part 2 (continuation): the following helpers + routes moved out:
   //   - `removeServiceAndProject`            → `service-helpers.ts` (used by
@@ -87,22 +122,13 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.get('/api/company/sessions/:id/state-snapshot', async (c) => {
     const id = parseIdParam(c);
-    try {
-      companyStore.pruneOrphanCompanySessionProjects(id);
-    } catch {
-      /* same swallow as /sessions/:id */
-    }
-    const full = companyStore.getCompanySessionFull(id);
-    if (!full) return notFound(c);
-
-    const enrichedProjects = full.projects.map((p) => {
-      const proj = db.getProject(p.project_id);
-      return {
-        ...p,
-        project_name: proj?.name ?? `project-${p.project_id}`,
-        root_path: proj?.root_path ?? '',
-      };
-    });
+    const dbPart = snapshotCache.get(
+      `company-snapshot:${id}`,
+      HOT_READ_TTL_MS,
+      () => buildSnapshotDbPart(id),
+    );
+    if (!dbPart) return notFound(c);
+    const { full, enrichedProjects, pendingMasterInboxCount } = dbPart;
 
     const orchestrator = getCompanyOrchestrator(id);
     const liveOrchestrator = !!orchestrator;
@@ -128,12 +154,6 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         );
       }
     }
-    const pendingMasterInboxCount = companyStore.listInboxMessages({
-      companySessionId: id,
-      toRole: '__master__',
-      status: 'pending',
-      limit: 50,
-    }).length;
 
     return c.json({
       ...full,

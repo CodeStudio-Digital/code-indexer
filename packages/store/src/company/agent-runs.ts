@@ -42,6 +42,31 @@ export function list(db: DB, companySessionId: number): CompanyAgentRun[] {
     .all(companySessionId) as CompanyAgentRun[];
 }
 
+/** Statuses that count as "actively consuming capacity". */
+const GLOBAL_ACTIVE_STATUSES = [
+  'running', 'working',
+  'waiting', 'waiting_plan', 'waiting_question', 'waiting_tasks',
+  'reviewing', 'blocked',
+] as const;
+
+/**
+ * Count subordinate runs actively consuming capacity ACROSS ALL company
+ * sessions (archive_id IS NULL, role != 'master'). Powers the global spawn
+ * budget: every company worker shares this one SQLite file, so any worker reads
+ * the org-wide load directly — no cross-worker coordinator or RPC needed, and
+ * no leak (the count is DB truth, not an in-memory counter).
+ */
+export function countActiveSubordinatesGlobal(db: DB): number {
+  const placeholders = GLOBAL_ACTIVE_STATUSES.map(() => '?').join(',');
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM company_agent_runs
+       WHERE archive_id IS NULL AND role != 'master' AND status IN (${placeholders})`,
+    )
+    .get(...GLOBAL_ACTIVE_STATUSES) as { n: number };
+  return row.n;
+}
+
 export function listArchived(db: DB, archiveId: number): CompanyAgentRun[] {
   return db
     .prepare('SELECT * FROM company_agent_runs WHERE archive_id = ? ORDER BY created_at ASC')

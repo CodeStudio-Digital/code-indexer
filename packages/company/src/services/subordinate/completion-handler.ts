@@ -148,6 +148,22 @@ export function applySubordinateModelFallback(
  * → auto-retry via `resume()` (with optional model fallback). Permanent
  * → bubble up to the master with a recovery hint + kanban comment.
  */
+/**
+ * Best-effort parse of a provider `Retry-After` hint out of the free-text
+ * error detail. Recognizes `retry-after: 12`, `retry after 12s`, and bare
+ * `Retry-After 12000ms`. Returns the delay in ms, or undefined when absent.
+ * Used only as a floor on the computed backoff — never as a hard schedule.
+ */
+function parseRetryAfterMs(detail: string | null | undefined): number | undefined {
+  if (!detail) return undefined;
+  const m = /retry[-\s]?after[:\s]+(\d+)\s*(ms|s|seconds?)?/i.exec(detail);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  const unit = (m[2] ?? 's').toLowerCase();
+  return unit.startsWith('ms') ? n : n * 1000;
+}
+
 export function handleSubordinateFailure(
   agentRunId: number,
   role: string,
@@ -177,16 +193,29 @@ export function handleSubordinateFailure(
       }
     } catch { /* best-effort */ }
 
-    void deps.resume(agentRunId,
-      `[SYSTEM] Previous run ended with transient error (${errorDetail ?? 'unknown'}). ` +
-      `Auto-retrying attempt ${attempt}/${max}. Continue the task.`,
-    ).catch((e: unknown) => {
-      console.warn(`[company] auto-retry failed for ${role}#${agentRunId}:`, e);
-      deps.master.notify(
-        `[SYSTEM] @${role} (agent_run_id=${agentRunId}) auto-retry FAILED to start: ${e instanceof Error ? e.message : String(e)}. ` +
-        `Use resume_subordinate to retry manually or spawn_subordinate_agent for a fresh start.`,
-      );
-    });
+    // Wait out a bounded exponential backoff before retrying so a transient
+    // provider error (429/5xx) isn't hammered on immediately. `retry-after`
+    // from the provider, when present in the error text, is honored as a floor.
+    const retryAfterMs = parseRetryAfterMs(errorDetail);
+    const delayMs = deps.retryPolicy.backoffMs(agentRunId, retryAfterMs);
+    const doResume = () =>
+      void deps.resume(agentRunId,
+        `[SYSTEM] Previous run ended with transient error (${errorDetail ?? 'unknown'}). ` +
+        `Auto-retrying attempt ${attempt}/${max}. Continue the task.`,
+      ).catch((e: unknown) => {
+        console.warn(`[company] auto-retry failed for ${role}#${agentRunId}:`, e);
+        deps.master.notify(
+          `[SYSTEM] @${role} (agent_run_id=${agentRunId}) auto-retry FAILED to start: ${e instanceof Error ? e.message : String(e)}. ` +
+          `Use resume_subordinate to retry manually or spawn_subordinate_agent for a fresh start.`,
+        );
+      });
+    if (delayMs > 0) {
+      const t = setTimeout(doResume, delayMs);
+      // Don't keep the worker alive solely for a pending retry during shutdown.
+      (t as { unref?: () => void }).unref?.();
+    } else {
+      doResume();
+    }
     return;
   }
 

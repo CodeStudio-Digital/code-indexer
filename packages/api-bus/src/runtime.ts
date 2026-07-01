@@ -13,6 +13,15 @@ import type { ApiContext, AsyncStream } from './common.js';
 
 export type RuntimeKind = 'node' | 'php' | 'python';
 
+/**
+ * Execution target a runtime is detected/installed/injected for. `host` is the
+ * machine the app runs on (Windows/macOS/Linux); `wsl` is a specific WSL distro,
+ * where managed runtimes are Linux builds installed INSIDE the distro under
+ * `~/.mcp/runtimes` and injected into the per-terminal PATH. Defaults to `host`
+ * everywhere the field is omitted (back-compat).
+ */
+export type RuntimeTarget = { kind: 'host' } | { kind: 'wsl'; distro: string };
+
 /** Where a detected runtime came from. */
 export type RuntimeSource =
   // common to every kind
@@ -102,17 +111,25 @@ export interface PhpExtension {
 }
 
 export interface RuntimeApi {
-  /** Detected + managed runtimes of `kind` on this machine. */
-  list(input: { kind: RuntimeKind }, ctx: ApiContext): Promise<Runtime[]>;
+  /**
+   * Detected + managed runtimes of `kind` on the given `target` (default
+   * `host`). For a `wsl` target, lists the MCP-managed Linux builds installed
+   * inside that distro under `~/.mcp/runtimes`.
+   */
+  list(input: { kind: RuntimeKind; target?: RuntimeTarget }, ctx: ApiContext): Promise<Runtime[]>;
 
-  /** Official releases of `kind` available to install. */
-  listReleases(input: { kind: RuntimeKind }, ctx: ApiContext): Promise<RuntimeRelease[]>;
+  /** Official releases of `kind` available to install on `target` (default `host`). */
+  listReleases(input: { kind: RuntimeKind; target?: RuntimeTarget }, ctx: ApiContext): Promise<RuntimeRelease[]>;
 
-  /** Install an official build of `kind` (portable zip, silent installer, or brew/pyenv). */
-  install(input: { kind: RuntimeKind; version: string }, ctx: ApiContext): AsyncStream<InstallProgress>;
+  /**
+   * Install an official build of `kind` on `target` (default `host`):
+   * portable zip / silent installer / brew/pyenv on the host, or a portable
+   * Linux build extracted inside the WSL distro.
+   */
+  install(input: { kind: RuntimeKind; version: string; target?: RuntimeTarget }, ctx: ApiContext): AsyncStream<InstallProgress>;
 
-  /** Remove a managed install. */
-  uninstall(input: { kind: RuntimeKind; version: string }, ctx: ApiContext): Promise<void>;
+  /** Remove a managed install on `target` (default `host`). */
+  uninstall(input: { kind: RuntimeKind; version: string; target?: RuntimeTarget }, ctx: ApiContext): Promise<void>;
 
   // ── PHP extension management (managed installs only) ──
 

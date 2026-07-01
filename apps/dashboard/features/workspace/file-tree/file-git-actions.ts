@@ -10,6 +10,7 @@
  * — no conversion.
  */
 import { GitCompare, Minus, Plus, Undo2 } from 'lucide-react';
+import i18n from '../../../i18n/index.js';
 import { apiCall } from '../../../lib/api-client.js';
 import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { confirm, toast } from '../../../components/ui/prompt-dialog.js';
@@ -31,19 +32,19 @@ export function buildFileGitActions(
     try {
       const { patch } = await apiCall<{ patch: string }>('projectGit.diff', { projectId, path });
       if (!patch.trim()) {
-        toast.message('No changes', { description: path });
+        toast.message(i18n.t('workspace:git.noChanges'), { description: path });
         return;
       }
       useWorkspaceStore.getState().openDiff({
         kind: 'diff',
         projectId,
         path: `gitdiff:${path}`,
-        title: `Diff: ${name}`,
+        title: i18n.t('workspace:git.diffTitle', { file: name }),
         patch,
         source: 'git-unstaged',
       });
     } catch (e) {
-      toast.error('Diff failed', { description: errDesc(e) });
+      toast.error(i18n.t('workspace:git.diffFailed'), { description: errDesc(e) });
     }
   };
 
@@ -57,7 +58,7 @@ export function buildFileGitActions(
       await apiCall<{ ok: true }>('projectGit.stage', { projectId, paths: [path] });
       afterMutate();
     } catch (e) {
-      toast.error('Stage failed', { description: errDesc(e) });
+      toast.error(i18n.t('workspace:git.stageFailed'), { description: errDesc(e) });
     }
   };
 
@@ -66,34 +67,34 @@ export function buildFileGitActions(
       await apiCall<{ ok: true }>('projectGit.unstage', { projectId, paths: [path] });
       afterMutate();
     } catch (e) {
-      toast.error('Unstage failed', { description: errDesc(e) });
+      toast.error(i18n.t('workspace:git.unstageFailed'), { description: errDesc(e) });
     }
   };
 
   const revert = async () => {
     const ok = await confirm({
-      title: 'Revert changes?',
-      description: `"${path}" will be restored to its last committed state. Uncommitted changes are lost.`,
-      confirmLabel: 'Revert',
+      title: i18n.t('workspace:git.revertConfirmTitle'),
+      description: i18n.t('workspace:git.revertConfirmBody', { path }),
+      confirmLabel: i18n.t('workspace:git.revert'),
       tone: 'destructive',
     });
     if (!ok) return;
     try {
       await apiCall<{ ok: true }>('projectGit.discard', { projectId, paths: [path] });
       afterMutate();
-      toast.success('Reverted', { description: path });
+      toast.success(i18n.t('workspace:git.reverted'), { description: path });
     } catch (e) {
-      toast.error('Revert failed', { description: errDesc(e) });
+      toast.error(i18n.t('workspace:git.revertFailed'), { description: errDesc(e) });
     }
   };
 
   return [
-    { id: 'git-diff', label: 'Show Diff', icon: GitCompare, onSelect: () => void showDiff() },
-    { id: 'git-stage', label: 'Stage', icon: Plus, onSelect: () => void stage() },
-    { id: 'git-unstage', label: 'Unstage', icon: Minus, onSelect: () => void unstage() },
+    { id: 'git-diff', label: i18n.t('workspace:git.showDiff'), icon: GitCompare, onSelect: () => void showDiff() },
+    { id: 'git-stage', label: i18n.t('workspace:git.stage'), icon: Plus, onSelect: () => void stage() },
+    { id: 'git-unstage', label: i18n.t('workspace:git.unstage'), icon: Minus, onSelect: () => void unstage() },
     {
       id: 'git-revert',
-      label: 'Revert',
+      label: i18n.t('workspace:git.revert'),
       icon: Undo2,
       destructive: true,
       separatorBefore: true,

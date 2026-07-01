@@ -1,16 +1,12 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, ChevronDown, ChevronUp, Gauge, Paperclip, Send, X } from 'lucide-react';
+import { Brain, Gauge, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
 import { fileToAttachment } from '../chat/utils.js';
 import { useFileDrop } from '../chat/composer/useFileDrop.js';
 import { DropOverlay } from '../chat/composer/DropOverlay.js';
 import { useComposerDraft } from '../chat/composer/useComposerDraft.js';
-import { MicButton } from '../chat/composer/MicButton.js';
-import { MicDevicePicker } from '../chat/composer/MicDevicePicker.js';
-import { VoiceCaptureBar } from '../chat/composer/VoiceCaptureBar.js';
-import { useVoiceCaptureStatus, requestVoiceCaptureStop } from '../chat/composer/voice-capture-store.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 
 interface MasterComposerProps {
@@ -38,17 +34,6 @@ interface MasterComposerProps {
   sessionId?: number | null;
 }
 
-const COLLAPSED_KEY = 'agents.composer.collapsed';
-
-function readCollapsed(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window.localStorage.getItem(COLLAPSED_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
 export function MasterComposer({ onSend, placeholder, disabled, supportsThinking, reasoningEffort, setReasoningEffort, reasoningLevels, buildPrefix, sessionId }: MasterComposerProps) {
   const { t } = useTranslation('agents');
   const [input, setInput] = useState('');
@@ -57,32 +42,17 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
   const draftKey = sessionId != null ? `company:${sessionId}` : null;
   const { clearDraft } = useComposerDraft({ draftKey, input, setInput, attachments, setAttachments });
   const [thinking, setThinking] = useState(false);
-  const [collapsed, setCollapsed] = useState(readCollapsed);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Markdown formatting toolbar removed (useless markers for an AI prompt);
   // the smart keyboard behaviors (Tab indent, Enter list continuation) stay.
   const { handleKeyDown: mdHandleKeyDown } = useMarkdownShortcuts(textareaRef, input, setInput);
 
-  function toggleCollapsed() {
-    setCollapsed((cur) => {
-      const next = !cur;
-      try { window.localStorage.setItem(COLLAPSED_KEY, String(next)); } catch { /* quota */ }
-      return next;
-    });
-  }
-
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     const arr = await Promise.all(Array.from(files).map(fileToAttachment));
     setAttachments((prev) => [...prev, ...arr]);
   }
-
-  // Voice dictation: append the transcript to whatever is already typed.
-  const appendTranscript = useCallback((text: string) => {
-    setInput((prev) => (prev ? `${prev.trimEnd()} ${text}` : text));
-  }, []);
-  const voiceRecording = useVoiceCaptureStatus() === 'recording';
 
   const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled });
 
@@ -109,16 +79,8 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
   return (
     <div className="space-y-2 relative" {...dropHandlers}>
       <DropOverlay show={isDragging} />
-      <button
-        type="button"
-        onClick={toggleCollapsed}
-        title={collapsed ? t('composer.expand', 'Expand composer') : t('composer.minimize', 'Minimize composer')}
-        className="absolute -top-3 right-2 z-10 h-6 w-6 rounded-full border bg-card flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shadow-sm"
-      >
-        {collapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-      </button>
 
-      {!collapsed && attachments.length > 0 && (
+      {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {attachments.map((a, i) => {
             const isImg = a.mediaType.startsWith('image/') && a.base64;
@@ -152,7 +114,6 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
 
       <div className="flex gap-2 items-end">
         <div className="relative flex-1 rounded-md border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
-          {voiceRecording && <VoiceCaptureBar onStop={requestVoiceCaptureStop} />}
           <textarea
             ref={textareaRef}
             value={input}
@@ -160,15 +121,10 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             disabled={disabled}
-            className={
-              collapsed
-                ? 'w-full resize-none px-3 py-1.5 text-sm min-h-[32px] max-h-[120px] bg-transparent focus:outline-none'
-                : 'w-full resize-y px-3 py-2 text-sm min-h-[60px] max-h-[300px] bg-transparent focus:outline-none'
-            }
-            rows={collapsed ? 1 : 3}
+            className="w-full resize-y px-3 py-2 text-sm min-h-[60px] max-h-[300px] bg-transparent focus:outline-none"
+            rows={3}
           />
-          {!collapsed && (
-            <div className="flex items-center gap-1 border-t">
+          <div className="flex items-center gap-1 border-t">
               <label className="cursor-pointer">
                 <input
                   ref={fileInputRef}
@@ -185,8 +141,6 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                   <Paperclip className="h-3.5 w-3.5" />
                 </span>
               </label>
-              <MicButton onTranscript={appendTranscript} disabled={disabled} className="ml-1" />
-              <MicDevicePicker disabled={disabled} />
               {supportsThinking && (
                 <button
                   type="button"
@@ -222,8 +176,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                   </select>
                 </span>
               )}
-            </div>
-          )}
+          </div>
         </div>
         <Button onClick={handleSend} disabled={disabled || !input.trim()} size="sm" className="h-9 shrink-0">
           <Send className="h-3.5 w-3.5" />

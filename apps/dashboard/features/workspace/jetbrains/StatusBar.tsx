@@ -25,6 +25,7 @@ import { apiCall } from '../../../lib/api-client.js';
 import { startRouteSpan } from '../../../lib/perf/route-startup-metrics.js';
 import { cn } from '../../../lib/utils.js';
 import { ProjectSwitcher } from '../../../components/ProjectSwitcher.js';
+import { StatusBarShell } from '../../../components/chrome/index.js';
 import { BranchPopover } from './status-bar/BranchPopover.js';
 import { IndexStatusSection } from './status-bar/IndexStatusSection.js';
 import { LanguageChip } from './status-bar/LanguageChip.js';
@@ -132,7 +133,7 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
   };
 
   return (
-    <footer className="h-5 shrink-0 border-t bg-card/60 flex items-center px-2 gap-3 text-[10px] text-muted-foreground select-none">
+    <StatusBarShell>
       {/* Project name doubles as a quick switcher; opens upward (status bar
           hugs the bottom edge). */}
       <ProjectSwitcher
@@ -258,7 +259,7 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
           }}
         />
       )}
-    </footer>
+    </StatusBarShell>
   );
 }
 

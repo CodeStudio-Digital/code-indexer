@@ -15,6 +15,7 @@ import { useCallback, useRef, useState } from 'react';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
+import { apiBaseUrl } from '../lib/api-client.js';
 
 import type { AgentAttachment } from './agent-stream/types.js';
 import { useAgentControls } from './useAgentControls.js';
@@ -290,7 +291,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
   const loadKanbanFromDB = useCallback(async () => {
     if (companySessionId == null) return;
     try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}/kanban?full=true`);
+      const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/kanban?full=true`);
       if (!res.ok) return;
       const cards = await res.json();
       if (Array.isArray(cards)) kanbanHydrate(companySessionId, cards);
@@ -302,7 +303,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
   const loadFinalStateFromDB = useCallback(async () => {
     if (companySessionId == null) return;
     try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}`);
+      const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}`);
       if (!res.ok) return;
       const data = (await res.json()) as InitialFetchResponse;
       const boardMessages: BoardMessage[] = (data.recentBoard ?? []).map((b) => ({
@@ -396,7 +397,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
       streamSetConnected(companySessionId, true);
       streamSetUserMessage(companySessionId, userMessage);
       await openStream({
-        url: `/api/company/sessions/${companySessionId}/start`,
+        url: `${apiBaseUrl()}/api/company/sessions/${companySessionId}/start`,
         method: 'POST',
         body: {
           user_message: userMessage,
@@ -415,7 +416,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
       streamSetConnected(companySessionId, true);
       streamSetError(companySessionId, null);
       await openStream({
-        url: `/api/company/sessions/${companySessionId}/resume`,
+        url: `${apiBaseUrl()}/api/company/sessions/${companySessionId}/resume`,
         method: 'POST',
         body: {
           message,
@@ -445,7 +446,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
       pendingMasterInboxCount?: number;
     } | null = null;
     try {
-      const r = await fetch(`/api/company/sessions/${companySessionId}/state-snapshot`);
+      const r = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/state-snapshot`);
       if (r.ok) snapshot = (await r.json()) as typeof snapshot;
     } catch {
       /* fall through to /attach optimistic path */
@@ -477,7 +478,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
     let attached = false;
     try {
       await openStream({
-        url: `/api/company/sessions/${companySessionId}/attach`,
+        url: `${apiBaseUrl()}/api/company/sessions/${companySessionId}/attach`,
         method: 'GET',
         suppressError: (e) => {
           if (e.message === 'HTTP 404') {
@@ -506,7 +507,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
     if (companySessionId == null) return;
     abortRef.current?.abort();
     try {
-      await fetch(`/api/company/sessions/${companySessionId}/abort`, { method: 'POST' });
+      await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/abort`, { method: 'POST' });
     } catch {
       /* ignore */
     }
@@ -521,7 +522,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
     ) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(`/api/company/sessions/${companySessionId}/message`, {
+        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/message`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -537,7 +538,12 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
             interject: opts?.interject || undefined,
           }),
         });
-        if (!res.ok) {
+        if (res.ok) {
+          const body = (await res.json().catch(() => null)) as { resumed?: boolean } | null;
+          // Backend re-spawned + resumed an evicted/restarted master — re-attach
+          // the SSE so the master's continuation streams instead of going silent.
+          if (body?.resumed) { streamSetStarted(companySessionId, true); void reattach(); }
+        } else {
           const body = await res.text().catch(() => '');
           const errorMsg = res.status === 404
             ? 'Session is no longer active. Start a new session or reload the page.'
@@ -549,21 +555,22 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
         streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamSetError],
+    [companySessionId, streamSetError, streamSetStarted, reattach],
   );
 
   const respondToMasterPlan = useCallback(
     async (promptId: number, approved: boolean, feedback?: string) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(`/api/company/sessions/${companySessionId}/plan-response`, {
+        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/plan-response`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ approved, feedback, prompt_id: promptId }),
         });
         if (res.ok) {
-          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt } | null;
+          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt; resumed?: boolean } | null;
           if (body?.prompt) streamApplyMasterPrompt(companySessionId, body.prompt);
+          if (body?.resumed) { streamSetStarted(companySessionId, true); void reattach(); }
         } else if (res.status !== 409) {
           const body = await res.text().catch(() => '');
           streamSetError(companySessionId, `Failed to respond to plan (${res.status}): ${body}`);
@@ -572,21 +579,24 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
         console.error('Failed to respond to master plan:', e);
       }
     },
-    [companySessionId, streamApplyMasterPrompt, streamSetError],
+    [companySessionId, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
   );
 
   const respondToMasterQuestion = useCallback(
     async (promptId: number, answer: string) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(`/api/company/sessions/${companySessionId}/answer`, {
+        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/answer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ answer, prompt_id: promptId }),
         });
         if (res.ok) {
-          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt } | null;
+          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt; resumed?: boolean } | null;
           if (body?.prompt) streamApplyMasterPrompt(companySessionId, body.prompt);
+          // The orchestrator had been evicted/restarted; the backend re-spawned
+          // and resumed the master. Re-establish the SSE so the continuation streams.
+          if (body?.resumed) { streamSetStarted(companySessionId, true); void reattach(); }
         } else if (res.status !== 409) {
           const body = await res.text().catch(() => '');
           const errorMsg = res.status === 404
@@ -599,7 +609,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
         streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamApplyMasterPrompt, streamSetError],
+    [companySessionId, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
   );
 
   const switchProvider = useCallback(
@@ -610,7 +620,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
     ) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(`/api/company/sessions/${companySessionId}/switch`, {
+        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/switch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ provider, model, role_assignments: roleAssignments }),
@@ -653,7 +663,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
   > => {
     if (companySessionId == null) return null;
     try {
-      const r = await fetch(`/api/company/sessions/${companySessionId}/wake-master`, {
+      const r = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/wake-master`, {
         method: 'POST',
       });
       if (!r.ok) return null;

@@ -23,17 +23,17 @@ export class MetaBusPublisher implements IMetaBusPublisher {
    * `setActivityListener` after construction so wiring order
    * (publisher first, watchdog later) stays clean.
    */
-  private activityListener: (() => void) | null = null;
+  private activityListener: ((event: string) => void) | null = null;
 
   constructor(readonly bus: CoderRunBus) {}
 
-  setActivityListener(listener: (() => void) | null): void {
+  setActivityListener(listener: ((event: string) => void) | null): void {
     this.activityListener = listener;
   }
 
   publish(event: string, data: unknown): void {
     if (this.activityListener) {
-      try { this.activityListener(); } catch { /* best-effort */ }
+      try { this.activityListener(event); } catch { /* best-effort */ }
     }
     busPublish(this.bus, event, data);
   }

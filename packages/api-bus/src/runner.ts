@@ -1,4 +1,5 @@
 import type { ApiContext, AsyncStream } from './common.js';
+import type { RuntimeTarget } from './runtime.js';
 
 /**
  * Runner / task player — detects the runnable commands of a project
@@ -133,16 +134,22 @@ export interface ManagerStatus {
 }
 
 export interface RunnerApi {
-  /** Scan the project's root for runnable commands across ecosystems. */
-  detect(input: { projectId: number }, ctx: ApiContext): Promise<DetectedRunners>;
+  /**
+   * Scan the project's root for runnable commands across ecosystems. The
+   * package-manager override is resolved for `target` (default: the env of the
+   * project's `runner_shell` — host or a WSL distro), so the WSL list/commands
+   * honour the distro's chosen manager.
+   */
+  detect(input: { projectId: number; target?: RuntimeTarget }, ctx: ApiContext): Promise<DetectedRunners>;
 
   /**
    * Probe whether a package manager (npm/yarn/pnpm/bun/composer/pip/poetry) is
    * on the project's effective PATH — so the dependency assistant can warn
-   * before an install would fail with "command not found".
+   * before an install would fail with "command not found". For a `wsl` target
+   * the probe runs inside the distro.
    */
   managerStatus(
-    input: { projectId: number; manager: RunnerManager },
+    input: { projectId: number; manager: RunnerManager; target?: RuntimeTarget },
     ctx: ApiContext,
   ): Promise<ManagerStatus>;
 

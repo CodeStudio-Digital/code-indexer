@@ -15,10 +15,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ALargeSmall, Blocks, Braces, Hexagon, MemoryStick, Palette, Search, Settings2, TerminalSquare, Trash2 } from 'lucide-react';
 import type { Project } from '@mcp/shared/types.js';
+import type { RuntimeTarget, TerminalShell } from '@mcp/api-bus';
 import { cn } from '../../../lib/utils.js';
 import { apiCall } from '../../../lib/api-client.js';
 import { apiPatch } from '../../../hooks/useApi.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/select.js';
 import { GeneralPane } from './panes/GeneralPane.js';
 import { SearchPane } from './panes/SearchPane.js';
 import { RuntimePane } from './panes/RuntimePane.js';
@@ -65,6 +67,10 @@ export function ProjectSettingsModal({
   const [section, setSection] = useState<SettingsSection>(initialSection);
   const [project, setProject] = useState<Project>(initialProject);
   const [error, setError] = useState<string | null>(null);
+  // Runtime environment (Host vs a WSL distro) — governs the Node/PHP/Python
+  // panes so the same picker can manage a distro's MCP-managed Linux runtimes.
+  const [runtimeEnv, setRuntimeEnv] = useState<RuntimeTarget>({ kind: 'host' });
+  const [wslDistros, setWslDistros] = useState<string[]>([]);
 
   // Re-hydrate the freshest project (persisted values) every time we open, and
   // honour the requested entry section.
@@ -72,12 +78,25 @@ export function ProjectSettingsModal({
     if (!open) return;
     setSection(initialSection);
     setError(null);
+    setRuntimeEnv({ kind: 'host' });
     let alive = true;
     void apiCall<Project>('projects.get', { id: initialProject.id })
       .then((p) => { if (alive) setProject(p); })
       .catch(() => undefined);
+    // Detected WSL distros become the non-Host runtime environments.
+    void apiCall<TerminalShell[]>('terminal.listShells', {})
+      .then((shells) => {
+        if (!alive) return;
+        const distros = (Array.isArray(shells) ? shells : [])
+          .filter((s) => s.id.startsWith('wsl:'))
+          .map((s) => s.id.slice('wsl:'.length));
+        setWslDistros(distros);
+      })
+      .catch(() => { if (alive) setWslDistros([]); });
     return () => { alive = false; };
   }, [open, initialSection, initialProject.id]);
+
+  const isRuntimeSection = section === 'node' || section === 'php' || section === 'python';
 
   const patch = useCallback<PatchFn>(
     async (body) => {
@@ -144,6 +163,23 @@ export function ProjectSettingsModal({
                 {error}
               </div>
             )}
+            {isRuntimeSection && wslDistros.length > 0 && (
+              <div className="mb-4 flex items-center gap-2">
+                <label className="text-xs font-medium text-muted-foreground shrink-0">{t('settings.runtimeEnv')}</label>
+                <Select
+                  value={runtimeEnv.kind === 'wsl' ? `wsl:${runtimeEnv.distro}` : 'host'}
+                  onValueChange={(v) => setRuntimeEnv(v.startsWith('wsl:') ? { kind: 'wsl', distro: v.slice('wsl:'.length) } : { kind: 'host' })}
+                >
+                  <SelectTrigger className="h-8 w-60"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="host">{t('settings.runtimeEnvHost')}</SelectItem>
+                    {wslDistros.map((d) => (
+                      <SelectItem key={d} value={`wsl:${d}`}>{`WSL: ${d}`}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             {section === 'general' && (
               <GeneralPane
                 project={project}
@@ -152,9 +188,9 @@ export function ProjectSettingsModal({
               />
             )}
             {section === 'search' && <SearchPane project={project} patch={patch} />}
-            {section === 'node' && <RuntimePane kind="node" project={project} patch={patch} />}
-            {section === 'php' && <RuntimePane kind="php" project={project} patch={patch} />}
-            {section === 'python' && <RuntimePane kind="python" project={project} patch={patch} />}
+            {section === 'node' && <RuntimePane kind="node" project={project} patch={patch} target={runtimeEnv} />}
+            {section === 'php' && <RuntimePane kind="php" project={project} patch={patch} target={runtimeEnv} />}
+            {section === 'python' && <RuntimePane kind="python" project={project} patch={patch} target={runtimeEnv} />}
             {section === 'terminal' && <TerminalPane project={project} patch={patch} />}
             {section === 'memory' && <MemoryPane project={project} patch={patch} />}
             {section === 'appearance' && <AppearancePane />}

@@ -27,10 +27,12 @@ interface GitCommitDetail {
 
 interface CommitDetailPanelProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo) the commit belongs to; undefined = main. */
+  repoPath?: string;
   sha: string | null;
 }
 
-export function CommitDetailPanel({ projectId, sha }: CommitDetailPanelProps) {
+export function CommitDetailPanel({ projectId, repoPath, sha }: CommitDetailPanelProps) {
   const [detail, setDetail] = useState<GitCommitDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,7 @@ export function CommitDetailPanel({ projectId, sha }: CommitDetailPanelProps) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    apiCall<GitCommitDetail>('projectGit.commitDetail', { projectId, sha })
+    apiCall<GitCommitDetail>('projectGit.commitDetail', { projectId, repoPath, sha })
       .then((d) => {
         if (!cancelled) setDetail(d);
       })
@@ -57,13 +59,14 @@ export function CommitDetailPanel({ projectId, sha }: CommitDetailPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, sha]);
+  }, [projectId, repoPath, sha]);
 
   const openFile = async (f: ChangedFile) => {
     if (!detail) return;
     try {
       const r = await apiCall<{ patch: string }>('projectGit.commitFileDiff', {
         projectId,
+        repoPath,
         sha: detail.sha,
         path: f.path,
       });

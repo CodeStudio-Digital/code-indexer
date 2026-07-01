@@ -13,11 +13,15 @@
  *
  * Clicking an icon calls `onChange(zone, tab)`; the parent owns the
  * router navigation. Active state is purely visual.
+ *
+ * The buttons / edge / separators come from the shared `components/chrome`
+ * rail primitives (same as the ProjectView rail), and the terminal toggle
+ * is pinned to the footer (`mt-auto`) mirroring that rail.
  */
-import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { Fragment, useEffect, useState } from 'react';
+import { ChevronDown, ChevronUp, TerminalSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { cn } from '../../../lib/utils.js';
+import { RailButton, RailContainer, RailSeparator } from '../../../components/chrome/index.js';
 import { TAB_REGISTRY, type TabDef } from './tab-registry.js';
 import type { Zone } from './types.js';
 
@@ -25,6 +29,9 @@ interface LeftTabRailProps {
   activeZone: Zone;
   activeTab: string;
   onChange: (zone: Zone, tab: string) => void;
+  /** Bottom terminal panel open state — drives the footer toggle. */
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
 }
 
 const ADVANCED_STORAGE_KEY = 'agents.railAdvanced';
@@ -37,7 +44,7 @@ function readStoredAdvanced(): boolean {
   }
 }
 
-export function LeftTabRail({ activeZone, activeTab, onChange }: LeftTabRailProps) {
+export function LeftTabRail({ activeZone, activeTab, onChange, terminalOpen, onToggleTerminal }: LeftTabRailProps) {
   const { t } = useTranslation('agents');
   const [expanded, setExpanded] = useState(readStoredAdvanced);
 
@@ -67,23 +74,15 @@ export function LeftTabRail({ activeZone, activeTab, onChange }: LeftTabRailProp
     const label = t(td.labelKey, { defaultValue: td.fallbackLabel });
     const key = `${td.zone}-${td.tab}`;
     return (
-      <div key={key} className="flex flex-col items-center gap-1 w-full">
-        {showSep && <div className="w-6 border-t" />}
-        <button
-          type="button"
+      <Fragment key={key}>
+        {showSep && <RailSeparator />}
+        <RailButton
+          icon={td.Icon}
+          label={label}
+          active={isActive}
           onClick={() => onChange(td.zone, td.tab)}
-          title={label}
-          aria-label={label}
-          className={cn(
-            'p-1.5 rounded-md transition-colors',
-            isActive
-              ? 'bg-muted text-foreground'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-          )}
-        >
-          <td.Icon className="h-4 w-4" />
-        </button>
-      </div>
+        />
+      </Fragment>
     );
   };
 
@@ -93,22 +92,33 @@ export function LeftTabRail({ activeZone, activeTab, onChange }: LeftTabRailProp
   };
 
   const moreLabel = t('company.moreTabs', { defaultValue: 'More' });
+  const terminalLabel = t('company.terminal', { defaultValue: 'Terminal' });
 
   return (
-    <div className="w-10 border-r flex flex-col items-center gap-1 py-2 bg-card flex-shrink-0 overflow-y-auto">
+    <RailContainer side="left">
       {renderGroup(core)}
-      <div className="w-6 border-t" />
+      <RailSeparator />
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         title={moreLabel}
         aria-label={moreLabel}
         aria-expanded={showAdvanced}
-        className="p-1.5 rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
       </button>
       {showAdvanced && renderGroup(advanced)}
-    </div>
+      {/* Terminal toggle pinned to the footer — mirrors the ProjectView rail. */}
+      <div className="mt-auto pb-1 flex flex-col items-center gap-0.5">
+        <RailButton
+          icon={TerminalSquare}
+          label={terminalLabel}
+          role="toggle"
+          active={terminalOpen}
+          onClick={onToggleTerminal}
+        />
+      </div>
+    </RailContainer>
   );
 }

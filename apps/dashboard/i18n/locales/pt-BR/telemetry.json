@@ -1,6 +1,7 @@
 {
   "title": "Telemetria",
   "subtitle": "Uso de tokens e ferramentas por turno em todas as sessões. Alimentado pela tabela coder_turn_telemetry.",
+  "aboutAria": "Sobre esta página",
   "empty": "Sem dados de telemetria ainda. Rode uma sessão do coder para popular este painel.",
   "overall.sessions": "Sessões",
   "overall.turns": "Turnos",
@@ -54,8 +55,9 @@
   "skillsModes.title": "Modo de skills (por sessão)",
 
   "tabs.overview": "Visão geral",
-  "tabs.pipeline": "Telemetria de pipelines",
   "tabs.quality": "Qualidade",
+  "tabs.prices": "Preços",
+  "tabs.supervisor": "Supervisor",
 
   "pipeline.subtitle": "Traços de execução por estágio emitidos pelo framework de candidate-pipeline. Cada componente (Source / Hydrator / Filter / Scorer / Selector / SideEffect) registra latência, contagem de candidatos e cache hit/miss.",
   "pipeline.filters.pipelineName": "filtrar por pipeline…",

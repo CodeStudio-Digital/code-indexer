@@ -23,18 +23,15 @@ import {
   BookOpen,
   BookText,
   Brain,
-  Database,
   FlaskConical,
   FolderOpen,
   FolderTree,
   GitBranch,
   GitCompare,
   KanbanSquare,
-  MessageCircle,
   MessageSquare,
   Network,
   Play,
-  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import type { BuildTab, DataTab, WorkTab, Zone } from './types.js';
@@ -57,7 +54,6 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   // Project memory (Mem C) — distilled decisions/gotchas from prior runs;
   // what subordinates are born knowing. Operator curates it here.
   { zone: 'work', tab: 'memory', Icon: Brain, labelKey: 'company.memory', fallbackLabel: 'Memory' },
-  { zone: 'work', tab: 'transcript', Icon: MessageCircle, labelKey: 'company.transcript', fallbackLabel: 'Transcript' },
   { zone: 'build', tab: 'files', Icon: FolderTree, labelKey: 'company.files', fallbackLabel: 'Files' },
   { zone: 'build', tab: 'git', Icon: GitBranch, labelKey: 'company.git', fallbackLabel: 'Git' },
   { zone: 'data', tab: 'drive', Icon: FolderOpen, labelKey: 'company.drive', fallbackLabel: 'Drive' },
@@ -72,8 +68,4 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   { zone: 'build', tab: 'runners', Icon: Play, labelKey: 'company.runners', fallbackLabel: 'Runners', advanced: true },
   { zone: 'data', tab: 'snapshots', Icon: GitCompare, labelKey: 'company.snapshots', fallbackLabel: 'Snapshots', advanced: true },
   { zone: 'data', tab: 'archived', Icon: Archive, labelKey: 'company.archived', fallbackLabel: 'Archived', advanced: true },
-  // Browse the indexed-file table (path/lang/complexity + summary modal).
-  { zone: 'data', tab: 'indexed', Icon: Database, labelKey: 'company.indexed', fallbackLabel: 'Indexed', advanced: true },
-  // Query the embedded corpus (hybrid · vector · FTS) with diagnostics.
-  { zone: 'data', tab: 'vectors', Icon: Sparkles, labelKey: 'company.vectors', fallbackLabel: 'Vectors', advanced: true },
 ] as const;

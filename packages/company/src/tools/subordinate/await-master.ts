@@ -22,6 +22,8 @@
  * for when it is off. Tunable via `MCP_SUBORDINATE_MASTER_WAIT_MS`.
  */
 
+import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
+
 /** Minimal structural slice of CoderRunner this helper needs. */
 export interface MasterWaitRunner {
   waitForUserInput(askId?: string): Promise<string>;
@@ -30,6 +32,9 @@ export interface MasterWaitRunner {
 }
 
 const DEFAULT_MASTER_WAIT_MS = 30 * 60 * 1000;
+/** Heartbeat cadence while blocked on the master — well under the supervisor's
+ *  ~5min stuck-tool timeout so a legitimate wait is never flagged/aborted. */
+const MASTER_WAIT_HEARTBEAT_MS = 30_000;
 
 export function resolveMasterWaitMs(): number {
   const raw = Number(process.env.MCP_SUBORDINATE_MASTER_WAIT_MS);
@@ -47,7 +52,10 @@ export const MASTER_WAIT_TIMEOUT = {
  * the Master provided, OR the JSON sentinel string when the deadline elapses
  * first. Always clears its timer.
  */
-export async function awaitMasterDecision(runner: MasterWaitRunner): Promise<string> {
+export async function awaitMasterDecision(
+  runner: MasterWaitRunner,
+  opts: { heartbeatAgentRunId?: number } = {},
+): Promise<string> {
   const timeoutMs = resolveMasterWaitMs();
   let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
     timer = null;
@@ -61,9 +69,24 @@ export async function awaitMasterDecision(runner: MasterWaitRunner): Promise<str
   // Don't keep the event loop alive just for this deadline.
   const t = timer as { unref?: () => void } | null;
   if (t && typeof t.unref === 'function') t.unref();
+
+  // Heartbeat the supervisor while blocked. Waiting for a master decision parks
+  // the subordinate inside the `submit_plan_to_master`/`ask_master` tool call
+  // (AWAITING_TOOL) with no `tool_progress` — so without this the supervisor
+  // would flag a perfectly healthy wait as STUCK_TOOL and (now) reestablish/
+  // abort it. No-op when the supervisor is off or the agent isn't tracked.
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  if (opts.heartbeatAgentRunId != null) {
+    const id = opts.heartbeatAgentRunId;
+    getGlobalAgentSupervisor()?.heartbeat(id);
+    heartbeat = setInterval(() => { getGlobalAgentSupervisor()?.heartbeat(id); }, MASTER_WAIT_HEARTBEAT_MS);
+    (heartbeat as { unref?: () => void }).unref?.();
+  }
+
   try {
     return await runner.waitForUserInput();
   } finally {
     if (timer) clearTimeout(timer);
+    if (heartbeat) clearInterval(heartbeat);
   }
 }

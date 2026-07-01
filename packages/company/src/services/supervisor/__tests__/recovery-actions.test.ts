@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   abortStuckTool,
+  abortStuckTurn,
   dispatchRecovery,
   forceResumeSubordinate,
   resurrectMasterIfOrphaned,
@@ -253,8 +254,8 @@ describe('resurrectMasterIfOrphaned', () => {
 
 describe('dispatchRecovery', () => {
   it('returns null when no action registered for state', async () => {
-    // STUCK_TURN has no action in Phase 2.2 (no_match for all 3 actions)
-    const stuck = makeStuck('STUCK_TURN', 'RUNNING_TURN');
+    // INBOX_EXPIRED still has no registered action (STUCK_TURN/PROVIDER/BOOT now do).
+    const stuck = makeStuck('INBOX_EXPIRED', 'RUNNING_TURN');
     const out = await dispatchRecovery(stuck, {});
     expect(out).toBeNull();
   });
@@ -307,5 +308,49 @@ describe('listRegisteredActions', () => {
     expect(reg.STUCK_AWAITING_MASTER).toEqual(
       expect.arrayContaining(['resurrectMasterIfOrphaned', 'forceResumeSubordinate']),
     );
+    expect(reg.STUCK_TURN).toContain('abortStuckTurn');
+    expect(reg.STUCK_PROVIDER).toContain('abortStuckTurn');
+  });
+});
+
+describe('abortStuckTurn', () => {
+  it('aborts a subordinate runner on STUCK_PROVIDER', async () => {
+    const abort = vi.fn();
+    const stuck = makeStuck('STUCK_PROVIDER', 'AWAITING_PROVIDER', { agentRunId: 5, role: 'backend' });
+    const out = await abortStuckTurn(stuck, { runners: { get: () => ({ abort }) } });
+    expect(out.ok).toBe(true);
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts on STUCK_TURN too', async () => {
+    const abort = vi.fn();
+    const stuck = makeStuck('STUCK_TURN', 'RUNNING_TURN', { role: 'qa' });
+    const out = await abortStuckTurn(stuck, { runners: { get: () => ({ abort }) } });
+    expect(out.ok).toBe(true);
+    expect(abort).toHaveBeenCalled();
+  });
+
+  it('NEVER auto-aborts the master (incident-only)', async () => {
+    const abort = vi.fn();
+    const stuck = makeStuck('STUCK_PROVIDER', 'AWAITING_PROVIDER', { role: 'master' });
+    const out = await abortStuckTurn(stuck, { runners: { get: () => ({ abort }) } });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe('skipped');
+    expect(abort).not.toHaveBeenCalled();
+  });
+
+  it('falls back to subordinates.abort when no runner ref', async () => {
+    const abort = vi.fn(async () => undefined);
+    const stuck = makeStuck('STUCK_PROVIDER', 'AWAITING_PROVIDER', { agentRunId: 9, role: 'backend' });
+    const out = await abortStuckTurn(stuck, { subordinates: { resume: vi.fn(), abort } });
+    expect(out.ok).toBe(true);
+    expect(abort).toHaveBeenCalledWith(9, expect.stringContaining('supervisor'));
+  });
+
+  it('returns no_match for an unrelated state', async () => {
+    const stuck = makeStuck('STUCK_TOOL', 'AWAITING_TOOL');
+    const out = await abortStuckTurn(stuck, {});
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe('no_match');
   });
 });

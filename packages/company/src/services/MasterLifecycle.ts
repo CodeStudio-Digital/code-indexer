@@ -41,6 +41,8 @@ import {
   wireMasterRunnerListeners,
   type MasterRunnerStateMutators,
 } from '@mcp/company/services/master/runner-wiring.js';
+import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
+import { wireSupervisorToRunner } from '@mcp/company/services/supervisor/wire-runner-events.js';
 import {
   startMaster,
   type MasterStartOpts,
@@ -638,6 +640,45 @@ export class MasterLifecycle implements IMasterNotifier {
     // docsResearch RPC shim was already wired — this was the missing half.
     // Navigate-tier, so it surfaces via expand_toolset('navigate').
     installDocsDeepResearch(runner);
+    this.maybeWireMasterSupervisor(runner, runId);
+  }
+
+  /**
+   * Register the master with the AgentSupervisor + wire its runner heartbeats,
+   * so the supervisor can finally observe the session's most important organ
+   * (today `registerMaster` is otherwise test-only and the observation-layer
+   * master handlers never fire). Covers both fresh start and resurrect because
+   * `wireAllForRunner` is the single chokepoint for both.
+   *
+   * GATED behind `MCP_SUPERVISOR_MASTER=1` (default off) and EXPERIMENTAL: the
+   * master's long event-driven waits — `wait_for_subordinates` can legitimately
+   * block ~30min — run as a single `AWAITING_TOOL` with no `tool_progress`
+   * heartbeat, so naive wiring trips `STUCK_TOOL` after the ~5min default and
+   * the recovery action could abort a healthy wait. Enabling this safely first
+   * needs the wait loop to heartbeat / set a generous timeout override (a
+   * Phase-1 follow-up). Until then this flag lets it be validated on-device
+   * without changing the shipping default. No-op when the supervisor is
+   * disabled, so the flag is a true superset gate.
+   */
+  private maybeWireMasterSupervisor(runner: CoderRunner, runId: number): void {
+    if (process.env.MCP_SUPERVISOR_MASTER !== '1') return;
+    const supervisor = getGlobalAgentSupervisor();
+    if (!supervisor) return;
+    supervisor.registerMaster({
+      agentRunId: runId,
+      companySessionId: this.deps.ctx.companySessionId,
+    });
+    const unsubscribe = wireSupervisorToRunner(runner, runId);
+    // One-shot cleanup so listeners don't leak when this runner exits (a new
+    // runner is created on resurrect). `done` also fires the TERMINAL
+    // transition inside wireSupervisorToRunner.
+    const emitter = runner as unknown as {
+      once?: (event: string, listener: () => void) => void;
+      on?: (event: string, listener: () => void) => void;
+    };
+    const onDone = (): void => { try { unsubscribe(); } catch { /* best-effort */ } };
+    if (emitter.once) emitter.once('done', onDone);
+    else emitter.on?.('done', onDone);
   }
 
   private attachCompletionHandler(handle: RunCoderHandle, runId: number): void {

@@ -182,11 +182,14 @@ const noopTwoFactor: TwoFactorRepo = {
   },
 };
 const noopChallengeTokens: ChallengeTokenPort = {
-  async sign() {
+  async issue() {
     return 'ch';
   },
   async verify() {
     return null;
+  },
+  async consume() {
+    return false;
   },
 };
 

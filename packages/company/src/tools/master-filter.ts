@@ -96,6 +96,11 @@ const COMPANY_TOOL_PREFIXES = [
   'list_company_projects',
   'forward_to_agent',
   'finalize_subordinates',
+  // recommend_role — embedding-backed role suggestion for the master's manual
+  // delegation. Built by buildMasterTools; must survive the master filter.
+  'recommend_role',
+  // broadcast_to_roles — multicast one message to several roles at once.
+  'broadcast_to_roles',
   'post_to_board',
   'read_board',
   // Shared drive (company-scoped file pool). Master must be able to read

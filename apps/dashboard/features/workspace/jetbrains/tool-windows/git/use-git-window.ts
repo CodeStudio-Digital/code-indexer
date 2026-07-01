@@ -53,12 +53,24 @@ export interface GitWindowModel {
   onDiscard: (paths: string[]) => Promise<void>;
 }
 
-// Auto-switch memory per project, OUTSIDE the hook — GitWindow unmounts on
-// every Git↔Files tab toggle, so a useRef would reset and re-yank the user to
-// the Conflicts tab on every return mid-merge. Module scope survives remounts.
-const autoSwitchedKind = new Map<number, GitMergeState['kind']>();
+// Auto-switch memory per (project, repo) — GitWindow unmounts on every Git↔Files
+// tab toggle, so a useRef would reset and re-yank the user to the Conflicts tab
+// on every return mid-merge. Module scope survives remounts. Keyed by repo too
+// so switching the active repo can't be mistaken for a real merge transition.
+const autoSwitchedKind = new Map<string, GitMergeState['kind']>();
 
-export function useGitWindow(projectId: number, active: boolean): GitWindowModel {
+export function useGitWindow(
+  projectId: number,
+  active: boolean,
+  repoPath?: string,
+  /** Active repo's project-relative prefix ('' = main) — used to rebase
+   *  repoRoot-relative conflict paths to project-relative for the editor. */
+  repoPrefix?: string,
+  /** False until listRepos resolves — gates the first fetch so the window never
+   *  briefly issues the no-repoPath (project-wide AGGREGATE) status before the
+   *  real repoPath (main / selection) is known. */
+  ready = true,
+): GitWindowModel {
   const { t } = useTranslation('workspace');
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,6 +94,7 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
       try {
         const r = await apiCall<{ patch: string }>('projectGit.diff', {
           projectId,
+          repoPath,
           path: file.path,
           staged: file.staged,
         });
@@ -101,7 +114,7 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
         });
       }
     },
-    [projectId, openDiff, t],
+    [projectId, repoPath, openDiff, t],
   );
 
   // `silent` skips the loading flag (no toolbar spinner) — used for background
@@ -112,6 +125,9 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
       staleWhileHidden.current = true;
       return;
     }
+    // Hold the initial fetch until repos are known so repoPath is settled (else
+    // the first status would be the project-wide aggregate). Stays in loading.
+    if (!ready) return;
     const includeFiles = tab === 'changes';
     if (!silent) setLoading(true);
     const finishStatusSpan = startRouteSpan('GitWindow:status', {
@@ -122,7 +138,7 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
     const finishMergeSpan = startRouteSpan('GitWindow:mergeState', { projectId, tab: 'git' });
     try {
       const [s, ms] = await Promise.all([
-        apiCall<GitStatus>('projectGit.status', { projectId, includeFiles })
+        apiCall<GitStatus>('projectGit.status', { projectId, repoPath, includeFiles })
           .then((value) => {
             finishStatusSpan({ status: 'ok' });
             return value;
@@ -131,7 +147,7 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
             finishStatusSpan({ status: 'error', error: err instanceof Error ? err.message : String(err) });
             throw err;
           }),
-        apiCall<GitMergeState>('projectGit.mergeState', { projectId })
+        apiCall<GitMergeState>('projectGit.mergeState', { projectId, repoPath })
           .then((value) => {
             finishMergeSpan({ status: 'ok' });
             return value;
@@ -144,16 +160,23 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
       setStatus(s);
       setMergeState(ms);
       staleWhileHidden.current = false;
-      // Feed the editor's conflict registry so open files light up inline.
-      if (ms.kind) setConflicts(projectId, ms.conflictedFiles);
-      else clearConflicts(projectId);
+      // Feed the editor's conflict registry (project-relative paths) so open
+      // files light up inline. mergeState paths are repoRoot-relative, so for a
+      // submodule we prefix them with the active repo's project-relative prefix.
+      const prefix = repoPrefix ?? '';
+      if (ms.kind) {
+        const rebased = prefix ? ms.conflictedFiles.map((f) => `${prefix}/${f}`) : ms.conflictedFiles;
+        setConflicts(projectId, prefix, rebased);
+      } else {
+        clearConflicts(projectId, prefix);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [active, projectId, tab]);
+  }, [active, ready, projectId, repoPath, repoPrefix, tab]);
 
   useEffect(() => {
     if (active) void reload(staleWhileHidden.current);
@@ -171,12 +194,13 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
   // conflicted state; fall back to Changes once it clears. Keyed per project in
   // module scope so a tab-toggle remount mid-merge doesn't re-force the switch.
   useEffect(() => {
+    const key = `${projectId}:${repoPath ?? ''}`;
     const kind = mergeState?.kind ?? null;
-    const prev = autoSwitchedKind.get(projectId) ?? null;
+    const prev = autoSwitchedKind.get(key) ?? null;
     if (kind && !prev) setTab('conflicts');
     else if (!kind && prev) setTab((cur) => (cur === 'conflicts' ? 'changes' : cur));
-    autoSwitchedKind.set(projectId, kind);
-  }, [mergeState?.kind, projectId, setTab]);
+    autoSwitchedKind.set(key, kind);
+  }, [mergeState?.kind, projectId, repoPath, setTab]);
 
   // NOTE: deliberately NO force-clear of the conflict registry on unmount — the
   // Git window unmounts on every Files↔Git tab toggle, and clearing here would
@@ -201,7 +225,7 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
 
   const onStage = async (paths: string[]) => {
     try {
-      await apiCall('projectGit.stage', { projectId, paths });
+      await apiCall('projectGit.stage', { projectId, repoPath, paths });
       await reload();
     } catch (err) {
       toast.error(t('git.stageFailed'), { description: err instanceof Error ? err.message : String(err) });
@@ -209,7 +233,7 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
   };
   const onUnstage = async (paths: string[]) => {
     try {
-      await apiCall('projectGit.unstage', { projectId, paths });
+      await apiCall('projectGit.unstage', { projectId, repoPath, paths });
       await reload();
     } catch (err) {
       toast.error(t('git.unstageFailed'), { description: err instanceof Error ? err.message : String(err) });
@@ -227,7 +251,7 @@ export function useGitWindow(projectId: number, active: boolean): GitWindowModel
     });
     if (!ok) return;
     try {
-      await apiCall('projectGit.discard', { projectId, paths });
+      await apiCall('projectGit.discard', { projectId, repoPath, paths });
       await reload();
       toast.success(t('git.discarded'), {
         description: paths.length === 1 ? paths[0] : t('git.filesReverted', { count: paths.length }),

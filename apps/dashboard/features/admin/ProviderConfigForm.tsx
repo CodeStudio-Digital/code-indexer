@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Input } from '../../components/ui/input.js';
 import { Switch } from '../../components/ui/switch.js';
 import {
@@ -27,6 +28,7 @@ interface ProviderConfigFieldsProps {
  * `extra` route here by each field's `storeIn`.
  */
 export function ProviderConfigFields({ fields, base_url, extra, onBaseUrl, onExtra }: ProviderConfigFieldsProps) {
+  const { t } = useTranslation('admin');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const basic = fields.filter((f) => !f.advanced);
   const advanced = fields.filter((f) => f.advanced);
@@ -103,7 +105,7 @@ export function ProviderConfigFields({ fields, base_url, extra, onBaseUrl, onExt
           onClick={() => setShowAdvanced((s) => !s)}
         >
           {showAdvanced ? '− ' : '+ '}
-          {advanced.length} advanced
+          {t('admin:providerConfig.advanced', { count: advanced.length })}
         </button>
       )}
       {showAdvanced && advanced.map(fieldRow)}

@@ -275,7 +275,7 @@ function kanbanAddDependency(orchestrator: CompanyOrchestrator): CoderTool {
 
   return {
     name: 'kanban_add_dependency',
-    description: 'Create a blocking dependency: card_id is blocked by depends_on_card_id. The blocked card cannot move to in_progress until the blocker is done.',
+    description: 'Create a blocking dependency: card_id is blocked by depends_on_card_id. The blocked card cannot advance into in_progress / review / done until every blocker reaches done — enforced for both agent moves and automation (spawns, pipelines, the scheduler).',
     parameters,
     source: 'native',
     handler: async (args) => {

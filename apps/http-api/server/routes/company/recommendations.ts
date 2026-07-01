@@ -16,12 +16,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
-import {
-  createRolePipeline,
-  recommendRoles,
-  type IdleRunDescriptor,
-  type RoleDescriptor,
-} from '@mcp/company/role-pipeline/index.js';
+import { recommendRolesForSession } from './recommend-core.js';
 import {
   createKanbanPriorityPipeline,
   prioritizeKanban,
@@ -42,12 +37,7 @@ function fnv1aHash(text: string): string {
 }
 
 export function mountCompanyRecommendationsRoutes(app: Hono, deps: ServerDeps): void {
-  const {
-    companyStore,
-    toolSelectionEmbed,
-    roleEmbeddingStore,
-    pipelineTelemetrySink,
-  } = deps;
+  const { companyStore, pipelineTelemetrySink } = deps;
 
   // ─── POST /api/company/sessions/:id/recommend-role ──────────────────
   app.post('/api/company/sessions/:id/recommend-role', async (c) => {
@@ -62,52 +52,12 @@ export function mountCompanyRecommendationsRoutes(app: Hono, deps: ServerDeps): 
     const session = companyStore.getCompanySession(sessionId);
     if (!session) return c.json({ error: 'session_not_found' }, 404);
 
-    // Resolve roles from the template (if any). `CompanyRoleConfig` doesn't
-    // carry a free-form description — synthesize one from role + skills so
-    // the two-tower scorer has something meaningful to embed.
-    const template = session.template_id != null
-      ? companyStore.getTemplate(session.template_id)
-      : null;
-    const availableRoles: RoleDescriptor[] = (template?.roles ?? []).map((r) => {
-      const skillsArr = Array.isArray(r.skills) ? r.skills : [];
-      const skillsText = skillsArr.join(', ');
-      return {
-        role: r.role,
-        description: skillsText ? `${r.role}. Skills: ${skillsText}` : `${r.role} role`,
-        skills: skillsArr,
-        preferredModel: r.model || undefined,
-      };
-    });
-
-    // Active subordinate runs — used by the pipeline for capacity filter
-    // and reuse-bonus signal. Status values come from AgentRunStatus.
-    const activeRuns = companyStore.listAgentRuns(sessionId);
-    const runningByRole: Record<string, number> = {};
-    const idleRuns: IdleRunDescriptor[] = [];
-    const RUNNING_STATUSES = new Set<string>([
-      'running', 'working',
-      'waiting', 'waiting_plan', 'waiting_question', 'waiting_tasks',
-      'reviewing', 'blocked',
-    ]);
-    for (const r of activeRuns) {
-      if (RUNNING_STATUSES.has(r.status)) {
-        runningByRole[r.role] = (runningByRole[r.role] ?? 0) + 1;
-      } else if (r.status === 'idle') {
-        idleRuns.push({ agentRunId: r.id, role: r.role });
-      }
-    }
-
-    const pipeline = createRolePipeline({
-      embed: toolSelectionEmbed,
-      roleEmbeddingStore,
-      telemetry: pipelineTelemetrySink,
-    });
-    const result = await recommendRoles(pipeline, {
-      queryId: `recommend-role-${sessionId}-${Date.now()}`,
+    // Shared "brain" — the SAME pipeline run the autonomous scheduler uses via
+    // the worker→main `recommend` shim (recommend-core.ts), so dashboard and
+    // scheduler never drift apart.
+    const result = await recommendRolesForSession(deps, {
+      companySessionId: sessionId,
       taskText: body.task,
-      availableRoles,
-      idleRuns,
-      runningByRole,
       k: body.k,
     });
 

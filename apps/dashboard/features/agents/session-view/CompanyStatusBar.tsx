@@ -5,8 +5,9 @@
  * the middle, primary action at the right.
  *
  * Visual conventions:
- *   - 28px tall, top + bottom border, muted background so it doesn't
- *     fight the transcript or the composer for attention.
+ *   - 20px tall (shared `StatusBarShell`), hairline top border, muted
+ *     background so it doesn't fight the transcript or composer for
+ *     attention — identical to the ProjectView status bar.
  *   - Left: master state pill (running / standby / pending / error).
  *     One-word label + tiny icon; no spinner — when the master is
  *     actively running, the transcript is already rendering text/tool
@@ -23,7 +24,7 @@
  */
 import { Loader2, Moon, Activity, AlertTriangle, Bell, AlertCircle } from 'lucide-react';
 import type { AgentStreamState } from '../../../state/company/types.js';
-import { Button } from '../../../components/ui/button.js';
+import { StatusBarShell } from '../../../components/chrome/index.js';
 import { cn } from '../../../lib/utils.js';
 
 interface Props {
@@ -104,17 +105,17 @@ export function CompanyStatusBar(props: Props) {
     props.pendingMasterInboxCount > 0;
 
   return (
-    <div className="shrink-0 h-7 border-t bg-card/60 px-3 flex items-center gap-3 text-[11.5px]">
+    <StatusBarShell>
       {/* Left — phase pill */}
       <div className={cn('flex items-center gap-1.5 shrink-0', style.className)}>
-        <Icon className={cn('h-3.5 w-3.5 shrink-0', style.iconClassName)} />
+        <Icon className={cn('h-3 w-3 shrink-0', style.iconClassName)} />
         <span className="truncate">{style.label}</span>
       </div>
 
       <span className="w-px h-3 bg-border" aria-hidden />
 
       {/* Middle — counters. Spacing collapses cleanly when both are 0. */}
-      <div className="flex items-center gap-3 text-muted-foreground min-w-0 flex-1">
+      <div className="flex items-center gap-3 min-w-0 flex-1">
         {showCounters && (
           <>
             <span className="truncate">
@@ -132,18 +133,18 @@ export function CompanyStatusBar(props: Props) {
         )}
       </div>
 
-      {/* Right — wake action when relevant */}
+      {/* Right — wake action as a status chip (fits the 20px bar, mirrors
+          the ProjectView status-bar chips). */}
       {phase === 'idle_pending' && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-6 text-[11px] px-2"
+        <button
+          type="button"
           onClick={props.onWakeMaster}
+          className="inline-flex items-center gap-1 rounded px-1.5 -mx-0.5 text-amber-600 dark:text-amber-400 hover:bg-muted/40 transition-colors"
         >
-          <Bell className="h-3 w-3 mr-1.5" />
+          <Bell className="h-3 w-3" />
           {props.t('company.actions.wakeMaster')}
-        </Button>
+        </button>
       )}
-    </div>
+    </StatusBarShell>
   );
 }

@@ -6,7 +6,7 @@
  * keeps `metaBus`, exposes service handles, and delegates the public API so
  * tools / HTTP routes / CompanyContext consumers keep working unchanged.
  */
-import type { RunCoderHandle, MasterStartResult } from '@mcp/code-agent/index.js';
+import type { MasterStartResult } from '@mcp/code-agent/index.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
@@ -50,6 +50,7 @@ import type { PipelineExecutor } from './services/PipelineExecutor.js';
 import type { InboxQueue, SendArgs as InboxSendArgs, SendResult as InboxSendResult } from './services/InboxQueue.js';
 import type { MasterInboxRouter } from './services/MasterInboxRouter.js';
 import type { RuntimeReconciler } from './services/RuntimeReconciler.js';
+import type { CompanyScheduler } from './services/scheduler/CompanyScheduler.js';
 import type { CompanyDriveStore } from './services/CompanyDriveStore.js';
 import type { CompanyEventBus } from './services/CompanyEventBus.js';
 import type { IdleWatchdog } from './services/IdleWatchdog.js';
@@ -109,6 +110,7 @@ export class CompanyOrchestrator {
   private readonly inbox: InboxQueue;
   private readonly masterInbox: MasterInboxRouter;
   private readonly reconciler: RuntimeReconciler;
+  private readonly scheduler: CompanyScheduler;
 
   constructor(opts: CompanyOrchestratorOpts) {
     this.companySessionId = opts.companySessionId;
@@ -134,6 +136,7 @@ export class CompanyOrchestrator {
     this.inbox = w.inbox;
     this.masterInbox = w.masterInbox;
     this.reconciler = w.reconciler;
+    this.scheduler = w.scheduler;
   }
 
   /**
@@ -147,8 +150,6 @@ export class CompanyOrchestrator {
   masterResurrectedWithinMs(ms: number): boolean { return this.master?.resurrectedWithinMs(ms) ?? false; }
   get hasMasterStarted(): boolean { return !!this.master?.handle; }
   get masterEndedAt(): string | null { return this.master?.endedAt ?? null; }
-  /** @deprecated prefer `getMasterAgentRunId()`. */
-  get masterHandle(): RunCoderHandle | null { return this.master.handle; }
   getMasterAgentRunId(): number | null { return this.master.agentRunId; }
 
   /**
@@ -286,6 +287,30 @@ export class CompanyOrchestrator {
     return this.subordinates.reactivate(agentRunId, message, attachments, thinking);
   }
   abortSubordinate(agentRunId: number): boolean { return this.subordinates.abort(agentRunId); }
+  /**
+   * Supervisor recovery: a subordinate the DB still shows as running/waiting_*
+   * whose runner is actually dead or wedged (no heartbeat). Reconcile the UI +
+   * re-establish it:
+   *   1. tear down any lingering (zombie) runner,
+   *   2. flip the live status → 'error' so the dashboard STOPS showing "running"
+   *      (and `resumeSubordinate` accepts it — it rejects a 'running' row),
+   *   3. resume from the persisted coder session so it continues its task.
+   * The supervisor's circuit breaker caps retries, so this can't loop forever.
+   */
+  async reestablishSubordinate(agentRunId: number, reason: string): Promise<{ ok: boolean; detail: string }> {
+    const agentRun = this.ctx.companyStore.getAgentRun(agentRunId);
+    if (!agentRun) return { ok: false, detail: `agent run ${agentRunId} not found` };
+    if (agentRun.role === 'master') return { ok: false, detail: 'not a subordinate' };
+    try { this.subordinates.abort(agentRunId); } catch { /* best-effort zombie teardown */ }
+    // Flip off the live status so the UI reflects reality AND resume is permitted.
+    this.setAgentStatus(agentRunId, agentRun.role, 'error', `supervisor: ${reason}`);
+    const sys =
+      `[SYSTEM] Your run stalled (${reason}) and was re-established by the supervisor. ` +
+      `Continue your assigned task from where you left off; if it was already done, ` +
+      `post your deliverable and stop.`;
+    await this.resumeSubordinate(agentRunId, sys);
+    return { ok: true, detail: `re-established subordinate ${agentRunId} (${agentRun.role})` };
+  }
   pauseSubordinate(agentRunId: number): boolean {
     const sub = this.subordinates.get(agentRunId);
     if (!sub) return false;
@@ -394,6 +419,7 @@ export class CompanyOrchestrator {
     this.idle.clear();
     this.watchdog.dispose();
     this.reconciler.stop();
+    this.scheduler.stop();
     this.subordinates.abortAll();
     this.master.abort();
     try { this.humanInLoop.cancelPendingMasterPrompts(); } catch { /* best-effort */ }

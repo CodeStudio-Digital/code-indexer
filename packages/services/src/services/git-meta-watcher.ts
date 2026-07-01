@@ -54,6 +54,40 @@ function resolveGitDir(rootPath: string): string | null {
   return null;
 }
 
+/** Resolve the gitdirs of a repo's INITIALIZED submodules by parsing
+ *  `.gitmodules` for their paths and following each one's `.git` file (which
+ *  points into `<main>/.git/modules/<name>`). Pure fs — no git spawn. Lets the
+ *  watcher catch a branch switch / commit INSIDE a submodule, which the parent's
+ *  gitdir never reflects (its `.git/modules/**` is high-churn noise we prune). */
+function resolveSubmoduleGitDirs(rootPath: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(join(rootPath, '.gitmodules'), 'utf8');
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  const re = /^\s*path\s*=\s*(.+?)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const sub = m[1].trim();
+    if (!sub) continue;
+    const gd = resolveGitDir(join(rootPath, sub));
+    if (gd) out.push(gd);
+  }
+  return out;
+}
+
+/** Is `child` the same as, or nested under, `parent`? Separator-agnostic: chokidar
+ *  v4 hands the `ignored` predicate FORWARD-slash paths while our gitdirs are
+ *  native (backslash on Windows), so we normalize both before comparing — else
+ *  pruning silently never fires on Windows and we'd watch the whole object DB. */
+function isUnderOrEq(parent: string, child: string): boolean {
+  const p = parent.replace(/\\/g, '/');
+  const c = child.replace(/\\/g, '/');
+  return c === p || c.startsWith(p + '/');
+}
+
 /** `.git/HEAD` → branch name, or detached when it holds a raw commit sha. The
  *  ambiguous {branch:null, detached:false} return means "couldn't determine"
  *  (unreadable mid-write / empty) — startWatching falls back to the last known
@@ -104,6 +138,23 @@ function classify(absPath: string, gitDir: string): GitMetaChange | null {
   return null;
 }
 
+/** The deepest watched gitdir that contains `p` (a submodule gitdir lives under
+ *  the main one, so longest-match wins). Separator-agnostic. Exported for tests. */
+export function ownerGitDir(gitDirs: string[], p: string): string | null {
+  let best: string | null = null;
+  for (const gd of gitDirs) if (isUnderOrEq(gd, p) && (!best || gd.length > best.length)) best = gd;
+  return best;
+}
+
+/** The chokidar `ignored` decision across the watched gitdirs: prune a path iff
+ *  it's noise within its OWNING gitdir (so each repo's object DB is pruned while
+ *  its HEAD/refs are watched). Exported so the cross-platform separator contract
+ *  is unit-tested (chokidar v4 feeds forward-slash paths; gitdirs are native). */
+export function isWatchIgnored(gitDirs: string[], p: string): boolean {
+  const gd = ownerGitDir(gitDirs, p);
+  return gd ? isNoise(p, gd) : false;
+}
+
 const DEBOUNCE_MS = 250;
 
 export class GitMetaWatcher {
@@ -113,26 +164,35 @@ export class GitMetaWatcher {
   /** Last successfully-determined HEAD per project — used to mask transient reads. */
   private lastHead = new Map<number, { branch: string | null; detached: boolean }>();
 
-  /** Arm the watcher for one project. No-op when the project isn't a git repo. */
+  /** Arm the watcher for one project. No-op when the project isn't a git repo.
+   *  Watches the main gitdir PLUS each initialized submodule's gitdir, so a
+   *  branch switch / commit inside a submodule still fires (and bumps the UI's
+   *  git revision → editor change markers re-fetch their submodule baseline). */
   startWatching(projectId: number, rootPath: string, events: GitMetaWatcherEvents): void {
     if (this.watchers.has(projectId)) return;
-    const gitDir = resolveGitDir(rootPath);
-    if (!gitDir) return;
+    const mainGitDir = resolveGitDir(rootPath);
+    if (!mainGitDir) return;
+    // [main, ...submodule gitdirs]. Each path's owning gitdir is the DEEPEST
+    // match (a submodule gitdir lives under the main one), so its HEAD/refs are
+    // classified against the right root while its object DB is still pruned.
+    const gitDirs = [mainGitDir, ...resolveSubmoduleGitDirs(rootPath)];
     this.pending.set(projectId, new Set());
-    // Baseline for the transient-read fallback above.
-    this.lastHead.set(projectId, readHead(gitDir));
+    // Baseline for the transient-read fallback above (main repo's HEAD).
+    this.lastHead.set(projectId, readHead(mainGitDir));
 
-    const watcher = watch(gitDir, {
+    const watcher = watch(gitDirs, {
       persistent: true,
       ignoreInitial: true,
-      ignored: (p: string) => isNoise(p, gitDir),
+      ignored: (p: string) => isWatchIgnored(gitDirs, p),
       // HEAD/refs are written via write-then-rename; a short settle avoids
       // reading a half-written file before we re-read it ourselves.
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
     });
 
     const onEvent = (filePath: string) => {
-      const kind = classify(filePath, gitDir);
+      const gd = ownerGitDir(gitDirs, filePath);
+      if (!gd) return;
+      const kind = classify(filePath, gd);
       if (!kind) return;
       this.pending.get(projectId)!.add(kind);
       const existing = this.timers.get(projectId);
@@ -143,7 +203,9 @@ export class GitMetaWatcher {
         if (!set || set.size === 0) return;
         const changed = Array.from(set);
         set.clear();
-        let { branch, detached } = readHead(gitDir);
+        // Branch identity is always the MAIN repo's HEAD; a submodule-only change
+        // keeps it unchanged but still emits (non-seed → the UI bumps gitRev).
+        let { branch, detached } = readHead(mainGitDir);
         // Ambiguous read (mid-write / unreadable) → keep the last known HEAD so
         // we don't emit a false "detached" branch:null that the UI would toast.
         if (branch === null && !detached) {

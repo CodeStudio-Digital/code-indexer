@@ -17,7 +17,7 @@ type ProjectUpdates = Partial<Pick<Project,
   'last_indexed' | 'structural_indexed_at' | 'file_count' | 'symbol_count' |
   'embeddings_enabled' | 'search_mode' |
   'node_version' | 'runner_shell' | 'builder_json' | 'language_levels' | 'runtime_versions' |
-  'package_managers' | 'git_remote' | 'default_branch'
+  'package_managers' | 'wsl_runtime_versions' | 'wsl_package_managers' | 'git_remote' | 'default_branch'
 >>;
 
 export function create(db: DB, name: string, rootPath: string, description?: string): Project {

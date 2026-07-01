@@ -18,12 +18,13 @@ export async function checkoutBranch(
   projectId: number,
   branch: string,
   isRemote: boolean,
+  repoPath?: string,
 ): Promise<string> {
   if (isRemote) {
     const local = branch.replace(/^[^/]+\//, ''); // strip "origin/"
-    await apiCall('projectGit.branchCheckout', { projectId, name: local, create: true });
+    await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: local, create: true });
     return local;
   }
-  await apiCall('projectGit.branchCheckout', { projectId, name: branch });
+  await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: branch });
   return branch;
 }

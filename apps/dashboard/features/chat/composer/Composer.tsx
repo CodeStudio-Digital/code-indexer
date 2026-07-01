@@ -238,7 +238,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       const ta = textareaRef.current;
       if (!ta) return;
       ta.style.height = 'auto';
-      const minH = 72;  // ~3 rows
+      const minH = 40;  // ~1.5 rows — grows as the user types
       const maxH = 288; // ~12 rows
       ta.style.height = `${Math.min(Math.max(ta.scrollHeight, minH), maxH)}px`;
     }, [input]);
@@ -388,7 +388,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     const skillPicks = props.skillPicks ?? [];
 
     return (
-      <div className="relative border-t bg-card p-4" {...dropHandlers}>
+      <div className="relative border-t bg-card px-2 py-1.5" {...dropHandlers}>
         <DropOverlay show={isDragging} />
         {props.queuedStrip}
         {(attachments.length > 0 || filePicks.length > 0 || skillPicks.length > 0) && (
@@ -492,7 +492,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
           </div>
         )}
 
-        <div className={`relative rounded-xl border border-l-2 ${BORDER_TINT[props.agent] ?? ''} bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-background transition`}>
+        <div className={`relative border-l-2 ${BORDER_TINT[props.agent] ?? ''} bg-background focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring transition`}>
           {voiceRecording && <VoiceCaptureBar onStop={requestVoiceCaptureStop} />}
           {/* Slash command autocomplete dropdown */}
           {showSlash && filteredSlash.length > 0 && (
@@ -565,9 +565,9 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               mdKeyDown(e);
             }}
             placeholder={t('composer.placeholder')}
-            rows={3}
+            rows={1}
             disabled={streaming && !props.queueable}
-            className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-0"
+            className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-0 py-1.5"
           />
           {props.compact ? (
             <RailComposerBar
@@ -624,7 +624,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             above the busier bottom row leaves the pickers (agent / provider /
             model) and Send button focused.
           */}
-          <div className="flex items-center justify-start gap-0.5 px-2 py-1 border-t border-dashed border-border/40">
+          <div className="flex items-center justify-start gap-0.5 px-2 py-0.5 border-t border-dashed border-border/40">
             <ComposerActionIcons
               streaming={streaming}
               handleFiles={handleFiles}

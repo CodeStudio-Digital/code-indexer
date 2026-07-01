@@ -27,7 +27,7 @@ interface GitStashDetail {
 }
 
 export function StashDetailView({ tab }: { tab: OpenGitStash }) {
-  const { projectId, stashRef } = tab;
+  const { projectId, stashRef, repoPath } = tab;
   const [detail, setDetail] = useState<GitStashDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +37,7 @@ export function StashDetailView({ tab }: { tab: OpenGitStash }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    apiCall<GitStashDetail>('projectGit.stashDetail', { projectId, ref: stashRef })
+    apiCall<GitStashDetail>('projectGit.stashDetail', { projectId, repoPath, ref: stashRef })
       .then((d) => {
         if (!cancelled) setDetail(d);
       })
@@ -50,12 +50,13 @@ export function StashDetailView({ tab }: { tab: OpenGitStash }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, stashRef]);
+  }, [projectId, stashRef, repoPath]);
 
   const openFile = async (f: ChangedFile) => {
     try {
       const r = await apiCall<{ patch: string }>('projectGit.stashFileDiff', {
         projectId,
+        repoPath,
         ref: stashRef,
         path: f.path,
       });

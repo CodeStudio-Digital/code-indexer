@@ -20,7 +20,7 @@ import { ApiError, type TerminalApi, type TerminalOutputChunk } from '@mcp/api-b
 import type { HandlerDeps } from '../types.js';
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import { sharedPtyManager, defaultShell, loadPty, type PtyManager } from './pty-manager.js';
-import { detectShells } from './shells.js';
+import { detectShells, targetForShell } from './shells.js';
 import { resolveProjectRuntimeEnv } from '../runtime/runtime-resolve.js';
 
 export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
@@ -47,12 +47,15 @@ export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
     async spawn({ target, cols = 80, rows = 24, shell, shellArgs, cwd: cwdOverride, env }) {
       const cwd = cwdOverride ?? resolveCwd(target);
       // Per-project runtimes (Node/PHP/Python) → prepend their bin dirs to PATH
-      // (and add e.g. PHPRC) so the terminal uses the same toolchains as the runner.
-      const { pathPrepend, extraEnv } =
+      // (and add e.g. PHPRC) so the terminal uses the same toolchains as the
+      // runner. The chosen shell decides the target: a WSL distro gets its Linux
+      // managed runtimes on the POSIX PATH (posix*), the rest the Windows ones.
+      const runtimeTarget = targetForShell({ file: shell ?? '', args: shellArgs });
+      const { pathPrepend, extraEnv, posixPathPrepend, posixExtraEnv } =
         target.kind === 'project'
-          ? resolveProjectRuntimeEnv(db, target.projectId, ensureDataDir())
-          : { pathPrepend: [], extraEnv: {} };
-      const { id } = manager.spawn({ shell, shellArgs, cwd, cols, rows, env, pathPrepend, extraEnv });
+          ? resolveProjectRuntimeEnv(db, target.projectId, ensureDataDir(), { target: runtimeTarget })
+          : { pathPrepend: [], extraEnv: {}, posixPathPrepend: [], posixExtraEnv: {} };
+      const { id } = manager.spawn({ shell, shellArgs, cwd, cols, rows, env, pathPrepend, extraEnv, posixPathPrepend, posixExtraEnv });
       const entry = manager.get(id);
       return {
         terminalId: id,

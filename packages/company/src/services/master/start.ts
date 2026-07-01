@@ -25,6 +25,7 @@ import {
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
+import { publish as busPublish } from '@apps/http-api/coder-bus.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { AllowedModel } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
@@ -231,6 +232,18 @@ export async function startMaster(
     .catch((e) => {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[company s=${ctx.companySessionId}] master start background task failed:`, msg);
+      // Distinct SSE event so the dashboard can render a dedicated "master
+      // failed to boot" banner + retry, rather than the operator having to spot
+      // it among board messages. The HTTP start already returned 200 (the boot
+      // runs in the background), so this stream event is the only structured
+      // signal the failure ever happened.
+      try {
+        busPublish(ctx.metaBus, 'master_boot_failed', {
+          companySessionId: ctx.companySessionId,
+          agentRunId,
+          error: msg,
+        });
+      } catch { /* best-effort */ }
       try {
         deps.board.post('system', null, 'message', `Master start failed: ${msg}`);
       } catch { /* best-effort */ }

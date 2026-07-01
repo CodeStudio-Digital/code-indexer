@@ -259,11 +259,11 @@ function UserMessage({
               <button
                 type="button"
                 onClick={onFork}
-                title="Fork a new session from this message"
+                title={t('messages.forkTitle')}
                 className="group/action inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all duration-200"
               >
                 <GitBranch className="h-3 w-3" />
-                <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/action:max-w-24 group-hover/action:opacity-100 group-focus/action:max-w-24 group-focus/action:opacity-100">Fork</span>
+                <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/action:max-w-24 group-hover/action:opacity-100 group-focus/action:max-w-24 group-focus/action:opacity-100">{t('messages.fork')}</span>
               </button>
             )}
             {onRollback && (
@@ -280,7 +280,7 @@ function UserMessage({
             {text && <CopyMarkdownButton text={text} />}
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="font-semibold text-primary/80">Você</span>
+            <span className="font-semibold text-primary/80">{t('messages.you')}</span>
             {tokenBadge}
             <Avatar className="h-4 w-4 shrink-0 opacity-90">
               <AvatarFallback className="bg-primary/10 text-primary">

@@ -136,7 +136,13 @@ export class WorkerOrchestratorPool {
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly opts: WorkerOrchestratorPoolOpts) {
-    this.ttlMs = opts.ttlMs ?? 5 * 60 * 1000;
+    // Idle-eviction TTL. A company session is a human-in-the-loop workflow —
+    // the operator reads the board, thinks, walks away — so the old 5-min
+    // default reclaimed orchestrators mid-session and the next interaction
+    // 404'd with "No active orchestrator". 30 min covers normal think-time;
+    // a session actively blocked on a question/plan is pinned for 1h on top of
+    // this (awaitingHumanSince). Override via CODER_COMPANY_ORCHESTRATOR_TTL_MS.
+    this.ttlMs = opts.ttlMs ?? 30 * 60 * 1000;
     this.log = opts.log ?? ((level, msg) => console[level === 'info' ? 'log' : level](msg));
     // Periodic eviction sweep. Unref'd so it doesn't keep Node alive.
     this.sweepTimer = setInterval(() => this.sweep(), 60_000);
@@ -406,6 +412,14 @@ export class WorkerOrchestratorPool {
       }
       return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
     });
+    // Role recommender — the autonomous CompanyScheduler in the worker asks the
+    // main-thread embedding pipeline for a role per card. Degrades to an empty
+    // recommendation (scheduler skips the card) when no recommender is wired.
+    const offRecommend = bridge.handle('recommend', async (payload) => {
+      const fn = this.opts.docDeps?.recommend;
+      if (!fn) return { recommendations: [] };
+      return fn(payload as Parameters<NonNullable<CoderWorkerDocDeps['recommend']>>[0]);
+    });
     // Preview DevTools — same main-process service as the coder pool, so
     // company subordinates get the preview/devtools tools too.
     const offPreviewDevtools = bridge.handle('previewDevtools', async (payload) => {
@@ -461,6 +475,20 @@ export class WorkerOrchestratorPool {
       // across reconnects.
       publish(bus, env.event, env.data);
     });
+    // Batched high-volume deltas (text_delta / tool_progress /
+    // operation_progress) coalesced worker-side into one message — see
+    // company-worker.ts. Republish each through the SAME `publish` path so
+    // seq allocation, the replay ring and Last-Event-ID stay identical to the
+    // single-event path. Batches only ever carry coalescable `agent_event`
+    // deltas (never the AWAIT_HUMAN master_* events), so no pin/unpin here.
+    const offEventBatch = bridge.on('bus.event.batch', (payload) => {
+      const env = payload as { events?: Array<{ event: string; data: unknown }> };
+      if (!env || !Array.isArray(env.events)) return;
+      touch();
+      for (const e of env.events) {
+        publish(bus, e.event, e.data);
+      }
+    });
     const offEnd = bridge.on('bus.end', (payload) => {
       const env = payload as { event: 'done' | 'error'; data: unknown };
       markEnded(bus, env.event, env.data);
@@ -495,6 +523,7 @@ export class WorkerOrchestratorPool {
     const detachBusMirror = (): void => {
       try { detachRuntimeLog(); } catch { /* best-effort */ }
       try { offEvent(); } catch { /* best-effort */ }
+      try { offEventBatch(); } catch { /* best-effort */ }
       try { offEnd(); } catch { /* best-effort */ }
       try { offSupervisorBoot(); } catch { /* best-effort */ }
       try { offSupervisorIncident(); } catch { /* best-effort */ }
@@ -503,6 +532,7 @@ export class WorkerOrchestratorPool {
       try { offDocReadSection(); } catch { /* best-effort */ }
       try { offDocOutline(); } catch { /* best-effort */ }
       try { offDocsResearch(); } catch { /* best-effort */ }
+      try { offRecommend(); } catch { /* best-effort */ }
       try { offPreviewDevtools(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }
       try { offMemory(); } catch { /* best-effort */ }

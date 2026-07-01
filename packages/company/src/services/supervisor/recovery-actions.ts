@@ -41,6 +41,14 @@ export interface RecoveryContext {
   subordinates?: {
     resume(agentRunId: number, message?: string): Promise<unknown>;
     abort(agentRunId: number, reason?: string): Promise<unknown> | unknown;
+    /**
+     * Re-establish a subordinate whose runner is dead/wedged but whose DB row
+     * still says running/waiting: flips the status off the live state (so the
+     * UI stops showing "running") + resumes it from persisted state. Used by
+     * `reestablishStalledSubordinate` for STUCK_TURN / STUCK_PROVIDER /
+     * STUCK_BOOT. Optional — when missing the action is a no-op.
+     */
+    reestablish?(agentRunId: number, reason: string): Promise<{ ok: boolean; detail: string }>;
   };
   /**
    * Master lifecycle handle. Used by `resurrectMasterIfOrphaned` to
@@ -323,6 +331,93 @@ export const resurrectMasterIfOrphaned: RecoveryAction = async (stuck, ctx) => {
   }
 };
 
+// ─── Action 4: abortStuckTurn ─────────────────────────────────
+
+/**
+ * STUCK_TURN / STUCK_PROVIDER → the runner is wedged mid-turn (a provider call
+ * that never returns, or a turn making no progress) with no tool_use_id to
+ * unwedge. The only lever is to abort the runner: that cancels the in-flight
+ * provider fetch via its AbortController and settles the run, at which point
+ * the completion handler escalates to the master — and auto-retries transient
+ * failures through RetryPolicy. Conservative by design: cut the hang and hand
+ * off, rather than silently retrying a turn whose state we can't inspect.
+ *
+ * SUBORDINATES ONLY. A hung master provider is rarer and killing the master's
+ * turn is higher-risk, so master STUCK_TURN/PROVIDER stays incident-only.
+ */
+export const abortStuckTurn: RecoveryAction = async (stuck, ctx) => {
+  if (stuck.toStuckState !== 'STUCK_TURN' && stuck.toStuckState !== 'STUCK_PROVIDER') {
+    return { ok: false, action: 'abortStuckTurn', detail: 'state mismatch', reason: 'no_match' };
+  }
+  if (stuck.record.role === 'master') {
+    return { ok: false, action: 'abortStuckTurn', detail: 'master is incident-only (too risky to auto-abort)', reason: 'skipped' };
+  }
+  const { agentRunId } = stuck.record;
+  const secs = Math.round(stuck.ageMs / 1000);
+  const reason = `supervisor: ${stuck.toStuckState.toLowerCase()} for ${secs}s with no heartbeat`;
+  try {
+    const runner = ctx.runners?.get(agentRunId);
+    if (runner) {
+      await runner.abort(reason);
+      return { ok: true, action: 'abortStuckTurn', detail: `aborted wedged runner (${reason})` };
+    }
+    if (ctx.subordinates) {
+      await ctx.subordinates.abort(agentRunId, reason);
+      return { ok: true, action: 'abortStuckTurn', detail: `aborted via subordinates (${reason})` };
+    }
+    return { ok: false, action: 'abortStuckTurn', detail: 'no runner/subordinates ref', reason: 'skipped' };
+  } catch (e) {
+    return { ok: false, action: 'abortStuckTurn', detail: e instanceof Error ? e.message : String(e), reason: 'failed' };
+  }
+};
+
+// ─── Action 4: reestablishStalledSubordinate ──────────────────
+
+/**
+ * STUCK_TURN / STUCK_PROVIDER / STUCK_BOOT → the subordinate's runner emitted
+ * no heartbeat for the whole state timeout (5min / 60s / 90s). For a healthy
+ * agent that's impossible — a live turn/provider-call/boot streams deltas — so
+ * a stale heartbeat here means the runner crashed or wedged while the DB row is
+ * still `running`. That's the "caiu mas fica mostrando rodando" bug.
+ *
+ * Recovery: `ctx.subordinates.reestablish` flips the DB status off the live
+ * state (dashboard stops showing "running") and resumes the subordinate from
+ * its persisted coder session so it continues the task. Per-agent + per-role
+ * circuit breakers (Phase 2.3) cap retries, so a chronically-crashing agent
+ * gets quarantined instead of looping.
+ */
+export const reestablishStalledSubordinate: RecoveryAction = async (stuck, ctx) => {
+  const applicable =
+    stuck.toStuckState === 'STUCK_TURN' ||
+    stuck.toStuckState === 'STUCK_PROVIDER' ||
+    stuck.toStuckState === 'STUCK_BOOT';
+  if (!applicable) {
+    return { ok: false, action: 'reestablishStalledSubordinate', detail: 'state mismatch', reason: 'no_match' };
+  }
+  if (stuck.record.role === 'master') {
+    // Master has its own resurrect path (RuntimeReconciler + resurrectMaster).
+    return { ok: false, action: 'reestablishStalledSubordinate', detail: 'agent is master', reason: 'no_match' };
+  }
+  if (!ctx.subordinates?.reestablish) {
+    return { ok: false, action: 'reestablishStalledSubordinate', detail: 'reestablish handle missing', reason: 'skipped' };
+  }
+  const secs = Math.round(stuck.ageMs / 1000);
+  const reason = `${stuck.fromState} with no heartbeat for ${secs}s — runner appears dead`;
+  try {
+    const res = await ctx.subordinates.reestablish(stuck.record.agentRunId, reason);
+    return res.ok
+      ? { ok: true, action: 'reestablishStalledSubordinate', detail: res.detail }
+      : { ok: false, action: 'reestablishStalledSubordinate', detail: res.detail, reason: 'failed' };
+  } catch (e) {
+    return {
+      ok: false,
+      action: 'reestablishStalledSubordinate',
+      detail: e instanceof Error ? e.message : String(e),
+      reason: 'failed',
+    };
+  }
+};
+
 // ─── Dispatcher ──────────────────────────────────────────────
 
 /**
@@ -340,9 +435,15 @@ const ACTIONS_BY_STATE: Readonly<Partial<Record<SupervisionState, ReadonlyArray<
       resurrectMasterIfOrphaned,
       forceResumeSubordinate,
     ],
-    // STUCK_TURN / STUCK_PROVIDER / STUCK_BOOT / INBOX_EXPIRED /
-    // FAILED_* — no action yet. They emit `stuck_detected` incidents
-    // so the user sees the pattern; Phase 2.3 / 2.4 will add actions.
+    // Wedged provider/turn/boot on a subordinate. Prefer `reestablish` — it
+    // resumes from the persisted coder session, preserving work — and fall back
+    // to `abortStuckTurn` (cut the hang) only when the reestablish handle isn't
+    // wired. Master is excluded inside both actions (incident-only).
+    STUCK_TURN: [reestablishStalledSubordinate, abortStuckTurn],
+    STUCK_PROVIDER: [reestablishStalledSubordinate, abortStuckTurn],
+    STUCK_BOOT: [reestablishStalledSubordinate],
+    // INBOX_EXPIRED / FAILED_* — no action yet; they emit `stuck_detected`
+    // incidents so the user sees the pattern.
   });
 
 /**

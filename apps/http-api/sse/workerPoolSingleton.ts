@@ -114,6 +114,7 @@ export function setCompanyWorkerDocDeps(
     docSearch?: CoderWorkerDocDeps['docSearch'];
     docsResearch?: CoderWorkerDocDeps['docsResearch'];
     vision?: CoderWorkerDocDeps['vision'];
+    recommend?: CoderWorkerDocDeps['recommend'];
     memoryRetriever?: CoderWorkerDocDeps['memoryRetriever'];
     runEndMemory?: CoderWorkerDocDeps['runEndMemory'];
     projectMemory?: CoderWorkerDocDeps['projectMemory'];
@@ -122,6 +123,7 @@ export function setCompanyWorkerDocDeps(
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
   if (deps.vision !== undefined) docDeps.vision = deps.vision;
+  if (deps.recommend !== undefined) docDeps.recommend = deps.recommend;
   if (deps.memoryRetriever !== undefined) docDeps.memoryRetriever = deps.memoryRetriever;
   if (deps.runEndMemory !== undefined) docDeps.runEndMemory = deps.runEndMemory;
   if (deps.projectMemory !== undefined) docDeps.projectMemory = deps.projectMemory;

@@ -13,14 +13,16 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
-import { ApiError, type RunnerApi, type RunnerManager, type RunnerTask, snippetRunFor } from '@mcp/api-bus';
+import { ApiError, type RunnerApi, type RunnerManager, type RunnerTask, type RuntimeTarget, snippetRunFor } from '@mcp/api-bus';
 import { parsePackageManagers } from '@mcp/shared/utils/package-managers.js';
+import { parseWslPackageManagers } from '@mcp/shared/utils/wsl-package-managers.js';
+import type { Project } from '@mcp/shared/types.js';
 import type { HandlerDeps } from '../types.js';
 import { sharedPtyManager } from '../terminal/pty-manager.js';
-import { resolveShellById } from '../terminal/shells.js';
+import { resolveShellById, targetForShell } from '../terminal/shells.js';
 import { resolveProjectRuntimeEnv } from '../runtime/runtime-resolve.js';
 import { detectRunners, type DetectOptions } from './detect.js';
-import { probeManagerStatus } from './manager-status.js';
+import { probeManagerStatus, probeWslManagerStatus } from './manager-status.js';
 
 const VALID_NODE_MANAGERS: ReadonlySet<string> = new Set(['npm', 'yarn', 'pnpm', 'bun']);
 const VALID_PY_MANAGERS: ReadonlySet<string> = new Set(['pip', 'poetry']);
@@ -94,6 +96,27 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     return p;
   }
 
+  /** The runtime target a run/detect applies to: explicit, else the project's runner_shell env. */
+  function effectiveTarget(p: Project, explicit: RuntimeTarget | undefined): RuntimeTarget {
+    return explicit ?? targetForShell(resolveShellById(p.runner_shell));
+  }
+
+  /**
+   * Per-environment package-manager override for `detect`. Allowlist-validate
+   * each key before it becomes part of a spawnable command (the JSON is opaque
+   * in the DB; an unknown value falls back to lockfile auto-detect).
+   */
+  function detectOptionsFor(p: Project, target: RuntimeTarget): DetectOptions {
+    const pm =
+      target.kind === 'wsl'
+        ? parseWslPackageManagers(p.wsl_package_managers)[target.distro] ?? {}
+        : parsePackageManagers(p.package_managers);
+    return {
+      nodeManager: VALID_NODE_MANAGERS.has(pm.node ?? '') ? (pm.node as RunnerManager) : undefined,
+      pythonManager: VALID_PY_MANAGERS.has(pm.python ?? '') ? (pm.python as RunnerManager) : undefined,
+    };
+  }
+
   /** Resolve a project-relative cwd, confined to the project root (escape → root). */
   function resolveCwdInRoot(root: string, rel: string | undefined): string {
     if (!rel) return root;
@@ -110,10 +133,17 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     cwd?: string;
   }): RunnerTask {
     const p = project(input.projectId);
-    const { pathPrepend, extraEnv } = resolveProjectRuntimeEnv(db, input.projectId, ensureDataDir());
     // Per-project runner shell — resolve the stored id to a spawnable
-    // {file,args}; null falls back to the system default shell.
+    // {file,args}; null falls back to the system default shell. The shell
+    // decides the runtime target: a WSL distro gets its Linux managed runtimes
+    // on the POSIX PATH, everything else (incl. Git Bash) the Windows ones.
     const shellSel = resolveShellById(p.runner_shell);
+    const { pathPrepend, extraEnv, posixPathPrepend, posixExtraEnv } = resolveProjectRuntimeEnv(
+      db,
+      input.projectId,
+      ensureDataDir(),
+      { target: targetForShell(shellSel) },
+    );
     const { id: terminalId } = manager.spawn({
       command: input.command,
       cwd: resolveCwdInRoot(p.root_path, input.cwd),
@@ -121,6 +151,8 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       rows: 24,
       pathPrepend,
       extraEnv,
+      posixPathPrepend,
+      posixExtraEnv,
       shell: shellSel?.file,
       shellArgs: shellSel?.args,
     });
@@ -152,24 +184,24 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
   }
 
   return {
-    async detect({ projectId }) {
-      const p = project(projectId);
+    async detect({ projectId, target }) {
       // Per-project package-manager override (settings) wins over the lockfile
-      // auto-detect. Allowlist-validate the stored value per key before it
-      // becomes part of a spawnable command (defense-in-depth: the JSON is
-      // opaque in the DB; an unknown value falls back to auto-detect).
-      const pm = parsePackageManagers(p.package_managers);
-      const opts: DetectOptions = {
-        nodeManager: VALID_NODE_MANAGERS.has(pm.node ?? '') ? (pm.node as RunnerManager) : undefined,
-        pythonManager: VALID_PY_MANAGERS.has(pm.python ?? '') ? (pm.python as RunnerManager) : undefined,
-      };
-      return detectRunners(p.root_path, opts);
+      // auto-detect, resolved for the run ENVIRONMENT (host or a WSL distro) so
+      // the WSL list/commands honour the distro's chosen manager.
+      const p = project(projectId);
+      return detectRunners(p.root_path, detectOptionsFor(p, effectiveTarget(p, target)));
     },
 
-    async managerStatus({ projectId, manager }) {
-      // Confirm project exists, then probe `<manager> --version` on the
-      // project's effective PATH (chosen runtimes prepended).
-      project(projectId);
+    async managerStatus({ projectId, manager, target }) {
+      // Probe `<manager> --version` on the project's effective PATH for the
+      // environment: host PATH, or inside the WSL distro with its managed
+      // runtimes prepended.
+      const p = project(projectId);
+      const rt = effectiveTarget(p, target);
+      if (rt.kind === 'wsl') {
+        const { posixPathPrepend } = resolveProjectRuntimeEnv(db, projectId, ensureDataDir(), { target: rt });
+        return probeWslManagerStatus(manager, rt.distro, posixPathPrepend);
+      }
       const { pathPrepend } = resolveProjectRuntimeEnv(db, projectId, ensureDataDir());
       return probeManagerStatus(manager, pathPrepend);
     },

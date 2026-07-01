@@ -116,11 +116,20 @@ export class PtyManager {
     pathPrepend?: string[];
     /** Extra env merged after the base env (e.g. PHPRC for a managed PHP). */
     extraEnv?: Record<string, string>;
+    /**
+     * Dirs prepended to the distro's POSIX PATH for a WSL shell — woven into the
+     * `bash -lc 'export PATH="…:$PATH"; <cmd>'` invocation (NOT the Windows env,
+     * which WSL ignores). Inert for non-WSL shells.
+     */
+    posixPathPrepend?: string[];
+    /** Extra env exported inside the distro before the command (WSL only). */
+    posixExtraEnv?: Record<string, string>;
   }): { id: string; entry: PtyEntry } {
     const pty = loadPty();
     const shell = opts.shell ?? defaultShell();
+    const posix = { prepend: opts.posixPathPrepend ?? [], env: opts.posixExtraEnv ?? {} };
     const { file, args } = opts.command
-      ? commandInvocation(shell, opts.shellArgs, opts.command)
+      ? commandInvocation(shell, opts.shellArgs, opts.command, posix)
       : { file: shell, args: opts.shellArgs ?? defaultShellArgs(shell) };
     // Build a CLEAN env for the user's process — strip the dev-only
     // vars our parent process sets (NODE_OPTIONS injects tsx/esm,
@@ -337,10 +346,27 @@ export function defaultShellArgs(shell: string): string[] {
  * the interactive launch args (e.g. WSL's `-d <distro>`) so we can prefix
  * them before the command.
  */
+/** Single-quote a value for a POSIX `export` (handles embedded quotes). */
+function shSingleQuote(v: string): string {
+  return `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Build the `export …; ` prefix that injects a WSL distro's MCP-managed
+ * runtimes BEFORE the command runs — inside the login shell so it wins over
+ * the distro default. PATH dirs stay in double quotes so `$HOME` expands.
+ */
+export function posixExportPrefix(prepend: string[], env: Record<string, string>): string {
+  const parts = Object.entries(env).map(([k, v]) => `export ${k}=${shSingleQuote(v)}`);
+  if (prepend.length > 0) parts.push(`export PATH="${prepend.join(':')}:$PATH"`);
+  return parts.length > 0 ? `${parts.join('; ')}; ` : '';
+}
+
 function commandInvocation(
   shell: string,
   shellArgs: string[] | undefined,
   command: string,
+  posix: { prepend: string[]; env: Record<string, string> } = { prepend: [], env: {} },
 ): { file: string; args: string[] } {
   const base = shell.toLowerCase();
   // PowerShell / PowerShell 7.
@@ -351,10 +377,12 @@ function commandInvocation(
   if (/cmd(\.exe)?$/.test(base)) {
     return { file: shell, args: ['/d', '/s', '/c', command] };
   }
-  // WSL — run inside the selected distro's shell. `--` ends wsl's own
-  // options; we invoke bash -lc so PATH/profile are loaded.
+  // WSL — run inside the selected distro's shell. `--` ends wsl's own options;
+  // we invoke bash -lc so PATH/profile load, then prepend the project's chosen
+  // distro-managed runtimes so they win over the distro default.
   if (/wsl(\.exe)?$/.test(base)) {
-    return { file: shell, args: [...(shellArgs ?? []), '--', 'bash', '-lc', command] };
+    const cmd = posixExportPrefix(posix.prepend, posix.env) + command;
+    return { file: shell, args: [...(shellArgs ?? []), '--', 'bash', '-lc', cmd] };
   }
   // POSIX-style shells (bash/zsh/sh/dash, incl. Git Bash on Windows) —
   // login shell so the user's PATH/nvm/etc. are present.

@@ -23,11 +23,14 @@ const VERB_KEY: Record<NonNullable<GitMergeState['kind']>, string> = {
 
 interface MergeBannerProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. The
+   *  in-progress sequencer op lives in THIS repo, so continue/abort target it. */
+  repoPath?: string;
   state: GitMergeState;
   onMutated: () => void;
 }
 
-export function MergeBanner({ projectId, state, onMutated }: MergeBannerProps) {
+export function MergeBanner({ projectId, repoPath, state, onMutated }: MergeBannerProps) {
   const { t } = useTranslation('workspace');
   const [busy, setBusy] = useState<null | 'continue' | 'abort'>(null);
   if (!state.kind) return null;
@@ -38,7 +41,7 @@ export function MergeBanner({ projectId, state, onMutated }: MergeBannerProps) {
   const onContinue = async () => {
     setBusy('continue');
     try {
-      const r = await apiCall<GitRunResult>('projectGit.mergeContinue', { projectId });
+      const r = await apiCall<GitRunResult>('projectGit.mergeContinue', { projectId, repoPath });
       if (!r.ok) {
         toast.error(t('git.conflict.continueFailed'), {
           description: r.stderr.trim().slice(0, 300) || r.stdout.trim().slice(0, 300),
@@ -62,7 +65,7 @@ export function MergeBanner({ projectId, state, onMutated }: MergeBannerProps) {
     if (!ok) return;
     setBusy('abort');
     try {
-      const r = await apiCall<GitRunResult>('projectGit.mergeAbort', { projectId });
+      const r = await apiCall<GitRunResult>('projectGit.mergeAbort', { projectId, repoPath });
       if (!r.ok) toast.error(t('git.conflict.abortFailed'), { description: r.stderr.trim().slice(0, 300) });
       onMutated();
     } catch (e) {

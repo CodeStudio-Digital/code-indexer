@@ -16,6 +16,7 @@ import {
   Play,
   Trash2,
 } from 'lucide-react';
+import i18n from '../../../i18n/index.js';
 import { apiCall } from '../../../lib/api-client.js';
 import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
@@ -78,7 +79,7 @@ export async function commitRename(
     await apiCall<{ ok: true }>('files.rename', { projectId, from: fromPath, to: toPath });
     return true;
   } catch (err) {
-    toast.error('Rename failed', { description: err instanceof Error ? err.message : String(err) });
+    toast.error(i18n.t('workspace:fileTree.renameFailed'), { description: err instanceof Error ? err.message : String(err) });
     return false;
   }
 }
@@ -97,10 +98,12 @@ export function buildContextItems(
 
   const promptCreate = async (kind: 'file' | 'folder') => {
     const name = await prompt({
-      title: `New ${kind}`,
-      description: parentPath ? `Inside ${parentPath}/` : 'At project root',
-      placeholder: kind === 'file' ? 'name.ts' : 'folder-name',
-      confirmLabel: 'Create',
+      title: kind === 'file' ? i18n.t('workspace:fileTree.newFile') : i18n.t('workspace:fileTree.newFolder'),
+      description: parentPath
+        ? i18n.t('workspace:fileTree.insideDir', { dir: parentPath })
+        : i18n.t('workspace:fileTree.atRoot'),
+      placeholder: kind === 'file' ? i18n.t('workspace:fileTree.filePlaceholder') : i18n.t('workspace:fileTree.folderPlaceholder'),
+      confirmLabel: i18n.t('workspace:fileTree.create'),
     });
     if (!name) return;
     const target = posixJoin(parentPath, name);
@@ -111,34 +114,41 @@ export function buildContextItems(
         await apiCall<{ ok: true }>('files.mkdir', { projectId, path: target });
       }
       onMutated();
-      toast.success(`${kind === 'file' ? 'File' : 'Folder'} created`, { description: target });
+      toast.success(
+        kind === 'file' ? i18n.t('workspace:fileTree.fileCreated') : i18n.t('workspace:fileTree.folderCreated'),
+        { description: target },
+      );
     } catch (err) {
-      toast.error('Create failed', { description: err instanceof Error ? err.message : String(err) });
+      toast.error(i18n.t('workspace:fileTree.createFailed'), { description: err instanceof Error ? err.message : String(err) });
     }
   };
 
   const doDelete = async () => {
     const ok = await confirm({
-      title: `Delete ${isDir ? 'folder' : 'file'}?`,
-      description: `"${entry.path}" will be removed${isDir ? ' (and everything inside)' : ''}. This cannot be undone.`,
-      confirmLabel: 'Delete',
+      title: isDir
+        ? i18n.t('workspace:fileTree.deleteFolderTitle')
+        : i18n.t('workspace:fileTree.deleteFileTitle'),
+      description: isDir
+        ? i18n.t('workspace:fileTree.deleteFolderBody', { path: entry.path })
+        : i18n.t('workspace:fileTree.deleteFileBody', { path: entry.path }),
+      confirmLabel: i18n.t('workspace:fileTree.delete'),
       tone: 'destructive',
     });
     if (!ok) return;
     try {
       await apiCall<{ ok: true }>('files.delete', { projectId, path: entry.path, recursive: isDir });
       onMutated();
-      toast.success('Deleted', { description: entry.path });
+      toast.success(i18n.t('workspace:fileTree.deleted'), { description: entry.path });
     } catch (err) {
-      toast.error('Delete failed', { description: err instanceof Error ? err.message : String(err) });
+      toast.error(i18n.t('workspace:fileTree.deleteFailed'), { description: err instanceof Error ? err.message : String(err) });
     }
   };
 
   const doCopyPath = () => {
     void navigator.clipboard
       .writeText(entry.path)
-      .then(() => toast.info('Path copied', { description: entry.path }))
-      .catch(() => toast.error('Could not access clipboard'));
+      .then(() => toast.info(i18n.t('workspace:fileTree.pathCopied'), { description: entry.path }))
+      .catch(() => toast.error(i18n.t('workspace:fileTree.clipboardError')));
   };
 
   // Múltiplos selecionados: o menu age sobre o conjunto inteiro.
@@ -146,14 +156,14 @@ export function buildContextItems(
     const doCopyPaths = () => {
       void navigator.clipboard
         .writeText(selection.getPaths().join('\n'))
-        .then(() => toast.info(`${selection.count} paths copied`))
-        .catch(() => toast.error('Could not access clipboard'));
+        .then(() => toast.info(i18n.t('workspace:fileTree.pathsCopied', { count: selection.count })))
+        .catch(() => toast.error(i18n.t('workspace:fileTree.clipboardError')));
     };
     return [
-      { id: 'copy-paths', label: `Copy paths (${selection.count})`, icon: ClipboardCopy, onSelect: doCopyPaths },
+      { id: 'copy-paths', label: i18n.t('workspace:fileTree.copyPaths', { count: selection.count }), icon: ClipboardCopy, onSelect: doCopyPaths },
       {
         id: 'delete-selected',
-        label: `Delete selected (${selection.count})`,
+        label: i18n.t('workspace:fileTree.deleteSelected', { count: selection.count }),
         icon: Trash2,
         destructive: true,
         separatorBefore: true,
@@ -167,13 +177,13 @@ export function buildContextItems(
   const runItem: ContextMenuItem[] = run
     ? [{
         id: 'run-with',
-        label: `Run with ${RUNTIME_LABEL[run.runtime]}`,
+        label: i18n.t('workspace:fileTree.runWith', { runtime: RUNTIME_LABEL[run.runtime] }),
         icon: Play,
         onSelect: () =>
           void launchRun({
             projectId,
             command: fileRunCommand(entry.path, run.runtime),
-            label: `Run ${posixBasename(entry.path)}`,
+            label: i18n.t('workspace:fileTree.runLabel', { file: posixBasename(entry.path) }),
             manager: run.manager,
           }),
       }]
@@ -186,25 +196,30 @@ export function buildContextItems(
     void navigator.clipboard
       .writeText(text)
       .then(() => toast.info(okMsg, { description: text }))
-      .catch(() => toast.error('Could not access clipboard'));
+      .catch(() => toast.error(i18n.t('workspace:fileTree.clipboardError')));
 
   const copyRefChildren: ContextMenuItem[] = [
-    { id: 'copy-name', label: 'File name', icon: ClipboardCopy, onSelect: () => copyTo(entry.name, 'Name copied') },
+    {
+      id: 'copy-name',
+      label: i18n.t('workspace:fileTree.copyFileName'),
+      icon: ClipboardCopy,
+      onSelect: () => copyTo(entry.name, i18n.t('workspace:fileTree.nameCopied')),
+    },
   ];
   if (projectRoot) {
     copyRefChildren.push({
       id: 'copy-abs',
-      label: 'Absolute path',
+      label: i18n.t('workspace:fileTree.copyAbsPath'),
       icon: ClipboardCopy,
-      onSelect: () => copyTo(toNativeAbsolute(projectRoot, entry.path), 'Absolute path copied'),
+      onSelect: () => copyTo(toNativeAbsolute(projectRoot, entry.path), i18n.t('workspace:fileTree.absPathCopied')),
     });
     const repoRel = toRepoRelative(repoRoot, projectRoot, entry.path);
     if (repoRel) {
       copyRefChildren.push({
         id: 'copy-repo-rel',
-        label: 'Path from repository root',
+        label: i18n.t('workspace:fileTree.copyRepoPath'),
         icon: ClipboardCopy,
-        onSelect: () => copyTo(repoRel, 'Repo path copied'),
+        onSelect: () => copyTo(repoRel, i18n.t('workspace:fileTree.repoPathCopied')),
       });
     }
   }
@@ -212,7 +227,7 @@ export function buildContextItems(
   if (!isDir && ctx?.isRepo) {
     copyRefChildren.push({
       id: 'copy-github',
-      label: 'Copy GitHub URL',
+      label: i18n.t('workspace:fileTree.copyGithubUrl'),
       icon: Link2,
       separatorBefore: true,
       onSelect: () =>
@@ -227,23 +242,25 @@ export function buildContextItems(
               : entry.path;
             const url = gitRemote ? githubUrlFor(gitRemote, defaultBranch, relPosix) : null;
             if (!url) {
-              toast.message('No GitHub remote', { description: 'origin is not a GitHub repository.' });
+              toast.message(i18n.t('workspace:fileTree.noGithubRemote'), {
+                description: i18n.t('workspace:fileTree.noGithubRemoteBody'),
+              });
               return;
             }
-            copyTo(url, 'GitHub URL copied');
+            copyTo(url, i18n.t('workspace:fileTree.githubUrlCopied'));
           } catch (err) {
-            toast.error('Could not resolve remote', { description: err instanceof Error ? err.message : String(err) });
+            toast.error(i18n.t('workspace:fileTree.resolveRemoteFailed'), { description: err instanceof Error ? err.message : String(err) });
           }
         })(),
     });
   }
   const copyRefItem: ContextMenuItem[] = copyRefChildren.length
-    ? [{ id: 'copy-ref', label: 'Copy reference', icon: Copy, submenu: copyRefChildren }]
+    ? [{ id: 'copy-ref', label: i18n.t('workspace:fileTree.copyReference'), icon: Copy, submenu: copyRefChildren }]
     : [];
 
   // "Git ▸" — ações por-arquivo quando o projeto é repo (arquivos e pastas).
   const gitItem: ContextMenuItem[] = ctx?.isRepo
-    ? [{ id: 'git', label: 'Git', icon: GitBranch, submenu: buildFileGitActions(entry, projectId, onMutated) }]
+    ? [{ id: 'git', label: i18n.t('workspace:fileTree.git'), icon: GitBranch, submenu: buildFileGitActions(entry, projectId, onMutated) }]
     : [];
 
   // Local History só para arquivos (pastas não têm versões). Desktop: popout
@@ -251,7 +268,7 @@ export function buildContextItems(
   const historyItem: ContextMenuItem[] = !isDir
     ? [{
         id: 'history',
-        label: 'Local History',
+        label: i18n.t('workspace:fileTree.localHistory'),
         icon: History,
         onSelect: () => openDetached(
           'local-history',
@@ -269,7 +286,7 @@ export function buildContextItems(
     electronAPI?.openPath && projectRoot
       ? [{
           id: 'reveal',
-          label: 'Reveal in Explorer',
+          label: i18n.t('workspace:fileTree.revealInExplorer'),
           icon: FolderSymlink,
           onSelect: () => {
             const abs = toNativeAbsolute(projectRoot, entry.path);
@@ -285,13 +302,13 @@ export function buildContextItems(
   if (actionGroup.length) actionGroup[0] = { ...actionGroup[0], separatorBefore: true };
 
   return [
-    { id: 'new-file', label: 'New file', icon: FilePlus2, onSelect: () => void promptCreate('file') },
-    { id: 'new-folder', label: 'New folder', icon: FolderPlus, onSelect: () => void promptCreate('folder') },
-    { id: 'rename', label: 'Rename', icon: Edit3, shortcut: 'F2', separatorBefore: true, onSelect: onStartRename },
-    { id: 'copy-path', label: 'Copy path', icon: ClipboardCopy, onSelect: doCopyPath },
+    { id: 'new-file', label: i18n.t('workspace:fileTree.newFile'), icon: FilePlus2, onSelect: () => void promptCreate('file') },
+    { id: 'new-folder', label: i18n.t('workspace:fileTree.newFolder'), icon: FolderPlus, onSelect: () => void promptCreate('folder') },
+    { id: 'rename', label: i18n.t('workspace:fileTree.rename'), icon: Edit3, shortcut: 'F2', separatorBefore: true, onSelect: onStartRename },
+    { id: 'copy-path', label: i18n.t('workspace:fileTree.copyPath'), icon: ClipboardCopy, onSelect: doCopyPath },
     ...copyRefItem,
     ...actionGroup,
-    { id: 'delete', label: 'Delete', icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => void doDelete() },
+    { id: 'delete', label: i18n.t('workspace:fileTree.delete'), icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => void doDelete() },
   ];
 }
 

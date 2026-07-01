@@ -14,8 +14,8 @@ import { useTranslation } from 'react-i18next';
 import { Cloud, Loader2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
-import { useAccountGate } from './useAccountGate.js';
-import { cloudStartBrowserLogin, cloudStartSsoLogin, type OAuthProviderId } from '../../lib/cloud/cloud-client.js';
+import { type AccountGateState } from './useAccountGate.js';
+import { cloudStartBrowserLogin, cloudStartSsoLogin, cloudStartPortalLogin, type OAuthProviderId } from '../../lib/cloud/cloud-client.js';
 import { PORTAL_URL } from '../../lib/cloud/cloud-config.js';
 
 const PROVIDERS: { id: OAuthProviderId; label: string }[] = [
@@ -24,11 +24,10 @@ const PROVIDERS: { id: OAuthProviderId; label: string }[] = [
   { id: 'microsoft', label: 'Microsoft' },
 ];
 
-export function AccountGate() {
-  const gate = useAccountGate();
+export function AccountGate({ gate }: { gate: AccountGateState }) {
   if (gate.decision === 'allow') return null;
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 p-6 backdrop-blur">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background p-6">
       <div className="w-full max-w-sm rounded-xl border bg-card p-6 shadow-2xl">
         {gate.decision === 'loading' ? <GateLoading /> : null}
         {gate.decision === 'login' ? <GateLogin /> : null}
@@ -50,19 +49,39 @@ function GateLoading() {
 function GateLogin() {
   const { t } = useTranslation('cloud');
   const [pending, setPending] = useState<OAuthProviderId | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [errCode, setErrCode] = useState<string | null>(null); // null = no error; string = failure reason
   const [ssoOrg, setSsoOrg] = useState<string | null>(null); // null = hidden; string = SSO org input shown
   const [ssoPending, setSsoPending] = useState(false);
+  const [portalPending, setPortalPending] = useState(false);
+
+  // Exactly one sign-in attempt at a time: all flows share a single 127.0.0.1
+  // loopback + handoff capture, so concurrent attempts would clobber each other.
+  const busy = pending != null || ssoPending || portalPending;
+
+  const signInWithEmail = async () => {
+    if (busy) return;
+    setErrCode(null);
+    setPortalPending(true);
+    try {
+      const r = await cloudStartPortalLogin();
+      if (!r.ok) setErrCode(r.error ?? 'failed');
+    } catch (e) {
+      setErrCode(e instanceof Error ? e.message : 'failed');
+    } finally {
+      setPortalPending(false);
+    }
+  };
 
   const signIn = async (id: OAuthProviderId) => {
-    setFailed(false);
+    if (busy) return;
+    setErrCode(null);
     setPending(id);
     try {
       const r = await cloudStartBrowserLogin(id);
-      if (!r.ok) setFailed(true);
+      if (!r.ok) setErrCode(r.error ?? 'failed');
       // On success, main broadcasts cloud:auth-changed → the gate flips to allow.
-    } catch {
-      setFailed(true);
+    } catch (e) {
+      setErrCode(e instanceof Error ? e.message : 'failed');
     } finally {
       setPending(null);
     }
@@ -70,14 +89,14 @@ function GateLogin() {
 
   const startSso = async () => {
     const id = (ssoOrg ?? '').trim();
-    if (!id) return;
-    setFailed(false);
+    if (!id || busy) return;
+    setErrCode(null);
     setSsoPending(true);
     try {
       const r = await cloudStartSsoLogin(id);
-      if (!r.ok) setFailed(true);
-    } catch {
-      setFailed(true);
+      if (!r.ok) setErrCode(r.error ?? 'failed');
+    } catch (e) {
+      setErrCode(e instanceof Error ? e.message : 'failed');
     } finally {
       setSsoPending(false);
     }
@@ -95,12 +114,25 @@ function GateLogin() {
       </div>
       <p className="text-sm text-muted-foreground">{t('gate.signInOAuth')}</p>
       <div className="space-y-2">
+        <Button
+          className="w-full justify-center gap-2"
+          disabled={busy}
+          onClick={() => void signInWithEmail()}
+        >
+          {portalPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {t('gate.emailLogin')}
+        </Button>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="h-px flex-1 bg-border" />
+          {t('gate.or')}
+          <span className="h-px flex-1 bg-border" />
+        </div>
         {PROVIDERS.map((p) => (
           <Button
             key={p.id}
             variant="outline"
             className="w-full justify-center gap-2"
-            disabled={pending != null}
+            disabled={busy}
             onClick={() => void signIn(p.id)}
           >
             {pending === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
@@ -111,7 +143,7 @@ function GateLogin() {
           <Button
             variant="outline"
             className="w-full justify-center"
-            disabled={pending != null}
+            disabled={busy}
             onClick={() => setSsoOrg('')}
           >
             {t('sso.signIn')}
@@ -126,7 +158,7 @@ function GateLogin() {
           >
             <Input autoFocus value={ssoOrg} onChange={(e) => setSsoOrg(e.target.value)} placeholder={t('sso.orgId')} />
             <div className="flex gap-2">
-              <Button type="submit" className="flex-1 gap-2" disabled={!ssoOrg.trim() || ssoPending}>
+              <Button type="submit" className="flex-1 gap-2" disabled={!ssoOrg.trim() || busy}>
                 {ssoPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {t('sso.continue')}
               </Button>
@@ -137,8 +169,12 @@ function GateLogin() {
           </form>
         )}
       </div>
-      {pending ? <p className="text-xs text-muted-foreground">{t('gate.signingIn')}</p> : null}
-      {failed ? <p className="text-xs text-destructive">{t('gate.oauthFailed')}</p> : null}
+      {busy ? <p className="text-xs text-muted-foreground">{t('gate.signingIn')}</p> : null}
+      {errCode ? (
+        <p className="text-xs text-destructive">
+          {t('gate.oauthFailed')} <span className="opacity-70">({errCode})</span>
+        </p>
+      ) : null}
       <div className="border-t pt-3 text-xs text-muted-foreground">
         <p>{t('gate.portalHint')}</p>
         <button type="button" className="mt-1 text-primary hover:underline" onClick={openPortal}>

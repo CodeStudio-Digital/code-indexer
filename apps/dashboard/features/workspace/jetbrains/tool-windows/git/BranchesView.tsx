@@ -25,13 +25,15 @@ type FlatRow =
 
 interface BranchesViewProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   /** Called after every operation so the parent can refresh status etc. */
   onMutated: () => void;
   /** A sequencer op is mid-flight — disable merge/rebase/pull. */
   opInProgress?: boolean;
 }
 
-export function BranchesView({ projectId, onMutated, opInProgress }: BranchesViewProps) {
+export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: BranchesViewProps) {
   const { t } = useTranslation('workspace');
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +47,7 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await apiCall<GitBranch[]>('projectGit.branchesDetailed', { projectId, includeRemote: true, rev: gitRev });
+      const r = await apiCall<GitBranch[]>('projectGit.branchesDetailed', { projectId, repoPath, includeRemote: true, rev: gitRev });
       setBranches(r);
       setError(null);
     } catch (e) {
@@ -53,7 +55,7 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
     } finally {
       setLoading(false);
     }
-  }, [projectId, gitRev]);
+  }, [projectId, repoPath, gitRev]);
 
   useEffect(() => {
     void reload();
@@ -64,6 +66,7 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
   branchesRef.current = branches;
   const actions = useBranchOps({
     projectId,
+    repoPath,
     getBranches: useCallback(() => branchesRef.current, []),
     onMutated: useCallback(async () => { await reload(); onMutated(); }, [reload, onMutated]),
   });
@@ -83,7 +86,7 @@ export function BranchesView({ projectId, onMutated, opInProgress }: BranchesVie
     });
     if (!name?.trim()) return;
     try {
-      await apiCall('projectGit.branchCreate', { projectId, name: name.trim(), checkout: true });
+      await apiCall('projectGit.branchCreate', { projectId, repoPath, name: name.trim(), checkout: true });
       toast.success(`Created and switched to ${name.trim()}`);
       await reload();
       onMutated();

@@ -34,6 +34,9 @@ import { BranchActionPanel, BranchListRow, RemoteBranchList } from './branch-act
 
 interface BranchPopoverProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. The
+   *  Git tool window passes its selection; the status bar leaves it main. */
+  repoPath?: string;
   /** Refresh chips/data when an operation succeeds. */
   onMutated: () => void;
   /** Open the commit modal owned by the workspace (we don't redo the UI). */
@@ -44,6 +47,7 @@ interface BranchPopoverProps {
 
 export function BranchPopover({
   projectId,
+  repoPath,
   onMutated,
   onRequestCommit,
   onClose,
@@ -61,6 +65,7 @@ export function BranchPopover({
 
   const actions = useBranchActions({
     projectId,
+    repoPath,
     onMutated: () => {
       // Refresh both the parent chips AND our local branches list so the
       // popover reflects post-op state (e.g. new upstream after push).
@@ -75,8 +80,9 @@ export function BranchPopover({
     try {
       const r = await apiCall<BranchRowData[]>('projectGit.branchesDetailed', {
         projectId,
+        repoPath,
         includeRemote: true,
-        rev: gitRev, // backend caches per (project, rev) → instant reopen
+        rev: gitRev, // backend caches per (project, rev, repo) → instant reopen
       });
       setBranches(r);
       setError(null);
@@ -85,7 +91,7 @@ export function BranchPopover({
     } finally {
       setLoading(false);
     }
-  }, [projectId, gitRev]);
+  }, [projectId, repoPath, gitRev]);
 
   useEffect(() => {
     void reload();
@@ -98,6 +104,7 @@ export function BranchPopover({
   branchesRef.current = branches;
   const branchOps = useBranchOps({
     projectId,
+    repoPath,
     getBranches: useCallback(() => branchesRef.current, []),
     onMutated: useCallback(async () => { onMutated(); await reload(); }, [onMutated, reload]),
     onClose,

@@ -221,8 +221,39 @@ export class HumanInTheLoop {
 
   // ─── Subordinate plan / question / tasks ────────────────────────
 
+  /**
+   * Fast-path auto-approval (Phase 3 — break the master serialization funnel).
+   *
+   * When the operator designates a role as trusted via
+   * `MCP_COMPANY_AUTO_APPROVE_ROLES` (comma list, or `*` for all), that role's
+   * PLANS are approved immediately instead of blocking on a master round-trip.
+   * This is the "auto-aprovar baixo risco" posture: the operator decides which
+   * roles are low-risk enough to self-approve. Off by default (env unset).
+   *
+   * Scope is intentionally PLANS only — task lists (multi-step commitments)
+   * still go through the master. Read per-call so the operator can flip it
+   * live without a restart.
+   */
+  private shouldAutoApprovePlan(role: string): boolean {
+    const raw = process.env.MCP_COMPANY_AUTO_APPROVE_ROLES;
+    if (!raw || !raw.trim()) return false;
+    if (raw.trim() === '*') return true;
+    return raw.split(',').map((s) => s.trim()).filter(Boolean).includes(role);
+  }
+
   wireSubordinatePlan(handle: RunCoderHandle, agentRunId: number, role: string): void {
     handle.runner.on('plan_posted', (block: { plan: string; toolUseId?: string }) => {
+      // Fast-path: a trusted role's plan is approved without the master turn.
+      if (this.shouldAutoApprovePlan(role)) {
+        this.bus.publish('subordinate_plan_posted', { agentRunId, role, plan: block.plan });
+        this.board.post(role, agentRunId, 'message',
+          `[auto-approved] ${role}'s plan was auto-approved (trusted role) — proceeding without a master round-trip.`);
+        handle.runner.provideUserInput(
+          JSON.stringify({ approved: true, feedback: 'Auto-approved: trusted role (MCP_COMPANY_AUTO_APPROVE_ROLES).' }),
+        );
+        this.status.setStatus(agentRunId, 'running');
+        return;
+      }
       this.status.setStatus(agentRunId, 'waiting_plan');
       this.board.post(role, agentRunId, 'question',
         `[@master] ${role} submitted plan for review:\n\n${block.plan}`);

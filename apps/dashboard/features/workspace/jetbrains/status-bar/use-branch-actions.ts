@@ -23,11 +23,13 @@ interface GitRunResult {
 
 export interface UseBranchActions {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   onMutated: () => void;
   onClose: () => void;
 }
 
-export function useBranchActions({ projectId, onMutated, onClose }: UseBranchActions) {
+export function useBranchActions({ projectId, repoPath, onMutated, onClose }: UseBranchActions) {
   // `busyAction` doubles as "currently running" indicator and matches
   // against either an action label ("Update Project") or a per-branch
   // key ("Switch feature/foo") so the corresponding row can spin.
@@ -40,7 +42,7 @@ export function useBranchActions({ projectId, onMutated, onClose }: UseBranchAct
   ): Promise<boolean> => {
     setBusyAction(label);
     try {
-      const r = await apiCall<GitRunResult>(method, { projectId, ...payload });
+      const r = await apiCall<GitRunResult>(method, { projectId, repoPath, ...payload });
       if (r.ok) {
         toast.success(`${label} OK`, {
           description:
@@ -88,6 +90,7 @@ export function useBranchActions({ projectId, onMutated, onClose }: UseBranchAct
     try {
       await apiCall('projectGit.branchCreate', {
         projectId,
+        repoPath,
         name: name.trim(),
         checkout: true,
       });
@@ -110,7 +113,7 @@ export function useBranchActions({ projectId, onMutated, onClose }: UseBranchAct
     if (!ref?.trim()) return;
     setBusyAction('Checkout');
     try {
-      await apiCall('projectGit.branchCheckout', { projectId, name: ref.trim() });
+      await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: ref.trim() });
       toast.success(`Checked out ${ref.trim()}`);
       onMutated();
       onClose();
@@ -131,9 +134,9 @@ export function useBranchActions({ projectId, onMutated, onClose }: UseBranchAct
         // Materialise a local tracking branch when picking a remote ref
         // — bare `git checkout origin/foo` would land on detached HEAD.
         const local = b.name.replace(/^[^/]+\//, '');
-        await apiCall('projectGit.branchCheckout', { projectId, name: local, create: true });
+        await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: local, create: true });
       } else {
-        await apiCall('projectGit.branchCheckout', { projectId, name: b.name });
+        await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: b.name });
       }
       toast.success(`Switched to ${b.name}`);
       onMutated();

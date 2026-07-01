@@ -15,14 +15,14 @@ import { Switch } from '../../../../../components/ui/switch.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../../../../components/ui/popover.js';
 import { toast } from '../../../../../components/ui/prompt-dialog.js';
 
-export function GitPerfPanel({ projectId }: { projectId: number }) {
+export function GitPerfPanel({ projectId, repoPath }: { projectId: number; repoPath?: string }) {
   const { t } = useTranslation('workspace');
   const [opt, setOpt] = useState<GitOptimizations | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
     try {
-      setOpt(await apiCall<GitOptimizations>('projectGit.gitOptimizations', { projectId }));
+      setOpt(await apiCall<GitOptimizations>('projectGit.gitOptimizations', { projectId, repoPath }));
     } catch {
       /* leave null — the toggles render disabled until a successful read */
     }
@@ -31,7 +31,7 @@ export function GitPerfPanel({ projectId }: { projectId: number }) {
   const apply = async (patch: { untrackedCache?: boolean; fsmonitor?: boolean }) => {
     setBusy(true);
     try {
-      setOpt(await apiCall<GitOptimizations>('projectGit.configureGitOptimizations', { projectId, ...patch }));
+      setOpt(await apiCall<GitOptimizations>('projectGit.configureGitOptimizations', { projectId, repoPath, ...patch }));
     } catch (err) {
       toast.error(t('git.perf.failed'), { description: err instanceof Error ? err.message : String(err) });
     } finally {

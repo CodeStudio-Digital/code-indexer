@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { MasterPrompt } from '@mcp/company-contracts';
 import { isPortClosedError } from '@mcp/orchestrator-host';
 import {
   getCompanyOrchestrator,
@@ -17,6 +18,7 @@ import {
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
 import { resolveAndRunMaster } from './master-resolve.js';
+import { ensureCompanyMasterLive } from './ensure-master-live.js';
 import { normalizeAttachmentsForModel, pdfHandledNatively } from '@mcp/services/services/docs/attachment-extract.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 
@@ -507,23 +509,46 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/plan-response', async (c) => {
     const id = parseIdParam(c);
-    const orchestrator = getCompanyOrchestrator(id);
-    if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
-
     const body = await parseJsonBody<PlanResponseBody>(c);
     if (body.approved === undefined) {
       return c.json({ error: 'approved field required' }, 400);
     }
 
-    const resolved = orchestrator.respondToMasterPlan(body.approved, body.feedback, body.prompt_id);
-    if (!resolved) {
-      return c.json(
-        { error: 'No pending master plan to respond to (already resolved or session ended)' },
-        409,
-      );
+    // Live path.
+    const orchestrator = getCompanyOrchestrator(id);
+    if (orchestrator) {
+      const resolved = orchestrator.respondToMasterPlan(body.approved, body.feedback, body.prompt_id);
+      if (!resolved) {
+        return c.json(
+          { error: 'No pending master plan to respond to (already resolved or session ended)' },
+          409,
+        );
+      }
+      return c.json({ ok: true, prompt: resolved });
     }
 
-    return c.json({ ok: true, prompt: resolved });
+    // Dead orchestrator: resolve the plan prompt + re-spawn + resume, delivering
+    // the verdict as a continuation (dangling submit_plan auto-sealed on resume).
+    let resolvedPlan: MasterPrompt | null = null;
+    try {
+      const pid = body.prompt_id ?? companyStore.getPendingMasterPrompt(id, 'plan')?.id;
+      if (pid != null) {
+        resolvedPlan = companyStore.resolveMasterPrompt(pid, { kind: 'plan', approved: body.approved, feedback: body.feedback });
+      }
+    } catch { /* best-effort bookkeeping */ }
+    // IDEMPOTENCY — see /answer: only the call that actually resolves the pending
+    // plan proceeds; a duplicate/racing submit no-ops instead of double-posting.
+    if (!resolvedPlan) {
+      return c.json({ ok: true, duplicate: true });
+    }
+    const verdict = body.approved
+      ? `[plano APROVADO]${body.feedback ? ` ${body.feedback}` : ''}`
+      : `[plano REJEITADO]${body.feedback ? ` ${body.feedback}` : ''}`;
+    const res = await ensureCompanyMasterLive(id, deps, { message: verdict });
+    if ('error' in res) return c.json({ error: res.error }, res.status);
+    try { await res.orchestrator.postToBoard('human', null, 'decision', `Plan ${body.approved ? 'APPROVED' : 'REJECTED'}${body.feedback ? `: ${body.feedback}` : ''}`); }
+    catch { /* best-effort */ }
+    return c.json({ ok: true, resumed: true, prompt: resolvedPlan });
   });
 
   /**
@@ -540,13 +565,6 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/message', async (c) => {
     const id = parseIdParam(c);
-    const orchestrator = getCompanyOrchestrator(id);
-    if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
-
-    if (orchestrator.metaBus.ended) {
-      return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
-    }
-
     const body = await parseJsonBody<{ message: string; interject?: boolean; attachments?: AttachmentBody[]; thinking?: boolean }>(c);
     if (!body.message) {
       return c.json({ error: 'message required' }, 400);
@@ -555,22 +573,40 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!attachmentsCheck.ok) {
       return c.json({ error: attachmentsCheck.error }, 400);
     }
+    const attachments = await normalizeAttachmentsForModel(attachmentsCheck.value, masterAttachmentOpts(id));
 
-    const result = orchestrator.sendMessageToMaster(body.message, {
-      interject: body.interject,
-      attachments: await normalizeAttachmentsForModel(attachmentsCheck.value, masterAttachmentOpts(id)),
+    // Live path.
+    const orchestrator = getCompanyOrchestrator(id);
+    if (orchestrator) {
+      if (orchestrator.metaBus.ended) {
+        return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
+      }
+      const result = orchestrator.sendMessageToMaster(body.message, {
+        interject: body.interject,
+        attachments,
+        thinking: body.thinking,
+      });
+      if (!result.ok && result.pending === 'interactive_wait') {
+        return c.json(
+          {
+            error: 'master is waiting for an interactive answer — use /plan-response or /answer, or pass {"interject": true} to override',
+            code: 'INTERACTION_PENDING',
+          },
+          409,
+        );
+      }
+      return c.json({ ok: true });
+    }
+
+    // Dead orchestrator: re-spawn + resume the master with this message instead
+    // of 404ing (idle eviction / process restart should be invisible).
+    const res = await ensureCompanyMasterLive(id, deps, {
+      message: body.message,
+      attachments,
       thinking: body.thinking,
     });
-    if (!result.ok && result.pending === 'interactive_wait') {
-      return c.json(
-        {
-          error: 'master is waiting for an interactive answer — use /plan-response or /answer, or pass {"interject": true} to override',
-          code: 'INTERACTION_PENDING',
-        },
-        409,
-      );
-    }
-    return c.json({ ok: true });
+    if ('error' in res) return c.json({ error: res.error }, res.status);
+    return c.json({ ok: true, resumed: true });
   });
 
   /**
@@ -579,23 +615,51 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/answer', async (c) => {
     const id = parseIdParam(c);
-    const orchestrator = getCompanyOrchestrator(id);
-    if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
-
     const body = await parseJsonBody<{ answer: string; prompt_id?: number }>(c);
     if (!body.answer) {
       return c.json({ error: 'answer required' }, 400);
     }
 
-    const resolved = orchestrator.respondToMasterQuestion(body.answer, body.prompt_id);
-    if (!resolved) {
-      return c.json(
-        { error: 'No pending question to answer (already resolved or session ended)' },
-        409,
-      );
+    // Live path — master runner is in the pool: deliver to its waitForUserInput.
+    const orchestrator = getCompanyOrchestrator(id);
+    if (orchestrator) {
+      const resolved = orchestrator.respondToMasterQuestion(body.answer, body.prompt_id);
+      if (!resolved) {
+        return c.json(
+          { error: 'No pending question to answer (already resolved or session ended)' },
+          409,
+        );
+      }
+      return c.json({ ok: true, prompt: resolved });
     }
 
-    return c.json({ ok: true, prompt: resolved });
+    // Dead orchestrator (idle-evicted OR process/dev restart): re-spawn + resume
+    // the master and deliver the answer as a continuation. The dangling ask_user
+    // tool_use is auto-sealed on resume (runner.ts "Safety net 2"). Resolve the
+    // master prompt (so the question card flips to answered) and RETURN it so the
+    // dashboard applies it — exactly like the live path does.
+    let resolvedPrompt: MasterPrompt | null = null;
+    try {
+      const pid = body.prompt_id ?? companyStore.getPendingMasterPrompt(id, 'question')?.id;
+      if (pid != null) resolvedPrompt = companyStore.resolveMasterPrompt(pid, { kind: 'question', answer: body.answer });
+    } catch { /* best-effort bookkeeping */ }
+    // IDEMPOTENCY: only the call that ACTUALLY resolves a pending prompt proceeds
+    // to spawn the resume + post to the board. A duplicate/racing submit (the
+    // triple-click bug) finds the prompt already resolved — `resolveMasterPrompt`
+    // returns null — so we no-op instead of spawning a 2nd master and posting a
+    // 3rd "Human answered" board entry.
+    if (!resolvedPrompt) {
+      return c.json({ ok: true, duplicate: true });
+    }
+    const res = await ensureCompanyMasterLive(id, deps, {
+      message: `[resposta à pergunta do Master] ${body.answer}`,
+    });
+    if ('error' in res) return c.json({ error: res.error }, res.status);
+    // Mirror the live path: record the human's answer on the PERSISTENT board so
+    // it survives close/open (board_entries in SQLite).
+    try { await res.orchestrator.postToBoard('human', null, 'decision', `Human answered: ${body.answer}`); }
+    catch { /* best-effort */ }
+    return c.json({ ok: true, resumed: true, prompt: resolvedPrompt });
   });
 
   /**

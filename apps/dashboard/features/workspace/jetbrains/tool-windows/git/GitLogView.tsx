@@ -37,7 +37,7 @@ interface GitRunResult {
 const PAGE_SIZES = [60, 120, 250, 500];
 
 export function GitLogView({ tab }: { tab: OpenGitLog }) {
-  const { projectId, branch, isRemote } = tab;
+  const { projectId, branch, isRemote, repoPath } = tab;
   const [commits, setCommits] = useState<Commit[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [limit, setLimit] = useState<number>(120);
@@ -50,9 +50,9 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
     setLoading(true);
     try {
       const [cs, status, ms] = await Promise.all([
-        apiCall<Commit[]>('projectGit.log', { projectId, limit, branch }),
-        apiCall<{ branch: string | null }>('projectGit.status', { projectId, includeFiles: false }),
-        apiCall<{ kind: string | null }>('projectGit.mergeState', { projectId }),
+        apiCall<Commit[]>('projectGit.log', { projectId, repoPath, limit, branch }),
+        apiCall<{ branch: string | null }>('projectGit.status', { projectId, repoPath, includeFiles: false }),
+        apiCall<{ kind: string | null }>('projectGit.mergeState', { projectId, repoPath }),
       ]);
       setCommits(cs);
       setCurrentBranch(status.branch);
@@ -63,7 +63,7 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
     } finally {
       setLoading(false);
     }
-  }, [projectId, branch, limit]);
+  }, [projectId, repoPath, branch, limit]);
 
   useEffect(() => {
     void reload();
@@ -85,7 +85,7 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
 
   const switchTo = async () => {
     try {
-      const name = await checkoutBranch(projectId, branch, isRemote);
+      const name = await checkoutBranch(projectId, branch, isRemote, repoPath);
       toast.success(`Switched to ${name}`);
       await reload();
     } catch (e) {
@@ -102,7 +102,7 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
     body: object,
   ) => {
     try {
-      const r = await apiCall<GitRunResult>(path, { projectId, ...body });
+      const r = await apiCall<GitRunResult>(path, { projectId, repoPath, ...body });
       if (r.ok) toast.success(`${label} ok`);
       else
         toast.error(`${label} had issues`, {
@@ -217,7 +217,7 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
         </Panel>
         <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
         <Panel defaultSize={44} minSize={25}>
-          <CommitDetailPanel projectId={projectId} sha={selected} />
+          <CommitDetailPanel projectId={projectId} repoPath={repoPath} sha={selected} />
         </Panel>
       </PanelGroup>
     </div>

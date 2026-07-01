@@ -574,7 +574,9 @@ export type ServerDeps = CoreDeps
 
 export function createDeps(): ServerDeps {
   const config = loadConfig();
-  const db = new CodeIndexDB(config.dbPath);
+  // This is the ONE main-process handle: make it the WAL checkpoint owner so the
+  // central -wal can't bloat under multi-agent worker write load (see db.ts).
+  const db = new CodeIndexDB(config.dbPath, { checkpointOwner: true });
   const costTracker = new CostTracker(db);
   const diffService = new DiffService(db);
   const exportService = new ExportService(db);

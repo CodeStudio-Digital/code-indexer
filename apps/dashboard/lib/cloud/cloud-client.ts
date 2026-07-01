@@ -18,6 +18,8 @@ interface CloudBridge {
   startBrowserLogin?(provider: string): Promise<{ ok: boolean; error?: string }>;
   /** Desktop-only: Enterprise SSO login (same loopback handoff, keyed by org id). */
   startSsoLogin?(orgId: string): Promise<{ ok: boolean; error?: string }>;
+  /** Desktop-only: device login via the web portal (browser; any auth method). */
+  startPortalLogin?(): Promise<{ ok: boolean; error?: string }>;
   onAuthChanged(cb: (s: CloudAuthState) => void): (() => void) | void;
 }
 
@@ -60,4 +62,13 @@ export async function cloudStartSsoLogin(orgId: string): Promise<{ ok: boolean; 
   const bridge = cloudBridge();
   if (!bridge.startSsoLogin) return { ok: false, error: 'desktop_only' };
   return bridge.startSsoLogin(orgId);
+}
+
+/** Start device login via the web portal (desktop only): opens the portal in the
+ *  browser where the user signs in by ANY method (email/password or OAuth), then is
+ *  handed back to the desktop via the loopback. */
+export async function cloudStartPortalLogin(): Promise<{ ok: boolean; error?: string }> {
+  const bridge = cloudBridge();
+  if (!bridge.startPortalLogin) return { ok: false, error: 'desktop_only' };
+  return bridge.startPortalLogin();
 }

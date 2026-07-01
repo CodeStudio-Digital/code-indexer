@@ -655,7 +655,9 @@ const SessionRow = memo(function SessionRow({
           >
             {s.title}
           </span>
-          <span className="ml-auto flex items-center gap-1 shrink-0">
+          {/* Tokens fade out on hover so the action cluster can take their
+              place — no overlap / bleed-through. */}
+          <span className="ml-auto flex items-center gap-1 shrink-0 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
             {!selectMode && s.is_favorite && (
               <Star className="h-3 w-3 fill-current text-yellow-500" aria-hidden="true" />
             )}
@@ -676,11 +678,10 @@ const SessionRow = memo(function SessionRow({
         </div>
       </div>
 
-      {/* Hover actions overlay the token figure (slides over on hover with a
-          from-card fade), so the resting row stays calm and tokens reclaim the
-          width an always-on action column would waste. */}
+      {/* Hover actions sit where the (now hidden) token figure was — no
+          gradient/overlay, so nothing bleeds through behind the icons. */}
       {!selectMode && (
-        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pl-5 bg-gradient-to-l from-card via-card to-transparent opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <button
             type="button"
             aria-label={s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}

@@ -187,6 +187,61 @@ function loadIncrementalIndexer(): Promise<
 }
 
 /**
+ * Process-wide shared central DB handles (anti-freeze, Phase 2).
+ *
+ * `runCoder` used to open a FRESH `CodeIndexDB` + `SessionStore` (two
+ * better-sqlite3 connections to the central file) on EVERY call and close them
+ * at run end. In a company worker the master + up to 10 subordinates each call
+ * `runCoder`, so that was ~22 short-lived connections to ONE SQLite file inside
+ * ONE worker thread — heavy WAL writer-lock contention that (with the event
+ * firehose) froze the backend during multi-agent runs.
+ *
+ * Now every `runCoder` in a process SHARES one `CodeIndexDB` and one
+ * `SessionStore` built from `db.raw()` (`ownsHandle=false`, so it is the SAME
+ * single connection — mirrors how `server/deps.ts` shares one handle across ~20
+ * stores). Keyed by `dbPath` and guarded against a second path, like
+ * `getDbWriter`. Process-owned and intentionally NOT closed per-run: a
+ * process-`exit` hook plus the explicit `closeSharedCentral()` (called from the
+ * company-worker stop handler) close them once on teardown.
+ */
+let sharedCentral: { dbPath: string; db: CodeIndexDB; store: SessionStore } | null = null;
+let sharedCentralExitHookInstalled = false;
+
+function getSharedCentral(dbPath: string): { db: CodeIndexDB; store: SessionStore } {
+  if (sharedCentral && sharedCentral.dbPath !== dbPath) {
+    throw new Error(
+      `runCoder central DB already opened against ${sharedCentral.dbPath}; cannot reuse for ${dbPath}`,
+    );
+  }
+  if (!sharedCentral) {
+    const db = new CodeIndexDB(dbPath);
+    // Same single connection for sessions — NOT a 2nd writer on the file.
+    const store = new SessionStore(db.raw());
+    sharedCentral = { dbPath, db, store };
+    if (!sharedCentralExitHookInstalled) {
+      sharedCentralExitHookInstalled = true;
+      // 'exit' is sync-only (db.close() is sync) and does not override signal
+      // handling the way a SIGINT/SIGTERM listener would. Graceful teardown
+      // goes through closeSharedCentral() in the worker stop handler.
+      process.on('exit', () => closeSharedCentral());
+    }
+  }
+  return { db: sharedCentral.db, store: sharedCentral.store };
+}
+
+/**
+ * Close the shared central handles. Idempotent. Called on process exit and
+ * explicitly from the company-worker stop handler for a graceful flush.
+ */
+export function closeSharedCentral(): void {
+  if (!sharedCentral) return;
+  const held = sharedCentral;
+  sharedCentral = null;
+  try { held.store.close(); } catch { /* no-op: store shares the db handle */ }
+  try { held.db.close(); } catch { /* best-effort */ }
+}
+
+/**
  * Build a fully-wired runner for a coder session and start it.
  *
  * Both the CLI and the SSE handler use this. Listeners should be attached
@@ -194,8 +249,9 @@ function loadIncrementalIndexer(): Promise<
  */
 export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const config = loadConfig();
-  const db = new CodeIndexDB(config.dbPath);
-  const store = new SessionStore(config.dbPath);
+  // Shared per-process central handles — see getSharedCentral. One connection
+  // for the whole worker instead of one per master/subordinate run.
+  const { db, store } = getSharedCentral(config.dbPath);
   const dbWriter: DbWriter | null = isDbWriterEnabled() ? getDbWriter(config.dbPath) : null;
 
   // Resolve or create the session. `agent` is persisted on the session row so
@@ -1166,9 +1222,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Opens a long-lived SkillStore that survives until the runner's `done`
   // promise resolves — the runner reads it every turn from inside
   // `assembleMessagesForChat` to materialize the `<active_skills>` block
-  // for messages the user sent with sidebar picks. Closed in the run's
-  // `finally` hook below alongside the other per-run resources.
-  const skillStore = new SkillStore(config.dbPath);
+  // for messages the user sent with sidebar picks. Built on the SHARED central
+  // handle (Phase 2) so it adds no new connection; its `close()` is a no-op.
+  const skillStore = new SkillStore(db.raw());
   let resolvedSkills: ResolvedSkill[] = [];
   try {
     resolvedSkills = skillStore.resolveActiveSkills(session.id, session.project_id);
@@ -2504,9 +2560,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       if (stickyToolset && runner.pinnedTools.size > 0) {
         try { store.mergeSessionToolsetState(session.id, { addPins: [...runner.pinnedTools] }); } catch { /* best-effort */ }
       }
-      store.close();
-      try { skillStore.close(); } catch { /* best-effort */ }
-      db.close();
+      // Phase 2: `store`, `db` and `skillStore` all share ONE process-wide
+      // central connection now (getSharedCentral). They are NOT closed per-run —
+      // a concurrent subordinate run shares the same handle. closeSharedCentral()
+      // (worker stop handler) + the process-exit hook close it once on teardown.
     });
 
   return { session, runner, done: donePromise, indexStatus };

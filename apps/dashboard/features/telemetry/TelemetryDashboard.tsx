@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Activity, AlertTriangle, DollarSign, Loader2, Scissors } from 'lucide-react';
+import { Activity, AlertTriangle, DollarSign, Info, Loader2, Scissors } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
+import { cn } from '../../lib/utils.js';
 import { QualityPanel } from '../admin/QualityPanel.js';
 import { SupervisorPanel } from '../admin/SupervisorPanel.js';
 import { SINCE_PRESETS, sinceForKey } from './since.js';
@@ -107,52 +109,92 @@ interface ProjectOption { id: number; name: string }
  * Top-level `/telemetry` page.
  *
  * Previously a flat "session telemetry" dashboard, now wrapped in tabs so
- * the panels that used to live in the admin tray (pipeline traces, hot
- * state cache, quality classifiers) live next to the global stats they
- * relate to. Operators land here when they want observability — every
- * dashboard-shaped panel is one click away from each other instead of
- * spread between `/admin` tabs and `/telemetry`.
+ * the panels that used to live in the admin tray (quality classifiers,
+ * agent supervisor) live next to the global stats they relate to.
+ * Operators land here when they want observability — every dashboard-shaped
+ * panel is one click away instead of spread between `/admin` and `/telemetry`.
+ *
+ * The shell mirrors `/docs` (DocsPage): a compact top band (title + info
+ * tooltip + lightweight tabs) over a body that fills the height and scrolls.
  *
  * Tab list:
- *   - overview  : the existing global session stats (cost, tokens, top tools)
- *   - pipeline  : per-stage candidate-pipeline traces
- *   - quality   : 5-classifier verdict distribution + counterfactual stats
+ *   - overview   : global session stats (cost, tokens, top tools)
+ *   - prices     : per-model price table + sync/backfill
+ *   - quality    : 5-classifier verdict distribution + counterfactual stats
+ *   - supervisor : live AgentSupervisor status + incidents
  */
+const TELEMETRY_TABS = ['overview', 'prices', 'quality', 'supervisor'] as const;
+
 export function TelemetryDashboard() {
   const { t } = useTranslation(['telemetry', 'common']);
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Activity className="h-5 w-5" />
-        <h1 className="text-lg font-semibold">{t('telemetry:title')}</h1>
-      </div>
-      <p className="text-sm text-muted-foreground">{t('telemetry:subtitle')}</p>
+    // Full-height IDE-style shell, mirroring `/docs` (DocsPage): the title,
+    // an info affordance (description on hover) and the tabs share one
+    // compact top band; the active tab's body fills the rest and scrolls on
+    // its own. `/telemetry` opts out of AppShell's outer scroll+padding (see
+    // AppShell), so this owns its height — `min-h-0` is load-bearing.
+    <Tabs defaultValue="overview" className="flex h-full min-h-0 flex-col">
+      <header className="flex items-center gap-2 px-3 h-11 border-b shrink-0">
+        <Activity className="h-4 w-4 text-primary shrink-0" />
+        <span className="text-[13px] font-semibold shrink-0">{t('telemetry:title')}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={t('telemetry:aboutAria')}
+              className="text-muted-foreground/70 hover:text-foreground transition-colors shrink-0"
+            >
+              <Info className="h-3.5 w-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-sm leading-relaxed">
+            {t('telemetry:subtitle')}
+          </TooltipContent>
+        </Tooltip>
 
-      <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">{t('telemetry:tabs.overview', { defaultValue: 'Overview' })}</TabsTrigger>
-          <TabsTrigger value="prices">{t('telemetry:tabs.prices', { defaultValue: 'Preços' })}</TabsTrigger>
-          <TabsTrigger value="quality">{t('telemetry:tabs.quality', { defaultValue: 'Quality' })}</TabsTrigger>
-          <TabsTrigger value="supervisor">{t('telemetry:tabs.supervisor', { defaultValue: 'Supervisor' })}</TabsTrigger>
+        <div className="mx-1 h-4 w-px bg-border shrink-0" />
+
+        <TabsList className="h-auto gap-0.5 bg-transparent p-0">
+          {TELEMETRY_TABS.map((id) => (
+            <TabsTrigger
+              key={id}
+              value={id}
+              className={cn(
+                'h-7 rounded px-2 text-xs font-medium text-muted-foreground shadow-none',
+                'hover:text-foreground hover:bg-muted',
+                'data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none',
+              )}
+            >
+              {t(`telemetry:tabs.${id}`)}
+            </TabsTrigger>
+          ))}
         </TabsList>
+      </header>
 
-        <TabsContent value="overview" className="space-y-4">
+      <TabsContent value="overview" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
+        <div className="pt-3">
           <TelemetryOverview />
-        </TabsContent>
+        </div>
+      </TabsContent>
 
-        <TabsContent value="prices">
+      <TabsContent value="prices" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
+        <div className="pt-3">
           <ModelPricesPanel />
-        </TabsContent>
+        </div>
+      </TabsContent>
 
-        <TabsContent value="quality">
+      <TabsContent value="quality" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
+        <div className="pt-3">
           <QualityPanel />
-        </TabsContent>
+        </div>
+      </TabsContent>
 
-        <TabsContent value="supervisor">
-          <SupervisorPanel />
-        </TabsContent>
-      </Tabs>
-    </div>
+      <TabsContent value="supervisor" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
+        <div className="pt-3">
+          <SupervisorPanel variant="dashboard" />
+        </div>
+      </TabsContent>
+    </Tabs>
   );
 }
 

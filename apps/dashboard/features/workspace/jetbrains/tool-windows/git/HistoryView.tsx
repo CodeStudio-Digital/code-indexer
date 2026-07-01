@@ -47,6 +47,8 @@ interface GitBranchSummary {
 
 interface HistoryViewProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   onMutated: () => void;
   /** A sequencer op is mid-flight — disable cherry-pick/revert/reset. */
   opInProgress?: boolean;
@@ -54,7 +56,7 @@ interface HistoryViewProps {
 
 const PAGE_SIZES = [30, 60, 120, 250];
 
-export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewProps) {
+export function HistoryView({ projectId, repoPath, onMutated, opInProgress }: HistoryViewProps) {
   const [commits, setCommits] = useState<Commit[]>([]);
   const [branches, setBranches] = useState<GitBranchSummary[]>([]);
   const [branch, setBranch] = useState<string>(''); // empty = current
@@ -67,8 +69,8 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
     setLoading(true);
     try {
       const [bs, cs] = await Promise.all([
-        apiCall<GitBranchSummary[]>('projectGit.branchesDetailed', { projectId, includeRemote: true, rev: gitRev }),
-        apiCall<Commit[]>('projectGit.log', { projectId, limit, branch: branch || undefined }),
+        apiCall<GitBranchSummary[]>('projectGit.branchesDetailed', { projectId, repoPath, includeRemote: true, rev: gitRev }),
+        apiCall<Commit[]>('projectGit.log', { projectId, repoPath, limit, branch: branch || undefined }),
       ]);
       setBranches(bs);
       setCommits(cs);
@@ -78,7 +80,7 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
     } finally {
       setLoading(false);
     }
-  }, [projectId, limit, branch, gitRev]);
+  }, [projectId, repoPath, limit, branch, gitRev]);
 
   useEffect(() => {
     void reload();
@@ -101,6 +103,7 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
     try {
       const r = await apiCall<GitRunResult>('projectGit.cherryPick', {
         projectId,
+        repoPath,
         commits: [c.sha],
       });
       if (r.ok) {
@@ -125,7 +128,7 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
     });
     if (!ok) return;
     try {
-      const r = await apiCall<GitRunResult>('projectGit.revert', { projectId, commit: c.sha });
+      const r = await apiCall<GitRunResult>('projectGit.revert', { projectId, repoPath, commit: c.sha });
       if (r.ok) {
         toast.success(`Reverted ${c.shortSha}`);
       } else {
@@ -154,7 +157,7 @@ export function HistoryView({ projectId, onMutated, opInProgress }: HistoryViewP
     });
     if (!ok) return;
     try {
-      const r = await apiCall<GitRunResult>('projectGit.reset', { projectId, target: c.sha, mode });
+      const r = await apiCall<GitRunResult>('projectGit.reset', { projectId, repoPath, target: c.sha, mode });
       if (r.ok) {
         toast.success(`Reset --${mode} to ${c.shortSha}`);
       } else {

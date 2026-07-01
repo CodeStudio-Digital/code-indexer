@@ -34,6 +34,8 @@ export interface BranchActions {
 
 interface UseBranchOps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   /** Snapshot of the branch list — used to resolve the current branch. */
   getBranches: () => GitBranch[];
   /** Refresh the caller (reload its list + bubble to the parent). */
@@ -46,7 +48,7 @@ interface UseBranchOps {
 const tail = (r: GitRunResult) => r.stderr.trim().slice(0, 300) || r.stdout.trim().slice(0, 300);
 const remoteOf = (b: GitBranch) => b.name.split('/')[0] || 'origin';
 
-export function useBranchOps({ projectId, getBranches, onMutated, onClose }: UseBranchOps): BranchActions {
+export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onClose }: UseBranchOps): BranchActions {
   const openGitLog = useWorkspaceStore((s) => s.openGitLog);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
 
@@ -55,12 +57,12 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
     const currentName = () => getBranches().find((x) => x.isCurrent)?.name ?? null;
 
     const openLog = (b: GitBranch) =>
-      openGitLog({ kind: 'git-log', projectId, path: `gitlog:${b.name}`, title: `Log: ${b.name}`, branch: b.name, isRemote: b.isRemote });
+      openGitLog({ kind: 'git-log', projectId, repoPath, path: `gitlog:${repoPath ?? ''}:${b.name}`, title: `Log: ${b.name}`, branch: b.name, isRemote: b.isRemote });
 
     const switchTo = async (b: GitBranch) => {
       if (b.isCurrent) return;
       try {
-        const name = await checkoutBranch(projectId, b.name, b.isRemote);
+        const name = await checkoutBranch(projectId, b.name, b.isRemote, repoPath);
         toast.success(`Switched to ${name}`);
         await after();
         onClose?.();
@@ -73,7 +75,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
       const name = await prompt({ title: `New branch from ${b.name}`, description: 'Created from the selected branch and checked out immediately.', placeholder: 'feature/cool-thing' });
       if (!name?.trim()) return;
       try {
-        await apiCall('projectGit.branchCreate', { projectId, name: name.trim(), from: b.name, checkout: true });
+        await apiCall('projectGit.branchCreate', { projectId, repoPath, name: name.trim(), from: b.name, checkout: true });
         toast.success(`Created and switched to ${name.trim()}`);
         await after();
         onClose?.();
@@ -86,7 +88,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
       const newName = await prompt({ title: `Rename ${b.name}`, description: 'New branch name.', placeholder: b.name, defaultValue: b.name });
       if (!newName?.trim() || newName.trim() === b.name) return;
       try {
-        await apiCall('projectGit.branchRename', { projectId, oldName: b.name, newName: newName.trim() });
+        await apiCall('projectGit.branchRename', { projectId, repoPath, oldName: b.name, newName: newName.trim() });
         toast.success(`Renamed to ${newName.trim()}`);
         await after();
       } catch (e) {
@@ -97,7 +99,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
     const push = async (b: GitBranch) => {
       try {
         const remote = b.upstream ? b.upstream.split('/')[0] : 'origin';
-        const r = await apiCall<GitRunResult>('projectGit.push', { projectId, remote, branch: b.name, setUpstream: !b.upstream });
+        const r = await apiCall<GitRunResult>('projectGit.push', { projectId, repoPath, remote, branch: b.name, setUpstream: !b.upstream });
         r.ok ? toast.success(`Pushed ${b.name}`) : toast.error('Push had issues', { description: tail(r) });
         await after();
       } catch (e) {
@@ -111,7 +113,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
       const ok = await confirm({ title: `Delete branch ${b.name}?`, description: b.ahead > 0 ? `This branch has ${b.ahead} commit(s) not in any other branch — they will be lost unless force-deleted.` : 'The branch will be deleted from your local repo only.', confirmLabel: 'Delete', tone: 'destructive' });
       if (!ok) return;
       try {
-        await apiCall('projectGit.branchDelete', { projectId, name: b.name });
+        await apiCall('projectGit.branchDelete', { projectId, repoPath, name: b.name });
         toast.success(`Deleted ${b.name}`);
         await after();
       } catch (e) {
@@ -119,7 +121,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
         if (/not fully merged|not yet merged/i.test(msg)) {
           const force = await confirm({ title: `Force-delete ${b.name}?`, description: 'Branch has unmerged commits. Force-delete loses them.', confirmLabel: 'Force delete', tone: 'destructive' });
           if (!force) return;
-          try { await apiCall('projectGit.branchDelete', { projectId, name: b.name, force: true }); toast.success(`Force-deleted ${b.name}`); await after(); }
+          try { await apiCall('projectGit.branchDelete', { projectId, repoPath, name: b.name, force: true }); toast.success(`Force-deleted ${b.name}`); await after(); }
           catch (e2) { toast.error('Delete failed', { description: e2 instanceof Error ? e2.message : String(e2) }); }
         } else { toast.error('Delete failed', { description: msg }); }
       }
@@ -131,7 +133,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
       const ok = await confirm({ title: `Merge ${b.name} into ${current}?`, description: 'Creates a merge commit if needed. Conflicts open in the resolver.', confirmLabel: 'Merge' });
       if (!ok) return;
       try {
-        const r = await apiCall<GitRunResult>('projectGit.merge', { projectId, branch: b.name });
+        const r = await apiCall<GitRunResult>('projectGit.merge', { projectId, repoPath, branch: b.name });
         r.ok ? toast.success(`Merged ${b.name} into ${current}`) : toast.error('Merge had issues', { description: tail(r) });
         await after();
         requestGitReload();
@@ -144,7 +146,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
       const ok = await confirm({ title: `Rebase ${current} onto ${b.name}?`, description: 'Replays your commits on top of the target. Conflicts open in the resolver; finish with Continue or Abort.', confirmLabel: 'Rebase' });
       if (!ok) return;
       try {
-        const r = await apiCall<GitRunResult>('projectGit.rebase', { projectId, onto: b.name });
+        const r = await apiCall<GitRunResult>('projectGit.rebase', { projectId, repoPath, onto: b.name });
         r.ok ? toast.success(`Rebased ${current} onto ${b.name}`) : toast.error('Rebase stopped', { description: tail(r) });
         await after();
         requestGitReload();
@@ -155,11 +157,11 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
       const current = currentName();
       if (!current) { toast.error('Pull requires a current branch (detached HEAD)'); return; }
       try {
-        const fetched = await apiCall<GitRunResult>('projectGit.fetch', { projectId, remote: remoteOf(b) });
+        const fetched = await apiCall<GitRunResult>('projectGit.fetch', { projectId, repoPath, remote: remoteOf(b) });
         if (!fetched.ok) { toast.error('Fetch failed', { description: tail(fetched) }); return; }
         const r = mode === 'rebase'
-          ? await apiCall<GitRunResult>('projectGit.rebase', { projectId, onto: b.name })
-          : await apiCall<GitRunResult>('projectGit.merge', { projectId, branch: b.name });
+          ? await apiCall<GitRunResult>('projectGit.rebase', { projectId, repoPath, onto: b.name })
+          : await apiCall<GitRunResult>('projectGit.merge', { projectId, repoPath, branch: b.name });
         r.ok ? toast.success(`Pulled ${b.name} into ${current}`) : toast.error('Pull stopped', { description: tail(r) });
         await after();
         requestGitReload();
@@ -171,8 +173,8 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
         // Current branch → the famous `git pull` (rebase, like Update Project);
         // a non-current branch can't be pulled into, so fast-forward its ref.
         const r = b.isCurrent
-          ? await apiCall<GitRunResult>('projectGit.pull', { projectId, rebase: true })
-          : await apiCall<GitRunResult>('projectGit.updateBranch', { projectId, branch: b.name });
+          ? await apiCall<GitRunResult>('projectGit.pull', { projectId, repoPath, rebase: true })
+          : await apiCall<GitRunResult>('projectGit.updateBranch', { projectId, repoPath, branch: b.name });
         r.ok ? toast.success(`Updated ${b.name}`) : toast.error('Update had issues', { description: tail(r) });
         await after();
         requestGitReload();
@@ -181,7 +183,7 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
 
     const compare = async (b: GitBranch, worktree: boolean) => {
       try {
-        const { patch } = await apiCall<{ patch: string }>('projectGit.branchDiff', { projectId, branch: b.name, worktree });
+        const { patch } = await apiCall<{ patch: string }>('projectGit.branchDiff', { projectId, repoPath, branch: b.name, worktree });
         if (!patch.trim()) { toast.message('No differences', { description: worktree ? `Working tree matches ${b.name}.` : `${b.name} matches the current branch.` }); return; }
         openDiff({ kind: 'diff', projectId, path: `branchdiff:${worktree ? 'wt' : 'cmp'}:${b.name}`, title: worktree ? `Diff vs ${b.name}` : `Compare ${b.name}`, patch, source: 'git-unstaged' });
         onClose?.();
@@ -202,5 +204,5 @@ export function useBranchOps({ projectId, getBranches, onMutated, onClose }: Use
       onPush: (b) => void push(b),
       onDelete: (b) => void remove(b),
     };
-  }, [projectId, getBranches, onMutated, onClose, openGitLog, openDiff]);
+  }, [projectId, repoPath, getBranches, onMutated, onClose, openGitLog, openDiff]);
 }

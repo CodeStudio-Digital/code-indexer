@@ -38,13 +38,15 @@ interface GitRunResult {
 
 interface StashViewProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   /** Bubble to parent so Changes tab re-fetches status after apply/pop. */
   onMutated: () => void;
   /** A conflict is already in progress — block apply/pop. */
   opInProgress?: boolean;
 }
 
-export function StashView({ projectId, onMutated, opInProgress }: StashViewProps) {
+export function StashView({ projectId, repoPath, onMutated, opInProgress }: StashViewProps) {
   const [stashes, setStashes] = useState<GitStashEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +58,7 @@ export function StashView({ projectId, onMutated, opInProgress }: StashViewProps
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await apiCall<GitStashEntry[]>('projectGit.stashList', { projectId });
+      const r = await apiCall<GitStashEntry[]>('projectGit.stashList', { projectId, repoPath });
       setStashes(r);
       setError(null);
     } catch (e) {
@@ -64,7 +66,7 @@ export function StashView({ projectId, onMutated, opInProgress }: StashViewProps
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, repoPath]);
 
   useEffect(() => {
     void reload();
@@ -87,7 +89,7 @@ export function StashView({ projectId, onMutated, opInProgress }: StashViewProps
     }
     setBusyRef(ref);
     try {
-      const r = await apiCall<GitRunResult>(method, { projectId, ref });
+      const r = await apiCall<GitRunResult>(method, { projectId, repoPath, ref });
       if (r.ok) {
         toast.success(`${label} OK`, {
           description:
@@ -122,7 +124,8 @@ export function StashView({ projectId, onMutated, opInProgress }: StashViewProps
     openGitStash({
       kind: 'git-stash',
       projectId,
-      path: `gitstash:${entry.index}`,
+      repoPath,
+      path: `gitstash:${repoPath ?? ''}:${entry.index}`,
       title: `Stash ${entry.shortSha}`,
       stashRef: entry.index,
     });
@@ -132,6 +135,7 @@ export function StashView({ projectId, onMutated, opInProgress }: StashViewProps
     try {
       const r = await apiCall<{ patch: string }>('projectGit.stashShow', {
         projectId,
+        repoPath,
         ref: entry.index,
       });
       openDiff({
@@ -205,6 +209,7 @@ export function StashView({ projectId, onMutated, opInProgress }: StashViewProps
       {createOpen && (
         <CreateStashDialog
           projectId={projectId}
+          repoPath={repoPath}
           onClose={() => setCreateOpen(false)}
           onCreated={() => {
             setCreateOpen(false);

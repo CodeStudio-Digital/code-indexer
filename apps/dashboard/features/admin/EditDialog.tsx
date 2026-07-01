@@ -136,8 +136,14 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
           )}
           {isOauth ? (
             <div className="rounded border border-input bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-              {selected?.displayName} usa conexão {selected?.credKind === 'aws' ? 'por credenciais' : 'OAuth'} —
-              conecte pelo botão do provider (acima na lista). {initial.has_key ? 'Conectado.' : ''}
+              {t('admin:editProvider.oauthHint', {
+                name: selected?.displayName ?? '',
+                method:
+                  selected?.credKind === 'aws'
+                    ? t('admin:editProvider.oauthMethodAws')
+                    : t('admin:editProvider.oauthMethodOauth'),
+              })}
+              {initial.has_key ? ` ${t('admin:editProvider.oauthConnected')}` : ''}
             </div>
           ) : (
             <div>

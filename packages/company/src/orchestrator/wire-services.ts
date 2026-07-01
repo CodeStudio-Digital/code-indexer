@@ -20,6 +20,7 @@ import { PipelineExecutor } from '../services/PipelineExecutor.js';
 import { InboxQueue } from '../services/InboxQueue.js';
 import { MasterInboxRouter } from '../services/MasterInboxRouter.js';
 import { RuntimeReconciler } from '../services/RuntimeReconciler.js';
+import { CompanyScheduler } from '../services/scheduler/CompanyScheduler.js';
 import { CompanyDriveStore } from '../services/CompanyDriveStore.js';
 import { CompanyEventBus } from '../services/CompanyEventBus.js';
 import type { CompanyOrchestrator } from '../orchestrator.js';
@@ -44,6 +45,7 @@ export interface WiredServices {
   inbox: InboxQueue;
   masterInbox: MasterInboxRouter;
   reconciler: RuntimeReconciler;
+  scheduler: CompanyScheduler;
   driveStore: CompanyDriveStore;
   metaBus: CoderRunBus;
   parentSessionId: number | null;
@@ -129,7 +131,7 @@ export function wireServices(args: {
     master: { get hasEnded() { return master.hasEnded; } },
     subordinates,
   });
-  publisher.setActivityListener(() => watchdog.recordActivity());
+  publisher.setActivityListener((event) => watchdog.recordActivity(event));
   watchdog.start();
 
   // Pipelines: thin CRUD + executor that drives subordinates through a stored
@@ -167,14 +169,26 @@ export function wireServices(args: {
   // RuntimeReconciler — periodic DB↔runtime consistency sweep + master-inbox
   // heartbeat. Constructed AFTER masterInbox because it depends on it.
   const reconciler = new RuntimeReconciler({
-    ctx, master, subordinates, masterInbox, publisher, humanInLoop, attention,
+    ctx, master, subordinates, masterInbox, publisher, humanInLoop, attention, kanban,
   });
   reconciler.start();
+
+  // CompanyScheduler — autonomous dispatch loop. Gated behind
+  // MCP_COMPANY_SCHEDULER (default off): `start()` is a no-op when disabled,
+  // so this costs nothing until the operator opts in.
+  const scheduler = new CompanyScheduler({
+    ctx,
+    kanban,
+    master,
+    subordinates,
+    concurrencyLimit: subordinates.concurrencyPolicy.limit,
+  });
+  scheduler.start();
 
   return {
     ctx, publisher, wirer, kanban, board, status, attention,
     sandboxService, eventBus, humanInLoop, idle, watchdog,
     subordinates, master, pipelines, pipelineExecutor,
-    inbox, masterInbox, reconciler, driveStore, metaBus, parentSessionId,
+    inbox, masterInbox, reconciler, scheduler, driveStore, metaBus, parentSessionId,
   };
 }

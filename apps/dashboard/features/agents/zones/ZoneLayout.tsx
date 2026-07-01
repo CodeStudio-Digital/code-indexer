@@ -40,6 +40,9 @@ interface ZoneLayoutProps {
    * the composer's closures without WorkZone re-wiring them.
    */
   composer?: React.ReactNode;
+  /** Bottom terminal panel open state — forwarded to the rail footer toggle. */
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
 }
 
 export function ZoneLayout({
@@ -51,6 +54,8 @@ export function ZoneLayout({
   stream,
   boardMessages,
   composer,
+  terminalOpen,
+  onToggleTerminal,
 }: ZoneLayoutProps) {
   const handleChange = useCallback(
     (nextZone: Zone, nextTab: string) => {
@@ -68,7 +73,13 @@ export function ZoneLayout({
     // composer now (not wrapping ZoneLayout in a PanelGroup), so this
     // is the natural flex layout again.
     <div className="flex-1 flex overflow-hidden">
-      <LeftTabRail activeZone={zone} activeTab={tab} onChange={handleChange} />
+      <LeftTabRail
+        activeZone={zone}
+        activeTab={tab}
+        onChange={handleChange}
+        terminalOpen={terminalOpen}
+        onToggleTerminal={onToggleTerminal}
+      />
       <div className="flex-1 flex flex-col overflow-hidden">
         {zone === 'work' && (
           <WorkZone

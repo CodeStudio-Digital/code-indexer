@@ -33,42 +33,51 @@ const MCP_BASE = 'mcp://app';
 
 function isElectronRenderer(): boolean {
   if (typeof window === 'undefined') return false;
-  if (typeof navigator === 'undefined') return false;
   // Electron's chromium fork stamps "Electron/<version>" into the UA.
   // Examples from Electron 33: "...Electron/33.4.0 Safari/537.36".
-  return /\bElectron\//i.test(navigator.userAgent);
+  if (typeof navigator !== 'undefined' && /\bElectron\//i.test(navigator.userAgent)) return true;
+  // After the Electron 42 upgrade some renderers no longer carry "Electron/"
+  // in the UA, so the UA-only check returned false INSIDE the app and every
+  // relative `/api/*` leaked to the http loopback (Vite proxy 7317→7333)
+  // instead of mcp://app — company orchestrators (in-process) became
+  // unreachable and /answer 404'd. The preload-exposed `electronAPI.invoke`
+  // primitive crosses contextBridge reliably and exists in every app window
+  // (a browser never has it), so use it as the fallback. Mirrors
+  // `isElectronRenderer` in lib/api-client.ts — keep the two in sync.
+  const electron = (window as unknown as { electronAPI?: { invoke?: unknown } }).electronAPI;
+  return !!electron && typeof electron.invoke === 'function';
 }
 
 export function installFetchBase(): void {
   if (installed) return;
   installed = true;
-  if (!isElectronRenderer()) {
-    // Browser dev: relative URLs hit the Vite proxy → Hono dev listener
-    // (operator must set MCP_DEV_HTTP=1 for that path to work).
-    return;
-  }
 
   const originalFetch = window.fetch.bind(window);
 
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    if (typeof input === 'string') {
-      if (input.startsWith('/api')) {
-        return originalFetch(`${MCP_BASE}${input}`, init);
-      }
-      // /ws/* deliberately left unchanged — see Fase D in the plan.
-    } else if (input instanceof URL) {
-      // URL inputs are already absolute. No rewrite needed.
-    } else if (input && typeof input === 'object' && 'url' in input) {
-      const url = (input as Request).url;
-      if (url.startsWith('/api')) {
-        return originalFetch(new Request(`${MCP_BASE}${url}`, input as Request), init);
+    // Decide PER-CALL, not once at startup: `isElectronRenderer()` leans on the
+    // preload-exposed `electronAPI.invoke`, which is guaranteed present by the
+    // time any component fetches — even if it raced this startup install. In a
+    // plain browser this stays false and every call passes through to the Vite
+    // proxy unchanged (relative URLs → 7317 → backend).
+    if (isElectronRenderer()) {
+      if (typeof input === 'string') {
+        if (input.startsWith('/api')) {
+          return originalFetch(`${MCP_BASE}${input}`, init);
+        }
+        // /ws/* deliberately left unchanged — see Fase D in the plan.
+      } else if (input && typeof input === 'object' && !(input instanceof URL) && 'url' in input) {
+        // URL inputs are already absolute; only relative Request urls need it.
+        const url = (input as Request).url;
+        if (url.startsWith('/api')) {
+          return originalFetch(new Request(`${MCP_BASE}${url}`, input as Request), init);
+        }
       }
     }
     return originalFetch(input as RequestInfo, init);
   }) as typeof window.fetch;
 
-  // Visible-in-DevTools confirmation that the interceptor is wired.
-  // Surfaces silently if everything works; helps debug when the next
-  // person sees Vite proxy errors and wonders if this ran at all.
-  console.info('[mcp] fetch interceptor active — /api/* → mcp://app/api/*');
+  // Visible-in-DevTools confirmation that the interceptor is wired. The actual
+  // rewrite is gated per-call on isElectronRenderer().
+  console.info('[mcp] fetch interceptor installed — /api/* → mcp://app in Electron');
 }

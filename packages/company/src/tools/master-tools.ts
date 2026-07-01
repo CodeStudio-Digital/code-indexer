@@ -13,6 +13,7 @@ import { buildReviewSubordinateTool, type MasterReviewDeps } from '@mcp/company/
 import { resolveAgentRunId } from '@mcp/company/tools/path-resolution.js';
 import { runAgentWaitLoop } from '@mcp/company/tools/agent-wait-loop.js';
 import { observeOutcome } from '@mcp/services/shadow-traffic/index.js';
+import { getGlobalCompanyRecommend } from '@mcp/company/services/scheduler/recommend-shim.js';
 
 /** FNV-1a hash — matches the producer in recommendations.ts so observed
  *  outcomes correlate with the shadow rows created at recommend-role time. */
@@ -44,6 +45,8 @@ export function buildMasterTools(
     listContainers(orchestrator),
     readContainerLogs(orchestrator),
     respondToInbox(orchestrator),
+    recommendRole(orchestrator),
+    broadcastToRoles(orchestrator),
     // review_subordinate_work — only wired when the host supplies db access
     // (runCoder does; the lightweight tool unit tests don't, and don't need it).
     ...(reviewDeps ? [buildReviewSubordinateTool(orchestrator, reviewDeps)] : []),
@@ -292,6 +295,9 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
         targetIds: null,
         isMaster: true,
         deadlineMs: deadline,
+        // Heartbeat the master's supervisor record so a long, healthy wait
+        // isn't misread as a stuck tool (safe master-supervisor wiring).
+        heartbeatAgentRunId: orchestrator.getMasterAgentRunId() ?? undefined,
       });
       switch (outcome.kind) {
         case 'pending_messages':
@@ -825,6 +831,118 @@ function listContainers(orchestrator: CompanyOrchestrator): CoderTool {
       const footer =
         '\nUse read_container_logs(service_id=<id>, tail=<n>) to inspect a specific container.';
       return ok(rows.join('\n') + footer);
+    },
+  };
+}
+
+// ─── recommend_role ────────────────────────────────────────────
+
+function recommendRole(orchestrator: CompanyOrchestrator): CoderTool {
+  return {
+    name: 'recommend_role',
+    description:
+      'Ask the role recommender which configured role best fits a task. It is embedding-backed ' +
+      '(matches the task against each role\'s specialty) and factors in which agents are idle vs busy. ' +
+      'Returns a ranked shortlist — ADVISORY: you still decide and call spawn_subordinate_agent. ' +
+      'Use when you are unsure which of several similar roles should own a piece of work.',
+    parameters: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'The task you want a role for. Be specific (stack, files, goal).' },
+        k: { type: 'number', description: 'How many ranked roles to return (default 3).' },
+      },
+      required: ['task'],
+      additionalProperties: false,
+    },
+    source: 'native',
+    handler: async (args) => {
+      const recommend = getGlobalCompanyRecommend();
+      if (!recommend) {
+        return ok('Role recommender is not wired into this process — pick a role from YOUR TEAM yourself.');
+      }
+      const task = String(args.task ?? '').trim();
+      if (!task) return err('task cannot be empty');
+      try {
+        const res = await recommend({
+          companySessionId: orchestrator.companySessionId,
+          taskText: task,
+          k: (args.k as number | undefined) ?? 3,
+        });
+        if (res.recommendations.length === 0) {
+          return ok('No recommendation (no roles configured for this session, or none matched). Choose from YOUR TEAM.');
+        }
+        const lines = res.recommendations.map(
+          (r, i) => `${i + 1}. ${r.role} — ${r.kind}, score=${r.score.toFixed(3)}`,
+        );
+        return ok(
+          `Recommended roles for this task (best first):\n${lines.join('\n')}\n\n` +
+          'These are suggestions — spawn the one that fits, or override with your own judgment.',
+        );
+      } catch (e) {
+        return err(`recommend_role failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  };
+}
+
+// ─── broadcast_to_roles ────────────────────────────────────────
+
+function broadcastToRoles(orchestrator: CompanyOrchestrator): CoderTool {
+  return {
+    name: 'broadcast_to_roles',
+    description:
+      'Send ONE message to several roles at once (multicast) instead of copying it into N separate ' +
+      'forward_to_agent calls. Use to align the team on a shared decision — an API contract, a naming ' +
+      'convention, a schema — so @backend, @frontend and @qa all get the same source of truth. ' +
+      'Delivery reuses the inbox: each role\'s agent receives it when idle (queued if busy). ' +
+      'Fire-and-forget — for a question that needs an answer from a specific agent, use forward_to_agent.',
+    parameters: {
+      type: 'object',
+      properties: {
+        roles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Target role names, e.g. ["backend", "frontend", "qa"].',
+        },
+        message: { type: 'string', description: 'The shared message every listed role should receive verbatim.' },
+      },
+      required: ['roles', 'message'],
+      additionalProperties: false,
+    },
+    source: 'native',
+    handler: async (args) => {
+      const roles = (args.roles as string[] | undefined)?.map((r) => String(r).trim()).filter(Boolean) ?? [];
+      const message = String(args.message ?? '').trim();
+      if (roles.length === 0) return err('Provide at least one target role.');
+      if (!message) return err('message cannot be empty');
+      const uniqueRoles = [...new Set(roles)];
+      const masterRunId = orchestrator.getMasterAgentRunId() ?? 0;
+
+      const lines: string[] = [];
+      for (const role of uniqueRoles) {
+        try {
+          const sent = orchestrator.inboxSend({
+            fromAgentRunId: masterRunId,
+            fromRole: 'master',
+            toRole: role,
+            kind: 'notify',
+            body: message,
+            wait: false,
+          });
+          lines.push(`  @${role}: message ${sent.message.id} (${sent.deliveredImmediately ? 'delivered' : 'queued — picked up when idle'})`);
+        } catch (e) {
+          lines.push(`  @${role}: FAILED — ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      // Mirror to the board so the operator sees the alignment happen.
+      try {
+        orchestrator.postToBoard(
+          'master', masterRunId, 'handoff',
+          `[broadcast → ${uniqueRoles.map((r) => `@${r}`).join(', ')}]\n${message}`,
+          uniqueRoles,
+        );
+      } catch { /* best-effort */ }
+      return ok(`Broadcast to ${uniqueRoles.length} role(s):\n${lines.join('\n')}`);
     },
   };
 }

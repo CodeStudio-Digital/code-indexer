@@ -31,6 +31,18 @@ export function remove(db: DB, companySessionId: number, projectId: number): voi
  * history. Returns the number of rows removed.
  */
 export function pruneOrphans(db: DB, companySessionId: number): number {
+  // This runs on EVERY `state-snapshot` poll (a hot, high-frequency read path).
+  // A bare DELETE takes the WAL write lock and appends a frame even when zero
+  // rows match, which under a multi-agent run needlessly contends with the
+  // worker writers. Probe with a read first; only take the write path when an
+  // orphan actually exists (rare), keeping the steady-state poll read-only.
+  const orphan = db.prepare(
+    `SELECT 1 FROM company_session_projects
+     WHERE company_session_id = ?
+       AND project_id NOT IN (SELECT id FROM projects)
+     LIMIT 1`,
+  ).get(companySessionId);
+  if (!orphan) return 0;
   const res = db.prepare(
     `DELETE FROM company_session_projects
      WHERE company_session_id = ?

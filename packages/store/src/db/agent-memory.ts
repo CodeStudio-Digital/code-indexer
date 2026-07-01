@@ -501,6 +501,10 @@ export interface AgentMemoryStats {
   liveUser: number;
   /** Telemetry event counts by type (remember/recall/forget/selector/…). */
   events: Record<string, number>;
+  /** Recall events that injected ≥1 memory — the "actually used" signal. */
+  recallHits: number;
+  /** Recall events that returned nothing (cold/irrelevant store). */
+  recallEmpty: number;
 }
 
 /**
@@ -531,7 +535,16 @@ export function getStats(db: DB, projectId?: number): AgentMemoryStats {
     .all(...(projectId != null ? [projectId] : [])) as Array<{ event_type: string; c: number }>;
   const events: Record<string, number> = {};
   for (const r of evRows) events[r.event_type] = r.c;
-  return { liveProject, liveUser, events };
+  const recall = db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN kept > 0 THEN 1 ELSE 0 END), 0) AS hits,
+              COALESCE(SUM(CASE WHEN kept = 0 THEN 1 ELSE 0 END), 0) AS empty
+         FROM agent_memory_events WHERE event_type = 'recall'${
+           projectId != null ? ' AND project_id = ?' : ''
+         }`,
+    )
+    .get(...(projectId != null ? [projectId] : [])) as { hits: number; empty: number };
+  return { liveProject, liveUser, events, recallHits: recall.hits, recallEmpty: recall.empty };
 }
 
 function clamp01(n: number): number {

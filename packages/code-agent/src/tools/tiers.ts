@@ -202,11 +202,11 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // write entry (kept always-on); read_plan + list_notes demoted to navigate
   // (Phase B) — 0 calls in 12k turns.
   // (Session-scoped notes — distinct from project-wide mcp__save_memory.)
-  'save_note',
-  // WS5/WS6: the durable Agent Memory write (`remember`) + read (`recall_memory`)
-  // are BOTH on the turn-1 surface — the old asymmetry (a visible write via
-  // save_note, a hidden read) was a root cause of memory going unused. save_note
-  // is now session-scratchpad only; `forget_memory` lives in navigate.
+  // WS12: minimal turn-1 memory surface = the durable write+read pair
+  // (`remember` + `recall_memory`), BOTH in NEVER_TRIM so the catalog cap keeps
+  // them on weak models. save_note (session scratchpad) + forget_memory live in
+  // navigate — weak models aren't forced to disambiguate ephemeral vs durable
+  // (memory also works passively via proactive injection + the run-end distiller).
   'remember',
   'recall_memory',
   'recall_investigations',
@@ -358,6 +358,7 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'read_plan',
   'list_notes',
   'forget_memory',
+  'save_note',
   'get_goal',
   'mcp__query_snapshots',
   'mcp__search_memory',
@@ -607,9 +608,11 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   find_tools: 'Search the full tool catalog by description',
   request_review: 'Spawn a reviewer subagent to second-opinion the diff',
   read_plan: 'Re-read your submitted plan and its approval status',
-  save_note: 'Save a session note or a durable project memory (scope: session|project)',
+  save_note: 'Jot a scratchpad note for THIS session (ephemeral — use remember for durable memory)',
+  remember: 'Save a durable fact the moment you learn it (decision/convention/gotcha/recipe)',
+  forget_memory: 'Archive a durable memory by title when it becomes wrong or obsolete',
   list_notes: 'List the notes you saved with save_note this session',
-  recall_memory: 'Fetch full project memories by meaning (decisions/gotchas/recipes)',
+  recall_memory: 'Recall durable memory by meaning before re-exploring (decisions/gotchas/recipes)',
   recall_investigations: 'Find a past sub-agent exploration before re-running it',
   get_tool_output: 'Retrieve truncated output from a prior tool call',
   glob: 'Find files matching a glob pattern',

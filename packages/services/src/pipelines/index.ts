@@ -25,8 +25,11 @@ export {
 
 export {
   type BindingRole,
+  type CapabilityKind,
   type PipelineCatalogEntry,
   PIPELINE_CATALOG,
+  capabilityKindForRole,
+  setupTargetsForCapability,
   groupCatalogByPipeline,
   findCatalogEntry,
 } from './catalog.js';

@@ -25,6 +25,7 @@ import type {
   AttentionEvent,
   AttentionListener,
 } from '@mcp/company/services/MasterAttention.js';
+import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
 
 /** Statuses that mean a target agent has reached a terminal state. */
 const TERMINAL_STATUSES = new Set<string>([
@@ -70,6 +71,15 @@ export interface AgentWaitLoopOpts {
   pollMs?: number;
   /** Injectable clock (tests). Default `Date.now`. */
   now?: () => number;
+  /**
+   * When set, the loop heartbeats this agent's supervisor record on every
+   * poll. A `wait_for_subordinates` / `wait_agents` call parks the caller in a
+   * single long `AWAITING_TOOL` (up to 30 min) that emits no `tool_progress`,
+   * so without this the supervisor would flag a perfectly healthy waiter as
+   * `STUCK_TOOL`. No-op when the supervisor is disabled or the agent isn't
+   * tracked. This is what makes wiring the master into the supervisor safe.
+   */
+  heartbeatAgentRunId?: number;
 }
 
 export async function runAgentWaitLoop(
@@ -91,6 +101,10 @@ export async function runAgentWaitLoop(
   };
 
   while (!isDone()) {
+    // Keep the supervisor from mistaking a healthy long wait for a stuck tool.
+    if (opts.heartbeatAgentRunId != null) {
+      getGlobalAgentSupervisor()?.heartbeat(opts.heartbeatAgentRunId);
+    }
     // Level-trigger (master only): a notification was queued while we weren't
     // subscribed — return so the runner drains it on the next turn.
     if (isMaster && orchestrator.masterHasPendingMessages()) {

@@ -44,6 +44,16 @@ import {
 } from './persistence.js';
 
 export interface AgentSupervisorDeps {
+  /**
+   * The company session this supervisor instance is scoped to. One
+   * `AgentSupervisor` always maps 1:1 to one company session — a
+   * per-worker singleton (see `company-worker.ts`). Used to attribute
+   * session-less incidents (global circuit-breaker events, or ones
+   * fired for an agent that isn't in the tracker yet) instead of
+   * silently persisting them with `company_session_id = NULL`, which
+   * made them permanently unqueryable.
+   */
+  companySessionId: number;
   companyEventBus: CompanyEventBus;
   completionBus: SubordinateCompletionBus;
   /** Optional sink for incidents — defaults to console.warn. */
@@ -111,6 +121,7 @@ export interface SupervisorStatus {
 }
 
 export class AgentSupervisor {
+  private readonly companySessionId: number;
   private readonly tracker: HeartbeatTracker;
   private readonly observation: ObservationLayer;
   private readonly emitIncidentRaw: IncidentEmitter;
@@ -135,6 +146,7 @@ export class AgentSupervisor {
   private loopEnforcementCounts = new Map<number, number>();
 
   constructor(deps: AgentSupervisorDeps) {
+    this.companySessionId = deps.companySessionId;
     this.tracker = new HeartbeatTracker();
     this.emitIncidentRaw =
       deps.emitIncident ??
@@ -153,7 +165,7 @@ export class AgentSupervisor {
         try {
           const persisted: PersistedIncident = {
             agentRunId: incident.agentRunId ?? null,
-            companySessionId: this.companySessionFor(incident.agentRunId ?? null),
+            companySessionId: this.companySessionId,
             incidentKind: incident.kind,
             fromState: incident.fromState ?? null,
             attemptedToState: incident.attemptedTo ?? null,
@@ -178,13 +190,6 @@ export class AgentSupervisor {
     // Merge: hard defaults ← env overrides ← explicit deps overrides.
     this.breakers = new CircuitBreakers({ ...configFromEnv(), ...(deps.circuitBreakerConfig ?? {}) });
     this.ghostStaleThresholdMs = deps.ghostStaleThresholdMs ?? DEFAULT_GHOST_STALE_THRESHOLD_MS;
-  }
-
-  /** Lookup company_session_id for an agent so persisted incidents
-   *  carry it. Returns null when the agent isn't currently tracked. */
-  private companySessionFor(agentRunId: number | null): number | null {
-    if (agentRunId == null) return null;
-    return this.tracker.get(agentRunId)?.companySessionId ?? null;
   }
 
   /**

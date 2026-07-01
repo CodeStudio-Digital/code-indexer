@@ -13,13 +13,9 @@
  */
 export type Zone = 'work' | 'build' | 'data';
 
-export type WorkTab = 'board' | 'kanban' | 'memory' | 'pipelines' | 'transcript';
+export type WorkTab = 'board' | 'kanban' | 'memory' | 'pipelines';
 export type BuildTab = 'docs' | 'tests' | 'files' | 'git' | 'api' | 'terminal' | 'runners';
-// `indexed` = project's indexed-file table (path · lang · lines · layer ·
-// complexity + summarization). `vectors` = hybrid/vector/FTS search of
-// the embedded corpus. Both read across the session's linked projects
-// via a ProjectSelect inside the tab.
-export type DataTab = 'drive' | 'snapshots' | 'archived' | 'indexed' | 'vectors';
+export type DataTab = 'drive' | 'snapshots' | 'archived';
 
 export type ZoneTab =
   | { zone: 'work'; tab: WorkTab }
@@ -27,9 +23,9 @@ export type ZoneTab =
   | { zone: 'data'; tab: DataTab };
 
 export const ZONE_TABS: { [Z in Zone]: readonly Extract<ZoneTab, { zone: Z }>['tab'][] } = {
-  work: ['board', 'kanban', 'memory', 'pipelines', 'transcript'] as const,
+  work: ['board', 'kanban', 'memory', 'pipelines'] as const,
   build: ['docs', 'tests', 'files', 'git', 'api', 'terminal', 'runners'] as const,
-  data: ['drive', 'snapshots', 'archived', 'indexed', 'vectors'] as const,
+  data: ['drive', 'snapshots', 'archived'] as const,
 };
 
 export const DEFAULT_TAB_FOR_ZONE: { [Z in Zone]: Extract<ZoneTab, { zone: Z }>['tab'] } = {

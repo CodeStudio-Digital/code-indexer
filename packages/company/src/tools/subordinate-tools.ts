@@ -82,7 +82,7 @@ export const askMaster: CoderTool = {
       allowFreeform,
     });
 
-    const answer = await awaitMasterDecision(runner);
+    const answer = await awaitMasterDecision(runner, { heartbeatAgentRunId: ctx.companyContext?.agentRunId ?? undefined });
     let parsed: { aborted?: boolean; interrupted?: boolean; answer?: string };
     try { parsed = JSON.parse(answer); } catch { parsed = { answer }; }
     if (parsed.aborted) return err('Question aborted by Master.');
@@ -135,7 +135,7 @@ export const submitPlanToMaster: CoderTool = {
     // Emit the same event as submit_plan — orchestrator intercepts it
     runner.emit('plan_posted', { type: 'plan', id, plan });
 
-    const raw = await awaitMasterDecision(runner);
+    const raw = await awaitMasterDecision(runner, { heartbeatAgentRunId: ctx.companyContext?.agentRunId ?? undefined });
     let parsed: { approved?: boolean; feedback?: string; aborted?: boolean; interrupted?: boolean };
     try { parsed = JSON.parse(raw); } catch { parsed = { approved: false, feedback: raw }; }
 
@@ -276,7 +276,7 @@ export const submitTasksToMaster: CoderTool = {
       version: 1,
     });
 
-    const raw = await awaitMasterDecision(runner);
+    const raw = await awaitMasterDecision(runner, { heartbeatAgentRunId: ctx.companyContext?.agentRunId ?? undefined });
     let parsed: {
       approved?: boolean;
       feedback?: string;
@@ -358,6 +358,11 @@ export const sendToAgent: CoderTool = {
         enum: ['question', 'notify'],
         description: '"question" expects an answer; "notify" is fire-and-forget. Default: "question".',
       },
+      priority: {
+        type: 'string',
+        enum: ['low', 'normal', 'urgent'],
+        description: 'Delivery priority. "urgent" is claimed before queued FYIs — use it only for a real blocker. Default: "normal".',
+      },
       wait: {
         type: 'boolean',
         description: 'When true (default for question), your session BLOCKS until target answers via respond_to_inbox.',
@@ -371,6 +376,7 @@ export const sendToAgent: CoderTool = {
     if (!body) return err('question cannot be empty');
     const kind = (args.kind as 'question' | 'notify' | undefined) ?? 'question';
     const wait = args.wait == null ? kind === 'question' : Boolean(args.wait);
+    const priority = (args.priority as 'low' | 'normal' | 'urgent' | undefined) ?? 'normal';
     const targetRole = args.target_role as string | undefined;
     const targetAgentRunId = args.target_agent_run_id as number | undefined;
 
@@ -390,6 +396,7 @@ export const sendToAgent: CoderTool = {
         kind,
         body,
         wait,
+        priority,
       });
 
       if (!wait || !sent.waitToken) {
@@ -435,6 +442,11 @@ export const sendToMaster: CoderTool = {
         enum: ['question', 'notify'],
         description: '"question" expects an answer; "notify" is fire-and-forget. Default: "notify".',
       },
+      priority: {
+        type: 'string',
+        enum: ['low', 'normal', 'urgent'],
+        description: 'Delivery priority. "urgent" jumps ahead of the master\'s queued FYIs — use only for a real blocker. Default: "normal".',
+      },
       wait: {
         type: 'boolean',
         description:
@@ -449,6 +461,7 @@ export const sendToMaster: CoderTool = {
     if (!body) return err('message cannot be empty');
     const kind = (args.kind as 'question' | 'notify' | undefined) ?? 'notify';
     const wait = args.wait == null ? kind === 'question' : Boolean(args.wait);
+    const priority = (args.priority as 'low' | 'normal' | 'urgent' | undefined) ?? 'normal';
 
     const company = ctx.companyContext;
     if (!company) return err('send_to_master requires a company orchestrator context');
@@ -464,6 +477,7 @@ export const sendToMaster: CoderTool = {
         kind,
         body,
         wait,
+        priority,
       });
 
       if (!wait || !sent.waitToken) {

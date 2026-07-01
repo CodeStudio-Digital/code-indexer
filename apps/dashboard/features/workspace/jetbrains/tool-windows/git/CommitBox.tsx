@@ -25,6 +25,8 @@ import { toast } from '../../../../../components/ui/prompt-dialog.js';
 
 interface CommitBoxProps {
   projectId: number;
+  /** Selected git root (submodule / nested repo); undefined = main repo. */
+  repoPath?: string;
   /** Staged file count — gates the Commit button + AI generate. */
   stagedCount: number;
   /** Current branch upstream, or null when it doesn't track a remote yet. */
@@ -33,7 +35,7 @@ interface CommitBoxProps {
   onCommitted: () => void;
 }
 
-export function CommitBox({ projectId, stagedCount, upstream, onCommitted }: CommitBoxProps) {
+export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommitted }: CommitBoxProps) {
   const { t } = useTranslation('workspace');
   const [open, setOpen] = useState(true);
   const [message, setMessage] = useState('');
@@ -50,7 +52,7 @@ export function CommitBox({ projectId, stagedCount, upstream, onCommitted }: Com
     if (stagedCount === 0 || generating) return;
     setGenerating(true);
     try {
-      const r = await apiCall<{ message: string }>('projectGit.aiCommitMessage', { projectId });
+      const r = await apiCall<{ message: string }>('projectGit.aiCommitMessage', { projectId, repoPath });
       if (r.message) setMessage(r.message);
     } catch (e) {
       const err = e as Error & { status?: number };
@@ -68,12 +70,14 @@ export function CommitBox({ projectId, stagedCount, upstream, onCommitted }: Com
     try {
       await apiCall<{ sha: string }>('projectGit.commit', {
         projectId,
+        repoPath,
         message: message.trim(),
         amend,
       });
       if (push) {
         const res = await apiCall<{ ok: boolean; stderr: string }>('projectGit.push', {
           projectId,
+          repoPath,
           setUpstream: !upstream,
         });
         // The commit already landed — surface a push failure without

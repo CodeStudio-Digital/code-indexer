@@ -112,6 +112,7 @@ import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
 import { setChromeServiceForDocs } from './server/deps.js';
 import { setGlobalDocSearch } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { recommendRolesForSession } from './server/routes/company/recommend-core.js';
 import { setGlobalDocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
 import { buildDocSearchBackend, buildDocsHintProvider } from './server/docs/search-backend.js';
 import { setGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
@@ -212,6 +213,74 @@ async function wireQualityWatchdog(): Promise<void> {
     }),
   );
   console.log(`[quality-watchdog] wired (provider=${provider}, model=${model})`);
+}
+
+// ─── Company auto-resume (Phase 1 — metabolism at rest) ──────────────
+//
+// After a crash/restart/deploy every in-flight company session sits dormant
+// until a human re-opens that exact session (orchestrators are lazy). These
+// helpers re-arm, at boot, the sessions that have genuinely pending work — a
+// subordinate message queued for the master — by constructing their
+// orchestrator, which triggers `MasterInboxRouter.reviveIfPending` →
+// `master.notify` → resurrect-from-saved-context.
+
+/** Hard cap on sessions re-armed per boot (runaway backstop). */
+const COMPANY_AUTORESUME_MAX = Math.max(0, Number(process.env.MCP_COMPANY_AUTORESUME_MAX ?? 25));
+/** How many orchestrators to spawn in parallel during the sweep. */
+const COMPANY_AUTORESUME_CONCURRENCY = Math.max(1, Number(process.env.MCP_COMPANY_AUTORESUME_CONCURRENCY ?? 3));
+/** Delay before the sweep so it runs after the rest of boot wiring settles. */
+const COMPANY_AUTORESUME_DELAY_MS = Math.max(0, Number(process.env.MCP_COMPANY_AUTORESUME_DELAY_MS ?? 3000));
+
+/**
+ * Auto-resume default: ON for server (node) deploys — the "always-on org"
+ * posture — and OFF for desktop (electron) so launching the app doesn't
+ * trigger a flood of worker spawns + master resurrects. `MCP_COMPANY_AUTORESUME`
+ * overrides either way (`1`/`true` → on, `0`/`false` → off).
+ */
+function companyAutoResumeEnabled(): boolean {
+  const v = process.env.MCP_COMPANY_AUTORESUME;
+  if (v != null && v !== '') return v === '1' || v.toLowerCase() === 'true';
+  return !process.versions.electron;
+}
+
+/**
+ * Schedule a bounded, rate-limited, best-effort sweep that re-arms the given
+ * sessions. Deferred via an unref'd timer so it never blocks boot and runs
+ * after the worker doc/research deps are wired in `createApp`.
+ */
+function scheduleCompanyAutoResume(sessionIds: number[]): void {
+  const ids = sessionIds.slice(0, COMPANY_AUTORESUME_MAX);
+  const dropped = sessionIds.length - ids.length;
+  const timer = setTimeout(() => {
+    void (async () => {
+      const { getOrSpawnCompanyOrchestrator } = await import('./sse/companyOrchestrator.js');
+      let revived = 0;
+      let cursor = 0;
+      const worker = async (): Promise<void> => {
+        while (cursor < ids.length) {
+          const id = ids[cursor++];
+          try {
+            await getOrSpawnCompanyOrchestrator(id);
+            revived++;
+          } catch (e) {
+            console.warn(
+              `[company] auto-resume failed for session ${id}: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(COMPANY_AUTORESUME_CONCURRENCY, ids.length) }, worker),
+      );
+      console.log(
+        `[company] Auto-resume: re-armed ${revived}/${ids.length} session(s) with pending master inbox` +
+          (dropped > 0 ? ` (${dropped} over MCP_COMPANY_AUTORESUME_MAX skipped)` : ''),
+      );
+    })().catch((e) =>
+      console.warn(`[company] auto-resume sweep failed: ${e instanceof Error ? e.message : String(e)}`),
+    );
+  }, COMPANY_AUTORESUME_DELAY_MS);
+  (timer as { unref?: () => void }).unref?.();
 }
 
 export function createApp() {
@@ -587,10 +656,21 @@ export function createApp() {
   try {
     const sessionsWithPending = deps.companyStore.listSessionsWithPendingMasterInbox();
     if (sessionsWithPending.length > 0) {
-      console.log(
-        `[company] Pending master inbox: ${sessionsWithPending.length} session(s) ` +
-          `awaiting revive on next open — ids: ${sessionsWithPending.join(', ')}`,
-      );
+      if (companyAutoResumeEnabled()) {
+        // Auto-resume (metabolism at rest): proactively re-arm the dormant
+        // sessions instead of just logging. Constructing each orchestrator
+        // runs `MasterInboxRouter.reviveIfPending` in the worker boot, which
+        // drains the queue and resurrects the master from its saved context
+        // — no roleConfig rebuild needed. Deferred so it fires AFTER the
+        // worker doc/research deps are wired (setCompanyWorkerDocDeps, below).
+        scheduleCompanyAutoResume(sessionsWithPending);
+      } else {
+        console.log(
+          `[company] Pending master inbox: ${sessionsWithPending.length} session(s) ` +
+            `awaiting revive on next open — ids: ${sessionsWithPending.join(', ')} ` +
+            `(auto-resume off; set MCP_COMPANY_AUTORESUME=1 to re-arm at boot)`,
+        );
+      }
     }
   } catch (e) {
     console.warn(
@@ -854,6 +934,10 @@ export function createApp() {
     docSearch: docSearchBackend,
     docsResearch: docsResearchBridge,
     vision: visionDescriber,
+    // Role recommender for the autonomous CompanyScheduler — the SAME pipeline
+    // the /recommend-role dashboard route uses (recommend-core.ts), so the
+    // brain stays single-sourced.
+    recommend: (input) => recommendRolesForSession(deps, input),
     memoryRetriever: deps.memoryRetriever,
     runEndMemory: deps.runEndMemory,
     projectMemory: deps.projectMemory,

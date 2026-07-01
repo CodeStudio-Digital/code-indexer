@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Pencil, Layers, Eraser, Settings2 } from 'lucide-react';
+import { Loader2, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Pencil, Layers, Eraser, Settings2, Wand2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
@@ -44,6 +44,9 @@ import {
 } from './pipeline-bindings-api.js';
 import { fetchProviders, fetchProviderModels } from './api.js';
 import type { AdminModel, AdminProvider } from './types.js';
+import { usePipelineFilter } from './pipeline-filter/usePipelineFilter.js';
+import { PipelineFilterBar } from './pipeline-filter/PipelineFilterBar.js';
+import { SetupWizard } from './setup-wizard/SetupWizard.js';
 
 /**
  * State shape for the bulk-apply dialog. Mirrors the single-row edit
@@ -208,6 +211,8 @@ export function PipelineBindingsPanel() {
   const [bulkApply, setBulkApply] = useState<BulkApplyState | null>(null);
   /** Bulk-clear in-flight flag (the panel uses useConfirm() for the dialog itself). */
   const [bulkClearing, setBulkClearing] = useState(false);
+  /** Guided-setup wizard open state. */
+  const [setupOpen, setSetupOpen] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -257,6 +262,8 @@ export function PipelineBindingsPanel() {
     }
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [bindings, catalog, t]);
+
+  const filter = usePipelineFilter(grouped, (c) => `${pipelineLabel(c)} ${roleLabel(c)}`);
 
   const openNew = (entry: PipelineCatalogEntry) => {
     setEditing({
@@ -538,6 +545,14 @@ export function PipelineBindingsPanel() {
         <div className="flex items-center gap-2 shrink-0">
           <Button
             size="sm"
+            onClick={() => setSetupOpen(true)}
+            disabled={loading}
+            title={t('admin:pipelines.setup.openTitle')}
+          >
+            <Wand2 className="h-3.5 w-3.5 mr-1.5" /> {t('admin:pipelines.setup.open')}
+          </Button>
+          <Button
+            size="sm"
             variant="outline"
             onClick={openBulkApply}
             disabled={loading || bulkClearing}
@@ -574,8 +589,10 @@ export function PipelineBindingsPanel() {
         </div>
       )}
 
+      {!loading && <PipelineFilterBar filter={filter} />}
+
       <div className="grid gap-3 xl:grid-cols-2">
-        {grouped.map(([key, group]) => {
+        {filter.visibleGroups.map(([key, group]) => {
           const enabledCount = group.rows.filter((r) => r.enabled).length;
           const statusVariant = group.catalog.comingSoon ? 'warning' : enabledCount > 0 ? 'success' : 'muted';
           const statusLabel = group.catalog.comingSoon
@@ -682,6 +699,17 @@ export function PipelineBindingsPanel() {
           );
         })}
       </div>
+
+      {!loading && !error && filter.shown === 0 && (
+        <div className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+          {t('admin:pipelines.filter.empty')}
+          <Button variant="link" size="sm" onClick={filter.reset} className="ml-1 h-auto p-0 align-baseline">
+            {t('admin:pipelines.filter.clear')}
+          </Button>
+        </div>
+      )}
+
+      <SetupWizard open={setupOpen} onClose={() => setSetupOpen(false)} onApplied={() => void load()} />
 
       {editing && (
         <Dialog open onOpenChange={(open) => !open && setEditing(null)}>

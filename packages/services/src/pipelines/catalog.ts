@@ -28,6 +28,45 @@ export type BindingRole =
   | 'preflight'
   | 'autocomplete';
 
+/**
+ * Coarse, layperson-facing capability bucket a binding role belongs to.
+ * Drives the admin filter facets and the guided-setup wizard fan-out.
+ * Fully determined by the role (1:1) — see {@link ROLE_CAPABILITY}.
+ */
+export type CapabilityKind =
+  | 'text_llm'
+  | 'embeddings'
+  | 'reranking'
+  | 'vision'
+  | 'voice'
+  | 'autocomplete';
+
+/**
+ * Role → capability bucket. The `satisfies Record<BindingRole, …>` makes
+ * this exhaustive: adding a new BindingRole without a bucket here is a
+ * compile error — the safety net the admin UI + setup endpoint rely on.
+ */
+const ROLE_CAPABILITY = {
+  embedder: 'embeddings',
+  classifier: 'text_llm',
+  reranker: 'reranking',
+  scorer_llm: 'text_llm',
+  hyde: 'text_llm',
+  compaction_llm: 'text_llm',
+  link_extractor: 'text_llm',
+  rewriter: 'text_llm',
+  reviewer: 'text_llm',
+  vision: 'vision',
+  transcription: 'voice',
+  distiller: 'text_llm',
+  preflight: 'text_llm',
+  autocomplete: 'autocomplete',
+} satisfies Record<BindingRole, CapabilityKind>;
+
+export function capabilityKindForRole(role: BindingRole): CapabilityKind {
+  return ROLE_CAPABILITY[role];
+}
+
 export interface PipelineCatalogEntry {
   pipelineName: string;
   bindingRole: BindingRole;
@@ -43,9 +82,21 @@ export interface PipelineCatalogEntry {
   comingSoon?: boolean;
   /** Which refactor phase introduces this pipeline. */
   introducedInPhase: string;
+  /** Layperson capability bucket (filled by the catalog builder). */
+  capabilityKind: CapabilityKind;
+  /**
+   * Whether the guided-setup wizard may bind this entry. Defaults to true.
+   * Set false for entries that are informational (no runtime effect) or
+   * whose role expects a different model TYPE than the bucket implies
+   * (e.g. a cross-encoder reranker, not an LLM-as-reranker).
+   */
+  setupEligible?: boolean;
 }
 
-export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
+/** Authoring shape — `capabilityKind` is derived, not hand-written. */
+type CatalogSeed = Omit<PipelineCatalogEntry, 'capabilityKind'>;
+
+const CATALOG_SEED: CatalogSeed[] = [
   // ─── Existing indexer pipelines (Phase 1 — extracted) ────────────────────
   {
     pipelineName: 'indexer_search',
@@ -57,6 +108,7 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
     pipelineName: 'indexer_search',
     bindingRole: 'reranker',
     description: 'Cross-encoder reranker for hybrid search top-K.',
+    setupEligible: false, // cross-encoder, not an LLM-as-reranker
     introducedInPhase: '1',
   },
   {
@@ -223,6 +275,7 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
     description:
       'INFORMATIONAL ONLY — not consumed by code. The docs embedder is governed by the shared embedding_configs default (the worker emits @cf/baai/bge-m3, 1024-dim, multilingual) for BOTH corpus and queries. This row is reserved for future per-corpus embedder selection; setting it today has no effect.',
     recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-m3' },
+    setupEligible: false, // informational only — no runtime effect
     introducedInPhase: '9',
   },
   {
@@ -428,6 +481,26 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
     introducedInPhase: 'editor-autocomplete',
   },
 ];
+
+/**
+ * Public catalog — every entry enriched with its derived `capabilityKind`.
+ * Deriving here (vs hand-writing 44 literals) guarantees the role→bucket
+ * map can never drift from the entries.
+ */
+export const PIPELINE_CATALOG: PipelineCatalogEntry[] = CATALOG_SEED.map((e) => ({
+  ...e,
+  capabilityKind: capabilityKindForRole(e.bindingRole),
+}));
+
+/**
+ * Catalog entries the guided-setup wizard should bind for a capability
+ * bucket: same bucket, real (not coming-soon), and setup-eligible.
+ */
+export function setupTargetsForCapability(kind: CapabilityKind): PipelineCatalogEntry[] {
+  return PIPELINE_CATALOG.filter(
+    (e) => e.capabilityKind === kind && e.setupEligible !== false && !e.comingSoon,
+  );
+}
 
 /**
  * Group catalog entries by pipeline name for the admin panel listing.

@@ -45,6 +45,20 @@ export interface PipelineProviderBindingInput {
   priority?: number;
 }
 
+/**
+ * One row for {@link PipelineProviderBindingsStore.bulkApplyProfile} — a
+ * single (pipeline, role) target the guided-setup wizard wants bound at
+ * GLOBAL scope, carrying its OWN per-role config.
+ */
+export interface PipelineProfileApplyRow {
+  pipeline_name: string;
+  binding_role: string;
+  provider_id: string;
+  model_id: string;
+  model_mode?: string;
+  config?: Record<string, unknown>;
+}
+
 interface RawRow {
   id: number;
   pipeline_name: string;
@@ -363,5 +377,61 @@ export class PipelineProviderBindingsStore {
       },
     );
     return txn(input.targets);
+  }
+
+  /**
+   * Apply a guided-setup profile: bind a list of (pipeline, role) targets at
+   * GLOBAL scope, each with its OWN config.
+   *
+   * Unlike {@link bulkApply} (which fans ONE shared config to every target
+   * via `upsert`), this does **delete-then-insert per (pipeline, role)**:
+   *
+   *   - Every existing GLOBAL row for that (pipeline, role) is removed first,
+   *     then exactly one fresh row is inserted. This guarantees a single
+   *     global binding per role and is **idempotent across re-runs** — the
+   *     layperson can redo the wizard with a different model and never end
+   *     up with duplicate rows. (`upsert` keys on provider+model+mode, so
+   *     switching the model would otherwise leave the old row behind.)
+   *   - Each row carries its own `config`, so the wizard can preserve the
+   *     catalog's per-role recommended config (classifier max_tokens:256 vs
+   *     reviewer max_tokens:4000+json_mode) in a single transaction.
+   *
+   * Template/session bindings are never touched.
+   *
+   * @returns The inserted row ids, in input order.
+   */
+  bulkApplyProfile(rows: ReadonlyArray<PipelineProfileApplyRow>): number[] {
+    const del = this.db.prepare(
+      `DELETE FROM pipeline_provider_bindings
+        WHERE pipeline_name = @pipeline_name
+          AND binding_role  = @binding_role
+          AND scope_type    = 'global'`,
+    );
+    const ins = this.db.prepare(
+      `INSERT INTO pipeline_provider_bindings (
+         pipeline_name, binding_role, provider_id, model_id, model_mode,
+         config_json, scope_type, scope_id, enabled, priority
+       ) VALUES (
+         @pipeline_name, @binding_role, @provider_id, @model_id, @model_mode,
+         @config_json, 'global', NULL, 1, 0
+       )`,
+    );
+    const txn = this.db.transaction((items: ReadonlyArray<PipelineProfileApplyRow>) => {
+      const ids: number[] = [];
+      for (const r of items) {
+        del.run({ pipeline_name: r.pipeline_name, binding_role: r.binding_role });
+        const result = ins.run({
+          pipeline_name: r.pipeline_name,
+          binding_role:  r.binding_role,
+          provider_id:   r.provider_id,
+          model_id:      r.model_id,
+          model_mode:    r.model_mode ?? '',
+          config_json:   JSON.stringify(r.config ?? {}),
+        });
+        ids.push(Number(result.lastInsertRowid));
+      }
+      return ids;
+    });
+    return txn(rows);
   }
 }

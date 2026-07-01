@@ -12,6 +12,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { realpath } from 'node:fs/promises';
 import {
   ApiError,
   type ProjectGitApi,
@@ -29,6 +31,7 @@ import { callGeneralAiJson } from '../aiJson.js';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import { createConflictHandlers } from './conflicts.js';
 import { createGitOptimizationHandlers } from './git-optimizations.js';
+import { createRepoResolver } from './repos.js';
 import { selectHunks } from './hunk-stage.js';
 
 interface GitResult {
@@ -53,6 +56,8 @@ const GIT_AUTO_OPTIMIZE_SLOW_MS = Number(process.env.MCP_GIT_AUTO_OPTIMIZE_SLOW_
 // forever — git itself has no default timeout here.
 const GIT_NETWORK_TIMEOUT_MS = Number(process.env.MCP_GIT_NETWORK_TIMEOUT_MS ?? 30_000);
 const GIT_STATUS_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_STATUS_MAX_OUTPUT_BYTES ?? 24 * 1024 * 1024);
+// How many repos to `git status` in parallel for the aggregate (explorer) view.
+const GIT_AGG_CONCURRENCY = Number(process.env.MCP_GIT_AGG_CONCURRENCY ?? 4);
 const GIT_LIST_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_LIST_MAX_OUTPUT_BYTES ?? 8 * 1024 * 1024);
 const GIT_DETAIL_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_DETAIL_MAX_OUTPUT_BYTES ?? 32 * 1024 * 1024);
 
@@ -353,6 +358,26 @@ async function collectChangedFiles(
   return files;
 }
 
+/** Run `fn` over `items` with a bounded number in flight at once. Order of the
+ *  returned array matches `items`; a failing `fn` rejects the whole pool. */
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length || 1) }, worker));
+  return out;
+}
+
+/** POSIX path of `to` relative to `from`. */
+function posixRel(from: string, to: string): string {
+  return path.relative(from, to).replace(/\\/g, '/');
+}
+
 export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   const { db } = deps;
   const statusInflight = new Map<string, Promise<GitStatus>>();
@@ -397,12 +422,105 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     return { repoRoot, gitDir, notARepo: false };
   }
 
+  // Multi-repo resolver: discovers submodules / nested repos and resolves which
+  // root a call targets. `resolveCwd` validates an explicit `repoPath` selection
+  // (the Git tool window always sends one) against the discovered set and falls
+  // back to the project's main repo when omitted.
+  const repoResolver = createRepoResolver({ runGit, requireRoot, detectRepo });
+  const resolveCwd = repoResolver.resolveCwd;
+
+  // Path-scoped auto-routing (explorer / editor): with NO explicit repo selected,
+  // resolve which discovered repo CONTAINS a project-relative path and run there
+  // with the path rebased repo-relative — so a file inside a submodule gets its
+  // baseline/diff/stage from the SUBMODULE, not the opaque parent gitlink. With
+  // an explicit repoPath the path is already relative to that repo (the Git tool
+  // window's single-repo view), so it's used verbatim.
+  async function resolvePathTarget(
+    projectId: number,
+    repoPath: string | undefined,
+    projectRelPath: string,
+  ): Promise<{ cwd: string; gitPath: string }> {
+    if (repoPath) return { cwd: await resolveCwd(projectId, repoPath), gitPath: projectRelPath };
+    const { cwd, repoRelPath } = await repoResolver.resolveRepoForPath(projectId, projectRelPath);
+    return { cwd, gitPath: repoRelPath };
+  }
+
+  // Group project-relative paths by containing repo so a bulk stage/unstage/
+  // discard runs one git invocation per repo with repo-relative paths.
+  async function groupPathsByRepo(projectId: number, paths: string[]): Promise<Map<string, string[]>> {
+    const groups = new Map<string, string[]>();
+    for (const p of paths) {
+      const { cwd, repoRelPath } = await repoResolver.resolveRepoForPath(projectId, p);
+      const arr = groups.get(cwd);
+      if (arr) arr.push(repoRelPath);
+      else groups.set(cwd, [repoRelPath]);
+    }
+    return groups;
+  }
+
   // Git accelerators (fsmonitor/untrackedCache). Created once so `readStatus`
   // can also auto-enable them per repo on first status (ensureAutoOptimized).
-  const gitOpt = createGitOptimizationHandlers({ runGit, requireRoot });
+  const gitOpt = createGitOptimizationHandlers({ runGit, resolveCwd });
 
-  async function readStatus(projectId: number, includeFiles: boolean): Promise<GitStatus> {
-    const root = requireRoot(projectId);
+  // Aggregate working-tree status across EVERY git root in the project — the
+  // main repo plus its initialized submodules and non-ignored nested repos. Each
+  // repo's `git status` runs at its own root and its file paths are rebased to
+  // project-relative (so the explorer can color files INSIDE a submodule, which
+  // the parent only reports as one opaque gitlink). The parent's gitlink entry
+  // for every DISCOVERED repo root is suppressed to avoid double-reporting; files
+  // outside the project subtree (when the main repo is an ancestor of a nested
+  // project) are clamped out. Discovery is single-level — a submodule nested
+  // inside another submodule isn't expanded, so its parent's opaque entry stays.
+  async function aggregateStatus(projectId: number): Promise<GitStatus> {
+    // Canonicalize the project root so per-file rebasing lines up with the
+    // realpath'd repo roots discovery resolved (see repos.ts).
+    let projectRoot = requireRoot(projectId);
+    try {
+      projectRoot = await realpath(projectRoot);
+    } catch {
+      /* keep raw root */
+    }
+    const repos = await repoResolver.listRepos(projectId);
+    if (repos.length === 0) {
+      return { branch: null, upstream: null, ahead: 0, behind: 0, files: [], repoRoot: null, notARepo: true };
+    }
+    const main = repos.find((r) => r.kind === 'main') ?? repos[0];
+    const scan = repos.filter(
+      (r) => r.kind === 'main' || (r.initialized && !(r.kind === 'nested' && r.ignoredByParent)),
+    );
+    // Suppress the parent's single gitlink entry for any discovered repo root.
+    const repoPrefixes = new Set(repos.map((r) => r.projectRelPrefix).filter(Boolean));
+
+    const perRepo = await mapPool(scan, GIT_AGG_CONCURRENCY, async (r) => {
+      const res = await runGit(r.absPath, ['status', '--porcelain=v2', '--branch', '-z'], {
+        timeoutMs: GIT_READ_TIMEOUT_MS,
+        maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
+      });
+      // Tolerate a single repo failing (transient lock / race) — the rest render.
+      if (res.code !== 0) return { repo: r, files: [] as GitStatusFile[] };
+      return { repo: r, files: parsePorcelainV2Status(res.stdout).files };
+    });
+
+    const files: GitStatusFile[] = [];
+    for (const { repo, files: repoFiles } of perRepo) {
+      for (const f of repoFiles) {
+        const projRel = posixRel(projectRoot, path.resolve(repo.absPath, f.path));
+        if (projRel.startsWith('..') || path.isAbsolute(projRel)) continue; // outside the project
+        if (repoPrefixes.has(projRel)) continue; // a discovered repo's gitlink → already detailed
+        files.push({ path: projRel, state: f.state, staged: f.staged, repo: repo.projectRelPrefix || undefined });
+      }
+    }
+    // Branch / ahead-behind come from the repo that contains the project root.
+    const head = await readHeadSummary(main.absPath);
+    return { ...head, files, repoRoot: main.absPath, notARepo: false };
+  }
+
+  async function readStatus(projectId: number, includeFiles: boolean, repoPath?: string): Promise<GitStatus> {
+    // No explicit repo selected + a full file list requested (the explorer /
+    // status bar) → the project-wide aggregate. An explicit repoPath (the Git
+    // tool window) or a summary-only read takes the single-repo path below.
+    if (!repoPath && includeFiles) return aggregateStatus(projectId);
+    const root = await resolveCwd(projectId, repoPath);
     const { repoRoot, notARepo } = await detectRepo(root);
     if (notARepo) {
       return {
@@ -444,11 +562,11 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     };
   }
 
-  function statusSingleFlight(projectId: number, includeFiles: boolean): Promise<GitStatus> {
-    const key = `${projectId}:${includeFiles ? 'full' : 'summary'}`;
+  function statusSingleFlight(projectId: number, includeFiles: boolean, repoPath?: string): Promise<GitStatus> {
+    const key = `${projectId}:${includeFiles ? 'full' : 'summary'}:${repoPath ?? ''}`;
     const existing = statusInflight.get(key);
     if (existing) return existing;
-    const promise = readStatus(projectId, includeFiles).finally(() => {
+    const promise = readStatus(projectId, includeFiles, repoPath).finally(() => {
       statusInflight.delete(key);
     });
     statusInflight.set(key, promise);
@@ -465,12 +583,16 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     | 'gitOptimizations'
     | 'configureGitOptimizations'
   > = {
-    async status({ projectId, includeFiles = true }) {
-      return statusSingleFlight(projectId, includeFiles !== false);
+    async listRepos({ projectId }) {
+      return repoResolver.listRepos(projectId);
     },
 
-    async detectRemote({ projectId }) {
-      const root = requireRoot(projectId);
+    async status({ projectId, includeFiles = true, repoPath }) {
+      return statusSingleFlight(projectId, includeFiles !== false, repoPath);
+    },
+
+    async detectRemote({ projectId, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const { repoRoot, notARepo } = await detectRepo(root);
       if (notARepo) return { gitRemote: null, defaultBranch: null };
       const cwd = repoRoot ?? root;
@@ -493,12 +615,16 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { gitRemote, defaultBranch };
     },
 
-    async diff({ projectId, path, staged }) {
-      const root = requireRoot(projectId);
+    async diff({ projectId, path: filePath, staged, repoPath }) {
+      // A path-scoped diff auto-routes to its containing repo (submodule-aware);
+      // a whole-repo diff (no path) uses the selected/main repo.
+      const target = filePath
+        ? await resolvePathTarget(projectId, repoPath, filePath)
+        : { cwd: await resolveCwd(projectId, repoPath), gitPath: undefined as string | undefined };
       const args = ['diff', '--no-color'];
       if (staged) args.push('--cached');
-      if (path) args.push('--', path);
-      const r = await runGit(root, args, {
+      if (target.gitPath) args.push('--', target.gitPath);
+      const r = await runGit(target.cwd, args, {
         timeoutMs: GIT_READ_TIMEOUT_MS,
         maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
       });
@@ -508,16 +634,19 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { patch: r.stdout };
     },
 
-    async baseline({ projectId, path }) {
-      const root = requireRoot(projectId);
+    async baseline({ projectId, path: filePath, repoPath }) {
+      // Route to the repo that CONTAINS the file (submodule-aware) so a file
+      // inside a submodule reads its baseline from the submodule's HEAD — the
+      // parent only has an opaque gitlink, which `HEAD:./` would silently
+      // misresolve (empty → whole file painted as added).
+      const { cwd, gitPath } = await resolvePathTarget(projectId, repoPath, filePath);
       // Distinguish "not a repo" (no markers) from "new file in a repo" (whole
       // file is added). detectRepo is cached, so this is cheap.
-      const { notARepo } = await detectRepo(root);
+      const { notARepo } = await detectRepo(cwd);
       if (notARepo) return { content: null, isRepo: false };
-      // `HEAD:./<path>` resolves the path relative to cwd, so a project nested
-      // below the repo root still reads the right blob. Non-zero → the file
-      // isn't at HEAD yet (new / untracked) → empty baseline (all added).
-      const r = await runGit(root, ['show', `HEAD:./${path}`], {
+      // `HEAD:./<gitPath>` resolves relative to the containing repo's root.
+      // Non-zero → the file isn't at HEAD yet (new / untracked) → empty baseline.
+      const r = await runGit(cwd, ['show', `HEAD:./${gitPath}`], {
         timeoutMs: GIT_READ_TIMEOUT_MS,
         maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
       });
@@ -525,12 +654,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { content: r.stdout, isRepo: true };
     },
 
-    async stageHunk({ projectId, path, newStart, newEnd }) {
-      const root = requireRoot(projectId);
-      // Diff the on-disk working tree against the index; the caller flushes the
-      // buffer first so the new side matches the editor. `--recount` lets git
-      // re-derive line numbers after we drop the non-overlapping hunks.
-      const diffRes = await runGit(root, ['diff', '--no-color', '-U3', '--', path], {
+    async stageHunk({ projectId, path: filePath, newStart, newEnd, repoPath }) {
+      const { cwd, gitPath } = await resolvePathTarget(projectId, repoPath, filePath);
+      // Diff the on-disk working tree against the index in the CONTAINING repo;
+      // the caller flushes the buffer first so the new side matches the editor.
+      // `--recount` lets git re-derive line numbers after we drop non-overlaps.
+      const diffRes = await runGit(cwd, ['diff', '--no-color', '-U3', '--', gitPath], {
         timeoutMs: GIT_READ_TIMEOUT_MS,
         maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
       });
@@ -539,18 +668,20 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       }
       const patch = selectHunks(diffRes.stdout, newStart, newEnd);
       if (!patch) throw new ApiError('stage_hunk_empty', 409, 'no stageable changes in this block');
-      const applyRes = await runGit(root, ['apply', '--cached', '--recount', '--whitespace=nowarn'], {
+      const applyRes = await runGit(cwd, ['apply', '--cached', '--recount', '--whitespace=nowarn'], {
         stdin: patch,
         timeoutMs: GIT_READ_TIMEOUT_MS,
       });
       if (applyRes.code !== 0) {
         throw new ApiError('stage_hunk_failed', 409, applyRes.stderr.trim() || 'git apply failed');
       }
-      return { ok: true as const };
+      // Return the repo we staged in so a follow-up "commit this block" targets
+      // the SAME repo (a submodule, not the opaque parent).
+      return { ok: true as const, repoPath: cwd };
     },
 
-    async branchDiff({ projectId, branch, worktree }) {
-      const root = requireRoot(projectId);
+    async branchDiff({ projectId, branch, worktree, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // worktree → branch vs the working tree ("Show diff with working tree");
       // else the symmetric three-dot diff from the merge-base ("Compare with
       // current"), so it shows exactly what `branch` carries relative to HEAD.
@@ -567,8 +698,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { patch: r.stdout };
     },
 
-    async log({ projectId, limit = 30, path, branch }) {
-      const root = requireRoot(projectId);
+    async log({ projectId, limit = 30, path, branch, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s';
       const args = ['log', `--pretty=format:${fmt}`, '--date=iso-strict', `-n${limit}`];
       // Branch filter ALWAYS goes BEFORE the `--` separator. Treating
@@ -593,8 +724,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         });
     },
 
-    async commitDetail({ projectId, sha }) {
-      const root = requireRoot(projectId);
+    async commitDetail({ projectId, sha, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // Metadata in one pass. `%P` (parents) is space-separated; `%b`
       // (body) can contain anything including our separator, so it's
       // fetched in a second `-s` call where it's the whole output.
@@ -630,8 +761,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       };
     },
 
-    async commitFileDiff({ projectId, sha, path }) {
-      const root = requireRoot(projectId);
+    async commitFileDiff({ projectId, sha, path, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // Empty `--format=` strips the commit header so we return only the
       // unified patch — matches the shape `diff` returns.
       const r = await runGit(root, ['show', '--no-color', '--format=', sha, '--', path], {
@@ -644,38 +775,46 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { patch: r.stdout };
     },
 
-    async stage({ projectId, paths }) {
+    async stage({ projectId, paths, repoPath }) {
       if (paths.length === 0) return { ok: true as const };
-      const root = requireRoot(projectId);
-      const r = await runGit(root, ['add', '--', ...paths]);
-      if (r.code !== 0) {
-        throw new ApiError('git_stage_failed', 500, r.stderr.trim() || 'git add failed');
+      // Explicit repo (Git window) → paths are repo-relative, one call. No
+      // repoPath (explorer) → project-relative paths grouped by containing repo.
+      const groups = repoPath
+        ? new Map([[await resolveCwd(projectId, repoPath), paths]])
+        : await groupPathsByRepo(projectId, paths);
+      for (const [cwd, gitPaths] of groups) {
+        const r = await runGit(cwd, ['add', '--', ...gitPaths]);
+        if (r.code !== 0) throw new ApiError('git_stage_failed', 500, r.stderr.trim() || 'git add failed');
       }
       return { ok: true as const };
     },
 
-    async unstage({ projectId, paths }) {
+    async unstage({ projectId, paths, repoPath }) {
       if (paths.length === 0) return { ok: true as const };
-      const root = requireRoot(projectId);
-      const r = await runGit(root, ['restore', '--staged', '--', ...paths]);
-      if (r.code !== 0) {
-        throw new ApiError('git_unstage_failed', 500, r.stderr.trim() || 'git restore --staged failed');
+      const groups = repoPath
+        ? new Map([[await resolveCwd(projectId, repoPath), paths]])
+        : await groupPathsByRepo(projectId, paths);
+      for (const [cwd, gitPaths] of groups) {
+        const r = await runGit(cwd, ['restore', '--staged', '--', ...gitPaths]);
+        if (r.code !== 0) throw new ApiError('git_unstage_failed', 500, r.stderr.trim() || 'git restore --staged failed');
       }
       return { ok: true as const };
     },
 
-    async discard({ projectId, paths }) {
+    async discard({ projectId, paths, repoPath }) {
       if (paths.length === 0) return { ok: true as const };
-      const root = requireRoot(projectId);
-      const r = await runGit(root, ['checkout', '--', ...paths]);
-      if (r.code !== 0) {
-        throw new ApiError('git_discard_failed', 500, r.stderr.trim() || 'git checkout failed');
+      const groups = repoPath
+        ? new Map([[await resolveCwd(projectId, repoPath), paths]])
+        : await groupPathsByRepo(projectId, paths);
+      for (const [cwd, gitPaths] of groups) {
+        const r = await runGit(cwd, ['checkout', '--', ...gitPaths]);
+        if (r.code !== 0) throw new ApiError('git_discard_failed', 500, r.stderr.trim() || 'git checkout failed');
       }
       return { ok: true as const };
     },
 
-    async commit({ projectId, message, amend }) {
-      const root = requireRoot(projectId);
+    async commit({ projectId, message, amend, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = ['commit'];
       if (amend) args.push('--amend');
       args.push('-F', '-');
@@ -687,8 +826,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { sha };
     },
 
-    async branchList({ projectId }) {
-      const root = requireRoot(projectId);
+    async branchList({ projectId, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const cur = (await runGit(root, ['branch', '--show-current'])).stdout.trim() || null;
       const all = (await runGit(root, ['branch', '--list', '--format=%(refname:short)']))
         .stdout
@@ -698,8 +837,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { current: cur, all };
     },
 
-    async branchCheckout({ projectId, name, create }) {
-      const root = requireRoot(projectId);
+    async branchCheckout({ projectId, name, create, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = create ? ['checkout', '-b', name] : ['checkout', name];
       const r = await runGit(root, args);
       if (r.code !== 0) {
@@ -709,15 +848,17 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     },
 
     // ─── Branches (rich) ─────────────────────────────────────────
-    async branchesDetailed({ projectId, includeRemote, rev }) {
+    async branchesDetailed({ projectId, includeRemote, rev, repoPath }) {
       const withRemote = includeRemote !== false;
       // Serve from cache when the caller pins a git-revision and nothing moved.
-      const cacheKey = rev !== undefined ? `${projectId}:${withRemote}:${rev}` : null;
+      // repoPath is part of the scope (before rev) so the cleanup prefix below
+      // isolates per-repo entries.
+      const cacheKey = rev !== undefined ? `${projectId}:${withRemote}:${repoPath ?? ''}:${rev}` : null;
       if (cacheKey) {
         const hit = branchesCache.get(cacheKey);
         if (hit) return hit;
       }
-      const root = requireRoot(projectId);
+      const root = await resolveCwd(projectId, repoPath);
       // `git for-each-ref` with a tab-separated format is the cheap
       // single-call alternative to running `git branch -vv` and parsing
       // its column-oriented output. We pull both refs/heads and
@@ -775,16 +916,16 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       });
       if (cacheKey) {
         branchesCache.set(cacheKey, branches);
-        // Keep only the latest rev per (project, scope) — older revs are stale.
+        // Keep only the latest rev per (project, scope, repo) — older revs are stale.
         for (const k of branchesCache.keys()) {
-          if (k !== cacheKey && k.startsWith(`${projectId}:${withRemote}:`)) branchesCache.delete(k);
+          if (k !== cacheKey && k.startsWith(`${projectId}:${withRemote}:${repoPath ?? ''}:`)) branchesCache.delete(k);
         }
       }
       return branches;
     },
 
-    async branchCreate({ projectId, name, from, checkout }) {
-      const root = requireRoot(projectId);
+    async branchCreate({ projectId, name, from, checkout, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = checkout ? ['checkout', '-b', name] : ['branch', name];
       if (from) args.push(from);
       const r = await runGit(root, args);
@@ -794,8 +935,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { ok: true as const };
     },
 
-    async branchDelete({ projectId, name, force }) {
-      const root = requireRoot(projectId);
+    async branchDelete({ projectId, name, force, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // -D (force) merges -d's safety check + force-delete; -d alone
       // refuses to delete branches not fully merged into HEAD.
       const args = ['branch', force ? '-D' : '-d', name];
@@ -806,8 +947,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { ok: true as const };
     },
 
-    async branchRename({ projectId, oldName, newName, force }) {
-      const root = requireRoot(projectId);
+    async branchRename({ projectId, oldName, newName, force, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = ['branch', force ? '-M' : '-m', oldName, newName];
       const r = await runGit(root, args);
       if (r.code !== 0) {
@@ -817,8 +958,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     },
 
     // ─── Merge / reset / revert / cherry-pick ────────────────────
-    async merge({ projectId, branch, ffOnly, noFf, message }) {
-      const root = requireRoot(projectId);
+    async merge({ projectId, branch, ffOnly, noFf, message, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = ['merge'];
       if (ffOnly) args.push('--ff-only');
       if (noFf) args.push('--no-ff');
@@ -827,24 +968,24 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args);
     },
 
-    async reset({ projectId, target, mode }) {
-      const root = requireRoot(projectId);
+    async reset({ projectId, target, mode, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // Whitelist mode — never trust raw input as a git CLI flag.
       const flag =
         mode === 'soft' ? '--soft' : mode === 'hard' ? '--hard' : '--mixed';
       return runAsResult(root, 'git', ['reset', flag, target]);
     },
 
-    async revert({ projectId, commit, noCommit }) {
-      const root = requireRoot(projectId);
+    async revert({ projectId, commit, noCommit, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = ['revert'];
       if (noCommit) args.push('--no-commit');
       args.push(commit);
       return runAsResult(root, 'git', args);
     },
 
-    async cherryPick({ projectId, commits, noCommit }) {
-      const root = requireRoot(projectId);
+    async cherryPick({ projectId, commits, noCommit, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       if (commits.length === 0) {
         throw new ApiError('bad_input', 400, 'cherryPick requires at least one commit');
       }
@@ -854,8 +995,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args);
     },
 
-    async rebase({ projectId, onto }) {
-      const root = requireRoot(projectId);
+    async rebase({ projectId, onto, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // Non-interactive: suppress the editor (todo list + commit message) so a
       // rebase can never block on it. A conflict stops the rebase and is picked
       // up by mergeState (kind 'rebase') — the resolver + continue/abort flow
@@ -871,8 +1012,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     // can render "non-zero exit but here's the helpful stderr" — git's
     // failure messages on push/pull are rich (rejected fast-forward,
     // diverged branches, suggested next steps).
-    async push({ projectId, remote, branch, force, setUpstream }) {
-      const root = requireRoot(projectId);
+    async push({ projectId, remote, branch, force, setUpstream, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = ['push'];
       // --force-with-lease is the safe variant: rejects when the
       // remote moved since we last fetched. Never expose plain --force
@@ -884,8 +1025,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args);
     },
 
-    async fetch({ projectId, remote, prune }) {
-      const root = requireRoot(projectId);
+    async fetch({ projectId, remote, prune, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = ['fetch'];
       if (prune) args.push('--prune');
       if (remote) args.push(remote);
@@ -895,8 +1036,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args, undefined, GIT_NETWORK_TIMEOUT_MS);
     },
 
-    async pull({ projectId, remote, branch, rebase }) {
-      const root = requireRoot(projectId);
+    async pull({ projectId, remote, branch, rebase, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const args = ['pull'];
       if (rebase) args.push('--rebase');
       if (remote) args.push(remote);
@@ -904,8 +1045,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args, undefined, GIT_NETWORK_TIMEOUT_MS);
     },
 
-    async updateBranch({ projectId, branch }) {
-      const root = requireRoot(projectId);
+    async updateBranch({ projectId, branch, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // The branch's configured upstream, e.g. "origin/feature/x".
       const up = await runGit(root, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], {
         timeoutMs: GIT_READ_TIMEOUT_MS,
@@ -930,8 +1071,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     // without scraping the freeform default output. The auto-generated
     // message follows "WIP on <branch>: <sha> <subject>" — we extract
     // the branch portion when present.
-    async stashList({ projectId }) {
-      const root = requireRoot(projectId);
+    async stashList({ projectId, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // %gd = stash ref (stash@{0}), %h = short sha, %gs = full message,
       // %cI = committer date (iso-strict). \x1f as field separator.
       const fmt = '%gd%x1f%h%x1f%cI%x1f%gs';
@@ -963,8 +1104,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return entries;
     },
 
-    async stashSave({ projectId, message, includeUntracked, keepIndex }) {
-      const root = requireRoot(projectId);
+    async stashSave({ projectId, message, includeUntracked, keepIndex, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       // `stash push` is the modern form; `save` is deprecated. `-u`
       // includes untracked, `--keep-index` leaves staged changes alone.
       const args = ['stash', 'push'];
@@ -974,35 +1115,35 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args);
     },
 
-    async stashPop({ projectId, ref }) {
+    async stashPop({ projectId, ref, repoPath }) {
       if (!ref) {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
-      const root = requireRoot(projectId);
+      const root = await resolveCwd(projectId, repoPath);
       return runAsResult(root, 'git', ['stash', 'pop', ref]);
     },
 
-    async stashApply({ projectId, ref }) {
+    async stashApply({ projectId, ref, repoPath }) {
       if (!ref) {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
-      const root = requireRoot(projectId);
+      const root = await resolveCwd(projectId, repoPath);
       return runAsResult(root, 'git', ['stash', 'apply', ref]);
     },
 
-    async stashDrop({ projectId, ref }) {
+    async stashDrop({ projectId, ref, repoPath }) {
       if (!ref) {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
-      const root = requireRoot(projectId);
+      const root = await resolveCwd(projectId, repoPath);
       return runAsResult(root, 'git', ['stash', 'drop', ref]);
     },
 
-    async stashShow({ projectId, ref }) {
+    async stashShow({ projectId, ref, repoPath }) {
       if (!ref) {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
-      const root = requireRoot(projectId);
+      const root = await resolveCwd(projectId, repoPath);
       // `-p` emits a unified diff. Skips the index-summary at the top
       // that the default `stash show` produces.
       const r = await runGit(root, ['stash', 'show', '-p', '--no-color', ref], {
@@ -1015,9 +1156,9 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { patch: r.stdout };
     },
 
-    async stashDetail({ projectId, ref }) {
+    async stashDetail({ projectId, ref, repoPath }) {
       if (!ref) throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
-      const root = requireRoot(projectId);
+      const root = await resolveCwd(projectId, repoPath);
       // A stash IS a commit object, so `git show -s` reads its metadata.
       // %s is the stash subject ("WIP on <branch>: <sha> <subject>").
       const meta = await runGit(root, ['show', '-s', '--format=%h%x1f%cI%x1f%s', '--date=iso-strict', ref], {
@@ -1040,9 +1181,9 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       };
     },
 
-    async stashFileDiff({ projectId, ref, path }) {
+    async stashFileDiff({ projectId, ref, path, repoPath }) {
       if (!ref) throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
-      const root = requireRoot(projectId);
+      const root = await resolveCwd(projectId, repoPath);
       // `git stash show` rejects a `-- <path>` pathspec ("too many
       // revisions"). A stash IS a commit whose first parent is the base
       // it was taken from, so diffing base→stash for one path gives the
@@ -1058,8 +1199,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     },
 
     // ─── AI-assisted git ─────────────────────────────────────────
-    async aiPlan({ projectId, intent }) {
-      const root = requireRoot(projectId);
+    async aiPlan({ projectId, intent, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const cleaned = intent.trim().slice(0, 2000);
       if (!cleaned) {
         throw new ApiError('bad_input', 400, 'intent text required');
@@ -1081,8 +1222,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return plan;
     },
 
-    async aiExecute({ projectId, steps }) {
-      const root = requireRoot(projectId);
+    async aiExecute({ projectId, steps, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const results: GitRunResult[] = [];
       let aborted = false;
       for (const step of steps) {
@@ -1119,8 +1260,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { results, aborted };
     },
 
-    async aiCommitMessage({ projectId }) {
-      const root = requireRoot(projectId);
+    async aiCommitMessage({ projectId, repoPath }) {
+      const root = await resolveCwd(projectId, repoPath);
       const d = await runGit(root, ['diff', '--cached', '--no-color']);
       const diff = d.stdout.trim();
       if (!diff) {
@@ -1175,7 +1316,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   // we shell out to git.
   return {
     ...base,
-    ...createConflictHandlers({ runGit, runAsResult, requireRoot, detectRepo }),
+    ...createConflictHandlers({ runGit, runAsResult, resolveCwd, detectRepo, resolveRepoForPath: repoResolver.resolveRepoForPath }),
     // Only the two public methods reach the IPC surface — `ensureAutoOptimized`
     // stays internal (called fire-and-forget from readStatus).
     gitOptimizations: gitOpt.gitOptimizations,

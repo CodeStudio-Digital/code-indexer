@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CompanyTerminalPanel } from './terminal/CompanyTerminalPanel.js';
 import { useSandboxStatus } from '../builder/useSandboxStatus.js';
-import { useResizableHeight } from '../../hooks/useResizableHeight.js';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AlertCircle, RefreshCw } from 'lucide-react';
-import { cn } from '../../lib/utils.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 import { useCompanySiblings } from '../../hooks/useCompanySiblings.js';
@@ -19,22 +17,19 @@ import { FrontTabsBar } from './FrontTabsBar.js';
 import { ResetSessionDialog } from './ResetSessionDialog.js';
 import { ReestablishMasterDialog } from './ReestablishMasterDialog.js';
 import type { RoleConfig, SkillDef } from './RoleEditModal.js';
-import { ConnectionPhaseStrip } from './ConnectionPhaseStrip.js';
-import { MasterStatusBanner } from './MasterStatusBanner.js';
-import { SessionStalledBanner } from './SessionStalledBanner.js';
 import { CompanyStatusBar } from './session-view/CompanyStatusBar.js';
 import { ZoneLayout } from './zones/ZoneLayout.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from './zones/types.js';
 import { buildAgentsUrl, parseAgentsParams } from './routing.js';
 import { AgentsSidebar } from './session-view/AgentsSidebar.js';
 import { SessionHeader } from './session-view/SessionHeader.js';
+import { SessionBanners } from './session-view/SessionBanners.js';
 import { RoleDialog } from './session-view/RoleDialog.js';
 import { parseConfig } from './session-view/types.js';
 import { mergeBoardMessages, mergeSubordinates } from './session-view/merge-live-persisted.js';
 import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
 import { SidebarPanels } from './preview-sidebar/SidebarPanels.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
-import { useResizableWidth } from '../../hooks/useResizableWidth.js';
 import type { NotificationSourceContext } from '../notifications/index.js';
 import type {
   AvailableProject,
@@ -163,11 +158,11 @@ export function CompanySessionView({
   );
 
   // Right-rail panel selection: `null` collapses the panel and shows
-  // only the icon rail. The rail itself is always mounted; Preview is
-  // gated on `builderMode` but Inbox / Env / Databases / Company-Config
-  // work for every session. We default to `company-config` so the first
-  // visit shows roles + projects + agents in context — same affordance
-  // the old left-rail AgentsSidebar gave for free, now on the right.
+  // only the icon rail. The rail itself is always mounted; Inbox / Env /
+  // Databases / Company-Config work for every session. We default to
+  // `company-config` so the first visit shows roles + projects + agents
+  // in context — same affordance the old left-rail AgentsSidebar gave
+  // for free, now on the right.
   const [sidePanel, setSidePanel] = useState<SidePanel | null>('company-config');
   // Bottom terminal panel — workspace-style, resizable via
   // `react-resizable-panels` (which persists the size on its own via
@@ -186,17 +181,6 @@ export function CompanySessionView({
   const sandboxStatus = useSandboxStatus(sessionId);
   const hasSandboxForTerminal = !!sandboxStatus.data?.containerId;
 
-  // Drag-to-resize for the bottom terminal. Height is persisted per
-  // session so the user's preferred size survives reloads. We anchor
-  // 'bottom' so dragging the top handle UP grows the panel.
-  const terminalSizer = useResizableHeight({
-    defaultHeight: 280,
-    minHeight: 120,
-    maxHeight: 720,
-    storageKey: `mcp-ide:agents.terminalHeight.${sessionId}`,
-    anchor: 'bottom',
-  });
-
   const toggleTerminal = useCallback(() => {
     setTerminalOpen((v) => {
       const next = !v;
@@ -208,15 +192,6 @@ export function CompanySessionView({
       return next;
     });
   }, [TERMINAL_OPEN_KEY]);
-  // Drag-resizable width for whichever right panel is mounted. Width
-  // is persisted globally — switching between Preview and Inbox keeps
-  // the user's chosen size.
-  const sidePanelSizer = useResizableWidth({
-    defaultWidth: 448,
-    minWidth: 280,
-    maxWidth: 960,
-    storageKey: 'agents.sidePanel.width',
-  });
   const [modalSession, setModalSession] = useState<{
     coderSessionId: number;
     role: string;
@@ -315,11 +290,6 @@ export function CompanySessionView({
     (config as { builder?: unknown }).builder
   );
 
-  // For non-builder sessions, the Preview icon is hidden — if the
-  // default `'preview'` selection would point at a hidden icon, treat
-  // it as collapsed. Explicit toggles later are respected.
-  const sidePanelEffective: SidePanel | null =
-    sidePanel === 'preview' && !builderMode ? null : sidePanel;
   const togglePanel = (panel: SidePanel) => {
     setSidePanel((cur) => (cur === panel ? null : panel));
   };
@@ -391,17 +361,12 @@ export function CompanySessionView({
   return (
     <div className="flex flex-col h-full">
       <SessionHeader
-        sessionId={sessionId}
         sessionName={sessionName}
         sessionStatus={sessionStatus}
         reportedStatus={sessionData?.session.status}
-        projects={sessionData?.projects}
         stream={stream}
-        siblings={siblings}
         sessionsListOpen={sessionsListOpen}
         onToggleSessionsList={onToggleSessionsList}
-        terminalOpen={terminalOpen}
-        onToggleTerminal={toggleTerminal}
         recoveredAt={sessionData?.session.recovered_at ?? null}
         recoveredReason={sessionData?.session.recovered_reason ?? null}
         onResetClick={() => setResetDialogOpen(true)}
@@ -409,186 +374,134 @@ export function CompanySessionView({
       />
 
       <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <ConnectionPhaseStrip phase={stream.connectionPhase} />
-          {stream.error && (
-            <div className="mx-3 mt-3 p-3 rounded-lg border border-destructive/30 bg-destructive/5 text-xs text-destructive flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <p>{stream.error}</p>
-            </div>
-          )}
+        {/* Resizable IDE-style splits via react-resizable-panels, mirroring
+            ProjectView: a horizontal split [center | right drawer] with a
+            nested vertical split [content | terminal] inside the center.
+            Sizes persist via autoSaveId; the right icon rail stays OUTSIDE
+            the group at a fixed width. */}
+        <PanelGroup direction="horizontal" autoSaveId="mcp-agents-horiz">
+          <Panel minSize={30}>
+            <PanelGroup direction="vertical" autoSaveId="mcp-agents-vert">
+              <Panel minSize={20}>
+                <div className="h-full flex flex-col overflow-hidden">
+                  <SessionBanners stream={stream} />
 
-          <MasterStatusBanner
-            endedAt={stream.masterEndedAt}
-            unexpected={stream.masterEndedUnexpected}
-            errorDetail={stream.masterErrorDetail}
-          />
+                  {/* Front tabs — visible across every zone so the user always
+                      has a way to switch between Main and child fronts. */}
+                  {siblings.parent && (
+                    <FrontTabsBar
+                      parent={siblings.parent}
+                      children={siblings.children}
+                      activeSessionId={siblings.activeSessionId}
+                      onSelect={siblings.setActiveSessionId}
+                      onCreate={siblings.createChild}
+                      onArchive={siblings.archiveChild}
+                      onRename={siblings.renameChild}
+                    />
+                  )}
 
-          <SessionStalledBanner
-            stalledSinceMs={stream.sessionStalledSinceMs}
-            onContinue={async () => {
-              // Triple-prong wake-up because a stall can be in any of:
-              //   (a) interactive wait (ask_user/submit_plan) — needs
-              //       interject:true on the sendMessage to break the
-              //       wait before the new message gets queued.
-              //   (b) master ended/paused with pending inbox — needs
-              //       the wake-master endpoint to forward the queued
-              //       inbox row through the in-process router.
-              //   (c) runner alive but hung mid-tool — both above are
-              //       no-ops, but at least the message is recorded for
-              //       when the user manually resets.
-              // Order: send first (so the message is on the board even
-              // if wake fails), then wake (idempotent — safe to spam).
-              await stream.sendMessage(
-                '[SYSTEM] Status check — any blockers? Update the board with current progress and pick up the next task.',
-                [],
-                { interject: true },
-              );
-              await stream.wakeMaster();
-            }}
-          />
+                  {/* Zone content keeps its natural flex-1. The MasterComposer
+                      is passed as a slot so WorkZone can render it INSIDE the
+                      Board tab only — there's no point in showing it on
+                      Kanban/Pipelines/Transcript/Files/Git/etc surfaces where
+                      the operator isn't talking to the master. The terminal
+                      toggle now lives in the rail footer (mirrors ProjectView). */}
+                  <ZoneLayout
+                    sessionId={sessionId}
+                    sessionName={sessionName}
+                    zone={zone}
+                    tab={tab}
+                    onZoneTabChange={handleZoneTabChange}
+                    stream={stream}
+                    boardMessages={boardMessages}
+                    terminalOpen={terminalOpen}
+                    onToggleTerminal={toggleTerminal}
+                    composer={
+                      <MasterComposer
+                        sessionId={activeSessionId}
+                        onSend={handleSend}
+                        placeholder={
+                          !stream.started && !sessionAlreadyRan
+                            ? t('company.inputPlaceholder')
+                            : t('company.inputPlaceholderMaster')
+                        }
+                        supportsThinking={masterSupportsThinking}
+                        reasoningEffort={masterReasoningEffort}
+                        setReasoningEffort={handleMasterEffortChange}
+                        reasoningLevels={masterReasoningLevels}
+                      />
+                    }
+                  />
+                </div>
+              </Panel>
 
-          {/* Front tabs — visible across every zone so the user always
-              has a way to switch between Main and child fronts. */}
-          {siblings.parent && (
-            <FrontTabsBar
-              parent={siblings.parent}
-              children={siblings.children}
-              activeSessionId={siblings.activeSessionId}
-              onSelect={siblings.setActiveSessionId}
-              onCreate={siblings.createChild}
-              onArchive={siblings.archiveChild}
-              onRename={siblings.renameChild}
-            />
-          )}
+              {/* Bottom terminal — workspace-style resizable panel beneath the
+                  composer. Drag the handle on its top edge; size persists via
+                  the PanelGroup autoSaveId. */}
+              {terminalOpen && (
+                <>
+                  <PanelResizeHandle className="h-px bg-border hover:bg-primary/40 transition-colors" />
+                  <Panel defaultSize={28} minSize={10} maxSize={60}>
+                    <div className="h-full overflow-hidden">
+                      <CompanyTerminalPanel
+                        companySessionId={sessionId}
+                        projects={sessionData?.projects ?? []}
+                        hasSandbox={hasSandboxForTerminal}
+                      />
+                    </div>
+                  </Panel>
+                </>
+              )}
+            </PanelGroup>
+          </Panel>
 
-          {/* Zone content keeps its natural flex-1. The MasterComposer
-              is passed as a slot so WorkZone can render it INSIDE the
-              Board tab only — there's no point in showing it on
-              Kanban/Pipelines/Transcript/Files/Git/etc surfaces where
-              the operator isn't talking to the master. */}
-          <ZoneLayout
-            sessionId={sessionId}
-            sessionName={sessionName}
-            zone={zone}
-            tab={tab}
-            onZoneTabChange={handleZoneTabChange}
-            stream={stream}
-            boardMessages={boardMessages}
-            composer={
-              <MasterComposer
-                sessionId={activeSessionId}
-                onSend={handleSend}
-                placeholder={
-                  !stream.started && !sessionAlreadyRan
-                    ? t('company.inputPlaceholder')
-                    : t('company.inputPlaceholderMaster')
-                }
-                supportsThinking={masterSupportsThinking}
-                reasoningEffort={masterReasoningEffort}
-                setReasoningEffort={handleMasterEffortChange}
-                reasoningLevels={masterReasoningLevels}
-              />
-            }
-          />
-
-          {/* Bottom terminal lives BELOW the composer — operator
-              feedback: the composer should stay glued to the
-              transcript above it, with terminals appearing as a
-              "tools" surface beneath. Handle on the top edge for
-              drag-to-resize; height is persisted per session. */}
-          {terminalOpen && (
+          {/* Right drawer: drag-resizable content panel + always-on icon
+              rail. Preview is gated on builder mode; Inbox / Env /
+              Databases work for every session. Sub-sessions share the
+              parent's sandbox so we always feed the ROOT session id. */}
+          {sidePanel !== null && (
             <>
-              <div
-                role="separator"
-                aria-orientation="horizontal"
-                onMouseDown={terminalSizer.startResize}
-                className={cn(
-                  'h-1 cursor-row-resize shrink-0 transition-colors',
-                  terminalSizer.resizing
-                    ? 'bg-primary/60'
-                    : 'bg-border hover:bg-primary/40',
-                )}
-                title="Arraste para redimensionar"
-              />
-              <div
-                style={{ height: terminalSizer.height }}
-                className="shrink-0 overflow-hidden"
-              >
-                <CompanyTerminalPanel
-                  companySessionId={sessionId}
-                  projects={sessionData?.projects ?? []}
-                  hasSandbox={hasSandboxForTerminal}
-                />
-              </div>
+              <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
+              <Panel defaultSize={26} minSize={15} maxSize={45}>
+                <div className="h-full border-l flex flex-col overflow-hidden">
+                  <SidebarPanels
+                    sessionId={sessionId}
+                    active={sidePanel}
+                    companyConfigSlot={
+                      // AgentsSidebar moved from a permanent left rail to
+                      // a right-drawer panel (item from the UI feedback
+                      // round). Same 14 closures, same behaviour — only
+                      // the chrome changed. `open=true` because if the
+                      // user opens this panel they want the content
+                      // expanded; the rail icon handles the toggle.
+                      <AgentsSidebar
+                        sessionId={sessionId}
+                        open={true}
+                        config={config}
+                        projects={sessionData?.projects ?? []}
+                        allProjects={allProjects ?? null}
+                        persistedAgentRuns={sessionData?.agentRuns ?? []}
+                        subordinates={subordinates}
+                        stream={stream}
+                        providerOptions={providerOptions}
+                        getModelsForProvider={getModelsForProvider}
+                        getDefaultModel={getDefaultModel}
+                        refetch={refetch}
+                        onOpenAgentRun={openAgentRun}
+                        onOpenPersistedRun={openPersistedRun}
+                        onOpenRoleDialog={(args) => setRoleDialog(args)}
+                      />
+                    }
+                    pluginWindows={contribWindows}
+                  />
+                </div>
+              </Panel>
             </>
           )}
-        </div>
-
-        {/* Right drawer: drag-resizable content panel + always-on icon
-            rail. Preview is gated on builder mode; Inbox / Env /
-            Databases work for every session. Sub-sessions share the
-            parent's sandbox so we always feed the ROOT session id.
-            The width persists in localStorage and applies to every
-            panel, not just Preview. */}
-        {sidePanelEffective !== null && (
-          <>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              onMouseDown={sidePanelSizer.startResize}
-              className={cn(
-                'w-1 cursor-col-resize shrink-0 transition-colors',
-                sidePanelSizer.resizing
-                  ? 'bg-primary/60'
-                  : 'bg-border hover:bg-primary/40',
-              )}
-              title="Drag to resize"
-            />
-            <div
-              style={{ width: sidePanelSizer.width }}
-              className="border-l flex-shrink-0 overflow-hidden flex flex-col"
-            >
-              <SidebarPanels
-                sessionId={sessionId}
-                active={sidePanelEffective}
-                companyConfigSlot={
-                  // AgentsSidebar moved from a permanent left rail to
-                  // a right-drawer panel (item from the UI feedback
-                  // round). Same 14 closures, same behaviour — only
-                  // the chrome changed. `open=true` because if the
-                  // user opens this panel they want the content
-                  // expanded; the rail icon handles the toggle.
-                  <AgentsSidebar
-                    sessionId={sessionId}
-                    open={true}
-                    config={config}
-                    projects={sessionData?.projects ?? []}
-                    allProjects={allProjects ?? null}
-                    persistedAgentRuns={sessionData?.agentRuns ?? []}
-                    subordinates={subordinates}
-                    stream={stream}
-                    providerOptions={providerOptions}
-                    getModelsForProvider={getModelsForProvider}
-                    getDefaultModel={getDefaultModel}
-                    refetch={refetch}
-                    onOpenAgentRun={openAgentRun}
-                    onOpenPersistedRun={openPersistedRun}
-                    onOpenRoleDialog={(args) => setRoleDialog(args)}
-                  />
-                }
-                pluginWindows={contribWindows}
-              />
-            </div>
-          </>
-        )}
+        </PanelGroup>
         <SidebarRail
-          active={sidePanelEffective}
+          active={sidePanel}
           onToggle={togglePanel}
-          // DEPRECATED: the company sandbox preview is superseded by the
-          // agent-driven preview DevTools tools (preview_open/console/…).
-          // Hidden here; the sandbox routes/service remain for now (reversible).
-          showPreview={false}
           pluginWindows={contribWindows}
         />
       </div>

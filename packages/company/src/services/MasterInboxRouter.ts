@@ -56,6 +56,8 @@ export interface MasterEnqueueArgs {
   body: string;
   /** Token usado pelo sender em `waitForAnswer` quando `wait=true`. */
   waitToken?: string | null;
+  /** Prioridade de entrega — 'urgent' é reclamada antes das demais (migração 184). */
+  priority?: import('@mcp/company/types.js').InboxPriority;
 }
 
 export interface MasterEnqueueResult {
@@ -93,6 +95,7 @@ export class MasterInboxRouter {
       kind: args.kind,
       body: args.body,
       waitToken: args.waitToken ?? null,
+      priority: args.priority ?? 'normal',
     });
 
     this.deps.publisher.publish('inbox_message_sent', {
@@ -222,8 +225,9 @@ export function formatMasterInboxPrompt(messages: readonly AgentInboxMessage[]):
   lines.push(`[INBOX — ${messages.length} message(s) from subordinates]`);
   for (const m of messages) {
     lines.push('');
+    const prio = m.priority && m.priority !== 'normal' ? `, priority=${m.priority}` : '';
     lines.push(
-      `[from @${m.from_role}, run=${m.from_agent_run_id}, message_id=${m.id}, kind=${m.kind}]`,
+      `[from @${m.from_role}, run=${m.from_agent_run_id}, message_id=${m.id}, kind=${m.kind}${prio}]`,
     );
     lines.push(m.body);
   }

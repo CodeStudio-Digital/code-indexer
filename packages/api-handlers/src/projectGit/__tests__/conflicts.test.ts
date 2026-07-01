@@ -59,7 +59,13 @@ async function fakeDetectRepo(root: string) {
 }
 
 function makeHandlers(dir: string) {
-  return createConflictHandlers({ runGit, runAsResult, requireRoot: () => dir, detectRepo: fakeDetectRepo });
+  return createConflictHandlers({
+    runGit,
+    runAsResult,
+    resolveCwd: async () => dir,
+    detectRepo: fakeDetectRepo,
+    resolveRepoForPath: async (_id: number, p: string) => ({ cwd: dir, repoRelPath: p }),
+  });
 }
 
 const dirs: string[] = [];
@@ -131,8 +137,9 @@ describe('conflict resolver engine', () => {
     const h = createConflictHandlers({
       runGit: spyRunGit,
       runAsResult,
-      requireRoot: () => dir,
+      resolveCwd: async () => dir,
       detectRepo: fakeDetectRepo,
+      resolveRepoForPath: async (_id: number, p: string) => ({ cwd: dir, repoRelPath: p }),
     });
     const s = await h.mergeState({ projectId: 1 }, {} as never);
     expect(s.kind).toBeNull(); // clean repo, no op in progress

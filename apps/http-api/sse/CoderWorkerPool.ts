@@ -40,6 +40,7 @@ import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js'
 import { notifyBuilderRunEnded } from './builder-checkpoint.js';
 import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
+import type { CompanyRecommendFn } from '@mcp/company/services/scheduler/recommend-shim.js';
 import type { McpExternalPool } from './McpExternalPool.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers, type WorkerMemoryDeps } from './worker-memory-handlers.js';
@@ -67,6 +68,12 @@ export interface CoderWorkerDocDeps extends WorkerMemoryDeps {
   docsResearch?: DocsResearchBridge | null;
   /** Main-side vision describer; worker reaches it via `visionDescribe` RPC. */
   vision?: IVisionDescriber | null;
+  /**
+   * Main-side role recommender (embedding-backed). The company worker reaches
+   * it via the `recommend` RPC so the autonomous CompanyScheduler can resolve
+   * a role per card. Company-only — the coder pool ignores it.
+   */
+  recommend?: CompanyRecommendFn | null;
   // memoryRetriever / runEndMemory (Mem C) inherited from WorkerMemoryDeps —
   // same mutable-box wiring, handlers in worker-memory-handlers.ts.
 }

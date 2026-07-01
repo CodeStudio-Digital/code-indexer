@@ -134,7 +134,7 @@ describe('email verification + password reset', () => {
     t.accounts.store.set('acc1', { id, email: 'u@e.com', canon: 'u@e.com', hash: 'hashed:x', verifiedAt: null });
     lastMail = null;
     await t.sendVerification.execute({ accountId: id, email: 'u@e.com' });
-    expect(lastMail?.to).toBe('u@e.com');
+    expect(lastMail!.to).toBe('u@e.com');
     const token = lastMail!.text;
     const r = await t.verifyEmail.execute({ token });
     expect(r.ok).toBe(true);

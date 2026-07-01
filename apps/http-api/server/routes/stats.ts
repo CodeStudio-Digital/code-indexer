@@ -13,6 +13,19 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   /**
+   * Agent Memory health (migration 181) — feeds the project Memory tab's
+   * "is memory actually being used?" card: live project/user memory counts plus
+   * telemetry (remember/recall/forget + recalls that injected ≥1 memory).
+   * Read-only over agent_memory / agent_memory_events.
+   */
+  app.get('/api/projects/:id/agent-memory/stats', (c) => {
+    const projectId = parseIdParam(c);
+    const project = db.getProject(projectId);
+    if (!project) return notFound(c);
+    return c.json(db.getAgentMemoryStats(projectId));
+  });
+
+  /**
    * Embedding diagnostics for the debug panel — the FAST half: indexed
    * coverage counts (now index-only via idx_files_project_embedding),
    * vector-id stats, fingerprint, health. The expensive `ORDER BY RANDOM()`

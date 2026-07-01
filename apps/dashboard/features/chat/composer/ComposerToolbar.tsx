@@ -60,7 +60,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   const { t } = useTranslation(['chat', 'common']);
 
   return (
-    <div className="flex items-center gap-2 px-2 pb-2 flex-wrap">
+    <div className="flex items-center gap-2 px-2 pb-1.5 flex-wrap">
       <AgentPicker value={agent} onChange={setAgent} autoSuggestFor={autoSuggestText} />
 
       {/* Reasoning effort — only when the model exposes discrete effort levels. */}

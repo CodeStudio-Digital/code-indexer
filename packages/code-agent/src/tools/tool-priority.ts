@@ -49,6 +49,11 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   'submit_plan_to_master',
   'submit_tasks_to_master',
   'update_goal',
+  // Agent Memory (migration 181) — the ONE durable write + read must survive the
+  // catalog cap so weak models always have memory on turn 1. (The proactive
+  // injection + run-end distiller cover the rest passively, model-independent.)
+  'remember',
+  'recall_memory',
 ]);
 
 /**
@@ -88,7 +93,6 @@ const HOT_RANK: readonly string[] = [
   'exec_command',
   'write_stdin',
   'list_sessions',
-  'mcp__save_memory',
   'manage_path',
   'rag_search_docs',
   'rag_read_doc',

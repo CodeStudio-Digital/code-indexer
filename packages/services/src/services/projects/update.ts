@@ -20,6 +20,10 @@ export interface UpdateProjectInput {
   runtime_versions?: string | null;
   /** Per-project package-manager prefs — JSON `{"node":"pnpm","python":"poetry"}`. */
   package_managers?: string | null;
+  /** Per-project, per-WSL-distro runtime ids — JSON `{"Ubuntu":{"node":"managed:20.11.0"}}`. */
+  wsl_runtime_versions?: string | null;
+  /** Per-project, per-WSL-distro package-manager prefs — JSON `{"Ubuntu":{"node":"npm"}}`. */
+  wsl_package_managers?: string | null;
   /** LSP language level JSON (migration 157) — set here when synced from a runtime change. */
   language_levels?: string | null;
 }
@@ -151,6 +155,18 @@ export class UpdateProjectService {
       // Opaque per-language manager prefs (JSON) consumed by the runner's
       // detect override + the dependency assistant; empty → null (auto-detect).
       updates.package_managers = patch.package_managers || null;
+    }
+
+    if (patch.wsl_runtime_versions !== undefined) {
+      // Opaque per-distro runtime ids (JSON) resolved at spawn time for a WSL
+      // shell; empty → null (distro default, no PATH injection).
+      updates.wsl_runtime_versions = patch.wsl_runtime_versions || null;
+    }
+
+    if (patch.wsl_package_managers !== undefined) {
+      // Opaque per-distro package-manager prefs (JSON) consumed by the runner's
+      // detect override for a WSL shell; empty → null (auto-detect).
+      updates.wsl_package_managers = patch.wsl_package_managers || null;
     }
 
     if (patch.memory_enabled !== undefined) {

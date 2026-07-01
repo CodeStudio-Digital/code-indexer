@@ -9,12 +9,14 @@
 
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import { ApiError } from '@mcp/api-bus';
-import type { InstallProgress, Runtime, RuntimeApi, RuntimeKind, RuntimeRelease } from '@mcp/api-bus';
+import type { InstallProgress, Runtime, RuntimeApi, RuntimeKind, RuntimeRelease, RuntimeTarget } from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
 import { detectNodeRuntimes } from './detect-node.js';
 import * as nodeManager from './node-manager.js';
 import * as phpManager from './php-manager.js';
 import * as pythonManager from './python-manager.js';
+import { detectWslRuntimes } from './wsl-runtime.js';
+import { installWslRuntime, listWslReleases, uninstallWslRuntime } from './wsl-install.js';
 
 export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
   const dir = (): string => ensureDataDir();
@@ -47,18 +49,28 @@ export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
     throw new ApiError('unsupported', 400, `unknown runtime kind: ${kind}`);
   }
 
+  /** Narrow a target to its WSL distro, or null for the host (default). */
+  function wslDistro(target: RuntimeTarget | undefined): string | null {
+    return target?.kind === 'wsl' ? target.distro : null;
+  }
+
   return {
-    async list({ kind }) {
-      return listFor(kind);
+    async list({ kind, target }) {
+      const distro = wslDistro(target);
+      return distro ? detectWslRuntimes(kind, distro) : listFor(kind);
     },
-    async listReleases({ kind }) {
-      return releasesFor(kind);
+    async listReleases({ kind, target }) {
+      const distro = wslDistro(target);
+      return distro ? listWslReleases(kind, distro) : releasesFor(kind);
     },
-    install({ kind, version }) {
-      return installFor(kind, version);
+    install({ kind, version, target }) {
+      const distro = wslDistro(target);
+      return distro ? installWslRuntime(kind, version, distro) : installFor(kind, version);
     },
-    async uninstall({ kind, version }) {
-      await uninstallFor(kind, version);
+    async uninstall({ kind, version, target }) {
+      const distro = wslDistro(target);
+      if (distro) await uninstallWslRuntime(kind, version, distro);
+      else await uninstallFor(kind, version);
     },
 
     // ── PHP extensions ──

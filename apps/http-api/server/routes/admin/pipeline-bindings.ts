@@ -22,10 +22,13 @@ import type { ServerDeps } from '../../deps.js';
 import {
   PIPELINE_CATALOG,
   groupCatalogByPipeline,
+  setupTargetsForCapability,
+  type CapabilityKind,
   type PipelineCatalogEntry,
 } from '@mcp/services/pipelines/index.js';
 import type {
   BindingScopeType,
+  PipelineProfileApplyRow,
   PipelineProviderBindingInput,
 } from '@mcp/store/pipeline-provider-bindings-store.js';
 
@@ -48,6 +51,14 @@ const VALID_SCOPES: BindingScopeType[] = ['global', 'template', 'session'];
 
 function isValidScope(s: unknown): s is BindingScopeType {
   return typeof s === 'string' && VALID_SCOPES.includes(s as BindingScopeType);
+}
+
+const VALID_CAPABILITIES: CapabilityKind[] = [
+  'text_llm', 'embeddings', 'reranking', 'vision', 'voice', 'autocomplete',
+];
+
+function isValidCapability(s: unknown): s is CapabilityKind {
+  return typeof s === 'string' && VALID_CAPABILITIES.includes(s as CapabilityKind);
 }
 
 export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): void {
@@ -359,6 +370,84 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
       priority:    body.priority ?? 0,
     });
     return c.json({ ok: true, applied: ids.length, ids });
+  });
+
+  // ───── POST /bulk/apply-profile ────────────────────────────────────────
+  //
+  // Guided-setup ("Configuração assistida"). The wizard sends ONE assignment
+  // per capability bucket; the server fans each out to that bucket's
+  // setup-eligible catalog targets, stamping EACH target's own
+  // `recommendedDefault.config` — so a classifier keeps max_tokens:256 while
+  // a reviewer keeps max_tokens:4000+json_mode in the same call. Writes
+  // GLOBAL scope only and REPLACES any existing global row per
+  // (pipeline, role), so re-running the wizard never duplicates bindings.
+  //
+  // Body:
+  //   { assignments: [{ capability_kind, provider_id, model_id, model_mode? }] }
+  app.post('/api/admin/pipeline-bindings/bulk/apply-profile', async (c) => {
+    let body: {
+      scope_type?: BindingScopeType;
+      assignments?: Array<{
+        capability_kind?: string;
+        provider_id?: string;
+        model_id?: string;
+        model_mode?: string;
+      }>;
+    };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return c.json({ error: 'invalid_json' }, 400);
+    }
+
+    // The wizard only configures the global scope.
+    if (body.scope_type !== undefined && body.scope_type !== 'global') {
+      return c.json({ error: 'validation_failed', details: ['only scope_type "global" is supported'] }, 400);
+    }
+    if (!Array.isArray(body.assignments) || body.assignments.length === 0) {
+      return c.json({ error: 'validation_failed', details: ['assignments must be a non-empty array'] }, 400);
+    }
+
+    const errors: string[] = [];
+    body.assignments.forEach((a, i) => {
+      if (!isValidCapability(a.capability_kind)) errors.push(`assignments[${i}].capability_kind invalid`);
+      if (!a.provider_id) errors.push(`assignments[${i}].provider_id is required`);
+      if (!a.model_id)    errors.push(`assignments[${i}].model_id is required`);
+    });
+    if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
+
+    for (const a of body.assignments) {
+      if (!providerStore.getProvider(a.provider_id!)) {
+        return c.json({ error: 'provider_not_found', provider_id: a.provider_id }, 404);
+      }
+    }
+
+    // Fan each assignment out to its bucket's setup-eligible targets,
+    // carrying each target's OWN per-role config.
+    const rows: PipelineProfileApplyRow[] = [];
+    const byCapability: Record<string, number> = {};
+    for (const a of body.assignments) {
+      const kind = a.capability_kind as CapabilityKind;
+      const targets = setupTargetsForCapability(kind);
+      byCapability[kind] = targets.length;
+      for (const t of targets) {
+        rows.push({
+          pipeline_name: t.pipelineName,
+          binding_role:  t.bindingRole,
+          provider_id:   a.provider_id!,
+          model_id:      a.model_id!,
+          model_mode:    a.model_mode ?? '',
+          config:        t.recommendedDefault?.config ?? {},
+        });
+      }
+    }
+
+    if (rows.length === 0) {
+      return c.json({ ok: true, applied: 0, byCapability });
+    }
+
+    const ids = pipelineBindingsStore.bulkApplyProfile(rows);
+    return c.json({ ok: true, applied: ids.length, byCapability });
   });
 
   // ───── GET /resolve ────────────────────────────────────────────────────

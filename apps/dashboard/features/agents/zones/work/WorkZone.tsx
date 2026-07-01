@@ -10,7 +10,6 @@ import { BoardPanel } from '../../BoardPanel.js';
 import { KanbanTab } from '../../KanbanTab.js';
 import { MemoryPanel } from '../../MemoryPanel.js';
 import { PipelinesTab } from '../../PipelinesTab.js';
-import { InboxTranscriptPanel } from '../../transcript/InboxTranscriptPanel.js';
 import type { useCompanyStream } from '../../../../hooks/useCompanyStream.js';
 import type { BoardMessage } from '../../../../state/company/types.js';
 import type { WorkTab } from '../types.js';
@@ -23,8 +22,8 @@ interface WorkZoneProps {
   boardMessages: BoardMessage[];
   /**
    * Master composer rendered BELOW the Board surface only. Kanban /
-   * Pipelines / Transcript don't get it — they're observation
-   * surfaces, not conversation entry points. CompanySessionView builds
+   * Pipelines don't get it — they're observation surfaces, not
+   * conversation entry points. CompanySessionView builds
    * the composer once and passes it down so its closures (provider,
    * thinking flag, placeholder) stay co-located with the rest of
    * the session state.
@@ -62,9 +61,6 @@ export function WorkZone({
   }
   if (tab === 'memory') {
     return <MemoryPanel sessionId={sessionId} />;
-  }
-  if (tab === 'transcript') {
-    return <InboxTranscriptPanel sessionId={sessionId} />;
   }
   return <PipelinesTab companySessionId={sessionId} />;
 }

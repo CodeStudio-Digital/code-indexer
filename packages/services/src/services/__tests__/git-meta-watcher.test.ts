@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GitMetaWatcher, type GitMetaEvent } from '../git-meta-watcher.js';
+import { GitMetaWatcher, ownerGitDir, isWatchIgnored, type GitMetaEvent } from '../git-meta-watcher.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -23,6 +23,38 @@ const roots: string[] = [];
 afterEach(async () => {
   await watcher.stopAll();
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
+});
+
+describe('multi-root ignore predicate (cross-platform separator contract)', () => {
+  // chokidar v4 hands `ignored` FORWARD-slash paths; the gitdirs are native
+  // (backslash on Windows). The predicate must work across that mismatch — else
+  // pruning silently never fires on Windows and the whole object DB gets watched.
+  const main = 'D:\\proj\\.git';
+  const sub = 'D:\\proj\\.git\\modules\\foo';
+  const dirs = [main, sub];
+
+  it('owner is the DEEPEST gitdir (submodule, not the enclosing main)', () => {
+    expect(ownerGitDir(dirs, 'D:/proj/.git/modules/foo/HEAD')).toBe(sub);
+    expect(ownerGitDir(dirs, 'D:/proj/.git/HEAD')).toBe(main);
+  });
+
+  it('prunes object DB / logs / fsmonitor of BOTH main and submodule', () => {
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/objects/ab/cd')).toBe(true);
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/logs/HEAD')).toBe(true);
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/fsmonitor--daemon/sock')).toBe(true);
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/modules/foo/objects/ab/cd')).toBe(true);
+    // The main watch must not descend into the modules tree (the submodule gitdir
+    // is watched as its OWN explicit root instead).
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/modules')).toBe(true);
+  });
+
+  it('watches HEAD/refs/sequencer of BOTH main and submodule', () => {
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/HEAD')).toBe(false);
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/refs/heads/main')).toBe(false);
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/MERGE_HEAD')).toBe(false);
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/modules/foo/HEAD')).toBe(false);
+    expect(isWatchIgnored(dirs, 'D:/proj/.git/modules/foo/refs/heads/x')).toBe(false);
+  });
 });
 
 describe('readCurrent', () => {

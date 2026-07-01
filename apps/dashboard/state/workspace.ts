@@ -67,6 +67,10 @@ export interface OpenGitLog {
   branch: string;
   /** True when `branch` is a remote ref (drives the checkout-as-local path). */
   isRemote: boolean;
+  /** Selected git root (submodule / nested repo) the log is scoped to; undefined
+   *  = main. The Git window decouples into this editor-pane tab, so the selection
+   *  must ride along or log/cherry-pick/revert/reset would hit the main repo. */
+  repoPath?: string;
 }
 
 export interface OpenGitStash {
@@ -78,6 +82,9 @@ export interface OpenGitStash {
   title: string;
   /** Stash ref (e.g. "stash@{0}"). */
   stashRef: string;
+  /** Selected git root (submodule / nested repo) the stash belongs to; undefined
+   *  = main. Carried so stashDetail/stashFileDiff read the right repo's stash. */
+  repoPath?: string;
 }
 
 export interface OpenMerge {
@@ -87,7 +94,9 @@ export interface OpenMerge {
   path: string;
   /** Friendly label rendered on the tab. */
   title: string;
-  /** repoRoot-relative path of the conflicted file being resolved. */
+  /** PROJECT-relative path of the conflicted file (the backend auto-routes it to
+   *  its containing repo; ConflictsView rebases mergeState's repoRoot-relative
+   *  paths to project-relative before opening this tab). */
   file: string;
 }
 

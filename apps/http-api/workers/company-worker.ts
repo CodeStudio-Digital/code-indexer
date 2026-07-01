@@ -31,6 +31,7 @@
 // resolve identically under tsx, tsc and raw node.
 import { parentPort, workerData } from 'node:worker_threads';
 import { installLlmDispatcher } from '../install-llm-dispatcher.js';
+import { closeDbWriter } from '../../../packages/indexer/src/workers/dbWriter/client.js';
 import {
   MessageBridge,
   openWorkerDb,
@@ -77,6 +78,10 @@ import {
   setGlobalDocSearch,
   type DocSearchBackend,
 } from '../../../packages/code-agent/src/tools/rag-search-docs.js';
+import {
+  setGlobalCompanyRecommend,
+  type CompanyRecommendFn,
+} from '../../../packages/company/src/services/scheduler/recommend-shim.js';
 import { setGlobalDocsHintProvider } from '../../../packages/code-agent/src/core/docs-hint.js';
 import { DocStore } from '../../../packages/store/src/doc-store.js';
 import {
@@ -202,6 +207,17 @@ const docSearchShim: DocSearchBackend = {
 };
 setGlobalDocSearch(docSearchShim);
 
+// Role recommender shim → forwards to the main process (WorkerOrchestratorPool
+// registers the `recommend` handler). The embedding pipeline + roleEmbeddingStore
+// live ONCE on the main thread; the worker's CompanyScheduler reaches them
+// through this RPC to resolve a role per card. A short ceiling — the call is
+// just an embedding + scoring pass, not a container build.
+setGlobalCompanyRecommend((input) =>
+  bridge.request<Awaited<ReturnType<CompanyRecommendFn>>>('recommend', input, {
+    timeoutMs: 15_000,
+  }),
+);
+
 // Preview DevTools shim → forwards to the main process (WorkerOrchestratorPool
 // registers the `previewDevtools` handler). Lets company subordinates use the
 // preview/devtools tools, each scoped to its own window key.
@@ -242,12 +258,13 @@ installWorkerLspShim(bridge);
 // Per-isolate heap stats for the admin perf monitor (best-effort RPC).
 registerPerfStatsHandler(bridge);
 
-// Build the stores. Both wrap better-sqlite3 internally — we let
-// them open their own handles to keep the construction unchanged.
-// `CodeIndexDB` and `CompanyStore` are both safe to instantiate
-// from a worker thread.
-const companyStore = new CompanyStore(dbPath);
+// Build the stores. Anti-freeze (Phase 2): ONE `CodeIndexDB` owns the worker's
+// central connection and every sibling store shares its `db.raw()` handle
+// (ownsHandle=false) — mirrors apps/http-api/server/deps.ts. Previously
+// `CompanyStore` opened its OWN second writer on the same file, which (× the
+// per-runCoder handles) starved the WAL during multi-agent runs.
 const db = new CodeIndexDB(dbPath);
+const companyStore = new CompanyStore(db.raw());
 
 // ─── Company-tool store bindings (DS + QA) ──────────────────────
 // worker_threads don't share module state, so the setDesignSystemStore()
@@ -337,7 +354,9 @@ const orchestrator = new CompanyOrchestrator({
 let workerSupervisionPersistence: SupervisionPersistence | null = null;
 if (process.env.MCP_SUPERVISOR_PERSISTENCE !== '0') {
   try {
-    workerSupervisionPersistence = new SqliteSupervisionPersistence(dbPath);
+    // Share the worker's ONE central handle (Phase 2) instead of opening a
+    // separate writer connection to the same file.
+    workerSupervisionPersistence = new SqliteSupervisionPersistence(db.raw());
   } catch (e) {
     console.warn(
       `[company-worker ${companySessionId}] failed to open supervisor persistence:`,
@@ -350,6 +369,7 @@ if (process.env.MCP_SUPERVISOR_PERSISTENCE !== '0') {
 // orchestrator's public service methods. Each recovery action picks
 // what it needs (some don't need master, some don't need runners).
 const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
+  companySessionId,
   companyEventBus: orchestrator.eventBus,
   completionBus: subordinateCompletionBus,
   emitIncident: (incident): void => {
@@ -371,6 +391,9 @@ const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
       // Async signature on the public method; preserve it through.
       resume: (agentRunId, message) => orchestrator.resumeSubordinate(agentRunId, message),
       abort: (agentRunId) => Promise.resolve(orchestrator.abortSubordinate(agentRunId)),
+      // Stalled-runner recovery: flip the DB status off 'running' + resume from
+      // persisted state so a crashed subordinate stops showing "running".
+      reestablish: (agentRunId, reason) => orchestrator.reestablishSubordinate(agentRunId, reason),
     },
     // Phase 2.3 — live view over the orchestrator's subordinate registry (no
     // parallel map to keep in sync). Subordinate runners are in-process in THIS
@@ -403,19 +426,81 @@ if (workerSupervisor) {
 // the main thread. `since: -1` replays the entire buffer at attach
 // time so events emitted between construction and the first
 // subscriber don't get lost.
+//
+// COALESCING (anti-freeze): the master + EVERY subordinate runner publish
+// their per-token `agent_event` deltas (text_delta / tool_progress /
+// operation_progress) onto this one meta-bus. With N subordinates that is an
+// N× firehose which, mirrored 1:1, saturates the MAIN event loop — each event
+// costs one MessagePort message plus a synchronous SSE fan-out on the main
+// side. We micro-batch ONLY those high-volume deltas into a single
+// `bus.event.batch` message every `MCP_BUS_BATCH_MS` (default 16ms). Every
+// other event (tool_call_start, *_posted, done, company lifecycle events, …)
+// flushes the pending batch FIRST — preserving global ordering — then emits
+// immediately exactly as before. Bus seq, the replay ring and Last-Event-ID
+// are untouched: only the cross-thread transport batches.
+const BUS_BATCH_MS = (() => {
+  const raw = process.env.MCP_BUS_BATCH_MS;
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 16;
+})();
+const COALESCABLE_INNER = new Set(['text_delta', 'tool_progress', 'operation_progress']);
+
+let pendingEvents: BusEventEnvelope[] = [];
+let batchTimer: ReturnType<typeof setTimeout> | null = null;
+
+const flushPending = (): void => {
+  if (batchTimer != null) {
+    clearTimeout(batchTimer);
+    batchTimer = null;
+  }
+  if (pendingEvents.length === 0) return;
+  const events = pendingEvents;
+  pendingEvents = [];
+  bridge.emit('bus.event.batch', { events });
+};
+
+const isCoalescable = (ev: BusEventEnvelope): boolean => {
+  if (ev.event !== 'agent_event') return false;
+  const d = ev.data as { event?: unknown } | null;
+  return (
+    !!d &&
+    typeof d === 'object' &&
+    typeof d.event === 'string' &&
+    COALESCABLE_INNER.has(d.event)
+  );
+};
+
 const busUnsubscribe = subscribe(
   orchestrator.metaBus,
   (ev) => {
     const envelope: BusEventEnvelope = { seq: ev.seq, event: ev.event, data: ev.data };
+    if (BUS_BATCH_MS > 0 && isCoalescable(envelope)) {
+      pendingEvents.push(envelope);
+      if (batchTimer == null) {
+        batchTimer = setTimeout(flushPending, BUS_BATCH_MS);
+        // Don't let a pending flush keep the worker alive on its own — the
+        // stop handler + endListener flush explicitly on a clean shutdown.
+        if (typeof (batchTimer as { unref?: () => void }).unref === 'function') {
+          (batchTimer as { unref: () => void }).unref();
+        }
+      }
+      return;
+    }
+    // Non-coalescable: flush buffered deltas BEFORE this event so ordering is
+    // preserved (a tool_call_start / done can never overtake its text), then
+    // emit immediately as before.
+    flushPending();
     bridge.emit('bus.event', envelope);
   },
   -1,
 );
 
 // Mirror the terminal event so the main-side bus also resolves
-// `waitEnded`. We listen on the worker bus's endListeners directly
-// because `subscribe` only fires buffered events, not the end.
+// `waitEnded`. Flush buffered deltas first so a `done`/`error` can never
+// overtake the text that preceded it. We listen on the worker bus's
+// endListeners directly because `subscribe` only fires buffered events.
 orchestrator.metaBus.endListeners.add(() => {
+  flushPending();
   if (orchestrator.metaBus.endReason) {
     const envelope: BusEndEnvelope = orchestrator.metaBus.endReason;
     bridge.emit('bus.end', envelope);
@@ -527,6 +612,15 @@ bridge.handle('stop', async () => {
   } catch (err) {
     console.warn(`[company-worker ${companySessionId}] abortAll threw:`, err);
   }
+  // Drain the size-1 dbWriter (when MCP_DB_WORKER=1) so the in-flight final
+  // turn-persist completes before this worker exits — same lost-final-turn
+  // guard the main process applies in server.ts. No-op when the writer was
+  // never created (flag off / no runCoder ran).
+  try {
+    await closeDbWriter();
+  } catch (err) {
+    console.warn(`[company-worker ${companySessionId}] closeDbWriter threw:`, err);
+  }
   // Phase 1.6 — stop the supervisor's periodic tick + unsubscribe its
   // observation layer. Order matters: stop AFTER abortAll so terminal
   // events still flow through; but BEFORE busUnsubscribe so the
@@ -549,6 +643,7 @@ bridge.handle('stop', async () => {
       err,
     );
   }
+  flushPending();
   busUnsubscribe();
   try { companyStore.close(); } catch { /* best-effort */ }
   return { ok: true };
