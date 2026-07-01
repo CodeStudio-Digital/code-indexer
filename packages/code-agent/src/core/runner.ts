@@ -1732,6 +1732,15 @@ export class CoderRunner extends EventEmitter {
   noteDecisionGateNudge(): void {
     this.decisionGateNudges += 1;
   }
+  /**
+   * Re-arm the one-shot decision-gate nudge. Called when the user REJECTS a
+   * plan: the model is going to revise and re-submit, and if the revised plan
+   * still exposes an unconsulted fork we want the nudge to fire again instead of
+   * staying spent for the rest of the run.
+   */
+  resetDecisionGateNudges(): void {
+    this.decisionGateNudges = 0;
+  }
   /** How many times the decision-gate nudge fired this run (0 or 1). */
   get decisionGateNudgeCount(): number {
     return this.decisionGateNudges;

@@ -63,7 +63,7 @@ export function maybePlanNudge(ctx: RunContext): string | null {
  * toward silence.
  */
 const DECISION_FORK_RE =
-  /\boption\s+[a-d]\b|\bapproach\s+[12]\b|\btwo (?:viable )?approaches?\b|\balternativ|\bcould either\b|\bon the other hand\b|\beither\b[^.\n]{0,40}\bor\b/i;
+  /\boption\s+[a-d]\b|\bapproach\s+[12]\b|\btwo (?:viable )?approaches?\b|\balternativ|\bcould either\b|\bon the other hand\b|\beither\b[^.\n]{0,80}\bor\b/i;
 
 const DECISION_GATE_NUDGE_TEXT =
   'Hold on — this plan presents more than one viable approach, but you have not consulted the user on the fork. ' +

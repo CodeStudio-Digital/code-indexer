@@ -272,13 +272,23 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       verdict: { approved: boolean; aborted?: boolean; feedback?: string },
       onMessageComplete?: () => void,
       extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
-    ) =>
-      postAndResume(
+    ) => {
+      // Stay-in-Build: on APPROVAL the plan→build transition already happened
+      // server-side (agent persisted to `build`), so the resume must NOT forward
+      // `plan_mode: true` — that would re-enter plan mode and push the model to
+      // submit a second plan. Carry the resulting agent (`build`) instead. Only a
+      // rejected/aborted verdict stays in plan mode to revise.
+      const resumeBody =
+        verdict.approved && !verdict.aborted
+          ? { agent: extras?.agent ?? ('build' as const) }
+          : { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) };
+      return postAndResume(
         `/api/coder/sessions/${sessionId}/plan-response`,
         { approved: verdict.approved, feedback: verdict.feedback, aborted: verdict.aborted },
-        { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) },
+        resumeBody,
         onMessageComplete,
-      ),
+      );
+    },
     [sessionId, postAndResume],
   );
 

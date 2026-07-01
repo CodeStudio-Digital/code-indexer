@@ -189,6 +189,10 @@ export const submitPlan: CoderTool = {
     }
     rejected.add(hash);
     ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
+    // Re-arm the decision-gate nudge: the model will revise and re-submit, and a
+    // still-unconsulted fork in the revised plan should nudge again (one-shot per
+    // submission, not per run).
+    runner.resetDecisionGateNudges();
     return ok(formatPlanResult(false, parsed.feedback));
   },
 };

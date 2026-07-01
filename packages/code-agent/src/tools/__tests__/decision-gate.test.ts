@@ -176,6 +176,19 @@ describe('maybeDecisionGateNudge', () => {
     expect(maybeDecisionGateNudge({ ...base, planText })).toMatch(/decision_gate/);
   });
 
+  it('fires when either…or spans 40–80 chars (widened window)', () => {
+    // ~50 chars between "either" and "or": inside the new 80-char window, but
+    // outside the old 40-char one — a real fork the tightened regex used to miss.
+    const planText = 'We can either reuse the existing pipeline helper for this path or hand-roll a new one.';
+    expect(maybeDecisionGateNudge({ ...base, planText })).toMatch(/decision_gate/);
+  });
+
+  it('stays silent when either…or are far apart (>80 chars, likely unrelated)', () => {
+    const planText =
+      'Loop over either the left rows sourced from the primary datastore replica cluster instance node group or the cache.';
+    expect(maybeDecisionGateNudge({ ...base, planText })).toBeNull();
+  });
+
   it.each([
     'Add a null check in foo() and a test.',
     'Use the shared validator instead of the inline check.',
@@ -252,5 +265,27 @@ describe('submit_plan ↔ decision-gate nudge integration', () => {
     r.provideUserInput(JSON.stringify({ approved: true }));
     await resP;
     expect(r.decisionGateNudgeCount).toBe(0);
+  });
+
+  it('re-arms the nudge after the user rejects a plan', async () => {
+    const r = makeRunner({ planMode: true, planDepth: 'normal' });
+    // 1st submit → nudge (err), count=1.
+    await submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
+    expect(r.decisionGateNudgeCount).toBe(1);
+    // 2nd submit → one-shot, no nudge, pauses → user REJECTS → reset on reject.
+    const res2P = submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
+    await flush();
+    r.provideUserInput(JSON.stringify({ approved: false, feedback: 'reconsider' }));
+    await res2P;
+    expect(r.decisionGateNudgeCount).toBe(0);
+    // 3rd submit (a DIFFERENT forked plan, to dodge the rejection ledger) →
+    // nudge fires again because reject re-armed it.
+    const res3 = await submitPlan.handler(
+      { plan: 'Either add a cache layer or restructure the query pipeline for the hot path here.' },
+      ctx(r),
+    );
+    expect(res3.isError).toBe(true);
+    expect(res3.content).toMatch(/decision_gate/);
+    expect(r.decisionGateNudgeCount).toBe(1);
   });
 });

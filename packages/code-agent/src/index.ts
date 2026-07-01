@@ -290,6 +290,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (opts.profile === undefined) opts = { ...opts, profile: agentDef.profile };
     if (opts.planMode === undefined) opts = { ...opts, planMode: agentDef.planMode };
     if (opts.maxTurns === undefined && agentDef.maxTurns) opts = { ...opts, maxTurns: agentDef.maxTurns };
+    // Stay-in-Build invariant: on a RESUME, the persisted agent is authoritative
+    // for plan mode. A non-plan agent (e.g. `build`, after a plan→build approval)
+    // must NOT re-enter plan mode even if the client forwarded a stale
+    // `plan_mode: true` in the resume body — the dashboard's plan-response resume
+    // used to do exactly that, so a resumed build run re-engaged the plan gate and
+    // the model got pushed to submit a second plan. Scoped to `resume` so explicit
+    // non-resume starts like `--agent build --plan` still keep plan mode on.
+    if (opts.resume && agentDef.planMode === false && opts.planMode) {
+      opts = { ...opts, planMode: false };
+    }
   }
 
   const project = db.getProject(session.project_id);
@@ -2143,14 +2153,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // turn_start flush below must skip it. The submit_plan handler that
     // produced this resume path also calls approvePlan() inline; we need to
     // re-apply that here so the runner accepts mutating tools.
-    const last = runner.messages[runner.messages.length - 1];
-    if (last?.role === 'tool') {
-      for (const b of last.content) {
-        if (b.type === 'tool_result' && /Plan approved by user/.test(b.content)) {
-          runner.approvePlan();
-          break;
-        }
+    //
+    // Scan the recent tail (not just the last message): the OFFLINE plan-approval
+    // path appends a "Mode transition" reminder AFTER the "Plan approved" tool
+    // result, which would otherwise hide it. Walk back to the most recent plan
+    // verdict — a later rejection/abort must NOT be overridden by an older approval.
+    for (let i = runner.messages.length - 1, seen = 0; i >= 0 && seen < 6; i--) {
+      const m = runner.messages[i];
+      if (m.role !== 'tool') continue;
+      seen++;
+      let verdict: 'approved' | 'rejected' | null = null;
+      for (const b of m.content) {
+        if (b.type !== 'tool_result') continue;
+        if (/Plan approved by user/.test(b.content)) { verdict = 'approved'; break; }
+        if (/Plan (rejected|review aborted) by user/.test(b.content)) { verdict = 'rejected'; break; }
       }
+      if (verdict === 'approved') runner.approvePlan();
+      if (verdict) break;
     }
   }
   store.updateSessionStatus(session.id, 'running');

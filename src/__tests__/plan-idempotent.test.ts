@@ -16,6 +16,7 @@ const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks')!;
 class FakeRunner extends EventEmitter {
   private queue: string[] = [];
   approved = false;
+  decisionGateNudges = 0;
   enqueue(response: string) {
     this.queue.push(response);
   }
@@ -25,6 +26,13 @@ class FakeRunner extends EventEmitter {
     return Promise.resolve(next);
   }
   approvePlan() { this.approved = true; }
+  // Surface the plan-mode / decision-gate API the submit_plan handler touches.
+  isPlanMode(): boolean { return false; }
+  get planDepth(): string { return 'normal'; }
+  get decisionAskCount(): number { return 0; }
+  get decisionGateNudgeCount(): number { return this.decisionGateNudges; }
+  noteDecisionGateNudge(): void { this.decisionGateNudges += 1; }
+  resetDecisionGateNudges(): void { this.decisionGateNudges = 0; }
 }
 
 function ctx(runner: FakeRunner): ToolContext {
