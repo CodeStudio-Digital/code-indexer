@@ -353,7 +353,7 @@ async function awaitYield(rec: SessionRecord, yieldMs: number, signal?: AbortSig
 // ─── Tool: exec_command ────────────────────────────────────────────
 
 const EXEC_COMMAND_DESC =
-  'Spawn a shell command as a PERSISTENT session and return whatever it emits within `yield_time_ms`. ' +
+  'Spawn a shell command as a PERSISTENT session and return whatever it emits within a short yield window. ' +
   'If the process is still alive when yield expires, you get back a `session_id` you can drive with `write_stdin`.\n' +
   '\n' +
   'USE: when the command needs to interact across multiple turns — REPLs (`node`, `python -i`, `psql`), ' +
@@ -366,7 +366,7 @@ const EXEC_COMMAND_DESC =
   'An evicted session is GONE (process killed, no reconnect) — call `list_sessions` to check which session_ids are still alive before writing to one.\n' +
   "The shell is the platform default (cmd.exe on Windows, /bin/sh on POSIX) — see the system prompt's OS line for shell-specific dos/don'ts.\n" +
   '\n' +
-  `Defaults: yield_time_ms=${DEFAULT_EXEC_YIELD_MS}, max_output_tokens=${DEFAULT_MAX_OUTPUT_CHARS}, tty=false (pipe). ` +
+  `Defaults: tty=false (pipe); yields after ~${DEFAULT_EXEC_YIELD_MS}ms; output capped at ~${DEFAULT_MAX_OUTPUT_CHARS} chars. ` +
   `Output beyond cap is FIFO-truncated; \`output_truncated=true\` in the header signals when this happened.`;
 
 export const execCommand: CoderTool = {
@@ -391,16 +391,6 @@ export const execCommand: CoderTool = {
         type: 'boolean',
         description: 'Force a real pty (node-pty). Use only when the command gates on isatty(). Default false (pipe).',
       },
-      yield_time_ms: {
-        type: 'number',
-        description: `How long to wait for output before returning. Default ${DEFAULT_EXEC_YIELD_MS}, max ${MAX_YIELD_MS}.`,
-      },
-      max_output_tokens: {
-        type: 'number',
-        description: `Cap on accumulated output chars. Default ${DEFAULT_MAX_OUTPUT_CHARS}, hard max ${HARD_MAX_OUTPUT_CHARS}.`,
-      },
-      cols: { type: 'number', description: 'TTY columns (pty mode only). Default 120.' },
-      rows: { type: 'number', description: 'TTY rows (pty mode only). Default 30.' },
     },
     required: ['cmd'],
     additionalProperties: false,

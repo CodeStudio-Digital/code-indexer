@@ -68,15 +68,14 @@ export const READ_FILE_NATIVE_DESC =
   '1. Don\'t know total_lines? → call mcp__get_file_skeleton FIRST. It returns file size + outline in <100 tokens.\n' +
   '2. File ≤800 lines → read_file returns the whole file in one call (auto-full).\n' +
   '3. File >800 + you know the symbol name → pass `symbol: "<name>"` (or call mcp__get_symbol_body).\n' +
-  '4. File >800 + you have a stack frame / grep hit → pass `around_line: <n>` to get the enclosing function.\n' +
-  '5. File >800 + you know a string → pass `search_term:` to center the window on the first match.\n' +
-  '6. File >800 + you need everything → pass `force: true` (returns the full file in one call).\n' +
+  '4. File >800 + you need everything → pass `force: true` (returns the full file in one call).\n' +
+  '5. Hunting a string, not a line? → use mcp__grep_code to locate it, then read the range or symbol.\n' +
   '\n' +
   'NEVER: paginate more than twice on the same file. After 2 calls without finding what you need, switch tactics (skeleton, symbol, grep, force). The doom-loop guard aborts repetitive turns.\n' +
   '\n' +
   "USE: file you just created/modified that mcp__read_file says is unknown.\n" +
   "USE: quick sanity-check of a config/dotfile that the indexer skipped.\n" +
-  "USE: in a non-indexed project, `symbol`/`around_line` is the cheapest way to read one function.";
+  "USE: in a non-indexed project, `symbol` is the cheapest way to read one function.";
 
 export const LIST_DIRECTORY_NATIVE_DESC =
   'List files and subdirectories at a path (non-recursive). Fallback path when the indexer listing is stale.\n' +

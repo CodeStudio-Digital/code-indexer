@@ -72,7 +72,7 @@ describe('read_file — error strings (telemetry cases)', () => {
     writeFileSync(join(root, 'same-rel-path.md'), 'local content');
     const res = await run(readFile, { path: 'same-rel-path.md', project_name: 'poa-backend' });
     expect(res.isError).toBe(true);
-    expect(res.content).toContain("ignores project_name");
+    expect(res.content).toContain('neither the primary project nor a linked root');
     expect(res.content).toContain('mcp__<project>__read_file');
   });
 
@@ -92,7 +92,7 @@ describe('read_file — large-file truncation + force', () => {
     expect(res.isError).toBeFalsy();
     expect(res.content).toContain('[lines 1-400]');
     expect(res.content).toContain('[auto-full off — file > 800 lines, pass force=true to read all]');
-    expect(res.content).toContain('[truncated: 600 more lines — pass force=true, symbol, around_line, or search_term]');
+    expect(res.content).toContain('[truncated: 600 more lines — pass force=true, a start_line/end_line range, or symbol]');
     expect(res.content).not.toContain('row 401');
   });
 
@@ -105,14 +105,26 @@ describe('read_file — large-file truncation + force', () => {
     expect(res.content).not.toContain('[truncated:');
   });
 
-  it('search_term centers the window and reports a miss without erroring', async () => {
-    writeFileSync(join(root, 'find.txt'), Array.from({ length: 900 }, (_, i) => (i === 599 ? 'NEEDLE here' : `pad ${i}`)).join('\n'));
-    const hit = await run(readFile, { path: 'find.txt', search_term: 'NEEDLE' });
-    expect(hit.isError).toBeFalsy();
-    expect(hit.content).toContain('[Auto-scrolled to line 600 matching "NEEDLE"]');
+});
 
-    const miss = await run(readFile, { path: 'find.txt', search_term: 'ABSENT_TOKEN' });
-    expect(miss.isError).toBeFalsy();
-    expect(miss.content).toContain('not found in find.txt');
+describe('read_file — symbol-targeted read', () => {
+  it('symbol returns just that declaration body, not the whole file', async () => {
+    writeFileSync(
+      join(root, 'sym.ts'),
+      'const x = 1;\nfunction foo() {\n  return 42;\n}\nconst y = 2;\n',
+    );
+    const res = await run(readFile, { path: 'sym.ts', symbol: 'foo' });
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('symbol body');
+    expect(res.content).toContain('return 42');
+    expect(res.content).not.toContain('const y = 2');
+  });
+
+  it('unknown symbol → actionable error pointing at range/grep', async () => {
+    writeFileSync(join(root, 'sym2.ts'), 'const x = 1;\n');
+    const res = await run(readFile, { path: 'sym2.ts', symbol: 'missingFn' });
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain("Symbol 'missingFn' not found");
+    expect(res.content).toContain('start_line/end_line');
   });
 });

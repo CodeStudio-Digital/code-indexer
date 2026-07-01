@@ -466,6 +466,13 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
   const deps = maybeRegistry
     ? depsOrRegistry as SubagentDeps
     : ({ provider: undefined as never, parentTools: [] } as SubagentDeps);
+
+  // Persistent (Company subordinate) spawns delegate to spawn_subordinate_agent,
+  // which is registered ONLY in a Company master session. When it's absent the
+  // persistent path is unreachable, so its 9 config fields are pure dead weight
+  // in the schema — omit them. Registration is fixed for the whole run, so the
+  // serialized tool bytes stay stable for the prompt cache.
+  const includePersistent = !!registry.get('spawn_subordinate_agent');
   return {
     name: 'spawn_agent',
     description: maybeTerse(SPAWN_AGENT_DESC),
@@ -496,21 +503,24 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
         },
         parallel: { type: 'boolean', description: 'Force parallel/sequential. Default: parallel when agents.length > 1.' },
         kind: { type: 'string', enum: ['ephemeral', 'persistent'], description: 'Default "ephemeral". "persistent" needs Company master (uses spawn_subordinate_agent under the hood).' },
-        // Backward-compat single-agent shape:
-        task: { type: 'string', description: 'Single-agent shortcut — wraps into agents:[{task,type,files}].' },
-        type: { type: 'string', enum: ['explore', 'implement', 'full'], description: 'Single-agent shortcut.' },
-        max_turns: { type: 'number', description: 'Single-agent shortcut.' },
-        files: { type: 'array', items: { type: 'string' }, description: 'Single-agent shortcut.' },
-        // Persistent-only Company fields:
-        role: { type: 'string', description: 'Persistent only — required inside Company master.' },
-        project_id: { type: 'number', description: 'Persistent only.' },
-        provider: { type: 'string', description: 'Persistent only.' },
-        model: { type: 'string', description: 'Persistent only.' },
-        tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Persistent only.' },
-        skills: { type: 'array', items: { type: 'string' }, description: 'Persistent only.' },
-        kanban_card_id: { type: 'number', description: 'Persistent only.' },
-        wait: { type: 'boolean', description: 'Persistent only.' },
-        forward_user_attachments: { type: 'boolean', description: 'Persistent only.' },
+        // Persistent-only Company fields — surfaced only in a master session
+        // (see includePersistent). Unreachable/ignored elsewhere. The handler
+        // still reads the legacy single-agent shortcut (task/type/max_turns/
+        // files) via normalizeAgents, so old callers keep working; they're just
+        // no longer advertised — `agents:[{...}]` is the one documented shape.
+        ...(includePersistent
+          ? {
+              role: { type: 'string', description: 'Persistent only — required inside Company master.' },
+              project_id: { type: 'number', description: 'Persistent only.' },
+              provider: { type: 'string', description: 'Persistent only.' },
+              model: { type: 'string', description: 'Persistent only.' },
+              tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Persistent only.' },
+              skills: { type: 'array', items: { type: 'string' }, description: 'Persistent only.' },
+              kanban_card_id: { type: 'number', description: 'Persistent only.' },
+              wait: { type: 'boolean', description: 'Persistent only.' },
+              forward_user_attachments: { type: 'boolean', description: 'Persistent only.' },
+            }
+          : {}),
       },
       additionalProperties: false,
     },

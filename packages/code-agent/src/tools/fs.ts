@@ -30,7 +30,6 @@ import {
 import {
   extractSymbolBodyFromContent,
   findSymbolDeclLineFromContent,
-  findEnclosingDeclLine,
 } from '@mcp/services/services/code-reader.js';
 
 /** The project root a native fs call resolved to (primary or a linked root). */
@@ -96,12 +95,6 @@ function overlayFor(ctx: ToolContext, projectId: number | undefined): ToolContex
   return ctx.overlay;
 }
 
-/** Optional `project` schema param shared by the native fs tools (global sessions). */
-const PROJECT_PARAM = {
-  type: 'string',
-  description: 'Optional. Linked-project slug for a global (multi-project) session; omit for the primary project.',
-} as const;
-
 const writeFile: CoderTool = {
   name: 'write_file',
   description: maybeTerse(WRITE_FILE_DESC),
@@ -120,7 +113,6 @@ const writeFile: CoderTool = {
     properties: {
       path: { type: 'string', description: 'Project-relative path' },
       content: { type: 'string', description: 'Full new content of the file' },
-      project: PROJECT_PARAM,
     },
     required: ['path', 'content'],
     additionalProperties: false,
@@ -152,7 +144,6 @@ const createFile: CoderTool = {
     properties: {
       path: { type: 'string', description: 'Project-relative path' },
       content: { type: 'string', description: 'Initial content' },
-      project: PROJECT_PARAM,
     },
     required: ['path', 'content'],
     additionalProperties: false,
@@ -368,7 +359,6 @@ const editFile: CoderTool = {
       old_string: { type: 'string', description: 'Text to find. Should match file content closely — minor whitespace differences are tolerated automatically.' },
       new_string: { type: 'string', description: 'Replacement text' },
       replace_all: { type: 'boolean', description: 'Replace all occurrences (default false)' },
-      project: PROJECT_PARAM,
     },
     required: ['path', 'old_string', 'new_string'],
     additionalProperties: false,
@@ -490,31 +480,15 @@ const readFile: CoderTool = {
       path: { type: 'string', description: 'Project-relative path' },
       start_line: { type: 'number', description: '1-indexed start line (optional)' },
       end_line: { type: 'number', description: '1-indexed inclusive end line (optional)' },
-      max_lines: { type: 'number', description: 'Max lines to return when no range is given (default 400)' },
       symbol: {
         type: 'string',
         description:
           'Return only the body of this symbol (function/class/etc.). Locates the declaration via regex and extracts the brace/indent block. Wins over start_line/end_line when set.',
       },
-      around_line: {
-        type: 'number',
-        description:
-          'Return the symbol body that contains this 1-indexed line. Useful when you have a stack frame or grep hit and want the enclosing function. Wins over start_line/end_line when set.',
-      },
-      search_term: {
-        type: 'string',
-        description: 'Center the read window on the first match of this regex (case-insensitive). Useful when you know a unique string but not the line number.',
-      },
       force: {
         type: 'boolean',
         description: 'Return the full file in one call regardless of size. Use for files >800 lines when you need everything.',
       },
-      force_reread: {
-        type: 'boolean',
-        description:
-          'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying file changed since a previous read (file edited, snapshot refreshed). Different from `force`: `force` controls truncation policy (size), `force_reread` controls cache policy (skip the dup-content marker). Default false.',
-      },
-      project: PROJECT_PARAM,
     },
     required: ['path'],
     additionalProperties: false,
@@ -542,30 +516,19 @@ const readFile: CoderTool = {
     const lines = content.split('\n');
     const total = lines.length;
 
-    // Symbol-targeted modes: locate declaration, then extract the body block.
+    // Symbol-targeted mode: locate the declaration, then extract the body block.
     const symbolArg = typeof args.symbol === 'string' ? args.symbol.trim() : '';
-    const aroundLine = typeof args.around_line === 'number' ? args.around_line : null;
-    if (symbolArg || aroundLine !== null) {
-      let anchor: number | null = null;
-      if (symbolArg) {
-        anchor = findSymbolDeclLineFromContent(content, symbolArg);
-        if (anchor === null) {
-          return err(
-            `Symbol '${symbolArg}' not found in ${path}. ` +
-              `Fall back to a line range (start_line/end_line) or grep first.`,
-          );
-        }
-      } else if (aroundLine !== null) {
-        // around_line points anywhere inside the symbol — walk backward to
-        // its declaration so the brace-matcher returns the whole body, not
-        // the suffix from the cursor.
-        anchor = findEnclosingDeclLine(content, aroundLine);
+    if (symbolArg) {
+      const anchor = findSymbolDeclLineFromContent(content, symbolArg);
+      if (anchor === null) {
+        return err(
+          `Symbol '${symbolArg}' not found in ${path}. ` +
+            `Fall back to a line range (start_line/end_line) or grep first.`,
+        );
       }
-      if (anchor !== null) {
-        const body = extractSymbolBodyFromContent(path, content, anchor);
-        const header = `${path} — symbol body (lines ${body.start_line}-${body.end_line} of ${total})\n`;
-        return ok(header + body.body);
-      }
+      const body = extractSymbolBodyFromContent(path, content, anchor);
+      const header = `${path} — symbol body (lines ${body.start_line}-${body.end_line} of ${total})\n`;
+      return ok(header + body.body);
     }
 
     const startLineArg = typeof args.start_line === 'number' ? args.start_line : undefined;
@@ -574,42 +537,24 @@ const readFile: CoderTool = {
     // auto_full env-toggle preserved for tests; not exposed in schema.
     const autoFull = process.env.CODER_READ_FILE_AUTOFULL_DISABLE !== '1';
     const AUTO_FULL_THRESHOLD = 800;
+    // Default window when a large file is read without a range and without force.
+    const DEFAULT_READ_LINES = 400;
 
-    let startLine = startLineArg !== undefined ? Math.max(1, startLineArg) : 1;
+    const startLine = startLineArg !== undefined ? Math.max(1, startLineArg) : 1;
     let endLine: number;
 
     const isAutoFull =
       autoFull &&
       startLineArg === undefined &&
       endLineArg === undefined &&
-      !args.search_term &&
       total <= AUTO_FULL_THRESHOLD;
-
-    // search_term: locate first regex match (case-insensitive) and center the window on it.
-    let headerNote = '';
-    if (typeof args.search_term === 'string' && args.search_term.length > 0) {
-      const term = args.search_term;
-      try {
-        const re = new RegExp(term, 'i');
-        const idx = lines.findIndex((l) => re.test(l));
-        if (idx === -1) {
-          return ok(`[Search term "${term}" not found in ${path}. Use mcp__grep_code to search across files.]`);
-        }
-        const win = typeof args.max_lines === 'number' ? args.max_lines : 400;
-        startLine = Math.max(1, idx + 1 - Math.floor(win / 2));
-        headerNote = `[Auto-scrolled to line ${idx + 1} matching "${term}"]\n`;
-      } catch (e) {
-        return err(`Invalid search_term regex: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
 
     if (endLineArg !== undefined) {
       endLine = Math.min(total, endLineArg);
     } else if (force || isAutoFull) {
       endLine = total;
     } else {
-      const maxLines = typeof args.max_lines === 'number' ? args.max_lines : 400;
-      endLine = Math.min(total, startLine + maxLines - 1);
+      endLine = Math.min(total, startLine + DEFAULT_READ_LINES - 1);
     }
 
     const slice = lines.slice(startLine - 1, endLine);
@@ -623,9 +568,9 @@ const readFile: CoderTool = {
         : '';
     const richHeader = `${path} | ${total} lines | ${ext}\n[lines ${startLine}-${endLine}]${tag}\n`;
     const footer = remaining > 0
-      ? `\n... ${truncationMarker(`${remaining} more lines`, 'pass force=true, symbol, around_line, or search_term')}`
+      ? `\n... ${truncationMarker(`${remaining} more lines`, 'pass force=true, a start_line/end_line range, or symbol')}`
       : '';
-    return ok(richHeader + headerNote + numbered + footer);
+    return ok(richHeader + numbered + footer);
   },
 };
 
@@ -638,7 +583,6 @@ const listDirectory: CoderTool = {
     properties: {
       path: { type: 'string', description: 'Project-relative path (default: project root)' },
       recursive: { type: 'boolean', description: 'Recurse into subdirectories (default false)' },
-      project: PROJECT_PARAM,
     },
     additionalProperties: false,
   },
@@ -780,7 +724,6 @@ export const multiEdit: CoderTool = {
           required: ['old_string', 'new_string'],
         },
       },
-      project: PROJECT_PARAM,
     },
     required: ['path', 'edits'],
     additionalProperties: false,

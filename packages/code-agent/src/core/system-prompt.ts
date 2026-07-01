@@ -60,7 +60,7 @@ Only stop when one of these holds:
 If a tool call fails, persevere: read the error, adjust, retry. Do not stop on first failure.
 
 # Do not re-read what you already have
-The runner refuses identical-content tool results after the second duplicate. Reads snap to the enclosing symbol — nudging \`around_line\` inside a range you already received returns the same body. Repeating yourself burns the parent's tokens and stalls the session.`;
+The runner refuses identical-content tool results after the second duplicate. Re-reading a range or symbol you already received returns the same body. Repeating yourself burns the parent's tokens and stalls the session.`;
 }
 
 export type ProviderFamily =
@@ -506,7 +506,7 @@ If a tool call fails, persevere: read the error, adjust, retry. Do not stop on t
 Before each tool call (or grouped batch of related calls) emit a 1–2 sentence preamble: what you're about to do, ~8–12 words, connected to what was just done. ONE preamble per related group — don't narrate every individual read. Concrete and collaborative; no apologies, no restating the question.
 
 # Do not re-read what you already have
-The runner refuses identical-content tool results after the second duplicate. Reads snap to the enclosing symbol — nudging \`around_line\` inside a range you already received returns the same body. After a successful \`edit_file\`/\`multi_edit\`/\`apply_patch\`, trust the tool result; re-read only on failure or for adjacent context you have not seen.
+The runner refuses identical-content tool results after the second duplicate. Re-reading a range or symbol you already received returns the same body. After a successful \`edit_file\`/\`multi_edit\`/\`apply_patch\`, trust the tool result; re-read only on failure or for adjacent context you have not seen.
 
 # Active context
 Each turn you will receive a final user message wrapped in \`<active-context>...</active-context>\` containing the live goal, todo list, and any active task scope. Read it before acting — it is the source of truth, more authoritative than older history.`;
@@ -654,7 +654,7 @@ MCP semantic tools (\`mcp__*\`) are NOT available this session. Do NOT call any 
 
 Use native tools for all code exploration:
 1. \`list_directory\` — browse project structure.
-2. \`read_file\` — read file contents. Pass \`symbol: "<name>"\` to get just one function/class body, or \`around_line: <n>\` to grab the symbol that contains that line. Falls back to a line range when the file's language has no AST grammar.
+2. \`read_file\` — read file contents. Pass \`symbol: "<name>"\` to get just one function/class body, or a \`start_line\`/\`end_line\` range for a slice. Files ≤800 lines return in full automatically.
 3. \`glob\` (native) or \`run_command\` with \`rg\`/\`grep -rn\` — text search across files.
 4. \`run_command\` with \`find\` (or \`dir /s\` on Windows) — file discovery by name/pattern.
 `;
@@ -666,7 +666,7 @@ Use native tools for all code exploration:
 The MCP bridge is connected, but this project was never indexed. Tools that strictly need the symbol DB were stripped — DB-backed search/overview/graph tools (\`search*\`, \`get_project_*\`, \`get_context_for\`, \`query_snapshots\`, \`get_hierarchy\`, \`semantic_neighbors\`, \`get_dependencies\`/\`get_dependents\`, ...) are NOT callable; the error names the tool if you hit one.
 
 Still available with automatic tree-sitter / disk-grep fallbacks: \`mcp__read_file\`, \`mcp__list_directory\`, \`mcp__grep_code\`, \`mcp__get_file_skeleton\` / \`get_file_structure\`, \`mcp__get_symbol_body\`, \`mcp__find_references\`, \`mcp__trace_usage\` (depth=1), \`mcp__prepare_edit\` (no imports/tests).
-Native always works: \`read_file\` (pass \`symbol\` or \`around_line\`), \`glob\`, \`run_command\` with \`rg\`.
+Native always works: \`read_file\` (pass \`symbol\` or a \`start_line\`/\`end_line\` range), \`glob\`, \`run_command\` with \`rg\`.
 For full caller graphs / scored search / vector neighbors, ask the user to index the project via the admin panel.
 `;
   }
