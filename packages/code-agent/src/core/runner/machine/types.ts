@@ -563,6 +563,19 @@ export interface BridgeCallbacks {
     compactionTriggered: boolean;
     summarizerRan: boolean;
   }) => number | null;
+  /**
+   * Background (fire-and-forget) subagent liveness. Present only when the
+   * host wired the job manager (single sessions with subagent capability);
+   * undefined for subagents, company masters, and tests. When set, the
+   * orchestrator does NOT end a clean run while `hasActive()` is true — it
+   * `park()`s until a job settles (→ 'work', notice already injected), the
+   * user sends a message ('message'), the run aborts ('aborted'), or a
+   * safety cap elapses ('timeout').
+   */
+  backgroundJobs?: {
+    hasActive: () => boolean;
+    park: (signal: AbortSignal) => Promise<'work' | 'message' | 'aborted' | 'timeout'>;
+  };
 }
 
 /** Transition table shape: `TRANSITIONS[state][event.kind] = nextState`. */
