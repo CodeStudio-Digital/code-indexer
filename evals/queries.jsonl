@@ -37,3 +37,18 @@
 {"query": "LSH simhash bucket prefilter embeddings", "relevant_files": ["packages/indexer/src/indexer/lsh-indexing-sink.ts"]}
 {"query": "candidate pipeline stages dedup topk rerank hydrator", "relevant_files": ["packages/indexer/src/search/hybrid-pipeline.ts"]}
 {"query": "retry embeddings missing hashes from disk", "relevant_files": ["packages/indexer/src/indexer/indexer/embed-executor.ts"], "relevant_symbols": ["retryEmbeddings"]}
+{"query": "who triggers the structural index when a project is opened", "relevant_files": ["packages/services/src/services/project-index/service.ts", "packages/indexer/src/indexer/structural.ts"]}
+{"query": "editor file save marks the index dirty fast path", "relevant_files": ["packages/services/src/services/project-index/service.ts", "packages/api-handlers/src/files/index.ts"]}
+{"query": "how does a class completion get its use statement auto import", "relevant_files": ["packages/api-handlers/src/lsp/fallback-members.ts", "packages/api-handlers/src/lsp/index-fallback.ts"]}
+{"query": "what happens when a language server keeps crashing on spawn", "relevant_files": ["packages/services/src/lsp/lsp-server-manager.ts", "packages/services/src/lsp/lsp-server-handle.ts"]}
+{"query": "typing in monaco reaches intelephense as didChange", "relevant_files": ["apps/dashboard/features/workspace/editor/documentSync.ts", "packages/api-handlers/src/lsp/server-backend.ts"]}
+{"query": "rename edits applied to files that are not open in the editor", "relevant_files": ["apps/dashboard/features/workspace/editor/lsp/apply-workspace-edit.ts", "apps/dashboard/features/workspace/editor/lsp/rename.ts"]}
+{"query": "ghost text autocomplete builds context from class members of the receiver", "relevant_files": ["packages/api-handlers/src/editor/completion/members.ts", "packages/api-handlers/src/editor/completion/context.ts"]}
+{"query": "which data feeds the sticky scroll outline in the editor", "relevant_files": ["apps/dashboard/features/workspace/editor/lsp/documentSymbols.ts", "packages/api-handlers/src/lsp/fallback-document-symbols.ts"]}
+{"query": "who decides which language server owns a python file", "relevant_files": ["packages/services/src/lsp/server-registry.ts", "packages/api-handlers/src/lsp/index.ts"]}
+{"query": "watcher batches dirty files before incremental reindex", "relevant_files": ["packages/services/src/services/project-index/service.ts", "packages/indexer/src/indexer/structural-incremental.ts"]}
+{"query": "where do php trait relations get persisted during indexing", "relevant_files": ["packages/indexer/src/indexer/tree-sitter/namespace-extractor.ts", "packages/store/src/db/symbols.ts"]}
+{"query": "detect references pointing at symbols that no longer exist", "relevant_files": ["packages/store/src/db/index-health.ts", "scripts/index-health.ts"]}
+{"query": "keyboard shortcut fires while focus is inside an input field", "relevant_files": ["apps/dashboard/keymap/dispatcher.ts", "apps/dashboard/keymap/commands.ts"]}
+{"query": "file changed on disk outside the app updates the file tree", "relevant_files": ["packages/services/src/services/project-index/service.ts", "apps/dashboard/state/file-tree.ts"]}
+{"query": "inherited members walk stops on inheritance cycles", "relevant_files": ["packages/store/src/db/symbol-members-deep.ts", "packages/api-handlers/src/lsp/fallback-members.ts"]}

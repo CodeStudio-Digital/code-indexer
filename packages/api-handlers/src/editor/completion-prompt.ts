@@ -36,10 +36,13 @@ const SYSTEM_PROMPT = [
   'Never repeat the code that is already before the cursor.',
   'Match the surrounding indentation and code style exactly.',
   'Keep it short: finish the current statement or small block, then stop.',
-  'When PROJECT CONTEXT is given below, it is ordered most-relevant first: the',
-  'enclosing scope, the members available on the expression at the cursor, the',
-  'current class and file symbols, then imported APIs. PREFER these exact names,',
-  'signatures and member calls — they are the real symbols in this codebase.',
+  'When PROJECT CONTEXT is given below, PREFER its exact names, signatures and',
+  'member calls — they are the real symbols in this codebase. Sections may',
+  'include the enclosing scope, the members available on the expression at the',
+  'cursor, the current class and file symbols, imported APIs, RECENTLY EDITED',
+  'excerpts (what the user is actively working on — mirror their direction),',
+  'and OPEN FILE excerpts (similar code from the same project — follow its',
+  'patterns and conventions).',
   'Do not invent methods that are not listed for a known receiver.',
 ].join(' ');
 
@@ -47,10 +50,17 @@ export function buildCompletionMessages(input: {
   language: string;
   file: string;
   windows: PromptWindows;
-  context: string;
+  /** v1 single-block context (legacy path). */
+  context?: string;
+  /** v2 two-block context: stable first (byte-identical across keystrokes)… */
+  contextStable?: string;
+  /** …volatile last, nearest the code window (scope + receiver members). */
+  contextVolatile?: string;
 }): ChatMessage[] {
-  const contextBlock = input.context
-    ? `PROJECT CONTEXT (most relevant first):\n${input.context}\n\n`
+  const blocks = [input.contextStable, input.contextVolatile, input.context]
+    .filter((b): b is string => !!b && b.length > 0);
+  const contextBlock = blocks.length > 0
+    ? `PROJECT CONTEXT (most relevant first):\n${blocks.join('\n\n')}\n\n`
     : '';
   return [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -64,72 +74,8 @@ export function buildCompletionMessages(input: {
   ];
 }
 
-/** Strip a single wrapping markdown fence, keeping the inner code. */
-function stripFences(text: string): string {
-  const m = text.match(/^\s*```[\w-]*\r?\n([\s\S]*?)(\r?\n```\s*)?$/);
-  return m ? (m[1] ?? '') : text;
-}
-
-/**
- * Drop inline reasoning from thinking models (GLM/Qwen emit
- * `<think>…</think>` INSIDE content). An unterminated block means the
- * token budget died mid-reasoning — nothing insertable remains.
- */
-function stripThinking(text: string): string {
-  const cut = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  return /<think>/i.test(cut) ? '' : cut;
-}
-
-/**
- * Scrub the raw model output into insert-ready ghost text.
- *  - fences and stray <CURSOR> markers removed
- *  - prefix echo cut (longest tail-of-prefix that prefixes the output, ≥3)
- *  - suffix overlap cut (model re-typing the code right after the cursor)
- *  - single-line mode keeps only the first line
- * Returns '' when nothing insertable remains.
- */
-export function postProcessCompletion(
-  raw: string,
-  prefix: string,
-  suffix: string,
-  multiline: boolean,
-): string {
-  let text = stripFences(stripThinking(raw.replace(/\r\n/g, '\n')));
-  // Code followed by a fence + prose ("…\n``` Explanation:") — keep the code.
-  const trailingFence = text.indexOf('\n```');
-  if (trailingFence >= 0) text = text.slice(0, trailingFence);
-  text = text.split('<CURSOR>').join('');
-
-  // Prefix echo: chat models often re-type the current line before adding
-  // new code. Cut the longest overlap (min 3 chars to spare legit repeats).
-  const tail = prefix.slice(-200);
-  for (let len = Math.min(tail.length, text.length); len >= 3; len--) {
-    if (text.startsWith(tail.slice(tail.length - len))) {
-      text = text.slice(len);
-      break;
-    }
-  }
-
-  if (!multiline) {
-    text = text.split('\n')[0] ?? '';
-  }
-
-  // Suffix overlap: the buffer already holds `suffix` right after the
-  // cursor — if the output ends by re-typing its beginning, drop that part
-  // (classic case: closing brackets that already exist).
-  const head = suffix.slice(0, 80);
-  for (let len = Math.min(head.length, text.length); len >= 2; len--) {
-    const candidate = head.slice(0, len);
-    if (candidate.trim().length > 0 && text.endsWith(candidate)) {
-      text = text.slice(0, text.length - len);
-      break;
-    }
-  }
-
-  // Drop trailing whitespace-only lines (stop sequences leave half-cuts).
-  text = text.replace(/[ \t]+$/gm, '').replace(/\n+$/, (m) => (m.length > 1 ? '\n' : ''));
-  return text.trim().length === 0 ? '' : text;
-}
+// Output post-processing moved to completion/postprocess.ts (postProcessV2 —
+// token-boundary cuts, rewrite/loop rejection, bracket guard).
 
 /**
  * Stop sequences for the chat call. NO fence stop: models that OPEN their

@@ -47,23 +47,24 @@ import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
   runSubagent,
   runParallelAgents,
-  READ_ONLY_FILTER,
-  READ_WRITE_FILTER,
-  FULL_ACCESS_FILTER,
   extractLastAssistantText,
   emptyCollected,
-  type SubagentAllowlist,
   type SubagentLimits,
   type ParallelAgentSpec,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import { renderCollectedSnapshotForParent } from '@mcp/code-agent/tools/subagent-collector.js';
 import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
 import {
-  EXPLORE_SYSTEM_PROMPT,
-  IMPLEMENT_SYSTEM_PROMPT,
   describeProvider,
   type SubagentDeps,
 } from '@mcp/code-agent/tools/subagent.js';
+import {
+  MICRO_AGENT_PROFILE_NAMES,
+  MICRO_AGENT_PROFILES,
+  resolveMicroAgentProfile,
+  type MicroAgentCapability,
+  type MicroAgentProfile,
+} from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import {
   isGlobalSubAgentCacheEnabled,
   tryGlobalSubAgentRead,
@@ -76,10 +77,12 @@ const SPAWN_AGENT_DESC =
   'Each agent returns only its final summary — intermediate tool results NEVER enter your history. ' +
   'Token cost IS counted in this session.\n' +
   '\n' +
-  'Per-agent `type` controls the toolset:\n' +
-  '  • "explore" (default) — read-only investigation + non-mutating MCPs. Cheap.\n' +
-  '  • "implement"         — adds write + shell + ALL external MCPs.\n' +
-  '  • "full"              — no filter, inherits the parent\'s exact toolset.\n' +
+  'Per-agent `profile` controls the specialized toolset:\n' +
+  '  - "explore" / "investigator" (default): read-only investigation + non-mutating MCPs. Cheap.\n' +
+  '  - "implement" / "implementer": scoped writes + shell + external MCPs.\n' +
+  '  - "verify" / "verifier": shell + diagnostics for tests/linters, no writes.\n' +
+  '  - "review" / "reviewer": read-only bug/regression/security review.\n' +
+  '  - "full": no filter, inherits the parent\'s exact toolset.\n' +
   '\n' +
   'USE: when a task needs many tool calls whose outputs would pollute your context.\n' +
   'USE: with multiple agents to investigate independent topics in parallel.\n' +
@@ -89,13 +92,14 @@ const SPAWN_AGENT_DESC =
 
 interface NormalizedAgent {
   task: string;
-  type: 'explore' | 'implement' | 'full';
+  type: MicroAgentCapability;
+  profile: MicroAgentProfile;
   label: string;
   maxTurns: number;
   files?: string[];
 }
 
-const SPAWN_LIMITS: Record<NormalizedAgent['type'], Required<SubagentLimits>> = {
+const SPAWN_LIMITS: Record<MicroAgentCapability, Required<SubagentLimits>> = {
   explore: {
     // `maxToolCalls` is a budget of tool *CALLS* (invocations), NOT the number
     // of tools available (the env name is kept for back-compat). Default 0 =
@@ -111,6 +115,16 @@ const SPAWN_LIMITS: Record<NormalizedAgent['type'], Required<SubagentLimits>> = 
     timeoutMs: Number(process.env.CODER_SPAWN_IMPLEMENT_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
     stallMs: Number(process.env.CODER_SPAWN_IMPLEMENT_STALL_MS ?? 120_000) || 120_000,
   },
+  verify: {
+    maxToolCalls: Number(process.env.CODER_SPAWN_VERIFY_MAX_TOOLS ?? 40) || 40,
+    timeoutMs: Number(process.env.CODER_SPAWN_VERIFY_TIMEOUT_MS ?? 15 * 60_000) || 15 * 60_000,
+    stallMs: Number(process.env.CODER_SPAWN_VERIFY_STALL_MS ?? 120_000) || 120_000,
+  },
+  review: {
+    maxToolCalls: Number(process.env.CODER_SPAWN_REVIEW_MAX_TOOLS ?? 40) || 40,
+    timeoutMs: Number(process.env.CODER_SPAWN_REVIEW_TIMEOUT_MS ?? 15 * 60_000) || 15 * 60_000,
+    stallMs: Number(process.env.CODER_SPAWN_REVIEW_STALL_MS ?? 120_000) || 120_000,
+  },
   full: {
     maxToolCalls: Number(process.env.CODER_SPAWN_FULL_MAX_TOOLS ?? 80) || 80,
     timeoutMs: Number(process.env.CODER_SPAWN_FULL_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
@@ -122,18 +136,13 @@ function limitsForAgent(agent: NormalizedAgent): SubagentLimits {
   return SPAWN_LIMITS[agent.type];
 }
 
-function resolveTypeArtifacts(type: NormalizedAgent['type']): {
-  systemPrompt: string;
-  allowlist: SubagentAllowlist;
-} {
-  if (type === 'full') return { systemPrompt: IMPLEMENT_SYSTEM_PROMPT, allowlist: FULL_ACCESS_FILTER };
-  if (type === 'implement') return { systemPrompt: IMPLEMENT_SYSTEM_PROMPT, allowlist: READ_WRITE_FILTER };
-  return { systemPrompt: EXPLORE_SYSTEM_PROMPT, allowlist: READ_ONLY_FILTER };
+function rawString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAgent[]; error: string | null } {
   const MIN_TURNS = 50;
-  const fallbackType: NormalizedAgent['type'] = 'explore';
+  const fallbackProfile = MICRO_AGENT_PROFILES.explore;
 
   // Backward-compat path: top-level `task` (singular) → wrap in agents:[{}].
   let rawList: unknown[];
@@ -142,6 +151,8 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
   } else if (typeof args.task === 'string' && args.task.trim()) {
     rawList = [{
       task: args.task,
+      profile: args.profile,
+      tool_profile: args.tool_profile,
       type: args.type,
       label: args.label,
       max_turns: args.max_turns,
@@ -158,18 +169,27 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
     const raw = rawList[i] as Record<string, unknown>;
     const task = typeof raw.task === 'string' ? raw.task.trim() : '';
     if (!task) return { agents: [], error: `spawn_agent: agent[${i}].task is required and non-empty.` };
-    const typeRaw = typeof raw.type === 'string' ? raw.type : fallbackType;
-    if (typeRaw !== 'explore' && typeRaw !== 'implement' && typeRaw !== 'full') {
-      return { agents: [], error: `spawn_agent: agent[${i}].type='${typeRaw}' invalid — use 'explore' | 'implement' | 'full'.` };
+    const profileName = rawString(raw.profile) ?? rawString(raw.tool_profile) ?? rawString(raw.type);
+    const profile = profileName ? resolveMicroAgentProfile(profileName) : fallbackProfile;
+    if (!profile) {
+      return {
+        agents: [],
+        error:
+          `spawn_agent: agent[${i}].profile='${profileName}' invalid - use one of: ` +
+          MICRO_AGENT_PROFILE_NAMES.join(', '),
+      };
     }
-    const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : `${typeRaw}-${i + 1}`;
+    const label = typeof raw.label === 'string' && raw.label.trim()
+      ? raw.label.trim()
+      : `${profile.defaultLabel}-${i + 1}`;
     const max_turns = typeof raw.max_turns === 'number' ? raw.max_turns : 100;
     const files = Array.isArray(raw.files)
       ? (raw.files as unknown[]).filter((f): f is string => typeof f === 'string' && f.length > 0)
       : undefined;
     out.push({
       task,
-      type: typeRaw,
+      type: profile.capability,
+      profile,
       label,
       maxTurns: Math.max(MIN_TURNS, max_turns),
       files,
@@ -230,6 +250,17 @@ function captureInvestigation(
   }
 }
 
+function renderParallelProfilePrompts(agents: NormalizedAgent[]): string {
+  const seen = new Set<MicroAgentProfile['id']>();
+  const parts: string[] = [];
+  for (const agent of agents) {
+    if (seen.has(agent.profile.id)) continue;
+    seen.add(agent.profile.id);
+    parts.push(`# ${agent.profile.id}\n${agent.profile.systemPrompt}`);
+  }
+  return parts.join('\n\n---\n\n');
+}
+
 async function runSingleEphemeral(
   deps: SubagentDeps,
   agent: NormalizedAgent,
@@ -243,11 +274,10 @@ async function runSingleEphemeral(
     `max_turns=${agent.maxTurns}${agent.files ? ` files=[${agent.files.join(', ')}]` : ''}`,
   );
 
-  const { systemPrompt, allowlist } = resolveTypeArtifacts(agent.type);
   const cacheKeyInput = {
     prompt: agent.task,
     agentType: agent.type === 'explore' ? 'Explore' as const : 'general-purpose' as const,
-    recentMutations: agent.files ?? [],
+    recentMutations: [...(agent.files ?? []), `profile:${agent.profile.id}`],
   };
   if (isGlobalSubAgentCacheEnabled()) {
     const hit = tryGlobalSubAgentRead<{
@@ -272,9 +302,14 @@ async function runSingleEphemeral(
       deps.sessionStore.recordSessionInput({
         session_id: parentSessionId,
         kind: 'subagent_prompt',
-        source_label: `subagent:${agent.type}`,
-        content: systemPrompt,
-        meta: { task: agent.task, max_turns: agent.maxTurns, files: agent.files },
+        source_label: `subagent:${agent.profile.id}`,
+        content: agent.profile.systemPrompt,
+        meta: {
+          task: agent.task,
+          max_turns: agent.maxTurns,
+          files: agent.files,
+          profile: agent.profile.id,
+        },
       });
     } catch { /* best-effort */ }
   }
@@ -290,11 +325,14 @@ async function runSingleEphemeral(
     },
     {
       label: agent.label,
-      systemPrompt,
-      allowlist,
+      systemPrompt: agent.profile.systemPrompt,
+      allowlist: agent.profile.allowlist,
       initialMessages,
       maxTurns: agent.maxTurns,
-      pathScope: agent.type === 'implement' && agent.files && agent.files.length > 0 ? agent.files : undefined,
+      pathScope: agent.profile.pathScopeMode === 'enforce-writes' && agent.files && agent.files.length > 0
+        ? agent.files
+        : undefined,
+      pathScopeMode: agent.profile.pathScopeMode,
       limits: limitsForAgent(agent),
     },
   );
@@ -352,29 +390,30 @@ async function runParallelEphemeral(
         session_id: parentSessionId,
         kind: 'subagent_prompt',
         source_label: `subagent:parallel:${groupId}`,
-        content: EXPLORE_SYSTEM_PROMPT,
+        content: renderParallelProfilePrompts(agents),
         meta: {
           group_id: groupId,
           agent_count: agents.length,
           labels: agents.map((a) => a.label),
           types: agents.map((a) => a.type),
+          profiles: agents.map((a) => a.profile.id),
         },
       });
     } catch { /* best-effort */ }
   }
 
-  const specs: ParallelAgentSpec[] = agents.map((a) => {
-    const { systemPrompt, allowlist } = resolveTypeArtifacts(a.type);
-    return {
-      task: a.task,
-      label: a.label,
-      maxTurns: a.maxTurns,
-      systemPrompt,
-      allowlist,
-      pathScope: a.type === 'implement' && a.files && a.files.length > 0 ? a.files : undefined,
-      limits: limitsForAgent(a),
-    };
-  });
+  const specs: ParallelAgentSpec[] = agents.map((a) => ({
+    task: a.task,
+    label: a.label,
+    maxTurns: a.maxTurns,
+    systemPrompt: a.profile.systemPrompt,
+    allowlist: a.profile.allowlist,
+    pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files && a.files.length > 0
+      ? a.files
+      : undefined,
+    pathScopeMode: a.profile.pathScopeMode,
+    limits: limitsForAgent(a),
+  }));
 
   const { results, totalUsage } = await runParallelAgents(
     {
@@ -385,8 +424,8 @@ async function runParallelEphemeral(
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
     },
     specs,
-    EXPLORE_SYSTEM_PROMPT,
-    READ_ONLY_FILTER,
+    MICRO_AGENT_PROFILES.explore.systemPrompt,
+    MICRO_AGENT_PROFILES.explore.allowlist,
     (progress) => {
       ctx.runner?.emit('agent_progress', {
         groupId,
@@ -410,7 +449,9 @@ async function runParallelEphemeral(
     `input=${totalUsage.input_tokens} output=${totalUsage.output_tokens} cache_hit=${cached}]\n\n`;
   const body = results
     .map((r, i) => {
-      const meta = `[type=${agents[i].type} reason=${r.reason} tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}]`;
+      const meta =
+        `[type=${agents[i].type} profile=${agents[i].profile.id} reason=${r.reason} ` +
+        `tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}]`;
       const text = r.finalText || '(no summary produced)';
       // Frente C — per-agent trail (memos/snapshots/board) appended after
       // its summary so the master can attribute each entry to the right
@@ -487,14 +528,25 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
             type: 'object',
             properties: {
               task: { type: 'string', description: 'Self-contained task description for this agent.' },
+              profile: {
+                type: 'string',
+                enum: MICRO_AGENT_PROFILE_NAMES,
+                description:
+                  'Named micro-agent profile. Prefer investigator/verifier/reviewer/implementer/full for specialized toolsets.',
+              },
+              tool_profile: {
+                type: 'string',
+                enum: MICRO_AGENT_PROFILE_NAMES,
+                description: 'Alias for profile, accepted for callers that describe tool capability explicitly.',
+              },
               type: {
                 type: 'string',
-                enum: ['explore', 'implement', 'full'],
-                description: '"explore" (default) read-only; "implement" read+write+shell+all MCPs; "full" parent\'s exact toolset.',
+                enum: ['explore', 'implement', 'full', 'verify', 'review'],
+                description: 'Backward-compatible alias for profile. Prefer profile/tool_profile for named specializations.',
               },
               label: { type: 'string', description: 'Short UI label shown in parallel mode (3-5 words).' },
               max_turns: { type: 'number', description: 'Max turns for this agent (default 50, min 50).' },
-              files: { type: 'array', items: { type: 'string' }, description: 'Implement-only: paths the agent may write to.' },
+              files: { type: 'array', items: { type: 'string' }, description: 'Implement profile: paths the agent may write to.' },
             },
             required: ['task'],
           },

@@ -48,10 +48,13 @@ export function clampToBudget(lines: string[], cap: number): { text: string; cha
   const out: string[] = [];
   let used = 0;
   for (const line of lines) {
-    const add = line.length + 1; // trailing newline
+    const add = line.length + 1; // trailing newline (budget accounting)
     if (used + add > cap) break;
     out.push(line);
     used += add;
   }
-  return { text: out.join('\n'), chars: used };
+  // `chars` reports the ACTUAL joined length (join emits N-1 newlines) — the
+  // accumulator above is budget accounting only.
+  const text = out.join('\n');
+  return { text, chars: text.length };
 }

@@ -63,10 +63,10 @@ describe('render', () => {
       .toBe('where(col, op, val): Builder');
     expect(memberLine(sym({ name: 'rate', kind: 'property', return_type: 'float' }))).toBe('rate: float');
   });
-  it('clampToBudget stops before exceeding the cap', () => {
-    const r = clampToBudget(['aaa', 'bbb', 'ccc'], 8); // 4+4 = 8 fits two, third would be 12
+  it('clampToBudget stops before exceeding the cap and reports actual length', () => {
+    const r = clampToBudget(['aaa', 'bbb', 'ccc'], 8); // budget: 4+4 = 8 fits two, third would be 12
     expect(r.text).toBe('aaa\nbbb');
-    expect(r.chars).toBe(8);
+    expect(r.chars).toBe(7); // joined length (one newline), not the budget accumulator
   });
 });
 

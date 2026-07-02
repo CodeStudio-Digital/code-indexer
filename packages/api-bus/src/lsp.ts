@@ -372,4 +372,44 @@ export interface LspApi {
     input: { projectId: number; file: string; range: { start: Position; end: Position } },
     ctx: ApiContext,
   ): Promise<CodeActionDTO[]>;
+
+  /**
+   * Document (or range) formatting via the language server owning the file's
+   * language (PHP today). TS/JS/JSON/CSS/HTML are NOT routed here — Monaco's
+   * built-in workers already format those client-side. 1-based ranges.
+   */
+  formatting(
+    input: {
+      projectId: number;
+      file: string;
+      range?: { start: Position; end: Position };
+      options: { tabSize: number; insertSpaces: boolean };
+    },
+    ctx: ApiContext,
+  ): Promise<TextEditDTO[]>;
+
+  /**
+   * Organize imports (Ctrl+Alt+O): ts/js → TS service organizeImports;
+   * server languages → codeAction `source.organizeImports`. Same edits shape
+   * as rename. `applied: false` + `reason` = the language backend exists but
+   * doesn't support the action (e.g. Intelephense free) — show a toast.
+   */
+  organizeImports(
+    input: { projectId: number; file: string },
+    ctx: ApiContext,
+  ): Promise<{
+    edits: Array<{ file: string; range: { start: Position; end: Position }; newText: string }>;
+    applied?: false;
+    reason?: string;
+  }>;
+
+  /**
+   * Go to implementation (Ctrl+Alt+B): ts/js → getImplementationAtPosition;
+   * server languages → textDocument/implementation; otherwise (or empty) →
+   * structural-index fallback (implementors + subclasses by name).
+   */
+  implementation(
+    input: { projectId: number; file: string; position: Position },
+    ctx: ApiContext,
+  ): Promise<LspLocation[]>;
 }

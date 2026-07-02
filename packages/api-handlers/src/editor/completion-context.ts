@@ -27,12 +27,17 @@ export class TtlLru<V> {
     return hit.value;
   }
 
-  set(key: string, value: V): void {
+  /** `ttlMs` overrides the instance TTL for this entry (latency policy). */
+  set(key: string, value: V, ttlMs?: number): void {
     if (this.map.has(key)) this.map.delete(key);
-    this.map.set(key, { value, expiresAt: performance.now() + this.ttlMs });
+    this.map.set(key, { value, expiresAt: performance.now() + (ttlMs ?? this.ttlMs) });
     if (this.map.size > this.cap) {
       const oldest = this.map.keys().next().value;
       if (oldest !== undefined) this.map.delete(oldest);
     }
+  }
+
+  clear(): void {
+    this.map.clear();
   }
 }

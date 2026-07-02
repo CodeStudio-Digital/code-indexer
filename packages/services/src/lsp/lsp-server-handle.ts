@@ -41,6 +41,9 @@ const REQ_TIMEOUT_MS = {
   rename: 30_000,
   signatureHelp: 5_000,
   documentSymbol: 10_000,
+  // Formatting re-prints the whole document — comfortably under 10s warm.
+  formatting: 10_000,
+  implementation: 10_000,
 } as const;
 const STDERR_RING = 8 * 1024;
 
@@ -160,7 +163,10 @@ export class LspServerHandle {
             },
             isPreferredSupport: true,
           },
-          definition: {}, references: {},
+          definition: {}, references: {}, implementation: {},
+          // Document + range formatting (PHP via Intelephense; other servers
+          // that advertise the capability get it for free).
+          formatting: {}, rangeFormatting: {},
           // Hierarchical outline (DocumentSymbol[] with children). Servers
           // ignoring this flag answer flat SymbolInformation[] — the mapper
           // in server-backend-ops accepts both shapes.
@@ -323,12 +329,46 @@ export class LspServerHandle {
   codeActions(
     absPath: string,
     range: { start: { line: number; column: number }; end: { line: number; column: number } },
+    /** LSP CodeActionContext.only — restrict to kinds like 'source.organizeImports'. */
+    only?: string[],
   ): Promise<unknown> {
     return this.rpc.request('textDocument/codeAction', {
       textDocument: { uri: pathToUri(absPath) },
       range: { start: toLsp(range.start), end: toLsp(range.end) },
-      context: { diagnostics: [] },
+      context: { diagnostics: [], ...(only ? { only } : {}) },
     }, REQ_TIMEOUT_MS.codeAction);
+  }
+
+  /** `textDocument/implementation` — Location[] / LocationLink[] like definition. */
+  implementation(absPath: string, position: { line: number; column: number }): Promise<unknown> {
+    return this.rpc.request('textDocument/implementation', {
+      textDocument: { uri: pathToUri(absPath) },
+      position: toLsp(position),
+    }, REQ_TIMEOUT_MS.implementation);
+  }
+
+  /** `textDocument/formatting` — whole-document TextEdit[]. */
+  formatting(
+    absPath: string,
+    options: { tabSize: number; insertSpaces: boolean },
+  ): Promise<unknown> {
+    return this.rpc.request('textDocument/formatting', {
+      textDocument: { uri: pathToUri(absPath) },
+      options,
+    }, REQ_TIMEOUT_MS.formatting);
+  }
+
+  /** `textDocument/rangeFormatting` — TextEdit[] for a 1-based range (toLsp → 0-based). */
+  rangeFormatting(
+    absPath: string,
+    range: { start: { line: number; column: number }; end: { line: number; column: number } },
+    options: { tabSize: number; insertSpaces: boolean },
+  ): Promise<unknown> {
+    return this.rpc.request('textDocument/rangeFormatting', {
+      textDocument: { uri: pathToUri(absPath) },
+      range: { start: toLsp(range.start), end: toLsp(range.end) },
+      options,
+    }, REQ_TIMEOUT_MS.formatting);
   }
 
   /** `textDocument/semanticTokens/full` — tokens encoded against the server's

@@ -119,6 +119,7 @@ export function resolveBaseUrl(binding: ResolvedBinding, override?: string): str
     case 'openai':   return 'https://api.openai.com/v1';
     case 'openrouter': return 'https://openrouter.ai/api/v1';
     case 'deepseek': return 'https://api.deepseek.com/v1';
+    case 'mistral':  return 'https://api.mistral.ai/v1';
     case 'zai':      return 'https://api.z.ai/api/coding/paas/v4';
     case 'moonshot': return 'https://api.moonshot.cn/v1';
     default:

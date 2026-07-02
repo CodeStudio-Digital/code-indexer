@@ -33,6 +33,11 @@ describe('supportsFim', () => {
     expect(supportsFim(binding({ kind: 'deepseek', model: 'deepseek-reasoner' }))).toBe(false);
     expect(supportsFim(binding({ kind: 'deepseek', model: 'deepseek-r1' }))).toBe(false);
   });
+  it('enables mistral kind only for the code models', () => {
+    expect(supportsFim(binding({ kind: 'mistral', model: 'codestral-latest' }))).toBe(true);
+    expect(supportsFim(binding({ kind: 'mistral', model: 'devstral-small' }))).toBe(true);
+    expect(supportsFim(binding({ kind: 'mistral', model: 'mistral-small-latest' }))).toBe(false);
+  });
   it('stops choosing FIM after the endpoint is marked unsupported', () => {
     const b = binding({ kind: 'deepseek', model: 'deepseek-coder' });
     expect(supportsFim(b)).toBe(true);
@@ -69,6 +74,33 @@ describe('fimCompletion', () => {
     );
     const sent = JSON.parse(fetchFn.mock.calls[0]![1]!.body as string);
     expect(sent.prompt).toContain('# scope line');
+  });
+
+  it('posts to /fim/completions for the mistral kind, honoring the provider base_url', async () => {
+    const fetchFn = jsonFetch({ choices: [{ text: 'ok' }] });
+    await fimCompletion(
+      binding({ kind: 'mistral', model: 'codestral-latest', baseUrl: 'https://codestral.mistral.ai/v1' }),
+      { prefix: 'a', suffix: 'b', context: '', language: 'php' },
+      { fetchFn: fetchFn as unknown as typeof fetch },
+    );
+    const [url, init] = fetchFn.mock.calls[0]!;
+    expect(url).toBe('https://codestral.mistral.ai/v1/fim/completions');
+    const sent = JSON.parse(init!.body as string);
+    expect(sent.prompt).toBe('a');
+    expect(sent.suffix).toBe('b'); // native endpoint keeps the suffix param
+  });
+
+  it('assembles a raw sentinel-token prompt (no suffix param) for template models on generic hosts', async () => {
+    const fetchFn = jsonFetch({ choices: [{ text: 'ok' }] });
+    await fimCompletion(
+      binding({ kind: 'openrouter', model: 'qwen2.5-coder-32b', baseUrl: 'https://host.example/v1' }),
+      { prefix: 'P', suffix: 'S', context: '', language: 'ts' },
+      { fetchFn: fetchFn as unknown as typeof fetch, stop: ['\n'] },
+    );
+    const sent = JSON.parse(fetchFn.mock.calls[0]![1]!.body as string);
+    expect(sent.prompt).toBe('<|fim_prefix|>P<|fim_suffix|>S<|fim_middle|>');
+    expect('suffix' in sent).toBe(false);
+    expect(sent.stop).toEqual(['\n', '<|endoftext|>', '<|fim_prefix|>', '<|repo_name|>']);
   });
 
   it('returns errorBody + status on a non-2xx (caller degrades to chat)', async () => {

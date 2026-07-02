@@ -247,6 +247,60 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  app.post('/api/lsp/:projectId/signature-help', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; position: Position }>();
+      return c.json(await h.signatureHelp({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/document-symbols', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string }>();
+      return c.json(await h.documentSymbols({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/formatting', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{
+        file: string;
+        range?: { start: Position; end: Position };
+        options: { tabSize: number; insertSpaces: boolean };
+      }>();
+      return c.json(await h.formatting({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/organize-imports', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string }>();
+      return c.json(await h.organizeImports({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/implementation', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<PositionBody>();
+      return c.json(await h.implementation({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   app.post('/api/lsp/:projectId/diagnostics', async (c) => {
     try {
       const projectId = parseIdParam(c, 'projectId');

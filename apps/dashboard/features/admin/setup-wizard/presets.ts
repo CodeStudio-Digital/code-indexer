@@ -31,6 +31,7 @@ const PROVIDER_CAPABILITIES: Record<string, CapabilityKind[]> = {
   anthropic:      ['text_llm', 'reranking', 'vision'],
   'claude-code':  ['text_llm', 'reranking', 'vision'],
   deepseek:       ['text_llm', 'reranking', 'autocomplete'],
+  mistral:        ['text_llm', 'reranking', 'autocomplete'],
   zai:            ['text_llm', 'reranking'],
   moonshot:       ['text_llm', 'reranking'],
   'kimi-code':    ['text_llm', 'reranking'],
@@ -63,7 +64,7 @@ export const PRESETS: Preset[] = [
       reranking:    { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
       vision:       { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
       voice:        { providerKind: 'openai',     modelHint: 'whisper-1' },
-      autocomplete: { providerKind: 'deepseek',   modelHint: 'deepseek-coder' },
+      autocomplete: { providerKind: 'mistral',    modelHint: 'codestral-latest' },
     },
   },
   {
@@ -75,7 +76,7 @@ export const PRESETS: Preset[] = [
       reranking:    { providerKind: 'anthropic',  modelHint: 'claude-sonnet-4' },
       vision:       { providerKind: 'openai',     modelHint: 'gpt-4o' },
       voice:        { providerKind: 'openai',     modelHint: 'whisper-1' },
-      autocomplete: { providerKind: 'deepseek',   modelHint: 'deepseek-coder' },
+      autocomplete: { providerKind: 'mistral',    modelHint: 'codestral-latest' },
     },
   },
 ];

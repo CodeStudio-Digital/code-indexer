@@ -15,6 +15,7 @@
  */
 import type * as MonacoNs from 'monaco-editor';
 import type { EditorThemeDef, Palette } from './types.js';
+import { widgetColors } from './widget-colors.js';
 
 type Rule = MonacoNs.editor.ITokenThemeRule;
 
@@ -89,6 +90,9 @@ function colorsFromPalette(p: Palette): MonacoNs.editor.IColors {
   set('editor.selectionBackground', hash(p.selection));
   set('editorLineNumber.foreground', hash(p.lineNumber ?? p.comment));
   set('editorLineNumber.activeForeground', hash(p.lineNumberActive ?? p.foreground));
+  // Colored suggest/outline icons + polished popup/hover/signature-help chrome,
+  // derived from this palette (see widget-colors.ts).
+  Object.assign(colors, widgetColors(p));
   return colors;
 }
 

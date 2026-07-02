@@ -5,11 +5,12 @@
  *
  * Two sources, LSP-first:
  *  - LSP (intelephense/pyright), ONLY when a server is already `ready` — never
- *    waits a cold boot; bounded by a 60ms race. Resolves typed `$var->`,
- *    inherited members, traits, vendor/magic methods the index can't see.
+ *    waits a cold boot; bounded by a configurable race (default 250ms — the
+ *    old 60ms NEVER won even against warm servers, telemetry showed 0% LSP).
+ *    Resolves typed `$var->`, inherited members, traits, vendor/magic methods.
  *  - Structural index fallback: receiver → class (via the shared
- *    resolveReceiverClass) → getClassMembersDeep (inherited + trait members
- *    via the extends/implements/mixes relations walk, cycle-guarded).
+ *    resolveReceiverClass, plus local buffer inference for typed `$var->`) →
+ *    getClassMembersDeep (inherited + trait members via the relations walk).
  * Member text is micro-cached per (project,file,receiver,prefix) so a typing
  * burst pays at most one LSP round-trip.
  */
@@ -24,8 +25,11 @@ import {
 import { ensureLspManager, serverCompletion } from '../../lsp/server-backend.js';
 import { TtlLru } from '../completion-context.js';
 import { memberLine, clampToBudget } from './render.js';
+import { inferReceiverClass } from './snippets/infer-receiver.js';
 
 export type MemberSource = 'lsp' | 'index' | 'none';
+/** How the receiver's class got resolved ('local' = buffer inference). */
+export type InferSource = 'lsp' | 'index' | 'local' | 'none';
 
 export interface ReceiverMembersInput {
   db: CodeIndexDB;
@@ -37,6 +41,10 @@ export interface ReceiverMembersInput {
   lastPrefixLine: string;
   syms: DBSymbol[];
   budgetChars: number;
+  /** Full live buffer — enables local type inference for `$var->`/`x.`. */
+  docContent?: string;
+  /** LSP race budget override (ms). */
+  lspRaceMs?: number;
 }
 
 export interface ReceiverMembersResult {
@@ -48,13 +56,16 @@ export interface ReceiverMembersResult {
   count: number;
   /** A `::`/`->` member trigger was detected (even if it resolved to nothing). */
   triggered: boolean;
+  inferSource: InferSource;
 }
 
-const EMPTY: ReceiverMembersResult = { text: '', chars: 0, source: 'none', label: '', count: 0, triggered: false };
+const EMPTY: ReceiverMembersResult = {
+  text: '', chars: 0, source: 'none', label: '', count: 0, triggered: false, inferSource: 'none',
+};
 const TRIGGERED_EMPTY: ReceiverMembersResult = { ...EMPTY, triggered: true };
 /** Languages where `.` is member access (not concat/range) — opt into dot detection. */
 const DOT_MEMBER_LANG = /^(typescript|javascript|typescriptreact|javascriptreact|tsx|jsx|python|java|csharp|c#|go|kotlin|scala|swift|dart)$/i;
-const LSP_MEMBER_TIMEOUT_MS = 60;
+const LSP_MEMBER_TIMEOUT_MS = 250;
 const MAX_MEMBERS = 30;
 /** Kinds that are noise as "members of a receiver" — exclude, keep the rest. */
 const NOISE_KINDS = new Set([
@@ -102,15 +113,23 @@ export async function receiverMembers(input: ReceiverMembersInput): Promise<Rece
   const viaLsp = await tryLspMembers(input, trigger);
   if (viaLsp) { memberCache.set(cacheKey, viaLsp); return viaLsp; }
 
-  // Index fallback: receiver → class → members (+ shallow inheritance).
-  const className = resolveReceiverClass(trigger, syms, position.line);
+  // Index fallback: receiver → class → members (inherited via relations walk).
+  // Typed receivers ($var->, x.) that resolveReceiverClass can't name are
+  // inferred from the buffer (assignments/annotations/param hints) instead.
+  let inferSource: InferSource = 'index';
+  let className = resolveReceiverClass(trigger, syms, position.line);
+  if (!className && input.docContent) {
+    className = inferReceiverClass(input.docContent, trigger.receiver, position.line, language);
+    if (className) inferSource = 'local';
+  }
   if (!className) return TRIGGERED_EMPTY;
   const members = collectIndexMembers(db, projectId, className, trigger);
   if (members.length === 0) return TRIGGERED_EMPTY;
   const { text, chars } = clampToBudget(members.map(memberLine), budgetChars);
   if (!text) return TRIGGERED_EMPTY;
   const result: ReceiverMembersResult = {
-    text, chars, source: 'index', label: receiverLabel(trigger, className), count: members.length, triggered: true,
+    text, chars, source: 'index', label: receiverLabel(trigger, className),
+    count: members.length, triggered: true, inferSource,
   };
   memberCache.set(cacheKey, result);
   return result;
@@ -132,13 +151,14 @@ async function tryLspMembers(
   if (!root) return null;
 
   const SENTINEL = Symbol('lsp-member-timeout');
+  const raceMs = input.lspRaceMs ?? LSP_MEMBER_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const items = await Promise.race([
     serverCompletion(
       db, projectId, root, file, language,
       { line: position.line, column: position.col }, { triggerKind: 1 },
     ).catch(() => null),
-    new Promise<typeof SENTINEL>((r) => { timer = setTimeout(() => r(SENTINEL), LSP_MEMBER_TIMEOUT_MS); }),
+    new Promise<typeof SENTINEL>((r) => { timer = setTimeout(() => r(SENTINEL), raceMs); }),
   ]);
   if (timer) clearTimeout(timer);
   if (items === SENTINEL || !Array.isArray(items) || items.length === 0) return null;
@@ -147,7 +167,10 @@ async function tryLspMembers(
   if (lines.length === 0) return null;
   const { text, chars } = clampToBudget(lines, budgetChars);
   if (!text) return null;
-  return { text, chars, source: 'lsp', label: receiverLabel(trigger, null), count: lines.length, triggered: true };
+  return {
+    text, chars, source: 'lsp', label: receiverLabel(trigger, null),
+    count: lines.length, triggered: true, inferSource: 'lsp',
+  };
 }
 
 function lspMemberLines(items: CompletionItem[], prefix: string): string[] {

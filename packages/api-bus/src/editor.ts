@@ -34,7 +34,7 @@ export interface EditorCompleteResult {
   status: EditorCompleteStatus;
   /** Present when status==='ok' — raw code to ghost-insert at the cursor. */
   text?: string;
-  /** Server-suggested debounce (binding config) — client adopts it. */
+  /** Server-suggested debounce (binding config + adaptive) — client adopts it. */
   debounceMs?: number;
   /** Correlates accept feedback with the completion request. */
   requestId?: string;
@@ -42,6 +42,50 @@ export interface EditorCompleteResult {
   message?: string;
   /** Suggested snooze on provider errors (rate-limit aware). */
   retryAfterMs?: number;
+  /** Client prefilter strictness (derived from the binding's aggressiveness). */
+  suppression?: 'strict' | 'standard' | 'lenient';
+  /** What produced the text — diagnostics/status-chip only. */
+  served?: 'model' | 'cache' | 'forward';
+}
+
+/**
+ * Completion lifecycle signals. 'shown'/'accept'/'partial'/'reject' correlate
+ * to a requestId; 'prefilter_skip' is a throttled client-side counter batch.
+ */
+export type EditorFeedbackAction = 'shown' | 'accept' | 'partial' | 'reject' | 'prefilter_skip';
+
+export interface EditorFeedbackInput {
+  projectId: number;
+  /** Required for lifecycle actions; absent for prefilter_skip batches. */
+  requestId?: string;
+  action: EditorFeedbackAction;
+  /** partial: cumulative accepted characters (Monaco reports cumulative). */
+  acceptedChars?: number;
+  /** reject: how long the ghost text was visible before dismissal. */
+  shownForMs?: number;
+  /** partial: which accept gesture (Monaco PartialAcceptTriggerKind). */
+  partialKind?: 'word' | 'line' | 'suggest';
+  /** prefilter_skip: accumulated per-rule counts, e.g. "r1:12,r3:4". */
+  detail?: string;
+}
+
+/** Aggregated completion quality metrics (chip tooltip + admin panel). */
+export interface EditorStatsResult {
+  configured: boolean;
+  model: string | null;
+  windowDays: number;
+  requests: number;
+  shown: number;
+  accepted: number;
+  partial: number;
+  rejected: number;
+  /** accepted/shown; null while no shown events exist (pre-rollout data). */
+  acceptRate: number | null;
+  latency: { p50: number | null; p90: number | null };
+  statusBreakdown: Record<string, number>;
+  endpointSplit: Record<string, number>;
+  byModel: Array<{ model: string; requests: number; shown: number; accepted: number }>;
+  daily: Array<{ day: string; requests: number; shown: number; accepted: number }>;
 }
 
 export interface EditorApi {
@@ -51,9 +95,9 @@ export interface EditorApi {
    */
   complete(input: EditorCompleteInput, ctx: ApiContext): Promise<EditorCompleteResult>;
 
-  /** Fire-and-forget accept signal (telemetry: accept-rate per binding). */
-  feedback(
-    input: { projectId: number; requestId: string; action: 'accept' },
-    ctx: ApiContext,
-  ): Promise<{ ok: boolean }>;
+  /** Fire-and-forget lifecycle signal (telemetry: real accept/reject rates). */
+  feedback(input: EditorFeedbackInput, ctx: ApiContext): Promise<{ ok: boolean }>;
+
+  /** Completion quality stats over the last `days` (≤30, telemetry prune). */
+  stats(input: { days?: number }, ctx: ApiContext): Promise<EditorStatsResult>;
 }

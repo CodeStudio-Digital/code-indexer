@@ -30,5 +30,25 @@ describe('editor theme catalog', () => {
       const tokens = new Set(theme.data!.rules.map((r) => r.token));
       for (const t of REQUIRED_TOKENS) expect(tokens.has(t)).toBe(true);
     });
+
+    it(`${theme.id}: colors the suggest icons + popup chrome`, () => {
+      const colors = theme.data!.colors;
+      const HEX = /^#[0-9a-fA-F]{6}$/;
+      for (const key of [
+        'symbolIcon.methodForeground',
+        'symbolIcon.classForeground',
+        'symbolIcon.propertyForeground',
+        'symbolIcon.variableForeground',
+        'editorSuggestWidget.background',
+        'editorSuggestWidget.selectedBackground',
+        'editorSuggestWidget.border',
+      ]) {
+        expect(colors[key], `${theme.id} missing ${key}`).toMatch(HEX);
+      }
+      // Icons must actually differ by kind — method ≠ property ≠ class,
+      // otherwise coloring them is pointless.
+      expect(colors['symbolIcon.methodForeground'])
+        .not.toBe(colors['symbolIcon.propertyForeground']);
+    });
   }
 });

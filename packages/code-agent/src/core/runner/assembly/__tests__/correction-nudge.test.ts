@@ -45,6 +45,11 @@ describe('detectCorrectionSignal', () => {
     'adiciona um botão de logout na navbar',
     'explica como funciona o pipeline de build',
     'can you refactor the auth module?',
+    // Frequency words in DESCRIPTIVE (not directive) position must not fire.
+    'the modal never closes when I press escape',
+    'o teste sempre falha no CI',
+    // Plain re-run request — not a correction.
+    'roda os testes de novo',
     // A long spec containing "always" — the length guard must win.
     `spec: the service must always retry failed requests with exponential backoff. ${'x'.repeat(500)}`,
   ];

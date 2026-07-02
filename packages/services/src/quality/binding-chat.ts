@@ -19,6 +19,7 @@ export const DIRECT_CHAT_KINDS = new Set([
   'cloudflare',
   'deepseek',
   'gemini',
+  'mistral',
   'moonshot',
   'openai',
   'openrouter',

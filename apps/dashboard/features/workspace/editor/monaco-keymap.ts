@@ -7,14 +7,21 @@
 import type * as MonacoNs from 'monaco-editor';
 import { useKeymapStore, type KeymapPreset } from '../../../keymap/keymap-store.js';
 import { buildIntellijRules } from './keymap-rules-intellij.js';
+import { buildAiCompleteRules } from './ai-complete-commands.js';
 
 type Monaco = typeof MonacoNs;
 
 let appliedPreset: KeymapPreset | null = null;
 let rulesDisposable: MonacoNs.IDisposable | null = null;
+let aiRulesApplied = false;
 let watching = false;
 
 export function applyMonacoKeymap(monaco: Monaco, preset: KeymapPreset): void {
+  // Preset-independent AI-completion rules (accept-next-line), applied once.
+  if (!aiRulesApplied) {
+    aiRulesApplied = true;
+    monaco.editor.addKeybindingRules(buildAiCompleteRules(monaco));
+  }
   if (appliedPreset === preset) return;
   appliedPreset = preset;
   rulesDisposable?.dispose();

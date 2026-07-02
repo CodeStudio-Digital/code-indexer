@@ -131,21 +131,23 @@ const NOOP_DISTILLER: MemoryDistiller = { async distill() { return []; } };
  *  the generic extractor (dedup + importance floors + merge) for each. */
 export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
   const { writer, search, resolver, resolveContext, getFallbackDefault } = deps;
-  // Per-pass observability channel: every LLM attempt reports its diag here
-  // so the distill log can carry provider/model/raw_chars even on success.
-  let passDiags: DistillDiag[] = [];
-  const onDiag = (d: DistillDiag): void => { passDiags.push(d); };
-  const positiveDistiller =
-    deps.distillers?.positive ??
-    (resolver ? new LlmMemoryDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER);
-  const failureDistiller =
-    deps.distillers?.failure ??
-    (resolver ? new FailureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER);
-  const procedureDistiller =
-    deps.distillers?.procedure ??
-    (resolver ? new ProcedureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER);
-  const failure = new MemoryExtractor(failureDistiller, writer, search);
-  const procedure = new MemoryExtractor(procedureDistiller, writer, search);
+  // Per-PASS observability channel. `extractAndPersist` runs CONCURRENTLY on
+  // the single main-process instance (worker harvests via the bridge + the
+  // idle sweeper), so the diag collector must be per-call — a shared array
+  // would attribute pass A's provider/model/detail to pass B's log row. The
+  // distiller wrappers are stateless, so building the trio per pass is free;
+  // the `deps.distillers` test seam keeps its fixed instances (no diags).
+  const buildDistillers = (onDiag: (d: DistillDiag) => void) => ({
+    positive:
+      deps.distillers?.positive ??
+      (resolver ? new LlmMemoryDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER),
+    failure:
+      deps.distillers?.failure ??
+      (resolver ? new FailureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER),
+    procedure:
+      deps.distillers?.procedure ??
+      (resolver ? new ProcedureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER),
+  });
 
   // Persist already-distilled candidates to a project, reusing the generic
   // dedup/merge machinery via a literal (no-LLM) distiller. Used to split the
@@ -190,7 +192,11 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
     },
     async extractAndPersist(projectId, projectName, input) {
       const startedAt = Date.now();
-      passDiags = []; // fresh observability window for this pass
+      // Per-pass diag collection + distillers (see buildDistillers note).
+      const passDiags: DistillDiag[] = [];
+      const distillers = buildDistillers((d) => { passDiags.push(d); });
+      const failure = new MemoryExtractor(distillers.failure, writer, search);
+      const procedure = new MemoryExtractor(distillers.procedure, writer, search);
       const totals = { created: 0, merged: 0, skipped: 0 };
       let userTotals: { created: number; merged: number; skipped: number } | undefined;
       let lastError: string | null = null;
@@ -212,7 +218,7 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
       if (input.primaryRequest || input.summary) {
         let cands: MemoryCandidate[] = [];
         try {
-          cands = await positiveDistiller.distill({
+          cands = await distillers.positive.distill({
             primaryRequest: input.primaryRequest,
             summary: input.summary,
             filesTouched: input.filesTouched,

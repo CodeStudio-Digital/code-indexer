@@ -1,5 +1,11 @@
 declare const __APP_VERSION__: string;
 
+declare module 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js' {
+  export const StandaloneServices: {
+    initialize(overrides?: Record<string, unknown>): unknown;
+  };
+}
+
 /**
  * Surface exposed by the Electron preload's `contextBridge.exposeInMainWorld('electronAPI', …)`.
  *

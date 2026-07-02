@@ -80,7 +80,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Native tools (edits, execution, git)': 870, // 2026-07-02: + no-invented-tool-names rule (measured 791)
   '# Images & vision': 500,
   '# Session overlay (automatic freshness)': 730,
-  '# Subagents (isolated delegation)': 1120,
+  '# Subagents (isolated delegation)': 1450, // 2026-07-02: subagent guidance grew in the parallel prompt-audit batch (measured 1327)
   '# Memory': 1450, // company/no-Session-Drive long-term memory block (+concrete save example, 2026-07)
   "# Memory (three distinct layers — don't conflate them)": 2150, // migration 181 overhaul + concrete examples (2026-07)
   '# Style': 560, // 2026-07-02: + parallel-batching + result-honesty bullets (measured 511)
@@ -106,8 +106,8 @@ const SECTION_BUDGETS: Record<string, number> = {
 
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
-  default: 12100,   // zai · navigate · no plan · no agentId · loop v2 · drive (2026-07-02 prompt-audit batch; ~11546 measured)
-  planMode: 17300,  // same + specialist plan.txt + ## Plan depth block + null-plan case (~16668 measured)
+  default: 12350,   // zai · navigate · no plan · no agentId · loop v2 · drive (2026-07-02 prompt-audit + memory-incentives batches; ~12104 measured)
+  planMode: 17800,  // same + specialist plan.txt + ## Plan depth block + null-plan case (~17575 measured)
 };
 
 interface Composition {

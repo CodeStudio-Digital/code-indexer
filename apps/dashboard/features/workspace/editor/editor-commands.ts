@@ -10,6 +10,8 @@
 import { registerCommands } from '../../../keymap/commands.js';
 import { getActiveEditor } from './editor-models.js';
 import { registerNavCommands } from './nav-commands.js';
+import { registerAiCompleteCommands } from './ai-complete-commands.js';
+import { organizeImportsInActiveEditor } from './lsp/organize-imports.js';
 
 function trigger(actionId: string): void {
   const editor = getActiveEditor();
@@ -43,6 +45,7 @@ export function registerEditorCommands(): () => void {
   // Navegação de cursor (back/forward) + next/prev change — registrados junto
   // para que ProjectView continue com um único ponto de (des)registro.
   const unregisterNav = registerNavCommands();
+  const unregisterAi = registerAiCompleteCommands();
   const unregister = registerCommands([
     {
       id: 'editor.toggleLineComment',
@@ -68,9 +71,18 @@ export function registerEditorCommands(): () => void {
       allowInInputs: true,
       run: toggleCase,
     },
+    {
+      id: 'editor.organizeImports',
+      title: 'Organize Imports',
+      category: 'Editor',
+      defaultKeys: { intellij: 'Ctrl+Alt+O', vscode: 'Alt+Shift+O' },
+      allowInInputs: true, // Monaco input is a textarea
+      run: () => void organizeImportsInActiveEditor(),
+    },
   ]);
   return () => {
     unregister();
     unregisterNav();
+    unregisterAi();
   };
 }

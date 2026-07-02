@@ -306,10 +306,12 @@ export interface RunContext {
     /** Task text the pending memory was retrieved for (throttle key). */
     lastMemoryQuery?: string;
     /**
-     * Correction-nudge throttle (assembly/correction-nudge.ts): the nudge
-     * fires at most once per distinct user message (hash) and at most
-     * `count` = 3 times per session — a steering-heavy session must not turn
-     * every turn into a "remember this!" reminder.
+     * Correction-nudge throttle (assembly/correction-nudge.ts): at most once
+     * per distinct user message (hash) and `count` ≤ 3 per RUN. RunContext
+     * (and this state) is rebuilt per run — i.e. per user message in the
+     * normal chat cadence — so across a session the effective bound is "once
+     * per correction-looking message", which is the desired trigger anyway;
+     * the cap guards steering-heavy multi-turn runs (queued messages).
      */
     correctionNudge: { lastHash: string | null; count: number };
   };

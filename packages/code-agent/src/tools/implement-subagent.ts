@@ -18,6 +18,7 @@
  * orchestrator gets the violation list in the TaskResult and can decide.
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -49,8 +50,13 @@ export interface SubagentSpec {
   pushTimeCap?: number;
   limits?: SubagentLimits;
   signal?: AbortSignal;
-  /** When set, fs/shell tools log (do not block) reads/writes outside this list. */
+  /** When set, fs/shell tools record paths outside this list for scope telemetry. */
   pathScope?: string[];
+  /**
+   * Optional stricter mode: block direct native write tools outside pathScope.
+   * Shell remains warning-only here; this is not a full filesystem sandbox.
+   */
+  pathScopeMode?: PathScopeMode;
   /** Optional progress hook for callers that need a per-subagent live timeline. */
   onProgress?: (progress: {
     event: 'heartbeat' | 'tool_call';
@@ -74,6 +80,8 @@ export interface SubagentLimits {
   timeoutMs?: number;
   stallMs?: number;
 }
+
+export type PathScopeMode = 'warn' | 'enforce-writes';
 
 /** Helper: tests whether a tool is admitted by the given allowlist shape. */
 function isAllowed(allowlist: SubagentAllowlist, tool: CoderTool): boolean {
@@ -258,7 +266,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   const subRegistry = new ToolRegistry();
   for (const tool of parent.tools) {
     if (!isAllowed(spec.allowlist, tool)) continue;
-    let wrapped = spec.pathScope ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations) : tool;
+    let wrapped = spec.pathScope
+      ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations, spec.pathScopeMode)
+      : tool;
     wrapped = wrapToolForCollector(wrapped, collector);
     subRegistry.register(wrapped);
   }
@@ -669,8 +679,9 @@ export const IMPLEMENT_ALLOWLIST = new Set<string>([
   'multi_edit',
   'create_file',
   'manage_path',
-  // Shell — gated by the parent runner's plan-mode allowlist for read-only,
-  // but inside an approved task scope the subagent gets the full set.
+  // Shell — needed for tests/builds. Path-scope records suspicious paths but
+  // intentionally remains warning-only until shell write detection is hardened;
+  // enforce-writes is a native-tool fence, not a full shell sandbox.
   'run_command',
   // Verify-its-own-work loop: diagnostics + the diff it just produced. These
   // were previously inherited via EXPLORE_ALLOWLIST (which dragged in ~30
@@ -796,6 +807,7 @@ export async function runImplementSubagent(parent: SubagentParent, task: CoderTa
     // Override via CODER_IMPLEMENT_MAX_TURNS.
     maxTurns: Number(process.env.CODER_IMPLEMENT_MAX_TURNS ?? 40),
     pathScope: task.files,
+    pathScopeMode: 'enforce-writes',
   });
 
   const parsed = parseResultBlock(result.finalText);
@@ -909,15 +921,54 @@ function wrapToolForCollector(
 }
 
 /**
- * Wrap a tool's handler so any path arguments outside `pathScope` are
- * recorded into `violations` (and the call still proceeds — warning mode).
+ * Check a tool call against an optional task file scope. Reads and shell probes
+ * remain warning-only; `enforce-writes` blocks direct native write tools outside
+ * scope. This is a native-tool fence, not a full shell/filesystem sandbox.
+ */
+export function checkPathScopeForTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  pathScope: string[],
+  mode: PathScopeMode = 'warn',
+): { violations: string[]; blockedMessage?: string } {
+  const directWriteTools = new Set([
+    'write_file',
+    'edit_file',
+    'multi_edit',
+    'create_file',
+    'manage_path',
+  ]);
+  const violations = extractPathsFromToolArgs(toolName, args)
+    .filter((p) => !isPathInsideScope(p, pathScope))
+    .map((p) => `${toolName}:${p}`);
+
+  if (mode === 'enforce-writes' && violations.length > 0 && directWriteTools.has(toolName)) {
+    return {
+      violations,
+      blockedMessage:
+        `subagent path scope violation: ${toolName} can only write within ` +
+        `[${pathScope.join(', ')}]. Violations: ${violations.join(', ')}`,
+    };
+  }
+  return { violations };
+}
+
+/**
+ * Wrap a tool's handler so any path arguments outside `pathScope` are recorded.
+ * In `enforce-writes` mode, direct write tools outside scope are refused.
  *
  * We don't touch the parent's tool object — return a clone with a new handler.
  */
-function wrapToolForPathScope(tool: CoderTool, pathScope: string[], violations: string[]): CoderTool {
+function wrapToolForPathScope(
+  tool: CoderTool,
+  pathScope: string[],
+  violations: string[],
+  mode: PathScopeMode = 'warn',
+): CoderTool {
   const fsOrShellTools = new Set([
     'write_file',
     'edit_file',
+    'multi_edit',
     'create_file',
     'manage_path',
     'read_file',
@@ -929,12 +980,9 @@ function wrapToolForPathScope(tool: CoderTool, pathScope: string[], violations: 
   return {
     ...tool,
     handler: async (args, ctx): Promise<ToolResult> => {
-      const paths = extractPathsFromToolArgs(tool.name, args);
-      for (const p of paths) {
-        if (!isPathInsideScope(p, pathScope)) {
-          violations.push(`${tool.name}:${p}`);
-        }
-      }
+      const scoped = checkPathScopeForTool(tool.name, args, pathScope, mode);
+      violations.push(...scoped.violations);
+      if (scoped.blockedMessage) return err(scoped.blockedMessage);
       return tool.handler(args, ctx);
     },
   };
@@ -956,6 +1004,7 @@ export interface ParallelAgentSpec {
   systemPrompt?: string;
   allowlist?: SubagentAllowlist;
   pathScope?: string[];
+  pathScopeMode?: PathScopeMode;
   limits?: SubagentLimits;
   signal?: AbortSignal;
 }
@@ -1033,6 +1082,7 @@ export async function runParallelAgents(
         maxTurns: spec.maxTurns,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,
+        pathScopeMode: spec.pathScopeMode,
         limits: spec.limits,
         signal: spec.signal,
         onProgress: (progress) => {

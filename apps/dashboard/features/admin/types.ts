@@ -12,7 +12,8 @@ export type ProviderKind =
   | 'openrouter'
   | 'kimi-code'
   | 'cloudflare'
-  | 'moonshot';
+  | 'moonshot'
+  | 'mistral';
 
 /**
  * Renderer-safe provider visual identity, shipped by the backend from the

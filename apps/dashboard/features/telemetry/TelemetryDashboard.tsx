@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/too
 import { cn } from '../../lib/utils.js';
 import { QualityPanel } from '../admin/QualityPanel.js';
 import { SupervisorPanel } from '../admin/SupervisorPanel.js';
+import { CompletionQualityPanel } from './CompletionQualityPanel.js';
 import { SINCE_PRESETS, sinceForKey } from './since.js';
 import { TelemetryCoverageNote, type TelemetryCoverage } from './TelemetryCoverageNote.js';
 import { ModelPricesPanel } from './ModelPricesPanel.js';
@@ -121,9 +122,10 @@ interface ProjectOption { id: number; name: string }
  *   - overview   : global session stats (cost, tokens, top tools)
  *   - prices     : per-model price table + sync/backfill
  *   - quality    : 5-classifier verdict distribution + counterfactual stats
+ *   - completion : AI ghost-text quality (accept rate, latency, per-model)
  *   - supervisor : live AgentSupervisor status + incidents
  */
-const TELEMETRY_TABS = ['overview', 'prices', 'quality', 'supervisor'] as const;
+const TELEMETRY_TABS = ['overview', 'prices', 'quality', 'completion', 'supervisor'] as const;
 
 export function TelemetryDashboard() {
   const { t } = useTranslation(['telemetry', 'common']);
@@ -186,6 +188,12 @@ export function TelemetryDashboard() {
       <TabsContent value="quality" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
         <div className="pt-3">
           <QualityPanel />
+        </div>
+      </TabsContent>
+
+      <TabsContent value="completion" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
+        <div className="pt-3">
+          <CompletionQualityPanel />
         </div>
       </TabsContent>
 

@@ -319,6 +319,32 @@ export const fuguSpec: ProviderSpec = {
   },
 };
 
+/**
+ * Mistral / Codestral — OpenAI-compatible chat plus a NATIVE FIM endpoint
+ * (`/v1/fim/completions`, body `{model, prompt, suffix}`) that powers the
+ * editor's ghost-text autocomplete. Free-tier Codestral keys only work on
+ * `https://codestral.mistral.ai/v1` (paid keys on the default host) — that is
+ * a per-provider `base_url` decision, not a config field; the autocomplete
+ * setup flow creates the provider with the free-tier host preset.
+ */
+export const mistralSpec: ProviderSpec = {
+  kind: 'mistral',
+  displayName: 'Mistral / Codestral',
+  visual: { icon: 'Wind', fg: 'text-amber-500', bg: 'bg-amber-500/15' },
+  credKind: 'api-key',
+  envVars: ['MISTRAL_API_KEY', 'CODESTRAL_API_KEY'],
+  defaultBaseURL: 'https://api.mistral.ai/v1',
+  defaultModels: ['codestral-latest', 'mistral-small-latest'],
+  pricing: {
+    'codestral-latest': { inputPer1M: 0.3, outputPer1M: 0.9 },
+    'mistral-small-latest': { inputPer1M: 0.1, outputPer1M: 0.3 },
+  },
+  wire: 'openai-compat',
+  wireOpts: {},
+  discovery: { from: 'openai-models' },
+  test: { from: 'openai-models', fallbackBaseURL: 'https://api.mistral.ai/v1' },
+};
+
 export const OPENAI_COMPAT_SPECS: ProviderSpec[] = [
   openaiSpec,
   deepseekSpec,
@@ -326,4 +352,5 @@ export const OPENAI_COMPAT_SPECS: ProviderSpec[] = [
   cloudflareSpec,
   openrouterSpec,
   fuguSpec,
+  mistralSpec,
 ];

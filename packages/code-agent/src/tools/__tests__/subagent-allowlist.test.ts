@@ -13,6 +13,7 @@ import {
   READ_WRITE_FILTER,
   EXPLORE_ALLOWLIST,
   IMPLEMENT_ALLOWLIST,
+  checkPathScopeForTool,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 
 const tool = (name: string, source: 'native' | 'mcp' | 'mcp_external' = 'native', mutates?: boolean) =>
@@ -54,5 +55,55 @@ describe('explore subagent — READ_ONLY_FILTER stays read-only', () => {
     // non-mutating external MCP is allowed; mutating is not
     expect(READ_ONLY_FILTER(tool('ext_x__read', 'mcp_external', false))).toBe(true);
     expect(READ_ONLY_FILTER(tool('ext_x__write', 'mcp_external', true))).toBe(false);
+  });
+});
+
+describe('subagent path scope', () => {
+  it('records read violations without blocking in warn mode', () => {
+    const scoped = checkPathScopeForTool(
+      'read_file',
+      { path: 'src/other.ts' },
+      ['src/owned.ts'],
+      'warn',
+    );
+
+    expect(scoped.violations).toEqual(['read_file:src/other.ts']);
+    expect(scoped.blockedMessage).toBeUndefined();
+  });
+
+  it('blocks write violations in enforce-writes mode', () => {
+    const scoped = checkPathScopeForTool(
+      'edit_file',
+      { path: 'src/other.ts' },
+      ['src/owned.ts'],
+      'enforce-writes',
+    );
+
+    expect(scoped.violations).toEqual(['edit_file:src/other.ts']);
+    expect(scoped.blockedMessage).toContain('subagent path scope violation');
+  });
+
+  it('allows scoped writes in enforce-writes mode', () => {
+    const scoped = checkPathScopeForTool(
+      'edit_file',
+      { path: 'src/owned.ts' },
+      ['src/owned.ts'],
+      'enforce-writes',
+    );
+
+    expect(scoped.violations).toEqual([]);
+    expect(scoped.blockedMessage).toBeUndefined();
+  });
+
+  it('records run_command scope violations without blocking in enforce-writes mode', () => {
+    const scoped = checkPathScopeForTool(
+      'run_command',
+      { command: 'cd src/other && pnpm test' },
+      ['src/owned.ts'],
+      'enforce-writes',
+    );
+
+    expect(scoped.violations).toEqual(['run_command:src/other']);
+    expect(scoped.blockedMessage).toBeUndefined();
   });
 });

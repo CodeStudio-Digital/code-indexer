@@ -1,5 +1,5 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
-import { openaiSpec, deepseekSpec, zaiSpec, cloudflareSpec, openrouterSpec, fuguSpec } from './openai-compat.js';
+import { openaiSpec, deepseekSpec, zaiSpec, cloudflareSpec, openrouterSpec, fuguSpec, mistralSpec } from './openai-compat.js';
 import { anthropicSpec } from './anthropic.js';
 import { bedrockSpec } from './bedrock.js';
 import { chatgptSpec } from './chatgpt.js';
@@ -36,6 +36,7 @@ export const BUILTIN_SPECS: ProviderSpec[] = [
   moonshotSpec,
   openrouterSpec,
   fuguSpec,
+  mistralSpec,
 ];
 
 const BY_KIND = new Map<string, ProviderSpec>();

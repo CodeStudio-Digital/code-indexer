@@ -65,6 +65,10 @@ export interface LspBackendExecutor {
   tsSignatureHelp(ctx: LspOpCtx): Promise<SignatureHelpDTO | null>;
   /** Outline tree for ctx.file (TS/JS only). Wire DTO already. */
   tsDocumentSymbols(ctx: LspOpCtx): Promise<DocumentSymbolDTO[]>;
+  /** Organize-imports edits for ctx.file (TS/JS only) — RenameEdit shape. */
+  tsOrganizeImports(ctx: LspOpCtx): Promise<RenameEdit[]>;
+  /** Implementations of the symbol at ctx.position (TS/JS only). */
+  tsImplementation(ctx: LspOpCtx): Promise<DefinitionResult>;
   // Structural-index fallback ops — these already return wire DTOs.
   fallbackCompletion(ctx: LspOpCtx): Promise<CompletionItem[]>;
   fallbackDefinition(ctx: LspOpCtx): Promise<LspLocation[]>;
@@ -91,6 +95,8 @@ export const EMPTY_RESULTS: Record<LspExecutorOp, unknown> = {
   tsRename: [],
   tsSignatureHelp: null,
   tsDocumentSymbols: [],
+  tsOrganizeImports: [],
+  tsImplementation: { targets: [] },
   fallbackCompletion: [],
   fallbackDefinition: [],
   fallbackHover: null,

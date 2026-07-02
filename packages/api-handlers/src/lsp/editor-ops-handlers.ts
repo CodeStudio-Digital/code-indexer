@@ -12,13 +12,25 @@
  * All cross-cutting state stays in module singletons elsewhere — this
  * factory holds none (createLspHandlers is instantiated 2-3× on Electron).
  */
+import { readFileSync } from 'node:fs';
 import { ApiError, type LspApi } from '@mcp/api-bus';
 import { isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
 import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
+import { relToAbsCanonical } from '@mcp/shared/utils/fs-canonical.js';
 import { serverForLanguage } from '@mcp/services/lsp/server-registry.js';
 import type { HandlerDeps } from '../types.js';
 import { getDoc } from './document-store.js';
-import { serverRename } from './server-backend-ops.js';
+import {
+  serverDocumentSymbols,
+  serverFormatting,
+  serverImplementation,
+  serverOrganizeImports,
+  serverRename,
+  serverSignatureHelp,
+} from './server-backend-ops.js';
+import { fallbackSignatureHelp } from './fallback-signature.js';
+import { fallbackDocumentSymbols } from './fallback-document-symbols.js';
+import { fallbackImplementation } from './fallback-implementation.js';
 import type { LspBackendExecutor, LspOpCtx } from './executor-types.js';
 
 /** Closures shared with createLspHandlers (index.ts) — no duplicated logic. */
@@ -36,10 +48,43 @@ export interface EditorOpsHelpers {
 export function createEditorOpsHandlers(
   deps: HandlerDeps,
   helpers: EditorOpsHelpers,
-): Pick<LspApi, 'rename'> {
+): Pick<LspApi, 'rename' | 'signatureHelp' | 'documentSymbols' | 'formatting' | 'organizeImports' | 'implementation'> {
   const { db } = deps;
 
+  /** Live buffer when open; disk otherwise (fallback ops need raw content). */
+  const contentFor = (projectId: number, root: string, file: string): string | null => {
+    const live = getDoc(projectId, file);
+    if (live) return live.content;
+    try { return readFileSync(relToAbsCanonical(root, file), 'utf-8'); } catch { return null; }
+  };
+
   return {
+    async signatureHelp({ projectId, file, position }) {
+      const root = helpers.requireProjectRoot(projectId);
+      if (isTsFile(file)) {
+        return helpers.exec().tsSignatureHelp(helpers.opCtx(projectId, root, file, position));
+      }
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      if (serverForLanguage(lang)) {
+        const viaServer = await serverSignatureHelp(db, projectId, root, file, lang, position);
+        if (viaServer) return viaServer;
+      }
+      const content = contentFor(projectId, root, file);
+      return content ? fallbackSignatureHelp(db, projectId, content, position) : null;
+    },
+
+    async documentSymbols({ projectId, file }) {
+      const root = helpers.requireProjectRoot(projectId);
+      if (isTsFile(file)) {
+        return helpers.exec().tsDocumentSymbols(helpers.opCtx(projectId, root, file));
+      }
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      if (serverForLanguage(lang)) {
+        const viaServer = await serverDocumentSymbols(db, projectId, root, file, lang);
+        if (viaServer && viaServer.length > 0) return viaServer;
+      }
+      return fallbackDocumentSymbols(db, projectId, file);
+    },
     async rename({ projectId, file, position, newName }) {
       if (process.env.MCP_EDITOR_RENAME === '0') {
         throw new ApiError(
@@ -85,6 +130,87 @@ export function createEditorOpsHandlers(
         'Rename requires a language server or TypeScript — the structural index ' +
         'is name-based and unsafe for rename.',
       );
+    },
+
+    async formatting({ projectId, file, range, options }) {
+      // NOT routed for ts/js/json/css/html on purpose — Monaco's built-in
+      // workers already format those client-side; the provider only registers
+      // for server languages (php today).
+      const root = helpers.requireProjectRoot(projectId);
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      if (!serverForLanguage(lang)) {
+        throw new ApiError(
+          'unsupported_language', 422,
+          `No formatter for ${lang} files — formatting needs a language server ` +
+          '(TS/JS/JSON/CSS/HTML format via the editor’s built-in workers).',
+        );
+      }
+      const edits = await serverFormatting(db, projectId, root, file, lang, options, range);
+      if (!edits) {
+        throw new ApiError(
+          'server_unavailable', 503,
+          `The ${lang} language server could not format the file — ` +
+          'check it is installed and ready (language chip in the status bar).',
+        );
+      }
+      return edits;
+    },
+
+    async organizeImports({ projectId, file }) {
+      const root = helpers.requireProjectRoot(projectId);
+      // TS/JS → the TS service's organizeImports via the executor.
+      if (isTsFile(file)) {
+        const edits = await helpers.exec().tsOrganizeImports(helpers.opCtx(projectId, root, file));
+        return { edits: edits.map((e) => ({ file: e.file, range: e.range, newText: e.newText })) };
+      }
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      if (serverForLanguage(lang)) {
+        const edits = await serverOrganizeImports(db, projectId, root, file, lang);
+        if (edits === null) {
+          throw new ApiError(
+            'server_unavailable', 503,
+            `The ${lang} language server could not organize imports — ` +
+            'check it is installed and ready (language chip in the status bar).',
+          );
+        }
+        // Server reachable but offers no source.organizeImports action
+        // (e.g. Intelephense free) — soft "not supported", not an error.
+        if (edits.length === 0) {
+          return {
+            edits: [],
+            applied: false as const,
+            reason: `organize imports is not supported by the ${lang} language server`,
+          };
+        }
+        return { edits };
+      }
+      throw new ApiError(
+        'unsupported_language', 422,
+        'Organize imports requires TypeScript or a language server for this file type.',
+      );
+    },
+
+    async implementation({ projectId, file, position }) {
+      const root = helpers.requireProjectRoot(projectId);
+      if (isTsFile(file)) {
+        const { targets } = await helpers.exec().tsImplementation(
+          helpers.opCtx(projectId, root, file, position),
+        );
+        return targets.map((t) => ({
+          file: t.file,
+          range: { start: { line: t.line, column: t.column }, end: { line: t.line, column: t.column } },
+        }));
+      }
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      if (serverForLanguage(lang)) {
+        const viaServer = await serverImplementation(db, projectId, root, file, lang, position);
+        if (viaServer && viaServer.length > 0) return viaServer;
+      }
+      // Structural-index fallback: implementors of an interface + subclasses
+      // of a base class, by the word under the cursor (absolute paths, like
+      // fallbackDefinition).
+      const content = contentFor(projectId, root, file);
+      return content ? fallbackImplementation(db, projectId, root, content, position) : [];
     },
   };
 }

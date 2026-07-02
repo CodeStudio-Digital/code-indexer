@@ -117,6 +117,17 @@ export function createInProcessLspExecutor(db: CodeIndexDB): LspBackendExecutor 
       return getTsService(ctx.root).getDocumentSymbols(ctx.file);
     },
 
+    async tsOrganizeImports(ctx) {
+      syncTs(ctx);
+      return getTsService(ctx.root).organizeImports(ctx.file);
+    },
+
+    async tsImplementation(ctx) {
+      const pos = requirePosition(ctx);
+      syncTs(ctx);
+      return getTsService(ctx.root).getImplementations(ctx.file, pos.line, pos.column);
+    },
+
     async fallbackCompletion(ctx) {
       return fallbackCompletion(db, ctx.projectId, ctx.root, ctx.file, requirePosition(ctx), ctx.languageId);
     },

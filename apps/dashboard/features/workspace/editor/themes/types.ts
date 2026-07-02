@@ -56,4 +56,14 @@ export interface Palette {
   lineHighlight?: string;
   lineNumber?: string;
   lineNumberActive?: string;
+  /**
+   * Optional widget-chrome overrides (suggest popup / hover / signature help).
+   * When absent they derive from background↔foreground (see widget-colors.ts),
+   * so a theme only sets these when the derived value isn't ideal.
+   */
+  widgetBackground?: string;
+  widgetBorder?: string;
+  suggestSelectedBackground?: string;
+  /** Matched-characters color in the suggest popup (defaults to `function`). */
+  matchHighlight?: string;
 }

@@ -319,7 +319,8 @@ export async function serverHover(
   }
 }
 
-function toLocations(raw: unknown): LspLocation[] {
+/** LSP Location[]/LocationLink[] (or single) → contract locations. Shared with server-backend-ops. */
+export function toLocations(raw: unknown): LspLocation[] {
   const arr: LspLocationLike[] = !raw ? [] : Array.isArray(raw) ? raw as LspLocationLike[] : [raw as LspLocationLike];
   return arr
     .map((l) => {

@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { createEditorHandlers, createContext } from '@mcp/api-handlers';
-import type { EditorCompleteInput } from '@mcp/api-bus';
+import type { EditorCompleteInput, EditorFeedbackInput } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
 
 /**
@@ -23,10 +23,19 @@ export function mountEditorRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/editor/feedback', async (c) => {
     try {
-      const body = (await c.req.json()) as { projectId: number; requestId: string; action: 'accept' };
+      const body = (await c.req.json()) as EditorFeedbackInput;
       return c.json(await h.feedback(body, createContext()));
     } catch {
       return c.json({ ok: false }, 400);
+    }
+  });
+
+  app.post('/api/editor/stats', async (c) => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as { days?: number };
+      return c.json(await h.stats(body, createContext()));
+    } catch {
+      return c.json({ configured: false }, 500);
     }
   });
 }

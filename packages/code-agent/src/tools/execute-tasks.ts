@@ -9,10 +9,10 @@
  * consolidated summary. No more `execute_task` loop, no more
  * task-mode-gate confusion, no more "did the model remember to call it?"
  *
- * Tool dispatch per `kind`:
- *   - investigate → READ_ONLY_FILTER  + EXPLORE_SYSTEM_PROMPT
- *   - implement   → READ_WRITE_FILTER + IMPLEMENT_SYSTEM_PROMPT + pathScope
- *   - verify      → VERIFY_FILTER     + VERIFY_SYSTEM_PROMPT
+ * Tool dispatch per `kind` is resolved through micro-agent profiles:
+ *   - investigate -> explore profile
+ *   - implement   -> implement profile + pathScope/pathScopeMode
+ *   - verify      -> verify profile
  *
  * Modes:
  *   - 'auto' (default) — subagent dispatch per kind, parallel batching.
@@ -26,17 +26,15 @@ import {
   runSubagent,
   runParallelAgents,
   emptyCollected,
-  READ_ONLY_FILTER,
-  READ_WRITE_FILTER,
-  VERIFY_FILTER,
   type SubagentAllowlist,
   type ParallelAgentSpec,
+  type PathScopeMode,
 } from '@mcp/code-agent/tools/implement-subagent.js';
+import { type SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import {
-  EXPLORE_SYSTEM_PROMPT,
-  IMPLEMENT_SYSTEM_PROMPT,
-  type SubagentDeps,
-} from '@mcp/code-agent/tools/subagent.js';
+  MICRO_AGENT_PROFILES,
+  microAgentProfileForTaskKind,
+} from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { applyPlanApproval } from '@mcp/code-agent/tools/plan.js';
 import { effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 import {
@@ -64,29 +62,6 @@ import {
 import { createTaskRunPersist } from './execute-tasks/task-run-persistence.js';
 import { dispatchWithRetry } from './execute-tasks/task-retry.js';
 import { shouldSkipTask } from './execute-tasks/task-stale-check.js';
-
-const VERIFY_SYSTEM_PROMPT = `You are a VERIFY subagent. The parent agent delegated a verification task to you.
-
-You have READ access + shell + LSP diagnostics. You CANNOT edit any code.
-Your job: run the relevant tests / linters / type-checkers, observe results, report what passed and what failed.
-
-# Rules
-1. Use run_command for tests/linters. Use get_diagnostics / lsp_diagnostics for LSP-driven checks.
-2. NEVER attempt to write or patch files. If you find an issue, report it — the parent agent will dispatch a fix.
-3. Stop and write a final summary listing what was verified and the result.
-4. NEVER end your run with only tool calls and no text.
-
-# Output format
-
-## Verified
-- <check name>: passed | failed (<short reason>)
-
-## Failures (if any)
-- <test/file>: <short error excerpt> at <file:line>
-
-## Suggested next step
-<one line — usually "fix X in Y" — or "all green, no action">
-`;
 
 // ─── Wave/group planning (pure) ─────────────────────────────────
 
@@ -155,23 +130,17 @@ interface KindArtifacts {
   systemPrompt: string;
   allowlist: SubagentAllowlist;
   pathScope?: string[];
+  pathScopeMode?: PathScopeMode;
 }
 
 function resolveKindArtifacts(task: CoderTask): KindArtifacts {
-  const kind = task.kind ?? 'implement';
-  switch (kind) {
-    case 'investigate':
-      return { systemPrompt: EXPLORE_SYSTEM_PROMPT, allowlist: READ_ONLY_FILTER };
-    case 'verify':
-      return { systemPrompt: VERIFY_SYSTEM_PROMPT, allowlist: VERIFY_FILTER };
-    case 'implement':
-    default:
-      return {
-        systemPrompt: IMPLEMENT_SYSTEM_PROMPT,
-        allowlist: READ_WRITE_FILTER,
-        pathScope: task.files.length > 0 ? task.files : undefined,
-      };
-  }
+  const profile = microAgentProfileForTaskKind(task.kind);
+  return {
+    systemPrompt: profile.systemPrompt,
+    allowlist: profile.allowlist,
+    pathScope: profile.pathScopeMode === 'enforce-writes' && task.files.length > 0 ? task.files : undefined,
+    pathScopeMode: profile.pathScopeMode,
+  };
 }
 
 // ─── Tool definition ────────────────────────────────────────────
@@ -576,6 +545,7 @@ async function runGroupParallel(
       systemPrompt: art.systemPrompt,
       allowlist: art.allowlist,
       pathScope: art.pathScope,
+      pathScopeMode: art.pathScopeMode,
       limits: resolveTaskLimit(t),
     };
   });
@@ -597,8 +567,8 @@ async function runGroupParallel(
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
       },
       specs,
-      IMPLEMENT_SYSTEM_PROMPT, // global fallback (never used — per-spec wins)
-      READ_WRITE_FILTER,        // global fallback (never used — per-spec wins)
+      MICRO_AGENT_PROFILES.implement.systemPrompt, // global fallback (never used - per-spec wins)
+      MICRO_AGENT_PROFILES.implement.allowlist,    // global fallback (never used - per-spec wins)
       (progress) => {
         ctx.runner?.emit('agent_progress', { groupId, ...progress });
         const task = tasks[progress.agentIndex];
@@ -755,6 +725,7 @@ async function runOneTask(
           initialMessages,
           maxTurns: 100,
           pathScope: art.pathScope,
+          pathScopeMode: art.pathScopeMode,
           limits,
           onProgress: (progress) => {
             toolCallCount = progress.toolCallCount;

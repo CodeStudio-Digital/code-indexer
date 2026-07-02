@@ -322,6 +322,7 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
     case 'lsp.hover':
     case 'lsp.definition':
     case 'lsp.references':
+    case 'lsp.implementation':
     case 'lsp.diagnostics': {
       const op = path.split('.')[1];
       return {
@@ -329,10 +330,21 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
         init: json({ file: ip!.file, position: ip!.position, content: ip!.content, context: ip!.context }),
       };
     }
+    case 'lsp.formatting':
+      return {
+        url: `/api/lsp/${ip!.projectId}/formatting`,
+        init: json({ file: ip!.file, range: ip!.range, options: ip!.options }),
+      };
+    case 'lsp.organizeImports':
+      return { url: `/api/lsp/${ip!.projectId}/organize-imports`, init: json({ file: ip!.file }) };
     case 'lsp.codeActions':
       return { url: `/api/lsp/${ip!.projectId}/code-actions`, init: json({ file: ip!.file, range: ip!.range }) };
     case 'lsp.rename':
       return { url: `/api/lsp/${ip!.projectId}/rename`, init: json({ file: ip!.file, position: ip!.position, newName: ip!.newName }) };
+    case 'lsp.signatureHelp':
+      return { url: `/api/lsp/${ip!.projectId}/signature-help`, init: json({ file: ip!.file, position: ip!.position }) };
+    case 'lsp.documentSymbols':
+      return { url: `/api/lsp/${ip!.projectId}/document-symbols`, init: json({ file: ip!.file }) };
     case 'lsp.didOpen':
       return {
         url: `/api/lsp/${ip!.projectId}/did-open`,
@@ -357,6 +369,8 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: '/api/editor/complete', init: json(ip!) };
     case 'editor.feedback':
       return { url: '/api/editor/feedback', init: json(ip!) };
+    case 'editor.stats':
+      return { url: '/api/editor/stats', init: json(ip ?? {}) };
     case 'search.project': {
       const qp = new URLSearchParams({ q: String(ip!.query), limit: String(Number(ip!.limit ?? 50)) });
       if (ip!.mode) qp.set('mode', String(ip!.mode));

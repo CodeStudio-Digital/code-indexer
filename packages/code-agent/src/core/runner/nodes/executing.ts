@@ -152,8 +152,12 @@ export class ExecutingNode implements BehaviorNode {
     // proactive recall so no remembered facts are surfaced or applied (CC's
     // ignore-memory rule). EN + PT-BR phrasings.
     const memoryTaskText = latestUserTaskText(ctx.messages);
+    // "ignore/don't use memory" instruction gate. Tightened against benign
+    // coding phrases: no bare "sem" ("sem estourar a memória"), and "memory"
+    // followed by leak/usage/check/heap-style words is the RESOURCE, not the
+    // agent memory feature ("ignore the memory leak for now").
     const ignoreMemory =
-      /\b(ignore|disregard|skip|don'?t use|do not use|n[aã]o use|n[aã]o usar|sem)\b[\s\S]{0,20}mem(o|ó)r(y|ia)/i.test(
+      /\b(ignore|disregard|skip|don'?t use|do not use|n[aã]o use|n[aã]o usar)\b[\s\S]{0,20}mem(?:o|ó)r(?:y|ia)\b(?!\s*(?:leak|leaks|usage|check|checks|profile|profiler|pressure|footprint|heap|ram|cache))/i.test(
         memoryTaskText ?? '',
       );
     if (!ignoreMemory && ctx.bridge?.getRelevantProjectMemory) {
@@ -170,9 +174,9 @@ export class ExecutingNode implements BehaviorNode {
 
     // Correction nudge — the user's last message looks like a correction or a
     // durable preference: suggest remember() THIS turn. Cheap regex, throttled
-    // (once per distinct message hash, ≤3/session). Gated to single sessions
-    // (getProjectMemoryIndex is only wired outside company contexts — a
-    // subordinate's "user" is the master, not a person).
+    // (once per distinct message hash, ≤3/run — see injectionState docs).
+    // Gated to single sessions (getProjectMemoryIndex is only wired outside
+    // company contexts — a subordinate's "user" is the master, not a person).
     let correctionHint: string | null = null;
     const nudgeState = ctx.injectionState.correctionNudge;
     if (!ignoreMemory && memoryTaskText && nudgeState.count < 3 && ctx.bridge?.getProjectMemoryIndex) {

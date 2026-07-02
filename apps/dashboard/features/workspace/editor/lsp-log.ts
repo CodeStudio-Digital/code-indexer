@@ -11,7 +11,9 @@
 
 export type LspOp =
   | 'completion' | 'resolve' | 'hover' | 'definition'
-  | 'references' | 'inline' | 'semanticTokens' | 'codeActions' | 'rename';
+  | 'references' | 'inline' | 'semanticTokens' | 'codeActions' | 'rename'
+  | 'signatureHelp' | 'documentSymbols'
+  | 'formatting' | 'organizeImports' | 'implementation';
 
 export type LspOutcome = 'ok' | 'threw' | 'empty' | 'timeout' | 'no-provider';
 

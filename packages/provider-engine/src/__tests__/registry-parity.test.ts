@@ -25,6 +25,7 @@ const REGISTRY_ORDER = [
   'openrouter',
   // Appended after the cutover (no model-id collisions → position irrelevant for pricing).
   'fugu',
+  'mistral',
 ];
 
 describe('registry cutover parity', () => {

@@ -22,6 +22,7 @@ import {
   makeAutoDiscoveryIndexListener,
 } from '@mcp/services/services/docs/index.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
+import { clearProjectEdits } from '../editor/completion/snippets/edit-tracker.js';
 import type { HandlerDeps } from '../types.js';
 
 /**
@@ -154,6 +155,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       if (!project) throw new ApiError('not_found', 404, 'project not found');
 
       await deps.projectIndexService.stopWatching(id).catch(() => undefined);
+      clearProjectEdits(id); // completion edit-tracker: drop the project's ring
       const v = await clearProjectVectors(project);
       db.deleteProject(id);
       return {

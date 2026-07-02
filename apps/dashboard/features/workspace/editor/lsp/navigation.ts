@@ -182,6 +182,31 @@ export function registerNavProviders(monaco: Monaco, projectId: number): MonacoN
   );
 
   disposers.push(
+    monaco.languages.registerImplementationProvider('*', {
+      // Ctrl+Alt+B (editor.action.goToImplementation, já no keymap). Sem
+      // flushDoc — mesmo contrato do definition provider acima; o backend
+      // roteia (TS service → server → fallback do índice de herança).
+      async provideImplementation(model, position) {
+        try {
+          const locs = await apiCall<LspLocationDTO[]>('lsp.implementation', {
+            projectId,
+            file: relPath(model),
+            position: { line: position.lineNumber, column: position.column },
+          });
+          return locs.map((loc) => ({
+            uri: monaco.Uri.file(loc.file),
+            range: toMonacoRange(monaco, loc.range),
+          }));
+        } catch (err) {
+          logLsp({ op: 'implementation', file: relPath(model), lang: model.getLanguageId(),
+                   outcome: 'threw', err: err instanceof Error ? err.message : String(err) });
+          return [];
+        }
+      },
+    }),
+  );
+
+  disposers.push(
     monaco.languages.registerReferenceProvider('*', {
       async provideReferences(model, position) {
         try {

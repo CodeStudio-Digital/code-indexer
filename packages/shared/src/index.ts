@@ -6,6 +6,7 @@ export * from './utils/token-budget.js';
 export * from './utils/dev-server-url.js';
 export * from './utils/map-with-concurrency.js';
 export * from './utils/native-fetch.js';
+export * from './editor/completion-prefilter.js';
 export * from './sse/SSEFramer.js';
 export * from './sse/BackoffStrategy.js';
 export * from './sse/ReconnectingSSEClient.js';

@@ -107,6 +107,10 @@ export async function callDistillLlm(
         deps.onDiag?.(diag);
         return { content: second.content, diag };
       }
+      // Fallback ALSO failed — report its diag too ("binding broken AND
+      // fallback broken" must be visible), but keep the PRIMARY binding's
+      // error as the last-reported one (it identifies the misconfiguration).
+      deps.onDiag?.({ ...second.diag, fallbackUsed: true });
     }
   }
   deps.onDiag?.(first.diag);

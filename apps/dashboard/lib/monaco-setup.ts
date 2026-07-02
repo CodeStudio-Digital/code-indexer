@@ -21,6 +21,7 @@
 
 import * as monaco from 'monaco-editor';
 import { loader } from '@monaco-editor/react';
+import { StandaloneServices } from 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js';
 // Vite worker imports — each `?worker` URL becomes a Worker class at
 // build time. The .ts paths are resolved by Vite's monaco-editor
 // optimizer.
@@ -32,6 +33,8 @@ import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import { defineEditorThemes } from '../features/workspace/editor/themes/index.js';
 import { enrichPhpHighlighting, registerPhpConstructHover } from '../features/workspace/editor/php-highlight.js';
 import { applyLanguageConfigOverlays } from '../features/workspace/editor/language-configs/index.js';
+import { createMonacoClipboardService } from './monaco-clipboard-service.js';
+import { createWorkspaceTextModelService } from './monaco-workspace-text-model-service.js';
 
 let initialized = false;
 
@@ -62,6 +65,15 @@ export function setupMonaco(): void {
       }
     },
   };
+
+  // Install our clipboard service before defineTheme/language overlays force
+  // Monaco's singleton standalone services to initialize. This avoids Monaco's
+  // WebKit pre-write workaround, which can spam denied clipboard writes in
+  // restricted WebViews.
+  StandaloneServices.initialize({
+    clipboardService: createMonacoClipboardService(),
+    textModelService: createWorkspaceTextModelService(monaco),
+  });
 
   // Hand the bundled `monaco` to @monaco-editor/react so it skips the
   // CDN fetch + cdn-side instantiation that was disposing under us.

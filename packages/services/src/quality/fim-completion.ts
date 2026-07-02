@@ -19,6 +19,8 @@ import {
   type ChatCallOptions,
   type ChatCallResult,
 } from './llm-chat.js';
+import { resolveFimTemplate, mergeStops, commentize, lineCommentPrefix } from './fim-templates.js';
+import { fimFlavor, renderFimContext, type FimSnippet } from './fim-format.js';
 
 /** Model ids with a native FIM completions endpoint (prompt + suffix). */
 const FIM_MODEL_RE = /(deepseek-coder|qwen[\d.]*-?coder|codestral|starcoder|stable-?code|codegemma|\bfim\b)/i;
@@ -49,6 +51,9 @@ export function supportsFim(binding: ResolvedBinding): boolean {
   if (deadUntil !== undefined && deadUntil > Date.now()) return false; // known dead endpoint
   if (REASONING_MODEL_RE.test(binding.modelId)) return false; // chat-only models
   if (binding.provider.kind === 'deepseek') return true; // /beta/completions, stable
+  // Mistral has a native /fim/completions endpoint, but only the code models
+  // are trained for it — mistral-small et al. are chat-only.
+  if (binding.provider.kind === 'mistral') return /codestral|devstral/i.test(binding.modelId);
   return FIM_MODEL_RE.test(binding.modelId);
 }
 
@@ -64,10 +69,22 @@ export function markFimUnsupported(binding: ResolvedBinding): void {
 export interface FimInput {
   prefix: string;
   suffix: string;
-  /** Layered project context (rendered as a leading comment block). */
+  /** Legacy single-block context (rendered as a leading comment block). */
   context: string;
   /** Monaco language id — picks the comment syntax for the context block. */
   language: string;
+  /**
+   * Engine-v2 cross-file snippets (recent edits / defs / open-tab windows) —
+   * rendered in the model family's native multi-file format (fim-format.ts).
+   * When present, `context` is ignored.
+   */
+  snippets?: FimSnippet[];
+  /** Scope + receiver members — commented block right before the prefix. */
+  volatileBlock?: string;
+  /** Project-relative path of the file being completed (multi-file headers). */
+  filePath?: string;
+  /** Repo display name for qwen's <|repo_name|> header. */
+  repoName?: string;
 }
 
 interface FimResponse {
@@ -75,24 +92,15 @@ interface FimResponse {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
-function lineCommentPrefix(language: string): string {
-  if (/^(python|ruby|shell|bash|sh|yaml|r|perl|toml|dockerfile|makefile|elixir)$/i.test(language)) return '# ';
-  if (/^(sql|lua|haskell|ada)$/i.test(language)) return '-- ';
-  return '// ';
-}
-
-function commentize(block: string, language: string): string {
-  const c = lineCommentPrefix(language);
-  return block.split('\n').map((l) => (l ? c + l : c.trimEnd())).join('\n');
-}
-
-/** Resolve the FIM completions endpoint (config override → DeepSeek beta → legacy). */
+/** Resolve the FIM completions endpoint (config override → kind-specific → legacy). */
 function fimUrl(binding: ResolvedBinding): string {
   const cfg = binding.config as Record<string, unknown>;
   if (typeof cfg.fim_endpoint === 'string' && cfg.fim_endpoint.trim()) return cfg.fim_endpoint.trim();
   const base = resolveBaseUrl(binding).replace(/\/+$/, '');
   // DeepSeek serves FIM under /beta, not /v1.
   if (binding.provider.kind === 'deepseek') return `${base.replace(/\/v1$/, '')}/beta/completions`;
+  // Mistral's native FIM endpoint (works on api.mistral.ai AND codestral.mistral.ai).
+  if (binding.provider.kind === 'mistral') return `${base}/fim/completions`;
   return `${base}/completions`;
 }
 
@@ -112,17 +120,42 @@ export async function fimCompletion(
 ): Promise<ChatCallResult> {
   const startedAt = performance.now();
   const cfg = binding.config as Record<string, unknown>;
-  const prompt = input.context
-    ? `${commentize(input.context, input.language)}\n\n${input.prefix}`
-    : input.prefix;
+  // Context: v2 snippet path (family-native multi-file format) or the legacy
+  // single commented block.
+  let contextText: string;
+  let flavorStop: string[] = [];
+  if (input.snippets !== undefined || input.volatileBlock !== undefined) {
+    const rendered = renderFimContext(fimFlavor(binding.modelId), input.snippets ?? [], {
+      repoName: input.repoName ?? 'repo',
+      currentFile: input.filePath ?? '',
+      commentPrefix: lineCommentPrefix(input.language),
+      volatileBlock: input.volatileBlock,
+    });
+    contextText = rendered.contextText;
+    flavorStop = rendered.extraStop;
+  } else {
+    contextText = input.context ? `${commentize(input.context, input.language)}\n\n` : '';
+  }
+  const prompt = contextText ? `${contextText}${input.prefix}` : input.prefix;
   const body: Record<string, unknown> = {
     model: binding.modelId,
-    prompt,
-    suffix: input.suffix,
     max_tokens: options.maxTokens ?? toNumber(cfg.max_tokens) ?? 256,
     temperature: options.temperature ?? toNumber(cfg.temperature) ?? 0.2,
   };
-  if (options.stop && options.stop.length > 0) body.stop = options.stop.slice(0, 4);
+  // Raw-template hosts don't understand the `suffix` param — the template
+  // folds prefix+suffix into a single sentinel-token prompt instead.
+  // Stop merge order (cap 4): caller '\n' → template stops → flavor stops.
+  const tpl = resolveFimTemplate(binding);
+  if (tpl) {
+    body.prompt = tpl.assemble({ prefix: prompt, suffix: input.suffix });
+    const stops = mergeStops(options.stop, [...tpl.stop, ...flavorStop]);
+    if (stops.length > 0) body.stop = stops;
+  } else {
+    body.prompt = prompt;
+    body.suffix = input.suffix;
+    const stops = mergeStops(options.stop, flavorStop);
+    if (stops.length > 0) body.stop = stops;
+  }
 
   const timeoutMs = options.timeoutMs ?? Math.max(1000, toNumber(cfg.timeout) ?? 30_000);
   const controller = new AbortController();

@@ -805,6 +805,74 @@ export class TsLanguageService {
   }
 
   /**
+   * Organize imports (sort + combine + drop unused) for ONE file. Backed by
+   * `service.organizeImports` (mode All). Same output conventions as
+   * getRenameEdits: TS-canonical absolute paths, 1-based end-exclusive
+   * ranges. Empty array = nothing to change.
+   */
+  organizeImports(file: string): RenameEdit[] {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+    let changes: readonly ts.FileTextChanges[];
+    try {
+      changes = service.organizeImports(
+        { type: 'file', fileName: abs, mode: ts.OrganizeImportsMode.All },
+        ts.getDefaultFormatCodeSettings(),
+        undefined,
+      );
+    } catch (e) {
+      console.warn(
+        `[lsp] organizeImports: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
+    const out: RenameEdit[] = [];
+    for (const change of changes) {
+      const fileName = tsCanonical(change.fileName);
+      for (const tc of change.textChanges) {
+        out.push({
+          file: fileName,
+          range: {
+            start: this.offsetToPosition(change.fileName, tc.span.start),
+            end: this.offsetToPosition(change.fileName, tc.span.start + tc.span.length),
+          },
+          newText: tc.newText,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Implementations of the symbol at (line, column) — concrete classes for an
+   * interface/abstract member, overrides for a method. Mirrors getDefinition's
+   * shape (TS-canonical absolute paths, 1-based positions).
+   */
+  getImplementations(file: string, line: number, column: number): DefinitionResult {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+    const offset = this.positionToOffset(abs, line, column);
+    if (offset === null) return { targets: [] };
+    let impls: readonly ts.ImplementationLocation[];
+    try {
+      impls = service.getImplementationAtPosition(abs, offset) ?? [];
+    } catch (e) {
+      console.warn(
+        `[lsp] getImplementations: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return { targets: [] };
+    }
+    const targets: TsPosition[] = [];
+    for (const i of impls) {
+      const pos = this.offsetToPosition(i.fileName, i.textSpan.start);
+      targets.push({ file: tsCanonical(i.fileName), line: pos.line, column: pos.column });
+    }
+    return { targets };
+  }
+
+  /**
    * Parameter hints at a call site (Ctrl+P / `(`/`,` triggers). Backed by
    * `getSignatureHelpItems`; labels are display-parts joins, the signature
    * label is prefix + params.join(separator) + suffix — exactly what the

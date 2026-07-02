@@ -48,6 +48,8 @@ const OP_TIMEOUTS: Record<LspExecutorOp, number> = {
   tsRename: 30_000,
   tsSignatureHelp: 5_000,
   tsDocumentSymbols: 5_000,
+  tsOrganizeImports: 10_000,
+  tsImplementation: 5_000,
   fallbackCompletion: 5_000,
   fallbackDefinition: 5_000,
   fallbackHover: 5_000,
@@ -103,6 +105,8 @@ export class LspWorkerClient implements LspBackendExecutor {
   tsRename: LspBackendExecutor['tsRename'] = (ctx) => this.call('tsRename', ctx);
   tsSignatureHelp: LspBackendExecutor['tsSignatureHelp'] = (ctx) => this.call('tsSignatureHelp', ctx);
   tsDocumentSymbols: LspBackendExecutor['tsDocumentSymbols'] = (ctx) => this.call('tsDocumentSymbols', ctx);
+  tsOrganizeImports: LspBackendExecutor['tsOrganizeImports'] = (ctx) => this.call('tsOrganizeImports', ctx);
+  tsImplementation: LspBackendExecutor['tsImplementation'] = (ctx) => this.call('tsImplementation', ctx);
   fallbackCompletion: LspBackendExecutor['fallbackCompletion'] = (ctx) => this.call('fallbackCompletion', ctx);
   fallbackDefinition: LspBackendExecutor['fallbackDefinition'] = (ctx) => this.call('fallbackDefinition', ctx);
   fallbackHover: LspBackendExecutor['fallbackHover'] = (ctx) => this.call('fallbackHover', ctx);

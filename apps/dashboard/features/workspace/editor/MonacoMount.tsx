@@ -307,6 +307,10 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
         showInlineDetails: true, // signature inline after the label
         localityBonus: true, // nearby symbols float up (additive to sortText)
       },
+      // Slightly denser popup rows (IntelliJ feel); paired with the rounded
+      // chrome + colored symbol icons from the theme (see widget-colors.ts).
+      suggestFontSize: Math.max(12, editorFontPx - 1),
+      suggestLineHeight: Math.round(Math.max(12, editorFontPx - 1) * 1.6),
       wordBasedSuggestions: 'off',
       inlayHints: { enabled: 'onUnlessPressed' },
       // Force semantic highlighting ON (default is 'configuredByTheme', and the

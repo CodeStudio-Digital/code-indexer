@@ -41,6 +41,7 @@ export function AgentMemoryList({ projectId }: { projectId: number }) {
   const { t } = useTranslation('projects');
   const { data, refetch } = useApi<AgentMemoryRow[]>(`/projects/${projectId}/agent-memory`);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const rows = data ?? [];
   const live = rows.filter((r) => r.archived_at === null);
@@ -49,9 +50,14 @@ export function AgentMemoryList({ projectId }: { projectId: number }) {
 
   const act = async (id: number, fn: () => Promise<unknown>) => {
     setBusyId(id);
+    setActionError(null);
     try {
       await fn();
       refetch();
+    } catch (e) {
+      // The restore route intentionally 409s on a live name collision — the
+      // user must see why the click "did nothing".
+      setActionError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusyId(null);
     }
@@ -118,11 +124,14 @@ export function AgentMemoryList({ projectId }: { projectId: number }) {
   );
 
   return (
-    <div className="px-3 py-2 space-y-1 border-b">
+    <div className="px-3 py-2 space-y-1 border-b shrink-0">
       <div className="text-[10px] font-medium text-muted-foreground">
         {t('memory.list.title', { count: live.length })}
       </div>
-      <div className="space-y-1">
+      {actionError && (
+        <div className="text-[10px] text-red-500 break-all" role="alert">{actionError}</div>
+      )}
+      <div className="space-y-1 max-h-56 overflow-y-auto">
         {live.map((r) => <Row key={r.id} r={r} />)}
       </div>
       {archived.length > 0 && (
@@ -131,7 +140,7 @@ export function AgentMemoryList({ projectId }: { projectId: number }) {
             <ChevronRight className="h-3 w-3" />
             {t('memory.list.archived', { count: archived.length })}
           </summary>
-          <div className="space-y-1 mt-1">
+          <div className="space-y-1 mt-1 max-h-40 overflow-y-auto">
             {archived.map((r) => <Row key={r.id} r={r} isArchived />)}
           </div>
         </details>

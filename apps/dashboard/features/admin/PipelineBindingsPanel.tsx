@@ -709,7 +709,29 @@ export function PipelineBindingsPanel() {
         </div>
       )}
 
-      <SetupWizard open={setupOpen} onClose={() => setSetupOpen(false)} onApplied={() => void load()} />
+      <SetupWizard
+        open={setupOpen}
+        onClose={() => setSetupOpen(false)}
+        onApplied={() => {
+          void load();
+          // Guided setup that bound editor/autocomplete = informed consent →
+          // auto-enable ghost text, but only when the user NEVER touched the
+          // toggle (an explicit '0' is an explicit no).
+          void (async () => {
+            try {
+              const { aiCompleteToggleUnset, useAiCompleteStore } = await import(
+                '../workspace/editor/inlineCompletionProvider.js'
+              );
+              if (!aiCompleteToggleUnset()) return;
+              const { bindings } = await fetchBindings({ pipelineName: 'editor', enabledOnly: true });
+              if (bindings.some((b) => b.binding_role === 'autocomplete')) {
+                useAiCompleteStore.getState().setEnabled(true);
+                useAiCompleteStore.getState().requestNudge('enabled-hint');
+              }
+            } catch { /* best-effort */ }
+          })();
+        }}
+      />
 
       {editing && (
         <Dialog open onOpenChange={(open) => !open && setEditing(null)}>

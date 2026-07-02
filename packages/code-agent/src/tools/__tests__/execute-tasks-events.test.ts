@@ -100,9 +100,12 @@ describe('execute_tasks timeline events', () => {
 
     const { tool, ctx, runner } = setup([task({ id: 'tsk_one', title: 'One' })]);
     const result = await tool.handler({}, ctx);
+    const spec = vi.mocked(runSubagent).mock.calls[0][1];
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('tools=1');
+    expect(spec.pathScope).toEqual(['src/base.ts']);
+    expect(spec.pathScopeMode).toBe('enforce-writes');
     expect(runner.emit).toHaveBeenCalledWith(
       'task_run_started',
       expect.objectContaining({ total_tasks: 1 }),
