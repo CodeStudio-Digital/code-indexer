@@ -1309,10 +1309,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       'get_hierarchy', 'find_implementations',
       'semantic_neighbors',
       'get_dependencies', 'get_dependents',
-      'search', 'search_global', 'search_concepts', 'search_by_kind',
+      'search', 'search_concepts', 'search_by_kind',
       'get_project_overview', 'get_project_pulse',
       'get_architecture', 'get_repo_map',
-      'get_context_for', 'query_snapshots', 'get_project_context',
     ]);
     const isIndexDep = (toolName: string): boolean => {
       // Strip mcp__ prefix and any company-master per-project slug

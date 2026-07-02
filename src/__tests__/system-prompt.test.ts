@@ -37,7 +37,9 @@ describe('buildSystemPrompt per-provider preambles', () => {
       const p = buildSystemPrompt({ ...base, providerFamily: f });
       expect(p).toContain('MCP Code Indexer');
       expect(p).toContain('get_project_pulse');
-      expect(p).toContain('Long-term memory');
+      // `base` sets no sessionDrive → memorySection renders the no-Session-Drive
+      // `# Memory` block (migration 181 renamed the former "# Long-term memory").
+      expect(p).toContain('PROJECT MEMORY');
     }
   });
 

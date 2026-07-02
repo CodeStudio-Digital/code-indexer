@@ -11,7 +11,6 @@ export const REDUCIBLE_READ_TOOLS = new Set<string>([
 const REDUCIBLE_SEARCH_TOOLS = new Set<string>([
   'mcp__grep_code',
   'mcp__search',
-  'mcp__search_global',
   'glob',
 ]);
 

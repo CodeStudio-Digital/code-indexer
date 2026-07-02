@@ -66,7 +66,12 @@
 // rewritten into three behaviour-triggering layers (recall-first / save-as-you-
 // learn / ignore-memory), recall_memory promoted to the bootstrap tier. Static
 // prefix changed → invalidates stale fingerprints.
-export const SYSTEM_PROMPT_VERSION = '20260628.1';
+// 2026-06-28.2 bump — prompt/tier alignment: mcpSection no longer advertises the
+// navigate-tier mcp__query_snapshots / mcp__get_context_for as "always visible"
+// (they were demoted from bootstrap in Phase B); explore.txt + base.txt reworded
+// to match the real turn-1 surface. Static prefix changed → invalidates stale
+// fingerprints.
+export const SYSTEM_PROMPT_VERSION = '20260628.2';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

@@ -15,20 +15,24 @@ describe('tool tiers', () => {
     // 3 and 4 — lazy tool discovery and reviewer subagent).
     // Bumped to 42 when `rag_search_docs` joined (Documentação feature —
     // read-only RAG over the user-curated doc corpus).
-    // Refreshed to 54 after subsequent tier additions (rag_read_doc /
-    // rag_doc_outline, skill discovery, kanban/DS comms, etc.).
-    expect(TIER_COUNTS.bootstrap).toBe(54);
+    // Refreshed to 53 (the prior hardcoded 54 had drifted by one — bootstrap
+    // membership is unchanged by the cozy-scone tool retirement).
+    expect(TIER_COUNTS.bootstrap).toBe(53);
   });
 
   it('navigate tier contains the expected tools', () => {
-    // Refreshed to 62; +1 is `decision_gate` (plan-mode questionnaire of
-    // alternative approaches — navigate-tier so it stays off the turn-1
-    // bootstrap surface).
-    expect(TIER_COUNTS.navigate).toBe(62);
+    // 60 after retiring the cross-project + snapshot-query MCP tools
+    // (list_projects / get_project_stats / search_global / get_project_context /
+    // get_context_for / query_snapshots / list_snapshots — −7) and adding the
+    // previously-untiered get_repo_map (+1). (The prior hardcoded 62 had
+    // drifted; actual pre-retirement size was 66.) See plan cozy-scone.
+    expect(TIER_COUNTS.navigate).toBe(60);
   });
 
   it('admin tier contains the expected tools', () => {
-    expect(TIER_COUNTS.admin).toBe(16);
+    // 11 after retiring delete_project + the snapshot CRUD tools
+    // (add/update/delete_snapshot + get_snapshot_history — −5). See plan cozy-scone.
+    expect(TIER_COUNTS.admin).toBe(11);
   });
 
   it('classifies bootstrap tools correctly', () => {
@@ -38,7 +42,8 @@ describe('tool tiers', () => {
     expect(getToolTier('expand_toolset')).toBe('bootstrap');
     expect(getToolTier('submit_plan')).toBe('bootstrap');
     expect(getToolTier('glob')).toBe('bootstrap');
-    expect(getToolTier('todo_write')).toBe('bootstrap');
+    // NOTE: `todo_write` is a NAVIGATE-tier back-compat alias (the bootstrap
+    // task tool is `task_list`), so it is intentionally not asserted here.
   });
 
   it('classifies navigate tools correctly', () => {
@@ -56,9 +61,9 @@ describe('tool tiers', () => {
   it('classifies admin tools correctly', () => {
     expect(getToolTier('git_commit')).toBe('admin');
     expect(getToolTier('git_add')).toBe('admin');
-    expect(getToolTier('mcp__add_snapshot')).toBe('admin');
     expect(getToolTier('mcp__index_project')).toBe('admin');
-    expect(getToolTier('mcp__delete_project')).toBe('admin');
+    expect(getToolTier('mcp__get_costs')).toBe('admin');
+    expect(getToolTier('mcp__get_diff')).toBe('admin');
     expect(getToolTier('enter_worktree')).toBe('admin');
     expect(getToolTier('exit_worktree')).toBe('admin');
   });
@@ -80,7 +85,7 @@ describe('tool tiers', () => {
       { name: 'git_commit' },
       { name: 'mcp__get_project_pulse' },
       { name: 'mcp__find_references' },
-      { name: 'mcp__add_snapshot' },
+      { name: 'mcp__index_project' },
     ];
     const bootstrap = filterByTiers(tools, profileToTiers('bootstrap'));
     expect(bootstrap.map((t) => t.name).sort()).toEqual(['mcp__get_project_pulse', 'read_file']);

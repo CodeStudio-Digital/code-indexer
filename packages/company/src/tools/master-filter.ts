@@ -22,7 +22,6 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'delete_tasks',
   'archive_task_list',
   'execute_tasks',
-  'execute_task',
   'task_complete',
   'update_task',
   'expand_toolset',
@@ -66,8 +65,6 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
  */
 export const MASTER_ALLOWED_MCP_SUFFIXES: ReadonlySet<string> = new Set([
   'get_project_pulse',
-  'list_projects',
-  'get_project_stats',
   'get_project_overview',
   'get_architecture',
   'list_directory',
@@ -76,9 +73,10 @@ export const MASTER_ALLOWED_MCP_SUFFIXES: ReadonlySet<string> = new Set([
   // Project memory (Mem C) — read-only retrieval of distilled decisions/
   // gotchas from prior runs. The master plans delegation with this context
   // (e.g. quote a known gotcha in the spawn task); writes stay with
-  // subordinates + the run-end distiller.
+  // subordinates + the run-end distiller. `list_projects`/`get_project_stats`/
+  // `get_context_for` were retired from the server — the master lists company
+  // projects via the native `list_company_projects` tool.
   'search_memory',
-  'get_context_for',
 ]);
 
 /**

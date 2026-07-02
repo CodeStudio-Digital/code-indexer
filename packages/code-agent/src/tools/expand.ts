@@ -52,7 +52,7 @@ export function buildExpandTools(
     'get_dependencies, prepare_edit, get_symbol_body, etc.). Unlock this BEFORE editing code ' +
     'or running shell commands. (spawn_agent + execute_tasks + update_task are bootstrap-tier — ' +
     'available without unlocking.)\n' +
-    '- "admin": git_add/commit/branch, mcp__add_snapshot, mcp__index_project, mcp__get_costs, ' +
+    '- "admin": git_add/commit/branch, mcp__index_project, mcp__get_costs, mcp__get_diff, ' +
     'and other rarely-needed admin tools. Unlock ONLY when the user explicitly asks for them.\n' +
     '- "master": company orchestration surface — spawn_subordinate_agent, ' +
     'wait_for_subordinates, list_subordinates, forward_to_agent, kanban_list_cards, ' +

@@ -240,9 +240,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'get_skills_list',
   'get_skill_content',
   'list_skill_namespaces',
-  // MCP — token-efficient discovery / search. Hot path only; the cold ones
-  // (mcp__query_snapshots / search_memory / get_context_for / list_projects /
-  // get_project_stats — all ≤9 calls in 12k turns) are demoted to navigate.
+  // MCP — token-efficient discovery / search. Hot path only. Cold read tools
+  // (search_memory, get_project_overview, the code-nav family) live in navigate;
+  // the cross-project + snapshot-query tools were retired from the server
+  // entirely (see plan essa-fun-o-poderia-ser-cozy-scone).
   'mcp__get_project_pulse',
   'mcp__search',
   'mcp__grep_code',
@@ -334,12 +335,13 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'mcp__search_by_kind',
   'mcp__search_concepts',
   'mcp__get_architecture',
+  // get_repo_map: explicitly tiered here so it stops riding the getToolTier
+  // bootstrap fallback (it was untiered → always-on on turn 1). Cold overview
+  // tool → navigate, reachable via expand_toolset.
+  'mcp__get_repo_map',
   'mcp__get_file_structure',
   'mcp__get_project_overview',
-  'mcp__get_project_context',
   'mcp__get_recently_modified_files',
-  'mcp__search_global',
-  'mcp__list_snapshots',
   'mcp__save_memory',
   // ─── Demoted from bootstrap (Phase B) ────────────────────────────
   // Cold always-on tools (≤12 calls across 12k turns). Subordinates run
@@ -360,11 +362,7 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'forget_memory',
   'save_note',
   'get_goal',
-  'mcp__query_snapshots',
   'mcp__search_memory',
-  'mcp__get_context_for',
-  'mcp__list_projects',
-  'mcp__get_project_stats',
   // MCP resource discovery (registered for non-master sessions). Read-only,
   // cold (≤1 call in 12k turns) — was an untiered bootstrap fallback.
   'mcp_list_resources',
@@ -428,18 +426,16 @@ export const ADMIN_TOOLS: ReadonlySet<string> = new Set([
   'git_branch',
   'enter_worktree',
   'exit_worktree',
-  // MCP — project + snapshot mutations, cost/model admin
+  // MCP — indexing + cost/model/diff admin. delete_project and the snapshot
+  // CRUD tools were retired from the server (see plan
+  // essa-fun-o-poderia-ser-cozy-scone): destructive project lifecycle belongs
+  // to the host, and snapshot CRUD is 0-call + superseded by agent memory.
   'mcp__index_project',
-  'mcp__delete_project',
   'mcp__get_costs',
   'mcp__estimate_cost',
   'mcp__list_models',
   'mcp__export_docs',
   'mcp__get_diff',
-  'mcp__add_snapshot',
-  'mcp__update_snapshot',
-  'mcp__delete_snapshot',
-  'mcp__get_snapshot_history',
 ]);
 
 /** Options for {@link getToolTier}. */
@@ -637,16 +633,12 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   kanban_move_to_review: 'Move your card to Review (done working)',
   // ─── Bootstrap MCP ────────────────────────────────────────────
   mcp__get_project_pulse: 'Ultra-compact project overview (~100 tokens)',
-  mcp__query_snapshots: 'Full-text search over project snapshots',
   mcp__search_memory: 'Search project memory (decisions/conventions/gotchas/facts) by meaning — try before exploring code',
-  mcp__get_context_for: 'Curated context bundle for an NL question',
   mcp__search: 'Hybrid search (FTS + vector) across the project',
   mcp__grep_code: 'Text search with language/layer/glob filters',
   mcp__get_file_skeleton: 'File outline — headers + symbols (cheap)',
   mcp__read_file: 'Read file slice from the index (default 100L)',
   mcp__list_directory: 'List files by prefix (no disk access)',
-  mcp__list_projects: 'List all indexed projects',
-  mcp__get_project_stats: 'Project metrics (files, symbols, concepts)',
   // ─── Navigate native ──────────────────────────────────────────
   write_file: 'Overwrite an existing file entirely',
   edit_file: 'Apply a targeted search-and-replace edit',
@@ -689,13 +681,11 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   mcp__search_by_kind: 'Filter symbols by type (function, class, ...)',
   mcp__search_concepts: 'Find files by semantic concept',
   mcp__get_architecture: 'Architecture by layer',
+  mcp__get_repo_map: 'Structural repo map — key files by importance (~2000 tokens)',
   mcp__get_file_structure: 'Full file details (verbose)',
   mcp__get_project_overview: 'Complete project overview (use compact)',
-  mcp__get_project_context: 'All project snapshots (use max_tokens)',
   mcp__get_recently_modified_files: 'Recently indexed files',
-  mcp__search_global: 'Search across all projects',
   mcp__save_memory: 'Save a durable fact (decision/convention/gotcha/architecture) to project memory for future sessions',
-  mcp__list_snapshots: 'List project snapshots',
   // ─── Admin native ─────────────────────────────────────────────
   git_add: 'Stage files for commit',
   git_commit: 'Create a git commit',
@@ -704,16 +694,11 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   exit_worktree: 'Leave the current worktree',
   // ─── Admin MCP ────────────────────────────────────────────────
   mcp__index_project: 'Index or reindex a project',
-  mcp__delete_project: 'Remove a project from the index',
   mcp__get_costs: 'View indexing costs',
   mcp__estimate_cost: 'Estimate cost of indexing',
   mcp__list_models: 'List available LLM models',
   mcp__export_docs: 'Export project documentation',
   mcp__get_diff: 'Diff between indexing runs',
-  mcp__add_snapshot: 'Create a project snapshot',
-  mcp__update_snapshot: 'Update an existing snapshot',
-  mcp__delete_snapshot: 'Delete a snapshot',
-  mcp__get_snapshot_history: 'Snapshot version history',
   // ─── Diagram (draw.io) ────────────────────────────────────────
   diagram_create: 'Create a new draw.io diagram (.drawio) from mxGraph XML',
   diagram_update: 'Replace the full mxGraph XML of an existing diagram',

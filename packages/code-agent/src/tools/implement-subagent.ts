@@ -550,10 +550,8 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
 export const EXPLORE_ALLOWLIST = new Set<string>([
   'mcp__get_project_pulse',
   'mcp__get_project_overview',
-  'mcp__get_project_stats',
   'mcp__get_architecture',
   'mcp__list_directory',
-  'mcp__list_projects',
   'mcp__get_recently_modified_files',
   'mcp__get_file_skeleton',
   'mcp__get_file_structure',
@@ -571,9 +569,7 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
   'mcp__search',
   'mcp__search_by_kind',
   'mcp__search_concepts',
-  'mcp__query_snapshots',
   'mcp__search_memory',
-  'mcp__get_context_for',
   'mcp__prepare_edit',
   // Native read-only filesystem
   'read_file',
@@ -591,12 +587,10 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
   'git_status',
   'git_diff',
   'git_log',
-  // Frente C — pre-approved write channels for subagents. Both are
-  // additionally wrapped by `wrapToolForCollector` so any successful call
-  // is mirrored into the parent's structured trail (the master sees the
-  // memo / snapshot / deliverable post in the tool_result text without
-  // needing to re-read the board or the snapshot store).
-  'mcp__add_snapshot',
+  // Frente C — pre-approved write channel for subagents. Wrapped by
+  // `wrapToolForCollector` so any successful call is mirrored into the
+  // parent's structured trail (the master sees the deliverable post in the
+  // tool_result text without needing to re-read the board).
   'post_to_board',
 ]);
 
@@ -878,9 +872,9 @@ function parseResultBlock(finalText: string): { summary: string; files_modified?
 }
 
 /**
- * Frente C — when the sub calls `mcp__add_snapshot` or
- * `post_to_board` we tee the success into the parent's collector so the
- * master sees a structured trail in addition to the final assistant text.
+ * Frente C — when the sub calls `post_to_board` we tee the success into the
+ * parent's collector so the master sees a structured trail in addition to the
+ * final assistant text.
  *
  * Only mirrors on a successful invocation. The wrap is name-keyed so any
  * other tool passes through untouched. Errors during the mirror step are
@@ -895,33 +889,6 @@ function wrapToolForCollector(
   tool: CoderTool,
   collector: import('@mcp/code-agent/tools/subagent-collector.js').SubagentCollector,
 ): CoderTool {
-  if (tool.name === 'mcp__add_snapshot') {
-    return {
-      ...tool,
-      handler: async (args, ctx): Promise<ToolResult> => {
-        const result = await tool.handler(args, ctx);
-        if (!result.isError) {
-          try {
-            const category = typeof args.category === 'string' ? args.category : 'general';
-            const body = typeof args.body === 'string'
-              ? args.body
-              : typeof args.content === 'string'
-                ? (args.content as string)
-                : '';
-            // Snapshot id is typically embedded in the tool's response text
-            // (e.g. "Snapshot created (id=ABC123)"). Try to extract; fall
-            // back to a deterministic placeholder.
-            const idMatch = /id[=:]\s*([A-Za-z0-9_-]+)/.exec(result.content) ?? null;
-            const id = idMatch ? idMatch[1] : `snap-${Date.now().toString(36)}`;
-            collector.recordSnapshot(id, category, body);
-          } catch {
-            /* swallow — never let mirror failure surface as tool error */
-          }
-        }
-        return result;
-      },
-    };
-  }
   if (tool.name === 'post_to_board') {
     return {
       ...tool,

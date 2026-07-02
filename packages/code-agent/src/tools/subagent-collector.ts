@@ -12,8 +12,9 @@
  *
  *   - `memos`         — short structured notes the sub explicitly emits
  *                       via the new `record_memo` tool.
- *   - `snapshots`     — long-lived `mcp__add_snapshot` writes (when admin
- *                       tier is unlocked or explicitly allowlisted).
+ *   - `snapshots`     — reserved channel, currently DORMANT: the snapshot
+ *                       MCP tools were retired, so nothing mirrors here today.
+ *                       Kept as generic infra for a future mirrored write.
  *   - `boardPosts`    — `post_to_board(kind='deliverable'|...)` writes
  *                       (when the sub is inside a company session and the
  *                       master pre-approved board access).

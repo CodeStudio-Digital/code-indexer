@@ -187,13 +187,6 @@ export const SUBMIT_TASKS_DESC =
   "DON'T: pad a task list with trivial items to look thorough. 3 meaningful tasks > 8 micro-tasks.\n" +
   "DON'T: submit tasks without concrete files/references per item — the user can't approve vague scope.";
 
-// Frente D — kept for backward compat with the unregistered `executeTask`
-// export; no live tool consumes this description anymore. The wave-based
-// `execute_tasks` (plural) replaces every dispatch path.
-export const EXECUTE_TASK_DESC =
-  '[DEPRECATED — execute_task (singular) is no longer registered. Use `execute_tasks` (plural) ' +
-  'which dispatches the whole approved list in dependency order, batching parallel waves.]';
-
 export const TASK_COMPLETE_DESC =
   'Close the inline task scope opened by `execute_tasks` (inline / inline-all / smart modes). ' +
   'Marks the task as done (or failed if `errors` is set).\n' +

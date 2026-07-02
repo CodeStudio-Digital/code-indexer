@@ -143,10 +143,23 @@ describe('tier contract — Phase A/B placements are locked', () => {
     for (const n of [
       'list_tasks', 'cancel_tasks', 'delete_tasks', 'archive_task_list', 'update_task',
       'read_plan', 'list_notes', 'get_goal',
-      'mcp__search_memory', 'mcp__query_snapshots', 'mcp__get_context_for',
-      'mcp__list_projects', 'mcp__get_project_stats', 'mcp_list_resources',
+      // mcp__get_repo_map: explicitly tiered so it no longer rides the
+      // getToolTier bootstrap fallback (regression guard for the leak fix).
+      'mcp__search_memory', 'mcp__get_repo_map', 'mcp_list_resources',
     ]) {
       expect(getToolTier(n), n).toBe('navigate');
+    }
+  });
+
+  it('drops the retired cross-project / snapshot MCP tools (strict mode throws)', () => {
+    for (const n of [
+      'mcp__list_projects', 'mcp__get_project_stats', 'mcp__search_global',
+      'mcp__delete_project', 'mcp__get_project_context', 'mcp__get_context_for',
+      'mcp__query_snapshots', 'mcp__list_snapshots',
+      'mcp__add_snapshot', 'mcp__update_snapshot', 'mcp__delete_snapshot',
+      'mcp__get_snapshot_history',
+    ]) {
+      expect(() => getToolTier(n, undefined, { strict: true }), n).toThrow();
     }
   });
 

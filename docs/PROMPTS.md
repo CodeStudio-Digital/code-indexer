@@ -50,17 +50,28 @@ Concatenation order (one `return` at the end of `buildSystemPrompt`):
 ┌─ STATIC PREFIX (cache-stable) ────────────────────────────────┐
 │  preamble          providerPreamble(family)                   │
 │  base              prompts/base.txt  + {{interpolation}}       │
+│                    ({{tierHint}} {{mcpSection}} {{visionSection}}│
+│                     {{memorySection}} inlined into base)       │
 │  planSection       prompts/plan.txt  (planMode && !spec)       │
+│  planDepthSection  buildPlanDepthBlock() (planMode && !spec)   │
 │  agentSection      prompts/<agentId>.txt (explore|build|admin| │
-│                                            spec|builder)        │
+│                     spec|builder|api|diagram; NOT plan)        │
 │  interactionSection  inline (ask_user / submit_* / tasks)      │
-│  sessionDriveSection inline (non-company sessions only)        │
 │  agentLoopBlock    buildAgentLoopBlock() (agentLoopV2)         │
+│  languageBlock     languageSection() (responseLanguage set)    │
+│  outputStyleBlock  outputStyleSection() (explanatory|learning) │
+│  autonomousBlock   autonomousSection() (unsupervised)          │
 │  agentlessHint     inline (CODER_AGENTLESS_MODE=1)             │
 ├─ SYSTEM_PROMPT_DYNAMIC_BOUNDARY ──────────────────────────────┤
-│  dynamicSuffix     customTiersBlock + project hook + repoMap   │
+│  dynamicSuffix     toolCapBlock + customTiersBlock             │
+│                    + project hook + repoMap                    │
 └───────────────────────────────────────────────────────────────┘
 ```
+
+The session working-memory tools and the "Images & vision" fallback are NOT
+separate top-level fragments — they render *inside* `base.txt` via the
+`{{memorySection}}` and `{{visionSection}}` placeholders (both gated in code:
+`memorySection(ctx.sessionDrive)`, `visionSection(ctx.modelCanSeeImages)`).
 
 Fragment sources:
 
@@ -69,20 +80,22 @@ Fragment sources:
   `deepseek` · `kimi-code` · `generic`.
 - **base body** — [`prompts/base.txt`](../packages/code-agent/src/prompts/base.txt)
   via `loadPrompt` + `interpolate`. Placeholders: `{{projectName}}`,
-  `{{projectRoot}}`, `{{os}}`, `{{tierHint}}`, `{{mcpSection}}`.
+  `{{projectRoot}}`, `{{os}}`, `{{tierHint}}`, `{{mcpSection}}`,
+  `{{visionSection}}`, `{{memorySection}}`.
 - **mode identity** — [`prompts/<agentId>.txt`](../packages/code-agent/src/prompts/)
-  for `explore` / `build` / `admin` / `spec` / `builder`. `plan` is loaded
-  separately via `planSection`; `spec` deliberately does **not** also load
-  `plan.txt` (it has its own `submit_spec` gate).
+  for `explore` / `build` / `admin` / `spec` / `builder` / `api` / `diagram`.
+  `plan` is loaded separately via `planSection`; `spec` deliberately does **not**
+  also load `plan.txt` (it has its own `submit_spec` gate).
 - **tier hint** — `tierHint(profile)`: `bootstrap` / `navigate` text; `full`
-  emits nothing. Lists the visible tools and how to unlock more.
+  emits nothing. Explains hidden tiers and how to unlock more.
 - **MCP section** — `mcpSection(mcpAvailable, isIndexed)`: three variants
   (full semantic-nav guide / project-not-indexed fallbacks / native-only).
-- **session drive** — `sessionDriveSection`, emitted only when `ctx.sessionDrive`
-  (set from `!companyContext`). Introduces the single-session working-memory tools
-  (`save_note` / `list_notes` / `read_plan` / `recall_investigations`). Gated so
-  company subordinates, which don't have those tools, never see it.
-- **dynamic suffix** — `customTiersBlock(customTiers)` (external MCP groups),
+- **memory / vision sections** — `memorySection(ctx.sessionDrive)` and
+  `visionSection(ctx.modelCanSeeImages)` are injected into `base.txt`; gate them
+  in code, never by pasting single-session-only tool names into the shared body.
+- **session-fixed directives** — `languageSection`, `outputStyleSection`, and
+  `autonomousSection` render above the boundary when configured.
+- **dynamic suffix** — `toolCapBlock(toolCap)`, `customTiersBlock(customTiers)`,
   the `.mcp-indexer/hooks/system-prompt.js` project hook, and the repo map.
 
 Then for **company sessions** the master/subordinate block is appended (§4), and
@@ -168,11 +181,13 @@ lists or rationale in the prompt.
 | Prompt | File | Purpose | Lang | Contract? |
 | --- | --- | --- | --- | --- |
 | base body | `code-agent/src/prompts/base.txt` | Core coding-agent identity + tools | EN | No (carries `{{vars}}`) |
-| mode: explore/plan/build/admin/spec/builder | `code-agent/src/prompts/{explore,plan,build,admin,spec,builder}.txt` | Per-mode behavior & gates | EN | No |
+| mode: explore/plan/build/admin/spec/builder/api/diagram | `code-agent/src/prompts/{explore,plan,build,admin,spec,builder,api,diagram}.txt` | Per-mode behavior & gates | EN | No |
+| DS Studio / DS consumer | `code-agent/src/prompts/{ds-studio,ds-consumer}.txt` | Design-system workspace and linked-design-system Builder guidance | EN | No (carries `{{vars}}`) |
+| diagram guidance | `code-agent/src/prompts/diagram-guidance.ts` | Draw.io mxGraph authoring guide appended when the diagram tier is active | EN | No |
 | master recovery | `code-agent/src/prompts/master-recovery.txt` | Master crash-recovery briefing | EN | No |
 | provider preambles | `code-agent/src/core/system-prompt.ts` (`providerPreamble`) | Per-family steering | EN | No |
 | tier hint / MCP section | `code-agent/src/core/system-prompt.ts` | Visible tools + unlock guidance | EN | No |
-| session working memory | `code-agent/src/core/system-prompt.ts` (`sessionDriveSection`, gated on `ctx.sessionDrive`) | Surfaces `save_note`/`list_notes`/`read_plan`/`recall_investigations` in non-company sessions | EN | No |
+| memory / vision sections | `code-agent/src/core/system-prompt.ts` (`memorySection`, `visionSection`) | Surfaces session notes, durable memory, snapshots, and image-fallback guidance through `base.txt` placeholders | EN | No |
 | company master block | `company/src/system-prompts.ts` (`buildMasterCompanyBlock`) | Orchestration framing | EN | No |
 | company subordinate block | `company/src/system-prompts.ts` (`buildSubordinateCompanyBlock`) | Worker framing | EN | No |
 | builder instructions | `company/src/system-prompts.ts` (`buildBuilderInstructions`) | Container facts (service-bound subordinates) | EN | No |
@@ -204,16 +219,17 @@ naming a tool in a prompt, use the exact registered name (MCP tools keep the
 
 Canonical vocabulary the prompts share:
 
-- **Memory** — write `mcp__save_memory` (navigate), read `mcp__search_memory`
-  (bootstrap), categories `decision | convention | gotcha | architecture`.
-  Snapshots (`mcp__add_snapshot`, admin) are a *separate* concept.
-- **Session notes** — `save_note` / `list_notes` (bootstrap, single-session only)
-  capture working notes that survive compaction *within* this session; `read_plan`
-  re-reads the submitted plan; `recall_investigations` reuses prior sub-agent
-  findings. Distinct from project Memory above — session-local, not cross-session.
-- **Tasks** — `submit_tasks` → `execute_tasks` (call **once**; wave-based) →
-  inline tasks close with `task_complete`, then `execute_tasks` again. The
-  singular `execute_task` is **removed** — never reference it.
+- **Memory** — in single sessions, use `recall_memory` / `remember` / `forget_memory`;
+  company/no-Session-Drive contexts may expose the MCP forms `mcp__search_memory` /
+  `mcp__save_memory`. Snapshots (`mcp__add_snapshot`, admin) are a *separate* concept.
+- **Session notes** — `save_note` / `list_notes` (single-session only) capture
+  working notes that survive compaction *within* this session; `read_plan` re-reads
+  the submitted plan; `recall_investigations` reuses prior sub-agent findings.
+  Distinct from project Memory above — session-local, not cross-session.
+- **Tasks** — `task_list({gate:'approve'})` (legacy alias: `submit_tasks`) →
+  `execute_tasks` (call **once**; wave-based) → inline tasks close with
+  `task_complete`, then `execute_tasks` again. The singular `execute_task` is
+  **removed** — never reference it.
 - **Kanban** — current names only: `kanban_post_comment`,
   `kanban_update_objectives`, `kanban_read_my_card`, `kanban_move_to_review`
   (subordinate); `kanban_create_card`/`kanban_move_card`/… (master). The

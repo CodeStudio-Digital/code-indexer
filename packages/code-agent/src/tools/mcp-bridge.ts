@@ -13,20 +13,15 @@ import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 
 /**
  * Default `max_tokens` injected by the bridge for verbose MCP tools when the
- * model omits the parameter. Without these, tools like `get_project_context`
+ * model omits the parameter. Without these, tools like `get_project_overview`
  * return unbounded content (truncateToTokens in src/mcp/server.ts is a no-op
  * when max_tokens is undefined). Override with CODER_MCP_DEFAULT_MAX_TOKENS
  * (JSON object: {"tool_name": number}).
  */
 const DEFAULT_MAX_TOKENS_BUILTIN: Record<string, number> = {
   get_project_overview: 2000,
-  get_project_context: 3000,
   get_architecture: 1500,
-  get_project_stats: 1000,
-  list_snapshots: 2000,
   search_concepts: 1500,
-  get_context_for: 2500,
-  query_snapshots: 1500,
   search_memory: 1500,
 };
 

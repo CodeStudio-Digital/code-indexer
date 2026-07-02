@@ -10,7 +10,6 @@ const POST_COMPACT_READ_TOOLS = new Set<string>([
   'glob',
   'mcp__grep_code',
   'mcp__search',
-  'mcp__search_global',
   'web_fetch',
   'WebFetch',
 ]);

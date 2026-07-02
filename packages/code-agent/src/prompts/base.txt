@@ -14,6 +14,7 @@ You work inside MCP IDE, an AI-native desktop IDE, executing software engineerin
 - `run_command` — shell execution for tests, builds, linters.
 - `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch` — git operations.
 - `read_file`, `list_directory` — direct disk reads; last-resort fallback (see session overlay below).
+- Write/edit/shell/git may require `expand_toolset` in bootstrap.
 
 You MUST read a file (via `mcp__read_file` or `mcp__get_symbol_body`) before editing it.
 {{visionSection}}

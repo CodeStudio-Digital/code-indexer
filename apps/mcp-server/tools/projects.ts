@@ -6,32 +6,6 @@ import { buildRepoMap } from '@mcp/services/services/repo-map.js';
 import type { ProviderName } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
 
-const list_projects = defineTool({
-  name: 'list_projects',
-  description: 'List all indexed projects',
-  inputSchema: { type: 'object', properties: {} },
-  handler: (_args, { db }) => {
-    const projects = db.listProjects();
-    return projects
-      .map(p => `${p.name} (${p.root_path}) — ${p.file_count} files, last indexed: ${p.last_indexed ?? 'never'}`)
-      .join('\n') || 'No projects registered.';
-  },
-});
-
-const delete_project = defineTool({
-  name: 'delete_project',
-  description: 'Delete an indexed project',
-  inputSchema: {
-    type: 'object',
-    properties: { project_name: { type: 'string' } },
-    required: ['project_name'],
-  },
-  handler: withProject((args, { db }, project) => {
-    db.deleteProject(project.id);
-    return `Project "${project.name}" deleted.`;
-  }),
-});
-
 const index_project = defineTool({
   name: 'index_project',
   description: 'Index or re-index a project',
@@ -56,19 +30,6 @@ const index_project = defineTool({
     const result = await agent.indexProject(args.project_path as string, { force: args.force as boolean });
     return `Indexed ${result.indexedFiles} files (${result.skippedFiles} skipped, ${result.errorCount} errors) in ${(result.durationMs / 1000).toFixed(1)}s. Cost: $${result.costUsd.toFixed(4)}`;
   },
-});
-
-const get_project_stats = defineTool({
-  name: 'get_project_stats',
-  description: 'Get project statistics',
-  inputSchema: {
-    type: 'object',
-    properties: { project_name: { type: 'string' } },
-    required: ['project_name'],
-  },
-  handler: withProject((args, { db }, project) => {
-    return JSON.stringify(db.getStats(project.id), null, 2);
-  }),
 });
 
 const get_project_overview = defineTool({
@@ -238,10 +199,7 @@ const get_repo_map = defineTool({
 });
 
 export const projectTools: McpTool[] = [
-  list_projects,
-  delete_project,
   index_project,
-  get_project_stats,
   get_project_overview,
   get_project_pulse,
   get_repo_map,

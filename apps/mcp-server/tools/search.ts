@@ -91,42 +91,6 @@ const search = defineTool({
   }),
 });
 
-const search_global = defineTool({
-  name: 'search_global',
-  description: 'Search across all projects',
-  inputSchema: {
-    type: 'object',
-    properties: { query: { type: 'string' }, limit: { type: 'number' } },
-    required: ['query'],
-  },
-  handler: async (args, { db, hybridSearch }) => {
-    const projects = db.listProjects();
-    const allResults = [];
-    for (const p of projects) {
-      const results = await hybridSearch.search(p.id, p.name, args.query as string, { limit: (args.limit as number) ?? 10 });
-      allResults.push(...results.map(r => ({ ...r, projectName: p.name })));
-    }
-    allResults.sort((a, b) => b.score - a.score);
-    return allResults.slice(0, (args.limit as number) ?? 20).map(r => {
-      const d = r.data as unknown as Record<string, unknown>;
-      const pName = (r as unknown as { projectName: string }).projectName;
-      if (r.type === 'file') {
-        return [
-          `## [${pName}] [file] ${d.path} (score: ${r.score.toFixed(3)})`,
-          `Language: ${d.language} | Lines: ${d.line_count} | Complexity: ${d.complexity}`,
-          `Summary: ${d.summary ?? ''}`,
-        ].join('\n');
-      }
-      return [
-        `## [${pName}] [symbol] ${d.name} (${d.kind}) — score: ${r.score.toFixed(3)}`,
-        `File: ${d.file_path}:${d.line ?? '?'}`,
-        `Signature: ${d.signature ?? ''}`,
-        d.comment ? `Description: ${d.comment}` : '',
-      ].filter(Boolean).join('\n');
-    }).join('\n\n') || 'No results found.';
-  },
-});
-
 const search_concepts = defineTool({
   name: 'search_concepts',
   description: 'Find files by concept',
@@ -276,4 +240,4 @@ const grep_code = defineTool({
   }),
 });
 
-export const searchTools: McpTool[] = [search, search_global, search_concepts, search_by_kind, grep_code];
+export const searchTools: McpTool[] = [search, search_concepts, search_by_kind, grep_code];

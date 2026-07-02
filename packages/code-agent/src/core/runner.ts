@@ -1994,6 +1994,12 @@ export class CoderRunner extends EventEmitter {
     return runBehaviorTree({
       opts: this.opts,
       emit: ((event: string, ...args: unknown[]) => {
+        // Mirror the loop-local turn (RunContext.turn) into the public field
+        // (see the `turn` docstring) so Quality v2 turn-accounting
+        // (nudge/classify/backfill/dedup/holdout) isn't frozen at 0. Every
+        // `turn_start` flows through here for both the main runner and
+        // subagents, so this is the single point that keeps the mirror live.
+        if (event === 'turn_start' && typeof args[0] === 'number') this.turn = args[0];
         (this as unknown as { emit: (e: string, ...a: unknown[]) => boolean }).emit(event, ...args);
       }) as never,
       initialTiers,
@@ -2265,7 +2271,7 @@ export class CoderRunner extends EventEmitter {
         const hasNarrative = lastAssistantText.length > 0;
         const lastWorst = this.peekLastSessionWorstVerdict();
         const shouldClassify = shouldClassifyTurn({
-          turn: this.turn,
+          turn: input.turn,
           sessionId: this.sessionId,
           hasNarrativeText: hasNarrative,
           lastWorstVerdict: lastWorst,
@@ -2276,7 +2282,7 @@ export class CoderRunner extends EventEmitter {
           const snapshotSessionId = this.sessionId;
           const snapshotCompanySessionId = this.opts.companySessionId ?? null;
           const snapshotAgentRunId = this.opts.companyAgentRunId ?? null;
-          const snapshotTurn = this.turn;
+          const snapshotTurn = input.turn;
           const promise = new Promise<QualityResult | null>((resolve) => {
             setImmediate(() => {
               runGlobalQualityClassifiers({

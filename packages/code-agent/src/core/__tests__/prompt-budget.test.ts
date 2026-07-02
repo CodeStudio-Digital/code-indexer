@@ -81,8 +81,8 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Images & vision': 500,
   '# Session overlay (automatic freshness)': 730,
   '# Subagents (isolated delegation)': 1120,
-  '# Long-term memory': 620, // + memory-staleness caveat (G4)
-  '# Memory (session + project)': 1450, // + memory-staleness caveat (G4)
+  '# Memory': 1300, // company/no-Session-Drive long-term memory block
+  "# Memory (three distinct layers — don't conflate them)": 1900, // migration 181 memory overhaul
   '# Style': 290,
   // Session-fixed directives (only rendered when configured): language (G1),
   // output style (G8), unsupervised framing (G3).
@@ -107,7 +107,7 @@ const SECTION_BUDGETS: Record<string, number> = {
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
   default: 11500,   // zai · navigate · no plan · no agentId · loop v2 · drive (+ G4 memory-staleness caveat; ~10943 measured)
-  planMode: 16100,  // same + specialist plan.txt + ## Plan depth block + decision-gate guidance + Track G agent-loop additions (~15858 measured)
+  planMode: 16600,  // same + specialist plan.txt + ## Plan depth block + decision-gate guidance + memory overhaul (~16402 measured)
 };
 
 interface Composition {

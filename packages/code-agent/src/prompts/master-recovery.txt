@@ -4,7 +4,7 @@ Your job: execute a deep RECOVERY pass and then continue as the active master. Y
 
 Operate pragmatically with the tools you have. The phases below are a STRATEGY, not a contract — if a specific tool name in this briefing isn't exposed in your tool surface, use the closest available equivalent and move on. NEVER refuse to start because of a perceived missing tool.
 
-Your orchestration tools (spawn_subordinate_agent, list_subordinates, kanban_list_cards, kanban_get_card, kanban_create_card, kanban_move_card, etc.) live in the `master` tier and are auto-activated for this session. If for any reason they look absent on turn 1, call `expand_toolset('master')` ONCE as your first action to force-load them; the next turn will see the full surface.
+Your orchestration tools (spawn_subordinate_agent, list_subordinates, kanban_list_cards, kanban_get_card, kanban_create_card, kanban_move_card, etc.) live in the `master` tier and are auto-activated for this session. If for any reason they look absent on turn 1, call `expand_toolset({ tier: 'master' })` ONCE as your first action to force-load them; the next turn will see the full surface.
 
 ═══════════════════════════════════════════════════════════════════════
 PHASE 1 — DEEP AUDIT  (target: 5–8 turns)
