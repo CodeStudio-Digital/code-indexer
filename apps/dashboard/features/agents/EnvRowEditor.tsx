@@ -1,21 +1,27 @@
 /**
- * EnvRowEditor — single env var row: name, value (masked or plain), source /
- * secret badges, and edit + delete actions.
+ * EnvRowEditor — single env var row: name, value (masked or plain), scope /
+ * source / secret badges, per-row reveal, and edit + delete actions.
  *
  * Editing happens in EnvEditDialog (opened by the pencil icon), not inline.
- * Reused by EnvTab and DatabasesTab; the edit action targets
- * `PUT /api/company/sessions/:id/envs/:key`, so the Databases tab needs no
- * dedicated mutation path — connection-string edits flow through the same
- * endpoint as any other env var.
+ * Used by EnvTab; the edit action targets
+ * `PUT /api/company/sessions/:id/envs/:key`.
+ *
+ * Per-row reveal (D1): the eye fetches `?reveal=1&key=<key>` so ONLY this
+ * value is exposed (and audited server-side), instead of the tab-wide
+ * reveal toggle that plaintexts every secret at once.
  */
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { EnvEditDialog } from './EnvEditDialog.js';
+import type { EnvServiceOption } from './EnvScopeSelector.js';
 
 export type EnvSource = 'user' | 'imported' | 'auto' | 'agent';
+
+/** Sub-family of an `auto` row, derived from the key prefix in EnvTab. */
+export type EnvAutoKind = 'database' | 'sandbox' | 'auto';
 
 export interface EnvRow {
   key: string;
@@ -23,6 +29,8 @@ export interface EnvRow {
   is_secret: boolean;
   masked: boolean;
   source?: EnvSource;
+  /** CSV of service ids, or null/undefined = every service (D1). */
+  service_scope?: string | null;
   updated_at: string;
 }
 
@@ -46,7 +54,11 @@ export interface EnvRowEditorProps {
   onDelete?: () => void;
   /** When true, the row renders read-only (managed by the sandbox). */
   managed?: boolean;
-  /** Hide the delete button (used by DatabasesTab where envs are deleted with the DB). */
+  /** Sub-label for managed rows (database / sandbox / auto). */
+  autoKind?: EnvAutoKind;
+  /** Session services offered by the scope selector in the edit dialog. */
+  services?: EnvServiceOption[];
+  /** Hide the delete button (for callers whose envs are deleted through another flow). */
   hideDelete?: boolean;
 }
 
@@ -56,23 +68,62 @@ export function EnvRowEditor({
   onSaved,
   onDelete,
   managed = false,
+  autoKind = 'auto',
+  services = [],
   hideDelete = false,
 }: EnvRowEditorProps) {
   const { t } = useTranslation('agents');
   const [editOpen, setEditOpen] = useState(false);
+  // Per-row reveal: plaintext for THIS key only, fetched on demand.
+  const [shown, setShown] = useState<string | null>(null);
+
+  async function toggleReveal(): Promise<void> {
+    if (shown !== null) {
+      setShown(null);
+      return;
+    }
+    const r = await fetch(
+      `/api/company/sessions/${sessionId}/envs?reveal=1&key=${encodeURIComponent(row.key)}`,
+    );
+    if (!r.ok) return;
+    const body = (await r.json()) as { envs: EnvRow[] };
+    const match = body.envs?.find((e) => e.key === row.key);
+    if (match) setShown(match.value);
+  }
+
+  const scope = (row.service_scope ?? '').trim();
+  const scopeText = scope || t('env.scopeAll');
 
   return (
     <div className="flex items-center gap-2 p-2 text-xs">
       <span className="font-mono font-medium min-w-[160px] truncate">{row.key}</span>
       <span className="flex-1 font-mono text-muted-foreground truncate">
-        {row.masked ? '••••••••' : row.value || '(empty)'}
+        {shown ?? (row.masked ? '••••••••' : row.value || '(empty)')}
       </span>
+      {(scope || !managed) && (
+        <span
+          className="text-[9px] font-mono text-muted-foreground border rounded px-1 py-px max-w-[110px] truncate shrink-0"
+          title={t('env.scopeTitle', { scope: scopeText })}
+        >
+          {scopeText}
+        </span>
+      )}
+      {row.masked && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void toggleReveal()}
+          title={shown !== null ? t('env.hideValue') : t('env.revealValue')}
+        >
+          {shown !== null ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+        </Button>
+      )}
       {managed ? (
         <span
           className="text-[9px] uppercase text-muted-foreground tracking-wide"
           title="Auto-managed by the sandbox; regenerated when services change."
         >
-          auto
+          {t(`env.autoKind_${autoKind}`)}
         </span>
       ) : (
         <>
@@ -103,6 +154,7 @@ export function EnvRowEditor({
           <EnvEditDialog
             row={row}
             sessionId={sessionId}
+            services={services}
             open={editOpen}
             onOpenChange={setEditOpen}
             onSaved={onSaved}

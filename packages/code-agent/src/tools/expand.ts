@@ -36,7 +36,9 @@ export function buildExpandTools(
   // explicitly load orchestration tools — though the runner already
   // auto-activates it whenever `companyContext.isMaster === true`, so
   // most masters never need to call it themselves.
-  const coreExpandable = ['navigate', 'admin', 'master', 'preview', 'diagram'];
+  // 'db' is expandable (unlike 'api'/'preview' it has no agent/host flag that
+  // auto-activates it), so any session can reach the Databases-tab tools.
+  const coreExpandable = ['navigate', 'admin', 'master', 'preview', 'diagram', 'db'];
   const customNames = customTiers ? [...customTiers.keys()].sort() : [];
   const allTiers = [...coreExpandable, ...customNames];
 
@@ -65,7 +67,10 @@ export function buildExpandTools(
     'the running app (open the dev-server URL first). Auto-active for builder/dev-server projects.\n' +
     '- "diagram": author draw.io diagrams — diagram_create/update/read/list/export. Saves real ' +
     '.drawio files rendered in a live embedded editor. Unlock to draw architecture, flowcharts, ' +
-    'network/ER/sequence/C4. Auto-active for the `diagram` agent.';
+    'network/ER/sequence/C4. Auto-active for the `diagram` agent.\n' +
+    '- "db": operate the databases registered in the Databases tab — db_list, db_schema, ' +
+    'db_query (single SQL statement, read-only connections block writes) and db_command ' +
+    '(MongoDB/Redis). Unlock when the task needs to inspect or change data in a registered database.';
 
   if (customTiers && customTiers.size > 0) {
     description += '\n\nExternal tool groups (on-demand):';

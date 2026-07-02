@@ -93,6 +93,95 @@ export async function restartDevServer(
   sb.lastAccessAt = Date.now();
   deps.appendLog(sb, 'info', 'Dev server restarted.');
   deps.emit({ kind: 'ready', sandboxId: sb.id, previewUrl: sb.previewUrl });
+  deps.emit({ kind: 'service_restarted', sandboxId: sessionId, serviceId: 'main' });
+}
+
+// ─── restartDevServerForService ─────────────────────────────────
+
+/** Why a per-service restart was refused. Carried on `ServiceRestartError`
+ *  so HTTP routes / the ServiceSupervisor can map refusals to precise
+ *  responses instead of regexing error messages. */
+export type ServiceRestartErrorCode =
+  | 'not_running'
+  | 'runtime_paused'
+  | 'attached'
+  | 'project_dockerfile';
+
+export class ServiceRestartError extends Error {
+  constructor(
+    readonly code: ServiceRestartErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ServiceRestartError';
+  }
+}
+
+/**
+ * Kill the dev-server of a SECONDARY service container and relaunch it,
+ * container preserved. Scaffolded stacks reuse `relaunchDevServer`;
+ * external Node projects reuse `startExternalNodeDevServer` (the same
+ * path resume/start use). Refusals throw a typed `ServiceRestartError`:
+ *   - attached            → lifecycle belongs to the host (podman restart)
+ *   - project_dockerfile  → image CMD/ENTRYPOINT owns the process; use Retry
+ */
+export async function restartDevServerForService(
+  sessionId: string,
+  serviceId: string,
+  deps: DevLifecycleDeps,
+): Promise<void> {
+  const sb = deps.registry.getService(sessionId, serviceId);
+  if (!sb || !sb.containerId) {
+    throw new ServiceRestartError('not_running', `service '${serviceId}' not running`);
+  }
+  if (sb.runtimePaused) {
+    throw new ServiceRestartError('runtime_paused', `service '${serviceId}' is runtime-paused`);
+  }
+  if (sb.attached) {
+    throw new ServiceRestartError(
+      'attached',
+      'This service is an externally-managed container — restart it from your host (podman restart). Use Refresh to update its status.',
+    );
+  }
+  if (sb.imageSource === 'project_dockerfile') {
+    throw new ServiceRestartError(
+      'project_dockerfile',
+      'Project Dockerfile containers use their image CMD/ENTRYPOINT; use Retry to rebuild/recreate.',
+    );
+  }
+  const driver = await deps.resolveDriverOnce();
+
+  deps.appendLog(sb, 'info', 'Restart requested — killing dev-server and relaunching…');
+  // `pkill` exits non-zero when nothing matches; tolerated.
+  await driver.exec(sb.containerId, `pkill -f 'wrangler|vite|node' 2>/dev/null || true`, {
+    cwd: undefined,
+    timeoutMs: 5_000,
+  });
+
+  deps.recordStep(sb, 'starting-dev-server', 'Relaunching dev server…');
+  if (sb.mountKind === 'external') {
+    if (!sb.hostWorkdirMount) {
+      throw new Error(`External Node service '${serviceId}' is missing its host project root.`);
+    }
+    const spec = resolveExternalNodeDevSpec(
+      sb.hostWorkdirMount,
+      sb.stack as SandboxStack,
+      sb.containerPort,
+      deps.devServerPort,
+    );
+    await startExternalNodeDevServer(driver, sb, spec, deps.externalNodeRuntimeDeps);
+  } else {
+    await relaunchDevServer(driver, sb.containerId, sb.workdir, sb.stack, deps.devServerPort);
+  }
+
+  sb.status = 'ready';
+  sb.step = 'ready';
+  sb.error = undefined;
+  sb.lastAccessAt = Date.now();
+  deps.appendLog(sb, 'info', 'Dev server restarted.');
+  deps.persistService(sessionId, serviceId, serviceId, sb, 'running');
+  deps.emit({ kind: 'ready', sandboxId: sb.id, previewUrl: sb.previewUrl });
+  deps.emit({ kind: 'service_restarted', sandboxId: sessionId, serviceId });
 }
 
 // ─── recoverDevServer ───────────────────────────────────────────

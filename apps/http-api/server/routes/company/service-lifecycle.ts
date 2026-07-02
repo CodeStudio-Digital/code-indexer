@@ -17,7 +17,9 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
+import { ServiceRestartError } from '@mcp/services/sandbox/manager/dev-lifecycle.js';
 import { parseIdParam, notFound } from '../_helpers.js';
+import { recordOperatorTransition } from './service-transition-log.js';
 
 /**
  * Reject lifecycle calls (start/pause/unpause/restart/retry) on
@@ -54,6 +56,7 @@ export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps):
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
     try {
       const sb = await getSandboxManager().pauseRuntimeContainer(String(id), serviceId);
+      recordOperatorTransition(deps, id, serviceId, 'paused', 'pause route');
       return c.json({
         ok: true,
         service_id: serviceId,
@@ -83,6 +86,7 @@ export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps):
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
     try {
       const sb = await getSandboxManager().unpauseRuntimeContainer(String(id), serviceId);
+      recordOperatorTransition(deps, id, serviceId, 'running', 'unpause route');
       return c.json({
         ok: true,
         service_id: serviceId,
@@ -157,70 +161,27 @@ export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps):
   });
 
   // Restart dev-server inside a service container — kills the node/
-  // wrangler process and relaunches with the scaffolder's original
-  // command. Used when the dev server died but the container stayed.
+  // wrangler process and relaunches. Used when the dev server died but
+  // the container stayed. Delegates to `SandboxManager.restartService`
+  // (B2) so the kill+relaunch synthesis lives in ONE place — the manager
+  // reuses the scaffolder/external-node relaunch paths instead of the
+  // hardcoded command this route used to synthesize inline.
   app.post('/api/company/sessions/:id/services/:serviceId/restart-dev', async (c) => {
     const id = parseIdParam(c);
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
     const blocked = rejectIfAttached(deps, id, serviceId);
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
-    const svc = getSandboxManager().getService(String(id), serviceId);
-    if (!svc || !svc.containerId) {
-      return c.json({ error: `service '${serviceId}' not running` }, 404);
+    try {
+      await getSandboxManager().restartService(String(id), serviceId);
+      recordOperatorTransition(deps, id, serviceId, 'restarted', 'restart-dev route');
+      return c.json({ ok: true });
+    } catch (e) {
+      if (e instanceof ServiceRestartError) {
+        return c.json({ error: e.message }, e.code === 'not_running' ? 404 : 409);
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      return c.json({ error: `failed to relaunch dev-server: ${message}` }, 500);
     }
-    if (svc.runtimePaused) {
-      return c.json({ error: `service '${serviceId}' is runtime-paused` }, 409);
-    }
-    if (svc.mountKind === 'external') {
-      return c.json(
-        {
-          error:
-            'External project containers should be recreated with Retry so package.json/Dockerfile metadata is re-read.',
-        },
-        409,
-      );
-    }
-    if (svc.imageSource === 'project_dockerfile') {
-      return c.json(
-        {
-          error:
-            'Project Dockerfile containers use their image CMD/ENTRYPOINT; use Retry to rebuild/recreate.',
-        },
-        409,
-      );
-    }
-    const { resolveDriver } = await import('@mcp/services/sandbox/index.js');
-    const driver = await resolveDriver();
-
-    // Kill anything bound to the dev port / likely dev-server process.
-    await driver.exec(
-      svc.containerId,
-      `pkill -f 'wrangler|vite|node' 2>/dev/null || true`,
-      { cwd: undefined, timeoutMs: 5_000 },
-    );
-
-    // Relaunch the command by stack. Kept in the route rather than
-    // the manager to avoid duplicating scaffolder-internal knowledge
-    // in too many places for this recovery-only path.
-    let cmd: string;
-    if (svc.stack === 'cf-worker') {
-      cmd =
-        `nohup npx wrangler dev --ip 0.0.0.0 --port 5173 --local ` +
-        `--show-interactive-dev-session=false > /tmp/dev-server.log 2>&1 &`;
-    } else {
-      cmd = `nohup npm run dev -- --host 0.0.0.0 --port 5173 > /tmp/dev-server.log 2>&1 &`;
-    }
-    const spawnRes = await driver.exec(svc.containerId, cmd, {
-      cwd: svc.workdir,
-      timeoutMs: 10_000,
-    });
-    if (spawnRes.exitCode !== 0) {
-      return c.json(
-        { error: `failed to relaunch dev-server: ${spawnRes.stderr || spawnRes.stdout}` },
-        500,
-      );
-    }
-    return c.json({ ok: true });
   });
 }

@@ -30,6 +30,12 @@ import {
   restoreQaWorkspace,
   type WorkspaceRestoreReport,
 } from '@mcp/services/qa/workspace-restore.js';
+import {
+  validateQaRunConfig,
+  type QaConfigValidation,
+} from '@mcp/services/qa/config-validator.js';
+import { resolvePlanGate, roleHasQaPlaywrightSkill } from './qa-plan-gate.js';
+import { preflightBrowser } from './qa-preflight.js';
 
 // Re-export for back-compat with existing tests / external callers.
 export type { WorkspaceRestoreReport };
@@ -177,6 +183,19 @@ export function normaliseServiceId(raw: unknown): string {
   return trimmed;
 }
 
+/**
+ * Pure: render the config-invalid refusal (B7). No row exists at this
+ * point, so the `error_class` rides the message for the agent/operator.
+ */
+export function formatConfigRefusal(v: QaConfigValidation): string {
+  const lines = [
+    'qa_start_run refused (error_class=config_invalid): playwright.config.ts breaks the QA contract:',
+    ...v.problems.map((p) => `  • ${p}`),
+  ];
+  if (v.suggestion) lines.push(`Suggestion: ${v.suggestion}`);
+  return lines.join('\n');
+}
+
 export function qaStartRun(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
@@ -185,7 +204,7 @@ export function qaStartRun(
   return {
     name: 'qa_start_run',
     description:
-      'Create a QA test run record and obtain the env vars (PLAYWRIGHT_QA_RUN_ID, PLAYWRIGHT_QA_ENDPOINT) the bundled Playwright reporter needs. Call this BEFORE `npx playwright test`.',
+      'Create a QA test run record and obtain the env vars (PLAYWRIGHT_QA_RUN_ID, PLAYWRIGHT_QA_ENDPOINT) the bundled Playwright reporter needs. Call this BEFORE `npx playwright test`. QA subordinates must have an APPROVED plan first (submit_plan_to_master) — the tool refuses otherwise.',
     parameters: PARAMETERS,
     source: 'native',
     handler: async (args) => {
@@ -202,6 +221,39 @@ export function qaStartRun(
         const sessionId = orchestrator.companySessionId;
         const kanban_feature_card_id = normaliseFeatureCardId(args.kanban_feature_card_id);
 
+        // ── B7 gate 1: approved plan (enforcement, no new tool) ──
+        const isQaSubordinate =
+          agentRunId != null &&
+          roleHasQaPlaywrightSkill(orchestrator.getSessionConfigJson(), agentRole);
+        const gate = resolvePlanGate({
+          requirePlanEnv: process.env.MCP_QA_REQUIRE_PLAN,
+          isQaSubordinate,
+          approval: agentRunId != null ? orchestrator.hasApprovedPlan(agentRunId) : null,
+        });
+        if (!gate.allowed) return err(gate.reason);
+
+        const manager = getSandboxManager();
+
+        // ── B7 gate 2: config contract (refuse BEFORE creating a row) ──
+        // A missing/unreadable config is NOT a refusal — fresh scaffolds
+        // are healed by restoreQaWorkspace below.
+        let configContent: string | null = null;
+        try {
+          configContent = await manager.readWorkspaceFile(String(sessionId), 'playwright.config.ts');
+        } catch {
+          configContent = null;
+        }
+        if (configContent) {
+          const verdict = validateQaRunConfig(configContent);
+          if (!verdict.ok) return err(formatConfigRefusal(verdict));
+        }
+
+        // ── B7 gate 3: browser preflight (retry + breaker; no orphan row) ──
+        const preflight = await preflightBrowser({ sessionId });
+        if (!preflight.ok) {
+          return err(`qa_start_run refused (error_class=sidecar_down): ${preflight.message}`);
+        }
+
         const run = store.startRun({
           company_session_id: sessionId,
           agent_run_id: agentRunId,
@@ -209,8 +261,8 @@ export function qaStartRun(
           trigger,
           service_id,
           kanban_feature_card_id,
+          plan_gate: gate.plan_gate,
         });
-        void agentRole; // reserved for future per-role audit; silences unused-var lint
 
         const { base, fallback } = resolveEndpointBase(process.env, getResolvedRuntime());
         const endpoint = `${base}${buildEndpointPath(sessionId)}`;
@@ -218,7 +270,7 @@ export function qaStartRun(
         // ── v4.4: prepare the workspace so the reporter Just Works ──
         // Delegated to `restoreQaWorkspace` — same helper backs the
         // operator's "Restore QA config" button on Tab Testes.
-        const restoreReport = await restoreQaWorkspace(getSandboxManager(), {
+        const restoreReport = await restoreQaWorkspace(manager, {
           sessionId,
           runConfig: { runId: run.id, endpoint },
         });

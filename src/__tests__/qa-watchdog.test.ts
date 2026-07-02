@@ -21,6 +21,22 @@ function seedSession(id: number): void {
     .run(id, `s${id}`);
 }
 
+/** B7 — rewind started_at so age-based assertions don't need real sleeps. */
+function backdateStartedAt(runId: number, minutes: number): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (db as any).db
+    .prepare(`UPDATE qa_test_runs SET started_at = datetime('now', ?) WHERE id = ?`)
+    .run(`-${minutes} minutes`, runId);
+}
+
+/** B7 — rewind last_event_at (simulates a reporter that went silent). */
+function backdateLastEventAt(runId: number, minutes: number): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (db as any).db
+    .prepare(`UPDATE qa_test_runs SET last_event_at = datetime('now', ?) WHERE id = ?`)
+    .run(`-${minutes} minutes`, runId);
+}
+
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), 'qa-watchdog-'));
   db = new CodeIndexDB(join(tmp, 'idx.db'));
@@ -103,6 +119,56 @@ describe('findStaleRunningRuns', () => {
     // Just-started row should NOT be considered stale at 60 s.
     expect(runStore.findStaleRunningRuns(60_000)).toHaveLength(0);
   });
+
+  // ─── B7: adaptive age — progress via last_event_at resets the clock ──
+
+  it('B7: an old run with recent reporter progress (last_event_at) is NOT stale', () => {
+    seedSession(9);
+    const run = runStore.startRun({
+      company_session_id: 9,
+      agent_run_id: null,
+      suite: 'slow-suite',
+      trigger: 'agent',
+      service_id: 'main',
+    });
+    backdateStartedAt(run.id, 20); // started 20 min ago
+    // Without progress: stale at the 10-min threshold.
+    expect(runStore.findStaleRunningRuns(10 * 60_000)).toHaveLength(1);
+    // Reporter event arrives → clock resets, run is healthy again.
+    runStore.touchLastEvent(run.id);
+    expect(runStore.findStaleRunningRuns(10 * 60_000)).toHaveLength(0);
+  });
+
+  it('B7: stale progress (old last_event_at) does not shield the run', () => {
+    seedSession(10);
+    const run = runStore.startRun({
+      company_session_id: 10,
+      agent_run_id: null,
+      suite: 'silent',
+      trigger: 'agent',
+      service_id: 'main',
+    });
+    backdateStartedAt(run.id, 30);
+    runStore.touchLastEvent(run.id);
+    backdateLastEventAt(run.id, 15); // last progress 15 min ago
+    expect(runStore.findStaleRunningRuns(10 * 60_000)).toHaveLength(1);
+  });
+
+  it('B7: touchLastEvent is a no-op once the run left running', () => {
+    seedSession(11);
+    const run = runStore.startRun({
+      company_session_id: 11,
+      agent_run_id: null,
+      suite: 'done',
+      trigger: 'agent',
+      service_id: 'main',
+    });
+    runStore.completeRun(run.id, {
+      status: 'completed', passed: 1, failed: 0, skipped: 0, duration_ms: 10,
+    });
+    runStore.touchLastEvent(run.id);
+    expect(runStore.getRun(run.id)?.last_event_at).toBeNull();
+  });
 });
 
 describe('runWatchdogTick', () => {
@@ -126,6 +192,9 @@ describe('runWatchdogTick', () => {
     expect(killed).toBe(2);
     expect(runStore.getRun(r1.id)?.status).toBe('error');
     expect(runStore.getRun(r2.id)?.status).toBe('error');
+    // B7 — machine-readable class (migration 189) alongside the legacy message.
+    expect(runStore.getRun(r1.id)?.error_class).toBe('orphan');
+    expect(runStore.getRun(r1.id)?.last_error).toBe(QA_WATCHDOG_ERROR_MESSAGE);
   });
 
   it('skips healthy runs (with results)', () => {

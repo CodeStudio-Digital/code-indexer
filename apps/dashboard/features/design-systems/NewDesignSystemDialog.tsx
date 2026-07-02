@@ -13,7 +13,7 @@ import { Loader2, Upload, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import type { DsStack } from './design-system-api.js';
-import { createDsStudio } from './studio/studio-api.js';
+import { createDsStudio, type DsStudioMode } from './studio/studio-api.js';
 
 interface Props {
   onClose: () => void;
@@ -35,7 +35,8 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
   const [stack, setStack] = useState<DsStack>('react-ts');
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
-  const [zip, setZip] = useState<File | null>(null);
+  const [zip, setZipState] = useState<File | null>(null);
+  const [mode, setMode] = useState<DsStudioMode>('creative');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phaseLabel, setPhaseLabel] = useState<string | null>(null);
@@ -65,6 +66,13 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
     setModel(getDefaultModel(next));
   }
 
+  /** Zip anexado → fidelidade vira o default; removido → fidelidade é inválida. */
+  function setZip(file: File | null) {
+    setZipState(file);
+    if (file) setMode('fidelity');
+    else setMode('creative');
+  }
+
   const valid =
     name.trim() !== '' && packageName.trim() !== '' && provider.trim() !== '' && model.trim() !== '';
 
@@ -76,7 +84,7 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
     setPhaseLabel(t('studio.dialogStarting'));
     try {
       const created = await createDsStudio(
-        { name: name.trim(), packageName: packageName.trim(), stack, provider, model, zip },
+        { name: name.trim(), packageName: packageName.trim(), stack, provider, model, mode, zip },
         {
           onPhase: (_phase, label) => setPhaseLabel(label),
           onLog: (_stream, chunk) => setLogTail((prev) => (prev + chunk).slice(-4000)),
@@ -212,6 +220,33 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
                 </div>
               )}
             </label>
+          </Field>
+
+          <Field label={t('mode.label')}>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => zip && setMode('fidelity')}
+                disabled={busy || !zip}
+                className={`rounded border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                  mode === 'fidelity' ? 'border-primary bg-primary/5 text-primary' : 'hover:border-muted-foreground/40'
+                }`}
+              >
+                <div className="font-medium">{t('mode.fidelity')}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {zip ? t('mode.fidelityHint') : t('mode.fidelityNeedsZip')}
+                </div>
+              </button>
+              <button
+                onClick={() => setMode('creative')}
+                disabled={busy}
+                className={`rounded border px-3 py-2 text-left text-sm ${
+                  mode === 'creative' ? 'border-primary bg-primary/5 text-primary' : 'hover:border-muted-foreground/40'
+                }`}
+              >
+                <div className="font-medium">{t('mode.creative')}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{t('mode.creativeHint')}</div>
+              </button>
+            </div>
           </Field>
 
           {busy && phaseLabel && (

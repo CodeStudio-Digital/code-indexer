@@ -268,7 +268,8 @@ export async function provisionAdditionalService(
       }
     }
 
-    const sharedEnvs = resolveSessionEnvs(deps.envStore, req.sessionId);
+    // Scope-enforced (D1): vars bound to other services stay out of this one.
+    const sharedEnvs = resolveSessionEnvs(deps.envStore, req.sessionId, req.serviceId);
     const image = imageSource === 'project_dockerfile' ? builtImageTag! : deps.nodeImage;
     if (imageSource === 'project_dockerfile') {
       deps.recordStep(seed, 'creating-container', 'Building image from Dockerfile…');
@@ -369,6 +370,8 @@ export async function provisionAdditionalService(
     seed.lastAccessAt = Date.now();
     deps.persistService(req.sessionId, req.serviceId, req.name ?? req.serviceId, seed, 'running');
     deps.emit({ kind: 'ready', sandboxId: serviceSandboxId, previewUrl });
+    // Session-keyed sibling of `ready` (company B2) — see SandboxEvent union.
+    deps.emit({ kind: 'service_provisioned', sandboxId: req.sessionId, serviceId: req.serviceId });
     deps.syncManagedEnvs(req.sessionId);
     void deps.syncEnvsToAllContainers(req.sessionId).catch(() => void 0);
     return seed;

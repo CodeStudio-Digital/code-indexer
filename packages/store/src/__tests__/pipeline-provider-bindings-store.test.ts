@@ -293,3 +293,35 @@ describe('PipelineProviderBindingsStore.bulkApplyProfile', () => {
     expect(ids[0]).toBeLessThan(ids[1]);
   });
 });
+
+describe('PipelineProviderBindingsStore.findAllActiveAtScope (failover chain)', () => {
+  let h: Handle;
+  beforeEach(() => { h = setup(); });
+  afterEach(() => teardown(h));
+
+  it('returns EVERY enabled binding at the scope, priority DESC then id ASC', () => {
+    // Two global bindings for the same pipeline+role, different providers/priority.
+    h.store.upsert({ pipeline_name: 'quality_code', binding_role: 'classifier', provider_id: 'p1', model_id: 'm1', scope_type: 'global', priority: 0 });
+    h.store.upsert({ pipeline_name: 'quality_code', binding_role: 'classifier', provider_id: 'p2', model_id: 'm2', scope_type: 'global', priority: 5 });
+    const all = h.store.findAllActiveAtScope({ pipelineName: 'quality_code', bindingRole: 'classifier', scopeType: 'global', scopeId: null });
+    expect(all.map((b) => b.provider_id)).toEqual(['p2', 'p1']); // priority 5 first
+    // findActiveAtScope stays LIMIT 1 — the single best binding.
+    expect(h.store.findActiveAtScope({ pipelineName: 'quality_code', bindingRole: 'classifier', scopeType: 'global', scopeId: null })?.provider_id).toBe('p2');
+  });
+
+  it('excludes disabled bindings from the chain', () => {
+    const id1 = h.store.upsert({ pipeline_name: 'quality_code', binding_role: 'classifier', provider_id: 'p1', model_id: 'm1', scope_type: 'global', priority: 9 });
+    h.store.upsert({ pipeline_name: 'quality_code', binding_role: 'classifier', provider_id: 'p2', model_id: 'm2', scope_type: 'global', priority: 1 });
+    h.store.setEnabled(id1, false);
+    const all = h.store.findAllActiveAtScope({ pipelineName: 'quality_code', bindingRole: 'classifier', scopeType: 'global', scopeId: null });
+    expect(all.map((b) => b.provider_id)).toEqual(['p2']);
+  });
+
+  it('is scope-isolated — only returns rows at the requested scope', () => {
+    seedMixedScope(h.store);
+    const global = h.store.findAllActiveAtScope({ pipelineName: 'quality_off_topic', bindingRole: 'classifier', scopeType: 'global', scopeId: null });
+    expect(global.map((b) => b.provider_id)).toEqual(['p1']);
+    const session = h.store.findAllActiveAtScope({ pipelineName: 'quality_off_topic', bindingRole: 'classifier', scopeType: 'session', scopeId: 42 });
+    expect(session.map((b) => b.provider_id)).toEqual(['p3']);
+  });
+});

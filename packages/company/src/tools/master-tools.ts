@@ -10,6 +10,8 @@ import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { buildPipelineMasterTools } from '@mcp/company/tools/pipeline-tools.js';
 import { buildReviewSubordinateTool, type MasterReviewDeps } from '@mcp/company/tools/review-subordinate.js';
+import { approveSubordinatePlansTool } from '@mcp/company/tools/approve-subordinates-batch.js';
+import { kanbanPlanGraphTool } from '@mcp/company/tools/kanban-plan-graph.js';
 import { resolveAgentRunId } from '@mcp/company/tools/path-resolution.js';
 import { runAgentWaitLoop } from '@mcp/company/tools/agent-wait-loop.js';
 import { observeOutcome } from '@mcp/services/shadow-traffic/index.js';
@@ -35,6 +37,8 @@ export function buildMasterTools(
     waitForSubordinates(orchestrator),
     resumeSubordinate(orchestrator),
     approveSubordinatePlan(orchestrator),
+    // C4 — batch companion: resolve N pending plans in one master turn.
+    approveSubordinatePlansTool(orchestrator),
     answerSubordinateQuestion(orchestrator),
     approveSubordinateTasks(orchestrator),
     abortSubordinateAgent(orchestrator),
@@ -47,6 +51,8 @@ export function buildMasterTools(
     respondToInbox(orchestrator),
     recommendRole(orchestrator),
     broadcastToRoles(orchestrator),
+    // C4 — plan a whole card DAG (deps + role hints) in one call.
+    kanbanPlanGraphTool(orchestrator),
     // review_subordinate_work — only wired when the host supplies db access
     // (runCoder does; the lightweight tool unit tests don't, and don't need it).
     ...(reviewDeps ? [buildReviewSubordinateTool(orchestrator, reviewDeps)] : []),

@@ -23,6 +23,9 @@ import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
 import { writeSourceInventory } from '@mcp/design-system/source-inventory.js';
+import { writeThemeDigest } from '@mcp/design-system/theme-digest/theme-digest.js';
+import { currentStage, parsePipelineState } from '@mcp/design-system/pipeline/stages.js';
+import { roadmapProgress } from '@mcp/design-system/pipeline/roadmap.js';
 import type { DesignSystemSession, DsBumpHint } from '@mcp/store/design-system-store.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import { runNpm } from '@mcp/design-system/run-npm.js';
@@ -106,6 +109,25 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     return c.json({ sessions: sessions.map(enrich) });
   });
 
+  /** View da máquina de etapas p/ a UI: progresso do roadmap DERIVADO em leitura. */
+  function pipelineView(session: DesignSystemSession) {
+    const state = parsePipelineState(session.pipeline_json);
+    if (!state) return null;
+    const recorded: string[] = [];
+    const published = designSystemStore.getLatestPublishedVersion(session.id);
+    if (published) for (const comp of designSystemStore.listComponents(published.id)) recorded.push(comp.name);
+    const draft = designSystemStore.getLatestVersionAny(session.id);
+    if (draft && (draft.status === 'draft' || draft.status === 'building')) {
+      for (const comp of designSystemStore.listComponents(draft.id)) recorded.push(comp.name);
+    }
+    return {
+      stages: state.stages,
+      current_stage: currentStage(state)?.id ?? null,
+      roadmap: roadmapProgress(state.roadmap, recorded),
+      theme_digest: state.theme_digest,
+    };
+  }
+
   app.get('/api/design-system/sessions/:id', (c) => {
     const id = parseIdParam(c);
     const session = designSystemStore.getSession(id);
@@ -121,6 +143,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       company_session_status: enriched.company_session_status,
       builder_port: enriched.builder_port,
       project: enriched.project,
+      pipeline: pipelineView(session),
     });
   });
 
@@ -220,9 +243,19 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       return c.json({ error: 'Zip extracted to 0 files — empty or all entries unsafe.' }, 400);
     }
     let inventoryStats = null;
-    if (dsSession.kind !== 'studio') {
-      // Legacy pipeline consumed a deterministic source inventory. Studio
-      // skips it — the agent reads import/ directly, guided by the user.
+    let digest: Awaited<ReturnType<typeof writeThemeDigest>> | null = null;
+    let digestError: string | null = null;
+    if (dsSession.kind === 'studio') {
+      // Studio: regenerate the deterministic theme digest the agent reads
+      // in the Análise stage (import/_analysis/). Non-fatal: extraction
+      // succeeded, and the digest is regenerable via this same route.
+      try {
+        digest = await writeThemeDigest(targetDir);
+      } catch (e) {
+        digestError = (e as Error).message;
+      }
+    } else {
+      // Legacy pipeline consumed a deterministic source inventory.
       try {
         const inventory = await writeSourceInventory(
           targetDir,
@@ -250,6 +283,8 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
         skipped: stats.skipped,
       },
       inventory: inventoryStats,
+      digest,
+      digest_error: digestError,
       zip_replaced: zipPathToUse !== dsSession.source_zip_path,
     });
   });

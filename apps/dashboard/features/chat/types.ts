@@ -201,6 +201,14 @@ export interface ToolResultFallback {
   _originalLength?: number;
 }
 
+export interface ToolResultView {
+  content: string;
+  isError: boolean;
+  image?: { mediaType: string; base64: string };
+  truncated?: boolean;
+  originalLength?: number;
+}
+
 export interface SessionData {
   session: CoderSession;
   messages: PersistedMessage[];

@@ -114,6 +114,12 @@ export interface SubordinateLifecycleDeps {
    * via `setOnSubordinateIdle`.
    */
   onSubordinateIdle?: (agentRunId: number, role: string) => void;
+  /**
+   * C2 — per-session autonomy config provider, forwarded to `spawnSubordinate`
+   * as the source of the global-budget cap (`maxSubordinates`, default 8).
+   * Optional: fixtures without it fall back to env+defaults inside spawn.
+   */
+  autonomy?: Pick<import('@mcp/company/services/autonomy/autonomy-provider.js').AutonomyProvider, 'get'>;
 }
 
 export class SubordinateLifecycle implements ISubordinateQuery {
@@ -279,6 +285,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       },
       completionDeps: this.completionDeps,
       listRunning: () => this.list().map((s) => ({ agentRunId: s.agentRunId, role: s.role })),
+      autonomy: this.deps.autonomy,
     };
   }
 

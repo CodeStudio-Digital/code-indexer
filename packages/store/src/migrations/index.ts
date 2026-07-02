@@ -200,6 +200,12 @@ import { agentInboxThreading184 } from './184_agent_inbox_threading.js';
 import { memoryDistillDiagnostics185 } from './185_memory_distill_diagnostics.js';
 import { coderToolCallsErrorClass186 } from './186_coder_tool_calls_error_class.js';
 import { symbolsNamespace187 } from './187_symbols_namespace.js';
+import { serviceHealthTransitionsLogs188 } from './188_service_health_transitions_logs.js';
+import { qaRunProgressAndErrorClass189 } from './189_qa_run_progress_and_error_class.js';
+import { dsPipeline190 } from './190_ds_pipeline.js';
+import { retireCompanySessionDatabases191 } from './191_retire_company_session_databases.js';
+import { companySessionEnvScope192 } from './192_company_session_env_scope.js';
+import { projectIndexIgnorePatterns193 } from './193_project_index_ignore_patterns.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -416,6 +422,12 @@ export const MIGRATIONS: Migration[] = [
   memoryDistillDiagnostics185,
   coderToolCallsErrorClass186,
   symbolsNamespace187,
+  serviceHealthTransitionsLogs188,
+  qaRunProgressAndErrorClass189,
+  dsPipeline190,
+  retireCompanySessionDatabases191,
+  companySessionEnvScope192,
+  projectIndexIgnorePatterns193,
 ];
 
 /**

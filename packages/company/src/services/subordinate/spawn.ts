@@ -52,6 +52,9 @@ import {
 import {
   resolveBindingForProject,
 } from '@mcp/company/services/subordinate/binding.js';
+import { resolveAutonomy } from '@mcp/company/services/autonomy/autonomy-config.js';
+import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-provider.js';
+import { checkGlobalSubordinateBudget } from '@mcp/company/services/subordinate/global-budget.js';
 import {
   attachSubordinateCompletionHandler,
   type SubordinateCompletionDeps,
@@ -88,6 +91,12 @@ export interface SpawnSubordinateDeps {
   completionDeps: SubordinateCompletionDeps;
   /** Helper to compose the `running` list in concurrency-error messages. */
   listRunning: () => Array<{ agentRunId: number; role: string }>;
+  /**
+   * C2 — per-session autonomy config; source of the global-budget cap
+   * (`maxSubordinates`, default 8). Optional: callers/tests without it
+   * fall back to `resolveAutonomy(null, process.env)` — never crash.
+   */
+  autonomy?: Pick<AutonomyProvider, 'get'>;
 }
 
 interface SpawnResult {
@@ -141,21 +150,21 @@ export async function spawnSubordinate(
     );
   }
 
-  // Global spawn budget (Phase 5 homeostasis). Coarse cross-session backstop so
-  // N sessions don't collectively exhaust the machine / trip provider rate
-  // limits. Reads the shared SQLite directly (every worker shares the file) — no
-  // coordinator, no leak. Opt-in via MCP_COMPANY_GLOBAL_MAX_SUBORDINATES.
-  const globalCapRaw = Number(process.env.MCP_COMPANY_GLOBAL_MAX_SUBORDINATES);
-  if (Number.isFinite(globalCapRaw) && globalCapRaw > 0) {
-    const globalActive = ctx.companyStore.countActiveSubordinatesGlobal();
-    if (globalActive >= globalCapRaw) {
-      throw new Error(
-        `spawnSubordinate refused: global subordinate budget reached ` +
-          `(${globalActive}/${globalCapRaw} active across all company sessions). ` +
-          `Wait for another session's agents to finish before spawning more.`,
-      );
-    }
-  }
+  // Global spawn budget (Phase 5 homeostasis; C2 — default ON, cap 8). Coarse
+  // cross-session backstop so N sessions don't collectively exhaust the
+  // machine / trip provider rate limits. The COUNT is global (shared SQLite —
+  // every worker reads the same file) but the CAP comes from THIS session's
+  // autonomy config: each spawn checks the global count against its OWN
+  // session's cap (session `maxSubordinates` > env > default 8; env '0' =
+  // uncapped — see global-budget.ts for the full semantics).
+  const autonomyCfg = deps.autonomy
+    ? deps.autonomy.get()
+    : resolveAutonomy(null, process.env);
+  const budget = checkGlobalSubordinateBudget({
+    cap: autonomyCfg.maxSubordinates,
+    countActive: () => ctx.companyStore.countActiveSubordinatesGlobal(),
+  });
+  if (!budget.ok) throw new Error(budget.message);
 
   // Reserve the slot for the whole spawn; released in the `finally` at the end
   // (success transfers the count into `runningIds`, failure just frees it).

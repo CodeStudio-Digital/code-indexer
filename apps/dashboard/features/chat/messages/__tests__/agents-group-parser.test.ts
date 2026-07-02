@@ -1,0 +1,67 @@
+import { describe, expect, it } from 'vitest';
+import { parsePersistedAgentsGroup } from '../agents-group-parser.js';
+
+describe('parsePersistedAgentsGroup', () => {
+  it('keeps per-agent tool counts from compact transport output', () => {
+    const input = {
+      agents: [
+        { label: 'Agent Tools', task: 'Inspect agent tools', profile: 'explore' },
+        { label: 'Company Runtime', task: 'Inspect company runtime', profile: 'explore' },
+        { label: 'API Transport', task: 'Inspect API transport', profile: 'explore' },
+        { label: 'Indexer Internals', task: 'Inspect indexer internals', profile: 'explore' },
+        { label: 'Docs Memory Telemetry', task: 'Inspect docs memory telemetry', profile: 'explore' },
+        { label: 'Providers Cloud Security', task: 'Inspect providers cloud security', profile: 'explore' },
+      ],
+    };
+    const content = [
+      '[parallel agents: 6 agents, provider=chatgpt model=gpt-5.4-mini, input=600 output=60 cache_hit=0]',
+      '',
+      '### Agent 1: Agent Tools',
+      '[type=explore reason=completed tools=27 input=100 output=10]',
+      'summary 1',
+      '',
+      '---',
+      '',
+      '### Agent 2: Company Runtime',
+      '[type=explore reason=completed tools=33 input=100 output=10]',
+      'summary 2',
+      '',
+      '---',
+      '',
+      '### Agent 3: API Transport',
+      '[type=explore reason=completed tools=29 input=100 output=10]',
+      'summary 3',
+      '',
+      '---',
+      '',
+      '### Agent 4: Indexer Internals',
+      '[type=explore reason=completed tools=47 input=100 output=10]',
+      'summary 4',
+      '',
+      '---',
+      '',
+      '### Agent 5: Docs Memory Telemetry',
+      '[type=explore reason=completed tools=40 input=100 output=10]',
+      'summary 5',
+      '',
+      '---',
+      '',
+      '### Agent 6: Providers Cloud Security',
+      '[type=explore reason=completed tools=17 input=100 output=10]',
+      'summary 6',
+      '',
+      '… [truncated for transport — 36360 more chars in DB]',
+    ].join('\n');
+
+    const group = parsePersistedAgentsGroup(input, { content, isError: false });
+
+    expect(group?.totalUsage).toEqual({ input_tokens: 600, output_tokens: 60 });
+    expect(group?.agents.map((a) => a.toolCallCount)).toEqual([27, 33, 29, 47, 40, 17]);
+    expect(group?.agents[0]).toMatchObject({
+      label: 'Agent Tools',
+      task: 'Inspect agent tools',
+      agentType: 'explore',
+    });
+    expect(group?.agents[5].summary).toBe('summary 6');
+  });
+});

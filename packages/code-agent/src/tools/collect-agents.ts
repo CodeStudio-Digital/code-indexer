@@ -1,0 +1,117 @@
+/**
+ * collect_agents — event-driven wait/fetch for background spawn_agent jobs.
+ *
+ * Already finished → returns the full aggregated result (byte-identical to the
+ * blocking spawn_agent output) and marks the job collected. Still running →
+ * `wait:true` (default) blocks on the job's settle promise (no polling; a
+ * `timeout_s` deadline is the only timer), emitting a heartbeat so the
+ * StuckBanner stays quiet; on timeout / `wait:false` it returns a per-agent
+ * status snapshot and tells the model to call again.
+ */
+import { ok, err, type CoderTool, type ToolResult, type ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
+import {
+  getSubagentJobManager,
+  type SubagentJob,
+  type BackgroundAgentSlot,
+} from '@mcp/code-agent/tools/subagent-jobs.js';
+
+const HEARTBEAT_MS = Number(process.env.CODER_PARALLEL_HEARTBEAT_MS ?? 15000) || 15_000;
+
+function fmtMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  return `${Math.round(ms / 60_000)}m`;
+}
+
+function slotLine(a: BackgroundAgentSlot): string {
+  const parts = [`${a.label} — ${a.status}`, `tools=${a.toolCallCount}`];
+  if (a.phase) parts.push(a.phase);
+  if (a.idleMs != null) parts.push(`idle ${fmtMs(a.idleMs)}`);
+  if (a.deadlineMs != null && a.elapsedMs != null) parts.push(`left ${fmtMs(Math.max(0, a.deadlineMs - a.elapsedMs))}`);
+  return `- ${parts.join(', ')}`;
+}
+
+function renderSnapshot(jobs: SubagentJob[]): string {
+  if (jobs.length === 0) return 'collect_agents: no outstanding background jobs.';
+  const blocks = jobs.map((j) => {
+    const head = `job ${j.jobId} (${j.status}, ${j.agents.length} agents):`;
+    return [head, ...j.agents.map(slotLine)].join('\n');
+  });
+  return blocks.join('\n\n') + '\n\nStill running — call collect_agents again to keep waiting, or do other work.';
+}
+
+const COLLECT_DESC =
+  'Wait for / fetch the results of a background spawn_agent job. Pass the job id from the spawn result. ' +
+  'Omit job_id to wait for ANY outstanding job. Blocks until done by default; set wait:false for an instant status snapshot. ' +
+  'Returns the same aggregated report a blocking spawn_agent would.';
+
+export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
+  return {
+    name: 'collect_agents',
+    description: COLLECT_DESC,
+    source: 'native',
+    mutates: false,
+    riskLevel: 'read',
+    parallelSafe: false,
+    // Exempt from the dup-call cap AND the dispatch timeout — it enforces its
+    // own deadline via `timeout_s`.
+    repeatable: true,
+    timeoutMs: Infinity,
+    parameters: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string', description: 'Background job id from spawn_agent. Omit to wait for any outstanding job.' },
+        wait: { type: 'boolean', description: 'Default true: block until the target finishes. false: return a status snapshot now.' },
+        timeout_s: { type: 'number', description: 'Max seconds to wait (default 300, max 1800).' },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+      const sessionId = ctx.runner?.sessionId;
+      if (sessionId == null) return err('collect_agents: no active session.');
+      const manager = getSubagentJobManager();
+      const jobId = typeof args.job_id === 'string' && args.job_id.trim() ? args.job_id.trim() : null;
+      const wait = args.wait !== false;
+      const timeoutS = Math.min(1800, Math.max(1, typeof args.timeout_s === 'number' ? args.timeout_s : 300));
+
+      if (jobId && !manager.get(sessionId, jobId)) {
+        return err(
+          `collect_agents: job '${jobId}' not found — it may have been collected and expired, ` +
+          `or the session worker restarted (background jobs are in-memory). Re-spawn if still needed.`,
+        );
+      }
+
+      const t0 = Date.now();
+      const heartbeat = wait
+        ? setInterval(() => {
+            const active = manager.list(sessionId).filter((j) => j.status === 'running');
+            const note = `waiting on ${jobId ?? 'any job'} (${active.length} running)`;
+            ctx.runner?.emit('tool_progress', { id: 'collect_agents', name: 'collect_agents', elapsedMs: Date.now() - t0, note });
+            ctx.reportProgress?.(note);
+          }, HEARTBEAT_MS)
+        : null;
+
+      try {
+        const res = await manager.waitAny(sessionId, jobId ? [jobId] : null, ctx.signal, wait ? timeoutS * 1000 : 0);
+        switch (res.kind) {
+          case 'done':
+            manager.markDelivery(res.job, 'collected');
+            return ok(res.job.resultText ?? '(background job produced no result)');
+          case 'timeout': {
+            const jobs = jobId ? manager.list(sessionId).filter((j) => j.jobId === jobId) : manager.list(sessionId).filter((j) => j.status === 'running');
+            return ok(renderSnapshot(jobs));
+          }
+          case 'aborted':
+            return ok('[collect_agents: wait aborted]');
+          case 'empty':
+            return ok('collect_agents: no outstanding background jobs.');
+          case 'not_found':
+            return err(`collect_agents: job '${jobId}' not found.`);
+        }
+      } finally {
+        if (heartbeat) clearInterval(heartbeat);
+      }
+    },
+  };
+}

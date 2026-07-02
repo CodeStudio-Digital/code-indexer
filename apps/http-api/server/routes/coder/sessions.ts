@@ -43,7 +43,65 @@ type OutputStyle = (typeof OUTPUT_STYLES)[number];
 const MAX_RESPONSE_LANGUAGE_LEN = 64;
 
 const TRIM_TOOL_RESULT = 4000;
+
+function isSpawnAgentTool(name: unknown): boolean {
+  return name === 'spawn_agent' || name === 'spawn_agents';
+}
+
+function collectToolNamesByUseId(messages: Array<{ content: unknown[] }>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of messages) {
+    for (const block of m.content) {
+      const b = block as Record<string, unknown>;
+      if (b?.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string') {
+        out.set(b.id, b.name);
+      }
+    }
+  }
+  return out;
+}
+
+function compactSpawnAgentResult(content: string): string {
+  const matches = [...content.matchAll(/^###\s+Agent\s+\d+:\s+.*$/gm)];
+  if (matches.length === 0) return content.slice(0, TRIM_TOOL_RESULT);
+
+  const headerStart = matches[0].index ?? 0;
+  const header = content.slice(0, headerStart).trimEnd();
+  const targetChars = Math.max(TRIM_TOOL_RESULT, 8000);
+  const fixedOverhead = header.length + matches.length * 180;
+  const bodyBudget = Math.max(260, Math.floor((targetChars - fixedOverhead) / matches.length));
+
+  const sections: string[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index ?? 0;
+    const nextStart = matches[i + 1]?.index ?? content.length;
+    const rawSection = content
+      .slice(start, nextStart)
+      .replace(/\n\s*---\s*$/, '')
+      .trim();
+    const lines = rawSection.split('\n');
+    const title = lines.shift() ?? '';
+    const meta = lines.shift() ?? '';
+    const body = lines.join('\n').trim();
+    const preview =
+      body.length > bodyBudget
+        ? `${body.slice(0, bodyBudget).trimEnd()}\n\n… [agent report truncated for transport]`
+        : body;
+    sections.push([title, meta, preview].filter(Boolean).join('\n'));
+  }
+
+  const compact = `${header ? `${header}\n\n` : ''}${sections.join('\n\n---\n\n')}`;
+  return compact.length < content.length ? compact : content;
+}
+
+function trimToolResultContent(content: string, toolName: unknown): string {
+  if (content.length <= TRIM_TOOL_RESULT) return content;
+  if (isSpawnAgentTool(toolName)) return compactSpawnAgentResult(content);
+  return content.slice(0, TRIM_TOOL_RESULT);
+}
+
 function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(messages: M[]): M[] {
+  const toolNamesByUseId = collectToolNamesByUseId(messages);
   return messages.map((m) => {
     // Synthetic tool-image plumbing message (view_image / preview_screenshot →
     // a user/image block). The dashboard renders this image INLINE under the
@@ -62,11 +120,15 @@ function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(mess
     content: m.content.map((block) => {
       const b = block as Record<string, unknown>;
       if (b.type === 'tool_result' && typeof b.content === 'string' && b.content.length > TRIM_TOOL_RESULT) {
+        const toolName = typeof b.tool_use_id === 'string' ? toolNamesByUseId.get(b.tool_use_id) : undefined;
+        const content = b.content as string;
+        const trimmedContent = trimToolResultContent(content, toolName);
+        if (trimmedContent.length >= content.length) return b;
         return {
           ...b,
-          content: (b.content as string).slice(0, TRIM_TOOL_RESULT),
+          content: trimmedContent,
           _truncated: true,
-          _originalLength: (b.content as string).length,
+          _originalLength: content.length,
         };
       }
       // Preserve assistant-emitted images (e.g. server-managed image_generation
@@ -108,21 +170,29 @@ function reconstructMissingToolResults(
 ): Array<{ tool_use_id: string; content: string; is_error: boolean; _truncated?: boolean; _originalLength?: number }> {
   const useIds = new Set<string>();
   const resIds = new Set<string>();
+  const toolNamesByUseId = new Map<string, string>();
   for (const m of messages) {
     if (!Array.isArray(m.content)) continue;
     for (const block of m.content as Array<Record<string, unknown>>) {
       if (!block || typeof block !== 'object') continue;
-      if (block.type === 'tool_use' && typeof block.id === 'string') useIds.add(block.id);
+      if (block.type === 'tool_use' && typeof block.id === 'string') {
+        useIds.add(block.id);
+        if (typeof block.name === 'string') toolNamesByUseId.set(block.id, block.name);
+      }
       else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') resIds.add(block.tool_use_id);
     }
   }
   const missing = [...useIds].filter((id) => !resIds.has(id));
   if (missing.length === 0) return [];
   return sessionStore.getToolResultsByToolUseIds(sessionId, missing).map((r) => {
-    const trimmed = r.result_text.length > TRIM_TOOL_RESULT;
+    const content =
+      r.result_text.length > TRIM_TOOL_RESULT
+        ? trimToolResultContent(r.result_text, toolNamesByUseId.get(r.tool_use_id))
+        : r.result_text;
+    const trimmed = content.length < r.result_text.length;
     return {
       tool_use_id: r.tool_use_id,
-      content: trimmed ? r.result_text.slice(0, TRIM_TOOL_RESULT) : r.result_text,
+      content,
       is_error: r.is_error,
       ...(trimmed ? { _truncated: true, _originalLength: r.result_text.length } : {}),
     };
@@ -913,6 +983,22 @@ export function mountCoderSessionsRoutes(
     const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit, includeArchived);
     const tool_results = reconstructMissingToolResults(sessionStore, sessionId, data.messages);
     return c.json({ messages: trimMessageBlocks(data.messages), message_rows: data.message_rows, tool_results });
+  });
+
+  app.get('/api/coder/sessions/:id/tool-results/:toolUseId/full', (c) => {
+    const sessionId = parseIdParam(c);
+    const session = sessionStore.getSession(sessionId);
+    if (!session) return notFound(c);
+    const toolUseId = c.req.param('toolUseId');
+    if (!toolUseId) return c.json({ error: 'toolUseId required' }, 400);
+    const row = sessionStore.getToolResultsByToolUseIds(sessionId, [toolUseId])[0];
+    if (!row) return notFound(c, 'tool result not found');
+    return c.json({
+      tool_use_id: row.tool_use_id,
+      content: row.result_text,
+      is_error: row.is_error,
+      duration_ms: row.duration_ms,
+    });
   });
 
   app.get('/api/coder/sessions/:id/stats', (c) => {

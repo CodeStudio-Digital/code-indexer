@@ -65,6 +65,7 @@ export function mountDesignSystemStudioRoutes(app: Hono, deps: ServerDeps): void
       stack: stringField(form, 'stack') as DsStudioCreateInput['stack'],
       provider: stringField(form, 'provider'),
       model: stringField(form, 'model'),
+      mode: (stringField(form, 'mode') || null) as DsStudioCreateInput['mode'],
       import_zip_path: importZipPath,
       import_zip_hash: importZipHash,
     };

@@ -7,6 +7,8 @@
 
 export interface ServiceRow {
   service_id: string;
+  /** B8 — 'local' marks a host-process row (`local:<id>`); absent = container. */
+  kind?: 'local';
   name: string;
   stack: string;
   status: string;
@@ -25,6 +27,13 @@ export interface ServiceRow {
   is_attached?: boolean;
   external_container_ref?: string | null;
   attached_hostname?: string | null;
+  /** Supervisor health verdict (B6): healthy | degraded | down | unknown. */
+  health?: string;
+  health_detail?: string | null;
+  last_health_at_ms?: number | null;
+  restart_count?: number;
+  /** Epoch-ms the live container was provisioned — uptime anchor. */
+  started_at_ms?: number | null;
 }
 
 export interface ServicesSidebarProps {
@@ -61,6 +70,31 @@ export const KNOWN_STACKS: Array<{ value: string; label: string }> = [
   { value: 'vite-api', label: 'API — Hono + Vite (TS)' },
   { value: 'cf-worker', label: 'API — Cloudflare Worker (wrangler)' },
 ];
+
+/** Tailwind bg class for the health badge dot (B6). Unknown/missing → gray. */
+export function healthDotClassName(health: string | undefined): string {
+  switch (health) {
+    case 'healthy':
+      return 'bg-emerald-500';
+    case 'degraded':
+      return 'bg-amber-500';
+    case 'down':
+      return 'bg-red-500';
+    default:
+      return 'bg-slate-400';
+  }
+}
+
+/** Approximate uptime label from the provision timestamp ('' when unknown). */
+export function formatUptime(startedAtMs: number | null | undefined, nowMs: number = Date.now()): string {
+  if (!startedAtMs || startedAtMs > nowMs) return '';
+  const mins = Math.floor((nowMs - startedAtMs) / 60_000);
+  if (mins < 1) return '<1m';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
 
 /** Tailwind color class for the status text. */
 export function statusClassName(status: string): string {

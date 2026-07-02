@@ -36,8 +36,13 @@ const PARAMETERS: JsonSchema = {
       type: 'string',
       description: 'Minimal example snippet (JSX/Vue/Angular template).',
     },
+    verified_in_preview: {
+      type: 'boolean',
+      description:
+        'REQUIRED attestation: you took a preview screenshot of this component\'s gallery demo THIS turn and the console is clean. Recording unverified work is forbidden — verify first, then record.',
+    },
   },
-  required: ['name', 'kind'],
+  required: ['name', 'kind', 'verified_in_preview'],
 };
 
 export function dsRecordComponent(binding: DsToolBinding): CoderTool {
@@ -59,6 +64,12 @@ export function dsRecordComponent(binding: DsToolBinding): CoderTool {
           | 'page-template';
         const props_schema_json = optString(args.props_schema_json) ?? null;
         const example_code = optString(args.example_code) ?? null;
+        if (args.verified_in_preview !== true) {
+          return err(
+            'Recording refused: verify the component first — gallery demo rendering every variant, ' +
+              'preview screenshot taken this turn, console clean — then call again with verified_in_preview: true.',
+          );
+        }
 
         const session = binding.resolveDsSession(store);
         if (!session) {

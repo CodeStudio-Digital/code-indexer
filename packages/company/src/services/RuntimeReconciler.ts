@@ -31,7 +31,17 @@ import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 import type { KanbanService } from '@mcp/company/services/KanbanService.js';
+import {
+  isAutonomyActionAllowed,
+  resolveAutonomy,
+} from '@mcp/company/services/autonomy/autonomy-config.js';
+import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-provider.js';
 import { findOrphanedCards } from '@mcp/company/services/scheduler/dispatch-core.js';
+import {
+  countReadyTodoCards,
+  evaluateNextCardNudge,
+  readNextCardIdleMs,
+} from '@mcp/company/services/scheduler/next-card-nudge.js';
 
 const DEFAULT_INTERVAL_MS = 45_000;
 
@@ -127,6 +137,12 @@ export interface RuntimeReconcilerDeps {
    *  `in_progress` by a dead agent (Phase 2 self-repair). Optional so existing
    *  callers/tests that don't need it stay untouched. */
   kanban?: KanbanService;
+  /**
+   * C2 — per-session autonomy config, consulted at every orphan-reset sweep
+   * so `freeze`/`scheduler=false` gate it LIVE. Optional: callers/tests
+   * without it fall back to `resolveAutonomy(null, process.env)`.
+   */
+  autonomy?: Pick<AutonomyProvider, 'get'>;
   /** Override for tests. Defaults to `Date.now()`. */
   now?: () => number;
 }
@@ -139,6 +155,8 @@ export class RuntimeReconciler {
   private nudging = false;
   /** Per-key last-nudge wall-clock for cooldown dedup. Bounded LRU. */
   private readonly lastNudgeAt = new Map<string, number>();
+  /** C3 — wall-clock of the last next-card nudge (its own long cooldown). */
+  private lastNextCardNudgeAt = 0;
   /** Per-subordinate auto-reestablish attempt counter (crash-loop cap). Reset
    *  when the subordinate is observed healthy (tracked) again. */
   private readonly reestablishAttempts = new Map<number, number>();
@@ -322,13 +340,18 @@ export class RuntimeReconciler {
    * unassign the dead agent(s) and reset the card to `todo` so the scheduler
    * (or the master) can re-dispatch it.
    *
-   * GATED behind `MCP_COMPANY_SCHEDULER=1` (default off) — it mutates board
-   * state autonomously, so it ships opt-in until validated on-device, and only
-   * makes sense paired with the dispatch loop that re-picks the freed card.
+   * C2 — gated by the per-session autonomy config (action `orphanReset`,
+   * which follows the scheduler default: ON). `freeze` or
+   * `autonomy.scheduler=false` / env `MCP_COMPANY_SCHEDULER='0'` kill it
+   * LIVE — the check runs at every sweep, not at boot. Only makes sense
+   * paired with the dispatch loop that re-picks the freed card.
    * No-op when no kanban service was wired.
    */
   private reconcileOrphanedCards(): void {
-    if (process.env.MCP_COMPANY_SCHEDULER !== '1') return;
+    const cfg = this.deps.autonomy
+      ? this.deps.autonomy.get()
+      : resolveAutonomy(null, process.env);
+    if (!isAutonomyActionAllowed(cfg, 'orphanReset')) return;
     const kanban = this.deps.kanban;
     if (!kanban) return;
     const sessionId = this.deps.ctx.companySessionId;
@@ -463,6 +486,10 @@ export class RuntimeReconciler {
         console.log(`[company s=${sessionId}] master nudge (decision): re-woke for run=${r.id} kind=${kind}`);
       }
       await this.nudgeStalledInbox(sessionId, now, nudgeMs);
+      // C3 — proactive board nudge: idle master + ready todo cards + zero
+      // active subordinates → suggest dispatching. Logic lives in the pure
+      // scheduler/next-card-nudge.ts module; this is only the shell.
+      this.maybeNudgeNextCard(now);
       return;
     }
 
@@ -482,6 +509,34 @@ export class RuntimeReconciler {
       this.publishNudge({ case: 'resurrect', reason: 'decision_pending' });
       console.log(`[company s=${sessionId}] master nudge (resurrect): ${stalled.length} pending decision(s), master dead`);
     }
+  }
+
+  /** C3 — shell for the pure next-card nudge (scheduler/next-card-nudge.ts). */
+  private maybeNudgeNextCard(now: number): void {
+    const kanban = this.deps.kanban;
+    if (!kanban) return;
+    try {
+      const runs = this.deps.ctx.companyStore.listAgentRuns(this.deps.ctx.companySessionId);
+      const masterRow = runs.find((r) => r.role === 'master');
+      const decision = evaluateNextCardNudge({
+        masterAlive: this.deps.master.isAlive,
+        masterIdleMs: now - parseSqliteUtc(masterRow?.updated_at),
+        activeSubordinateCount: runs.filter(
+          (r) => r.role !== 'master' && ACTIVE_RUN_STATUSES.has(r.status),
+        ).length,
+        readyTodoCount: countReadyTodoCards(kanban.listCardsFull()),
+        nowMs: now,
+        lastNudgeAtMs: this.lastNextCardNudgeAt,
+        idleThresholdMs: readNextCardIdleMs(),
+      });
+      if (!decision.nudge) return;
+      this.lastNextCardNudgeAt = now;
+      this.deps.master.notify(decision.message);
+      this.publishNudge({ case: 'next_card', reason: 'ready_cards', readyCount: decision.readyCount });
+      console.log(
+        `[company s=${this.deps.ctx.companySessionId}] master nudge (next_card): ${decision.readyCount} ready todo card(s), idle master`,
+      );
+    } catch { /* nudge must never break the sweep */ }
   }
 
   private decisionStillPending(id: number, kind: 'plan' | 'question' | 'tasks'): boolean {
@@ -523,13 +578,15 @@ export class RuntimeReconciler {
   }
 
   private publishNudge(payload: {
-    case: 'decision' | 'inbox' | 'resurrect';
+    case: 'decision' | 'inbox' | 'resurrect' | 'next_card';
     agentRunId?: number;
     role?: string;
     kind?: 'plan' | 'question' | 'tasks';
     messageId?: number;
     reason?: string;
     ageMs?: number;
+    /** next_card only — how many ready todo cards triggered the nudge. */
+    readyCount?: number;
   }): void {
     try {
       this.deps.publisher.publish('master_nudge', {

@@ -50,11 +50,16 @@ import type { PipelineExecutor } from './services/PipelineExecutor.js';
 import type { InboxQueue, SendArgs as InboxSendArgs, SendResult as InboxSendResult } from './services/InboxQueue.js';
 import type { MasterInboxRouter } from './services/MasterInboxRouter.js';
 import type { RuntimeReconciler } from './services/RuntimeReconciler.js';
+import type { ServiceSupervisor } from './services/service-supervisor/ServiceSupervisor.js';
 import type { CompanyScheduler } from './services/scheduler/CompanyScheduler.js';
+import { dispatchCard, type DispatchCardResult } from './services/scheduler/dispatch-card.js';
+import { getGlobalCompanyRecommend } from './services/scheduler/recommend-shim.js';
 import type { CompanyDriveStore } from './services/CompanyDriveStore.js';
 import type { CompanyEventBus } from './services/CompanyEventBus.js';
 import type { IdleWatchdog } from './services/IdleWatchdog.js';
 
+import type { AutonomyProvider } from './services/autonomy/autonomy-provider.js';
+import { mergeAutonomyPatch, type AutonomyPatch } from './services/autonomy/autonomy-patch.js';
 import { wireServices } from './orchestrator/wire-services.js';
 import {
   getSandboxBinding,
@@ -93,6 +98,12 @@ export class CompanyOrchestrator {
   readonly eventBus: CompanyEventBus;
   /** Company-scoped shared file drive. */
   readonly driveStore: CompanyDriveStore;
+  /**
+   * C0 — per-session autonomy config (cached; invalidated when
+   * `session.config_updated` is published). Exposed for the flip phase —
+   * no service consults it yet.
+   */
+  readonly autonomy: AutonomyProvider;
 
   private readonly ctx: SessionContext;
   private readonly publisher: MetaBusPublisher;
@@ -110,6 +121,7 @@ export class CompanyOrchestrator {
   private readonly inbox: InboxQueue;
   private readonly masterInbox: MasterInboxRouter;
   private readonly reconciler: RuntimeReconciler;
+  private readonly serviceSupervisor: ServiceSupervisor;
   private readonly scheduler: CompanyScheduler;
 
   constructor(opts: CompanyOrchestratorOpts) {
@@ -136,7 +148,9 @@ export class CompanyOrchestrator {
     this.inbox = w.inbox;
     this.masterInbox = w.masterInbox;
     this.reconciler = w.reconciler;
+    this.serviceSupervisor = w.serviceSupervisor;
     this.scheduler = w.scheduler;
+    this.autonomy = w.autonomy;
   }
 
   /**
@@ -219,6 +233,8 @@ export class CompanyOrchestrator {
     role_assignments?: RoleConfig[];
     skills?: Record<string, string[]>;
     allowed_models?: import('@mcp/company/types.js').AllowedModel[];
+    /** C0 — sanitized autonomy patch (shallow-merged over the persisted object). */
+    autonomy?: AutonomyPatch;
   }): void {
     const sessionId = this.ctx.companySessionId;
     const row = this.ctx.companyStore.getCompanySession(sessionId);
@@ -228,6 +244,7 @@ export class CompanyOrchestrator {
     if (patch.role_assignments) cfg.role_assignments = patch.role_assignments;
     if (patch.skills) cfg.skills = patch.skills;
     if (patch.allowed_models) cfg.allowed_models = patch.allowed_models;
+    if (patch.autonomy) cfg.autonomy = mergeAutonomyPatch(cfg.autonomy, patch.autonomy);
     this.ctx.companyStore.updateCompanySessionConfig(sessionId, JSON.stringify(cfg));
     if (patch.role_assignments) this.master.updateRoleConfigs(patch.role_assignments);
     this.publisher.publish('session.config_updated', {
@@ -343,6 +360,21 @@ export class CompanyOrchestrator {
   hasPendingPlan(agentRunId: number): boolean { return this.humanInLoop.hasPendingPlan(agentRunId); }
   hasPendingQuestion(agentRunId: number): boolean { return this.humanInLoop.hasPendingQuestion(agentRunId); }
   hasPendingTasks(agentRunId: number): boolean { return this.humanInLoop.hasPendingTasks(agentRunId); }
+  /** B7 — latest plan approval for an agent run (QA plan gate). Null = no approved plan. */
+  hasApprovedPlan(agentRunId: number): { approved: boolean; auto: boolean } | null { return this.humanInLoop.hasApprovedPlan(agentRunId); }
+  /**
+   * B7 — raw `config_json` of this session ('' when unavailable). Read-only
+   * accessor for tools that need per-role metadata (e.g. the QA plan gate
+   * checks the caller's skills) without widening the orchestrator surface
+   * with bespoke queries.
+   */
+  getSessionConfigJson(): string {
+    try {
+      return this.ctx.companyStore.getCompanySession(this.companySessionId)?.config_json ?? '';
+    } catch {
+      return '';
+    }
+  }
 
   // ─── Sub-sessions (multi-front via parent_session_id) ──────────
   listChildSessions(): import('@mcp/company/types.js').CompanySession[] {
@@ -388,6 +420,24 @@ export class CompanyOrchestrator {
   kanbanListCards(opts?: { column?: KanbanColumn }): KanbanCard[] { return this.kanban.listCards(opts); }
   kanbanGetCard(cardId: number): KanbanCardFull | null { return this.kanban.getCard(cardId); }
   kanbanListCardsFull(): KanbanCardFull[] { return this.kanban.listCardsFull(); }
+  /**
+   * C3 — manual dispatch of one card ("quick-dispatch" route / suggestion
+   * chip). Same recommend→spawn→assign→move→comment unit the autonomous
+   * scheduler uses; an explicit `role` skips the recommender entirely.
+   */
+  async dispatchCard(cardId: number, role?: string): Promise<DispatchCardResult> {
+    return dispatchCard(
+      {
+        sessionId: this.companySessionId,
+        kanban: this.kanban,
+        subordinates: this.subordinates,
+        recommend: getGlobalCompanyRecommend(),
+        publish: (event, data) => this.publisher.publish(event, data),
+      },
+      cardId,
+      { role, source: 'manual' },
+    );
+  }
   findCardForAgent(agentRunId: number): number | null { return this.kanban.findCardForAgent(agentRunId); }
   getCardContextForSubordinate(cardId: number): string { return this.kanban.getCardContextForSubordinate(cardId); }
 
@@ -419,6 +469,7 @@ export class CompanyOrchestrator {
     this.idle.clear();
     this.watchdog.dispose();
     this.reconciler.stop();
+    this.serviceSupervisor.stop();
     this.scheduler.stop();
     this.subordinates.abortAll();
     this.master.abort();

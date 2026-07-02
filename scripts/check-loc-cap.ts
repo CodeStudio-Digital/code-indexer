@@ -80,6 +80,11 @@ const LOC_ALLOWLIST: Record<string, string> = {
   // wiring around without value.
   'packages/company/src/orchestrator.ts':
     'Composition root for company services; body is mostly slot wiring.',
+  // Migration registry grows exactly 2 lines per migration by convention
+  // (import + MIGRATIONS entry). Splitting it would break the single
+  // ordered lineage the runner depends on.
+  'packages/store/src/migrations/index.ts':
+    'Migration registry; grows 2 lines per migration, single ordered lineage.',
 };
 
 /**
@@ -95,7 +100,6 @@ const GRANDFATHERED: ReadonlySet<string> = new Set([
   'apps/dashboard/features/admin/SupervisorPanel.tsx',
   'apps/dashboard/features/agents/AgentsTab.tsx',
   'apps/dashboard/features/agents/CompanySessionView.tsx',
-  'apps/dashboard/features/agents/DatabasesTab.tsx',
   'apps/dashboard/features/agents/DrivePanel.tsx',
   'apps/dashboard/features/agents/pipelines/NodeEditPanel.tsx',
   'apps/dashboard/features/agents/pipelines/PipelineBuilder.tsx',

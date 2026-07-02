@@ -7,6 +7,7 @@ import type { VectorStore } from '@mcp/store/vectors.js';
 import type { CostTracker } from '@mcp/services/services/costs.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
 import type { IndexResult, ProgressCallback, RunStatus, ScannedFile, ScanResult } from '@mcp/shared/types.js';
+import { mergeIndexIgnorePatterns, projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
 import type { TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
@@ -140,7 +141,11 @@ export class IndexAgent {
       }
     }
 
-    const scanner = new FileScanner(project.root_path, this.config.ignorePatterns, this.config.maxFileSize);
+    const scanner = new FileScanner(
+      project.root_path,
+      mergeIndexIgnorePatterns(this.config.ignorePatterns, projectIndexIgnorePatterns(project)),
+      this.config.maxFileSize,
+    );
     const scanResult = await telemetry.phase('scan', () => scanner.scan(this.db, project.id));
     if (scanResult.stats) {
       console.error(`[indexer] Scan: ${scanResult.stats.statOnly} stat-only, ${scanResult.stats.hashed} hashed, ${scanResult.stats.skippedTooLarge} too large`);

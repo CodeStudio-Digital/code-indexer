@@ -14,6 +14,7 @@
 import { join } from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { mergeIndexIgnorePatterns, projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
 import { buildTreeSitterDispatch } from '@mcp/indexer/indexer/tree-sitter-dispatch.js';
 import { withConcurrency } from './indexer/enrich-references.js';
@@ -81,7 +82,11 @@ export async function runStructuralIndex(
     console.warn(`[structural] project-db split skipped for ${projectId}:`, (e as Error).message);
   }
 
-  const scanner = new FileScanner(project.root_path, opts.ignorePatterns ?? [], opts.maxFileSizeKB ?? 200);
+  const scanner = new FileScanner(
+    project.root_path,
+    mergeIndexIgnorePatterns(opts.ignorePatterns, projectIndexIgnorePatterns(project)),
+    opts.maxFileSizeKB ?? 200,
+  );
   const scan = await scanner.scan(db, projectId, {
     maxFiles: opts.maxFiles,
     // Keep the "Scanning…" chip alive during the walk (total unknown → 0).

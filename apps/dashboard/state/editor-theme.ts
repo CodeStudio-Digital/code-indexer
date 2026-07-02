@@ -25,7 +25,7 @@ export interface EditorThemeState {
 }
 
 const STORAGE_KEY = 'mcp-ide:editor-theme';
-const DEFAULT: EditorThemeState = { darkTheme: 'vs-dark', lightTheme: 'vs', perLanguage: {} };
+const DEFAULT: EditorThemeState = { darkTheme: 'codestudio-dark', lightTheme: 'codestudio-light', perLanguage: {} };
 
 /**
  * Pure theme resolution — exported and unit-tested. Per-language override (if

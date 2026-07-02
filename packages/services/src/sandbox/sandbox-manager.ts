@@ -50,6 +50,7 @@ import { archiveSandboxWorkdir } from './manager/archive-sandbox.js';
 import {
   pauseSandbox as pauseSandboxFn,
   restartDevServer as restartDevServerFn,
+  restartDevServerForService as restartDevServerForServiceFn,
   resumeSandbox as resumeSandboxFn,
   startServiceContainer as startServiceContainerFn,
 } from './manager/dev-lifecycle.js';
@@ -182,9 +183,10 @@ export class SandboxManager {
     syncManagedEnvsFn(sessionId, buildSyncManagedEnvsDeps(this.hooks, getResolvedRuntime()));
   }
   async syncEnvsToAllContainers(sessionId: string): Promise<void> {
-    const body = renderDotEnv(resolveSessionEnvs(sessionId));
-    const targets = collectEnvSyncTargets(this.sandboxes.get(sessionId), this.listServices(sessionId));
-    await pushEnvsToContainers(targets, body, this.driver);
+    // D1: each container gets a body rendered for ITS service id, so
+    // `service_scope` vars only land where they belong ('main' = primary).
+    const targets = collectEnvSyncTargets(this.sandboxes.get(sessionId), this.listServicesWithIds(sessionId));
+    await pushEnvsToContainers(targets, (serviceId) => renderDotEnv(resolveSessionEnvs(sessionId, serviceId)), this.driver);
   }
   async destroyService(sessionId: string, serviceId: string, reason = 'explicit'): Promise<void> {
     return executeServiceDestroy(sessionId, serviceId, reason, buildDestroyServiceDeps(this.hooks));
@@ -209,6 +211,7 @@ export class SandboxManager {
     return provisionPrimarySandbox(req, buildProvisionPrimaryDeps(this.hooks, this.maxSandboxes, this.workdir, this.nodeImage));
   }
   async restartDevServer(sessionId: string): Promise<void> { return restartDevServerFn(sessionId, buildDevLifecycleDeps(this.hooks)); }
+  async restartService(sessionId: string, serviceId: string): Promise<void> { return restartDevServerForServiceFn(sessionId, serviceId, buildDevLifecycleDeps(this.hooks)); }
   async pauseRuntimeContainer(sessionId: string, serviceId?: string | null): Promise<Sandbox> {
     const { sb, serviceId: resolved } = resolveRuntimePauseTarget(this.registry, sessionId, serviceId);
     const driver = await this.resolveDriverOnce();

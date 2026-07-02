@@ -78,6 +78,35 @@ describe('DesignSystemStore (integration)', () => {
     expect(store.getSessionByCompanySessionId(1)).toBeNull();
   });
 
+  it('persists mode and pipeline_json (mig 190)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (cdb as any).db
+      .prepare(`INSERT INTO projects (id, name, root_path) VALUES (8, 'ds-ws2', 'D:/tmp/ds-ws2')`)
+      .run();
+    const created = store.createStudioSession({
+      project_id: 8,
+      name: 'Fidelity DS',
+      package_name: '@acme/fid',
+      stack: 'react-ts',
+      mode: 'fidelity',
+    });
+    expect(created.mode).toBe('fidelity');
+    expect(created.pipeline_json).toBeNull();
+
+    const updated = store.setPipelineJson(created.id, '{"v":1,"stages":[]}');
+    expect(updated.pipeline_json).toBe('{"v":1,"stages":[]}');
+    expect(store.setPipelineJson(created.id, null).pipeline_json).toBeNull();
+
+    // Default de modo (sessões legadas / sem seletor) = creative.
+    const legacy = store.createSession({
+      company_session_id: 1,
+      name: 'Legacy',
+      package_name: '@x/legacy',
+      stack: 'react-ts',
+    });
+    expect(legacy.mode).toBe('creative');
+  });
+
   it('updates next_bump_hint', () => {
     const s = store.createSession({
       company_session_id: 1,

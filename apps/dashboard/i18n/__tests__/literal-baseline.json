@@ -139,7 +139,6 @@
     "apps/dashboard/features/agents/ArchivedTab.tsx|jsxText|cards": 1,
     "apps/dashboard/features/agents/CompanyApiTab.tsx|jsxText|Client": 1,
     "apps/dashboard/features/agents/CompanyApiTab.tsx|jsxText|Docs": 1,
-    "apps/dashboard/features/agents/DatabasesTab.tsx|attr:placeholder|main, analytics, cache-replica…": 1,
     "apps/dashboard/features/agents/drive/DriveTreeRows.tsx|jsxText|by": 1,
     "apps/dashboard/features/agents/DrivePanel.tsx|attr:placeholder|File content (UTF-8 text, max 4MB)": 1,
     "apps/dashboard/features/agents/DrivePanel.tsx|attr:placeholder|Path (e.g. \"specs/auth.md\")": 1,

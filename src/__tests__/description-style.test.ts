@@ -55,7 +55,6 @@ import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
 import { docsTools as companyDocsTools } from '@mcp/company/tools/docs-tools.js';
 import { envTools } from '@mcp/company/tools/env-tools.js';
-import { databaseTools } from '@mcp/company/tools/database-tools.js';
 
 // ── MCP server surface (descriptions flow to the LLM through the bridge) ───
 import { allTools as mcpServerTools } from '@apps/mcp-server/tools/index.js';
@@ -71,7 +70,7 @@ const CODE_AGENT_TOOLS: NamedTool[] = [
   ...ragReadDocTools, ...todoTools, ...viewImageTools, ...previewTools, ...goalTools,
   ...listAgentsTools, ...waitAgentsTools, ...sendMessageTools, ...sendInputTools,
   ...followupTaskTools, ...worktreeTools, ...apiClientTools,
-  ...sandboxTools, ...companyDocsTools, ...envTools, ...databaseTools,
+  ...sandboxTools, ...companyDocsTools, ...envTools,
 ].flatMap(arr);
 
 /** Replica of the MCP bridge transform (mcp-bridge.ts) — keep in sync. */

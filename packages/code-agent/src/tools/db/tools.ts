@@ -1,0 +1,202 @@
+/**
+ * The `db_*` agent tools (v2) — operate the connections the user registered in
+ * the project's Databases tab (migration 174). Replaces the retired
+ * @mcp/company database-tools (env-var based). Registered UNCONDITIONALLY and
+ * surfaced through the `db` tool tier; the read-only valve reads the SAME
+ * pool metadata the UI handlers enforce with.
+ */
+import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
+import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { hasMultipleStatements, isReadStatement } from '@mcp/db-drivers/sql/read-guard.js';
+import { isWriteCommand } from '@mcp/db-drivers/command-classify.js';
+import type { DbCommand } from '@mcp/db-drivers/types.js';
+import { engineKind } from './scope.js';
+import { CONNECTION_PARAM, clampMaxRows, pickFromCtx, resolveToolScope } from './shared.js';
+import { scrubDbError } from './resolve-spec.js';
+import { acquireAgentDriver } from './pool.js';
+import { renderQueryResult, renderSchema } from './render.js';
+
+const dbList: CoderTool = {
+  name: 'db_list',
+  description:
+    'List the database connections registered in the Databases tab: name, engine, host/file, ' +
+    'database, read-only flag and kind (relational/document/keyvalue). Never returns ' +
+    'credentials and does NOT connect. Call this before db_query/db_schema/db_command when ' +
+    'unsure which connection to target.',
+  source: 'native',
+  riskLevel: 'read',
+  parameters: { type: 'object', properties: {}, additionalProperties: false },
+  handler: async (_args, ctx): Promise<ToolResult> => {
+    const scoped = resolveToolScope(ctx);
+    if (!scoped.ok) return err(scoped.error);
+    if (scoped.scope.length === 0) {
+      return ok('(no database connections registered — ask the user to add one in the Databases tab)');
+    }
+    const lines = scoped.scope.map(({ name, conn }) => {
+      const target = conn.engine === 'sqlite' ? (conn.file_path ?? '-') : (conn.host ?? '-');
+      const db = conn.database_name ? ` db=${conn.database_name}` : '';
+      const ro = conn.is_read_only === 1 ? ' [read-only]' : '';
+      return `- ${name} (${conn.engine}, ${engineKind(conn.engine)}${ro}) target=${target}${db}`;
+    });
+    return ok(lines.join('\n'));
+  },
+};
+
+const dbSchema: CoderTool = {
+  name: 'db_schema',
+  description:
+    'Introspect tables and columns of a registered connection — one block per table with ' +
+    'column types, nullability and PK flags. `schema` defaults to public (Postgres) or the ' +
+    "connection's database (MySQL). Pass `connection` when more than one is registered.",
+  source: 'native',
+  riskLevel: 'read',
+  parameters: {
+    type: 'object',
+    properties: {
+      connection: CONNECTION_PARAM,
+      schema: { type: 'string', description: 'Schema / database name (defaults per engine).' },
+    },
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const picked = pickFromCtx(ctx, args.connection);
+    if (!picked.ok) return err(picked.error);
+    let acquired = null as Awaited<ReturnType<typeof acquireAgentDriver>> | null;
+    try {
+      acquired = await acquireAgentDriver(picked.value.conn);
+      const tables = await acquired.driver.schema(
+        typeof args.schema === 'string' && args.schema ? args.schema : undefined,
+      );
+      return ok(renderSchema(tables));
+    } catch (e) {
+      return err(`db_schema failed: ${scrubDbError(e, acquired?.spec)}`);
+    }
+  },
+};
+
+const dbQuery: CoderTool = {
+  name: 'db_query',
+  description:
+    'Execute ONE SQL statement against a registered relational connection. Reads AND writes ' +
+    'are allowed unless the connection is marked read-only in the Databases tab. Use `params` ' +
+    'for values derived from user/agent input (Postgres $1…, MySQL ?). Results are capped — ' +
+    'paginate with LIMIT/OFFSET. Pass `connection` when more than one is registered.',
+  source: 'native',
+  riskOf: (input) => {
+    const sql = (input as { sql?: unknown } | null)?.sql;
+    return typeof sql === 'string' && isReadStatement(sql) ? 'read' : 'write';
+  },
+  parameters: {
+    type: 'object',
+    properties: {
+      connection: CONNECTION_PARAM,
+      sql: { type: 'string', description: 'A single SQL statement to execute.' },
+      params: { type: 'array', description: 'Positional parameters for the statement.', items: {} },
+      max_rows: { type: 'number', description: 'Row cap (default 200, max 1000).' },
+    },
+    required: ['sql'],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const sql = typeof args.sql === 'string' ? args.sql : '';
+    if (!sql.trim()) return err('db_query: sql (non-empty string) required');
+    if (hasMultipleStatements(sql)) {
+      return err('db_query: multiple statements are not allowed — send ONE statement per call.');
+    }
+    const picked = pickFromCtx(ctx, args.connection);
+    if (!picked.ok) return err(picked.error);
+    let acquired = null as Awaited<ReturnType<typeof acquireAgentDriver>> | null;
+    try {
+      acquired = await acquireAgentDriver(picked.value.conn);
+      if ((acquired.meta.kind ?? 'relational') !== 'relational') {
+        return err(
+          `db_query targets relational engines — '${picked.value.name}' is a ` +
+            `${acquired.meta.kind} store. Use db_command instead.`,
+        );
+      }
+      if (acquired.meta.readOnly && !isReadStatement(sql)) {
+        return err('Connection is read-only — writes are blocked.');
+      }
+      const params = Array.isArray(args.params) ? (args.params as unknown[]) : undefined;
+      const result = await acquired.driver.runQuery(sql, { params, maxRows: clampMaxRows(args.max_rows) });
+      return ok(renderQueryResult(result));
+    } catch (e) {
+      return err(`db_query failed: ${scrubDbError(e, acquired?.spec)}`);
+    }
+  },
+};
+
+/** Best-effort read/write classification with no engine at hand (gate hook). */
+function commandRisk(input: unknown): 'read' | 'write' {
+  const c = (input as { command?: unknown } | null)?.command;
+  if (!c || typeof c !== 'object') return 'write';
+  const probe = c as Omit<DbCommand, 'kind'>;
+  const asDocument = isWriteCommand({ ...probe, kind: 'document' });
+  const asKeyvalue = isWriteCommand({ ...probe, kind: 'keyvalue' });
+  // Read only when at least one engine interpretation proves it read-safe;
+  // unknown ops classify as write under both (conservative).
+  return asDocument && asKeyvalue ? 'write' : 'read';
+}
+
+const dbCommand: CoderTool = {
+  name: 'db_command',
+  description:
+    'Run a document/key-value command on a MongoDB or Redis connection (relational engines ' +
+    'must use db_query). Shape: {op, collection?, payload?} for Mongo ' +
+    "(find/aggregate/insertOne/…, payload carries filter/pipeline/document) or {args: ['GET','key']} " +
+    'for Redis. Read-only connections refuse mutating commands.',
+  source: 'native',
+  riskOf: commandRisk,
+  parameters: {
+    type: 'object',
+    properties: {
+      connection: CONNECTION_PARAM,
+      command: {
+        type: 'object',
+        description: 'The command: {op?, collection?, args?, payload?} (engine-specific).',
+        properties: {
+          op: { type: 'string', description: 'Mongo operation (find/aggregate/insertOne/…).' },
+          collection: { type: 'string', description: 'Mongo target collection.' },
+          args: { type: 'array', items: { type: 'string' }, description: "Redis command+args, e.g. ['GET','key']." },
+          payload: { description: 'Operation payload (filter/pipeline/document/value/…).' },
+        },
+        additionalProperties: false,
+      },
+      max_rows: { type: 'number', description: 'Row/document cap (default 200, max 1000).' },
+    },
+    required: ['command'],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const raw = args.command;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return err('db_command: command (object) required — see the tool description for its shape.');
+    }
+    const picked = pickFromCtx(ctx, args.connection);
+    if (!picked.ok) return err(picked.error);
+    let acquired = null as Awaited<ReturnType<typeof acquireAgentDriver>> | null;
+    try {
+      acquired = await acquireAgentDriver(picked.value.conn);
+      const kind = acquired.meta.kind ?? 'relational';
+      if (kind === 'relational') {
+        return err(
+          `db_command is only for document/key-value stores — '${picked.value.name}' is ` +
+            'relational. Use db_query instead.',
+        );
+      }
+      const command: DbCommand = { ...(raw as Omit<DbCommand, 'kind'>), kind };
+      if (acquired.meta.readOnly && isWriteCommand(command)) {
+        return err('Connection is read-only — writes are blocked.');
+      }
+      if (!acquired.driver.runCommand) {
+        return err(`db_command: the '${picked.value.conn.engine}' driver does not support commands.`);
+      }
+      const result = await acquired.driver.runCommand(command, { maxRows: clampMaxRows(args.max_rows) });
+      return ok(renderQueryResult(result));
+    } catch (e) {
+      return err(`db_command failed: ${scrubDbError(e, acquired?.spec)}`);
+    }
+  },
+};
+
+export const dbTools: CoderTool[] = [dbList, dbSchema, dbQuery, dbCommand];

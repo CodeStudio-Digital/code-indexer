@@ -56,10 +56,9 @@ export const COMPANY_TOOLS: ReadonlySet<string> = new Set([
  * service-bound company subordinates. Always-on within those sessions.
  */
 export const BUILDER_TOOLS: ReadonlySet<string> = new Set([
-  // Databases tab — query registered Postgres/MySQL instances.
-  'db_list',
-  'db_query',
-  'db_schema',
+  // db_list/db_query/db_schema moved to the core `db` tier (tiers.ts
+  // DB_TOOLS) — the v2 db_* tools are registered for EVERY session and
+  // unlocked via expand_toolset('db'), not gated to sandbox sessions.
   // In-container docs (<workdir>/docs/).
   'docs_delete',
   'docs_index_update',
@@ -76,4 +75,10 @@ export const BUILDER_TOOLS: ReadonlySet<string> = new Set([
   'list_services',
   'start_pipeline',
   'stop_pipeline',
+  // service_* (B5) — registered under the same sandbox-binding gate as
+  // list_services; in-handler authorization decides who may control what.
+  'service_logs',
+  'service_restart',
+  'service_start',
+  'service_stop',
 ]);

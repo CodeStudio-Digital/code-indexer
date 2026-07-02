@@ -25,8 +25,9 @@ import { setInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-em
 import { CompanyStore } from '@mcp/store/company-store.js';
 import { CompanySandboxStore } from '@mcp/store/company-sandbox-store.js';
 import { CompanySandboxServicesStore } from '@mcp/store/company-sandbox-services-store.js';
+import { CompanyServiceTransitionsStore } from '@mcp/store/company-service-transitions-store.js';
+import { CompanyServiceLogsStore } from '@mcp/store/company-service-logs-store.js';
 import { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
-import { CompanySessionDatabaseStore } from '@mcp/store/company-session-database-store.js';
 import { CompanyLocalProjectStore } from '@mcp/store/company-local-project-store.js';
 import { FileLocalHistoryStore } from '@mcp/store/file-local-history-store.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
@@ -526,16 +527,14 @@ export interface CompanyDeps {
    * using `companySandboxStore`.
    */
   companySandboxServicesStore: CompanySandboxServicesStore;
+  /** Append-only audit of service status/health flips (mig 188, company B1). */
+  companyServiceTransitionsStore: CompanyServiceTransitionsStore;
+  /** Ring-buffered per-service output lines (devserver/container/scaffold, mig 188). */
+  companyServiceLogsStore: CompanyServiceLogsStore;
   /** Shared env vars per session; injected into every container + written as /app/.env. */
   companySessionEnvStore: CompanySessionEnvStore;
   /** Local History (JetBrains-style) — versões de arquivos independentes do git (mig 160). */
   fileLocalHistoryStore: FileLocalHistoryStore;
-  /**
-   * Typed databases registered per session (Databases tab). Stores metadata
-   * only — actual connection strings live in `companySessionEnvStore` so
-   * container injection works without code changes.
-   */
-  companySessionDatabaseStore: CompanySessionDatabaseStore;
   /**
    * Local (host-process) project registry — separate from sandbox tables
    * because host processes have a different lifecycle (no container id,
@@ -769,8 +768,9 @@ export function createDeps(): ServerDeps {
   const companyStore = new CompanyStore(db.raw());
   const companySandboxStore = new CompanySandboxStore(db.raw());
   const companySandboxServicesStore = new CompanySandboxServicesStore(db.raw());
+  const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(db.raw());
+  const companyServiceLogsStore = new CompanyServiceLogsStore(db.raw());
   const companySessionEnvStore = new CompanySessionEnvStore(db.raw());
-  const companySessionDatabaseStore = new CompanySessionDatabaseStore(db.raw());
   const companyLocalProjectStore = new CompanyLocalProjectStore(db.raw());
   const fileLocalHistoryStore = new FileLocalHistoryStore(db.raw());
   const skillStore = new SkillStore(db.raw());
@@ -1369,8 +1369,9 @@ export function createDeps(): ServerDeps {
     companyStore,
     companySandboxStore,
     companySandboxServicesStore,
+    companyServiceTransitionsStore,
+    companyServiceLogsStore,
     companySessionEnvStore,
-    companySessionDatabaseStore,
     companyLocalProjectStore,
     fileLocalHistoryStore,
     skillStore,

@@ -19,6 +19,10 @@
 
 import type DatabaseConstructor from 'better-sqlite3';
 import type { PersistedSandboxStatus } from './company-sandbox-store.js';
+import {
+  CompanySandboxServicesHealth,
+  type UpdateServiceHealthInput,
+} from './company-sandbox-services-health.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -52,6 +56,14 @@ export interface PersistedSandboxServiceRow {
   external_container_ref: string | null;
   /** DNS hostname peer containers use to reach this service. */
   attached_hostname: string | null;
+  /** Supervisor-probe verdict (mig 188). 'unknown' until first probe. */
+  health: string;
+  /** Free-form detail behind the verdict (probe error, HTTP status, …). */
+  health_detail: string | null;
+  /** Epoch-ms of the last probe that wrote `health`. */
+  last_health_at_ms: number | null;
+  /** Supervisor-initiated restarts since provisioning (mig 188). */
+  restart_count: number;
 }
 
 export interface UpsertSandboxServiceInput {
@@ -81,7 +93,26 @@ export interface UpsertSandboxServiceInput {
 }
 
 export class CompanySandboxServicesStore {
-  constructor(private readonly db: DB) {}
+  /** Health-column queries (mig 188) — extracted to respect the LOC cap. */
+  private readonly healthOps: CompanySandboxServicesHealth;
+
+  constructor(private readonly db: DB) {
+    this.healthOps = new CompanySandboxServicesHealth(db);
+  }
+
+  /** Sets the supervisor-probe verdict. False when the row does not exist. */
+  updateHealth(
+    sessionId: number,
+    serviceId: string,
+    input: UpdateServiceHealthInput,
+  ): boolean {
+    return this.healthOps.updateHealth(sessionId, serviceId, input);
+  }
+
+  /** Increments restart_count; returns the new value (null when row is absent). */
+  bumpRestartCount(sessionId: number, serviceId: string): number | null {
+    return this.healthOps.bumpRestartCount(sessionId, serviceId);
+  }
 
   upsert(input: UpsertSandboxServiceInput): PersistedSandboxServiceRow {
     const now = input.last_access_at_ms ?? Date.now();

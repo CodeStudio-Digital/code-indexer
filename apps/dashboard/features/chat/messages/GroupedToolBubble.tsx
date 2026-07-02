@@ -10,6 +10,7 @@ import type {
   PersistedMessage,
   PersistedTasksState,
   PromptHandlers,
+  ToolResultView,
   VisualGroup,
 } from '../types.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
@@ -19,7 +20,8 @@ type AssistantGroup = Extract<VisualGroup, { kind: 'assistant' }>;
 
 interface GroupedToolBubbleProps {
   group: AssistantGroup;
-  toolResultsById: Map<string, { content: string; isError: boolean; image?: { mediaType: string; base64: string } }>;
+  toolResultsById: Map<string, ToolResultView>;
+  sessionId?: number;
   providerId: string;
   handlers: PromptHandlers;
   tasksState: PersistedTasksState | null | undefined;
@@ -48,6 +50,7 @@ function aggregateUsage(usages: (MessageRow | undefined)[]): {
 export const GroupedToolBubble = React.memo(function GroupedToolBubble({
   group,
   toolResultsById,
+  sessionId,
   providerId,
   handlers,
   tasksState,
@@ -109,6 +112,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
                 toolResultsById,
                 tasksState,
                 activeTasksToolUseId,
+                sessionId,
               ),
             ),
           )}

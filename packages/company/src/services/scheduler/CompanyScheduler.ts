@@ -5,7 +5,9 @@
  * via a DIRECT `subordinates.spawn(...)` call — not the main-thread RPC proxy,
  * which has a 60s timeout that a cold-container spawn would blow.
  *
- * Each tick (default 20s, gated behind `MCP_COMPANY_SCHEDULER=1`):
+ * Each tick (default 20s; C2 — ON by default, killed live by
+ * `autonomy.freeze`/`autonomy.scheduler=false` per session or the
+ * `MCP_COMPANY_SCHEDULER='0'` env kill-switch, checked at EVERY tick):
  *   1. Only act when the MASTER IS NOT ALIVE — the scheduler fills the gaps
  *      while the master rests between turns. When a dispatched subordinate
  *      finishes, its completion notify resurrects the master to synthesize.
@@ -26,13 +28,20 @@
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { KanbanService } from '@mcp/company/services/KanbanService.js';
 import type { MasterLifecycle } from '@mcp/company/services/MasterLifecycle.js';
+import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 import type { KanbanColumn, KanbanTag } from '@mcp/company/types.js';
 import {
   createKanbanPriorityPipeline,
   prioritizeKanban,
   type KanbanCardInput,
 } from '@mcp/company/kanban-priority/index.js';
+import {
+  isAutonomyActionAllowed,
+  resolveAutonomy,
+} from '@mcp/company/services/autonomy/autonomy-config.js';
+import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-provider.js';
 import { selectDispatchTargets, type SchedulerCard } from './dispatch-core.js';
+import { dispatchCard } from './dispatch-card.js';
 import { getGlobalCompanyRecommend } from './recommend-shim.js';
 
 const DEFAULT_TICK_MS = 20_000;
@@ -54,6 +63,20 @@ export interface CompanySchedulerDeps {
   subordinates: SchedulerSpawn;
   /** Hard concurrency cap (ConcurrencyPolicy.limit). */
   concurrencyLimit: number;
+  /**
+   * C1 — session metaBus publisher for organism-visibility events
+   * (`scheduler_dispatched` / `scheduler_skipped` / `scheduler_sweep`).
+   * Optional so test fixtures and older call-sites keep working; publish
+   * failures never break the sweep.
+   */
+  bus?: Pick<IMetaBusPublisher, 'publish'>;
+  /**
+   * C2 — per-session autonomy config, consulted at the START of every tick
+   * (not at boot) so `freeze` / `scheduler=false` kill the loop LIVE.
+   * Optional: legacy callers/tests without it fall back to
+   * `resolveAutonomy(null, process.env)` — never crash.
+   */
+  autonomy?: Pick<AutonomyProvider, 'get'>;
   /** Override for tests. */
   now?: () => number;
 }
@@ -75,25 +98,29 @@ function maxPerSweep(): number {
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_PER_SWEEP;
 }
 
-export function schedulerEnabled(): boolean {
-  return process.env.MCP_COMPANY_SCHEDULER === '1';
-}
-
 export class CompanyScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
   constructor(private readonly deps: CompanySchedulerDeps) {}
 
+  /** C2 — effective autonomy config; falls back to env+defaults when no
+   *  provider was injected (legacy callers, narrow test fixtures). */
+  private autonomyConfig() {
+    return this.deps.autonomy
+      ? this.deps.autonomy.get()
+      : resolveAutonomy(null, process.env);
+  }
+
   start(): void {
     if (this.timer) return;
-    if (!schedulerEnabled()) return; // opt-in; default off until validated on-device
-    // Loud, unmissable confirmation that the new code is live AND the flag was
-    // read — so an operator can tell "is the scheduler actually armed?" from the
-    // server log without guessing.
+    // C2 — ALWAYS arm the timer; the enable/freeze decision moved into the
+    // tick so a session toggle (PATCH /config) or env kill-switch acts LIVE,
+    // without restarting the worker. An off config costs one cheap check/20s.
     console.log(
       `[company s=${this.deps.ctx.companySessionId}] 🤖 AUTONOMOUS SCHEDULER ARMED ` +
-      `(MCP_COMPANY_SCHEDULER=1, tick=${tickMs()}ms, maxPerSweep=${maxPerSweep()}) — ` +
+      `(default ON — kill-switch: MCP_COMPANY_SCHEDULER=0 or autonomy.scheduler=false/freeze; ` +
+      `tick=${tickMs()}ms, maxPerSweep=${maxPerSweep()}) — ` +
       `will dispatch unblocked cards while the master is idle.`,
     );
     this.timer = setInterval(() => {
@@ -115,6 +142,10 @@ export class CompanyScheduler {
 
   /** One dispatch pass. Exposed for tests. */
   async tick(): Promise<void> {
+    // C2 — live kill-switch: freeze / scheduler=false / env '0' make every
+    // tick a no-op while the timer stays armed (re-enabling needs no restart).
+    const cfg = this.autonomyConfig();
+    if (!isAutonomyActionAllowed(cfg, 'scheduler')) return;
     // Division of labor: while the master is actively orchestrating, it owns
     // delegation — the scheduler only works the board during the master's
     // dormant gaps.
@@ -184,65 +215,68 @@ export class CompanyScheduler {
         assignedAgentRunIds: c.agents.filter((a) => !a.unassigned_at).map((a) => a.agent_run_id),
       }));
 
+    // C3 — soft WIP ceiling on in_progress. Only the scheduler respects it:
+    // a human drag or an explicit master move can still exceed the limit.
+    const inProgressCount = cardsFull.filter((c) => c.column === 'in_progress').length;
+    const wipLimit = cfg.wipLimits?.in_progress ?? null;
+
     const targets = selectDispatchTargets({
       prioritizedCards,
       runningCount,
       concurrencyLimit: this.deps.concurrencyLimit,
       maxPerSweep: maxPerSweep(),
+      wip: { inProgressCount, limit: wipLimit },
     });
     if (targets.length === 0) return;
 
+    // C3 — the per-card "recommend → spawn → assign → move → comment" unit
+    // lives in dispatch-card.ts, shared with the manual quick-dispatch route.
     const recommend = getGlobalCompanyRecommend();
+    let dispatched = 0;
     for (const cardId of targets) {
-      const card = byId.get(cardId);
-      if (!card) continue;
-      const taskText = `${card.title}\n\n${card.description ?? ''}`.trim();
-
-      // Resolve a role. The embedding recommender is the brain; never guess.
-      let role: string | null = null;
-      if (recommend) {
-        try {
-          const rec = await recommend({ companySessionId: sessionId, taskText, k: 1 });
-          role = rec.recommendations[0]?.role ?? null;
-        } catch (e) {
-          console.warn(
-            `[company s=${sessionId}] scheduler: recommend failed for card ${cardId}: ${e instanceof Error ? e.message : String(e)}`,
-          );
-        }
-      }
-      if (!role) {
-        console.log(
-          `[company s=${sessionId}] scheduler: no role resolved for card ${cardId} — skipping (wire the recommender shim to enable autonomous dispatch)`,
-        );
-        continue;
-      }
-
-      try {
-        const spawned = await this.deps.subordinates.spawn({
-          role,
-          task: taskText,
-          // projectId omitted → spawn auto-resolves from the role's single
-          // binding; a multi-bound/unbound role throws and we skip the card.
-        });
-        try {
-          this.deps.kanban.assignAgent(cardId, spawned.agentRunId, role);
-          this.deps.kanban.moveCard(cardId, 'in_progress');
-          this.deps.kanban.addComment(
-            cardId,
-            'scheduler',
-            spawned.agentRunId,
-            `[AUTO] Scheduler dispatched @${role} (run=${spawned.agentRunId}) for this card while the master was idle.`,
-          );
-        } catch { /* card bookkeeping is best-effort */ }
-        console.log(
-          `[company s=${sessionId}] scheduler: dispatched @${role} (run=${spawned.agentRunId}) for card ${cardId}`,
-        );
-      } catch (e) {
-        console.warn(
-          `[company s=${sessionId}] scheduler: spawn failed for card ${cardId} role=${role}: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
+      const result = await dispatchCard(
+        {
+          sessionId,
+          kanban: {
+            // Cards were just listed for prioritization — reuse the snapshot
+            // instead of a second store read per target.
+            getCard: (id) => byId.get(id) ?? null,
+            assignAgent: (c, agentRunId, role) => this.deps.kanban.assignAgent(c, agentRunId, role),
+            moveCard: (c, col) => this.deps.kanban.moveCard(c, col),
+            addComment: (c, author, runId, content) =>
+              this.deps.kanban.addComment(c, author, runId, content),
+          },
+          subordinates: this.deps.subordinates,
+          recommend,
+          publish: (event, data) => this.publishVisibility(event, data),
+        },
+        cardId,
+        { source: 'scheduler' },
+      );
+      if (result.ok) dispatched += 1;
     }
+    // Sweep summary only when something actually moved — silence is signal
+    // (an all-quiet tick must not spam the session feed every 20s).
+    if (dispatched > 0) {
+      this.publishVisibility('scheduler_sweep', {
+        dispatched,
+        freeSlots: Math.max(0, this.deps.concurrencyLimit - runningCount - dispatched),
+      });
+    }
+  }
+
+  /**
+   * C1 — best-effort visibility event on the session metaBus. Carries a
+   * server-side `at` timestamp so SSE replays de-dup client-side instead
+   * of re-stamping (and duplicating) on every reconnect.
+   */
+  private publishVisibility(event: string, data: Record<string, unknown>): void {
+    try {
+      this.deps.bus?.publish(event, {
+        ...data,
+        at: this.deps.now ? this.deps.now() : Date.now(),
+      });
+    } catch { /* visibility must never break the sweep */ }
   }
 
   private nowMs(): number {

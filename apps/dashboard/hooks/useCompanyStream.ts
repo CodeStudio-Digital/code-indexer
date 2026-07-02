@@ -30,6 +30,7 @@ import type {
   AgentStatusPayload,
   SessionIdlePayload,
 } from '../state/company/stream-handlers/agentStatusEvent.js';
+import { mapAutonomyStreamEvent } from '../state/company/stream-handlers/autonomyEvent.js';
 import { notifyCompanyStreamEvent, type NotificationSourceContext } from '../features/notifications/index.js';
 
 // Re-export client state types so legacy consumers keep their imports.
@@ -73,10 +74,13 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
   const sandboxApplyFileChange = useCompanyStore((s) => s.sandboxApplyFileChange);
   const sandboxBumpStatus = useCompanyStore((s) => s.sandboxBumpStatus);
   const sandboxBumpServices = useCompanyStore((s) => s.sandboxBumpServices);
+  const sandboxAppendServiceLogs = useCompanyStore((s) => s.sandboxAppendServiceLogs);
+  const sandboxApplyServiceHealth = useCompanyStore((s) => s.sandboxApplyServiceHealth);
   const driveApplyAdded = useCompanyStore((s) => s.driveApplyAdded);
   const driveApplyUpdated = useCompanyStore((s) => s.driveApplyUpdated);
   const driveApplyDeleted = useCompanyStore((s) => s.driveApplyDeleted);
   const inboxBumpEventSeq = useCompanyStore((s) => s.inboxBumpEventSeq);
+  const autonomyPushEvent = useCompanyStore((s) => s.autonomyPushEvent);
 
   // ─── Transport refs ──────────────────────────────────────────
   const abortRef = useRef<AbortController | null>(null);
@@ -201,12 +205,52 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
         sandboxBumpServices(companySessionId);
         return;
       }
+      // B6 — live structured log tail from the supervisor's collector.
+      // Appended to the bounded per-service buffer (500 lines); history
+      // pagination goes through REST (`/logs/history`).
+      if (eventType === 'sandbox.service.log_batch') {
+        const p = (data ?? {}) as {
+          serviceId?: string;
+          lines?: Array<{ atMs?: number; stream?: string; line?: string }>;
+        };
+        if (typeof p.serviceId === 'string' && p.serviceId && Array.isArray(p.lines)) {
+          sandboxAppendServiceLogs(companySessionId, p.serviceId, p.lines);
+        }
+        return;
+      }
+      // B8 — supervisor verdicts also land in the per-service health map:
+      // host-process rows (`local:<id>`) have no persisted health column,
+      // so the refetch below would keep them 'unknown' forever — the map
+      // is their live source (overlaid by the services sidebar).
+      if (eventType === 'sandbox.service.health') {
+        const p = (data ?? {}) as {
+          serviceId?: string;
+          health?: string;
+          detail?: string | null;
+          at?: number;
+        };
+        if (typeof p.serviceId === 'string' && p.serviceId && typeof p.health === 'string') {
+          sandboxApplyServiceHealth(
+            companySessionId,
+            p.serviceId,
+            p.health,
+            p.detail ?? null,
+            typeof p.at === 'number' ? p.at : Date.now(),
+          );
+        }
+        sandboxBumpServices(companySessionId);
+        return;
+      }
       // Service-list mutations (add/remove + synthetic status_changed
       // emitted on every primary-sandbox transition by forwardEvent).
+      // B6 adds the supervisor verdict events so health badges refresh:
+      // `.restarted`/`.incident` are rare, so the extra refetches stay cheap.
       if (
         eventType === 'sandbox.service.added' ||
         eventType === 'sandbox.service.removed' ||
-        eventType === 'sandbox.service.status_changed'
+        eventType === 'sandbox.service.status_changed' ||
+        eventType === 'sandbox.service.restarted' ||
+        eventType === 'sandbox.service.incident'
       ) {
         sandboxBumpServices(companySessionId);
         return;
@@ -240,6 +284,14 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
         inboxBumpEventSeq(companySessionId);
         return;
       }
+      // C1 — organism visibility: scheduler dispatch/skip/sweep, plan
+      // auto-approvals, supervisor incidents and master nudges feed the
+      // autonomy ring (AutonomyPanel / AutonomyActivityFeed / banner).
+      const autonomyEvent = mapAutonomyStreamEvent(eventType, data);
+      if (autonomyEvent) {
+        autonomyPushEvent(companySessionId, autonomyEvent);
+        return;
+      }
       if (eventType === 'done') {
         receivedDoneRef.current = true;
         streamSetConnected(companySessionId, false);
@@ -261,10 +313,13 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
       sandboxApplyFileChange,
       sandboxBumpStatus,
       sandboxBumpServices,
+      sandboxAppendServiceLogs,
+      sandboxApplyServiceHealth,
       driveApplyAdded,
       driveApplyUpdated,
       driveApplyDeleted,
       inboxBumpEventSeq,
+      autonomyPushEvent,
     ],
   );
 

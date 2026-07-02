@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Loader2, Sparkles, X } from 'lucide-react';
 import { KanbanColumn } from './KanbanColumn.js';
@@ -19,14 +19,26 @@ import type {
 } from '@mcp/company/types.js';
 import { KANBAN_COLUMNS } from '@mcp/company/types.js';
 import {
+  dispatchKanbanCard,
   recomputeKanbanPriorities,
+  suggestKanbanRoles,
   type KanbanPriorityDiagnostic,
 } from './recommendations-api.js';
+import { kanbanRecomputeFingerprint } from './kanban-card-flags.js';
 import { RecommendRoleDialog } from './RecommendRoleDialog.js';
+import { apiPatch } from '../../hooks/useApi.js';
+import { selectAutonomy, useCompanyStore } from '../../state/company/index.js';
+import type { AutonomyConfigLike } from '../../state/company/index.js';
 
 interface KanbanTabProps {
   companySessionId: number;
 }
+
+/** Debounce for the auto recompute + role-suggestion refresh (C3). */
+const AUTO_RECOMPUTE_DEBOUNCE_MS = 1_500;
+
+const autoRecomputeStorageKey = (sessionId: number): string =>
+  `mcp.kanban.autoRecompute.${sessionId}`;
 
 export function KanbanTab({ companySessionId }: KanbanTabProps) {
   const { t } = useTranslation(['agents', 'common']);
@@ -39,13 +51,26 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
   const [newTitle, setNewTitle] = useState('');
   const [newTag, setNewTag] = useState<KanbanTag | ''>('');
   // Priority-pipeline state — populated when the user clicks "Recompute
-  // priorities". Cards display badges + columns sort by score until the
-  // user clears it.
+  // priorities" (or the auto refresh runs). Cards display badges + columns
+  // sort by score until the user clears it.
   const [priorityDiag, setPriorityDiag] = useState<KanbanPriorityDiagnostic[] | null>(null);
   const [priorityLoading, setPriorityLoading] = useState(false);
   const [priorityError, setPriorityError] = useState<string | null>(null);
   const [recommendOpen, setRecommendOpen] = useState(false);
   const [recommendTask, setRecommendTask] = useState('');
+  // C3 — auto recompute toggle (persisted), role suggestions, quick dispatch.
+  const [autoRecompute, setAutoRecompute] = useState<boolean>(() => {
+    try { return localStorage.getItem(autoRecomputeStorageKey(companySessionId)) !== '0'; }
+    catch { return true; }
+  });
+  const [roleSuggestions, setRoleSuggestions] = useState<Map<number, string>>(new Map());
+  const [dispatchingIds, setDispatchingIds] = useState<Set<number>>(new Set());
+  const [dispatchNotice, setDispatchNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // C3 — WIP limits live in the session autonomy config.
+  const autonomyState = useCompanyStore((s) => selectAutonomy(s, companySessionId));
+  const autonomyHydrate = useCompanyStore((s) => s.autonomyHydrate);
+  const autonomySetConfig = useCompanyStore((s) => s.autonomySetConfig);
+
   const priorityScores = useMemo(() => {
     if (!priorityDiag) return undefined;
     const m = new Map<number, number>();
@@ -66,6 +91,102 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
     }
   }, [companySessionId]);
 
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const suggestions = await suggestKanbanRoles(companySessionId);
+      setRoleSuggestions(new Map(suggestions.map((s) => [s.cardId, s.role])));
+    } catch { /* suggestions are best-effort */ }
+  }, [companySessionId]);
+
+  // ─── C3: debounced auto refresh on board mutations ──────────
+  // Keyed off a content fingerprint (id/column/deps/agents/title) so
+  // unrelated churn (comments, checklist) doesn't re-run the pipelines and
+  // the read-only recompute response can never re-trigger itself.
+  const fingerprint = useMemo(
+    () => kanbanRecomputeFingerprint(kanban.cards),
+    [kanban.cards],
+  );
+  useEffect(() => {
+    if (!autoRecompute || kanban.loading || kanban.cards.length === 0) return;
+    const timer = setTimeout(() => {
+      void handleRecomputePriorities();
+      void loadSuggestions();
+    }, AUTO_RECOMPUTE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [fingerprint, autoRecompute, kanban.loading, kanban.cards.length, handleRecomputePriorities, loadSuggestions]);
+
+  const toggleAutoRecompute = useCallback(() => {
+    setAutoRecompute((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(autoRecomputeStorageKey(companySessionId), next ? '1' : '0'); }
+      catch { /* private mode */ }
+      return next;
+    });
+  }, [companySessionId]);
+
+  // ─── C3: quick dispatch (suggestion chip click) ─────────────
+  const handleQuickDispatch = useCallback(async (cardId: number, role: string) => {
+    setDispatchingIds((prev) => new Set(prev).add(cardId));
+    try {
+      const res = await dispatchKanbanCard(companySessionId, cardId, role);
+      if (res.ok) {
+        setDispatchNotice({
+          kind: 'ok',
+          text: t('agents:kanban.dispatch.success', { role: res.role ?? role, run: res.agentRunId ?? '?', cardId }),
+        });
+        setRoleSuggestions((prev) => { const m = new Map(prev); m.delete(cardId); return m; });
+      } else {
+        setDispatchNotice({
+          kind: 'err',
+          text: t('agents:kanban.dispatch.failed', { reason: res.reason ?? res.error ?? '?' }),
+        });
+      }
+    } catch (e) {
+      setDispatchNotice({
+        kind: 'err',
+        text: t('agents:kanban.dispatch.failed', { reason: (e as Error).message }),
+      });
+    } finally {
+      setDispatchingIds((prev) => { const s = new Set(prev); s.delete(cardId); return s; });
+    }
+  }, [companySessionId, t]);
+
+  // Toast substitute (no toast infra in the dashboard): auto-hide banner.
+  useEffect(() => {
+    if (!dispatchNotice) return;
+    const timer = setTimeout(() => setDispatchNotice(null), 5_000);
+    return () => clearTimeout(timer);
+  }, [dispatchNotice]);
+
+  // ─── C3: WIP limits (autonomy config) ───────────────────────
+  const refetchAutonomy = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/company/sessions/${companySessionId}/autonomy`);
+      if (!r.ok) return;
+      const body = (await r.json().catch(() => null)) as { config?: AutonomyConfigLike | null } | null;
+      if (body) autonomyHydrate(companySessionId, { config: body.config ?? null, events: [] });
+    } catch { /* keep last-known */ }
+  }, [companySessionId, autonomyHydrate]);
+
+  useEffect(() => {
+    if (!autonomyState.initialized) void refetchAutonomy();
+  }, [autonomyState.initialized, refetchAutonomy]);
+
+  const wipLimits = autonomyState.config?.wipLimits ?? {};
+
+  const handleWipLimitChange = useCallback(async (column: KanbanColumnType, limit: number | null) => {
+    const next: Record<string, number> = { ...(autonomyState.config?.wipLimits ?? {}) };
+    if (limit == null) delete next[column];
+    else next[column] = limit;
+    // Optimistic — the config PATCH round-trips through sanitize + merge.
+    autonomySetConfig(companySessionId, { ...(autonomyState.config ?? {}), wipLimits: next });
+    try {
+      await apiPatch(`/company/sessions/${companySessionId}/config`, { autonomy: { wipLimits: next } });
+    } catch {
+      await refetchAutonomy(); // reconcile on rejection
+    }
+  }, [companySessionId, autonomyState.config, autonomySetConfig, refetchAutonomy]);
+
   // Group cards by column
   const cardsByColumn = new Map<KanbanColumnType, KanbanCardFull[]>();
   for (const col of KANBAN_COLUMNS) cardsByColumn.set(col, []);
@@ -74,6 +195,12 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
     list.push(card);
     cardsByColumn.set(card.column, list);
   }
+
+  const titleById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of kanban.cards) m.set(c.id, c.title);
+    return m;
+  }, [kanban.cards]);
 
   const handleDrop = useCallback(
     (cardId: number, column: KanbanColumnType) => {
@@ -85,6 +212,12 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
   const handleCardClick = useCallback((card: KanbanCardFull) => {
     setSelectedCard(card);
   }, []);
+
+  // C3 — blocked_by chips open the BLOCKER's modal.
+  const handleOpenCardById = useCallback((cardId: number) => {
+    const card = kanban.cards.find((c) => c.id === cardId);
+    if (card) setSelectedCard(card);
+  }, [kanban.cards]);
 
   const handleCreateCard = useCallback(
     (column: KanbanColumnType) => {
@@ -131,8 +264,19 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
           Priority recompute failed: {priorityError}
         </div>
       )}
+      {dispatchNotice && (
+        <div
+          className={`mx-3 mt-2 p-2 rounded text-sm border ${
+            dispatchNotice.kind === 'ok'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              : 'bg-red-500/10 border-red-500/30 text-red-400'
+          }`}
+        >
+          {dispatchNotice.text}
+        </div>
+      )}
 
-      {/* Toolbar: priority pipeline trigger + clear */}
+      {/* Toolbar: priority pipeline trigger + auto toggle + clear */}
       <div className="px-3 pt-2 pb-1 flex items-center gap-2 text-xs">
         <Button
           size="sm"
@@ -146,6 +290,14 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
             <Sparkles className="h-3 w-3 mr-1" />
           )}
           {priorityScores ? 'Refresh priorities' : 'Recompute priorities'}
+        </Button>
+        <Button
+          size="sm"
+          variant={autoRecompute ? 'secondary' : 'ghost'}
+          onClick={toggleAutoRecompute}
+          title={t('agents:kanban.autoRecomputeTooltip')}
+        >
+          {t('agents:kanban.autoRecompute')}
         </Button>
         {priorityScores && (
           <Button size="sm" variant="ghost" onClick={() => setPriorityDiag(null)}>
@@ -182,6 +334,13 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
               onDrop={handleDrop}
               onCreateCard={handleCreateCard}
               priorityScores={priorityScores}
+              wipLimit={(wipLimits as Record<string, number>)[col] ?? null}
+              onWipLimitChange={(column, limit) => void handleWipLimitChange(column, limit)}
+              roleSuggestions={roleSuggestions}
+              onQuickDispatch={(cardId, role) => void handleQuickDispatch(cardId, role)}
+              dispatchingCardIds={dispatchingIds}
+              onOpenCardById={handleOpenCardById}
+              titleForCard={(id) => titleById.get(id)}
             />
           ))}
         </div>

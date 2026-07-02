@@ -1,6 +1,6 @@
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import { createBus, type CoderRunBus } from '@apps/http-api/coder-bus.js';
+import { createBus, addBusEventSink, type CoderRunBus } from '@apps/http-api/coder-bus.js';
 
 import { SessionContext } from '../services/SessionContext.js';
 import { MetaBusPublisher } from '../services/MetaBusPublisher.js';
@@ -20,9 +20,11 @@ import { PipelineExecutor } from '../services/PipelineExecutor.js';
 import { InboxQueue } from '../services/InboxQueue.js';
 import { MasterInboxRouter } from '../services/MasterInboxRouter.js';
 import { RuntimeReconciler } from '../services/RuntimeReconciler.js';
+import { ServiceSupervisor } from '../services/service-supervisor/ServiceSupervisor.js';
 import { CompanyScheduler } from '../services/scheduler/CompanyScheduler.js';
 import { CompanyDriveStore } from '../services/CompanyDriveStore.js';
 import { CompanyEventBus } from '../services/CompanyEventBus.js';
+import { createAutonomyProvider, type AutonomyProvider } from '../services/autonomy/autonomy-provider.js';
 import type { CompanyOrchestrator } from '../orchestrator.js';
 
 export interface WiredServices {
@@ -45,7 +47,22 @@ export interface WiredServices {
   inbox: InboxQueue;
   masterInbox: MasterInboxRouter;
   reconciler: RuntimeReconciler;
+  /**
+   * B3 — per-session sandbox health watchdog. Constructed here (worker
+   * only), STARTED by `MasterLifecycle.start/resumeExisting` after the
+   * sandbox provision kicks off, stopped by `orchestrator.abortAll`
+   * alongside the reconciler.
+   */
+  serviceSupervisor: ServiceSupervisor;
   scheduler: CompanyScheduler;
+  /**
+   * C0/C2 — per-session autonomy config provider (cached read of
+   * `config_json.autonomy`, invalidated on `session.config_updated`).
+   * C2: consulted live by scheduler (tick), reconciler (orphan sweep),
+   * HitL (plan auto-approve), spawn (global budget) and master
+   * lifecycle (supervisor wiring).
+   */
+  autonomy: AutonomyProvider;
   driveStore: CompanyDriveStore;
   metaBus: CoderRunBus;
   parentSessionId: number | null;
@@ -69,6 +86,17 @@ export function wireServices(args: {
   // Resolve parent linkage (migration 067).
   const sessionRow = args.companyStore.getCompanySession(args.companySessionId);
   const parentSessionId = sessionRow?.parent_session_id ?? null;
+
+  // C0 — autonomy config provider. `applyConfigPatch` (this worker) publishes
+  // `session.config_updated` on this same metaBus after persisting, so the
+  // sink below keeps the cache coherent without timers.
+  const autonomy = createAutonomyProvider({
+    companyStore: args.companyStore,
+    sessionId: args.companySessionId,
+  });
+  addBusEventSink(metaBus, (ev) => {
+    if (ev.event === 'session.config_updated') autonomy.invalidate();
+  });
 
   const ctx = new SessionContext({
     companySessionId: args.companySessionId,
@@ -94,16 +122,17 @@ export function wireServices(args: {
     humanInLoop: undefined as unknown as HumanInTheLoop,
     wirer, eventBus, attention,
     orchestratorRef: args.orchestratorRef,
+    autonomy,
   });
 
-  const humanInLoop = new HumanInTheLoop(publisher, board, status, master, attention, ctx);
+  const humanInLoop = new HumanInTheLoop(publisher, board, status, master, attention, ctx, autonomy);
   // Back-fill HitL into Master via the typed private slot — visible and
   // breakable from a test fixture.
   (master as unknown as { deps: { humanInLoop: HumanInTheLoop } }).deps.humanInLoop = humanInLoop;
 
   const subordinates = new SubordinateLifecycle({
     ctx, board, status, kanban, master, humanInLoop, wirer, eventBus,
-    orchestratorRef: args.orchestratorRef, attention,
+    orchestratorRef: args.orchestratorRef, attention, autonomy,
   });
 
   const idle = new IdleController({
@@ -170,18 +199,45 @@ export function wireServices(args: {
   // heartbeat. Constructed AFTER masterInbox because it depends on it.
   const reconciler = new RuntimeReconciler({
     ctx, master, subordinates, masterInbox, publisher, humanInLoop, attention, kanban,
+    autonomy,
   });
   reconciler.start();
 
-  // CompanyScheduler — autonomous dispatch loop. Gated behind
-  // MCP_COMPANY_SCHEDULER (default off): `start()` is a no-op when disabled,
-  // so this costs nothing until the operator opts in.
+  // ServiceSupervisor (B3) — sandbox health watchdog. Constructed after
+  // inbox/kanban because the incident fan-out uses them. NOT started here:
+  // MasterLifecycle start/resume calls `.start()` once the provision path
+  // ran (back-wired below, same typed-private-slot pattern as humanInLoop).
+  const serviceSupervisor = new ServiceSupervisor({
+    sessionId: args.companySessionId,
+    publisher,
+    autonomy,
+    incidents: {
+      notifyMaster: (m) => master.notify(m),
+      board,
+      publisher,
+      kanban,
+      inbox,
+      getSessionConfigJson: () =>
+        args.companyStore.getCompanySession(args.companySessionId)?.config_json ?? null,
+    },
+  });
+  (master as unknown as { deps: { serviceSupervisor?: ServiceSupervisor } }).deps.serviceSupervisor =
+    serviceSupervisor;
+
+  // CompanyScheduler — autonomous dispatch loop. C2 — ON by default: the
+  // timer is always armed and each tick consults the autonomy provider, so
+  // a session toggle (PATCH /config), `freeze`, or MCP_COMPANY_SCHEDULER='0'
+  // kills it live without a worker restart.
   const scheduler = new CompanyScheduler({
     ctx,
     kanban,
     master,
     subordinates,
     concurrencyLimit: subordinates.concurrencyPolicy.limit,
+    // C1 — organism visibility: dispatch/skip/sweep events ride the session
+    // metaBus so the dashboard's autonomy feed sees the scheduler act.
+    bus: publisher,
+    autonomy,
   });
   scheduler.start();
 
@@ -189,6 +245,7 @@ export function wireServices(args: {
     ctx, publisher, wirer, kanban, board, status, attention,
     sandboxService, eventBus, humanInLoop, idle, watchdog,
     subordinates, master, pipelines, pipelineExecutor,
-    inbox, masterInbox, reconciler, scheduler, driveStore, metaBus, parentSessionId,
+    inbox, masterInbox, reconciler, serviceSupervisor, scheduler,
+    autonomy, driveStore, metaBus, parentSessionId,
   };
 }

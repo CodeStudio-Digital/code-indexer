@@ -10,6 +10,7 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { getSandboxManager, inferPreviewStrategy } from '@mcp/services/sandbox/index.js';
+import { getLocalProcessManager } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 
 export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void {
   const { companyStore, db } = deps;
@@ -70,6 +71,13 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
         is_attached: isAttached,
         external_container_ref: row.external_container_ref ?? null,
         attached_hostname: row.attached_hostname ?? null,
+        // B6 — supervisor health projection (mig 188 columns) + approximate
+        // uptime anchor (live manager provision timestamp, epoch ms).
+        health: row.health ?? 'unknown',
+        health_detail: row.health_detail ?? null,
+        last_health_at_ms: row.last_health_at_ms ?? null,
+        restart_count: row.restart_count ?? 0,
+        started_at_ms: liveSb?.createdAt ?? null,
       };
     });
 
@@ -112,6 +120,13 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
           is_attached: false,
           external_container_ref: null,
           attached_hostname: null,
+          // The legacy primary has no company_sandbox_services row, so the
+          // supervisor's health write no-ops for it — report 'unknown'.
+          health: 'unknown',
+          health_detail: null,
+          last_health_at_ms: null,
+          restart_count: 0,
+          started_at_ms: liveMain?.createdAt ?? null,
         });
       }
     }
@@ -127,6 +142,8 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
     type SidecarService = typeof services[number] & {
       project_id?: number;
       root_path?: string;
+      /** B8 — discriminates host-process rows; absent = container. */
+      kind?: 'local';
     };
     const augmented: SidecarService[] = services.slice();
     for (const link of companyStore.listCompanySessionProjects(id)) {
@@ -157,8 +174,53 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
         is_attached: false,
         external_container_ref: null,
         attached_hostname: null,
+        health: 'unknown',
+        health_detail: null,
+        last_health_at_ms: null,
+        restart_count: 0,
+        started_at_ms: null,
       });
       seen.add(link.label);
+    }
+
+    // B8 — the session's HOST process (LocalProcessManager) as a read-only
+    // row under `service_id: 'local:<id>'`. This route runs on the main
+    // process, so the LPM singleton is authoritative when live; the
+    // persisted row covers the post-crash case (`listBySession` already
+    // hides destroyed rows). Health is deliberately 'unknown' here: the
+    // supervisor keeps host-process health in WORKER memory only (no
+    // company_sandbox_services row, no migration) and the dashboard
+    // receives live verdicts via the `sandbox.service.health` SSE events.
+    const liveLocal = getLocalProcessManager().get(String(id));
+    const localRow = deps.companyLocalProjectStore.listBySession(id);
+    if (liveLocal || localRow) {
+      const cwd = liveLocal?.cwd ?? localRow?.cwd ?? '';
+      const label = cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'local';
+      augmented.push({
+        service_id: `local:${id}`,
+        kind: 'local',
+        name: label,
+        stack: 'local-process',
+        status: liveLocal?.status ?? localRow?.status ?? 'error',
+        runtime_paused: false,
+        step: liveLocal?.status === 'running' ? 'ready' : 'queued',
+        host_port: liveLocal?.hostPort ?? localRow?.host_port ?? 0,
+        preview_url: liveLocal?.previewUrl ?? null,
+        preview_strategy: inferPreviewStrategy({ mountKind: 'external' }),
+        is_primary: false,
+        error: liveLocal?.error ?? localRow?.error ?? null,
+        created_at: localRow?.created_at ?? new Date().toISOString(),
+        mount_kind: 'external',
+        image_source: 'default',
+        is_attached: false,
+        external_container_ref: null,
+        attached_hostname: null,
+        health: 'unknown',
+        health_detail: null,
+        last_health_at_ms: null,
+        restart_count: 0,
+        started_at_ms: liveLocal?.createdAt ?? null,
+      });
     }
 
     return c.json({ services: augmented });

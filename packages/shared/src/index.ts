@@ -4,6 +4,7 @@ export * from './utils/config.js';
 export * from './utils/data-paths.js';
 export * from './utils/token-budget.js';
 export * from './utils/dev-server-url.js';
+export * from './utils/index-ignore.js';
 export * from './utils/map-with-concurrency.js';
 export * from './utils/native-fetch.js';
 export * from './editor/completion-prefilter.js';

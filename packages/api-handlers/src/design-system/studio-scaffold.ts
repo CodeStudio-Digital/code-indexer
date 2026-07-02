@@ -12,6 +12,9 @@
  * Espelha o contrato emit-driven de `projects/scaffold.ts`: registro só
  * acontece com scaffold ok; diretório meio-escrito nunca é apagado.
  */
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Project } from '@mcp/shared/types.js';
 import {
   scaffoldDsStudioWorkspace,
@@ -19,7 +22,21 @@ import {
 } from '@mcp/services/host-scaffold/index.js';
 import { CreateProjectService, ProjectError } from '@mcp/services/services/projects/index.js';
 import type { DesignSystemSession } from '@mcp/store/design-system-store.js';
+import {
+  createPipelineState,
+  serializePipelineState,
+  type DsPipelineState,
+} from '@mcp/design-system/pipeline/stages.js';
+import { buildRoadmap } from '@mcp/design-system/pipeline/roadmap.js';
+import {
+  THEME_ANALYSIS_DIRNAME,
+  THEME_DIGEST_FILENAME,
+  type ThemeDigest,
+  type ThemeDigestSummary,
+} from '@mcp/design-system/theme-digest/theme-digest.js';
 import type { HandlerDeps } from '../types.js';
+
+export type DsStudioMode = 'fidelity' | 'creative';
 
 export interface DsStudioCreateInput {
   name: string;
@@ -27,6 +44,13 @@ export interface DsStudioCreateInput {
   stack: DsStudioStack;
   provider: string;
   model: string;
+  /**
+   * Modo de design, fixado na criação (imutável — o prompt do agente deriva
+   * dele de forma cache-estável): 'fidelity' = tema anexado é a fonte da
+   * verdade (tokens exatos + réplica dos componentes); 'creative' = tema é
+   * inspiração. Default 'creative'; 'fidelity' exige zip.
+   */
+  mode?: DsStudioMode | null;
   /** Zip já persistido no disco (a rota cuida do upload). */
   import_zip_path?: string | null;
   import_zip_hash?: string | null;
@@ -57,7 +81,45 @@ function validate(input: DsStudioCreateInput): string | null {
     return `Invalid stack '${input.stack}'. Use react-ts, vue-ts or angular.`;
   }
   if (!input.provider?.trim() || !input.model?.trim()) return 'provider and model are required.';
+  if (input.mode != null && input.mode !== 'fidelity' && input.mode !== 'creative') {
+    return `Invalid mode '${input.mode}'. Use fidelity or creative.`;
+  }
+  if (input.mode === 'fidelity' && !input.import_zip_path) {
+    return 'Fidelity mode requires a theme zip — attach one or use creative mode.';
+  }
   return null;
+}
+
+/**
+ * Estado inicial do pipeline: lê o theme digest que o scaffold escreveu em
+ * `import/_analysis/` (se houver) e mescla os candidatos no roadmap padrão.
+ */
+function buildInitialPipelineState(workspaceDir: string, mode: 'fidelity' | 'creative'): DsPipelineState {
+  let digest: ThemeDigest | null = null;
+  let summary: ThemeDigestSummary | null = null;
+  const digestPath = join(workspaceDir, 'import', THEME_ANALYSIS_DIRNAME, THEME_DIGEST_FILENAME);
+  if (existsSync(digestPath)) {
+    try {
+      const raw = readFileSync(digestPath, 'utf8');
+      digest = JSON.parse(raw) as ThemeDigest;
+      summary = {
+        sha256: createHash('sha256').update(raw).digest('hex'),
+        generated_at: digest.generated_at,
+        files: digest.totals.files,
+        colors: digest.tokens.colors.length,
+        components: digest.components.length,
+      };
+    } catch {
+      digest = null;
+      summary = null;
+    }
+  }
+  const roadmap = buildRoadmap({
+    mode,
+    digestComponents: digest?.components ?? null,
+    digestPages: digest?.pages ?? null,
+  });
+  return createPipelineState(roadmap, summary);
 }
 
 export async function runDsStudioScaffoldStream(
@@ -102,18 +164,32 @@ export async function runDsStudioScaffoldStream(
         port: outcome.port,
         kind: 'ds',
         packageName,
+        mode: input.mode ?? 'creative',
       }),
     });
     const finalProject = deps.db.getProject(project.id) ?? project;
 
-    const dsSession = deps.designSystemStore.createStudioSession({
+    const mode = input.mode ?? 'creative';
+    let dsSession = deps.designSystemStore.createStudioSession({
       project_id: project.id,
       name: outcome.name,
       package_name: packageName,
       stack: input.stack,
+      mode,
       source_zip_hash: input.import_zip_hash ?? null,
       source_zip_path: input.import_zip_path ?? null,
     });
+    // Máquina de etapas: roadmap = catálogo shadcn-level mesclado com os
+    // candidatos do theme digest (escrito pelo scaffold em import/_analysis).
+    // Falha aqui nunca derruba a criação — a UI oferece pipeline/init.
+    try {
+      dsSession = deps.designSystemStore.setPipelineJson(
+        dsSession.id,
+        serializePipelineState(buildInitialPipelineState(outcome.targetPath, mode)),
+      );
+    } catch (e) {
+      emit({ event: 'log', data: { stream: 'stderr', chunk: `pipeline init failed (non-fatal): ${(e as Error).message}\n` } });
+    }
 
     const coderSession = deps.sessionStore.createSession({
       project_id: project.id,

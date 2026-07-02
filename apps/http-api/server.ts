@@ -46,7 +46,8 @@ import {
 } from '@mcp/services/sandbox/sandbox-manager.js';
 import { setCompanyLocalProjectStore } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
-import { setDatabaseToolStores } from '@mcp/company/tools/database-tools.js';
+import { setDbToolsStores, setDbSecretDecryptor } from '@mcp/code-agent/tools/db/index.js';
+import { getMainSecretDecryptor } from './server/secret-decrypt-port.js';
 import {
   setGlobalToolSelectionFilter,
   setGlobalToolSelectionOutcomeObserver,
@@ -319,7 +320,17 @@ export function createApp() {
   setCompanySessionEnvStore(deps.companySessionEnvStore);
   setCompanyLocalProjectStore(deps.companyLocalProjectStore);
   setEnvToolStore(deps.companySessionEnvStore);
-  setDatabaseToolStores(deps.companySessionDatabaseStore, deps.companySessionEnvStore);
+  // db_* v2 tools — connections come from the SAME per-project-routed store
+  // instances the routes/db-client handlers use (deps.dbClientFor), so the
+  // agent always sees the rows the Databases tab shows. Session projects come
+  // from CompanyStore (company_session_projects). The decryptor is resolved
+  // LATE (per call) because Electron injects the real safeStorage decryptor
+  // after createApp().
+  setDbToolsStores(
+    { listConnections: (projectId) => deps.dbClientFor(projectId).listConnections(projectId) },
+    deps.companyStore,
+  );
+  setDbSecretDecryptor((blob) => getMainSecretDecryptor()(blob));
   // Install the global ToolSelectionPipeline filter. When
   // MCP_PIPELINES_TOOL_SELECTION is unset, buildToolSelectionFilter()
   // returns undefined and the global stays disabled — zero overhead.
@@ -457,6 +468,9 @@ export function createApp() {
     companyStore: deps.companyStore,
     envStore: deps.companySessionEnvStore,
     httpApiPort: deps.config.dashboard.port,
+    // B7 — lets lifecycle transitions to stopped/error fail in-flight
+    // QA runs fast with error_class='sidecar_down'.
+    qaRunStore: deps.qaTestRunStore,
   });
   setChromeService(chromeService);
   // Hand the same ChromeService to the doc indexer's BrowserBackend so

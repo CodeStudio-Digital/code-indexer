@@ -24,6 +24,9 @@ import { dsListComponents } from '@mcp/company/tools/design-system/ds-list-compo
 import { dsAuditPackage } from '@mcp/company/tools/design-system/ds-audit-package.js';
 import { dsSetVersionStatus } from '@mcp/company/tools/design-system/ds-set-version-status.js';
 import { dsPublishVersion } from '@mcp/company/tools/design-system/ds-publish-version.js';
+import { dsGetPipeline } from '@mcp/company/tools/design-system/ds-get-pipeline.js';
+import { dsSubmitStage } from '@mcp/company/tools/design-system/ds-submit-stage.js';
+import { dsAnalyzeImport } from '@mcp/company/tools/design-system/ds-analyze-import.js';
 
 export {
   setDesignSystemStore,
@@ -46,6 +49,9 @@ export { dsListComponents } from '@mcp/company/tools/design-system/ds-list-compo
 export { dsAuditPackage } from '@mcp/company/tools/design-system/ds-audit-package.js';
 export { dsSetVersionStatus } from '@mcp/company/tools/design-system/ds-set-version-status.js';
 export { dsPublishVersion } from '@mcp/company/tools/design-system/ds-publish-version.js';
+export { dsGetPipeline } from '@mcp/company/tools/design-system/ds-get-pipeline.js';
+export { dsSubmitStage } from '@mcp/company/tools/design-system/ds-submit-stage.js';
+export { dsAnalyzeImport } from '@mcp/company/tools/design-system/ds-analyze-import.js';
 
 /**
  * DS Studio set — sessão single sobre o projeto-workspace. O pipeline
@@ -62,5 +68,8 @@ export function buildDesignSystemStudioTools(projectId: number): CoderTool[] {
     dsAuditPackage(binding),
     dsSetVersionStatus(binding),
     dsPublishVersion(binding),
+    dsGetPipeline(binding),
+    dsSubmitStage(binding),
+    dsAnalyzeImport(binding),
   ];
 }

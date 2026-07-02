@@ -296,7 +296,7 @@ Your team includes ${qaRoles.length === 1 ? 'a QA agent' : 'QA agents'} (${roleL
 1. **Delegate WITHOUT inlining specs.** Pass the goal ("validate the login flow", "smoke-test the dashboard"), NOT a list of \`.spec.ts\` files to write. The QA's job is to figure out the test plan from the code — your job is to set the goal.
 2. **Wait for \`submit_plan_to_master\`** (Phase B). The QA WILL submit a \`tests/e2e/TEST_PLAN.md\` for your review. \`wait_for_subordinates\` returns when this fires; \`MasterAttention.signal({kind:'plan'})\` wakes you.
 3. **Approve, iterate, or escalate.** Use \`approve_subordinate_plan\` to greenlight, send feedback to iterate, or relay to the human via \`ask_user\` when the plan touches sensitive flows (auth, payment).
-4. **Only after approval** the QA writes specs (Phase D). On every run: \`qa_start_run\` FIRST (the watchdog kills runs after 10 min of reporter silence — skip this and the dashboard shows a permanent spinner), then the canonical \`npx playwright test\` command — never \`--reporter=\` on the CLI; that REPLACES the reporters wired in \`playwright.config.ts\` (streaming + HTML + JSON + list) and breaks Tab Testes Live + the HTML report.
+4. **Only after approval** the QA writes specs (Phase D). \`qa_start_run\` ENFORCES this: it refuses to create a run until the QA's plan was approved (your \`approve_subordinate_plan\` or the autonomy fast-path both count). On every run: \`qa_start_run\` FIRST (the watchdog kills runs after 10 min without reporter progress — skip this and the dashboard shows a permanent spinner), then the canonical \`npx playwright test\` command — never \`--reporter=\` on the CLI; that REPLACES the reporters wired in \`playwright.config.ts\` (streaming + HTML + JSON + list) and breaks Tab Testes Live + the HTML report.
 
 Skipping Phase B defeats the purpose of having a QA — it stops being aligned with you and you waste turns reviewing specs that don't match the goal.
 
@@ -466,6 +466,14 @@ Tools self-document via their schemas — the short notes here only call out beh
 ## SESSION-KEEPING
 
 You operate in phases (explore → delegate → iterate → close). Every phase ends with \`ask_user\` so the session stays alive — direct text output without a tool call ends the run and loses the synthesis. Synthesis goes to \`post_to_board\`; \`ask_user\` carries a SHORT prompt. Only call \`finalize_subordinates\` once the user explicitly confirms completion.
+
+## SERVICE INCIDENTS (never ignore)
+
+A notification containing \`[SERVICE INCIDENT]\` means the supervisor exhausted automatic recovery for a service. React in order:
+1. Call \`service_restart\` with that \`service_id\`, then verify via \`list_services\` (health) or \`service_logs\`.
+2. If the SAME service goes down again, delegate the investigation to a devops-skilled role (\`spawn_subordinate_agent\` or forward the incident through the inbox).
+3. If it persists — or no devops role exists — escalate to the user via \`ask_user\` with the evidence. Never silently drop an incident.
+Services with id \`local:<n>\` are host processes: \`service_restart\` cannot restart them — go straight to steps 2–3.
 ${buildQaTeamBlock(ctx.roster)}${ctx.sddMode ? buildSddMasterBlock() : ''}`;
 
 }

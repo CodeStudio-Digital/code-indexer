@@ -44,6 +44,31 @@ export function append(db: DB, sessionId: number, message: AgentMessage, usage?:
   return Number(r.lastInsertRowid);
 }
 
+/**
+ * Add a subagent usage delta to the session totals WITHOUT inserting a
+ * message row. Used for background (fire-and-forget) subagents whose tokens
+ * are settled off the main turn — accounted exactly once, at job settle,
+ * whether or not the parent ever collects the result. Blocking subagents
+ * keep flowing through `pendingTurn.subagentUsage` → `persistAssistantTurn`.
+ */
+export function bumpSessionUsage(db: DB, sessionId: number, usage: AppendMessageUsage): void {
+  db.prepare(`
+    UPDATE coder_sessions
+       SET total_input_tokens = total_input_tokens + ?,
+           total_output_tokens = total_output_tokens + ?,
+           total_cache_read_tokens = total_cache_read_tokens + ?,
+           total_cache_creation_tokens = total_cache_creation_tokens + ?,
+           updated_at = datetime('now')
+     WHERE id = ?
+  `).run(
+    usage.input_tokens ?? 0,
+    usage.output_tokens ?? 0,
+    usage.cache_read_input_tokens ?? 0,
+    usage.cache_creation_input_tokens ?? 0,
+    sessionId,
+  );
+}
+
 export interface AppendToolCallInput {
   message_id: number;
   tool_use_id: string;

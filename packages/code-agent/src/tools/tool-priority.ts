@@ -54,6 +54,14 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   // injection + run-end distiller cover the rest passively, model-independent.)
   'remember',
   'recall_memory',
+  // self_review — the Executing-node nudge (dynamic-injection.ts) tells the
+  // agent to call `self_review` by NAME before declaring done whenever the
+  // session has pending changes. As a bootstrap-tier tool that is NOT in
+  // HOT_RANK it otherwise lands in the "bootstrap-cold" survival group and the
+  // model cap can drop it — forcing the agent to find_tools its way back to a
+  // tool the prompt just told it to call. Floor it so the nudge is always
+  // actionable. (The CODER_SELF_REVIEW toggle governs only the reminder.)
+  'self_review',
 ]);
 
 /**

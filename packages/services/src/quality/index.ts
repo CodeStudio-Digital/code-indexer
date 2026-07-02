@@ -40,6 +40,20 @@ export {
 } from './chat-retry.js';
 
 export {
+  callChatWithFailover,
+  type FailoverOptions,
+  type FailoverResult,
+} from './binding-failover.js';
+
+export {
+  bindingProblem,
+  callConfiguredChat,
+  coderProviderChat,
+  friendlyProviderError,
+  type BindingProblem,
+} from './binding-chat.js';
+
+export {
   DriftDetector,
   type DriftDetectorConfig,
   type DriftReport,

@@ -112,4 +112,57 @@ describe('selectDispatchTargets', () => {
       selectDispatchTargets({ ...base, prioritizedCards, maxPerSweep: 1 }),
     ).toEqual([1]);
   });
+
+  // ── C3 — soft WIP limit on in_progress ─────────────────────────
+  describe('wip limit', () => {
+    const three = [card({ id: 1 }), card({ id: 2 }), card({ id: 3 })];
+
+    it('caps the batch so in_progress never exceeds the limit', () => {
+      expect(
+        selectDispatchTargets({
+          ...base, prioritizedCards: three,
+          wip: { inProgressCount: 1, limit: 3 },
+        }),
+      ).toEqual([1, 2]);
+    });
+
+    it('returns nothing when in_progress is already AT the limit', () => {
+      expect(
+        selectDispatchTargets({
+          ...base, prioritizedCards: three,
+          wip: { inProgressCount: 3, limit: 3 },
+        }),
+      ).toEqual([]);
+    });
+
+    it('returns nothing when in_progress is already OVER the limit (humans may exceed)', () => {
+      expect(
+        selectDispatchTargets({
+          ...base, prioritizedCards: three,
+          wip: { inProgressCount: 5, limit: 3 },
+        }),
+      ).toEqual([]);
+    });
+
+    it('limit null = no WIP ceiling', () => {
+      expect(
+        selectDispatchTargets({
+          ...base, prioritizedCards: three,
+          wip: { inProgressCount: 99, limit: null },
+        }),
+      ).toEqual([1, 2, 3]);
+    });
+
+    it('composes with maxPerSweep and free slots (tightest wins)', () => {
+      expect(
+        selectDispatchTargets({
+          prioritizedCards: three,
+          runningCount: 8,
+          concurrencyLimit: 10, // 2 free slots
+          maxPerSweep: 2,
+          wip: { inProgressCount: 2, limit: 3 }, // 1 of WIP room
+        }),
+      ).toEqual([1]);
+    });
+  });
 });

@@ -9,10 +9,10 @@ import {
   type ResolvedBinding,
 } from '../pipelines/index.js';
 import {
-  bindingProblem,
   callConfiguredChat,
   friendlyProviderError,
 } from '../quality/binding-chat.js';
+import { callChatWithFailover } from '../quality/binding-failover.js';
 import type { FileDiff } from './session-snapshots.js';
 import { buildMessages } from './snapshot-review-prompt.js';
 import { filterReviewableDiffs } from './snapshot-review-ignore.js';
@@ -164,8 +164,12 @@ export class SnapshotReviewPipeline {
     let binding: ResolvedBinding | null = null;
     let pendingHunks = 0;
     try {
-      binding = await this.resolver.resolveOrNull(PIPELINE_NAME, ROLE, input.resolveContext);
-      if (!binding) {
+      // resolveChain lets a second configured reviewer binding (or the general
+      // default) take over when the primary is uncallable/down. The runner
+      // skips misconfigured bindings internally, so the explicit bindingProblem
+      // pre-check is no longer needed.
+      const chain = await this.resolver.resolveChain(PIPELINE_NAME, ROLE, input.resolveContext);
+      if (chain.length === 0) {
         return this.finish(input, startedAt, 0, 0, true, {
           ok: false,
           findings: [],
@@ -175,26 +179,20 @@ export class SnapshotReviewPipeline {
         });
       }
 
-      const problem = bindingProblem(binding, { label: LABEL, codePrefix: 'review_pipeline' });
-      if (problem) {
-        return this.finish(input, startedAt, 0, 0, true, {
-          ok: false,
-          findings: [],
-          raw: '',
-          providerId: binding.provider.id,
-          modelId: binding.modelId,
-          errorCode: problem.code,
-          error: problem.message,
-        });
-      }
-
       const rendered = renderDiffs(filterReviewableDiffs(input.diffs));
       pendingHunks = rendered.pendingHunks;
-      const cfg = binding.config;
-      const result = await callConfiguredChat(binding, buildMessages(rendered.text), {
-        temperature: 0,
-        maxTokens: toNumber(cfg.max_tokens) ?? 4000,
-      });
+      const messages = buildMessages(rendered.text);
+      const failover = await callChatWithFailover(
+        chain,
+        (b) =>
+          callConfiguredChat(b, messages, {
+            temperature: 0,
+            maxTokens: toNumber((b.config as Record<string, unknown>).max_tokens) ?? 4000,
+          }),
+        { label: LABEL, codePrefix: 'review_pipeline', retry: { maxRetries: 0 } },
+      );
+      const result = failover.result;
+      binding = failover.binding ?? chain[0];
       if (result.errorBody) {
         return this.finish(input, startedAt, pendingHunks, 0, true, {
           ok: false,

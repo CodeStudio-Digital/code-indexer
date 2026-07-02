@@ -10,6 +10,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
+import { writeThemeDigest } from '@mcp/design-system/theme-digest/theme-digest.js';
 import { resolveTargetPath } from '../paths.js';
 import { runHostCommand } from '../run-host-command.js';
 import { NON_INTERACTIVE_ENV, INSTALL_TIMEOUT_MS } from '../templates/types.js';
@@ -146,6 +147,17 @@ export async function scaffoldDsStudioWorkspace(
         return fail(targetDir, 'Import zip extracted to 0 files — empty or all entries unsafe.');
       }
       writeFileSync(join(targetDir, 'import', 'README.md'), IMPORT_README, 'utf8');
+
+      // Theme digest — deterministic token/component analysis the agent
+      // reads in the Análise stage. Never fatal: the digest is regenerable
+      // (re-extract route / ds_analyze_import), a broken theme must not
+      // block workspace creation.
+      onPhase?.({ phase: 'analyze-import', label: 'Analyzing theme (tokens, components)…' });
+      try {
+        await writeThemeDigest(join(targetDir, 'import'));
+      } catch (err) {
+        onLog?.('stderr', `theme digest failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`);
+      }
     }
 
     return { ok: true, targetPath: targetDir, slug: target.slug, name: target.name, port };

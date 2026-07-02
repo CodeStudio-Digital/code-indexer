@@ -3,13 +3,14 @@
  * panels (Company-Config / Inbox / Env / Supervisor / Databases, plus
  * plugin webviews) based on the `active` selection from `SidebarRail`.
  *
- * Inbox / Env / Databases reuse the existing tab bodies; mounting them
- * here instead of as central tabs lets the user peek at them alongside
- * whatever central tab is open.
+ * Inbox / Env reuse the existing tab bodies; mounting them here instead
+ * of as central tabs lets the user peek at them alongside whatever
+ * central tab is open. Databases is a read-only projection of the linked
+ * projects' connections (session-scoped DB CRUD was retired).
  */
 import { InboxPanel } from '../InboxPanel.js';
 import EnvTab from '../EnvTab.js';
-import DatabasesTab from '../DatabasesTab.js';
+import CompanyDbConnectionsPanel from '../CompanyDbConnectionsPanel.js';
 import { SupervisorPanel } from '../../admin/SupervisorPanel.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
@@ -63,5 +64,7 @@ export function SidebarPanels({ sessionId, active, companyConfigSlot, pluginWind
     return <SupervisorPanel sessionId={sessionId} />;
   }
 
-  return <DatabasesTab companySessionId={sessionId} />;
+  // 'databases' — read-only projection of the linked projects' connections
+  // (session-scoped DB CRUD retired; manage them in each project's Databases tab).
+  return <CompanyDbConnectionsPanel companySessionId={sessionId} />;
 }

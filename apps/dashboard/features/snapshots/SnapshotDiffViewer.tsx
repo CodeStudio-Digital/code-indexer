@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bot, MessageSquarePlus, Send } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { prompt } from '../../components/ui/prompt-dialog.js';
 import { ReviewCommentList } from './diff/ReviewComment.js';
-import { DiffRow, type DiffRowHandlers } from './diff/DiffRow.js';
+import { DiffRowsView } from './diff/DiffRowsView.js';
+import { type DiffRowHandlers } from './diff/DiffRow.js';
 import { useDiffRows } from './diff/useDiffRows.js';
 import { hunkExcerpt } from './diff/diff-format.js';
 import type { SnapshotFileDiff, SnapshotHunkLine, SnapshotReviewComment } from './types.js';
@@ -58,15 +58,6 @@ export function SnapshotDiffViewer({
   const isBusy = busy || localBusy || reviewBusy;
 
   const { rows, fileLevelComments, maxContentChars } = useDiffRows(diff, comments);
-
-  const parentRef = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 20,
-    overscan: 12,
-    getItemKey: (index) => rows[index].key,
-  });
 
   // Shows the prompt dialog, then forwards the comment. `fingerprint` resolves
   // back to the hunk object here (not threaded through every row) so the row
@@ -180,27 +171,7 @@ export function SnapshotDiffViewer({
     <div className="flex flex-col h-full min-h-0 min-w-0">
       {header}
       {fileComments}
-      <div ref={parentRef} className="flex-1 min-h-0 overflow-auto bg-background">
-        <div
-          className="relative font-mono text-[11.5px] leading-snug"
-          style={{
-            height: virtualizer.getTotalSize(),
-            width: `${Math.ceil(maxContentChars * 8.5) + 200}px`,
-            minWidth: '100%',
-          }}
-        >
-          {virtualizer.getVirtualItems().map((item) => (
-            <div
-              key={item.key}
-              data-index={item.index}
-              ref={virtualizer.measureElement}
-              style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${item.start}px)` }}
-            >
-              <DiffRow row={rows[item.index]} handlers={handlers} />
-            </div>
-          ))}
-        </div>
-      </div>
+      <DiffRowsView rows={rows} maxContentChars={maxContentChars} handlers={handlers} />
     </div>
   );
 }

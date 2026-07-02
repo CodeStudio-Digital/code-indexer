@@ -12,9 +12,35 @@
 
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { getServiceSupervisorStores } from '@mcp/company/services/service-supervisor/stores.js';
 
 const DEFAULT_LINES = 200;
 const MAX_LINES = 2_000;
+
+/**
+ * Supervisor-health projection for `list_services` (B5). Worker-only in
+ * practice: the stores setter is called by company-worker.ts; on main (or
+ * in tests without the binding) this returns an empty map and the listing
+ * silently omits health columns — same tolerant posture as the supervisor.
+ */
+function readHealthByService(sessionId: number | undefined): Map<
+  string,
+  { health: string; restartCount: number; lastHealthAtMs: number | null }
+> {
+  const out = new Map<string, { health: string; restartCount: number; lastHealthAtMs: number | null }>();
+  if (typeof sessionId !== 'number') return out;
+  try {
+    const rows = getServiceSupervisorStores()?.services?.listBySessionAll(sessionId) ?? [];
+    for (const r of rows) {
+      out.set(r.service_id, {
+        health: r.health ?? 'unknown',
+        restartCount: r.restart_count ?? 0,
+        lastHealthAtMs: r.last_health_at_ms ?? null,
+      });
+    }
+  } catch { /* advisory only */ }
+  return out;
+}
 
 /**
  * `read_sandbox_logs` — tail the Vite dev-server log file produced by
@@ -33,7 +59,7 @@ const readSandboxLogs: CoderTool = {
   name: 'read_sandbox_logs',
   // Auto-repeatable via `_logs` suffix.
   description:
-    'Tail the dev-server log from the session\'s builder sandbox (e.g. Vite output from `npm run dev`). Returns the last N lines of stdout+stderr, useful for verifying that a code change compiled, that HMR fired, or that an `npm install` succeeded. Only works in sessions that were created with builder mode. Use this AFTER write_file/edit_file calls to confirm your change had the intended effect before declaring success.',
+    'Tail the dev-server log from the session\'s builder sandbox (e.g. Vite output from `npm run dev`). Returns the last N lines of stdout+stderr, useful for verifying that a code change compiled, that HMR fired, or that an `npm install` succeeded. Only works in sessions that were created with builder mode. Use this AFTER write_file/edit_file calls to confirm your change had the intended effect before declaring success. For persistent, timestamped, paginated per-service history (including sibling services), use `service_logs` instead.',
   source: 'native',
   parameters: {
     type: 'object',
@@ -98,7 +124,7 @@ const listServices: CoderTool = {
   name: 'list_services',
   // Auto-repeatable via `list_*` prefix.
   description:
-    'List every container (primary + microservices) running in this session. Returns their service_id, stack, internal docker-network URL (for container-to-container calls), and public preview URL. Use this when your code needs to reach a sibling service but you\'re unsure of its hostname, or to confirm a newly-added microservice actually came up. Only available in builder-mode sessions.',
+    'List every container (primary + microservices) running in this session. Returns their service_id, stack, internal docker-network URL (for container-to-container calls), and public preview URL. Use this when your code needs to reach a sibling service but you\'re unsure of its hostname, or to confirm a newly-added microservice actually came up. Only available in builder-mode sessions. Each line also carries the supervisor\'s health verdict (healthy/degraded/down/unknown) and restart count when available.',
   source: 'native',
   parameters: {
     type: 'object',
@@ -128,9 +154,16 @@ const listServices: CoderTool = {
     if (peers.length === 0) {
       return ok('(no containers registered for this session yet)');
     }
+    const healthByService = readHealthByService(ctx.companyContext?.companySessionId);
     const lines = peers.map((p) => {
       const self = p.isSelf ? ' [you]' : '';
-      return `  - ${p.serviceId.padEnd(12)} ${p.stack.padEnd(12)} internal=${p.internalUrl}  preview=${p.previewUrl || '(none)'}${self}`;
+      const h = healthByService.get(p.serviceId);
+      const health = h
+        ? `  health=${h.health}${h.restartCount > 0 ? ` restarts=${h.restartCount}` : ''}${
+            h.lastHealthAtMs ? ` last_check=${new Date(h.lastHealthAtMs).toISOString()}` : ''
+          }`
+        : '';
+      return `  - ${p.serviceId.padEnd(12)} ${p.stack.padEnd(12)} internal=${p.internalUrl}  preview=${p.previewUrl || '(none)'}${health}${self}`;
     });
     return ok(
       `Services in this session:\n${lines.join('\n')}\n\n` +

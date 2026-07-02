@@ -23,8 +23,9 @@ import type { SandboxBinding } from '@mcp/company/types.js';
 import type { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { resolveDriver } from '@mcp/services/sandbox/drivers/driver-factory.js';
+import { checkRelativePath, DOCS_CONTENT_CAP_BYTES, DOCS_MIRROR_PREFIX } from './file-path-core.js';
 
-const MAX_CONTENT_BYTES = 256 * 1024;
+const MAX_CONTENT_BYTES = DOCS_CONTENT_CAP_BYTES;
 
 /**
  * Resolve which sandbox the tool should target. Absent `serviceId`
@@ -74,14 +75,15 @@ async function resolveTargetBinding(
 /**
  * Reject path traversal and absolute paths. Docs always live under
  * `<workdir>/docs/`; accepting `..` or leading `/` would let an agent
- * clobber source files. This function returns the absolute container
- * path when the input is acceptable, or null when it's not.
+ * clobber source files. Rules are shared with the drive via
+ * `file-path-core` — docs keep the stricter SUBSTRING `..` rejection.
+ * Returns the absolute container path when the input is acceptable, or
+ * null when it's not.
  */
 function resolveDocPath(binding: SandboxBinding, relPath: string): string | null {
   const clean = relPath.trim();
-  if (!clean || clean.startsWith('/') || clean.includes('..') || clean.includes('\0')) {
-    return null;
-  }
+  const check = checkRelativePath(clean, { traversal: 'substring' });
+  if (!check.ok) return null;
   return `${binding.workdir}/docs/${clean}`;
 }
 
@@ -93,7 +95,7 @@ function resolveDocPath(binding: SandboxBinding, relPath: string): string | null
  */
 function driveMirrorPath(serviceId: string | undefined, relPath: string): string {
   const svc = serviceId && serviceId !== 'main' ? serviceId : 'main';
-  return `__docs__/${svc}/${relPath}`;
+  return `${DOCS_MIRROR_PREFIX}${svc}/${relPath}`;
 }
 
 /**
@@ -177,9 +179,11 @@ const docsWrite: CoderTool = {
   name: 'docs_write',
   description:
     'Create or overwrite a markdown documentation file inside the sandbox. ' +
+    'THIS is the tool for LIVING DOCUMENTATION per service (ADRs, API references, runbooks, ' +
+    'architecture notes) — it mirrors to the durable company drive and shows in the Docs tab. ' +
+    'For work artifacts (specs, dumps, reports) use `write_shared_file` instead. ' +
     'Path is always relative to `<workdir>/docs/` (e.g. `decisions/0001-auth.md`, ' +
     '`api/endpoints.md`). Parent directories are created automatically. ' +
-    'Use this for ADRs, API references, runbooks, or architecture notes. ' +
     'Prefer markdown with an optional YAML frontmatter (`--- title: … ---`) — ' +
     'the dashboard\'s Docs tab indexes frontmatter titles and tags.',
   source: 'native',

@@ -20,6 +20,10 @@ import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import type { ChromeServiceState } from '@mcp/services/chrome-service/chrome-service.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
+// Module cycle with qa-preflight is intentional and runtime-safe: both
+// sides only reference each other inside function bodies (hoisted
+// function declarations), never during module init.
+import { preflightBrowser } from './qa-preflight.js';
 
 // ─── Module-level binding for the env store (used to surface the QA
 // preview-URL family alongside the wsEndpoint). Mirrors the existing
@@ -30,6 +34,15 @@ let envStore: CompanySessionEnvStore | null = null;
 
 export function setQaEndpointEnvStore(store: CompanySessionEnvStore | null): void {
   envStore = store;
+}
+
+/**
+ * B7 — read-only accessor for the bound env store. `qa-preflight.ts`
+ * reuses the same boot wiring (both server.ts and company-worker call
+ * `setQaEndpointEnvStore`) instead of introducing a second binding.
+ */
+export function getQaEndpointEnvStore(): CompanySessionEnvStore | null {
+  return envStore;
 }
 
 const PARAMETERS: JsonSchema = {
@@ -176,6 +189,35 @@ export function formatBrowserEndpointReply(
   return lines.join('\n');
 }
 
+/**
+ * B7 — pure: reply for the WORKER path, where the ChromeService
+ * singleton is unavailable but the env-store probe succeeded. Mirrors
+ * the running-state reply minus the fields only the singleton knows
+ * (image). Exported for unit tests.
+ */
+export function formatEnvProbeReply(
+  wsEndpoint: string,
+  previewUrls: Array<{ key: string; value: string }> = [],
+): string {
+  const lines = [
+    `wsEndpoint: ${wsEndpoint}`,
+    'alive:      true (probed via session env PLAYWRIGHT_WS_ENDPOINT)',
+  ];
+  if (previewUrls.length > 0) {
+    lines.push('');
+    lines.push('Preview URLs (use these as Playwright `baseURL`):');
+    for (const { key, value } of previewUrls) {
+      lines.push(`  ${key}: ${value}`);
+    }
+  }
+  lines.push('');
+  lines.push('Use this from inside the project container — the env var');
+  lines.push('PLAYWRIGHT_WS_ENDPOINT is already set to the same value.');
+  lines.push('NEVER call `playwright install` — the browser lives in the');
+  lines.push('shared Chrome Service, not in this container.');
+  return lines.join('\n');
+}
+
 export function qaGetBrowserEndpoint(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
@@ -195,13 +237,28 @@ export function qaGetBrowserEndpoint(
         const previewUrls = collectPlaywrightBaseUrls(envStore, sessionId);
         const svc = tryGetChromeService();
         if (!svc) {
-          return ok(formatBrowserEndpointReply(null, { ok: false }, previewUrls));
+          // B7 — worker path: the singleton doesn't cross worker threads,
+          // but the session env store always carries PLAYWRIGHT_WS_ENDPOINT.
+          // The preflight probes the equivalent loopback URL with
+          // retry + breaker instead of giving up immediately.
+          const pf = await preflightBrowser({ sessionId });
+          if (pf.ok && pf.wsEndpoint) {
+            return ok(formatEnvProbeReply(pf.wsEndpoint, previewUrls));
+          }
+          return ok(
+            formatBrowserEndpointReply(null, { ok: false, error: pf.message }, previewUrls),
+          );
         }
         const state = await svc.getEndpoint({ probe: false });
         if (state.status !== 'running') {
           return ok(formatBrowserEndpointReply(state, { ok: false }, previewUrls));
         }
-        const health = await fetchSidecarVersion(state.loopbackHealthUrl);
+        // B7 — same preflight wrapper as qa_start_run (replaces the old
+        // single 4s probe): retry/backoff + per-session circuit breaker.
+        const pf = await preflightBrowser({ sessionId });
+        const health: SidecarVersionInfo = pf.ok
+          ? { ok: true }
+          : { ok: false, error: pf.message };
         return ok(formatBrowserEndpointReply(state, health, previewUrls));
       } catch (e) {
         return err(`qa_get_browser_endpoint failed: ${(e as Error).message}`);

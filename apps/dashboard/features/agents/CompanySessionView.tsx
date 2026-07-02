@@ -384,7 +384,7 @@ export function CompanySessionView({
             <PanelGroup direction="vertical" autoSaveId="mcp-agents-vert">
               <Panel minSize={20}>
                 <div className="h-full flex flex-col overflow-hidden">
-                  <SessionBanners stream={stream} />
+                  <SessionBanners stream={stream} sessionId={activeSessionId} />
 
                   {/* Front tabs — visible across every zone so the user always
                       has a way to switch between Main and child fronts. */}

@@ -388,7 +388,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     const skillPicks = props.skillPicks ?? [];
 
     return (
-      <div className="relative border-t bg-card px-2 py-1.5" {...dropHandlers}>
+      <div className="relative border-t bg-card" {...dropHandlers}>
         <DropOverlay show={isDragging} />
         {props.queuedStrip}
         {(attachments.length > 0 || filePicks.length > 0 || skillPicks.length > 0) && (

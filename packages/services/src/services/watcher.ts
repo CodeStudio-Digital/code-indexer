@@ -1,5 +1,7 @@
 import { watch, type FSWatcher } from 'chokidar';
 import { relative } from 'node:path';
+import ignore from 'ignore';
+import { normalizeIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 
 export interface WatcherFileEvent {
   /** Absolute path as emitted by chokidar (backslashes on win32 — callers normalize). */
@@ -100,14 +102,17 @@ const IGNORED_DIRS = new Set<string>([
  * alloc) since chokidar calls this for every entry during the walk; handles
  * both win32 `\` and posix `/`.
  */
-export function makeIgnored(rootPath: string): (p: string) => boolean {
+export function makeIgnored(rootPath: string, extraPatterns: string[] = []): (p: string) => boolean {
+  const extra = normalizeIndexIgnorePatterns(extraPatterns);
+  const ig = extra.length > 0 ? ignore().add(extra) : null;
   return (p: string): boolean => {
-    const rel = relative(rootPath, p);
+    const rel = relative(rootPath, p).replace(/\\/g, '/');
     if (!rel || rel.startsWith('..')) return false; // the root itself / outside it
+    if (ig?.ignores(rel) || ig?.ignores(`${rel}/`)) return true;
     let start = 0;
     for (let i = 0; i <= rel.length; i++) {
       const c = i === rel.length ? 47 : rel.charCodeAt(i);
-      if (c === 47 || c === 92 /* / or \ */) {
+      if (c === 47 /* / */) {
         if (i > start && IGNORED_DIRS.has(rel.slice(start, i))) return true;
         start = i + 1;
       }
@@ -127,10 +132,10 @@ export class FileWatcherService {
     // `isIgnoredPath` is a FUNCTION (not a glob) so chokidar prunes heavy dirs
     // (node_modules, .git, target, vendor, …) during its walk instead of
     // descending + filtering events — the latter opened ~145 k native watchers.
-    // Any caller-supplied `ignorePatterns` (globs) are appended (chokidar v3
-    // anymatch accepts the mixed array). The indexer's private working dir
+    // Caller-supplied project rules flow through the same function so ignored
+    // directories are pruned during the walk. The indexer's private working dir
     // (`.mcp-indexer`, with its trash bin + `.tmp` scratch) is in IGNORED_DIRS.
-    const ignored = [makeIgnored(options.rootPath), ...(options.ignorePatterns ?? [])];
+    const ignored = makeIgnored(options.rootPath, options.ignorePatterns ?? []);
 
     const watcher = watch(options.rootPath, {
       persistent: true,

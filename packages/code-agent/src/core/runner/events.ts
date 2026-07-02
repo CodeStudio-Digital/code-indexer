@@ -265,7 +265,23 @@ export interface RunnerEvents {
     groupId: string;
     provider?: string;
     model?: string;
-    agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string }>;
+    /** True for a fire-and-forget background job (spawn_agent background:true). */
+    background?: boolean;
+    /** Background job handle — present when `background`. */
+    jobId?: string;
+    /** True when a prior group is being relaunched (resume_agent, or a
+     *  cross-run re-emit of a still-running background job). Dashboard MERGES
+     *  by groupId instead of pushing a duplicate block. */
+    resumed?: boolean;
+    agents: Array<{
+      index: number;
+      label: string;
+      provider?: string;
+      model?: string;
+      task?: string;
+      status?: 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
+      attempt?: number;
+    }>;
   }) => void;
   /** Emitted for per-agent progress within a parallel group. */
   agent_progress: (payload: {
@@ -277,6 +293,8 @@ export interface RunnerEvents {
     provider?: string;
     model?: string;
     toolCallCount?: number;
+    /** Retry attempt (>=2 when this agent was resumed). */
+    attempt?: number;
     note?: string;
     phase?: string;
     turn?: number;
@@ -299,6 +317,10 @@ export interface RunnerEvents {
     totalUsage: ChatUsage;
     agentCount: number;
     successCount: number;
+    /** Background job handle — present for background groups. */
+    jobId?: string;
+    /** Terminal disposition of a background group. */
+    status?: 'completed' | 'aborted';
   }) => void;
   /** Emitted when the runner auto-continues after hitting maxTurns. */
   auto_continue: (count: number, max: number) => void;

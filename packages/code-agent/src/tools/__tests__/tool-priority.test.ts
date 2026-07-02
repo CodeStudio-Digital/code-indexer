@@ -108,6 +108,10 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     // Regression: task_list is the ONE always-on task tool (todos+tasks merge);
     // the cap must never drop it, even at the most aggressive 32-tool cap.
     expect(names).toContain('task_list');
+    // Regression: self_review is floored in NEVER_TRIM — the Executing-node
+    // nudge tells the agent to call it by name before declaring done, so the
+    // cap must never drop it (else the agent must find_tools it back).
+    expect(names).toContain('self_review');
     // Hot working core survives; cold tiers die first.
     expect(names).toContain('write_file');
     expect(names).toContain('edit_file');

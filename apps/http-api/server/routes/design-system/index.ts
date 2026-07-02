@@ -13,6 +13,7 @@ import { mountDesignSystemVersionRoutes } from './versions.js';
 import { mountDesignSystemRoundRoutes } from './round.js';
 import { mountDesignSystemStudioRoutes } from './studio.js';
 import { mountDesignSystemConsumerRoutes } from './consumer.js';
+import { mountDesignSystemPipelineRoutes } from './pipeline.js';
 
 export function mountDesignSystemRoutes(app: Hono, deps: ServerDeps): void {
   mountDesignSystemSessionRoutes(app, deps);
@@ -20,4 +21,5 @@ export function mountDesignSystemRoutes(app: Hono, deps: ServerDeps): void {
   mountDesignSystemRoundRoutes(app, deps);
   mountDesignSystemStudioRoutes(app, deps);
   mountDesignSystemConsumerRoutes(app, deps);
+  mountDesignSystemPipelineRoutes(app, deps);
 }

@@ -17,13 +17,15 @@ import { createKanbanSlice, type KanbanSlice } from './kanbanSlice.js';
 import { createSandboxSlice, type SandboxSlice } from './sandboxSlice.js';
 import { createDriveSlice, type DriveSlice } from './driveSlice.js';
 import { createInboxSlice, type InboxSlice } from './inboxSlice.js';
+import { createAutonomySlice, type AutonomySlice } from './autonomySlice.js';
 
 export type CompanyStore = SessionSlice &
   StreamSlice &
   KanbanSlice &
   SandboxSlice &
   DriveSlice &
-  InboxSlice;
+  InboxSlice &
+  AutonomySlice;
 
 export const useCompanyStore = create<CompanyStore>()((...a) => ({
   ...createSessionSlice(...a),
@@ -32,6 +34,7 @@ export const useCompanyStore = create<CompanyStore>()((...a) => ({
   ...createSandboxSlice(...a),
   ...createDriveSlice(...a),
   ...createInboxSlice(...a),
+  ...createAutonomySlice(...a),
 }));
 
 export * from './types.js';
@@ -42,3 +45,10 @@ export type { KanbanSlice } from './kanbanSlice.js';
 export type { SandboxSlice, SandboxState, SandboxFileChange } from './sandboxSlice.js';
 export type { DriveSlice, DriveState, DriveFileMeta } from './driveSlice.js';
 export type { InboxSlice, InboxState } from './inboxSlice.js';
+export type {
+  AutonomySlice,
+  AutonomyState,
+  AutonomyEvent,
+  AutonomyEventType,
+  AutonomyConfigLike,
+} from './autonomySlice.js';

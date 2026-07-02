@@ -13,6 +13,8 @@ export type DsVersionStatus = 'draft' | 'building' | 'published' | 'failed' | 's
 export type DsComponentKind = 'atom' | 'page-template';
 /** 'studio' = single-session workspace (atual); 'company' = pipeline legado (read-only). */
 export type DsSessionKind = 'company' | 'studio';
+/** 'fidelity' = tema anexado é fonte da verdade; 'creative' = inspiração. */
+export type DsSessionMode = 'fidelity' | 'creative';
 
 export interface DesignSystemSession {
   id: number;
@@ -26,7 +28,49 @@ export interface DesignSystemSession {
   source_zip_path: string | null;
   next_bump_hint: DsBumpHint;
   mcp_server_config_id: string | null;
+  mode: DsSessionMode;
   created_at: string;
+}
+
+// ── Design pipeline (máquina de etapas, mig 190) ────────────────────
+
+export type DsStageId =
+  | 'analysis' | 'tokens' | 'primitives' | 'composites' | 'templates' | 'docs' | 'publish';
+export type DsStageStatus = 'pending' | 'active' | 'review' | 'approved' | 'skipped';
+export type DsStageAction = 'start' | 'approve' | 'reopen' | 'skip';
+export type DsRoadmapTier = 'primitive' | 'composite' | 'template';
+
+export interface DsPipelineStage {
+  id: DsStageId;
+  status: DsStageStatus;
+  summary: string | null;
+  gate: { ok: boolean; issues: string[] } | null;
+  feedback: string | null;
+  submitted_at: string | null;
+  approved_at: string | null;
+}
+
+export interface DsRoadmapEntry {
+  name: string;
+  tier: DsRoadmapTier;
+  source: 'catalog' | 'digest';
+  source_refs?: string[];
+  recorded: boolean;
+}
+
+export interface DsThemeDigestSummary {
+  sha256: string;
+  generated_at: string;
+  files: number;
+  colors: number;
+  components: number;
+}
+
+export interface DsPipelineView {
+  stages: DsPipelineStage[];
+  current_stage: DsStageId | null;
+  roadmap: DsRoadmapEntry[];
+  theme_digest: DsThemeDigestSummary | null;
 }
 
 export interface DsProjectSummary {
@@ -100,6 +144,7 @@ export interface DesignSystemSessionDetail {
   company_session_status: string;
   builder_port: number | null;
   project: DsProjectSummary | null;
+  pipeline: DsPipelineView | null;
 }
 
 export async function getDesignSystemSession(id: number): Promise<DesignSystemSessionDetail> {
@@ -137,6 +182,33 @@ export async function setNextBumpHint(id: number, hint: DsBumpHint): Promise<Des
   });
   const body = await unwrap<{ session: DesignSystemSession }>(r);
   return body.session;
+}
+
+export async function patchPipelineStage(
+  id: number,
+  stageId: DsStageId,
+  action: DsStageAction,
+  feedback?: string,
+): Promise<DsPipelineView['stages']> {
+  const r = await fetch(`/api/design-system/sessions/${id}/pipeline/stage`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage_id: stageId, action, feedback }),
+  });
+  const body = await unwrap<{ pipeline: { stages: DsPipelineView['stages'] } }>(r);
+  return body.pipeline.stages;
+}
+
+/** Backfill do pipeline em sessões studio pré-feature. */
+export async function initPipeline(id: number): Promise<void> {
+  const r = await fetch(`/api/design-system/sessions/${id}/pipeline/init`, { method: 'POST' });
+  await unwrap(r);
+}
+
+export async function analyzeImportDs(id: number): Promise<DsThemeDigestSummary> {
+  const r = await fetch(`/api/design-system/sessions/${id}/analyze-import`, { method: 'POST' });
+  const body = await unwrap<{ digest: DsThemeDigestSummary }>(r);
+  return body.digest;
 }
 
 export async function deleteDesignSystemSession(id: number): Promise<void> {

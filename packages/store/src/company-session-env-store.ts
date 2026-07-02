@@ -12,6 +12,7 @@
  * whose turn it is to modify, audit trails) lives in the callers.
  */
 import type DatabaseConstructor from 'better-sqlite3';
+import { normalizeServiceScope, scopeIncludesService } from './env-scope.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -23,6 +24,12 @@ export interface CompanySessionEnvRow {
   value: string;
   is_secret: 0 | 1;
   source: CompanySessionEnvSource;
+  /**
+   * Per-service scope (migration 192): NULL = every service; otherwise
+   * a CSV of service ids ('main' addresses the primary container).
+   * Parsing/matching semantics live in `env-scope.ts`.
+   */
+  service_scope: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -36,6 +43,15 @@ export interface UpsertOptions {
    * existing user value is never overwritten by the imported default.
    */
   onlyIfAbsent?: boolean;
+  /**
+   * Per-service scope. Tri-state on purpose:
+   *   - `undefined` (omitted) → an existing row KEEPS its scope; new
+   *     rows land unscoped. Legacy callers (managed-env sync, chrome
+   *     service) never clobber operator-set scopes this way.
+   *   - `null` → explicitly clear the scope (var goes to all services).
+   *   - string → CSV of service ids, normalized before storage.
+   */
+  serviceScope?: string | null;
 }
 
 export class CompanySessionEnvStore {
@@ -71,26 +87,33 @@ export class CompanySessionEnvStore {
     opts: UpsertOptions = {},
   ): void {
     const source: CompanySessionEnvSource = opts.source ?? 'user';
+    // Tri-state scope: `scopeProvided = 0` keeps the existing row's
+    // scope on conflict (see UpsertOptions.serviceScope).
+    const scopeProvided = opts.serviceScope !== undefined ? 1 : 0;
+    const scope = normalizeServiceScope(opts.serviceScope ?? null);
     if (opts.onlyIfAbsent) {
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO company_session_envs (session_id, key, value, is_secret, source)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT OR IGNORE INTO company_session_envs (session_id, key, value, is_secret, source, service_scope)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(sessionId, key, value, isSecret ? 1 : 0, source);
+        .run(sessionId, key, value, isSecret ? 1 : 0, source, scope);
       return;
     }
     this.db
       .prepare(
-        `INSERT INTO company_session_envs (session_id, key, value, is_secret, source)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO company_session_envs (session_id, key, value, is_secret, source, service_scope)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(session_id, key) DO UPDATE SET
            value = excluded.value,
            is_secret = excluded.is_secret,
            source = excluded.source,
+           service_scope = CASE WHEN ? = 1
+             THEN excluded.service_scope
+             ELSE company_session_envs.service_scope END,
            updated_at = datetime('now')`,
       )
-      .run(sessionId, key, value, isSecret ? 1 : 0, source);
+      .run(sessionId, key, value, isSecret ? 1 : 0, source, scope, scopeProvided);
   }
 
   delete(sessionId: number, key: string): void {
@@ -104,6 +127,22 @@ export class CompanySessionEnvStore {
     const out: Record<string, string> = {};
     for (const row of this.list(sessionId)) {
       out[row.key] = row.value;
+    }
+    return out;
+  }
+
+  /**
+   * Like `asRecord`, but ENFORCES `service_scope` (migration 192): only
+   * rows whose scope is NULL (all services) or whose CSV contains
+   * `serviceId` land in the record. The primary container's id is
+   * `'main'` — same id the services listing and env-sync targets use.
+   */
+  asRecordForService(sessionId: number, serviceId: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const row of this.list(sessionId)) {
+      if (scopeIncludesService(row.service_scope, serviceId)) {
+        out[row.key] = row.value;
+      }
     }
     return out;
   }

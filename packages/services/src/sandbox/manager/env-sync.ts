@@ -12,11 +12,16 @@
  *   4. Without any targets, the call is a clean no-op.
  *   5. Writes go out via `Promise.allSettled` so one bad container
  *      doesn't block the rest.
+ *   6. D1 scope enforcement: each target gets ITS OWN body rendered for
+ *      its `serviceId` ('main' = primary) — vars scoped to other
+ *      services never land in this container's `.env`.
  */
 import type { Sandbox } from '@mcp/services/sandbox/types.js';
 import type { ISandboxDriver } from '@mcp/services/sandbox/ports/sandbox-driver.js';
 
 export interface EnvSyncTarget {
+  /** Service id used for scope filtering — `'main'` for the primary. */
+  serviceId: string;
   containerId: string;
   workdir: string;
 }
@@ -27,33 +32,37 @@ export interface EnvSyncTarget {
  */
 export function collectEnvSyncTargets(
   primary: Sandbox | undefined,
-  services: readonly Sandbox[],
+  services: ReadonlyArray<{ serviceId: string; sandbox: Sandbox }>,
 ): EnvSyncTarget[] {
   const targets: EnvSyncTarget[] = [];
   if (primary?.containerId && !primary.runtimePaused && primary.mountKind !== 'external') {
-    targets.push({ containerId: primary.containerId, workdir: primary.workdir });
+    targets.push({ serviceId: 'main', containerId: primary.containerId, workdir: primary.workdir });
   }
-  for (const svc of services) {
+  for (const { serviceId, sandbox: svc } of services) {
     if (svc.containerId && !svc.runtimePaused && svc.mountKind !== 'external') {
-      targets.push({ containerId: svc.containerId, workdir: svc.workdir });
+      targets.push({ serviceId, containerId: svc.containerId, workdir: svc.workdir });
     }
   }
   return targets;
 }
 
 /**
- * Write the rendered `.env` body to every eligible container under the
- * session. Returns silently when there are no targets or no driver.
+ * Write a PER-SERVICE rendered `.env` body to every eligible container
+ * under the session. `bodyFor` receives the target's service id so the
+ * caller can enforce `service_scope` (D1). Returns silently when there
+ * are no targets or no driver.
  */
 export async function pushEnvsToContainers(
   targets: readonly EnvSyncTarget[],
-  body: string,
+  bodyFor: (serviceId: string) => string,
   driver: ISandboxDriver | null,
 ): Promise<void> {
   if (targets.length === 0 || !driver) return;
   await Promise.allSettled(
     targets.map((t) =>
-      driver.writeFile(t.containerId, `${t.workdir}/.env`, body, { recursive: true }),
+      driver.writeFile(t.containerId, `${t.workdir}/.env`, bodyFor(t.serviceId), {
+        recursive: true,
+      }),
     ),
   );
 }

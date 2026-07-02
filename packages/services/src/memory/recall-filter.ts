@@ -14,7 +14,8 @@
  * Gated by the caller (CODER_MEMORY_LLM_FILTER); off → never constructed.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
-import { bindingProblem, callConfiguredChat } from '../quality/binding-chat.js';
+import { callConfiguredChat } from '../quality/binding-chat.js';
+import { callChatWithFailover } from '../quality/binding-failover.js';
 import { suppressThinkingFor } from '../quality/chat-dispatcher.js';
 import type { RetrievedMemory } from './retriever.js';
 
@@ -37,38 +38,34 @@ export class LlmRecallFilter {
    */
   async filter(taskText: string, items: RetrievedMemory[]): Promise<RetrievedMemory[]> {
     if (this.opts.skipLlm || items.length < 2) return items;
-    const binding = await this.opts.resolver
-      .resolveOrNull(
+    // resolveChain lets a second configured reranker binding (or the general
+    // default) serve when the primary is uncallable/down. The runner skips
+    // OAuth-mismatched/misconfigured bindings and never throws — fail-open.
+    const chain = await this.opts.resolver
+      .resolveChain(
         'memory_recall',
         'reranker',
         this.opts.resolveContext ?? {},
         this.opts.getFallbackDefault?.() ?? undefined,
       )
-      .catch(() => null);
-    if (!binding) return items; // not configured → no filtering
-    // OAuth kinds (google-oauth, chatgpt, …) need the full coder client —
-    // the raw REST adapters authenticate by API key only and silently 401.
-    if (bindingProblem(binding, { label: 'memory recall filter', codePrefix: 'memory_recall' })) {
-      return items; // uncallable binding → fail-open, no doomed HTTP call
-    }
-    try {
-      const result = await callConfiguredChat(
-        binding,
-        [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: buildPrompt(taskText, items) },
-        ],
-        {
-          disableThinking: suppressThinkingFor(binding),
+      .catch(() => []);
+    if (chain.length === 0) return items; // not configured → no filtering
+    const messages = [
+      { role: 'system' as const, content: SYSTEM_PROMPT },
+      { role: 'user' as const, content: buildPrompt(taskText, items) },
+    ];
+    const { result } = await callChatWithFailover(
+      chain,
+      (b) =>
+        callConfiguredChat(b, messages, {
+          disableThinking: suppressThinkingFor(b),
           timeoutMs: 20_000,
           signal: AbortSignal.timeout(20_000),
-        },
-      );
-      if (result.errorBody || !result.content.trim()) return items; // fail-open
-      return decideKeep(items, parseKeepIds(result.content));
-    } catch {
-      return items; // fail-open
-    }
+        }),
+      { label: 'memory recall filter', codePrefix: 'memory_recall', retry: { maxRetries: 0 } },
+    );
+    if (result.errorBody || !result.content.trim()) return items; // fail-open
+    return decideKeep(items, parseKeepIds(result.content));
   }
 }
 

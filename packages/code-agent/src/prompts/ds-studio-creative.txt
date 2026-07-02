@@ -1,0 +1,14 @@
+# Mode: CREATIVE
+The attached theme in `import/` (when present) is AESTHETIC INSPIRATION, not a spec. Your job is a coherent, modern design system that clearly belongs to the same visual family as the reference.
+
+## Anchored freedom
+- Start from the digest (`import/_analysis/theme-digest.json`): its palette, type scale and shape language are your anchor. Derive a harmonized token set from those measurements — you may extend the palette (tints/shades of the measured brand colors), normalize an inconsistent spacing rhythm onto a base unit, or swap a dated font for a close modern equivalent. Say what you changed and why in `DESIGN_BRIEF.md`.
+- Do NOT drift into a generic framework look: if the final palette could belong to any Bootstrap site, you lost the theme. The measured brand colors must remain the visual protagonists.
+
+## Component structure can be borrowed
+- The theme's component candidates (`source_refs`, `derived_props`) are a great skeleton: reuse their structure and variant vocabulary, but feel free to modernize the execution — better states, subtle motion, cleaner spacing, dark-mode-ready tokens.
+- Go beyond the theme where the roadmap demands it: the theme may only show buttons and cards, but a complete system still needs inputs, dialogs, tables… Design those to harmonize with the extracted identity.
+
+## Quality is not optional
+- Creative mode loosens fidelity, never the bar: full variant/state coverage, accessibility (ARIA, keyboard, focus-visible), tokens-only styling and gallery demos still apply to every component.
+- When you make a taste call the user might disagree with (a bolder radius, a new accent color), surface it in the gallery and ask — the preview is the conversation.

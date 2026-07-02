@@ -37,6 +37,13 @@ import {
   syncFeatureCard,
   type EvidenceUrlBuilder,
 } from '@mcp/services/qa/kanban-bridge.js';
+import { classifyQaFailure } from '@mcp/services/qa/parsers/error-classifier.js';
+import {
+  SIDECAR_DOWN_THRESHOLD,
+  clearSidecarTracker,
+  resetSidecarTracker,
+  trackSidecarFailure,
+} from '@mcp/services/qa/sidecar-down-tracker.js';
 
 interface StartedEvent {
   kind: 'started';
@@ -90,6 +97,15 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
     const run = qaTestRunStore.getRun(runId);
     if (!run) return c.json({ error: 'unknown runId' }, 404);
     if (run.company_session_id !== sessionId) return c.json({ error: 'session mismatch' }, 403);
+
+    // B7 — every reporter event counts as PROGRESS: stamp last_event_at
+    // so the adaptive watchdog resets its clock (no-op once the run left
+    // `running`). Best-effort — a store hiccup must not block the suite.
+    try {
+      qaTestRunStore.touchLastEvent(runId);
+    } catch (e) {
+      console.warn(`[qa-test-event] touchLastEvent(${runId}) failed: ${(e as Error).message}`);
+    }
 
     // Live orchestrator (if any) — used to republish events on the SSE
     // bus so the dashboard can update without polling. When the
@@ -147,10 +163,36 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
             summary_md_url: artUrl(ev.summary_md_path),
           });
         }
+
+        // B7 — dead-sidecar detection: 2 CONSECUTIVE spec failures whose
+        // message classifies as `sidecar_down` ⇒ the shared browser is
+        // gone; complete the run early instead of letting every
+        // remaining spec fail one by one for 10+ minutes.
+        const isFailure =
+          status === 'failed' || status === 'timed-out' || status === 'interrupted';
+        const failureClass = isFailure ? classifyQaFailure(ev.error) : null;
+        if (failureClass === 'sidecar_down') {
+          const streak = trackSidecarFailure(runId);
+          if (streak >= SIDECAR_DOWN_THRESHOLD) {
+            const terminated = completeRunSidecarDown({
+              sessionId,
+              runId,
+              qaTestRunStore,
+              qaTestResultStore,
+              orchestrator,
+            });
+            clearSidecarTracker(runId);
+            return c.json({ ok: true, id, terminated: terminated ? 'sidecar_down' : undefined });
+          }
+        } else {
+          resetSidecarTracker(runId);
+        }
         return c.json({ ok: true, id });
       }
       case 'completed': {
         const ev = body as CompletedEvent;
+        // B7 — run over; drop any sidecar-down streak state for it.
+        clearSidecarTracker(runId);
         const updated = qaTestRunStore.completeRun(runId, {
           status: 'completed',
           passed: ev.passed ?? 0,
@@ -224,6 +266,75 @@ function normaliseStatus(raw: unknown): QaTestStatus | null {
   return TEST_STATUS_VALUES.has(candidate as QaTestStatus)
     ? (candidate as QaTestStatus)
     : null;
+}
+
+/**
+ * B7 — complete a run EARLY because the shared Chrome Service died mid-
+ * suite (2 consecutive `sidecar_down` spec failures). Counts are
+ * recomputed from the results already streamed in; the same
+ * `qa_run_completed` bus event the UI already consumes is published so
+ * the Tests tab flips from spinner to error without polling. Artifacts
+ * are persisted best-effort like the normal completion path. Returns
+ * true when the run actually transitioned (idempotent under races —
+ * `completeRun` is a no-op once the run left `running`).
+ */
+function completeRunSidecarDown(opts: {
+  sessionId: number;
+  runId: number;
+  qaTestRunStore: ServerDeps['qaTestRunStore'];
+  qaTestResultStore: ServerDeps['qaTestResultStore'];
+  orchestrator: ReturnType<typeof getCompanyOrchestrator>;
+}): boolean {
+  const { sessionId, runId, qaTestRunStore, qaTestResultStore, orchestrator } = opts;
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  try {
+    for (const r of qaTestResultStore.listResults(runId)) {
+      if (r.status === 'passed') passed++;
+      else if (r.status === 'skipped') skipped++;
+      else failed++;
+    }
+  } catch {
+    /* keep zeros — counts are informative here */
+  }
+  const updated = qaTestRunStore.completeRun(runId, {
+    status: 'error',
+    passed,
+    failed,
+    skipped,
+    duration_ms: null,
+    last_error:
+      'Chrome Service connection lost mid-run (2+ consecutive specs failed with browser-connection errors). Remaining specs were not executed.',
+    error_class: 'sidecar_down',
+  });
+  if (!updated || updated.status !== 'error') return false;
+
+  void persistAndStamp(getSandboxManager(), qaTestRunStore, {
+    sessionId,
+    runId,
+    serviceId: updated.service_id,
+  }).catch((err: unknown) => {
+    console.warn(
+      `[qa-test-event] persistAndStamp (sidecar_down) failed for run ${runId}: ${(err as Error).message}`,
+    );
+  });
+
+  if (orchestrator) {
+    busPublish(orchestrator.metaBus, 'qa_run_completed', {
+      agent_run_id: updated.agent_run_id,
+      agent_role: updated.suite,
+      suite: updated.suite,
+      passed: updated.passed,
+      failed: updated.failed,
+      skipped: updated.skipped,
+      duration_ms: updated.duration_ms ?? undefined,
+    });
+  }
+  console.warn(
+    `[qa-test-event] run ${runId} completed early: error_class=sidecar_down (Chrome Service unreachable mid-run).`,
+  );
+  return true;
 }
 
 /**

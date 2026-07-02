@@ -45,6 +45,7 @@ import {
 } from './supervisor-incident-bus.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers } from './worker-memory-handlers.js';
+import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 
 interface PoolEntry {
@@ -443,6 +444,9 @@ export class WorkerOrchestratorPool {
     // `setCompanyMemoryPorts` in company-worker.ts (spawn-time PROJECT MEMORY
     // block + run-end distillation for subordinates).
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
+    // Secret decryption (`enc:`/`plain:` blobs) — safeStorage lives only in
+    // the Electron main process; db_* tools in the worker RPC here.
+    const offSecrets = registerWorkerSecretsHandlers(bridge);
     // Agent LSP nav for master + subordinates — same main-side router.
     const offLsp = registerWorkerLspHandlers(bridge);
 
@@ -518,6 +522,21 @@ export class WorkerOrchestratorPool {
       } catch {
         /* best-effort */
       }
+      // C1 — organism visibility: mirror the incident into the SESSION's
+      // own metaBus (same bus the company SSE stream pumps), so the
+      // session dashboard (autonomy feed + incident banner) sees it
+      // without subscribing to the global Admin bus. The Admin bus above
+      // stays untouched.
+      try {
+        publish(bus, 'supervisor_incident', {
+          kind: incident.kind,
+          agentRunId: incident.agentRunId ?? undefined,
+          detail: incident.detail,
+          detectedAtMs: incident.detectedAtMs,
+        });
+      } catch {
+        /* best-effort */
+      }
     });
 
     const detachBusMirror = (): void => {
@@ -536,6 +555,7 @@ export class WorkerOrchestratorPool {
       try { offPreviewDevtools(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }
       try { offMemory(); } catch { /* best-effort */ }
+      try { offSecrets(); } catch { /* best-effort */ }
       try { offLsp(); } catch { /* best-effort */ }
     };
 

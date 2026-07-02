@@ -16,17 +16,20 @@
  */
 
 import { useTranslation } from 'react-i18next';
-import { Pause, Play, RefreshCw, RotateCw, Trash2, Zap } from 'lucide-react';
+import { ChevronDown, Pause, Play, RefreshCw, RotateCw, Trash2, Zap } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
-import { statusClassName, type ServiceRow } from './types.js';
+import { formatUptime, healthDotClassName, statusClassName, type ServiceRow } from './types.js';
 import type { UseServiceActionsResult } from './useServiceActions.js';
 
 export interface ServiceListItemProps {
   svc: ServiceRow;
   actions: UseServiceActionsResult;
+  /** B6 — logs+timeline detail expansion. Optional: legacy mounts omit it. */
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }
 
-export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
+export function ServiceListItem({ svc, actions, expanded, onToggleExpand }: ServiceListItemProps) {
   const { t } = useTranslation('agents');
   const {
     restartingId,
@@ -41,10 +44,15 @@ export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
     retryService,
     retryPrimary,
     retryOrphanedService,
+    stopLocalProject,
   } = actions;
 
   const isOrphaned = svc.status === 'orphaned';
   const isAttached = !!svc.is_attached;
+  // B8 — host-process row (`local:<id>`). No container to pause/restart/
+  // retry: the only action is Stop (DELETE /local-project) on the Trash
+  // slot. Health arrives via the SSE overlay (see ServicesSidebar).
+  const isLocal = svc.kind === 'local' || svc.stack === 'local-process';
   const runtimePaused = !!svc.runtime_paused;
   const displayStatus = runtimePaused ? 'paused' : svc.status;
   const isManagedContainer =
@@ -85,6 +93,14 @@ export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
               main
             </span>
           )}
+          {isLocal && (
+            <span
+              className="text-[8px] uppercase tracking-wide rounded px-1 bg-teal-500/15 text-teal-600"
+              title={t('services.local.tooltip')}
+            >
+              {t('services.local.badge')}
+            </span>
+          )}
           {isOrphaned && !svc.is_primary && (
             <span
               className="text-[8px] uppercase tracking-wide rounded px-1 bg-amber-500/15 text-amber-600"
@@ -97,7 +113,7 @@ export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
               orphaned
             </span>
           )}
-          {svc.mount_kind === 'external' && !isAttached && (
+          {svc.mount_kind === 'external' && !isAttached && !isLocal && (
             <span
               className="text-[8px] uppercase tracking-wide rounded px-1 bg-sky-500/15 text-sky-600"
               title="External project files are preserved on delete"
@@ -119,7 +135,25 @@ export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
           )}
         </div>
         <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
+          <span
+            className={'inline-block h-1.5 w-1.5 rounded-full shrink-0 ' + healthDotClassName(svc.health)}
+            title={
+              t(`services.health.${svc.health ?? 'unknown'}`, { defaultValue: svc.health ?? 'unknown' }) +
+              (svc.health_detail ? ` — ${svc.health_detail}` : '')
+            }
+          />
           <span className={statusClassName(displayStatus)}>{displayStatus}</span>
+          {formatUptime(svc.started_at_ms) !== '' &&
+            (displayStatus === 'ready' || displayStatus === 'running') && (
+              <span title={t('services.uptimeTooltip')}>
+                {t('services.uptime', { time: formatUptime(svc.started_at_ms) })}
+              </span>
+            )}
+          {(svc.restart_count ?? 0) > 0 && (
+            <span title={t('services.restartsTooltip', { n: svc.restart_count ?? 0 })}>
+              ↻{svc.restart_count}
+            </span>
+          )}
           {svc.preview_url && (
             <a
               href={svc.preview_url}
@@ -137,6 +171,20 @@ export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
           </div>
         )}
       </div>
+      {onToggleExpand && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-5 w-5"
+          onClick={onToggleExpand}
+          title={expanded ? t('services.detail.collapse') : t('services.detail.expand')}
+        >
+          <ChevronDown
+            className={'h-3 w-3 transition-transform ' + (expanded ? 'rotate-180' : '')}
+          />
+        </Button>
+      )}
       {isAttached && (
         <Button
           type="button"
@@ -152,7 +200,7 @@ export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
           />
         </Button>
       )}
-      {!isAttached && (
+      {!isAttached && !isLocal && (
         <>
           <Button
             type="button"
@@ -260,16 +308,18 @@ export function ServiceListItem({ svc, actions }: ServiceListItemProps) {
         variant="ghost"
         size="icon"
         className="h-5 w-5"
-        onClick={() => void removeService(svc.service_id)}
+        onClick={() => void (isLocal ? stopLocalProject() : removeService(svc.service_id))}
         disabled={svc.is_primary}
         title={
-          svc.is_primary
-            ? 'Primary container cannot be removed from this panel'
-            : isOrphaned
-              ? svc.mount_kind === 'external'
-                ? 'Drop the orphaned project link; files are preserved'
-                : 'Drop the orphaned project link and delete its files'
-              : 'Remove service'
+          isLocal
+            ? t('services.local.stopTooltip')
+            : svc.is_primary
+              ? 'Primary container cannot be removed from this panel'
+              : isOrphaned
+                ? svc.mount_kind === 'external'
+                  ? 'Drop the orphaned project link; files are preserved'
+                  : 'Drop the orphaned project link and delete its files'
+                : 'Remove service'
         }
       >
         <Trash2 className="h-3 w-3" />

@@ -152,6 +152,40 @@ export class PipelineProviderBindingsStore {
     return row ? mapRow(row) : null;
   }
 
+  /**
+   * Like {@link findActiveAtScope} but returns EVERY enabled binding at the
+   * requested scope, ordered `priority DESC, id ASC` — i.e. the same order in
+   * which they should be tried when the higher-priority one fails at runtime.
+   * The failover chain is built by `PipelineProviderResolver.resolveChain`,
+   * which picks the first scope that yields ≥1 usable binding and hands the
+   * whole ordered list to the caller. This method only answers "what's bound
+   * at THIS scope, best-first?".
+   */
+  findAllActiveAtScope(opts: {
+    pipelineName: string;
+    bindingRole: string;
+    scopeType: BindingScopeType;
+    scopeId: number | null;
+  }): PipelineProviderBinding[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM pipeline_provider_bindings
+         WHERE pipeline_name = @pipelineName
+           AND binding_role  = @bindingRole
+           AND scope_type    = @scopeType
+           AND (scope_id IS @scopeId OR scope_id = @scopeId)
+           AND enabled = 1
+         ORDER BY priority DESC, id ASC`,
+      )
+      .all({
+        pipelineName: opts.pipelineName,
+        bindingRole: opts.bindingRole,
+        scopeType: opts.scopeType,
+        scopeId: opts.scopeId,
+      }) as RawRow[];
+    return rows.map(mapRow);
+  }
+
   upsert(input: PipelineProviderBindingInput): number {
     const existing = this.db
       .prepare(

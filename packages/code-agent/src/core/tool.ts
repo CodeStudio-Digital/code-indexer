@@ -49,6 +49,15 @@ export interface CoderTool {
    */
   riskLevel?: ToolRiskLevel;
   /**
+   * Dynamic risk classifier consulted by the permission gate BEFORE the
+   * static metadata chain, so one tool can be read-risk for some inputs and
+   * write-risk for others (e.g. `db_query`: SELECT → 'read', INSERT →
+   * 'write'). Must be PURE and non-throwing over arbitrary input; the gate
+   * treats a throw as 'write' (fail-safe). When absent, classification falls
+   * back to the static chain exactly as before.
+   */
+  riskOf?(input: unknown): ToolRiskLevel;
+  /**
    * Tool requires a sandbox runtime to execute safely (e.g., scaffolders
    * that materialize new projects, or shell tools that should never touch
    * the host filesystem). The runner blocks invocation when no sandbox is
@@ -141,8 +150,28 @@ export interface ToolContext {
   /** Project root path of the PRIMARY project. Native fs operations default here
    *  and must stay inside SOME known root (primary or a linked `roots` entry). */
   cwd: string;
-  /** Project name of the PRIMARY project (injected as project_name into MCP calls). */
+  /**
+   * Session project name injected into MCP calls. In ordinary sessions this is
+   * the real project; in global sessions it is the synthetic union project.
+   * Use `globalWorkspace` for the real linked projects/folders.
+   */
   projectName: string;
+  /**
+   * Global-session virtual union metadata. The filesystem root (`cwd`) is a
+   * directory containing one link per real project, addressed by `slug`.
+   * Undefined for ordinary sessions.
+   */
+  globalWorkspace?: {
+    syntheticProjectName: string;
+    rootPath: string;
+    projects: ReadonlyArray<{
+      projectId: number;
+      name: string;
+      slug: string;
+      rootPath: string;
+      isPrimary: boolean;
+    }>;
+  };
   /**
    * Linked SECONDARY roots for a GLOBAL (multi-project) session (migration 152).
    * The PRIMARY stays `cwd`/`projectName`/`projectId`; these are additional roots

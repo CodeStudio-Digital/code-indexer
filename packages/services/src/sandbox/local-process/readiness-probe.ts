@@ -44,22 +44,39 @@ export async function httpReadinessProbe(opts: ProbeOptions): Promise<ProbeResul
   return { ok: false, reason: 'timeout' };
 }
 
-function tryOnce(port: number, path: string, timeoutMs: number): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+/** Outcome of a single GET attempt against `127.0.0.1:<port><path>`. */
+export type ProbeOnceResult =
+  | { replied: true; status: number }
+  | { replied: false };
+
+/**
+ * One GET attempt, no retry loop. Resolves with the HTTP status when the
+ * server answered (any status — 5xx still means "a process replied") or
+ * `{ replied: false }` on connection error/timeout. Reused by the
+ * ServiceSupervisor's health probe, which needs the raw status to tell
+ * healthy (2xx–4xx) from degraded (5xx) — `httpReadinessProbe` itself only
+ * cares that *something* replied.
+ */
+export function probeOnce(port: number, path: string, timeoutMs: number): Promise<ProbeOnceResult> {
+  return new Promise<ProbeOnceResult>((resolve) => {
     const req = httpRequest(
       { hostname: '127.0.0.1', port, method: 'GET', path, timeout: timeoutMs },
       (res) => {
         res.resume();
-        resolve(true);
+        resolve({ replied: true, status: res.statusCode ?? 0 });
       },
     );
-    req.on('error', () => resolve(false));
+    req.on('error', () => resolve({ replied: false }));
     req.on('timeout', () => {
       req.destroy();
-      resolve(false);
+      resolve({ replied: false });
     });
     req.end();
   });
+}
+
+async function tryOnce(port: number, path: string, timeoutMs: number): Promise<boolean> {
+  return (await probeOnce(port, path, timeoutMs)).replied;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {

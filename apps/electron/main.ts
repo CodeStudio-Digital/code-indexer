@@ -27,13 +27,14 @@ import { installLlmDispatcher } from '@apps/http-api/install-llm-dispatcher.js';
 import { mountIpcHandlers } from './src/handlers-mount.js';
 import { createElectronProfiler } from './src/perf-trace.js';
 import { setElectronProfiler } from '@apps/http-api/server/perf/electron-profiler.js';
+import { setMainSecretDecryptor } from '@apps/http-api/server/secret-decrypt-port.js';
 import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { PreviewWindowService } from './src/preview-window/service.js';
 import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
 import { startOptionalDevHttp, stopDevHttp } from './src/dev-http.js';
 import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
-import { mountSecretsIpc } from './src/secrets-ipc.js';
+import { decryptSecretBlob, mountSecretsIpc } from './src/secrets-ipc.js';
 import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
 import { registerWindowRegistryIpc } from './src/window-registry-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
@@ -252,6 +253,10 @@ async function bootstrap() {
   const handlers = mountIpcHandlers(deps, honoApp);
   mountTerminalIpc(deps);
   mountSecretsIpc();
+  // Server-side decrypt port: lets http-api code (and workers via the
+  // secretsDecrypt bridge handler) resolve `enc:` blobs with safeStorage
+  // without importing electron. See server/secret-decrypt-port.ts.
+  setMainSecretDecryptor(decryptSecretBlob);
   registerNativeIpc();
   registerWindowIpc();
   registerWindowControlsIpc();

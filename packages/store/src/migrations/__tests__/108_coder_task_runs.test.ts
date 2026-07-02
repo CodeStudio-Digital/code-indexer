@@ -22,6 +22,10 @@ beforeEach(() => {
   db = new Database(':memory:');
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  // coder_sessions (004) references projects(id) — with foreign_keys ON the
+  // INSERT fixtures need the target table AND row to exist.
+  db.exec(`CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT)`);
+  db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'p')`).run();
   // 004 creates coder_sessions which 108 references via FK.
   coderSessions004.up(db);
 });

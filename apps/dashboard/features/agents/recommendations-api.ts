@@ -71,3 +71,53 @@ export async function recomputeKanbanPriorities(sessionId: number): Promise<Reco
   }
   return (await r.json()) as RecomputeKanbanResponse;
 }
+
+// ─── C3 — proactive kanban ─────────────────────────────────────
+
+export interface KanbanRoleSuggestion {
+  cardId: number;
+  role: string;
+  score: number;
+}
+
+/** Role suggestions for the top unassigned/unblocked todo+backlog cards. */
+export async function suggestKanbanRoles(sessionId: number): Promise<KanbanRoleSuggestion[]> {
+  const r = await fetch(`/api/company/sessions/${sessionId}/kanban/suggest-roles`, {
+    method: 'POST',
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+  const body = (await r.json().catch(() => ({}))) as { suggestions?: KanbanRoleSuggestion[] };
+  return Array.isArray(body.suggestions) ? body.suggestions : [];
+}
+
+export interface DispatchKanbanCardResult {
+  ok: boolean;
+  agentRunId?: number;
+  role?: string;
+  reason?: string;
+  error?: string;
+}
+
+/** Quick-dispatch one card (explicit role skips the recommender). */
+export async function dispatchKanbanCard(
+  sessionId: number,
+  cardId: number,
+  role?: string,
+): Promise<DispatchKanbanCardResult> {
+  const r = await fetch(
+    `/api/company/sessions/${sessionId}/kanban/cards/${cardId}/dispatch`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(role ? { role } : {}),
+    },
+  );
+  const body = (await r.json().catch(() => ({}))) as DispatchKanbanCardResult;
+  if (!r.ok && body.ok === undefined) {
+    return { ok: false, error: body.error ?? `HTTP ${r.status}` };
+  }
+  return body;
+}

@@ -73,6 +73,14 @@ export interface DispatchSelectionInput {
   /** Optional extra ceiling on how many to dispatch in a single sweep, so the
    *  scheduler ramps up gradually instead of saturating the cap in one tick. */
   maxPerSweep?: number;
+  /**
+   * C3 — SOFT WIP limit on the `in_progress` column. Every dispatch moves a
+   * card into `in_progress`, so the selection refuses targets that would push
+   * `inProgressCount` past `limit`. `limit: null` (or the whole field absent)
+   * means "no limit". SOFT by design: only the autonomous scheduler passes
+   * this — a human drag or an explicit master move may still exceed it.
+   */
+  wip?: { inProgressCount: number; limit: number | null };
 }
 
 /**
@@ -87,9 +95,14 @@ export interface DispatchSelectionInput {
 export function selectDispatchTargets(input: DispatchSelectionInput): number[] {
   const freeSlots = Math.max(0, input.concurrencyLimit - input.runningCount);
   if (freeSlots === 0) return [];
-  const budget = input.maxPerSweep != null
+  let budget = input.maxPerSweep != null
     ? Math.min(freeSlots, Math.max(0, input.maxPerSweep))
     : freeSlots;
+  // C3 — soft WIP ceiling: each dispatch adds one card to in_progress.
+  if (input.wip && input.wip.limit != null) {
+    const wipRoom = Math.max(0, input.wip.limit - input.wip.inProgressCount);
+    budget = Math.min(budget, wipRoom);
+  }
   if (budget === 0) return [];
 
   const targets: number[] = [];

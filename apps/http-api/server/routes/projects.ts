@@ -2,6 +2,7 @@ import type { Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { createProjectsHandlers, createContext, reinstrumentBuilder, visualEdit, type VisualEditBody } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
+import { purgeIgnoredIndexedFiles } from '@mcp/indexer/indexer/purge-ignored.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
 
@@ -119,6 +120,19 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       return c.json(await h.clearData({ id: parseIdParam(c) }, createContext()));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/projects/:id/index-ignore/purge', async (c) => {
+    try {
+      const id = parseIdParam(c);
+      if (!deps.db.getProject(id)) return notFound(c);
+      const result = await purgeIgnoredIndexedFiles(deps.db, deps.vectorStore, deps.lshIndexingSink, id);
+      deps.hybridSearch?.invalidateCache?.();
+      deps.projectIndexService.refreshStatus(id);
+      return c.json(result);
+    } catch (err) {
       return mapApiError(c, err);
     }
   });

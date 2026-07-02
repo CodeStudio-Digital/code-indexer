@@ -72,6 +72,8 @@ export async function executeServiceDestroy(
     sb.status = 'destroyed';
     persistAfterDestroy(deps.servicesStore, sessionId, serviceId, sb, reason);
     deps.emit({ kind: 'destroyed', sandboxId: sb.id });
+    // Session-keyed sibling of `destroyed` (company B2) — see SandboxEvent union.
+    deps.emit({ kind: 'service_destroyed', sandboxId: sessionId, serviceId, reason });
 
     // Prune the managed PREVIEW_URL_* env for the removed service
     // and push fresh .env into the survivors.

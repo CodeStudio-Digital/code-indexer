@@ -9,9 +9,12 @@
  *
  * Loop:
  *   1. Every `intervalMs`, query `findStaleRunningRuns(maxRunAgeMs)` —
- *      runs in `running` for >maxRunAgeMs AND with zero results rows.
+ *      runs in `running` with >maxRunAgeMs WITHOUT PROGRESS (B7: age is
+ *      `max(started_at, last_event_at)`, so reporter events reset the
+ *      clock) AND with zero results rows.
  *   2. Mark each as `errored` via `completeRun`, with a clear `last_error`
- *      message the dashboard can surface.
+ *      message the dashboard can surface + `error_class='orphan'` for
+ *      machine-readable filtering (B7).
  *
  * Best-effort: errors are logged, never thrown. The runtime is
  * `setInterval` with `.unref()` so it doesn't keep the process alive.
@@ -65,7 +68,10 @@ export function runWatchdogTick(
         failed: run.failed,
         skipped: run.skipped,
         duration_ms: run.duration_ms,
+        // Keep the legacy message (UI + countWatchdogKills match on it)
+        // and add the machine-readable class introduced by migration 189.
         last_error: QA_WATCHDOG_ERROR_MESSAGE,
+        error_class: 'orphan',
       });
       if (updated && updated.status === 'error') killed++;
     } catch (e) {

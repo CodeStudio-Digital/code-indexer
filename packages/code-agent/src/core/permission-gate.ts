@@ -68,9 +68,26 @@ const DESTRUCTIVE_VERB_REGEX = /(?:^|_)(delete|destroy|drop|remove|push|publish|
  * apply name heuristics instead (destructive verb → admin, read verb →
  * allow, anything else → write).
  */
-export function classifyForGate(tool: CoderTool | undefined, name: string): 'allow' | ApprovalRiskClass {
+export function classifyForGate(
+  tool: CoderTool | undefined,
+  name: string,
+  input?: unknown,
+): 'allow' | ApprovalRiskClass {
   if (NEVER_GATE.has(name)) return 'allow';
   if (!tool) return 'write'; // unknown tool name — conservative (invoke will error anyway)
+  // Dynamic per-input classifier wins over the static metadata chain (e.g.
+  // db_query: SELECT → read, INSERT → write). A throw or an unexpected value
+  // gates as 'write' (fail-safe). Absent riskOf → EXACTLY the legacy chain.
+  if (typeof tool.riskOf === 'function') {
+    try {
+      const risk = tool.riskOf(input);
+      if (risk === 'read') return 'allow';
+      if (risk === 'write' || risk === 'execute' || risk === 'admin') return risk;
+      return 'write';
+    } catch {
+      return 'write';
+    }
+  }
   const meta = resolveToolMetadata(tool);
   if (meta.interactive) return 'allow'; // already pauses via its own wait — double-pause deadlocks the UX
   if (meta.riskLevel === 'admin') return 'admin';
@@ -147,8 +164,29 @@ export class PermissionGate {
     return this.pending;
   }
 
+  /**
+   * A gate clone for BACKGROUND (fire-and-forget) subagents. Same allow logic
+   * — the parent's live `getMode` and a snapshot of its "always allow" grants —
+   * but any decision that WOULD pause for the user instead auto-denies: a
+   * background job may settle between runs, where there is no runner/SSE to
+   * surface or resolve an approval prompt (it would hang until a watchdog
+   * kills it). The denial is tagged `[user-denied` so it stays out of error
+   * telemetry and failure-streak counting, with a note explaining the cause.
+   */
+  forBackground(): PermissionGate {
+    return new PermissionGate({
+      getMode: this.deps.getMode,
+      emit: () => { /* no approval UI in a detached background context */ },
+      initialGrants: [...this.grants],
+      waitForUserInput: async () => JSON.stringify({
+        note: 'background agents run non-interactively — grant "always allow" first, '
+          + 'or run this in a foreground spawn_agent',
+      }),
+    });
+  }
+
   async check(req: ApprovalCheckInput): Promise<ApprovalCheckResult> {
-    const riskClass = classifyForGate(req.tool, req.toolName);
+    const riskClass = classifyForGate(req.tool, req.toolName, req.input);
     if (riskClass === 'allow') return { allowed: true };
     const mode = this.deps.getMode();
     if (mode === 'unrestricted') return { allowed: true };

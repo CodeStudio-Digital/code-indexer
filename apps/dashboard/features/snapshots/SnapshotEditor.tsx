@@ -1,26 +1,26 @@
 /**
- * Context-snapshots editor — master/detail layout for the project-scoped
- * knowledge cards (architecture, decisions, patterns, conventions, todos,
- * notes). The legacy version rendered every snapshot as a fully-expanded
- * card stacked vertically; this one splits the work:
+ * Context-snapshots editor — a compact two-tab surface:
  *
- *   ┌──────────────┬─────────────────────────────────────┐
- *   │ SnapshotList │ SnapshotDetail                      │
- *   │ (resizable)  │   header  (chip · title · actions)  │
- *   │  - search    │   tabs    [View | Raw | History]    │
- *   │  - filter    │   body    <rendered/raw/history>    │
- *   │  - rows      │                                     │
- *   └──────────────┴─────────────────────────────────────┘
+ *   ┌ [Snapshots] [Memória] ──────────────────────────────┐
+ *   │  Snapshots: master/detail (list + rendered detail)   │
+ *   │  Memória:   project/agent memory health + curation   │
+ *   └──────────────────────────────────────────────────────┘
  *
- * Edit/Create flows route through the modal `SnapshotForm` — kept off
- * the detail surface so the read-only view stays uncluttered.
+ * Snapshots is the default tab so the list sits at the top of the surface
+ * instead of being pushed below the memory diagnostics strip. The memory
+ * cards only mount (and poll) while the Memória tab is active — no wasted
+ * fetches/polling when the user is just browsing snapshots.
+ *
+ * Edit/Create flows route through the modal `SnapshotForm` — kept off the
+ * detail surface so the read-only view stays uncluttered.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Plus } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
+import { cn } from '../../lib/utils.js';
 import { apiDelete, apiPut, useApi } from '../../hooks/useApi.js';
 import { SnapshotList } from './parts/SnapshotList.js';
 import { SnapshotDetail } from './parts/SnapshotDetail.js';
@@ -35,6 +35,8 @@ const PIN_IMPORTANCE = 0.95;
 const UNPIN_IMPORTANCE = 0.5;
 export const PIN_THRESHOLD = 0.9;
 
+type EditorTab = 'snapshots' | 'memory';
+
 interface SnapshotEditorProps {
   projectId: number;
 }
@@ -42,6 +44,7 @@ interface SnapshotEditorProps {
 export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
   const { t } = useTranslation(['projects', 'common']);
   const confirm = useConfirm();
+  const [tab, setTab] = useState<EditorTab>('snapshots');
   const [filterCategory, setFilterCategory] = useState<string>('');
   const categoryParam = filterCategory ? `?category=${filterCategory}` : '';
   const { data: snapshots, loading, refetch } = useApi<Snapshot[]>(
@@ -107,61 +110,76 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
     refetch();
   };
 
-  if (loading) {
-    return (
-      <div className="px-4 py-6 text-sm text-muted-foreground">
-        {t('common:actions.loading')}
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col h-full min-h-0">
-      <MemoryHealthCard projectId={projectId} />
-      <AgentMemoryHealthCard projectId={projectId} />
-      <AgentMemoryList projectId={projectId} />
-      <div className="flex flex-1 min-h-0">
-      <PanelGroup
-        direction="horizontal"
-        autoSaveId="snapshots-editor-cols"
-        className="flex-1 min-h-0"
-      >
-        <Panel
-          id="snapshots-list"
-          order={1}
-          defaultSize={28}
-          minSize={20}
-          maxSize={45}
-          className="min-w-0"
-        >
-          <SnapshotList
-            snapshots={snapshots ?? []}
-            selectedId={selectedId}
-            filterCategory={filterCategory}
-            onFilterCategory={(c) => {
-              setFilterCategory(c);
-              // Don't keep a stale selection from the previous filter —
-              // the auto-select effect picks the new first row.
-              setSelectedId(null);
-            }}
-            onSelect={setSelectedId}
-            onNew={handleNew}
-          />
-        </Panel>
-        <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-        <Panel id="snapshots-detail" order={2} minSize={40} className="min-w-0">
-          {selected ? (
-            <SnapshotDetail
-              snapshot={selected}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onTogglePin={handleTogglePin}
-            />
-          ) : (
-            <EmptyDetail onNew={handleNew} />
+      <div className="flex items-center gap-1 px-2 h-9 border-b bg-card shrink-0">
+        <TabButton active={tab === 'snapshots'} onClick={() => setTab('snapshots')}>
+          {t('projects:snapshotEditor.tab.snapshots')}
+          {snapshots && (
+            <span className="ml-1 text-[10px] text-muted-foreground">{snapshots.length}</span>
           )}
-        </Panel>
-      </PanelGroup>
+        </TabButton>
+        <TabButton active={tab === 'memory'} onClick={() => setTab('memory')}>
+          {t('projects:snapshotEditor.tab.memory')}
+        </TabButton>
+      </div>
+
+      {tab === 'memory' ? (
+        // Memory diagnostics + curation — only mounts (and polls) while active.
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <MemoryHealthCard projectId={projectId} />
+          <AgentMemoryHealthCard projectId={projectId} />
+          <AgentMemoryList projectId={projectId} />
+        </div>
+      ) : loading ? (
+        <div className="px-4 py-6 text-sm text-muted-foreground">
+          {t('common:actions.loading')}
+        </div>
+      ) : (
+        <div className="flex flex-1 min-h-0">
+          <PanelGroup
+            direction="horizontal"
+            autoSaveId="snapshots-editor-cols"
+            className="flex-1 min-h-0"
+          >
+            <Panel
+              id="snapshots-list"
+              order={1}
+              defaultSize={28}
+              minSize={20}
+              maxSize={45}
+              className="min-w-0"
+            >
+              <SnapshotList
+                snapshots={snapshots ?? []}
+                selectedId={selectedId}
+                filterCategory={filterCategory}
+                onFilterCategory={(c) => {
+                  setFilterCategory(c);
+                  // Don't keep a stale selection from the previous filter —
+                  // the auto-select effect picks the new first row.
+                  setSelectedId(null);
+                }}
+                onSelect={setSelectedId}
+                onNew={handleNew}
+              />
+            </Panel>
+            <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
+            <Panel id="snapshots-detail" order={2} minSize={40} className="min-w-0">
+              {selected ? (
+                <SnapshotDetail
+                  snapshot={selected}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onTogglePin={handleTogglePin}
+                />
+              ) : (
+                <EmptyDetail onNew={handleNew} />
+              )}
+            </Panel>
+          </PanelGroup>
+        </div>
+      )}
 
       <SnapshotForm
         projectId={projectId}
@@ -173,8 +191,33 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
         }}
         onSaved={refetch}
       />
-      </div>
     </div>
+  );
+}
+
+/** Compact segmented tab button matching the IDE's dense chrome. */
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex items-center h-7 px-2.5 rounded-md text-xs font-medium transition-colors',
+        active
+          ? 'bg-primary/10 text-primary'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

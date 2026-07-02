@@ -56,7 +56,8 @@ const envList: CoderTool = {
     'List every shared env var defined for this session. Returns key + value pairs as a newline- ' +
     'separated table. Call this BEFORE writing code that reads process.env / c.env — you may find ' +
     'a variable already exists (DATABASE_URL, API_BASE_URL, etc.) and should be reused rather than ' +
-    're-invented under a different name.',
+    're-invented under a different name. Vars restricted to specific services show a ' +
+    '`[scope: ...]` suffix; vars without it reach every service container.',
   source: 'native',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   handler: async (_args, ctx): Promise<ToolResult> => {
@@ -68,7 +69,11 @@ const envList: CoderTool = {
     if (rows.length === 0) return ok('(no env vars defined yet)');
     return ok(
       rows
-        .map((r) => `${r.key}=${r.value}${r.is_secret ? ' # (secret)' : ''}`)
+        .map(
+          (r) =>
+            `${r.key}=${r.value}${r.is_secret ? ' # (secret)' : ''}` +
+            (r.service_scope ? ` [scope: ${r.service_scope}]` : ''),
+        )
         .join('\n'),
     );
   },
@@ -110,6 +115,7 @@ const envSet: CoderTool = {
     'next file-watch tick; some frameworks require a restart to re-read env). Use `is_secret: true` ' +
     'for API keys / tokens — that masks the value in the dashboard Env tab (agents still see ' +
     'plaintext). Key MUST match /^[A-Za-z_][A-Za-z0-9_]*$/. ' +
+    'Pass `service` to restrict WHERE the var is materialized (only those containers get it in `.env`). ' +
     'WRITE PROTECTION: agents cannot silently overwrite keys whose `source === "user"` ' +
     '(values the operator typed by hand). Pass `force: true` to override — only do so when ' +
     'the user has explicitly asked you to update that value, otherwise prefer a different ' +
@@ -123,6 +129,12 @@ const envSet: CoderTool = {
       is_secret: {
         type: 'boolean',
         description: 'Mark as secret so the dashboard masks the value.',
+      },
+      service: {
+        type: 'string',
+        description:
+          "Optional service scope: CSV of service ids (e.g. 'api' or 'main,api'; 'main' = primary). " +
+          'Omit to keep/leave the var available to every service; pass an empty string to clear an existing scope.',
       },
       force: {
         type: 'boolean',
@@ -151,11 +163,19 @@ const envSet: CoderTool = {
           `when the user explicitly asked for this change.`,
       );
     }
-    s.upsert(sessionId, key, value, !!args.is_secret, { source: 'agent' });
+    // Tri-state scope: omitted → preserve any existing scope; '' → clear
+    // (all services); CSV → restrict materialization to those services.
+    const service =
+      args.service === undefined ? undefined : String(args.service ?? '').trim() || null;
+    s.upsert(sessionId, key, value, !!args.is_secret, { source: 'agent', serviceScope: service });
     await getSandboxManager()
       .syncEnvsToAllContainers(String(sessionId))
       .catch(() => void 0);
-    return ok(`Set ${key} (${args.is_secret ? 'secret' : 'plain'}, ${value.length} bytes)`);
+    return ok(
+      `Set ${key} (${args.is_secret ? 'secret' : 'plain'}, ${value.length} bytes` +
+        (service !== undefined ? `, scope: ${service ?? 'all services'}` : '') +
+        ')',
+    );
   },
 };
 

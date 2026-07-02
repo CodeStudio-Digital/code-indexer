@@ -56,12 +56,12 @@ import { sendInputTools } from '@mcp/code-agent/tools/send-input.js';
 import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools } from '@mcp/code-agent/tools/worktree.js';
 import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
+import { dbTools } from '@mcp/code-agent/tools/db/index.js';
 
 // ── Static tool arrays (@mcp/company — builder mode) ───────────────────────
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
 import { docsTools } from '@mcp/company/tools/docs-tools.js';
 import { envTools } from '@mcp/company/tools/env-tools.js';
-import { databaseTools } from '@mcp/company/tools/database-tools.js';
 
 type NamedTool = { name: string };
 const arr = (x: NamedTool | readonly NamedTool[]): NamedTool[] => (Array.isArray(x) ? [...x] : [x as NamedTool]);
@@ -73,8 +73,8 @@ const STATIC_TOOLS: NamedTool[] = [
   ...ragReadDocTools,
   ...todoTools, ...viewImageTools, ...previewTools, ...goalTools, ...listAgentsTools,
   ...waitAgentsTools, ...sendMessageTools, ...sendInputTools, ...followupTaskTools,
-  ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools, ...databaseTools,
-  ...apiClientTools,
+  ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools,
+  ...apiClientTools, ...dbTools,
 ].flatMap(arr);
 
 /**
@@ -182,8 +182,14 @@ describe('tier contract — Phase A/B placements are locked', () => {
   });
 
   it('places company/builder always-on tools at bootstrap (within their session)', () => {
-    for (const n of ['write_shared_file', 'send_message', 'qa_start_run', 'db_query', 'env_set', 'docs_write']) {
+    for (const n of ['write_shared_file', 'send_message', 'qa_start_run', 'start_pipeline', 'env_set', 'docs_write']) {
       expect(getToolTier(n), n).toBe('bootstrap');
+    }
+  });
+
+  it('db_* v2 tools live in the dedicated db tier (moved out of BUILDER_TOOLS)', () => {
+    for (const n of ['db_list', 'db_schema', 'db_query', 'db_command']) {
+      expect(getToolTier(n), n).toBe('db');
     }
   });
 

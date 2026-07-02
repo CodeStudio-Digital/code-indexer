@@ -44,6 +44,11 @@ import {
 import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
 import { wireSupervisorToRunner } from '@mcp/company/services/supervisor/wire-runner-events.js';
 import {
+  isAutonomyActionAllowed,
+  resolveAutonomy,
+} from '@mcp/company/services/autonomy/autonomy-config.js';
+import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-provider.js';
+import {
   startMaster,
   type MasterStartOpts,
   type MasterStartStateMutators,
@@ -145,6 +150,20 @@ export interface MasterLifecycleDeps {
   attention: MasterAttention;
   /** Facade handed to runCoder so tools can reach the orchestrator. */
   orchestratorRef: unknown;
+  /**
+   * C2 — per-session autonomy config; gates the master-supervisor wiring
+   * (action `supervisor`, default ON). Optional: fixtures without it fall
+   * back to `resolveAutonomy(null, process.env)` — never crash.
+   */
+  autonomy?: Pick<AutonomyProvider, 'get'>;
+  /**
+   * B3 — sandbox health watchdog, started after the master boot path
+   * (which runs `provisionSandboxIfNeeded`) so probes only begin once a
+   * sandbox can exist. Back-wired by `wire-services.ts` (same pattern as
+   * `humanInLoop`); optional so narrow test fixtures stay untouched.
+   * `start()` is idempotent.
+   */
+  serviceSupervisor?: { start(): void };
 }
 
 export class MasterLifecycle implements IMasterNotifier {
@@ -388,7 +407,7 @@ export class MasterLifecycle implements IMasterNotifier {
   // ─── Start (fresh) ──────────────────────────────────────────────
 
   async start(opts: MasterStartOpts): Promise<MasterStartResult> {
-    return startMaster(opts, {
+    const result = await startMaster(opts, {
       ctx: this.deps.ctx,
       board: this.deps.board,
       orchestratorRef: this.deps.orchestratorRef,
@@ -396,6 +415,10 @@ export class MasterLifecycle implements IMasterNotifier {
       wireRunner: (runner, runId) => this.wireAllForRunner(runner, runId),
       attachCompletion: (handle, runId) => this.attachCompletionHandler(handle, runId),
     });
+    // B3 — the boot path above kicks off `provisionSandboxIfNeeded`; from
+    // here on a sandbox may exist, so arm the health watchdog (idempotent).
+    this.deps.serviceSupervisor?.start();
+    return result;
   }
 
   /** Build the state-mutator surface shared by start + resume. */
@@ -425,7 +448,7 @@ export class MasterLifecycle implements IMasterNotifier {
   // ─── Resume existing (cold-start) ───────────────────────────────
 
   async resumeExisting(opts: MasterResumeOpts): Promise<MasterStartResult> {
-    return resumeMaster(opts, {
+    const result = await resumeMaster(opts, {
       ctx: this.deps.ctx,
       board: this.deps.board,
       orchestratorRef: this.deps.orchestratorRef,
@@ -433,6 +456,9 @@ export class MasterLifecycle implements IMasterNotifier {
       wireRunner: (runner, runId) => this.wireAllForRunner(runner, runId),
       attachCompletion: (handle, runId) => this.attachCompletionHandler(handle, runId),
     });
+    // B3 — cold-started sessions may already own live containers.
+    this.deps.serviceSupervisor?.start();
+    return result;
   }
 
   // ─── Resurrection (subordinate finished after master exited) ───
@@ -650,18 +676,21 @@ export class MasterLifecycle implements IMasterNotifier {
    * master handlers never fire). Covers both fresh start and resurrect because
    * `wireAllForRunner` is the single chokepoint for both.
    *
-   * GATED behind `MCP_SUPERVISOR_MASTER=1` (default off) and EXPERIMENTAL: the
-   * master's long event-driven waits — `wait_for_subordinates` can legitimately
-   * block ~30min — run as a single `AWAITING_TOOL` with no `tool_progress`
-   * heartbeat, so naive wiring trips `STUCK_TOOL` after the ~5min default and
-   * the recovery action could abort a healthy wait. Enabling this safely first
-   * needs the wait loop to heartbeat / set a generous timeout override (a
-   * Phase-1 follow-up). Until then this flag lets it be validated on-device
-   * without changing the shipping default. No-op when the supervisor is
-   * disabled, so the flag is a true superset gate.
+   * C2 — DEFAULT ON, gated by the per-session autonomy config (action
+   * `supervisor`; kill-switches: `autonomy.supervisorMaster=false`, `freeze`,
+   * or env `MCP_SUPERVISOR_MASTER='0'`). Flipping the default is safe TODAY
+   * because the long event-driven waits now heartbeat the supervisor:
+   * `tools/agent-wait-loop.ts` (`heartbeatAgentRunId`, fed by
+   * `master-tools.ts` for `wait_for_subordinates`) and
+   * `tools/subordinate/await-master.ts` (interval heartbeat) — so a healthy
+   * ~30min wait no longer trips `STUCK_TOOL`. No-op when the supervisor
+   * itself is disabled, so the gate stays a true superset.
    */
   private maybeWireMasterSupervisor(runner: CoderRunner, runId: number): void {
-    if (process.env.MCP_SUPERVISOR_MASTER !== '1') return;
+    const cfg = this.deps.autonomy
+      ? this.deps.autonomy.get()
+      : resolveAutonomy(null, process.env);
+    if (!isAutonomyActionAllowed(cfg, 'supervisor')) return;
     const supervisor = getGlobalAgentSupervisor();
     if (!supervisor) return;
     supervisor.registerMaster({

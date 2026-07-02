@@ -15,7 +15,7 @@
  * Inspired by `grox/classifiers/content/classifier.py` — small specialized
  * classifiers that all share the same observability scaffolding.
  */
-import type { ResolveContext } from '../pipelines/index.js';
+import type { ResolveContext, ResolvedBinding } from '../pipelines/index.js';
 import type { PipelineProviderResolver } from '../pipelines/provider-resolver.js';
 import {
   type ChatCallOptions,
@@ -26,8 +26,8 @@ import { pickChatFn } from './chat-dispatcher.js';
 import {
   type ChatRetryOptions,
   errorKindFromChatResult,
-  withChatRetry,
 } from './chat-retry.js';
+import { callChatWithFailover } from './binding-failover.js';
 import type {
   AgentOutputForClassification,
   ClassificationVerdict,
@@ -106,8 +106,11 @@ export abstract class LLMClassifier {
   async classify(output: AgentOutputForClassification): Promise<ClassificationVerdict> {
     const startedAt = performance.now();
     const ctx = this.resolveContext(output);
-    const binding = await this.resolver.resolveOrNull(this.pipelineName, this.bindingRole, ctx);
-    if (!binding) {
+    // Resolve the full failover chain: if the highest-priority binding is
+    // broken at runtime (dead key, provider down), the next enabled binding
+    // for this pipeline/role serves instead of returning verdict:'error'.
+    const chain = await this.resolver.resolveChain(this.pipelineName, this.bindingRole, ctx);
+    if (chain.length === 0) {
       return {
         classifierName: this.classifierName,
         verdict: 'error',
@@ -121,36 +124,49 @@ export abstract class LLMClassifier {
       { role: 'system', content: this.systemPrompt() },
       { role: 'user',   content: this.buildUserPrompt(output) },
     ];
-    const cfg = binding.config as Record<string, unknown>;
-    const chatOptions: ChatCallOptions = {
-      timeoutMs: toNumber(cfg.timeout) ?? CLASSIFIER_DEFAULT_TIMEOUT_MS,
-      maxTokens: toNumber(cfg.max_tokens) ?? CLASSIFIER_DEFAULT_MAX_TOKENS,
+    // Each binding carries its OWN config (timeout / max_tokens), so build the
+    // chat options per attempt rather than once from the top binding.
+    const runOne = (binding: ResolvedBinding): Promise<ChatCallResult> => {
+      const cfg = binding.config as Record<string, unknown>;
+      const chatOptions: ChatCallOptions = {
+        timeoutMs: toNumber(cfg.timeout) ?? CLASSIFIER_DEFAULT_TIMEOUT_MS,
+        maxTokens: toNumber(cfg.max_tokens) ?? CLASSIFIER_DEFAULT_MAX_TOKENS,
+      };
+      const chat = this.options.chatFn ?? pickChatFn(binding);
+      return chat(binding, messages, chatOptions);
     };
-    const chat = this.options.chatFn ?? pickChatFn(binding);
-    const result = await withChatRetry(() => chat(binding, messages, chatOptions), this.options.retry);
+    const { result, binding, failedOver } = await callChatWithFailover(chain, runOne, {
+      retry: this.options.retry,
+      label: `${this.pipelineName} classifier`,
+      codePrefix: this.pipelineName,
+    });
+    const providerId = binding?.provider.id;
+    const modelId = binding?.modelId;
+    const failoverTag = failedOver ? '[failover] ' : '';
     if (result.errorBody) {
       return {
         classifierName: this.classifierName,
         verdict: 'error',
         systemError: true,
-        reason: `[${errorKindFromChatResult(result)}] ${result.errorBody.slice(0, 480)}`,
+        reason: `${failoverTag}[${errorKindFromChatResult(result)}] ${result.errorBody.slice(0, 480)}`,
         latencyMs: result.latencyMs,
-        providerId: binding.provider.id,
-        modelId: binding.modelId,
+        providerId,
+        modelId,
       };
     }
     const parsed = this.parseVerdict(result.content);
+    // Tag unparseable replies so the dashboard distinguishes a model
+    // formatting failure (systemError) from a content verdict of 'error'.
+    const baseReason = parsed.systemError && parsed.reason ? `[parse] ${parsed.reason}` : parsed.reason;
     return {
       classifierName: this.classifierName,
       verdict: parsed.verdict,
       systemError: parsed.systemError,
       confidence: parsed.confidence,
-      // Tag unparseable replies so the dashboard distinguishes a model
-      // formatting failure (systemError) from a content verdict of 'error'.
-      reason: parsed.systemError && parsed.reason ? `[parse] ${parsed.reason}` : parsed.reason,
+      reason: failedOver ? `${failoverTag}${baseReason ?? 'served by fallback binding'}` : baseReason,
       latencyMs: result.latencyMs,
-      providerId: binding.provider.id,
-      modelId: binding.modelId,
+      providerId,
+      modelId,
       raw: result.content,
     };
   }

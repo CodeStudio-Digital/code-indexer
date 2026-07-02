@@ -42,6 +42,15 @@ export function setupMonaco(): void {
   if (initialized) return;
   initialized = true;
 
+  // IntelliJ-style round lettered symbol badges in the suggest popup (CSS in
+  // index.css, gated on this class). Default ON; `mcp-ide:symbol-badges='0'`
+  // reverts to plain colored codicon glyphs. Colors come from the theme's
+  // symbolIcon.* (see widget-colors.ts) via `currentColor`.
+  try {
+    const badges = typeof localStorage === 'undefined' || localStorage.getItem('mcp-ide:symbol-badges') !== '0';
+    document.documentElement.classList.toggle('mcp-ide-badges', badges);
+  } catch { document.documentElement.classList.add('mcp-ide-badges'); }
+
   // Tell Monaco where to find its workers. This runs in the renderer,
   // so the global `self` is the window.
   (self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {

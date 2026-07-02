@@ -154,6 +154,20 @@ export interface SubagentRunResult {
    * collector can keep using compact result literals.
    */
   collected?: SubagentCollected;
+  /**
+   * Snapshot of the child's full message history at terminal time (both
+   * success and failure). Retention policy is the CALLER's — spawn_agent
+   * keeps failed transcripts in the resume registry so `resume_agent` can
+   * relaunch the child from where it stopped.
+   */
+  transcript?: AgentMessage[];
+  /**
+   * Raw watchdog/error message on a non-completed stop (e.g. "subagent hard
+   * timeout reached", "subagent_quality_watchdog: …", a provider error).
+   * `finalText` carries the salvage SUMMARY, not the failure cause — the
+   * resume nudge classifier reads THIS to pick the right continuation line.
+   */
+  failureDetail?: string;
 }
 
 export interface SubagentParent {
@@ -185,11 +199,11 @@ export interface SubagentParent {
  * and return the structured result.
  *
  * The subagent inherits the parent's provider instance (no extra connection
- * pool needed for sequential subagents), the same overlay/cwd, and the parent
- * abort signal. It does NOT receive a `ctx.runner` back-reference — submit_plan,
- * ask_user and submit_tasks intentionally fail inside subagents because the
- * subagent only talks to its parent via the final `<result>` block, never to
- * the user directly.
+ * pool needed for sequential subagents), the same filesystem/search context,
+ * and the parent abort signal. It does NOT receive a `ctx.runner`
+ * back-reference — submit_plan, ask_user and submit_tasks intentionally fail
+ * inside subagents because the subagent only talks to its parent via the final
+ * `<result>` block, never to the user directly.
  */
 export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): Promise<SubagentRunResult> {
   const sandboxViolations: string[] = [];
@@ -287,7 +301,15 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   const subContext: ToolContext = {
     cwd: parent.ctx.cwd,
     projectName: parent.ctx.projectName,
+    globalWorkspace: parent.ctx.globalWorkspace,
+    roots: parent.ctx.roots,
+    overlayByRoot: parent.ctx.overlayByRoot,
     overlay: parent.ctx.overlay,
+    projectId: parent.ctx.projectId,
+    projectIndexed: parent.ctx.projectIndexed,
+    runtimeEnv: parent.ctx.runtimeEnv,
+    ports: parent.ctx.ports,
+    sessionId: parent.ctx.sessionId,
     signal: subAbort.signal,
     // Inherit the parent's tool-output cap LEVEL so MCP/code_exec calls inside
     // the subagent honour the same per-call truncation policy as the main
@@ -522,6 +544,8 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         usage: salvaged.usage,
         sandboxViolations,
         collected,
+        transcript: subRunner.messages.slice(),
+        failureDetail: e instanceof Error ? e.message : String(e),
       };
     }
     return {
@@ -533,6 +557,8 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       },
       sandboxViolations,
       collected,
+      transcript: subRunner.messages.slice(),
+      failureDetail: e instanceof Error ? e.message : String(e),
     };
   } finally {
     watchdog.cleanup();
@@ -548,6 +574,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     usage: result.totalUsage,
     sandboxViolations,
     collected: collector.snapshot(),
+    transcript: subRunner.messages.slice(),
   };
 }
 
@@ -1007,6 +1034,13 @@ export interface ParallelAgentSpec {
   pathScopeMode?: PathScopeMode;
   limits?: SubagentLimits;
   signal?: AbortSignal;
+  /**
+   * Resume path — full seed history for the child runner. When set it
+   * REPLACES the single synthesized `task` user message (resume_agent passes
+   * the captured transcript + a continuation nudge). `task` is still used
+   * for logs/ledger topics.
+   */
+  initialMessages?: AgentMessage[];
 }
 
 export interface ParallelAgentProgress {
@@ -1078,7 +1112,7 @@ export async function runParallelAgents(
         systemPrompt: spec.systemPrompt ?? systemPrompt,
         label: spec.label,
         allowlist: spec.allowlist ?? allowlist,
-        initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
+        initialMessages: spec.initialMessages ?? [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
         maxTurns: spec.maxTurns,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,
@@ -1112,6 +1146,8 @@ export async function runParallelAgents(
         usage: runResult.usage,
         sandboxViolations: runResult.sandboxViolations,
         collected: runResult.collected ?? emptyCollected(),
+        transcript: runResult.transcript,
+        failureDetail: runResult.failureDetail,
         label: spec.label,
         toolCallCount,
       };

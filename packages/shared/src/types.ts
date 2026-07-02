@@ -64,6 +64,11 @@ export interface Project {
   group_name: string | null;
   provider: string | null;
   model: string | null;
+  /**
+   * Per-project scanner ignore rules, stored as JSON string array.
+   * Managed by the project settings UI; does not create files in the repo root.
+   */
+  index_ignore_patterns?: string | null;
   embeddings_enabled: number;
   search_mode: SearchMode;
   /** Per-project agent-memory toggle (migration 115; default 1 = on). */

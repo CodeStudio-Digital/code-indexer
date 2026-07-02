@@ -28,6 +28,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
+import { assertRelativePath, DRIVE_WRITE_CAP_BYTES } from '@mcp/company/tools/file-path-core.js';
 
 type DB = ReturnType<SessionContext['db']['raw']>;
 
@@ -84,13 +85,9 @@ export interface DriveReadOpts {
   maxBytes?: number;
 }
 
-const MAX_WRITE_BYTES = 4 * 1024 * 1024; // 4 MB hard cap
+const MAX_WRITE_BYTES = DRIVE_WRITE_CAP_BYTES; // 4 MB hard cap
 const DEFAULT_READ_BYTES = 256 * 1024; // 256 KB
 const MAX_READ_BYTES = 4 * 1024 * 1024;
-// Reject control characters (including the null byte already checked
-// separately). Everything else printable is fine — folder uploads from
-// the dashboard frequently contain spaces, parens, accents, '+', etc.
-const FORBIDDEN_PATH_RE = /[\x00-\x1f]/;
 
 interface DriveRow {
   id: number;
@@ -119,17 +116,13 @@ function rowToMeta(row: DriveRow): DriveFileMeta {
   };
 }
 
+/**
+ * Shared rules live in `tools/file-path-core.ts`. Drive semantics:
+ * segment-level `..` rejection (names like "..foo" stay legal — folder
+ * uploads contain weird names) + the default 512-char length cap.
+ */
 function validatePath(p: string): void {
-  if (!p) throw new Error('path is required');
-  if (p.length > 512) throw new Error('path is too long (>512 chars)');
-  if (p.includes('\0')) throw new Error('path must not contain null bytes');
-  if (FORBIDDEN_PATH_RE.test(p)) throw new Error('path must not contain control characters');
-  if (p.includes('\\')) throw new Error('path must use forward slashes ("/"), not backslashes');
-  if (p.startsWith('/')) throw new Error('path must be relative (no leading "/")');
-  // Reject any segment that is exactly ".." (still allow names like "..foo").
-  for (const seg of p.split('/')) {
-    if (seg === '..') throw new Error('path must not contain ".." segments');
-  }
+  assertRelativePath(p, { traversal: 'segment' });
 }
 
 export class CompanyDriveStore {

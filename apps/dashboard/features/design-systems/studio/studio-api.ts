@@ -5,12 +5,16 @@
  */
 import type { DesignSystemSession, DsStack } from '../design-system-api.js';
 
+export type DsStudioMode = 'fidelity' | 'creative';
+
 export interface DsStudioCreateInput {
   name: string;
   packageName: string;
   stack: DsStack;
   provider: string;
   model: string;
+  /** 'fidelity' exige zip (validado no servidor); default 'creative'. */
+  mode: DsStudioMode;
   zip?: File | null;
 }
 
@@ -64,6 +68,7 @@ export async function createDsStudio(
   form.set('stack', input.stack);
   form.set('provider', input.provider);
   form.set('model', input.model);
+  form.set('mode', input.mode);
   if (input.zip) form.set('zip', input.zip);
 
   const r = await fetch('/api/design-system/studio', { method: 'POST', body: form });

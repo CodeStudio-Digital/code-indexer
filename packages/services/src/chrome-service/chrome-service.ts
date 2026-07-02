@@ -31,6 +31,7 @@ import {
 import type { ChromeServiceStore, ChromeServiceConfig } from '@mcp/store/chrome-service-store.js';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
+import type { IQaTestRunStore } from '../qa/store/interfaces.js';
 import { getSandboxManager } from '../sandbox/index.js';
 import { hasQaPlaywrightSkill } from '@mcp/company/services/SandboxService.js';
 import {
@@ -76,6 +77,14 @@ export interface ChromeServiceDeps {
    * Optional — when absent the check is skipped (tests, CLI paths).
    */
   httpApiPort?: number;
+  /**
+   * B7 — optional QA run store. When present, lifecycle transitions to
+   * `stopped`/`error` sweep every `running` qa_test_run and complete it
+   * with `error_class='sidecar_down'` so the dashboard doesn't show a
+   * spinner for a run whose browser just vanished. Optional so tests
+   * and non-QA hosts don't need to wire it.
+   */
+  qaRunStore?: IQaTestRunStore;
 }
 
 export class ChromeService {
@@ -83,6 +92,7 @@ export class ChromeService {
   private readonly companyStore: CompanyStore;
   private readonly envStore: CompanySessionEnvStore;
   private readonly httpApiPort: number | undefined;
+  private readonly qaRunStore: IQaTestRunStore | undefined;
   private startInFlight: Promise<ChromeServiceState> | null = null;
 
   constructor(deps: ChromeServiceDeps) {
@@ -90,6 +100,7 @@ export class ChromeService {
     this.companyStore = deps.companyStore;
     this.envStore = deps.envStore;
     this.httpApiPort = deps.httpApiPort;
+    this.qaRunStore = deps.qaRunStore;
   }
 
   /** Snapshot accessor — never throws. Includes a quick liveness probe. */
@@ -291,6 +302,10 @@ export class ChromeService {
         container_id: null,
         last_error: msg,
       });
+      // B7 — the service just transitioned to `error`; any run that was
+      // mid-flight lost its browser. Fail them fast (typed) instead of
+      // waiting 10 min for the watchdog.
+      this.failRunningQaRuns(`Chrome Service errored: ${msg}`);
       console.warn(`[chrome-service] enable failed: ${msg}`);
       throw e;
     }
@@ -320,6 +335,51 @@ export class ChromeService {
       container_id: null,
       last_error: null,
     });
+
+    // B7 — the shared browser is gone; complete every in-flight run with
+    // a typed error so the Tests tab shows an actionable state at once.
+    this.failRunningQaRuns('Chrome Service was stopped by the operator.');
+  }
+
+  /**
+   * B7 — sweep every `running` qa_test_run (all sessions — the Chrome
+   * Service is host-global) and complete it as `error` with
+   * `error_class='sidecar_down'`. Best-effort: a store failure logs a
+   * warning and never blocks the lifecycle transition. No-op when the
+   * host didn't wire `qaRunStore` (tests, workers).
+   */
+  private failRunningQaRuns(reason: string): void {
+    const store = this.qaRunStore;
+    if (!store) return;
+    try {
+      const running = store.listRunningRuns();
+      for (const run of running) {
+        try {
+          store.completeRun(run.id, {
+            status: 'error',
+            passed: run.passed,
+            failed: run.failed,
+            skipped: run.skipped,
+            duration_ms: run.duration_ms,
+            last_error: `${reason} The browser connection for this run was lost.`,
+            error_class: 'sidecar_down',
+          });
+        } catch (e) {
+          console.warn(
+            `[chrome-service] failed to mark qa run ${run.id} sidecar_down: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+      if (running.length > 0) {
+        console.log(
+          `[chrome-service] marked ${running.length} running qa_test_run(s) as sidecar_down (${reason})`,
+        );
+      }
+    } catch (e) {
+      console.warn(
+        `[chrome-service] sweep of running qa runs failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   async restart(): Promise<ChromeServiceState> {

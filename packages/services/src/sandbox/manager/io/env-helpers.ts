@@ -72,16 +72,24 @@ export function resolveHostWorkdirMount(sessionId: string): string | null {
 /**
  * Resolve shared env vars for a session. Returns an empty record when
  * the store isn't wired or the session id isn't numeric.
+ *
+ * Pass `serviceId` ('main' = primary container) to ENFORCE per-service
+ * scoping (migration 192): vars whose `service_scope` names other
+ * services are excluded. Omitting it keeps the legacy session-wide
+ * record (scope-agnostic callers like env_validate).
  */
 export function resolveSessionEnvs(
   envStore: CompanySessionEnvStore | null,
   sessionId: string,
+  serviceId?: string,
 ): Record<string, string> {
   if (!envStore) return {};
   const numericId = Number(sessionId);
   if (!Number.isFinite(numericId)) return {};
   try {
-    return envStore.asRecord(numericId);
+    return serviceId !== undefined
+      ? envStore.asRecordForService(numericId, serviceId)
+      : envStore.asRecord(numericId);
   } catch {
     return {};
   }

@@ -32,6 +32,20 @@ interface KanbanColumnProps {
    * within the column instead of by `position`.
    */
   priorityScores?: Map<number, number>;
+  /** C3 — WIP limit for this column (autonomy.wipLimits). Null/undefined = none. */
+  wipLimit?: number | null;
+  /** C3 — commit a new WIP limit (null removes it). Enables the inline editor. */
+  onWipLimitChange?: (column: KanbanColumnType, limit: number | null) => void;
+  /** C3 — role suggestions per card id (suggest-roles endpoint). */
+  roleSuggestions?: Map<number, string>;
+  /** C3 — quick-dispatch a card with its suggested role. */
+  onQuickDispatch?: (cardId: number, role: string) => void;
+  /** Card ids with a dispatch POST in flight. */
+  dispatchingCardIds?: Set<number>;
+  /** C3 — open ANY card's modal by id (blocked_by chips). */
+  onOpenCardById?: (cardId: number) => void;
+  /** Resolve a card title across the whole board (blocked_by chips). */
+  titleForCard?: (cardId: number) => string | undefined;
 }
 
 export const KanbanColumn = React.memo(function KanbanColumn({
@@ -41,9 +55,17 @@ export const KanbanColumn = React.memo(function KanbanColumn({
   onDrop,
   onCreateCard,
   priorityScores,
+  wipLimit,
+  onWipLimitChange,
+  roleSuggestions,
+  onQuickDispatch,
+  dispatchingCardIds,
+  onOpenCardById,
+  titleForCard,
 }: KanbanColumnProps) {
   const { t } = useTranslation('agents');
   const [dragOver, setDragOver] = useState(false);
+  const [limitDraft, setLimitDraft] = useState<string | null>(null);
   // When priority scores are present, sort by score desc (tiebreak: position).
   const sorted = priorityScores && priorityScores.size > 0
     ? [...cards].sort((a, b) => {
@@ -54,6 +76,16 @@ export const KanbanColumn = React.memo(function KanbanColumn({
       })
     : [...cards].sort((a, b) => a.position - b.position);
   const columnLabel = t(COLUMN_LABEL_KEYS[column]);
+  const hasLimit = typeof wipLimit === 'number' && wipLimit > 0;
+  const overLimit = hasLimit && cards.length > (wipLimit as number);
+
+  const commitLimit = (): void => {
+    if (limitDraft == null) return;
+    const n = parseInt(limitDraft, 10);
+    // 0 / empty / invalid → remove the limit (soft contract with the PATCH).
+    onWipLimitChange?.(column, Number.isInteger(n) && n > 0 ? n : null);
+    setLimitDraft(null);
+  };
 
   return (
     <div
@@ -79,9 +111,43 @@ export const KanbanColumn = React.memo(function KanbanColumn({
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/50">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">{columnLabel}</h3>
-          <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5">
-            {cards.length}
-          </span>
+          {limitDraft != null ? (
+            <input
+              autoFocus
+              type="number"
+              min={0}
+              value={limitDraft}
+              onChange={(e) => setLimitDraft(e.target.value)}
+              onBlur={commitLimit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitLimit();
+                if (e.key === 'Escape') setLimitDraft(null);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              title={t('kanban.wip.editTooltip')}
+              className="w-12 rounded border bg-background px-1 py-0 text-[10px]"
+            />
+          ) : (
+            <button
+              onClick={() => {
+                if (onWipLimitChange) setLimitDraft(hasLimit ? String(wipLimit) : '');
+              }}
+              title={
+                onWipLimitChange
+                  ? (overLimit
+                      ? t('kanban.wip.exceededTooltip', { count: cards.length, limit: wipLimit })
+                      : t('kanban.wip.editTooltip'))
+                  : undefined
+              }
+              className={`text-xs rounded-full px-1.5 py-0.5 transition-colors ${
+                overLimit
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                  : 'text-muted-foreground bg-muted'
+              } ${onWipLimitChange ? 'hover:ring-1 hover:ring-primary/40 cursor-pointer' : 'cursor-default'}`}
+            >
+              {hasLimit ? `${cards.length}/${wipLimit}` : cards.length}
+            </button>
+          )}
         </div>
         {onCreateCard && (
           <button
@@ -96,14 +162,26 @@ export const KanbanColumn = React.memo(function KanbanColumn({
 
       {/* Cards */}
       <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[100px]">
-        {sorted.map((card) => (
-          <KanbanCardItem
-            key={card.id}
-            card={card}
-            onClick={() => onCardClick(card)}
-            priorityScore={priorityScores?.get(card.id)}
-          />
-        ))}
+        {sorted.map((card) => {
+          const suggestedRole = roleSuggestions?.get(card.id);
+          return (
+            <KanbanCardItem
+              key={card.id}
+              card={card}
+              onClick={() => onCardClick(card)}
+              priorityScore={priorityScores?.get(card.id)}
+              suggestedRole={suggestedRole}
+              onQuickDispatch={
+                suggestedRole && onQuickDispatch
+                  ? () => onQuickDispatch(card.id, suggestedRole)
+                  : undefined
+              }
+              dispatching={dispatchingCardIds?.has(card.id)}
+              onOpenCardById={onOpenCardById}
+              titleForCard={titleForCard}
+            />
+          );
+        })}
 
         {cards.length === 0 && (
           <div className="flex items-center justify-center h-16 text-xs text-muted-foreground/60">

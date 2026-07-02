@@ -54,6 +54,18 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'env_list',
   'env_read',
   'env_validate',
+  // Databases tab (db_* v2). The master may inspect and query registered
+  // databases to scope delegations; db_command (Mongo/Redis mutations
+  // surface) is deliberately NOT allowed.
+  'db_list',
+  'db_schema',
+  'db_query',
+  // Service observability (B5) — the master supervises the session's
+  // containers, so it may inspect the roster (with health verdicts) and
+  // tail dev-server output. Lifecycle control rides the `service_`
+  // COMPANY_TOOL_PREFIXES entry below.
+  'list_services',
+  'read_sandbox_logs',
 ]);
 
 /**
@@ -116,6 +128,10 @@ const COMPANY_TOOL_PREFIXES = [
   'append_shared_file',
   'set_agent_status',
   'kanban_',
+  // service_* (B5): service_logs / service_restart / service_start /
+  // service_stop. The master always passes the in-handler authorization
+  // gate, so the filter keeps the whole family.
+  'service_',
 ];
 
 function isCompanyTool(name: string): boolean {

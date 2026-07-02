@@ -16,18 +16,73 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { selectSandbox, useCompanyStore } from '../../state/company/index.js';
 import { AddServiceForm } from './services-sidebar/AddServiceForm.js';
 import { ServiceListItem } from './services-sidebar/ServiceListItem.js';
+import { ServiceLogsPane } from './services-sidebar/ServiceLogsPane.js';
+import { ServiceTransitionsTimeline } from './services-sidebar/ServiceTransitionsTimeline.js';
 import { useServicesPolling } from './services-sidebar/useServicesPolling.js';
 import { useServiceActions } from './services-sidebar/useServiceActions.js';
 import type { ServicesSidebarProps } from './services-sidebar/types.js';
 
+/**
+ * B6 — expanded detail under a service row: Logs (live tail + history)
+ * and Timeline (status/health transitions) as two tiny tabs, following
+ * the sidebar's compact text-[9/10px] visual language.
+ */
+function ServiceDetail({ sessionId, serviceId }: { sessionId: number; serviceId: string }) {
+  const { t } = useTranslation('agents');
+  const [tab, setTab] = useState<'logs' | 'timeline'>('logs');
+  const tabClass = (active: boolean) =>
+    'rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wide ' +
+    (active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-accent');
+  return (
+    <div className="ml-1 pl-1 border-l border-border/60">
+      <div className="mt-1 flex items-center gap-1">
+        <button type="button" className={tabClass(tab === 'logs')} onClick={() => setTab('logs')}>
+          {t('services.detail.logsTab')}
+        </button>
+        <button type="button" className={tabClass(tab === 'timeline')} onClick={() => setTab('timeline')}>
+          {t('services.detail.timelineTab')}
+        </button>
+      </div>
+      {tab === 'logs' ? (
+        <ServiceLogsPane sessionId={sessionId} serviceId={serviceId} />
+      ) : (
+        <ServiceTransitionsTimeline sessionId={sessionId} serviceId={serviceId} />
+      )}
+    </div>
+  );
+}
+
 export default function ServicesSidebar({ sessionId, embedded }: ServicesSidebarProps & { embedded?: boolean }) {
   const [adding, setAdding] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const { services, loading, error, reload, setError } = useServicesPolling(sessionId);
   const actions = useServiceActions({ sessionId, services, reload, setError });
+  // B8 — live supervisor verdicts (SSE). Host-process rows (`kind:
+  // 'local'`) have no persisted health column, so the `/services`
+  // refetch always reports 'unknown' for them — the event map is their
+  // only live source and is overlaid below. Container rows keep the
+  // refetched (persisted) value. Defensive `?? {}`-less read: the slice
+  // initial state provides the map; older slots fall back to undefined.
+  const serviceHealth = useCompanyStore(
+    (s) => selectSandbox(s, sessionId).serviceHealth,
+  );
+  const withLiveHealth = services.map((svc) => {
+    if (svc.kind !== 'local') return svc;
+    const live = serviceHealth?.[svc.service_id];
+    if (!live) return svc;
+    return {
+      ...svc,
+      health: live.health,
+      health_detail: live.detail ?? svc.health_detail,
+      last_health_at_ms: live.at,
+    };
+  });
 
   // When `embedded` (wrapped in a parent SidebarSection that already
   // provides the header), drop our own header — the parent owns the
@@ -77,8 +132,26 @@ export default function ServicesSidebar({ sessionId, embedded }: ServicesSidebar
         </div>
       )}
       <div className="space-y-1">
-        {services.map((svc) => (
-          <ServiceListItem key={svc.service_id} svc={svc} actions={actions} />
+        {withLiveHealth.map((svc) => (
+          <div key={svc.service_id}>
+            <ServiceListItem
+              svc={svc}
+              actions={actions}
+              expanded={expandedId === svc.service_id}
+              onToggleExpand={
+                // B8 — host-process rows have no persisted logs/transitions
+                // (their output rides the LPM event overlay), so the
+                // logs/timeline detail expansion is container-only.
+                svc.kind === 'local'
+                  ? undefined
+                  : () =>
+                      setExpandedId((prev) => (prev === svc.service_id ? null : svc.service_id))
+              }
+            />
+            {expandedId === svc.service_id && svc.kind !== 'local' && (
+              <ServiceDetail sessionId={sessionId} serviceId={svc.service_id} />
+            )}
+          </div>
         ))}
       </div>
       {adding && (

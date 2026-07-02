@@ -15,7 +15,7 @@ function pruneLocalHistory(db: DB, projectId: number): void {
 type ProjectUpdates = Partial<Pick<Project,
   'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' |
   'last_indexed' | 'structural_indexed_at' | 'file_count' | 'symbol_count' |
-  'embeddings_enabled' | 'search_mode' |
+  'embeddings_enabled' | 'search_mode' | 'index_ignore_patterns' |
   'node_version' | 'runner_shell' | 'builder_json' | 'language_levels' | 'runtime_versions' |
   'package_managers' | 'wsl_runtime_versions' | 'wsl_package_managers' | 'git_remote' | 'default_branch'
 >>;

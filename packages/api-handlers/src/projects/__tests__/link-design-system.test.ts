@@ -29,6 +29,8 @@ function makeSession(over: Partial<DesignSystemSession> = {}): DesignSystemSessi
     source_zip_path: null,
     next_bump_hint: 'patch',
     mcp_server_config_id: null,
+    mode: 'creative',
+    pipeline_json: null,
     created_at: 'x',
     ...over,
   };

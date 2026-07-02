@@ -70,6 +70,51 @@ function terseDescription(desc: string): string {
   return desc.slice(0, 150).trim() + '…';
 }
 
+function schemaProperties(schema: JsonSchema): Record<string, unknown> | null {
+  if (typeof schema !== 'object' || schema === null) return null;
+  const props = (schema as { properties?: unknown }).properties;
+  return typeof props === 'object' && props !== null && !Array.isArray(props)
+    ? props as Record<string, unknown>
+    : null;
+}
+
+function schemaHasProperty(schema: JsonSchema, property: string): boolean {
+  const props = schemaProperties(schema);
+  return props ? property in props : false;
+}
+
+/**
+ * `project_name` is a bridge concern, not a model concern. The MCP server still
+ * requires it, but the bridge knows the exact project behind this tool instance
+ * and injects it at call time. Hiding the field prevents weak models/subagents
+ * from sending placeholders like `project` or `""`, which breaks global
+ * sessions whose real search scope is the synthetic union project.
+ */
+export function stripInjectedProjectName(schema: JsonSchema): JsonSchema {
+  const props = schemaProperties(schema);
+  if (!props || !('project_name' in props)) return schema;
+
+  const publicProps = { ...props };
+  delete publicProps.project_name;
+
+  const publicSchema: Record<string, unknown> = {
+    ...(schema as Record<string, unknown>),
+    properties: publicProps,
+  };
+
+  const required = (schema as { required?: unknown }).required;
+  if (Array.isArray(required)) {
+    const publicRequired = required.filter((key) => key !== 'project_name');
+    if (publicRequired.length > 0) {
+      publicSchema.required = publicRequired;
+    } else {
+      delete publicSchema.required;
+    }
+  }
+
+  return publicSchema as JsonSchema;
+}
+
 /**
  * Spawns the indexer's MCP server as a stdio subprocess and converts each
  * exposed tool into a CoderTool prefixed with `mcp__`. Tool calls are
@@ -131,18 +176,9 @@ export class McpToolBridge {
 
     return sortedTools.map((t): CoderTool => {
       const schema = (t.inputSchema ?? { type: 'object', properties: {} }) as unknown as JsonSchema;
-      const hasProjectName =
-        typeof schema === 'object' &&
-        schema !== null &&
-        typeof schema.properties === 'object' &&
-        schema.properties !== null &&
-        'project_name' in schema.properties;
-      const hasMaxTokens =
-        typeof schema === 'object' &&
-        schema !== null &&
-        typeof schema.properties === 'object' &&
-        schema.properties !== null &&
-        'max_tokens' in schema.properties;
+      const hasProjectName = schemaHasProperty(schema, 'project_name');
+      const hasMaxTokens = schemaHasProperty(schema, 'max_tokens');
+      const publicSchema = stripInjectedProjectName(schema);
 
       const overlayHandler = getOverlayHandler(t.name);
       const builtinDefault = defaultMaxTokens[t.name];
@@ -150,7 +186,7 @@ export class McpToolBridge {
       return {
         name: `mcp__${t.name}`,
         description: terseDescription(t.description ?? ''),
-        parameters: schema,
+        parameters: publicSchema,
         source: 'mcp',
         handler: async (args: Record<string, unknown>, toolCtx: ToolContext): Promise<ToolResult> => {
           if (!this.client) return err('MCP client disconnected');
@@ -166,7 +202,7 @@ export class McpToolBridge {
 
           // 2. Delegate to the real MCP server
           const finalArgs = { ...args };
-          if (hasProjectName && finalArgs.project_name === undefined) {
+          if (hasProjectName) {
             finalArgs.project_name = ctx.projectName;
           }
           // Inject default max_tokens for verbose tools when the model omits it.

@@ -14,6 +14,7 @@ export function createBaseTables(db: DB): void {
       last_indexed TEXT,
       file_count INTEGER NOT NULL DEFAULT 0,
       symbol_count INTEGER NOT NULL DEFAULT 0,
+      index_ignore_patterns TEXT NOT NULL DEFAULT '[]',
       git_remote TEXT,
       default_branch TEXT
     );

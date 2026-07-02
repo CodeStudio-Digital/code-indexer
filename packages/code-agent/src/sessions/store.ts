@@ -175,6 +175,7 @@ export class SessionStore {
     return messages.append(this.db, sessionId, message, usage);
   }
   appendToolCall(input: messages.AppendToolCallInput): void { messages.appendToolCall(this.db, input); }
+  bumpSessionUsage(sessionId: number, usage: messages.AppendMessageUsage): void { messages.bumpSessionUsage(this.db, sessionId, usage); }
   persistAssistantTurn(input: messages.PersistAssistantTurnInput): number { return messages.persistAssistantTurn(this.db, input); }
   loadSessionWithMessages(id: number): SessionWithMessages | null { return messages.loadWithMessages(this.db, id); }
   getMessageCount(sessionId: number): number { return messages.getCount(this.db, sessionId); }

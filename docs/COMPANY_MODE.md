@@ -216,7 +216,7 @@ antes de avançar). Escopo: **sessão** (multi-projeto) ou **global**.
 | **Preview** | Saída do dev server (HMR) de serviços em container. |
 | **Inbox** | Fila de mensagens entre agentes (status: *pending, delivered, answered, cancelled, expired*). Você pode **cancelar** uma mensagem travada ou **"Responder como humano"** no lugar do destinatário. |
 | **Env** | Variáveis de ambiente compartilhadas da sessão (ver abaixo). |
-| **Bancos** | Registra Postgres/MySQL/Supabase/Neon; as connection strings viram env vars e ficam acessíveis ao agente via `db_list`/`db_schema`/`db_query`. |
+| **Bancos** | Visão somente leitura das conexões da aba Databases dos projetos vinculados (migration 174). O agente as acessa via `db_list`/`db_schema`/`db_query`/`db_command`; o cadastro/edição acontece no projeto, não na sessão. |
 | **Supervisor** | Saúde dos agentes e incidentes (ver §6). |
 
 **Env** em detalhe: variáveis injetadas como env do container **e** escritas em `/app/.env` de cada
@@ -339,8 +339,9 @@ Tabelas centrais (migration `018_company_agents.ts`):
 carregar uma chave `builder` do modo aposentado — ignorada pelo runtime atual.)
 
 Tabelas adicionais por migrations posteriores: `034` sandbox, `035` serviços, `036` env vars
-(`company_session_envs`), `038` arquivos (`company_archives`), `040` bancos
-(`company_session_databases`), `065` frentes, `067` sub-sessões, `085` fundação de pipelines.
+(`company_session_envs`), `038` arquivos (`company_archives`), `065` frentes, `067` sub-sessões,
+`085` fundação de pipelines. (A tabela `company_session_databases` da migration `040` foi
+aposentada na `191` — conexões agora são por projeto, migration `174`.)
 
 **Rotas HTTP** (sob `apps/http-api/server/routes/company/`): `GET/POST /api/company/templates`,
 `PATCH/DELETE /api/company/templates/:id`, `GET/POST /api/company/sessions`,
@@ -371,6 +372,19 @@ Tabelas adicionais por migrations posteriores: `034` sandbox, `035` serviços, `
 | `MCP_COMPANY_INBOX_STALE_IDLE_MS` | `300000` (5 min) | Limite de inatividade para considerar a inbox "stale". |
 | `MCP_COMPANY_INBOX_WAIT_TIMEOUT_MS` | `1200000` (20 min) | Timeout de espera de uma mensagem de inbox. |
 | `CODER_SELF_REVIEW` | *on* | Liga/desliga o nudge de auto-revisão. |
+
+### 8.1 Flags de autonomia (C2 — organismo ligado por padrão)
+
+> Precedência: **sessão** (`config_json.autonomy.*`, painel de Autonomia / PATCH `/config`) >
+> **env** > **default**. `autonomy.freeze: true` na sessão zera TODAS as ações autônomas ao vivo
+> (checado a cada tick/uso, sem reiniciar o worker).
+
+| Variável | Padrão | Efeito |
+|---|---|---|
+| `MCP_COMPANY_SCHEDULER` | *on* | Kill-switch do scheduler autônomo E do reset de cards órfãos: `0` desliga (`1` segue ligando, no-op de back-compat). Por sessão: `autonomy.scheduler` / `autonomy.orphanReset`. |
+| `MCP_COMPANY_AUTO_APPROVE_ROLES` | `*` (todos os papéis) | Se PRESENTE, sobrepõe o default: csv = allowlist, `*` = todos, string vazia = ninguém auto-aprova. Por sessão: `autonomy.autoApproveRoles` (lista, `'*'` ou `null`). |
+| `MCP_SUPERVISOR_MASTER` | *on* | Kill-switch do supervisor do Master: `0` desliga. Seguro por padrão — os waits longos fazem heartbeat (`agent-wait-loop`/`await-master`). Por sessão: `autonomy.supervisorMaster`. |
+| `MCP_COMPANY_GLOBAL_MAX_SUBORDINATES` | `8` | Budget GLOBAL de subordinados (contagem cross-session): int>0 = teto, `0` = sem limite, ausente/inválido = 8. Por sessão: `autonomy.maxSubordinates` (int>0; `null` = volta à política padrão — NÃO significa "sem limite"). |
 
 ---
 
@@ -618,7 +632,7 @@ Scope: **session** (multi-project) or **global**.
 | **Preview** | Dev server output (HMR) of containerized services. |
 | **Inbox** | Inter-agent message queue (statuses: *pending, delivered, answered, cancelled, expired*). You can **cancel** a stuck message or **"Respond as human"** in place of the recipient. |
 | **Env** | Session-wide shared environment variables (see below). |
-| **Databases** | Register Postgres/MySQL/Supabase/Neon; connection strings become env vars and are reachable by the agent via `db_list`/`db_schema`/`db_query`. |
+| **Databases** | Read-only view of the linked projects' Databases-tab connections (migration 174). Agents reach them via `db_list`/`db_schema`/`db_query`/`db_command`; registration/editing happens on the project, not the session. |
 | **Supervisor** | Agent health and incidents (see §6). |
 
 **Env** in detail: variables injected as container env **and** written to `/app/.env` in every
@@ -739,8 +753,9 @@ Core tables (migration `018_company_agents.ts`):
 a `builder` key from the retired mode — ignored by the current runtime.)
 
 Additional tables in later migrations: `034` sandbox, `035` services, `036` env vars
-(`company_session_envs`), `038` archives (`company_archives`), `040` databases
-(`company_session_databases`), `065` fronts, `067` sub-sessions, `085` pipeline foundation.
+(`company_session_envs`), `038` archives (`company_archives`), `065` fronts, `067` sub-sessions,
+`085` pipeline foundation. (Migration `040`'s `company_session_databases` table was retired in
+`191` — connections are per-project now, migration `174`.)
 
 **HTTP routes** (under `apps/http-api/server/routes/company/`): `GET/POST /api/company/templates`,
 `PATCH/DELETE /api/company/templates/:id`, `GET/POST /api/company/sessions`,
@@ -771,6 +786,19 @@ Additional tables in later migrations: `034` sandbox, `035` services, `036` env 
 | `MCP_COMPANY_INBOX_STALE_IDLE_MS` | `300000` (5 min) | Idle threshold for marking the inbox "stale". |
 | `MCP_COMPANY_INBOX_WAIT_TIMEOUT_MS` | `1200000` (20 min) | Wait timeout for an inbox message. |
 | `CODER_SELF_REVIEW` | *on* | Enables/disables the self-review nudge. |
+
+### 8.1 Autonomy flags (C2 — the organism ships ON by default)
+
+> Precedence: **session** (`config_json.autonomy.*`, Autonomy panel / PATCH `/config`) >
+> **env** > **default**. Session `autonomy.freeze: true` live-kills EVERY autonomous action
+> (checked at each tick/use — no worker restart needed).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MCP_COMPANY_SCHEDULER` | *on* | Kill-switch for the autonomous scheduler AND the orphaned-card reset: `0` disables (`1` still enables — back-compat no-op). Per session: `autonomy.scheduler` / `autonomy.orphanReset`. |
+| `MCP_COMPANY_AUTO_APPROVE_ROLES` | `*` (every role) | When PRESENT it overrides the default: csv = allowlist, `*` = all, explicit empty string = nobody self-approves. Per session: `autonomy.autoApproveRoles` (list, `'*'` or `null`). |
+| `MCP_SUPERVISOR_MASTER` | *on* | Kill-switch for the Master supervisor: `0` disables. Safe by default — the long waits heartbeat (`agent-wait-loop`/`await-master`). Per session: `autonomy.supervisorMaster`. |
+| `MCP_COMPANY_GLOBAL_MAX_SUBORDINATES` | `8` | GLOBAL subordinate budget (cross-session count): int>0 = cap, `0` = uncapped, absent/invalid = 8. Per session: `autonomy.maxSubordinates` (int>0; `null` = back to default policy — NOT "no limit"). |
 
 ---
 

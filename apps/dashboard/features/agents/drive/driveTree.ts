@@ -82,6 +82,38 @@ function countFiles(nodes: DriveTreeNode[]): number {
   return n;
 }
 
+/**
+ * Drive namespace maintained by the agents' `docs_write` tool (see
+ * `packages/company/src/tools/file-path-core.ts`). These rows are a
+ * read-only MIRROR of the sandbox docs tree — the Drive panel renders
+ * them in a separate collapsed section instead of the main tree.
+ */
+export const DOCS_MIRROR_PREFIX = '__docs__/';
+
+export interface DriveMirrorFile {
+  /** Path with the `__docs__/` prefix stripped (e.g. "main/adr/0001.md"). */
+  displayPath: string;
+  file: DriveFileMeta;
+}
+
+/** Split the drive listing into work artifacts vs the docs mirror. */
+export function partitionDriveFiles(files: DriveFileMeta[]): {
+  work: DriveFileMeta[];
+  docsMirror: DriveMirrorFile[];
+} {
+  const work: DriveFileMeta[] = [];
+  const docsMirror: DriveMirrorFile[] = [];
+  for (const f of files) {
+    if (f.path.startsWith(DOCS_MIRROR_PREFIX)) {
+      docsMirror.push({ displayPath: f.path.slice(DOCS_MIRROR_PREFIX.length), file: f });
+    } else {
+      work.push(f);
+    }
+  }
+  docsMirror.sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+  return { work, docsMirror };
+}
+
 /** Every file path under a list of nodes (recursive). Used by folder delete. */
 export function collectFilePaths(nodes: DriveTreeNode[]): string[] {
   const out: string[] = [];

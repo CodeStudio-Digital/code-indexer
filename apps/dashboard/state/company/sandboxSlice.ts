@@ -13,6 +13,13 @@
  * sandbox can filter (`only react when serviceId === 'api'`).
  */
 import type { StateCreator } from 'zustand';
+import {
+  appendServiceLogLines,
+  type IncomingServiceLogLine,
+  type ServiceLogEntry,
+} from './service-log-buffer.js';
+
+export type { ServiceLogEntry } from './service-log-buffer.js';
 
 export interface SandboxFileChange {
   path: string;
@@ -39,16 +46,40 @@ export interface SandboxState {
   /**
    * Same pattern for `/services` list mutations
    * (`sandbox.service.added`, `sandbox.service.removed`,
-   * `sandbox.service.status_changed`). Replaces the 4-5s polls
-   * across `useServicesPolling` and `useExtraServices`.
+   * `sandbox.service.status_changed`; B6 also bumps on `.health` and
+   * `.restarted` so the sidebar badges refresh). Replaces the 4-5s
+   * polls across `useServicesPolling` and `useExtraServices`.
    */
   servicesSeq: number;
+  /**
+   * B6 — live tail buffers fed by `sandbox.service.log_batch`, bounded
+   * to 500 lines per service (`service-log-buffer.ts`). Keyed by
+   * serviceId; history/pagination stays REST-side (ServiceLogsPane).
+   */
+  serviceLogs: Record<string, ServiceLogEntry[]>;
+  /**
+   * B8 — last supervisor verdict per serviceId, fed by
+   * `sandbox.service.health` SSE. Container rows also get health from
+   * the `/services` refetch (persisted column); HOST-process rows
+   * (`local:<id>`) have NO persisted health — this map is their only
+   * live source, overlaid by the services sidebar.
+   */
+  serviceHealth: Record<string, ServiceHealthEntry>;
+}
+
+export interface ServiceHealthEntry {
+  health: string;
+  detail: string | null;
+  /** Epoch-ms from the event payload (supervisor clock). */
+  at: number;
 }
 
 export const INITIAL_SANDBOX_STATE: SandboxState = {
   lastFileChange: null,
   statusSeq: 0,
   servicesSeq: 0,
+  serviceLogs: {},
+  serviceHealth: {},
 };
 
 export interface SandboxSlice {
@@ -62,6 +93,20 @@ export interface SandboxSlice {
   sandboxBumpStatus: (sessionId: number) => void;
   /** Bumps `servicesSeq`. Consumers refetch `/services` on each tick. */
   sandboxBumpServices: (sessionId: number) => void;
+  /** Appends a `sandbox.service.log_batch` payload to the bounded live buffer. */
+  sandboxAppendServiceLogs: (
+    sessionId: number,
+    serviceId: string,
+    lines: IncomingServiceLogLine[],
+  ) => void;
+  /** B8 — records a `sandbox.service.health` verdict for overlay reads. */
+  sandboxApplyServiceHealth: (
+    sessionId: number,
+    serviceId: string,
+    health: string,
+    detail: string | null,
+    at: number,
+  ) => void;
   sandboxReset: (sessionId: number) => void;
 }
 
@@ -112,6 +157,28 @@ export const createSandboxSlice: StateCreator<SandboxSlice, [], [], SandboxSlice
       sandbox: withSlot(state.sandbox, sessionId, (slot) => ({
         ...slot,
         servicesSeq: slot.servicesSeq + 1,
+      })),
+    })),
+
+  sandboxAppendServiceLogs: (sessionId, serviceId, lines) =>
+    set((state) => ({
+      sandbox: withSlot(state.sandbox, sessionId, (slot) => ({
+        ...slot,
+        serviceLogs: {
+          ...slot.serviceLogs,
+          [serviceId]: appendServiceLogLines(slot.serviceLogs?.[serviceId], lines),
+        },
+      })),
+    })),
+
+  sandboxApplyServiceHealth: (sessionId, serviceId, health, detail, at) =>
+    set((state) => ({
+      sandbox: withSlot(state.sandbox, sessionId, (slot) => ({
+        ...slot,
+        serviceHealth: {
+          ...(slot.serviceHealth ?? {}),
+          [serviceId]: { health, detail, at },
+        },
       })),
     })),
 

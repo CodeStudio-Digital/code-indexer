@@ -49,11 +49,27 @@ import {
   runParallelAgents,
   extractLastAssistantText,
   emptyCollected,
-  type SubagentLimits,
   type ParallelAgentSpec,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import { renderCollectedSnapshotForParent } from '@mcp/code-agent/tools/subagent-collector.js';
-import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
+import {
+  renderSingleHeader,
+  renderSingleBody,
+  renderTrail,
+  renderParallelHeader,
+  renderParallelBody,
+  renderResumeHint,
+} from '@mcp/code-agent/tools/spawn-agent-render.js';
+import { retainSpawnGroup, countFailed } from '@mcp/code-agent/tools/spawn-agent-resume.js';
+import {
+  type NormalizedAgent,
+  limitsForAgent,
+  buildSubagentWorkspaceBriefing,
+  taskWithWorkspaceBriefing,
+  toRetentionAgent,
+} from '@mcp/code-agent/tools/spawn-agent-core.js';
+import { runBackgroundEphemeral } from '@mcp/code-agent/tools/spawn-agent-background.js';
+import { captureInvestigation } from '@mcp/code-agent/tools/investigation-capture.js';
 import {
   describeProvider,
   type SubagentDeps,
@@ -62,9 +78,12 @@ import {
   MICRO_AGENT_PROFILE_NAMES,
   MICRO_AGENT_PROFILES,
   resolveMicroAgentProfile,
-  type MicroAgentCapability,
   type MicroAgentProfile,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+
+// Re-exported for callers/tests that import it from spawn-agent.js (moved to
+// spawn-agent-core.js to break the spawn ↔ background import cycle).
+export { buildSubagentWorkspaceBriefing };
 import {
   isGlobalSubAgentCacheEnabled,
   tryGlobalSubAgentRead,
@@ -89,52 +108,6 @@ const SPAWN_AGENT_DESC =
   'USE: `kind:"persistent"` inside a company master session for a full coder subordinate (kanban/board/wait).\n' +
   "DON'T: use implement for read-only work — explore is cheaper.\n" +
   "DON'T: use persistent for one-shot exploration — default ephemeral fits.";
-
-interface NormalizedAgent {
-  task: string;
-  type: MicroAgentCapability;
-  profile: MicroAgentProfile;
-  label: string;
-  maxTurns: number;
-  files?: string[];
-}
-
-const SPAWN_LIMITS: Record<MicroAgentCapability, Required<SubagentLimits>> = {
-  explore: {
-    // `maxToolCalls` is a budget of tool *CALLS* (invocations), NOT the number
-    // of tools available (the env name is kept for back-compat). Default 0 =
-    // unlimited (codex-style): explore is read-only, so we let it run until it
-    // concludes or trips the time/turn/stall guards below — instead of cutting
-    // an in-flight investigation short. Set the env to a positive N to re-cap.
-    maxToolCalls: Number(process.env.CODER_SPAWN_EXPLORE_MAX_TOOLS ?? 0) || 0,
-    timeoutMs: Number(process.env.CODER_SPAWN_EXPLORE_TIMEOUT_MS ?? 10 * 60_000) || 10 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_EXPLORE_STALL_MS ?? 90_000) || 90_000,
-  },
-  implement: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_IMPLEMENT_MAX_TOOLS ?? 80) || 80,
-    timeoutMs: Number(process.env.CODER_SPAWN_IMPLEMENT_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_IMPLEMENT_STALL_MS ?? 120_000) || 120_000,
-  },
-  verify: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_VERIFY_MAX_TOOLS ?? 40) || 40,
-    timeoutMs: Number(process.env.CODER_SPAWN_VERIFY_TIMEOUT_MS ?? 15 * 60_000) || 15 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_VERIFY_STALL_MS ?? 120_000) || 120_000,
-  },
-  review: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_REVIEW_MAX_TOOLS ?? 40) || 40,
-    timeoutMs: Number(process.env.CODER_SPAWN_REVIEW_TIMEOUT_MS ?? 15 * 60_000) || 15 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_REVIEW_STALL_MS ?? 120_000) || 120_000,
-  },
-  full: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_FULL_MAX_TOOLS ?? 80) || 80,
-    timeoutMs: Number(process.env.CODER_SPAWN_FULL_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_FULL_STALL_MS ?? 120_000) || 120_000,
-  },
-};
-
-function limitsForAgent(agent: NormalizedAgent): SubagentLimits {
-  return SPAWN_LIMITS[agent.type];
-}
 
 function rawString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -198,58 +171,6 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
   return { agents: out, error: null };
 }
 
-/**
- * Auto-capture a finished sub-agent's digest into the project-scoped
- * investigation ledger (migration 126) so a later session can
- * `recall_investigations` it instead of re-running the same explore — and
- * so the `record_memo` trail (which is otherwise discarded after the parent
- * reads it) gets a durable home. Best-effort; never throws. Skipped in
- * company sessions (they have the shared drive) and when the sub produced
- * no summary.
- */
-function captureInvestigation(
-  deps: SubagentDeps,
-  ctx: ToolContext,
-  agent: NormalizedAgent,
-  finalText: string,
-  trail: string,
-  tokens: number,
-): void {
-  if (ctx.companyContext) return;
-  const sessionId = ctx.runner?.sessionId;
-  if (!deps.sessionStore || sessionId == null || !finalText.trim()) return;
-  try {
-    const topic = agent.task.slice(0, 300);
-    const summary = finalText.slice(0, 1000);
-    const row = deps.sessionStore.recordInvestigation({
-      session_id: sessionId,
-      topic,
-      summary,
-      body: `${finalText}${trail}`.slice(0, 20000),
-      source_label: agent.label,
-      agent_type: agent.type,
-      tokens,
-    });
-    // Live-update the Drive panel.
-    ctx.runner?.emit('session_drive_changed', { kind: 'investigation' });
-    // Semantic recall: embed the digest in the background (in-process only;
-    // worker mode / no embedder → keyword recall still works). Fire-and-forget
-    // so the spawn result isn't blocked on a network/CPU round-trip.
-    const embed = getInvestigationEmbedder();
-    if (embed) {
-      void embed(`${topic}\n${summary}`)
-        .then((vec) => {
-          if (vec && vec.length > 0 && vec.some((x) => x !== 0)) {
-            deps.sessionStore!.setInvestigationEmbedding(row.id, vec);
-          }
-        })
-        .catch(() => { /* embedding is best-effort */ });
-    }
-  } catch (e) {
-    console.warn(`[coder] captureInvestigation failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
 function renderParallelProfilePrompts(agents: NormalizedAgent[]): string {
   const seen = new Set<MicroAgentProfile['id']>();
   const parts: string[] = [];
@@ -269,9 +190,10 @@ async function runSingleEphemeral(
   const activeProvider = deps.subagentProvider ?? deps.provider;
   const providerInfo = describeProvider(activeProvider);
   const parentSessionId = ctx.runner?.sessionId;
+  const spawnId = randomUUID().slice(0, 8);
   console.log(
     `[coder s=${parentSessionId ?? '?'}] spawn_agent: type=${agent.type} provider=${providerInfo.label} ` +
-    `max_turns=${agent.maxTurns}${agent.files ? ` files=[${agent.files.join(', ')}]` : ''}`,
+    `max_turns=${agent.maxTurns} spawn=${spawnId}${agent.files ? ` files=[${agent.files.join(', ')}]` : ''}`,
   );
 
   const cacheKeyInput = {
@@ -314,7 +236,10 @@ async function runSingleEphemeral(
     } catch { /* best-effort */ }
   }
 
-  const initialMessages: AgentMessage[] = [{ role: 'user', content: [{ type: 'text', text: agent.task }] }];
+  const initialMessages: AgentMessage[] = [{
+    role: 'user',
+    content: [{ type: 'text', text: taskWithWorkspaceBriefing(agent.task, ctx) }],
+  }];
   const result = await runSubagent(
     {
       provider: activeProvider,
@@ -337,24 +262,33 @@ async function runSingleEphemeral(
     },
   );
 
-  const cached = result.usage.cache_read_input_tokens ?? 0;
-  const header =
-    `[subagent provider=${providerInfo.provider} model=${providerInfo.model} type=${agent.type} ` +
-    `reason=${result.reason} input=${result.usage.input_tokens} output=${result.usage.output_tokens} cache_hit=${cached}]\n\n`;
-  const body = result.finalText
-    || `(subagent did not produce a final summary — reason=${result.reason}. Retry with narrower scope or investigate directly.)`;
+  const header = renderSingleHeader(providerInfo, agent.type, result.reason, result.usage, spawnId);
+  const body = renderSingleBody(result.finalText, result.reason);
   // Frente C — append the sub's structured trail (memos / snapshots /
   // board posts) so the master sees what the sub explicitly flagged for
   // it. Empty when the sub didn't emit anything → no-op concat.
-  const trail = renderCollectedSnapshotForParent(result.collected ?? emptyCollected());
+  const trail = renderTrail(result.collected);
 
-  if (isGlobalSubAgentCacheEnabled() && result.finalText) {
+  // Only COMPLETED runs are cacheable: watchdog failures produce a non-empty
+  // salvage summary, and caching that would replay the failure to every
+  // later identical spawn.
+  if (isGlobalSubAgentCacheEnabled() && result.finalText && result.reason === 'completed') {
     writeGlobalSubAgentResult(cacheKeyInput, { header, body, usage: result.usage }, { sessionId: parentSessionId });
   }
   // Persist a durable digest into the investigation ledger (non-company).
   captureInvestigation(deps, ctx, agent, result.finalText ?? '', trail, result.usage.input_tokens + result.usage.output_tokens);
   void extractLastAssistantText; // keep helper referenced for re-exports
-  return { ...ok(header + body + trail), subUsage: result.usage };
+
+  // Retain for resume_agent (failed → transcript kept, hint appended).
+  retainSpawnGroup({
+    sessionId: parentSessionId,
+    spawnId,
+    provider: providerInfo.provider,
+    model: providerInfo.model,
+    agents: [toRetentionAgent(0, agent, result)],
+  });
+  const hint = result.reason !== 'completed' ? renderResumeHint(spawnId, 1) : '';
+  return { ...ok(header + body + trail + hint), subUsage: result.usage };
 }
 
 async function runParallelEphemeral(
@@ -403,7 +337,7 @@ async function runParallelEphemeral(
   }
 
   const specs: ParallelAgentSpec[] = agents.map((a) => ({
-    task: a.task,
+    task: taskWithWorkspaceBriefing(a.task, ctx),
     label: a.label,
     maxTurns: a.maxTurns,
     systemPrompt: a.profile.systemPrompt,
@@ -443,24 +377,16 @@ async function runParallelEphemeral(
     successCount: results.filter((r) => r.reason === 'completed').length,
   });
 
-  const cached = totalUsage.cache_read_input_tokens ?? 0;
-  const header =
-    `[parallel agents: ${results.length} agents, provider=${providerInfo.provider} model=${providerInfo.model}, ` +
-    `input=${totalUsage.input_tokens} output=${totalUsage.output_tokens} cache_hit=${cached}]\n\n`;
-  const body = results
-    .map((r, i) => {
-      const meta =
-        `[type=${agents[i].type} profile=${agents[i].profile.id} reason=${r.reason} ` +
-        `tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}]`;
-      const text = r.finalText || '(no summary produced)';
-      // Frente C — per-agent trail (memos/snapshots/board) appended after
-      // its summary so the master can attribute each entry to the right
-      // sub. `r.collected` is always present (empty arrays when nothing
-      // was emitted), so the render returns '' and concat is a no-op.
-      const trail = renderCollectedSnapshotForParent(r.collected ?? emptyCollected());
-      return `### Agent ${i + 1}: ${r.label}\n${meta}\n${text}${trail}`;
-    })
-    .join('\n\n---\n\n');
+  const header = renderParallelHeader(results.length, providerInfo, totalUsage, groupId);
+  const body = renderParallelBody(results.map((r, i) => ({
+    label: r.label,
+    type: agents[i].type,
+    reason: r.reason,
+    toolCallCount: r.toolCallCount,
+    usage: r.usage,
+    finalText: r.finalText,
+    collected: r.collected,
+  })));
 
   // Persist each sub-agent's digest into the investigation ledger (non-company).
   for (let i = 0; i < results.length; i++) {
@@ -469,7 +395,20 @@ async function runParallelEphemeral(
     captureInvestigation(deps, ctx, agents[i], r.finalText ?? '', trail, r.usage.input_tokens + r.usage.output_tokens);
   }
 
-  return { ...ok(header + body), subUsage: totalUsage };
+  // Retain for resume_agent — spawnId is the groupId so UI rows patch on resume.
+  retainSpawnGroup({
+    sessionId: parentSessionId,
+    spawnId: groupId,
+    provider: providerInfo.provider,
+    model: providerInfo.model,
+    agents: results.map((r, i) => ({
+      ...toRetentionAgent(i, agents[i], r),
+      toolCallCount: r.toolCallCount,
+    })),
+  });
+  const failed = countFailed(results);
+  const hint = failed > 0 ? renderResumeHint(groupId, failed) : '';
+  return { ...ok(header + body + hint), subUsage: totalUsage };
 }
 
 async function runPersistent(
@@ -554,6 +493,7 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
           maxItems: 8,
         },
         parallel: { type: 'boolean', description: 'Force parallel/sequential. Default: parallel when agents.length > 1.' },
+        background: { type: 'boolean', description: 'Fire-and-forget: return immediately with a job id and keep working; fetch results later with collect_agents. Use for long, independent work. Default false (blocks until done).' },
         kind: { type: 'string', enum: ['ephemeral', 'persistent'], description: 'Default "ephemeral". "persistent" needs Company master (uses spawn_subordinate_agent under the hood).' },
         // Persistent-only Company fields — surfaced only in a master session
         // (see includePersistent). Unreachable/ignored elsewhere. The handler
@@ -590,6 +530,12 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
           return err('spawn_agent: kind="persistent" supports only ONE agent (parallel persistent is undefined — each subordinate has its own session).');
         }
         return runPersistent(registry, args, agents[0], ctx);
+      }
+
+      // Background (fire-and-forget) — returns immediately with a job id.
+      // Ephemeral only; results fetched via collect_agents.
+      if (args.background === true) {
+        return runBackgroundEphemeral(deps, agents, ctx);
       }
 
       const parallel = typeof args.parallel === 'boolean' ? args.parallel : agents.length > 1;

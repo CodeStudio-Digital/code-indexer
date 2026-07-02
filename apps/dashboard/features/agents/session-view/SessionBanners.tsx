@@ -9,8 +9,16 @@ import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 import { ConnectionPhaseStrip } from '../ConnectionPhaseStrip.js';
 import { MasterStatusBanner } from '../MasterStatusBanner.js';
 import { SessionStalledBanner } from '../SessionStalledBanner.js';
+import { AutonomyIncidentBanner } from './AutonomyIncidentBanner.js';
 
-export function SessionBanners({ stream }: { stream: ReturnType<typeof useCompanyStream> }) {
+export function SessionBanners({
+  stream,
+  sessionId = null,
+}: {
+  stream: ReturnType<typeof useCompanyStream>;
+  /** C1 — needed by the autonomy incident banner; optional for older call-sites. */
+  sessionId?: number | null;
+}) {
   return (
     <>
       {!stream.error && <ConnectionPhaseStrip phase={stream.connectionPhase} />}
@@ -20,6 +28,9 @@ export function SessionBanners({ stream }: { stream: ReturnType<typeof useCompan
           <p>{stream.error}</p>
         </div>
       )}
+
+      {/* C1 — severe supervisor incidents (quarantine / ghost / read-only). */}
+      <AutonomyIncidentBanner sessionId={sessionId} />
 
       <MasterStatusBanner
         endedAt={stream.masterEndedAt}

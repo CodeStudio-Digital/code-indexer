@@ -12,6 +12,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { prompt } from '../../../components/ui/prompt-dialog.js';
 import { KNOWN_STACKS, type ServiceRow } from './types.js';
 
@@ -45,6 +46,8 @@ export interface UseServiceActionsResult {
   retryPrimary: () => Promise<void>;
   /** Retry an orphan with a `window.prompt` for the missing stack. */
   retryOrphanedService: (serviceId: string) => Promise<void>;
+  /** B8 — stop the session's host process + drop its persisted row. */
+  stopLocalProject: () => Promise<void>;
 }
 
 export function useServiceActions({
@@ -53,6 +56,7 @@ export function useServiceActions({
   reload,
   setError,
 }: UseServiceActionsParams): UseServiceActionsResult {
+  const { t } = useTranslation('agents');
   const [restartingId, setRestartingId] = useState<string | null>(null);
   const [runtimePausingId, setRuntimePausingId] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
@@ -227,6 +231,27 @@ export function useServiceActions({
     await retryService(serviceId, normalized);
   }
 
+  /**
+   * B8 — stop the session's host process. `DELETE /local-project` is the
+   * only existing local control route: it SIGTERM→SIGKILLs the child AND
+   * hard-deletes the persisted row (there is no restart/pause for host
+   * processes in v1).
+   */
+  async function stopLocalProject(): Promise<void> {
+    if (!confirm(t('services.local.stopConfirm'))) {
+      return;
+    }
+    setError(null);
+    const r = await fetch(`/api/company/sessions/${sessionId}/local-project`, {
+      method: 'DELETE',
+    });
+    if (!r.ok) {
+      const body = (await r.json().catch(() => ({}))) as { error?: string };
+      setError(body.error ?? `HTTP ${r.status}`);
+    }
+    await reload();
+  }
+
   return {
     restartingId,
     runtimePausingId,
@@ -241,5 +266,6 @@ export function useServiceActions({
     retryService,
     retryPrimary,
     retryOrphanedService,
+    stopLocalProject,
   };
 }

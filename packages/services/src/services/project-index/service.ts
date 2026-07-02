@@ -1,5 +1,6 @@
 import { isAbsolute, relative } from 'node:path';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { FileWatcherService, type WatcherFileEvent } from '../watcher.js';
 import { GitMetaWatcher, type GitMetaEvent } from '../git-meta-watcher.js';
 import { KeyedMutex } from './project-mutex.js';
@@ -270,7 +271,7 @@ export class ProjectIndexService {
     const root = project.root_path;
     this.watcher.startWatching(
       projectId,
-      { rootPath: root, debounce: s.watchDebounceMs },
+      { rootPath: root, debounce: s.watchDebounceMs, ignorePatterns: projectIndexIgnorePatterns(project) },
       { onFileChanged: (events) => this.onWatcherEvents(projectId, root, events) },
     );
     this.status.setWatcher(projectId, true);
@@ -317,6 +318,15 @@ export class ProjectIndexService {
     await this.stopFileWatching(projectId);
     await this.gitMetaWatcher.stopWatching(projectId);
     this.status.setWatcher(projectId, false);
+  }
+
+  restartFileWatching(projectId: number): void {
+    if (this.disposed || !this.fsListeners.has(projectId)) return;
+    void this.stopFileWatching(projectId)
+      .then(() => {
+        if (!this.disposed && this.fsListeners.has(projectId)) this.startFileWatchingNow(projectId);
+      })
+      .catch((err) => console.warn(`[project-index] failed to restart watcher for project ${projectId}: ${msg(err)}`));
   }
 
   getStatus(projectId: number): ProjectIndexStatus {

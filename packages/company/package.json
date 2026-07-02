@@ -11,7 +11,6 @@
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "@mcp/services": "workspace:*",
-    "@mcp/db-drivers": "workspace:*",
     "@mcp/code-agent": "workspace:*",
     "@mcp/design-system": "workspace:*",
     "@mcp/company-contracts": "workspace:*",

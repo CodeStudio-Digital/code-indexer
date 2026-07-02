@@ -26,6 +26,8 @@ export type DsVersionStatus = 'draft' | 'building' | 'published' | 'failed' | 's
 export type DsComponentKind = 'atom' | 'page-template';
 /** 'company' = pipeline legado (read-only); 'studio' = sessão single sobre projeto-workspace. */
 export type DsSessionKind = 'company' | 'studio';
+/** Modo de design (mig 190): 'fidelity' = tema é fonte da verdade; 'creative' = inspiração. */
+export type DsSessionMode = 'fidelity' | 'creative';
 
 export interface DesignSystemSession {
   id: number;
@@ -41,6 +43,9 @@ export interface DesignSystemSession {
   source_zip_path: string | null;
   next_bump_hint: DsBumpHint;
   mcp_server_config_id: string | null;
+  mode: DsSessionMode;
+  /** Estado da máquina de etapas (schema em @mcp/design-system/pipeline/stages). NULL = sem pipeline. */
+  pipeline_json: string | null;
   created_at: string;
 }
 
@@ -86,6 +91,7 @@ export interface CreateDsStudioSessionInput {
   name: string;
   package_name: string;
   stack: DsStack;
+  mode?: DsSessionMode;
   source_zip_hash?: string | null;
   source_zip_path?: string | null;
 }
@@ -131,6 +137,8 @@ interface SessionRow {
   source_zip_path: string | null;
   next_bump_hint: string;
   mcp_server_config_id: string | null;
+  mode: string | null;
+  pipeline_json: string | null;
   created_at: string;
 }
 
@@ -175,6 +183,8 @@ function hydrateSession(r: SessionRow): DesignSystemSession {
     source_zip_path: r.source_zip_path,
     next_bump_hint: r.next_bump_hint as DsBumpHint,
     mcp_server_config_id: r.mcp_server_config_id ?? null,
+    mode: r.mode === 'fidelity' ? 'fidelity' : 'creative',
+    pipeline_json: r.pipeline_json ?? null,
     created_at: r.created_at,
   };
 }
@@ -256,18 +266,27 @@ export class DesignSystemStore {
     const info = this.db
       .prepare(
         `INSERT INTO design_system_sessions
-           (project_id, kind, name, package_name, stack, source_zip_hash, source_zip_path)
-         VALUES (?, 'studio', ?, ?, ?, ?, ?)`,
+           (project_id, kind, name, package_name, stack, mode, source_zip_hash, source_zip_path)
+         VALUES (?, 'studio', ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.project_id,
         input.name,
         input.package_name,
         input.stack,
+        input.mode ?? 'creative',
         input.source_zip_hash ?? null,
         input.source_zip_path ?? null,
       );
     return this.getSession(Number(info.lastInsertRowid))!;
+  }
+
+  /** Estado da máquina de etapas (pipeline_json, mig 190). */
+  setPipelineJson(sessionId: number, json: string | null): DesignSystemSession {
+    this.db
+      .prepare('UPDATE design_system_sessions SET pipeline_json = ? WHERE id = ?')
+      .run(json, sessionId);
+    return this.getSession(sessionId)!;
   }
 
   getSession(id: number): DesignSystemSession | null {

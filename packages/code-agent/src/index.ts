@@ -70,9 +70,9 @@ import { buildDesignSystemStudioTools, buildDesignSystemConsumerTools } from '@m
 import { buildSubordinateTools } from '@mcp/company/tools/subordinate-tools.js';
 import { buildSharedDriveTools } from '@mcp/company/tools/shared-drive-tools.js';
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
+import { serviceTools } from '@mcp/company/tools/service-tools.js';
 import { docsTools } from '@mcp/company/tools/docs-tools.js';
 import { envTools } from '@mcp/company/tools/env-tools.js';
-import { databaseTools } from '@mcp/company/tools/database-tools.js';
 import { buildSubordinateKanbanTools } from '@mcp/company/tools/subordinate-kanban-tools.js';
 import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
 import { RuntimeHookRegistry } from '@mcp/code-agent/core/hook-registry.js';
@@ -98,6 +98,7 @@ import { execCommandTools } from '@mcp/code-agent/tools/exec-command.js';
 import { webTools } from '@mcp/code-agent/tools/web.js';
 import { httpTools } from '@mcp/code-agent/tools/http.js';
 import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
+import { dbTools } from '@mcp/code-agent/tools/db/index.js';
 import { diagramTools } from '@mcp/code-agent/tools/diagram/index.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
@@ -305,6 +306,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   const project = db.getProject(session.project_id);
   if (!project) throw new Error(`Project ${session.project_id} not found`);
+  const unionProjectLinks = project.is_synthetic ? db.listUnionProjectIds(project.id) : [];
 
   // Memory READ scope. A GLOBAL session's project is a SYNTHETIC union (mig 155)
   // whose own memory is empty/ephemeral; read the memory of every REAL
@@ -313,9 +315,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // consumer below stays single-iteration and byte-equivalent to before.
   const allReadProjects: ReadProject[] = project.is_synthetic
     ? (() => {
-        const links = db.listUnionProjectIds(project.id);
-        return links.length
-          ? links.map((l) => ({ id: l.project_id, name: l.name }))
+        return unionProjectLinks.length
+          ? unionProjectLinks.map((l) => ({ id: l.project_id, name: l.name }))
           : [{ id: project.id, name: project.name }];
       })()
     : [{ id: project.id, name: project.name }];
@@ -429,13 +430,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // clear errors when called while it is down.
   if (opts.companyContext?.sandbox) {
     registry.registerAll(sandboxTools);
+    // service_* tools (B5): structured log history + container lifecycle
+    // control. Same STABLE per-profile gate as sandboxTools (nothing
+    // per-request); authorization (master / own-service / devops skill)
+    // is enforced inside each handler.
+    registry.registerAll(serviceTools);
     // Docs tools write into `<workdir>/docs/` inside the container.
     // Registered for all builder sessions; fail gracefully when the
     // container is down so the agent gets a useful error message.
     registry.registerAll(docsTools);
-    // Database tools query Postgres/MySQL instances registered in the
-    // Databases tab — DB-backed, do not require the sandbox container.
-    registry.registerAll(databaseTools);
   }
   // expand_toolset registered AFTER external MCP servers (see below) so its
   // tier enum can include custom tiers dynamically.
@@ -449,6 +452,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // they only surface for the `api` agent (or after expand_toolset('api')).
   // They read ctx.projectId + the module-global ApiClientStore.
   registry.registerAll(apiClientTools);
+  // db_* tools (Databases-tab connections, v2) — registered UNCONDITIONALLY
+  // for single AND company sessions (the tool array is an LLM cache prefix;
+  // never gate registration on config/request). Surface is gated by the `db`
+  // tool tier; the master filter trims db_command afterwards.
+  registry.registerAll(dbTools);
   // draw.io diagram tools — gated to the `diagram` tool tier, so they only
   // surface for the `diagram` agent (or after expand_toolset('diagram')).
   // Stateless: each reads ctx.cwd and writes .drawio via the fs port.
@@ -784,6 +792,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.register(buildSpawnAgentTool(fallbackDeps, registry));
   }
 
+  // resume_agent + collect_agents — the async companions of spawn_agent
+  // (relaunch failed ephemeral subagents; wait on/fetch background jobs).
+  // Ephemeral capability only (company masters have resume_subordinate).
+  if (subagentDeps) {
+    const [{ buildResumeAgentTool }, { buildCollectAgentsTool }] = await Promise.all([
+      import('@mcp/code-agent/tools/resume-agent.js'),
+      import('@mcp/code-agent/tools/collect-agents.js'),
+    ]);
+    registry.register(buildResumeAgentTool(subagentDeps));
+    registry.register(buildCollectAgentsTool(subagentDeps));
+  }
+
   // execute_tasks — wave-based orchestrator (PR 3). Needs subagentDeps to
   // exist; only registers when the session has the subagent capability
   // (i.e. NOT a Company master, NOT CODER_DISABLE_SUBAGENTS=1).
@@ -891,6 +911,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const toolContext: ToolContext = {
     cwd: effectiveCwd,
     projectName: workspace.displayName,
+    globalWorkspace: project.is_synthetic
+      ? {
+          syntheticProjectName: project.name,
+          rootPath: workspace.rootPath,
+          projects: unionProjectLinks.map((p) => ({
+            projectId: p.project_id,
+            name: p.name,
+            slug: projectSlug(p.name),
+            rootPath: resolvePath(p.root_path),
+            isPrimary: p.is_primary,
+          })),
+        }
+      : undefined,
     // Global (multi-project) session: linked secondary roots the fs tools can
     // target via `project: "<slug>"`, plus their overlays. Undefined for normal
     // and company sessions, so the single-root path is unchanged for them.
@@ -1428,6 +1461,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         ? '4. Angular only: run `ng build pkg` first and publish the BUILT output (`ds_publish_version({ pkg_dir: "dist/pkg" })`).'
         : '',
     });
+    // Mode block (fidelity/creative) — same cache-stability contract:
+    // `mode` is immutable in builder_json. Pre-mode workspaces get none.
+    if (dsWorkspace.mode) {
+      systemPrompt += '\n' + interpolate(loadPrompt(`ds-studio-${dsWorkspace.mode}`), {
+        stack: dsWorkspace.stack,
+      });
+    }
   } else if (dsConsumer && config.features.designSystemEnabled) {
     // DS consumer block — derives from the pinned published version
     // (immutable rows), so the prefix stays byte-stable across turns.

@@ -25,19 +25,30 @@ import {
 } from '../../components/ui/dialog.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import type { EnvRow } from './EnvRowEditor.js';
+import { EnvScopeSelector, type EnvServiceOption } from './EnvScopeSelector.js';
 
 interface EnvEditDialogProps {
   row: EnvRow;
   sessionId: number;
+  /** Session services offered by the scope selector (D1). */
+  services?: EnvServiceOption[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => Promise<void> | void;
 }
 
-export function EnvEditDialog({ row, sessionId, open, onOpenChange, onSaved }: EnvEditDialogProps) {
+export function EnvEditDialog({
+  row,
+  sessionId,
+  services = [],
+  open,
+  onOpenChange,
+  onSaved,
+}: EnvEditDialogProps) {
   const { t } = useTranslation('agents');
   const [value, setValue] = useState(row.value);
   const [isSecret, setIsSecret] = useState(row.is_secret);
+  const [scope, setScope] = useState<string | null>(row.service_scope ?? null);
   const [saving, setSaving] = useState(false);
   // For a masked secret the real value is fetched on open; block Save until then.
   const [loadingValue, setLoadingValue] = useState(false);
@@ -47,14 +58,18 @@ export function EnvEditDialog({ row, sessionId, open, onOpenChange, onSaved }: E
     // Reseed from the row each time the dialog opens.
     setValue(row.value);
     setIsSecret(row.is_secret);
+    setScope(row.service_scope ?? null);
     if (!row.masked) return;
     // Secret + not revealed → row.value is ''. Fetch the real value so saving
-    // doesn't blank the secret.
+    // doesn't blank the secret. `&key=` keeps the reveal (and its server-side
+    // audit trail) scoped to the single var being edited.
     let cancelled = false;
     setLoadingValue(true);
     void (async () => {
       try {
-        const r = await fetch(`/api/company/sessions/${sessionId}/envs?reveal=1`);
+        const r = await fetch(
+          `/api/company/sessions/${sessionId}/envs?reveal=1&key=${encodeURIComponent(row.key)}`,
+        );
         if (r.ok) {
           const body = (await r.json()) as { envs: EnvRow[] };
           const match = body.envs?.find((e) => e.key === row.key);
@@ -75,7 +90,7 @@ export function EnvEditDialog({ row, sessionId, open, onOpenChange, onSaved }: E
       await fetch(`/api/company/sessions/${sessionId}/envs/${encodeURIComponent(row.key)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ value, is_secret: isSecret }),
+        body: JSON.stringify({ value, is_secret: isSecret, service_scope: scope }),
       });
       await onSaved();
       onOpenChange(false);
@@ -108,6 +123,7 @@ export function EnvEditDialog({ row, sessionId, open, onOpenChange, onSaved }: E
             />
             <span>{t('env.secret')}</span>
           </label>
+          <EnvScopeSelector services={services} value={scope} onChange={setScope} />
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

@@ -9,7 +9,7 @@
  *  - watcher-grade indexFilesStructural: hash short-circuit + delete handling.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeHarness, smallFileFixture, FakeProvider, type Harness } from './index-agent-harness.js';
 import { runStructuralIndex } from '../structural.js';
@@ -163,5 +163,24 @@ describe('structural index pipeline', () => {
     // Ignored paths never reach the index.
     const ignored = await indexFilesStructural(h.db, h.projectId, ['node_modules/x/y.js']);
     expect(ignored.skippedIgnored).toBe(1);
+  });
+
+  it('project ignore rules remove stale structural rows', async () => {
+    mkdirSync(join(h.projectRoot, 'generated'));
+    h.writeFile('generated/client.ts', smallFileFixture('generatedFn'));
+
+    await runStructuralIndex(h.db, h.projectId, { concurrency: 1 });
+    expect(h.db.getFile(h.projectId, 'generated/client.ts')).toBeTruthy();
+
+    h.db.updateProject(h.projectId, { index_ignore_patterns: JSON.stringify(['generated/']) });
+
+    const incremental = await indexFilesStructural(h.db, h.projectId, ['generated/client.ts']);
+    expect(incremental.skippedIgnored).toBe(1);
+    expect(incremental.removed).toBe(1);
+    expect(h.db.getFile(h.projectId, 'generated/client.ts')).toBeUndefined();
+
+    h.writeFile('generated/client.ts', smallFileFixture('generatedFn'));
+    await runStructuralIndex(h.db, h.projectId, { concurrency: 1 });
+    expect(h.db.getFile(h.projectId, 'generated/client.ts')).toBeUndefined();
   });
 });

@@ -11,6 +11,7 @@ import {
   formatDurationMs,
 } from '@mcp/services/qa/parsers/run-status-format.js';
 import { QaStatusBadge } from '../shared/QaStatusBadge.js';
+import { QaErrorClassHint } from '../shared/QaErrorClassHint.js';
 import { summariseRunI18n } from '../shared/qa-i18n.js';
 import { LiveRunTree } from './LiveRunTree.js';
 import { useLiveRun } from './useLiveRun.js';
@@ -127,6 +128,8 @@ function EmptyStatePanel({
           {last_run.last_error ? (
             <div className="mt-2">
               <div className="font-medium text-red-700 dark:text-red-400">{t('qa.error')}</div>
+              {/* B7 — friendly hint per machine-readable class; raw text stays as detail. */}
+              <QaErrorClassHint errorClass={last_run.error_class} />
               <div className="font-mono text-[11px] mt-0.5 whitespace-pre-wrap">
                 {last_run.last_error}
               </div>

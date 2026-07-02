@@ -147,6 +147,9 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     async update({ id, ...patch }) {
       const result = wrap(() => updateService.execute(id, patch as UpdateProjectInput));
       if (!result) throw new ApiError('not_found', 404, 'project not found');
+      if (Object.prototype.hasOwnProperty.call(patch, 'index_ignore_patterns')) {
+        deps.projectIndexService.restartFileWatching(id);
+      }
       return result;
     },
 

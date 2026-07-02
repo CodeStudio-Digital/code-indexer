@@ -7,20 +7,31 @@
  *     with a fallback that lists every `docs/**\/*.md` alphabetically
  *     when no index is present.
  *   - Main pane: the selected doc rendered as markdown (default) or raw,
- *     with a toolbar for view/raw toggle, copy, and refresh.
+ *     with a toolbar for view/raw toggle, copy, refresh, provenance
+ *     badge (live sandbox vs drive mirror) and the RAG index action.
  *
- * Everything is read-only from the UI's perspective. Writes always go
- * through the agents' `docs_*` tools — the source of truth is the
- * sandbox filesystem, not the dashboard.
+ * Phase D2: the backend merges sandbox docs with the durable drive
+ * mirror (`__docs__/…`), so this tab keeps working after a sandbox
+ * destroy — mirror-sourced docs are badged with their snapshot time.
+ * Everything is read-only from the UI's perspective; writes always go
+ * through the agents' `docs_*` tools.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Code2, Copy, Eye, FileText, FolderOpen, RefreshCw } from 'lucide-react';
+import { Check, Code2, Copy, Database, Eye, FileText, FolderOpen, HardDrive, RefreshCw } from 'lucide-react';
+import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { copyText } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { Markdown } from '../chat/messages/Markdown.js';
+import {
+  fetchDocBody,
+  useDocBody,
+  useDocsList,
+  useDocsRag,
+  type DocOrigin,
+} from './docs/useCompanyDocs.js';
 
 interface DocsTabProps {
   companySessionId: number;
@@ -34,105 +45,26 @@ interface TocEntry {
   children?: TocEntry[];
 }
 
-interface IndexFile {
-  sections?: TocEntry[];
-}
-
-function useDocsList(sessionId: number, service: string | null): {
-  items: string[];
-  reload: () => void;
-  loading: boolean;
-} {
-  const [items, setItems] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [nonce, setNonce] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    const url =
-      `/api/company/sessions/${sessionId}/docs/list` +
-      (service ? `?service=${encodeURIComponent(service)}` : '');
-    fetch(url)
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((body: { items?: string[] }) => {
-        if (!cancelled) setItems(body.items ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setItems([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, service, nonce]);
-
-  return {
-    items,
-    loading,
-    reload: () => setNonce((n) => n + 1),
-  };
-}
-
-function useDocBody(sessionId: number, service: string | null, path: string | null): {
-  body: string;
-  loading: boolean;
-} {
-  const [body, setBody] = useState('');
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!path) {
-      setBody('');
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    const qs = new URLSearchParams({ path });
-    if (service) qs.set('service', service);
-    fetch(`/api/company/sessions/${sessionId}/docs/read?${qs.toString()}`)
-      .then((r) => (r.ok ? r.text() : ''))
-      .then((text) => {
-        if (!cancelled) setBody(text);
-      })
-      .catch(() => {
-        if (!cancelled) setBody('');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, service, path]);
-  return { body, loading };
-}
-
 /**
  * Parse `docs/index.json` when present. Returns the TOC entries, or
  * `null` when the file is missing / malformed — callers then fall back
  * to the flat list.
  */
-function useIndexFile(sessionId: number, service: string | null, items: string[]): {
+function useIndexFile(sessionId: number, service: string | null, hasIndex: boolean): {
   sections: TocEntry[] | null;
 } {
   const [sections, setSections] = useState<TocEntry[] | null>(null);
-  const hasIndex = items.includes('index.json');
   useEffect(() => {
     if (!hasIndex) {
       setSections(null);
       return;
     }
     let cancelled = false;
-    const qs = new URLSearchParams({ path: 'index.json' });
-    if (service) qs.set('service', service);
-    fetch(`/api/company/sessions/${sessionId}/docs/read?${qs.toString()}`)
-      .then((r) => (r.ok ? r.text() : ''))
-      .then((text) => {
+    fetchDocBody(sessionId, service, 'index.json')
+      .then(({ content }) => {
         if (cancelled) return;
         try {
-          const parsed = JSON.parse(text) as IndexFile;
+          const parsed = JSON.parse(content) as { sections?: TocEntry[] };
           setSections(Array.isArray(parsed.sections) ? parsed.sections : null);
         } catch {
           setSections(null);
@@ -148,19 +80,46 @@ function useIndexFile(sessionId: number, service: string | null, items: string[]
   return { sections };
 }
 
+function OriginBadge({ origin, mtime }: { origin: DocOrigin | null; mtime: string | null }) {
+  const { t } = useTranslation('agents');
+  if (!origin) return null;
+  if (origin === 'drive_mirror') {
+    const stamp = mtime ? new Date(mtime).toLocaleString() : '';
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] gap-1 shrink-0"
+        title={stamp ? t('docs.mirrorTimestamp', { date: stamp }) : undefined}
+      >
+        <HardDrive className="h-2.5 w-2.5" />
+        {t('docs.originMirror', 'mirror')}
+        {stamp ? <span className="text-muted-foreground">{stamp}</span> : null}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="secondary" className="text-[10px] shrink-0">
+      {t('docs.originLive', 'live')}
+    </Badge>
+  );
+}
+
 function TreeNode({
   entry,
   selectedPath,
   onPick,
+  originOf,
   depth = 0,
 }: {
   entry: TocEntry;
   selectedPath: string | null;
   onPick: (path: string) => void;
+  originOf: (path: string) => DocOrigin | null;
   depth?: number;
 }) {
   const hasChildren = !!(entry.children && entry.children.length > 0);
   const isActive = entry.path && entry.path === selectedPath;
+  const mirror = entry.path ? originOf(entry.path) === 'drive_mirror' : false;
   return (
     <div>
       <button
@@ -175,6 +134,7 @@ function TreeNode({
       >
         {hasChildren ? <FolderOpen className="h-3 w-3" /> : <FileText className="h-3 w-3" />}
         <span className="truncate">{entry.title}</span>
+        {mirror ? <HardDrive className="h-2.5 w-2.5 text-muted-foreground shrink-0" /> : null}
       </button>
       {hasChildren && (
         <div>
@@ -184,6 +144,7 @@ function TreeNode({
               entry={child}
               selectedPath={selectedPath}
               onPick={onPick}
+              originOf={originOf}
               depth={depth + 1}
             />
           ))}
@@ -193,19 +154,62 @@ function TreeNode({
   );
 }
 
+function RagControls({ state, onIndex }: { state: ReturnType<typeof useDocsRag>['state']; onIndex: () => void }) {
+  const { t } = useTranslation('agents');
+  if (state === 'indexed') {
+    return (
+      <Badge variant="secondary" className="text-[10px] gap-1 shrink-0">
+        <Database className="h-2.5 w-2.5" /> {t('docs.indexedRag', 'indexed')}
+      </Badge>
+    );
+  }
+  if (state === 'indexing') {
+    return (
+      <Badge variant="outline" className="text-[10px] gap-1 shrink-0">
+        <RefreshCw className="h-2.5 w-2.5 animate-spin" /> {t('docs.indexingRag', 'indexing…')}
+      </Badge>
+    );
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-6 gap-1 px-2 text-[11px]"
+      onClick={onIndex}
+      title={state === 'error' ? t('docs.indexRagFailed', 'RAG indexing failed — try again') : t('docs.indexRag', 'Index in RAG')}
+    >
+      <Database className={cn('h-3 w-3', state === 'error' && 'text-destructive')} />
+      {t('docs.indexRag', 'Index in RAG')}
+    </Button>
+  );
+}
+
 export default function DocsTab({ companySessionId, services = [] }: DocsTabProps) {
   const { t } = useTranslation('agents');
   const [service, setService] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'view' | 'raw'>('view');
   const [copied, setCopied] = useState(false);
-  const { items, reload, loading } = useDocsList(companySessionId, service);
-  const { sections } = useIndexFile(companySessionId, service, items);
-  const { body, loading: bodyLoading } = useDocBody(companySessionId, service, selected);
+  const { entries, reload, loading } = useDocsList(companySessionId, service);
+  const hasIndex = useMemo(() => entries.some((e) => e.path === 'index.json'), [entries]);
+  const { sections } = useIndexFile(companySessionId, service, hasIndex);
+  const { body, origin, mtime, loading: bodyLoading } = useDocBody(companySessionId, service, selected);
+  const rag = useDocsRag(companySessionId, service, selected);
 
+  const originByPath = useMemo(() => {
+    const map = new Map<string, DocOrigin>();
+    for (const e of entries) map.set(e.path, e.origin);
+    return map;
+  }, [entries]);
+  const originOf = (path: string) => originByPath.get(path) ?? null;
+
+  const flatMarkdownEntries = useMemo(
+    () => entries.filter((e) => e.path.endsWith('.md')),
+    [entries],
+  );
   const flatMarkdownFiles = useMemo(
-    () => items.filter((p) => p.endsWith('.md')),
-    [items],
+    () => flatMarkdownEntries.map((e) => e.path),
+    [flatMarkdownEntries],
   );
 
   useEffect(() => {
@@ -256,25 +260,30 @@ export default function DocsTab({ companySessionId, services = [] }: DocsTabProp
                 entry={s}
                 selectedPath={selected}
                 onPick={setSelected}
+                originOf={originOf}
               />
             ))
-          ) : flatMarkdownFiles.length === 0 ? (
+          ) : flatMarkdownEntries.length === 0 ? (
             <div className="px-3 py-4 text-xs text-muted-foreground">
               {t('docs.noDocs')}
             </div>
           ) : (
-            flatMarkdownFiles.map((path) => (
+            flatMarkdownEntries.map((entry) => (
               <button
                 type="button"
-                key={path}
+                key={entry.path}
                 className={
                   'w-full text-left px-3 py-1 text-xs rounded flex items-center gap-1 ' +
-                  (path === selected ? 'bg-muted font-medium' : 'hover:bg-muted/50')
+                  (entry.path === selected ? 'bg-muted font-medium' : 'hover:bg-muted/50')
                 }
-                onClick={() => setSelected(path)}
+                onClick={() => setSelected(entry.path)}
+                title={entry.origin === 'drive_mirror' ? t('docs.originMirror', 'mirror') : undefined}
               >
                 <FileText className="h-3 w-3" />
-                <span className="truncate">{path}</span>
+                <span className="truncate flex-1">{entry.path}</span>
+                {entry.origin === 'drive_mirror' ? (
+                  <HardDrive className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+                ) : null}
               </button>
             ))
           )}
@@ -285,9 +294,12 @@ export default function DocsTab({ companySessionId, services = [] }: DocsTabProp
         {selected && (
           <div className="flex items-center gap-2 px-4 py-2 border-b bg-muted/30 shrink-0">
             <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <span className="text-xs text-muted-foreground truncate flex-1 font-mono">{selected}</span>
+            <span className="text-xs text-muted-foreground truncate font-mono">{selected}</span>
+            <OriginBadge origin={origin} mtime={mtime} />
 
             <div className="flex items-center gap-1 ml-auto shrink-0">
+              <RagControls state={rag.state} onIndex={rag.index} />
+
               <div className="flex items-center border rounded-md overflow-hidden text-xs">
                 <button
                   type="button"

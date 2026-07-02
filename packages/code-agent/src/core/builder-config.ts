@@ -15,10 +15,14 @@
  * tratado como consumidor (parseDsConsumer retorna null nele).
  */
 
+export type DsWorkspaceMode = 'fidelity' | 'creative';
+
 export interface DsWorkspaceConfig {
   stack: string;
   port: number | null;
   packageName: string | null;
+  /** Fixado no scaffold; null em workspaces criados antes do seletor de modo. */
+  mode: DsWorkspaceMode | null;
 }
 
 export function parseDsWorkspace(builderJson: string | null | undefined): DsWorkspaceConfig | null {
@@ -29,12 +33,14 @@ export function parseDsWorkspace(builderJson: string | null | undefined): DsWork
       port?: unknown;
       kind?: unknown;
       packageName?: unknown;
+      mode?: unknown;
     };
     if (cfg.kind !== 'ds') return null;
     return {
       stack: typeof cfg.stack === 'string' ? cfg.stack : 'react-ts',
       port: typeof cfg.port === 'number' ? cfg.port : null,
       packageName: typeof cfg.packageName === 'string' ? cfg.packageName : null,
+      mode: cfg.mode === 'fidelity' || cfg.mode === 'creative' ? cfg.mode : null,
     };
   } catch {
     return null;

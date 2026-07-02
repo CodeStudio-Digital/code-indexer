@@ -283,7 +283,8 @@ export async function provisionPrimarySandbox(
       }
     }
 
-    const sharedEnvs = resolveSessionEnvs(deps.envStore, req.sessionId);
+    // 'main' = the primary container's service id for scope enforcement (D1).
+    const sharedEnvs = resolveSessionEnvs(deps.envStore, req.sessionId, 'main');
     // Project Dockerfiles always run their freshly-built tag; otherwise honor a
     // per-session `image` override, falling back to the manager's node image.
     const image =

@@ -41,6 +41,24 @@ import type { NodeManifest } from '@mcp/services/sandbox/manifest-detector/types
 import { archivePath } from '@mcp/services/sandbox/archive.js';
 import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import type { SandboxManager } from '@mcp/services/sandbox/sandbox-manager.js';
+import { getServiceSupervisorStores } from '@mcp/company/services/service-supervisor/stores.js';
+import { validateQaRunConfig } from '@mcp/services/qa/config-validator.js';
+
+/**
+ * B3 item 6 — SandboxEvent kinds mirrored into the `company_service_
+ * transitions` audit trail (kind 'status', actor 'system'). High-frequency
+ * kinds (stats/log/step) and the session-keyed `service_*` siblings stay
+ * out: the former are noise, the latter are duplicates of the per-service
+ * `ready`/`destroyed` events already recorded here.
+ */
+const STATUS_TRANSITION_KINDS: Record<string, string> = {
+  ready: 'ready',
+  paused: 'paused',
+  resumed: 'resumed',
+  error: 'error',
+  destroying: 'destroying',
+  destroyed: 'destroyed',
+};
 
 /** @deprecated prefer `archivePath` from `core/sandbox/archive`. Re-exported
  *  for back-compat with the DELETE /sessions handler. */
@@ -99,6 +117,14 @@ function inferExternalNodePort(stack: SandboxStack, manifest: NodeManifest): num
  *   and continue. The QA agent will surface a clear diagnosis via
  *   `qa_get_browser_endpoint`.
  *
+ * B7 fix: the `.env` sync runs UNCONDITIONALLY. Only the
+ * `PLAYWRIGHT_WS_ENDPOINT` upsert depends on the Chrome Service being
+ * up — the `PLAYWRIGHT_BASE_URL_*` / `SERVICE_URL_*` family is minted
+ * independently (`syncManagedEnvs`) and used to be silently dropped
+ * from containers when this function early-returned on a stopped
+ * Chrome Service. Both upsert and sync are idempotent, so re-running
+ * the wiring is safe.
+ *
  * Best-effort throughout: never throws to the provision path.
  */
 async function wireSessionToChromeService(
@@ -110,32 +136,34 @@ async function wireSessionToChromeService(
     console.warn(
       `[sandbox-service] chrome service singleton not wired — session ${companySessionId} will not have PLAYWRIGHT_WS_ENDPOINT`,
     );
-    return;
-  }
-  const state = await svc.getEndpoint();
-  if (state.status !== 'running') {
-    console.log(
-      `[sandbox-service] chrome service status=${state.status} — session ${companySessionId} provisions without PLAYWRIGHT_WS_ENDPOINT (operator must enable in Admin)`,
-    );
-    return;
-  }
-  // Write the endpoint directly so brand-new sessions (not yet seen by
-  // the backfill loop in `ChromeService.enable`) get it before the
-  // first .env sync. The auto source means env_set tools won't
-  // surface this row as user-editable.
-  const envStore = getCompanySessionEnvStore();
-  if (envStore) {
-    try {
-      envStore.upsert(companySessionId, 'PLAYWRIGHT_WS_ENDPOINT', state.wsEndpoint, false, {
-        source: 'auto',
-      });
-    } catch (e) {
-      console.warn(
-        `[sandbox-service] env upsert ${companySessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+  } else {
+    const state = await svc.getEndpoint();
+    if (state.status !== 'running') {
+      console.log(
+        `[sandbox-service] chrome service status=${state.status} — session ${companySessionId} provisions without PLAYWRIGHT_WS_ENDPOINT (operator must enable in Admin)`,
       );
+    } else {
+      // Write the endpoint directly so brand-new sessions (not yet seen by
+      // the backfill loop in `ChromeService.enable`) get it before the
+      // first .env sync. The auto source means env_set tools won't
+      // surface this row as user-editable.
+      const envStore = getCompanySessionEnvStore();
+      if (envStore) {
+        try {
+          envStore.upsert(companySessionId, 'PLAYWRIGHT_WS_ENDPOINT', state.wsEndpoint, false, {
+            source: 'auto',
+          });
+        } catch (e) {
+          console.warn(
+            `[sandbox-service] env upsert ${companySessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
     }
   }
-  // Push to live containers so .env is up-to-date.
+  // Push to live containers so .env is up-to-date — ALWAYS, so the
+  // PLAYWRIGHT_BASE_URL_* / SERVICE_URL_* rows reach the container even
+  // when the Chrome Service is down.
   await manager.syncEnvsToAllContainers(String(companySessionId));
 }
 
@@ -454,6 +482,11 @@ export class SandboxService {
           `[sandbox-service] chrome service wiring failed for session ${this.sessionKey}: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
+      // B7 — validate the playwright.config.ts contract right after the
+      // E2E bootstrap so drifted configs surface on the board at
+      // provision time (non-fatal warning), not only when qa_start_run
+      // refuses hours later.
+      await this.warnOnInvalidQaConfig(manager);
     }
 
     // `resolveDriver` returns the same process-wide singleton the manager
@@ -474,6 +507,34 @@ export class SandboxService {
     this.hydrateServiceBindingsFromManager(manager, driver);
 
     return this.binding;
+  }
+
+  /**
+   * B7 — non-fatal provision-time check of the QA config contract.
+   * Reads `playwright.config.ts` from the freshly provisioned sandbox
+   * and, when it breaks the contract (`validateQaRunConfig`), posts a
+   * board warning so the operator/master sees the drift immediately.
+   * Missing file (scaffold still settling) and any read error are
+   * silently skipped — `qa_start_run` re-validates before every run.
+   */
+  private async warnOnInvalidQaConfig(manager: SandboxManager): Promise<void> {
+    try {
+      const content = await manager.readWorkspaceFile(this.sessionKey, 'playwright.config.ts');
+      if (!content) return;
+      const verdict = validateQaRunConfig(content);
+      if (verdict.ok) return;
+      const body =
+        `⚠ QA e2e: playwright.config.ts breaks the QA contract — Playwright runs will be refused until fixed:\n` +
+        verdict.problems.map((p) => `  • ${p}`).join('\n') +
+        (verdict.suggestion ? `\n${verdict.suggestion}` : '');
+      this.ctx.companyStore.postToBoard(
+        this.ctx.companySessionId, 'system', null, 'message', body, [],
+      );
+    } catch (e) {
+      console.warn(
+        `[sandbox-service] qa config validation skipped for session ${this.sessionKey}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /**
@@ -552,17 +613,61 @@ export class SandboxService {
     return binding;
   }
 
-  /** Tear down a single secondary service. */
+  /**
+   * Tear down a single secondary service.
+   *
+   * B3 item 6 — the destroy result is VALIDATED instead of swallowed:
+   * `executeServiceDestroy` tolerates a failed `driver.destroy` internally
+   * (it always finishes its teardown bookkeeping), so a resolved promise
+   * doesn't prove the container is gone. We inspect the container after
+   * the call; when it still exists the binding is KEPT (agents can still
+   * reach the container), a `destroy_failed` transition is recorded, a
+   * `sandbox.service.remove_failed` event is published, and the error
+   * propagates to the caller (route returns it to the operator).
+   */
   async removeService(serviceId: string): Promise<void> {
     const manager = getSandboxManager();
-    this.serviceBindings.delete(serviceId);
+    const sb = manager.getService(this.sessionKey, serviceId);
+    const containerId = sb?.containerId || null;
+    const attached = !!sb?.attached;
+
+    let failure: string | null = null;
     try {
       await manager.destroyService(this.sessionKey, serviceId, 'user-removed');
     } catch (e) {
-      console.warn(
-        `[sandbox-service] removeService ${this.sessionKey}:${serviceId} failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      failure = e instanceof Error ? e.message : String(e);
     }
+    if (!failure && containerId && !attached) {
+      try {
+        const driver = await resolveDriver();
+        const inspect = await driver.inspectContainer(containerId);
+        if (inspect.exists) {
+          failure = `container ${containerId.slice(0, 12)} still exists after destroy`;
+        }
+      } catch { /* can't inspect — assume the destroy went through */ }
+    }
+
+    if (failure) {
+      try {
+        getServiceSupervisorStores()?.transitions.record({
+          sessionId: this.ctx.companySessionId,
+          serviceId,
+          kind: 'status',
+          toState: 'destroy_failed',
+          reason: failure,
+          actor: 'system',
+        });
+      } catch { /* advisory trail */ }
+      this.publisher.publish('sandbox.service.remove_failed', {
+        sandboxId: this.sessionKey,
+        serviceId,
+        error: failure,
+        at: Date.now(),
+      });
+      throw new Error(`Failed to remove service '${serviceId}': ${failure}`);
+    }
+
+    this.serviceBindings.delete(serviceId);
     this.publisher.publish('sandbox.service.removed', {
       sandboxId: this.sessionKey,
       serviceId,
@@ -656,7 +761,18 @@ export class SandboxService {
   }
 
   private forwardEvent(event: SandboxEvent): void {
-    if (event.sandboxId !== this.sessionKey) return;
+    if (event.sandboxId !== this.sessionKey) {
+      // Secondary-service events carry the `<session>:<service>` registry
+      // id. Publishing behavior is unchanged (the dashboard polls
+      // /services for those), but the status audit trail (B3 item 6)
+      // records their lifecycle flips under the real serviceId.
+      const svcPrefix = `${this.sessionKey}:`;
+      if (event.sandboxId.startsWith(svcPrefix)) {
+        this.recordStatusTransition(event.sandboxId.slice(svcPrefix.length), event);
+      }
+      return;
+    }
+    this.recordStatusTransition('main', event);
     // Publish on the company metaBus under a stable `sandbox.*` envelope.
     // The UI subscribes to these events to drive the preview pane.
     this.publisher.publish(`sandbox.${event.kind}`, event);
@@ -676,6 +792,35 @@ export class SandboxService {
       sandboxId: event.sandboxId,
       kind: event.kind,
     });
+  }
+
+  /**
+   * B3 item 6 — append a `kind:'status'` row to the transitions audit
+   * trail for lifecycle events. Best-effort: the store binding is only
+   * wired in the company worker (`stores.ts`); on main (or when the
+   * write fails) this silently no-ops — the audit trail is advisory.
+   */
+  private recordStatusTransition(serviceId: string, event: SandboxEvent): void {
+    const toState = STATUS_TRANSITION_KINDS[event.kind];
+    if (!toState) return;
+    const store = getServiceSupervisorStores()?.transitions;
+    if (!store) return;
+    const reason =
+      'reason' in event && typeof event.reason === 'string'
+        ? event.reason
+        : 'message' in event && typeof event.message === 'string'
+          ? event.message
+          : null;
+    try {
+      store.record({
+        sessionId: this.ctx.companySessionId,
+        serviceId,
+        kind: 'status',
+        toState,
+        reason,
+        actor: 'system',
+      });
+    } catch { /* advisory trail — never break event forwarding */ }
   }
 
 }

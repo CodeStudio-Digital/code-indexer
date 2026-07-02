@@ -11,7 +11,7 @@ vi.mock('@mcp/code-agent/tools/implement-subagent.js', async (importOriginal) =>
   };
 });
 
-const { buildSpawnAgentTool } = await import('@mcp/code-agent/tools/spawn-agent.js');
+const { buildSpawnAgentTool, buildSubagentWorkspaceBriefing } = await import('@mcp/code-agent/tools/spawn-agent.js');
 const { runSubagent, runParallelAgents } = await import('@mcp/code-agent/tools/implement-subagent.js');
 
 const ctx: ToolContext = {
@@ -21,6 +21,32 @@ const ctx: ToolContext = {
     sessionId: 42,
     agentLoopV2: false,
     emit: vi.fn(),
+  },
+} as unknown as ToolContext;
+
+const globalCtx: ToolContext = {
+  ...ctx,
+  cwd: 'C:/data/global-workspaces/ws-1',
+  projectName: '__global_ws_1',
+  globalWorkspace: {
+    syntheticProjectName: '__global_ws_1',
+    rootPath: 'C:/data/global-workspaces/ws-1',
+    projects: [
+      {
+        projectId: 1,
+        name: 'Backend Loyalty',
+        slug: 'backend_loyalty',
+        rootPath: 'D:/repos/backend',
+        isPrimary: true,
+      },
+      {
+        projectId: 2,
+        name: 'Intranet Loyalty',
+        slug: 'intranet_loyalty',
+        rootPath: 'D:/repos/intranet',
+        isPrimary: false,
+      },
+    ],
   },
 } as unknown as ToolContext;
 
@@ -87,6 +113,21 @@ describe('spawn_agent profiles', () => {
     expect(spec.systemPrompt).toContain('EXPLORE subagent');
     expect(allowed(spec.allowlist, tool('read_file'))).toBe(true);
     expect(allowed(spec.allowlist, tool('write_file'))).toBe(false);
+  });
+
+  it('adds global workspace context to single subagent tasks', async () => {
+    const wrapper = buildTool();
+    await wrapper.handler({ kind: 'ephemeral', task: 'find recurring charge flow' }, globalCtx);
+
+    const spec = vi.mocked(runSubagent).mock.calls[0][1];
+    const text = (spec.initialMessages[0].content[0] as { text: string }).text;
+
+    expect(text).toContain('<workspace-context>');
+    expect(text).toContain('GLOBAL session over a virtual union workspace');
+    expect(text).toContain('backend_loyalty/ -> Backend Loyalty (primary)');
+    expect(text).toContain('intranet_loyalty/ -> Intranet Loyalty');
+    expect(text).toContain('Do not pass or invent project_name');
+    expect(text).toContain('# Delegated task\nfind recurring charge flow');
   });
 
   it('accepts verifier aliases and uses the verify toolset', async () => {
@@ -203,8 +244,33 @@ describe('spawn_agent profiles', () => {
     expect(specs[2].systemPrompt).toContain('VERIFY subagent');
     expect(allowed(specs[0].allowlist!, tool('run_command'))).toBe(false);
     expect(allowed(specs[2].allowlist!, tool('run_command'))).toBe(true);
-    expect(result.content).toContain('profile=review');
-    expect(result.content).toContain('profile=verify');
+    expect(result.content).toContain('[type=review reason=completed tools=0 input=1 output=1]');
+    expect(result.content).toContain('[type=verify reason=completed tools=0 input=1 output=1]');
+  });
+
+  it('adds global workspace context to parallel subagent tasks', async () => {
+    vi.mocked(runParallelAgents).mockResolvedValueOnce({
+      results: [],
+      totalUsage: { input_tokens: 0, output_tokens: 0 },
+    });
+
+    const wrapper = buildTool();
+    await wrapper.handler({
+      agents: [
+        { task: 'map backend flow', profile: 'investigator' },
+        { task: 'map intranet flow', profile: 'investigator' },
+      ],
+    }, globalCtx);
+
+    const specs = vi.mocked(runParallelAgents).mock.calls[0][1];
+    expect(specs[0].task).toContain('backend_loyalty/ -> Backend Loyalty (primary)');
+    expect(specs[0].task).toContain('# Delegated task\nmap backend flow');
+    expect(specs[1].task).toContain('intranet_loyalty/ -> Intranet Loyalty');
+    expect(specs[1].task).toContain('# Delegated task\nmap intranet flow');
+  });
+
+  it('does not add workspace briefing outside global sessions', () => {
+    expect(buildSubagentWorkspaceBriefing(ctx)).toBe('');
   });
 });
 

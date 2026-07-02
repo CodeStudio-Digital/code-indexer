@@ -21,6 +21,7 @@ import {
   serviceStartPayload,
   startPrimarySandboxForSession,
 } from './service-helpers.js';
+import { recordOperatorTransition } from './service-transition-log.js';
 
 export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore, db } = deps;
@@ -46,6 +47,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
     if (serviceId === 'main') {
       const result = await startPrimarySandboxForSession(deps, id, false);
       if (!result.ok) return c.json({ error: result.error }, result.status);
+      recordOperatorTransition(deps, id, 'main', 'running', 'start route');
       return c.json(serviceStartPayload('main', result.sandbox));
     }
 
@@ -59,6 +61,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
           : live.status === 'paused'
             ? await manager.startServiceContainer(String(id), serviceId)
             : live;
+        recordOperatorTransition(deps, id, serviceId, 'running', 'start route');
         return c.json(serviceStartPayload(serviceId, sb));
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -176,6 +179,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
         forceRecreate,
         ...provisionSpec,
       });
+      recordOperatorTransition(deps, id, serviceId, 'running', 'start route (provision)');
       return c.json(serviceStartPayload(serviceId, sandbox));
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
@@ -359,6 +363,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
         forceRecreate,
         ...provisionSpec,
       });
+      recordOperatorTransition(deps, id, serviceId, 'running', 'retry route');
       return c.json({
         service_id: serviceId,
         preview_url: sandbox.previewUrl,
@@ -377,7 +382,13 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
-    await removeServiceAndProject(deps, id, serviceId);
+    try {
+      await removeServiceAndProject(deps, id, serviceId);
+    } catch (e) {
+      // B3 item 6 — `SandboxService.removeService` now surfaces a failed
+      // container destroy instead of silently dropping the binding.
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
     return c.json({ ok: true });
   });
 }

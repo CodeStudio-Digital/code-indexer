@@ -41,6 +41,9 @@ interface QaRunRaw {
   report_persisted_path: string | null;
   kanban_feature_card_id: number | null;
   last_error: string | null;
+  error_class: string | null;
+  last_event_at: string | null;
+  plan_gate: string | null;
 }
 
 function hydrate(r: QaRunRaw): QaRun {
@@ -61,6 +64,9 @@ function hydrate(r: QaRunRaw): QaRun {
     report_persisted_path: r.report_persisted_path ?? null,
     kanban_feature_card_id: r.kanban_feature_card_id ?? null,
     last_error: r.last_error ?? null,
+    error_class: r.error_class ?? null,
+    last_event_at: r.last_event_at ?? null,
+    plan_gate: r.plan_gate ?? null,
   };
 }
 
@@ -91,8 +97,8 @@ export class QaTestRunStore implements IQaTestRunStore {
     const info = this.db
       .prepare(
         `INSERT INTO qa_test_runs
-           (company_session_id, agent_run_id, suite, service_id, status, trigger, kanban_feature_card_id)
-         VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+           (company_session_id, agent_run_id, suite, service_id, status, trigger, kanban_feature_card_id, plan_gate)
+         VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
       )
       .run(
         input.company_session_id,
@@ -101,6 +107,7 @@ export class QaTestRunStore implements IQaTestRunStore {
         input.service_id ?? 'main',
         input.trigger,
         input.kanban_feature_card_id ?? null,
+        input.plan_gate ?? null,
       );
     const inserted = this.getRun(Number(info.lastInsertRowid));
     if (!inserted) {
@@ -155,7 +162,7 @@ export class QaTestRunStore implements IQaTestRunStore {
         `UPDATE qa_test_runs
          SET status = ?, completed_at = datetime('now'),
              passed = ?, failed = ?, skipped = ?, duration_ms = ?,
-             last_error = ?
+             last_error = ?, error_class = ?
          WHERE id = ? AND status = 'running'`,
       )
       .run(
@@ -165,9 +172,34 @@ export class QaTestRunStore implements IQaTestRunStore {
         completion.skipped,
         completion.duration_ms,
         completion.last_error ?? null,
+        completion.error_class ?? null,
         runId,
       );
     return this.getRun(runId);
+  }
+
+  /**
+   * B7: mark reporter progress. Only touches rows still in `running`
+   * so late/retried reporter POSTs after completion stay no-ops.
+   */
+  touchLastEvent(runId: number): void {
+    this.db
+      .prepare(
+        `UPDATE qa_test_runs SET last_event_at = datetime('now')
+         WHERE id = ? AND status = 'running'`,
+      )
+      .run(runId);
+  }
+
+  /** B7: every `running` run across all sessions (ChromeService hook). */
+  listRunningRuns(): QaRun[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM qa_test_runs WHERE status = 'running'
+         ORDER BY started_at ASC, id ASC`,
+      )
+      .all() as QaRunRaw[];
+    return rows.map(hydrate);
   }
 
   getRun(runId: number): QaRun | null {
@@ -259,13 +291,19 @@ export class QaTestRunStore implements IQaTestRunStore {
    * the value compares apples to apples with `started_at` (also UTC
    * via `datetime('now')`). Pure SQL — no clock injection needed for
    * tests; tests pass `maxAgeMs=0` to match every running row.
+   *
+   * B7: age is measured from the run's last PROGRESS — the later of
+   * `started_at` and `last_event_at` — so a reporter that streamed a
+   * `started`/heartbeat event recently resets the clock even before
+   * the first `qa_test_results` row lands. `MAX(a, b)` in SQLite
+   * returns NULL when any operand is NULL, hence the COALESCE.
    */
   findStaleRunningRuns(maxAgeMs: number): QaRun[] {
     const rows = this.db
       .prepare(
         `SELECT r.* FROM qa_test_runs r
          WHERE r.status = 'running'
-           AND r.started_at <= datetime('now', ?)
+           AND MAX(r.started_at, COALESCE(r.last_event_at, r.started_at)) <= datetime('now', ?)
            AND NOT EXISTS (
              SELECT 1 FROM qa_test_results res WHERE res.run_id = r.id
            )

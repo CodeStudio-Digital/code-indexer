@@ -36,32 +36,32 @@ describe('resolveEndpointBase', () => {
 
   it('returns docker-internal fallback when neither URL nor runtime is set', () => {
     const r = resolveEndpointBase({});
-    expect(r.base).toBe('http://host.docker.internal:3333');
+    expect(r.base).toBe('http://host.docker.internal:7333');
     expect(r.fallback).toBe(true);
   });
 
   it('uses podman host alias when runtimeHint=podman', () => {
     const r = resolveEndpointBase({}, 'podman');
-    expect(r.base).toBe('http://host.containers.internal:3333');
+    expect(r.base).toBe('http://host.containers.internal:7333');
     expect(r.fallback).toBe(true);
   });
 
   it('uses podman alias via MCP_SANDBOX_RUNTIME=podman', () => {
     const r = resolveEndpointBase({ MCP_SANDBOX_RUNTIME: 'podman' });
-    expect(r.base).toBe('http://host.containers.internal:3333');
+    expect(r.base).toBe('http://host.containers.internal:7333');
   });
 
   it('runtimeHint takes precedence over env var', () => {
     const r = resolveEndpointBase({ MCP_SANDBOX_RUNTIME: 'docker' }, 'podman');
-    expect(r.base).toBe('http://host.containers.internal:3333');
+    expect(r.base).toBe('http://host.containers.internal:7333');
   });
 
   it('still uses docker alias when runtime=docker', () => {
-    expect(resolveEndpointBase({}, 'docker').base).toBe('http://host.docker.internal:3333');
+    expect(resolveEndpointBase({}, 'docker').base).toBe('http://host.docker.internal:7333');
   });
 
   it('ignores unknown runtimes (falls back to docker)', () => {
-    expect(resolveEndpointBase({}, 'k8s').base).toBe('http://host.docker.internal:3333');
+    expect(resolveEndpointBase({}, 'k8s').base).toBe('http://host.docker.internal:7333');
   });
 
   it('treats whitespace-only env as unset', () => {
@@ -125,7 +125,7 @@ function emptyReport(): WorkspaceRestoreReport {
 
 describe('formatStartRunReply', () => {
   const run = { id: 12, suite: 'login', service_id: 'main' };
-  const endpoint = 'http://host.containers.internal:3333/api/.../qa/test-event';
+  const endpoint = 'http://host.containers.internal:7333/api/.../qa/test-event';
 
   it('omits the restore section on the happy path with no side-effects to report', () => {
     const out = formatStartRunReply(run, endpoint, emptyReport(), '');

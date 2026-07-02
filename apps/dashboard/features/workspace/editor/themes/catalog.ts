@@ -184,6 +184,28 @@ const intellijDarcula: Palette = {
   punctuation: 'a9b7c6', lineHighlight: '323232', selection: '214283', lineNumber: '606366',
 };
 
+// Marca CodeStudio — fundo azul-preto do site (#050a16) para casar com o chrome
+// do app; sintaxe em cyan/índigo/violeta/verde da paleta de marca.
+const codeStudioDark: Palette = {
+  background: '050a16', foreground: 'e8ecfa', comment: '5b6a7f', keyword: 'c084fc',
+  string: '7ee787', number: 'c4b5fd', operator: '67e8f9', function: '818cf8',
+  method: '818cf8', property: 'a5b4fc', variable: 'f0abf7', parameter: 'ddd6fe',
+  type: '67e8f9', klass: '67e8f9', namespace: '67e8f9', constant: 'c4b5fd',
+  decorator: 'e879f9', regexp: '7ee787', tag: 'f0abf7', attribute: '67e8f9',
+  punctuation: '9ca3af', lineHighlight: '0d1629', selection: '26307a',
+  lineNumber: '2a3550', lineNumberActive: '9ca3af',
+};
+
+const codeStudioLight: Palette = {
+  background: 'f7f8fc', foreground: '0f1b35', comment: '5b6a7f', keyword: '7c3aed',
+  string: '15803d', number: '6d28d9', operator: '0891b2', function: '4f46e5',
+  method: '4f46e5', property: '1d4ed8', variable: '9f5dea', parameter: '7c3aed',
+  type: '0e7490', klass: '0e7490', namespace: '0e7490', constant: '6d28d9',
+  decorator: 'c026d3', regexp: '15803d', tag: 'c026d3', attribute: '0891b2',
+  punctuation: '5b6a7f', lineHighlight: 'eef2ff', selection: 'c7d2fe',
+  lineNumber: '9ca3af', lineNumberActive: '0f1b35',
+};
+
 /**
  * The full picker catalog. The two built-ins (vs-dark/vs) carry no `data` —
  * Monaco already defines them — and stay first so they read as the "defaults".
@@ -191,6 +213,8 @@ const intellijDarcula: Palette = {
 export const EDITOR_THEMES: EditorThemeDef[] = [
   { id: 'vs-dark', label: 'Default Dark', appearance: 'dark' },
   { id: 'vs', label: 'Default Light', appearance: 'light' },
+  darkTheme('codestudio-dark', 'CodeStudio Dark', codeStudioDark),
+  lightTheme('codestudio-light', 'CodeStudio Light', codeStudioLight),
   darkTheme('one-dark-pro', 'One Dark Pro', oneDarkPro),
   darkTheme('dracula', 'Dracula', dracula),
   darkTheme('monokai', 'Monokai', monokai),

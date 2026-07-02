@@ -5,17 +5,19 @@
  * panels vêm do `detail` compartilhado (polling 5s na view).
  */
 import { useTranslation } from 'react-i18next';
-import { BookOpen, Boxes, History, Monitor, type LucideIcon } from 'lucide-react';
+import { BookOpen, Boxes, History, ListChecks, Monitor, type LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import type { DesignSystemSessionDetail } from '../design-system-api.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { ComponentsPanel } from './ComponentsPanel.js';
 import { DocsPanel } from './DocsPanel.js';
+import { StagesPanel } from './StagesPanel.js';
 
-export type DsStudioTab = 'preview' | 'versions' | 'components' | 'docs';
+export type DsStudioTab = 'stages' | 'preview' | 'versions' | 'components' | 'docs';
 
 const TABS: Array<{ id: DsStudioTab; icon: LucideIcon; labelKey: string }> = [
+  { id: 'stages', icon: ListChecks, labelKey: 'tabs.stages' },
   { id: 'preview', icon: Monitor, labelKey: 'tabs.preview' },
   { id: 'versions', icon: History, labelKey: 'tabs.versions' },
   { id: 'components', icon: Boxes, labelKey: 'tabs.components' },
@@ -80,6 +82,7 @@ export function DsStudioTabContent({
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
       <div className="min-h-0 flex-1 overflow-auto">
+        {tab === 'stages' && <StagesPanel detail={detail} onChanged={onChanged} />}
         {tab === 'versions' && <VersionsPanel detail={detail} onChanged={onChanged} />}
         {tab === 'components' && <ComponentsPanel detail={detail} />}
         {tab === 'docs' && <DocsPanel detail={detail} />}

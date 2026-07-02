@@ -9,58 +9,60 @@
      theme — without this, a dark-styled <select> opens a white popup with
      light, near-invisible option text. */
   color-scheme: light;
-  /* ===== Brand palette (provided) ===== */
-  --primary-base: #195ab4;
-  --primary-extended-10: #d2e5ff;
-  --primary-extended-20: #b1d2ff;
-  --primary-extended-30: #87baff;
-  --primary-extended-40: #6baaff;
-  --primary-extended-50: #549cff;
-  --primary-extended-60: #307ae0;
-  --primary-extended-70: #195ab4;
-  --primary-extended-80: #10408d;
-  --primary-extended-90: #0b2859;
-  --primary-extended-100: #05132a;
+  /* ===== Brand palette — índigo/violeta (marca CodeStudio/site) =====
+     Rampas mantidas por coerência; hoje não são consumidas diretamente
+     (a UI usa os tokens shadcn abaixo). 10 = mais claro, 100 = mais escuro. */
+  --primary-base: #6366f1;
+  --primary-extended-10: #eef0fe;
+  --primary-extended-20: #dcdefc;
+  --primary-extended-30: #c3c4fa;
+  --primary-extended-40: #a5a4f6;
+  --primary-extended-50: #8b85f2;
+  --primary-extended-60: #7c6ff0;
+  --primary-extended-70: #6366f1;
+  --primary-extended-80: #4f46e5;
+  --primary-extended-90: #3730a3;
+  --primary-extended-100: #201b63;
 
-  --neutral-extended-10: #ffffff;
-  --neutral-extended-20: #f5f6f9;
-  --neutral-extended-30: #d7dbdf;
-  --neutral-extended-40: #b8bec4;
-  --neutral-extended-50: #959ca2;
-  --neutral-extended-60: #61686e;
-  --neutral-extended-70: #464c51;
-  --neutral-extended-80: #34383c;
-  --neutral-extended-90: #272a2e;
-  --neutral-extended-100: #1b1e20;
+  --neutral-extended-10: #f7f8fc;
+  --neutral-extended-20: #e8ecfa;
+  --neutral-extended-30: #cdd5ea;
+  --neutral-extended-40: #9ca3af;
+  --neutral-extended-50: #6b7691;
+  --neutral-extended-60: #48546f;
+  --neutral-extended-70: #2a3550;
+  --neutral-extended-80: #161f35;
+  --neutral-extended-90: #0d1629;
+  --neutral-extended-100: #050a16;
 
-  --status-success: #159e5c;
-  --status-warning: #f05800;
-  --status-error: #eb3d47;
-  --status-info: #1f7dff;
+  --status-success: #22c55e;
+  --status-warning: #f59e0b;
+  --status-error: #ef4444;
+  --status-info: #6366f1;
 
-  /* ===== shadcn tokens (light) — refreshed for IDE density ===== */
-  --background: #fafafb;
-  --foreground: #0b0d12;
+  /* ===== shadcn tokens (light) — paleta da marca (índigo/violeta) ===== */
+  --background: #f7f8fc;
+  --foreground: #0f1b35;
   --card: #ffffff;
-  --card-foreground: #0b0d12;
+  --card-foreground: #0f1b35;
   --popover: #ffffff;
-  --popover-foreground: #0b0d12;
-  --primary: #2563eb;
-  --primary-foreground: #ffffff;
-  --secondary: #f1f3f6;
-  --secondary-foreground: #0b0d12;
-  --muted: #f1f3f6;
-  --muted-foreground: #5b6470;
-  --accent: #e6efff;
-  --accent-foreground: #1d4ed8;
-  --destructive: #dc2626;
+  --popover-foreground: #0f1b35;
+  --primary: #6366f1;
+  --primary-foreground: #f5f8ff;
+  --secondary: #e8ecfa;
+  --secondary-foreground: #0f1b35;
+  --muted: #e8ecfa;
+  --muted-foreground: #5b6a7f;
+  --accent: #f8f5ff;
+  --accent-foreground: #8b3fd4; /* violeta escurecido do site #9f5dea → ~5.6:1 p/ texto pequeno de menu */
+  --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --success: #16a34a;
-  --warning: #d97706;
-  --info: #2563eb;
-  --border: #e4e7ec;
-  --input: #e4e7ec;
-  --ring: #4d8cff;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --info: #6366f1; /* sem equivalente no site; índigo = cor de "link/info" legível no fundo claro */
+  --border: #e5ecfb;
+  --input: #e5ecfb;
+  --ring: #6366f1;
   --radius: 0.375rem;
   /* Premium IDE typography — Inter variable + JetBrains Mono via the
      Google Fonts link in index.html. System fallbacks cover offline. */
@@ -87,29 +89,29 @@ html[data-density="large"] {
 .dark {
   /* Dark native controls (select dropdowns, scrollbars) — see :root note. */
   color-scheme: dark;
-  /* Deep premium dark — inspired by Zed / Linear / Raycast. */
-  --background: #0b0d12;
-  --foreground: #e6e8ee;
-  --card: #14171f;
-  --card-foreground: #e6e8ee;
-  --popover: #1a1d27;
-  --popover-foreground: #e6e8ee;
-  --primary: #4d8cff;
+  /* Deep premium dark — azul-preto da marca (site), índigo/violeta. */
+  --background: #050a16;
+  --foreground: #e8ecfa;
+  --card: #0d1629;
+  --card-foreground: #e8ecfa;
+  --popover: #131c33;
+  --popover-foreground: #e8ecfa;
+  --primary: #7c6ff0; /* violeta saturado p/ IDE densa; branco por cima = ~4.6:1 AA (site cru é #a78bfa) */
   --primary-foreground: #ffffff;
-  --secondary: #1a1d27;
-  --secondary-foreground: #c0c7d6;
-  --muted: #1a1d27;
-  --muted-foreground: #8a92a6;
-  --accent: #2a3550;
-  --accent-foreground: #b8c4dd;
-  --destructive: #ef4444;
-  --destructive-foreground: #ffffff;
+  --secondary: #131c33;
+  --secondary-foreground: #e8ecfa;
+  --muted: #131c33;
+  --muted-foreground: #9ca3af;
+  --accent: #3730a3;
+  --accent-foreground: #ddd6fe;
+  --destructive: #f87171;
+  --destructive-foreground: #450a0a; /* site cru claro dava ~2.6:1 (ilegível); vermelho-escuro → ~5.0:1 */
   --success: #22c55e;
-  --warning: #f59e0b;
-  --info: #4d8cff;
-  --border: #20242e;
-  --input: #20242e;
-  --ring: #4d8cff;
+  --warning: #f97316;
+  --info: #67e8f9; /* cyan: legível no #050a16 e distinto do violeta primary */
+  --border: #161f35;
+  --input: #161f35;
+  --ring: #7c6ff0;
 }
 
 @theme inline {
@@ -428,4 +430,64 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .monaco-editor .parameter-hints-widget .phwrapper,
 .monaco-editor .monaco-hover .monaco-hover-content {
   padding: 2px 4px;
+}
+
+/* ── IntelliJ-style round lettered symbol BADGES in the suggest popup ──────
+ * Replaces Monaco's monochrome codicon glyphs with a colored circle + letter
+ * (m/f/p/C…), like PhpStorm. Gated on `html.mcp-ide-badges` (set in
+ * monaco-setup.ts; localStorage `mcp-ide:symbol-badges='0'` reverts). The
+ * badge COLOR is `currentColor` = the theme's symbolIcon.<kind>Foreground
+ * (see widget-colors.ts), so badges recolor per theme AND per kind for free.
+ * Scoped to the suggest widget only — outline/breadcrumbs keep plain glyphs.
+ *
+ * Shape rule (fallback content "•" avoids tofu for any unlisted kind); the
+ * `font-family` !important beats Monaco's `.codicon{font-family:codicon!}`. */
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon[class*="codicon-symbol-"]::before {
+  content: "\2022"; /* • fallback */
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  line-height: 15px;
+  text-align: center;
+  vertical-align: middle;
+  border-radius: 50%;
+  font-family: var(--font-sans, system-ui, sans-serif) !important;
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  background: color-mix(in srgb, currentColor 20%, transparent);
+  -webkit-mask: none !important;
+}
+/* Per-kind letters. Equal specificity to the shape rule (both = .codicon +
+ * one more class); later source order wins, so content overrides cleanly. */
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-method::before,
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-constructor::before { content: "m"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-function::before { content: "f"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-field::before { content: "f"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-property::before { content: "p"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-variable::before { content: "v"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-constant::before { content: "c"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-class::before { content: "C"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-struct::before { content: "S"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-interface::before { content: "I"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-enum::before { content: "E"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-enum-member::before { content: "e"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-event::before { content: "e"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-type-parameter::before { content: "T"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-module::before,
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-namespace::before,
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-package::before { content: "N"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-keyword::before { content: "k"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-operator::before { content: "o"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-snippet::before { content: "s"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-text::before { content: "a"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-reference::before { content: "r"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-string::before { content: "s"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-number::before { content: "n"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-boolean::before { content: "b"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-file::before { content: "F"; }
+html.mcp-ide-badges .monaco-editor .suggest-widget .codicon.codicon-symbol-folder::before { content: "D"; }
+/* Keep the badge colored (not recolored to the selection fg) on the active row. */
+html.mcp-ide-badges .monaco-editor .suggest-widget .monaco-list-row.focused .codicon[class*="codicon-symbol-"]::before {
+  background: color-mix(in srgb, currentColor 26%, transparent);
 }

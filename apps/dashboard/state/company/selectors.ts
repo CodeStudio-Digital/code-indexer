@@ -13,6 +13,7 @@ import type { KanbanState, SiblingState, StreamState } from './types.js';
 import { INITIAL_SANDBOX_STATE, type SandboxState } from './sandboxSlice.js';
 import { INITIAL_DRIVE_STATE, type DriveState } from './driveSlice.js';
 import { INITIAL_INBOX_STATE, type InboxState } from './inboxSlice.js';
+import { INITIAL_AUTONOMY_STATE, type AutonomyState } from './autonomySlice.js';
 import type { CompanyStore } from './index.js';
 
 export const EMPTY_STREAM_STATE: StreamState = INITIAL_STREAM_STATE;
@@ -21,6 +22,7 @@ export const EMPTY_SIBLING_STATE: SiblingState = INITIAL_SIBLING_STATE;
 export const EMPTY_SANDBOX_STATE: SandboxState = INITIAL_SANDBOX_STATE;
 export const EMPTY_DRIVE_STATE: DriveState = INITIAL_DRIVE_STATE;
 export const EMPTY_INBOX_STATE: InboxState = INITIAL_INBOX_STATE;
+export const EMPTY_AUTONOMY_STATE: AutonomyState = INITIAL_AUTONOMY_STATE;
 
 /** Stream state for `sessionId`, or the stable empty state if absent. */
 export function selectStream(
@@ -74,4 +76,13 @@ export function selectInbox(
 ): InboxState {
   if (sessionId == null) return EMPTY_INBOX_STATE;
   return state.inbox.get(sessionId) ?? EMPTY_INBOX_STATE;
+}
+
+/** Autonomy (C1 visibility) state for `sessionId`, or the stable empty state. */
+export function selectAutonomy(
+  state: CompanyStore,
+  sessionId: number | null,
+): AutonomyState {
+  if (sessionId == null) return EMPTY_AUTONOMY_STATE;
+  return state.autonomy.get(sessionId) ?? EMPTY_AUTONOMY_STATE;
 }

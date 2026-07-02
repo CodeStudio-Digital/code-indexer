@@ -337,6 +337,14 @@ export type SandboxEvent =
   | { kind: 'error'; sandboxId: string; message: string }
   | { kind: 'destroying'; sandboxId: string; reason: string }
   | { kind: 'destroyed'; sandboxId: string }
+  // Service-scoped lifecycle events (company B2). `sandboxId` is the SESSION
+  // key (not the `<session>:<service>` registry id) so `SandboxService.
+  // forwardEvent` — which filters on the session key — republishes them on
+  // the company metaBus as `sandbox.service_provisioned` etc. The primary
+  // sandbox participates under the conventional serviceId 'main'.
+  | { kind: 'service_provisioned'; sandboxId: string; serviceId: string; reason?: string }
+  | { kind: 'service_destroyed'; sandboxId: string; serviceId: string; reason?: string }
+  | { kind: 'service_restarted'; sandboxId: string; serviceId: string; reason?: string }
   | {
       kind: 'stats';
       sandboxId: string;

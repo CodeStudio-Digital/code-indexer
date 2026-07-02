@@ -26,6 +26,28 @@ export type QaTestStatus =
 /** Who/what kicked off the run. Trailing into UI filters and bug-card metadata. */
 export type QaRunTrigger = 'agent' | 'human' | 'watcher';
 
+/**
+ * Machine-readable failure class persisted in `qa_test_runs.error_class`
+ * (migration 189). The column is free TEXT — this union documents the
+ * vocabulary today's writers use; readers must tolerate unknown values.
+ */
+export type QaErrorClass =
+  | 'orphan'
+  | 'sidecar_down'
+  | 'reporter_unreachable'
+  | 'config_invalid'
+  | 'driver_error'
+  | 'aborted';
+
+/**
+ * How a run cleared the plan gate (migration 189, `qa_test_runs.plan_gate`):
+ *   - `approved`: the master/human approved the QA's plan.
+ *   - `auto`: the plan was fast-path auto-approved (autonomy layer).
+ *   - `skipped`: the gate was disabled (`MCP_QA_REQUIRE_PLAN=0`).
+ * NULL on legacy rows and on callers the gate doesn't apply to.
+ */
+export type QaPlanGate = 'approved' | 'auto' | 'skipped';
+
 // ─── Persistence rows ───────────────────────────────────────────
 
 /**
@@ -79,6 +101,24 @@ export interface QaRun {
    * same column.
    */
   last_error: string | null;
+  /**
+   * B7 — coarse machine-readable failure class (migration 189). NULL on
+   * success and on legacy rows. See `QaErrorClass` for the vocabulary.
+   * The dashboard renders a friendly per-class hint next to `last_error`.
+   */
+  error_class: string | null;
+  /**
+   * B7 — timestamp (SQLite `datetime('now')`, UTC) of the last reporter
+   * event received for this run. Lets the watchdog tell "slow suite"
+   * from "reporter went silent" without scanning `qa_test_results`.
+   * NULL until the first event arrives.
+   */
+  last_event_at: string | null;
+  /**
+   * B7 — how the run cleared the plan gate. See `QaPlanGate`. NULL on
+   * legacy rows and for callers the gate doesn't apply to (master).
+   */
+  plan_gate: string | null;
 }
 
 /**
@@ -146,6 +186,11 @@ export interface QaRunInsert {
    * extra round-trip.
    */
   kanban_feature_card_id?: number | null;
+  /**
+   * B7 — how the run cleared the plan gate (`approved` | `auto` |
+   * `skipped`). Omitted/null for callers the gate doesn't apply to.
+   */
+  plan_gate?: QaPlanGate | null;
 }
 
 /**
@@ -166,6 +211,14 @@ export interface QaRunCompletion {
    * `completed` events leave this null.
    */
   last_error?: string | null;
+  /**
+   * B7 — machine-readable failure class stamped into
+   * `qa_test_runs.error_class`. Writers: watchdog (`orphan`), the
+   * test-event route's early-completion (`sidecar_down`), and the
+   * ChromeService lifecycle hook (`sidecar_down`). Null/omitted on
+   * clean completions.
+   */
+  error_class?: QaErrorClass | null;
 }
 
 /** Input to `QaTestResultStore.recordResult` — emitted on each `onTestEnd`. */

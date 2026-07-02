@@ -33,7 +33,11 @@ function binding(over: Partial<ResolvedBinding> = {}): ResolvedBinding {
 }
 
 function resolverFor(b: ResolvedBinding | null, fallback?: ResolvedBinding | null): PipelineProviderResolver {
+  // resolveChain returns the failover chain the resolver would build: the
+  // bound binding first, then the general default appended (distinct provider).
+  const chain = b ? (fallback ? [b, fallback] : [b]) : fallback ? [fallback] : [];
   return {
+    resolveChain: async () => chain,
     resolveOrNull: async () => b,
     resolveFallbackOnly: () => fallback ?? null,
   } as unknown as PipelineProviderResolver;

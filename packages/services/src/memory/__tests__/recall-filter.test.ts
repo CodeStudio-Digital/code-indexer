@@ -49,12 +49,12 @@ describe('LlmRecallFilter.filter — fail-open', () => {
   });
   it('skips the call (and returns) with fewer than two candidates', async () => {
     const resolver = {
-      resolveOrNull: async () => { throw new Error('must not be called'); },
+      resolveChain: async () => { throw new Error('must not be called'); },
     } as unknown as PipelineProviderResolver;
     expect(await new LlmRecallFilter({ resolver }).filter('task', [item('1')])).toEqual([item('1')]);
   });
   it('returns items unchanged when no binding resolves', async () => {
-    const resolver = { resolveOrNull: async () => null } as unknown as PipelineProviderResolver;
+    const resolver = { resolveChain: async () => [] } as unknown as PipelineProviderResolver;
     expect(await new LlmRecallFilter({ resolver }).filter('task', items)).toEqual(items);
   });
 });

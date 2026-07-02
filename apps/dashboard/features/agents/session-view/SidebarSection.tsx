@@ -61,6 +61,19 @@ export function SidebarSection({
     }
   }, [storageKey, open]);
 
+  // C1 — outside components (e.g. the autonomy incident banner's
+  // "view panel" link) can force a section open by storageKey:
+  //   window.dispatchEvent(new CustomEvent('mcp:sidebar-section:open',
+  //     { detail: { storageKey: 'autonomy' } }))
+  useEffect(() => {
+    const onForceOpen = (e: Event) => {
+      const detail = (e as CustomEvent<{ storageKey?: string }>).detail;
+      if (detail?.storageKey === storageKey) setOpen(true);
+    };
+    window.addEventListener('mcp:sidebar-section:open', onForceOpen);
+    return () => window.removeEventListener('mcp:sidebar-section:open', onForceOpen);
+  }, [storageKey]);
+
   const toggle = useCallback(() => setOpen((v) => !v), []);
 
   return (

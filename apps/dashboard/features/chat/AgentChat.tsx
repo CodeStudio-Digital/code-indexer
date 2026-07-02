@@ -45,6 +45,8 @@ import { GlobalNewSessionDialog } from './global/GlobalNewSessionDialog.js';
 import { ManageGlobalProjectsDialog } from './global/ManageGlobalProjectsDialog.js';
 import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
 import { fetchSnapshotList } from '../snapshots/api.js';
+import { buildSnapshotFileMap, type SnapshotActions } from './messages/snapshot-files-context.js';
+import type { SnapshotFileSummary } from '../snapshots/types.js';
 import type {
   AgentChatProps,
   CoderSession,
@@ -164,6 +166,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // right rail now and are switched via `activeRightPanelId`.
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [snapshotPending, setSnapshotPending] = useState(0);
+  // Session snapshot file list (by path) shared with the chat's file-edit blocks
+  // + turn summaries, the baseline preselected when opening the panel, and a
+  // nonce to force a refetch after a user keep/revert (not covered by snapshotTick).
+  const [snapshotFiles, setSnapshotFiles] = useState<Map<string, SnapshotFileSummary>>(new Map());
+  const [snapshotInitialBaselineId, setSnapshotInitialBaselineId] = useState<number | null>(null);
+  const [snapshotRefreshNonce, setSnapshotRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   /**
@@ -324,24 +332,31 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   useEffect(() => {
     if (!selectedId) {
       setSnapshotPending(0);
+      setSnapshotFiles(new Map());
       return;
     }
     let cancelled = false;
-    fetchSnapshotList('coder', selectedId)
+    // includeClosed so historical turns' summaries still resolve counts/diffs
+    // after the user keeps/reverts (which closes the baseline).
+    fetchSnapshotList('coder', selectedId, { includeClosed: true })
       .then((r) => {
         if (cancelled) return;
         const pending = r.files
           .filter((f) => f.status === 'active')
           .reduce((acc, f) => acc + (f.pendingHunks || (f.hunkCount === 0 ? 1 : 0)), 0);
         setSnapshotPending(pending);
+        setSnapshotFiles(buildSnapshotFileMap(r.files));
       })
       .catch(() => {
-        if (!cancelled) setSnapshotPending(0);
+        if (!cancelled) {
+          setSnapshotPending(0);
+          setSnapshotFiles(new Map());
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedId, snapshotTick]);
+  }, [selectedId, snapshotTick, snapshotRefreshNonce]);
 
   // Honor initialSessionId on mount and whenever it changes (e.g. the user
   // clicks a different recent-session entry while the same project is open).
@@ -1177,7 +1192,15 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     () => setActiveRightPanelId((p) => (p === 'diagram' ? null : 'diagram')),
     [],
   );
-  const openSnapshots = useCallback(() => setSnapshotsOpen(true), []);
+  const openSnapshots = useCallback((baselineId?: number) => {
+    setSnapshotInitialBaselineId(baselineId ?? null);
+    setSnapshotsOpen(true);
+  }, []);
+  const refreshSnapshots = useCallback(() => setSnapshotRefreshNonce((n) => n + 1), []);
+  const snapshotActions = useMemo<SnapshotActions>(
+    () => ({ scope: 'coder', sessionId: selectedId ?? 0, openSnapshots, refresh: refreshSnapshots }),
+    [selectedId, openSnapshots, refreshSnapshots],
+  );
   const handleViewChange = useCallback((v: 'active' | 'archived') => {
     setView(v);
     setSelectedId(null);
@@ -1463,6 +1486,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   tasksState={tasksState}
                   handlers={handlers}
                   onLoadEarlier={loadEarlierMessages}
+                  snapshotActions={selectedId ? snapshotActions : null}
+                  snapshotFiles={snapshotFiles}
                 />
               </div>
               <div className="relative">
@@ -1600,6 +1625,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 scope="coder"
                 sessionId={selectedId}
                 refreshKey={snapshotTick}
+                initialBaselineId={snapshotInitialBaselineId}
                 onSubmitReviewMessage={handleSnapshotReviewMessage}
               />
             </div>

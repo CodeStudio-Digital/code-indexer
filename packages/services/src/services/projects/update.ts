@@ -4,6 +4,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { Project, SearchMode } from '@mcp/shared/types.js';
 import { parseRuntimeVersions } from '@mcp/shared/utils/runtime-versions.js';
 import { PHP_LEVELS, PYTHON_LEVELS, snapToLevels, writeLanguageLevel } from '@mcp/shared/utils/language-levels.js';
+import { serializeIndexIgnorePatterns, parseIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { ProjectError } from './errors.js';
 
 export interface UpdateProjectInput {
@@ -13,6 +14,8 @@ export interface UpdateProjectInput {
   root_path?: string;
   embeddings_enabled?: number;
   search_mode?: SearchMode;
+  /** Per-project index ignore rules, stored as a JSON string array. */
+  index_ignore_patterns?: string | null;
   node_version?: string | null;
   runner_shell?: string | null;
   memory_enabled?: boolean;
@@ -126,6 +129,11 @@ export class UpdateProjectService {
         throw new ProjectError('invalid_input', 'search_mode must be one of: fts, vector, hybrid');
       }
       updates.search_mode = patch.search_mode;
+    }
+
+    if (patch.index_ignore_patterns !== undefined) {
+      const patterns = parseIndexIgnorePatterns(patch.index_ignore_patterns);
+      updates.index_ignore_patterns = serializeIndexIgnorePatterns(patterns);
     }
 
     if (patch.node_version !== undefined) {

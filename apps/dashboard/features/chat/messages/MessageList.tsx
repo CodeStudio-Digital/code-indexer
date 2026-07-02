@@ -12,6 +12,13 @@ import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
 import { renderStreamBlock } from './renderStreamBlock.js';
 import { PreflightBlock } from './PreflightBlock.js';
+import { SnapshotFilesProvider, type SnapshotActions } from './snapshot-files-context.js';
+import { TurnFilesSummary } from './TurnFilesSummary.js';
+import { computeTurnEditSummaries } from './turn-summaries.js';
+import { filesFromEditToolCall, type EditFileRef } from './edit-tools.js';
+import type { SnapshotFileSummary } from '../../snapshots/types.js';
+
+const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 
 interface MessageListProps {
   sessionData: SessionData | null;
@@ -33,6 +40,11 @@ interface MessageListProps {
   /** Fetch earlier messages from the backend. Returns count of rows loaded (0 = nothing more).
    *  `includeArchived` crosses a "summarize & clear" boundary to reveal hidden history. */
   onLoadEarlier?: (beforeId: number, limit?: number, includeArchived?: boolean) => Promise<number>;
+  /** Session-snapshot wiring for the file-edit blocks + per-turn "files changed"
+   *  summary. Optional — mounts without snapshot support (e.g. the editor rail)
+   *  degrade to plain file rows and skip the summary. */
+  snapshotActions?: SnapshotActions | null;
+  snapshotFiles?: Map<string, SnapshotFileSummary>;
 }
 
 /**
@@ -90,7 +102,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
   // fragile; the attachment renderer is the reliable one.
   const { t } = useTranslation('chat');
   const resultsById = useMemo(() => {
-    const m = new Map<string, { content: string; isError: boolean }>();
+    const m = new Map<string, { content: string; isError: boolean; truncated?: boolean; originalLength?: number }>();
     // Seed from the coder_tool_calls audit fallback FIRST so any real
     // tool_result block below overrides it. This covers tool calls whose tool
     // message was never persisted (pre-fix sessions where a mid-run compaction
@@ -100,7 +112,12 @@ const PersistedMessages = React.memo(function PersistedMessages({
         tr._truncated && tr._originalLength
           ? `\n\n… [truncated for transport — ${tr._originalLength - (tr.content?.length ?? 0)} more chars in DB]`
           : '';
-      m.set(tr.tool_use_id, { content: (tr.content ?? '') + suffix, isError: Boolean(tr.is_error) });
+      m.set(tr.tool_use_id, {
+        content: (tr.content ?? '') + suffix,
+        isError: Boolean(tr.is_error),
+        truncated: Boolean(tr._truncated),
+        originalLength: tr._originalLength,
+      });
     }
     for (const msg of sessionData.messages) {
       if (msg.role !== 'tool') continue;
@@ -113,6 +130,8 @@ const PersistedMessages = React.memo(function PersistedMessages({
           m.set(b.tool_use_id, {
             content: (b.content ?? '') + suffix,
             isError: Boolean(b.is_error),
+            truncated: Boolean(b._truncated),
+            originalLength: b._originalLength,
           });
         }
       }
@@ -165,6 +184,10 @@ const PersistedMessages = React.memo(function PersistedMessages({
   const displayGroups = renderCap !== null && groups.length > renderCap
     ? groups.slice(-renderCap)
     : groups;
+
+  // Per-turn "files changed" summary refs, keyed by each turn's last assistant
+  // group index. Derived from persisted tool calls → survives scrollback/reload.
+  const turnSummaries = useMemo(() => computeTurnEditSummaries(displayGroups), [displayGroups]);
 
   // Summary-boundary aware pagination. `total_messages` counts only VISIBLE
   // rows (above a "summarize & clear" boundary); `archived_count` is what's
@@ -315,8 +338,9 @@ const PersistedMessages = React.memo(function PersistedMessages({
           ? `u-${g.messageId ?? gi}`
           : `a-${g.messageIds[0] ?? gi}`;
 
+        let el: React.ReactNode;
         if (g.kind === 'user') {
-          return (
+          el = (
             <MessageView
               key={groupKey}
               message={g.message}
@@ -334,11 +358,9 @@ const PersistedMessages = React.memo(function PersistedMessages({
               tasksState={tasksState}
             />
           );
-        }
-
-        // Single text-bearing assistant message → original MessageView (backward compat)
-        if (g.hasText && g.messages.length === 1) {
-          return (
+        } else if (g.hasText && g.messages.length === 1) {
+          // Single text-bearing assistant message → original MessageView (backward compat)
+          el = (
             <MessageView
               key={groupKey}
               message={g.messages[0]}
@@ -357,19 +379,33 @@ const PersistedMessages = React.memo(function PersistedMessages({
               activeTasksToolUseId={activeTasksToolUseId}
             />
           );
+        } else {
+          // Grouped assistant bubble (multiple tool-only turns or single tool-only turn)
+          el = (
+            <GroupedToolBubble
+              key={groupKey}
+              group={g}
+              toolResultsById={resultsById}
+              sessionId={sessionData.session.id}
+              providerId={providerId}
+              handlers={handlers}
+              tasksState={tasksState}
+              activeTasksToolUseId={activeTasksToolUseId}
+            />
+          );
         }
 
-        // Grouped assistant bubble (multiple tool-only turns or single tool-only turn)
+        // Inject the per-turn "files changed" summary after the turn's final
+        // assistant group. For the very last group, only once the turn has
+        // ended (not streaming) — the in-flight turn gets a live summary below.
+        const summaryRefs = turnSummaries.get(gi);
+        const showSummary = !!summaryRefs && (gi < displayGroups.length - 1 || !streaming);
+        if (!showSummary) return el;
         return (
-          <GroupedToolBubble
-            key={groupKey}
-            group={g}
-            toolResultsById={resultsById}
-            providerId={providerId}
-            handlers={handlers}
-            tasksState={tasksState}
-            activeTasksToolUseId={activeTasksToolUseId}
-          />
+          <React.Fragment key={`grp-${groupKey}`}>
+            {el}
+            <TurnFilesSummary paths={summaryRefs!} />
+          </React.Fragment>
         );
       })}
     </>
@@ -451,6 +487,8 @@ export function MessageList({
   tasksState,
   handlers,
   onLoadEarlier,
+  snapshotActions = null,
+  snapshotFiles,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Track whether the user scrolled up — if so, don't yank them back to the
@@ -540,45 +578,63 @@ export function MessageList({
     [sessionData],
   );
 
+  // Files edited by the live turn, for its completion summary. Shown only once
+  // the turn ended AND before it's mirrored into persisted history (the same
+  // dedup gate LiveTurn uses), so the summary never renders twice.
+  const liveEditRefs = useMemo<EditFileRef[]>(() => {
+    if (!currentTurn) return [];
+    const byPath = new Map<string, EditFileRef>();
+    for (const b of currentTurn.blocks) {
+      if (b.type !== 'tool') continue;
+      for (const ref of filesFromEditToolCall(b.call.name, b.call.input)) byPath.set(ref.path, ref);
+    }
+    return [...byPath.values()];
+  }, [currentTurn]);
+  const showLiveSummary = !streaming && !!doneReason && !liveTurnDuplicatedInHistory && liveEditRefs.length > 0;
+
   return (
     <div
       ref={scrollRef}
       className="flex-1 overflow-y-auto overscroll-contain px-0 py-2 space-y-2 min-h-0"
     >
-      {sessionData && (
-        <PersistedMessages
-          sessionData={sessionData}
-          handlers={handlers}
-          tasksState={tasksState}
-          scrollContainerRef={scrollRef}
+      <SnapshotFilesProvider actions={snapshotActions} files={snapshotFiles ?? EMPTY_FILES}>
+        {sessionData && (
+          <PersistedMessages
+            sessionData={sessionData}
+            handlers={handlers}
+            tasksState={tasksState}
+            scrollContainerRef={scrollRef}
+            streaming={streaming}
+            onLoadEarlier={onLoadEarlier}
+          />
+        )}
+
+        <LiveTurn
+          currentTurn={currentTurn}
           streaming={streaming}
-          onLoadEarlier={onLoadEarlier}
+          preflight={preflight}
+          providerId={providerId}
+          handlers={handlers}
+          hidden={liveTurnDuplicatedInHistory}
+          persistedToolUseIds={persistedToolUseIds}
+          persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
         />
-      )}
 
-      <LiveTurn
-        currentTurn={currentTurn}
-        streaming={streaming}
-        preflight={preflight}
-        providerId={providerId}
-        handlers={handlers}
-        hidden={liveTurnDuplicatedInHistory}
-        persistedToolUseIds={persistedToolUseIds}
-        persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
-      />
+        {showLiveSummary && <TurnFilesSummary paths={liveEditRefs} />}
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-      {doneReason && !streaming && (
-        <div className="text-[10px] text-center py-1">
-          <span className="text-muted-foreground">— {doneReason} —</span>
-        </div>
-      )}
+        {doneReason && !streaming && (
+          <div className="text-[10px] text-center py-1">
+            <span className="text-muted-foreground">— {doneReason} —</span>
+          </div>
+        )}
+      </SnapshotFilesProvider>
     </div>
   );
 }

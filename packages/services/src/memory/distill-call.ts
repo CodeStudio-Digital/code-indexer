@@ -16,9 +16,10 @@
  */
 import type { SnapshotCategory } from '@mcp/shared/types.js';
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext, ResolvedBinding } from '../pipelines/index.js';
-import { bindingProblem, callConfiguredChat } from '../quality/binding-chat.js';
+import { callConfiguredChat } from '../quality/binding-chat.js';
+import { callChatWithFailover } from '../quality/binding-failover.js';
 import { suppressThinkingFor } from '../quality/chat-dispatcher.js';
-import type { ChatMessage } from '../quality/llm-chat.js';
+import type { ChatCallResult, ChatMessage } from '../quality/llm-chat.js';
 import type { MemoryCandidate } from './extractor.js';
 
 export type DistillOutcome = 'ok' | 'llm_error' | 'no_facts' | 'parse_empty';
@@ -76,10 +77,13 @@ export async function callDistillLlm(
   messages: ChatMessage[],
 ): Promise<{ content: string; diag: DistillDiag }> {
   const fallbackDefault = deps.getFallbackDefault?.() ?? undefined;
-  const binding = await deps.resolver
-    .resolveOrNull('memory_extraction', 'distiller', deps.resolveContext ?? {}, fallbackDefault)
-    .catch(() => null);
-  if (!binding) {
+  // resolveChain appends the general default as the last link, so a broken
+  // bound provider (dead OAuth token, revoked key) fails over to it — and a
+  // second CONFIGURED distiller binding now provides redundancy too.
+  const chain = await deps.resolver
+    .resolveChain('memory_extraction', 'distiller', deps.resolveContext ?? {}, fallbackDefault)
+    .catch(() => [] as ResolvedBinding[]);
+  if (chain.length === 0) {
     const diag: DistillDiag = {
       outcome: 'llm_error', rawChars: 0, latencyMs: 0,
       errorSnippet: 'no memory_extraction/distiller binding and no general default model',
@@ -89,68 +93,45 @@ export async function callDistillLlm(
   }
 
   const chatFn = deps.chatFn ?? callConfiguredChat;
-  const first = await attemptChat(binding, messages, chatFn);
-  if (first.diag.outcome === 'ok') {
-    deps.onDiag?.(first.diag);
-    return first;
-  }
-
-  // Runtime fallback: the resolver only falls back when NO row resolves; a
-  // bound provider that errors (dead OAuth token, revoked key) needs this
-  // explicit one-shot retry on the general default.
-  if (binding.resolvedFrom !== 'fallback' && fallbackDefault) {
-    const fb = deps.resolver.resolveFallbackOnly('memory_extraction', 'distiller', fallbackDefault);
-    if (fb && fb.provider.id !== binding.provider.id) {
-      const second = await attemptChat(fb, messages, chatFn);
-      if (second.diag.outcome === 'ok') {
-        const diag = { ...second.diag, fallbackUsed: true };
-        deps.onDiag?.(diag);
-        return { content: second.content, diag };
-      }
-      // Fallback ALSO failed — report its diag too ("binding broken AND
-      // fallback broken" must be visible), but keep the PRIMARY binding's
-      // error as the last-reported one (it identifies the misconfiguration).
-      deps.onDiag?.({ ...second.diag, fallbackUsed: true });
-    }
-  }
-  deps.onDiag?.(first.diag);
-  throw new DistillLlmError(first.diag);
-}
-
-async function attemptChat(
-  binding: ResolvedBinding,
-  messages: ChatMessage[],
-  chatFn: typeof callConfiguredChat,
-): Promise<{ content: string; diag: DistillDiag }> {
-  const base = {
-    providerId: binding.provider.id,
-    modelId: binding.modelId,
-    resolvedFrom: binding.resolvedFrom,
+  const runOne = (binding: ResolvedBinding): Promise<ChatCallResult> => {
+    const configured = Number((binding.config as Record<string, unknown>)?.max_tokens);
+    const maxTokens = Math.max(Number.isFinite(configured) ? configured : 0, MIN_DISTILL_MAX_TOKENS);
+    return chatFn(binding, messages, {
+      disableThinking: suppressThinkingFor(binding),
+      maxTokens,
+      timeoutMs: DISTILL_TIMEOUT_MS,
+      signal: AbortSignal.timeout(DISTILL_TIMEOUT_MS),
+    });
   };
-  const problem = bindingProblem(binding, { label: 'memory distiller', codePrefix: 'memory_distill' });
-  if (problem) {
-    return { content: '', diag: { ...base, outcome: 'llm_error', errorSnippet: problem.message, rawChars: 0, latencyMs: 0 } };
-  }
-  const configured = Number((binding.config as Record<string, unknown>)?.max_tokens);
-  const maxTokens = Math.max(Number.isFinite(configured) ? configured : 0, MIN_DISTILL_MAX_TOKENS);
-  const result = await chatFn(binding, messages, {
-    disableThinking: suppressThinkingFor(binding),
-    maxTokens,
-    timeoutMs: DISTILL_TIMEOUT_MS,
-    signal: AbortSignal.timeout(DISTILL_TIMEOUT_MS),
+  // The distiller has always gone straight to the next binding on failure
+  // (no same-binding retry) — keep that by disabling per-binding retry.
+  const { result, binding, failedOver } = await callChatWithFailover(chain, runOne, {
+    retry: { maxRetries: 0 },
+    label: 'memory distiller',
+    codePrefix: 'memory_distill',
   });
+  const base = {
+    providerId: binding?.provider.id,
+    modelId: binding?.modelId,
+    resolvedFrom: binding?.resolvedFrom,
+  };
   const content = (result.content ?? '').trim();
   if (result.errorBody || !content) {
-    return {
-      content: '',
-      diag: {
-        ...base, outcome: 'llm_error', httpStatus: result.status,
-        errorSnippet: snippet(result.errorBody || 'provider returned no text'),
-        rawChars: content.length, latencyMs: Math.round(result.latencyMs),
-      },
+    const diag: DistillDiag = {
+      ...base, outcome: 'llm_error', httpStatus: result.status,
+      errorSnippet: snippet(result.errorBody || 'provider returned no text'),
+      rawChars: content.length, latencyMs: Math.round(result.latencyMs),
+      ...(failedOver ? { fallbackUsed: true } : {}),
     };
+    deps.onDiag?.(diag);
+    throw new DistillLlmError(diag);
   }
-  return { content, diag: { ...base, outcome: 'ok', rawChars: content.length, latencyMs: Math.round(result.latencyMs) } };
+  const diag: DistillDiag = {
+    ...base, outcome: 'ok', rawChars: content.length, latencyMs: Math.round(result.latencyMs),
+    ...(failedOver ? { fallbackUsed: true } : {}),
+  };
+  deps.onDiag?.(diag);
+  return { content, diag };
 }
 
 /**

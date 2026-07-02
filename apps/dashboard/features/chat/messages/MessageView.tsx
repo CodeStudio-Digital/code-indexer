@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, RotateCcw, Sparkles, User } from 'lucide-react';
-import type { AgentsGroup, DecisionAnswers, DecisionQuestion, StreamTask, ToolCallEvent } from '../../../hooks/useAgentStream.js';
+import type { DecisionAnswers, DecisionQuestion, StreamTask, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
 import { providerAccent } from '../constants.js';
@@ -16,6 +16,7 @@ import type {
   PersistedMessage,
   PersistedTasksState,
   PromptHandlers,
+  ToolResultView,
 } from '../types.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
@@ -25,7 +26,10 @@ import { ToolCallBlock } from './ToolCallBlock.js';
 import { TodoWriteBlock } from './TodoWriteBlock.js';
 import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
+import { FileEditBlock } from './FileEditBlock.js';
+import { isEditTool } from './edit-tools.js';
 import { deriveTaskCardState } from './task-card-state.js';
+import { parsePersistedAgentsGroup } from './agents-group-parser.js';
 
 /**
  * `task_list` is the unified tool (merge of todo_write + submit_tasks). An
@@ -62,7 +66,7 @@ interface MessageViewProps {
   /** Session id — needed to lazy-fetch attachment base64 stripped from the
    *  list payload (see sessions.ts trimMessageBlocks). */
   sessionId?: number;
-  toolResultsById: Map<string, { content: string; isError: boolean; image?: { mediaType: string; base64: string } }>;
+  toolResultsById: Map<string, ToolResultView>;
   usage?: MessageRow;
   providerId: string;
   onAnswer: PromptHandlers['onAnswer'];
@@ -174,6 +178,7 @@ function MessageViewInner({
               toolResultsById,
               tasksState,
               activeTasksToolUseId,
+              sessionId,
             ),
           )}
         </div>
@@ -520,9 +525,10 @@ export function renderAssistantBlock(
   b: ContentBlock,
   i: number,
   handlers: PromptHandlers,
-  toolResultsById: Map<string, { content: string; isError: boolean; image?: { mediaType: string; base64: string } }>,
+  toolResultsById: Map<string, ToolResultView>,
   tasksState: PersistedTasksState | null | undefined,
   activeTasksToolUseId?: string | null,
+  sessionId?: number,
 ) {
   const maybeThinking = b as unknown as { type?: string; text?: string };
   if (maybeThinking.type === 'thinking') {
@@ -801,7 +807,22 @@ export function renderAssistantBlock(
   if (b.name === 'spawn_agent' || b.name === 'spawn_agents') {
     const group = parsePersistedAgentsGroup(b.input, result);
     if (group) {
-      return <AgentsGroupBlock key={`ag-${b.id}-${i}`} group={group} />;
+      return (
+        <AgentsGroupBlock
+          key={`ag-${b.id}-${i}`}
+          group={group}
+          resultSource={
+            sessionId && b.id
+              ? {
+                  sessionId,
+                  toolUseId: b.id,
+                  input: b.input,
+                  isTruncated: Boolean(result?.truncated),
+                }
+              : undefined
+          }
+        />
+      );
     }
   }
 
@@ -841,6 +862,11 @@ export function renderAssistantBlock(
   // generic collapsed ToolCallBlock makes too easy to miss.
   if (isGoalTool(tc.name)) {
     return <GoalCallBlock key={`gl-${b.id}-${i}`} call={tc} />;
+  }
+  // edit_file / multi_edit / write_file / create_file / apply_patch → file-first
+  // block. Persisted history never carries approvals (live-only), so no handler.
+  if (isEditTool(tc.name)) {
+    return <FileEditBlock key={`fe-${b.id}-${i}`} call={tc} />;
   }
   return <ToolCallBlock key={`tu-${b.id}-${i}`} call={tc} />;
 }
@@ -908,119 +934,4 @@ function ThinkingBlockView({ text }: { text: string }) {
       )}
     </div>
   );
-}
-
-/**
- * Reconstruct an AgentsGroup from the persisted tool_use input + tool_result
- * so the rich AgentsGroupBlock renders instead of raw JSON on session reload.
- */
-function parsePersistedAgentsGroup(
-  input: Record<string, unknown> | undefined,
-  result: { content: string; isError: boolean } | undefined,
-): AgentsGroup | null {
-  const agents = (input as { agents?: unknown[] })?.agents;
-  if (!Array.isArray(agents) || agents.length === 0) return null;
-
-  // Per-agent results parsed from the combined result text. Two shapes:
-  //  - parallel (N>1): "### Agent N: <label>\n[type=… reason=… tools=… input=… output=…]\n<summary>"
-  //  - single  (N=1):  "[subagent provider=… model=… type=… reason=… input=… output=… cache_hit=…]\n\n<report>"
-  const agentResults = new Map<number, {
-    provider?: string;
-    model?: string;
-    type?: string;
-    reason: string;
-    tools: number;
-    input: number;
-    output: number;
-    summary: string;
-  }>();
-  const groupProviderMatch = result?.content?.match(
-    /\[parallel agents:[^\]]*provider=([^\s,\]]+)\s+model=([^\s,\]]+)/,
-  );
-  let groupProvider = groupProviderMatch?.[1];
-  let groupModel = groupProviderMatch?.[2];
-  if (result?.content) {
-    const sections = result.content.split(/^---$/m);
-    for (const section of sections) {
-      const headerMatch = section.match(/###\s+Agent\s+(\d+):\s+(.+)/);
-      if (!headerMatch) continue;
-      const idx = parseInt(headerMatch[1], 10) - 1;
-      // Per-agent meta is `[type=… reason=… tools=… input=… output=…]`;
-      // provider/model live on the group header, not per-agent.
-      const metaMatch = section.match(
-        /\[type=(\S+)\s+reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)\]/,
-      );
-      const summaryStart = section.indexOf('\n', section.indexOf(']') + 1);
-      const summary = summaryStart >= 0 ? section.slice(summaryStart).trim() : '';
-      agentResults.set(idx, {
-        type: metaMatch?.[1],
-        reason: metaMatch?.[2] ?? 'unknown',
-        tools: parseInt(metaMatch?.[3] ?? '0', 10),
-        input: parseInt(metaMatch?.[4] ?? '0', 10),
-        output: parseInt(metaMatch?.[5] ?? '0', 10),
-        summary,
-      });
-    }
-
-    // Single-agent format — no `### Agent` sections; one `[subagent …]` header.
-    if (agentResults.size === 0) {
-      const m = result.content.match(
-        /\[subagent provider=(\S+) model=(\S+) type=(\S+) reason=(\w+) input=(\d+) output=(\d+)/,
-      );
-      if (m) {
-        groupProvider = groupProvider ?? m[1];
-        groupModel = groupModel ?? m[2];
-        const bodyStart = result.content.indexOf('\n', result.content.indexOf(']'));
-        const summary = bodyStart >= 0 ? result.content.slice(bodyStart).trim() : '';
-        agentResults.set(0, {
-          provider: m[1],
-          model: m[2],
-          type: m[3],
-          reason: m[4],
-          tools: 0,
-          input: parseInt(m[5], 10),
-          output: parseInt(m[6], 10),
-          summary,
-        });
-      }
-    }
-  }
-
-  const isCompleted = !!result;
-
-  return {
-    groupId: `persisted-${Date.now()}`,
-    status: isCompleted ? 'completed' : 'running',
-    provider: groupProvider,
-    model: groupModel,
-    totalUsage: isCompleted
-      ? {
-          input_tokens: Array.from(agentResults.values()).reduce((s, r) => s + r.input, 0),
-          output_tokens: Array.from(agentResults.values()).reduce((s, r) => s + r.output, 0),
-        }
-      : undefined,
-    agents: agents.map((a, i) => {
-      const raw = a as { label?: string; task?: string; type?: string };
-      const parsed = agentResults.get(i);
-      return {
-        index: i,
-        label: String(raw.label ?? `Agent ${i + 1}`),
-        status: parsed
-          ? parsed.reason === 'error'
-            ? ('error' as const)
-            : ('completed' as const)
-          : isCompleted
-            ? ('completed' as const)
-            : ('pending' as const),
-        toolCallCount: parsed?.tools ?? 0,
-        provider: parsed?.provider ?? groupProvider,
-        model: parsed?.model ?? groupModel,
-        usage: parsed ? { input_tokens: parsed.input, output_tokens: parsed.output } : undefined,
-        summary: parsed?.summary || undefined,
-        error: parsed?.reason === 'error' ? parsed.summary : undefined,
-        task: typeof raw.task === 'string' ? raw.task : undefined,
-        agentType: parsed?.type ?? (typeof raw.type === 'string' ? raw.type : undefined),
-      };
-    }),
-  };
 }

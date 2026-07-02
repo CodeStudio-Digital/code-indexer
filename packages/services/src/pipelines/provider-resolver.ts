@@ -79,6 +79,9 @@ export class PipelineProviderResolver {
    * Resolve the active binding for a pipeline+role, given a context. The
    * optional `fallbackDefault` is consulted only if no DB row matches at
    * any scope — useful for the very first run before an admin sets the row.
+   *
+   * Returns the single best binding (`resolveChain()[0]`). Callers that want
+   * runtime failover across every enabled binding use `resolveChain` instead.
    */
   async resolve(
     pipelineName: string,
@@ -86,71 +89,34 @@ export class PipelineProviderResolver {
     ctx: ResolveContext = {},
     fallbackDefault?: FallbackDefault,
   ): Promise<ResolvedBinding> {
-    const attempts: Array<{ scope: string; reason: string }> = [];
-
-    // 1. Session scope (company session has priority over coder session)
-    const sessionScopeId = ctx.companySessionId ?? ctx.sessionId ?? null;
-    if (sessionScopeId != null) {
-      const row = this.bindingsStore.findActiveAtScope({
-        pipelineName,
-        bindingRole,
-        scopeType: 'session',
-        scopeId: sessionScopeId,
-      });
-      const resolved = await this.tryEnrich(row, pipelineName, bindingRole, 'session');
-      if (resolved) return resolved;
-      attempts.push({ scope: 'session', reason: row ? 'provider-missing' : 'no-row' });
-    } else {
-      attempts.push({ scope: 'session', reason: 'no-context' });
+    const { chain, attempts } = await this.buildChain(pipelineName, bindingRole, ctx, fallbackDefault);
+    if (chain.length === 0) {
+      throw new PipelineBindingMissingError(pipelineName, bindingRole, attempts);
     }
+    return chain[0];
+  }
 
-    // 2. Template scope
-    if (ctx.templateId != null) {
-      const row = this.bindingsStore.findActiveAtScope({
-        pipelineName,
-        bindingRole,
-        scopeType: 'template',
-        scopeId: ctx.templateId,
-      });
-      const resolved = await this.tryEnrich(row, pipelineName, bindingRole, 'template');
-      if (resolved) return resolved;
-      attempts.push({ scope: 'template', reason: row ? 'provider-missing' : 'no-row' });
-    } else {
-      attempts.push({ scope: 'template', reason: 'no-context' });
-    }
-
-    // 3. Global scope
-    {
-      const row = this.bindingsStore.findActiveAtScope({
-        pipelineName,
-        bindingRole,
-        scopeType: 'global',
-        scopeId: null,
-      });
-      const resolved = await this.tryEnrich(row, pipelineName, bindingRole, 'global');
-      if (resolved) return resolved;
-      attempts.push({ scope: 'global', reason: row ? 'provider-missing' : 'no-row' });
-    }
-
-    // 4. Caller-supplied fallback default
-    if (fallbackDefault) {
-      const provider = this.findFallbackProvider(fallbackDefault);
-      if (provider) {
-        return {
-          pipelineName,
-          bindingRole,
-          provider,
-          modelId: fallbackDefault.modelId,
-          modelMode: fallbackDefault.modelMode ?? '',
-          config: fallbackDefault.config ?? {},
-          resolvedFrom: 'fallback',
-          bindingId: null,
-        };
-      }
-      attempts.push({ scope: 'fallback', reason: 'no-provider-of-kind' });
-    }
-
-    throw new PipelineBindingMissingError(pipelineName, bindingRole, attempts);
+  /**
+   * Resolve the ORDERED failover chain for a pipeline+role: every enabled
+   * binding at the first scope that yields at least one usable binding, in
+   * `priority DESC, id ASC` order, with the optional `fallbackDefault`
+   * appended as the last link (unless a chain binding already uses that
+   * provider).
+   *
+   * The scope hierarchy (session → template → global) is unchanged — a
+   * session/template override is an intentional choice, so we never fail
+   * over ACROSS scopes. Failover happens WITHIN the winning scope's binding
+   * set plus the appended general default. Returns `[]` when nothing is
+   * bound and no fallback resolves (the caller decides whether that's fatal).
+   */
+  async resolveChain(
+    pipelineName: string,
+    bindingRole: string,
+    ctx: ResolveContext = {},
+    fallbackDefault?: FallbackDefault,
+  ): Promise<ResolvedBinding[]> {
+    const { chain } = await this.buildChain(pipelineName, bindingRole, ctx, fallbackDefault);
+    return chain;
   }
 
   /**
@@ -173,12 +139,100 @@ export class PipelineProviderResolver {
   }
 
   /**
+   * Core walk shared by `resolve` and `resolveChain`. Returns the winning
+   * scope's enriched binding list (best-first) plus the per-scope attempts
+   * trail for diagnostics. Unlike the old single-row lookup, this enriches
+   * EVERY enabled row at a scope, so a disabled top-priority provider no
+   * longer hides a healthy sibling at the same scope.
+   */
+  private async buildChain(
+    pipelineName: string,
+    bindingRole: string,
+    ctx: ResolveContext,
+    fallbackDefault?: FallbackDefault,
+  ): Promise<{ chain: ResolvedBinding[]; attempts: Array<{ scope: string; reason: string }> }> {
+    const attempts: Array<{ scope: string; reason: string }> = [];
+
+    const enrichScope = async (
+      scope: 'session' | 'template' | 'global',
+      scopeId: number | null,
+    ): Promise<ResolvedBinding[]> => {
+      const rows = this.bindingsStore.findAllActiveAtScope({
+        pipelineName,
+        bindingRole,
+        scopeType: scope,
+        scopeId,
+      });
+      const enriched: ResolvedBinding[] = [];
+      for (const row of rows) {
+        const r = await this.tryEnrich(row, pipelineName, bindingRole, scope);
+        if (r) enriched.push(r);
+      }
+      if (rows.length > 0 && enriched.length === 0) {
+        attempts.push({ scope, reason: 'provider-missing' });
+      } else if (rows.length === 0) {
+        attempts.push({ scope, reason: 'no-row' });
+      }
+      return enriched;
+    };
+
+    // Append the general default as the last failover link (distinct provider).
+    const withFallback = (chain: ResolvedBinding[]): ResolvedBinding[] => {
+      if (!fallbackDefault) return chain;
+      const link = this.makeFallbackLink(pipelineName, bindingRole, fallbackDefault);
+      if (link && !chain.some((b) => b.provider.id === link.provider.id)) chain.push(link);
+      return chain;
+    };
+
+    // 1. Session scope (company session has priority over coder session)
+    const sessionScopeId = ctx.companySessionId ?? ctx.sessionId ?? null;
+    if (sessionScopeId != null) {
+      const chain = await enrichScope('session', sessionScopeId);
+      if (chain.length) return { chain: withFallback(chain), attempts };
+    } else {
+      attempts.push({ scope: 'session', reason: 'no-context' });
+    }
+
+    // 2. Template scope
+    if (ctx.templateId != null) {
+      const chain = await enrichScope('template', ctx.templateId);
+      if (chain.length) return { chain: withFallback(chain), attempts };
+    } else {
+      attempts.push({ scope: 'template', reason: 'no-context' });
+    }
+
+    // 3. Global scope
+    {
+      const chain = await enrichScope('global', null);
+      if (chain.length) return { chain: withFallback(chain), attempts };
+    }
+
+    // 4. Caller-supplied fallback default only.
+    if (fallbackDefault) {
+      const link = this.makeFallbackLink(pipelineName, bindingRole, fallbackDefault);
+      if (link) return { chain: [link], attempts };
+      attempts.push({ scope: 'fallback', reason: 'no-provider-of-kind' });
+    }
+
+    return { chain: [], attempts };
+  }
+
+  /**
    * Build a binding from the fallback default ONLY, ignoring binding rows.
    * A bound provider that exists but FAILS at runtime never falls back via
    * `resolve` (rows win); callers that want a one-shot retry on the general
    * default (memory distill) use this to get the fallback binding directly.
    */
   resolveFallbackOnly(
+    pipelineName: string,
+    bindingRole: string,
+    fallbackDefault: FallbackDefault,
+  ): ResolvedBinding | null {
+    return this.makeFallbackLink(pipelineName, bindingRole, fallbackDefault);
+  }
+
+  /** Build a `resolvedFrom:'fallback'` binding from the general default, or null. */
+  private makeFallbackLink(
     pipelineName: string,
     bindingRole: string,
     fallbackDefault: FallbackDefault,

@@ -12,6 +12,7 @@
 import { join } from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { mergeIndexIgnorePatterns, projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { buildScannerIgnore } from '@mcp/indexer/indexer/scanner-ignore.js';
 import { isHardExcluded } from '@mcp/indexer/indexer/mapper.js';
 import { buildTreeSitterDispatch } from '@mcp/indexer/indexer/tree-sitter-dispatch.js';
@@ -41,7 +42,11 @@ export async function indexFilesStructural(
   const project = db.getProject(projectId);
   if (!project) throw new Error(`project ${projectId} not found`);
   const root = project.root_path;
-  const ig = buildScannerIgnore(root, opts.ignorePatterns ?? [], isHardExcluded);
+  const ig = buildScannerIgnore(
+    root,
+    mergeIndexIgnorePatterns(opts.ignorePatterns, projectIndexIgnorePatterns(project)),
+    isHardExcluded,
+  );
   const maxBytes = (opts.maxFileSizeKB ?? 200) * 1024;
 
   const result: IndexFilesStructuralResult = {
@@ -51,7 +56,11 @@ export async function indexFilesStructural(
   try {
     for (const rel of new Set(relPaths.map((p) => p.replace(/\\/g, '/')))) {
       try {
-        if (ig.ignores(rel)) { result.skippedIgnored++; continue; }
+        if (ig.ignores(rel)) {
+          result.skippedIgnored++;
+          result.removed += removeFilesStructural(db, projectId, [rel]).removed;
+          continue;
+        }
         const abs = join(root, rel);
         const st = statSync(abs, { throwIfNoEntry: false });
         if (!st?.isFile() || st.size > maxBytes) {

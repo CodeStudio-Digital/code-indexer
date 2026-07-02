@@ -16,6 +16,7 @@ import {
   formatDurationMs,
 } from '@mcp/services/qa/parsers/run-status-format.js';
 import { QaStatusBadge } from '../shared/QaStatusBadge.js';
+import { QaErrorClassHint } from '../shared/QaErrorClassHint.js';
 import { TraceLinkButton } from '../shared/TraceLinkButton.js';
 import { ArtifactPreview } from '../shared/ArtifactPreview.js';
 import { summariseRunI18n } from '../shared/qa-i18n.js';
@@ -120,6 +121,15 @@ function RunDetailBody({ run, results }: { run: QaRun; results: QaTestResultWith
           {formatDurationMs(run.duration_ms)} · {run.trigger}
         </div>
       </div>
+
+      {/* B7 — run-level error with a friendly per-class hint; raw text kept as detail. */}
+      {run.last_error ? (
+        <div className="rounded border border-red-300 bg-red-50 dark:bg-red-950/20 p-2 text-xs">
+          <div className="font-medium text-red-700 dark:text-red-400">{t('qa.error')}</div>
+          <QaErrorClassHint errorClass={run.error_class} />
+          <pre className="font-mono text-[11px] mt-1 whitespace-pre-wrap">{run.last_error}</pre>
+        </div>
+      ) : null}
 
       {results.length === 0 ? (
         <p className="text-sm text-muted-foreground">

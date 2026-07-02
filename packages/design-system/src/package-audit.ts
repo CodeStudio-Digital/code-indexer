@@ -5,6 +5,13 @@ import {
   validateDesignSystemManifestData,
   type DesignSystemManifestV2,
 } from '@mcp/design-system/manifest-schema.js';
+import {
+  escapeRegExp,
+  extractBalanced,
+  extractNamedObjectBlocks,
+  extractPropertyObject,
+  topLevelObjectKeys,
+} from '@mcp/design-system/source-parse.js';
 
 export interface PackageAuditIssue {
   code: string;
@@ -447,91 +454,10 @@ function extractStoryPropUsage(text: string): {
   return { argTypes, args, options };
 }
 
-function extractNamedObjectBlocks(text: string, propertyName: string): string[] {
-  const blocks: string[] = [];
-  const re = new RegExp(`\\b${escapeRegExp(propertyName)}\\s*:`, 'g');
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text))) {
-    const brace = text.indexOf('{', re.lastIndex);
-    if (brace < 0) continue;
-    const block = extractBalanced(text, brace);
-    if (block) blocks.push(block);
-  }
-  return blocks;
-}
-
-function extractPropertyObject(objectBlock: string, propertyName: string): string | null {
-  const re = new RegExp(`(?:^|[,{])\\s*${escapeRegExp(propertyName)}\\s*:`, 'm');
-  const match = re.exec(objectBlock);
-  if (!match) return null;
-  const brace = objectBlock.indexOf('{', match.index);
-  if (brace < 0) return null;
-  return extractBalanced(objectBlock, brace);
-}
-
 function extractOptions(propBlock: string): string[] {
   const match = /\boptions\s*:\s*\[([\s\S]*?)\]/m.exec(propBlock);
   if (!match) return [];
   return [...match[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]);
-}
-
-function extractBalanced(text: string, startBrace: number): string | null {
-  if (text[startBrace] !== '{') return null;
-  let depth = 0;
-  let quote: string | null = null;
-  let escaped = false;
-  for (let i = startBrace; i < text.length; i++) {
-    const ch = text[i];
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      quote = ch;
-      continue;
-    }
-    if (ch === '{') depth++;
-    if (ch === '}') {
-      depth--;
-      if (depth === 0) return text.slice(startBrace, i + 1);
-    }
-  }
-  return null;
-}
-
-function topLevelObjectKeys(objectBlock: string): string[] {
-  const body = objectBlock.replace(/^\{|\}$/g, '');
-  const keys: string[] = [];
-  let depth = 0;
-  let quote: string | null = null;
-  let token = '';
-  for (let i = 0; i < body.length; i++) {
-    const ch = body[i];
-    if (quote) {
-      if (ch === quote && body[i - 1] !== '\\') quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      quote = ch;
-      continue;
-    }
-    if (ch === '{' || ch === '[' || ch === '(') depth++;
-    else if (ch === '}' || ch === ']' || ch === ')') depth--;
-    if (depth === 0 && /[A-Za-z0-9_$]/.test(ch)) {
-      token += ch;
-      continue;
-    }
-    if (depth === 0 && ch === ':' && token) {
-      keys.push(token);
-      token = '';
-      continue;
-    }
-    if (depth === 0 && ch === ',') token = '';
-    if (depth === 0 && !/\s/.test(ch)) token = '';
-  }
-  return Array.from(new Set(keys));
 }
 
 function topLevelTypeKeys(interfaceBlock: string): string[] {
@@ -563,10 +489,6 @@ function allowedValues(schema: Record<string, unknown> | undefined, prop: string
 
 function normalizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -19,10 +19,13 @@ import {
   type DesignSystemSessionDetail,
 } from '../design-system-api.js';
 import { DsStudioRail, DsStudioTabContent, type DsStudioTab } from './DsStudioRail.js';
+import { DsStudioActions } from './DsStudioActions.js';
+import { StageBar } from './StageBar.js';
+import { startStage } from './stage-prompts.js';
 
 const REFRESH_INTERVAL_MS = 5_000;
 const TAB_STORAGE_KEY = 'mcp.ds-studio.tab';
-const TAB_IDS: DsStudioTab[] = ['preview', 'versions', 'components', 'docs'];
+const TAB_IDS: DsStudioTab[] = ['stages', 'preview', 'versions', 'components', 'docs'];
 
 /** Aba ativa persistida ('none' = painel recolhido, só o chat + rail). */
 function usePersistedTab(): [DsStudioTab | null, (t: DsStudioTab | null) => void] {
@@ -99,6 +102,11 @@ export function DsStudioView({
   const projectId = project.id;
 
   function publish() {
+    // Com pipeline: o publish é a etapa 7 — marca start + manda o prompt.
+    if (detail?.pipeline) {
+      void startStage(t, { dsSessionId: dsSessionId, projectId, stage: 'publish' }).then(() => void refresh());
+      return;
+    }
     requestStudioSend(projectId, t('studio.publishMessage'));
   }
 
@@ -129,12 +137,25 @@ export function DsStudioView({
             (o que derrubaria a sessão aberta). Mesmo padrão do ProjectView. */}
         <PanelGroup direction="horizontal" autoSaveId="mcp-ds-studio-horiz" className="min-h-0 flex-1">
           <Panel id="ds-chat" order={1} defaultSize={activeTab ? 45 : 100} minSize={26}>
-            <AgentChat
-              projectId={projectId}
-              projectName={project.name}
-              initialSessionId={initialCoderSessionId}
-              selectionPrefixSessionId={projectId}
-            />
+            <div className="flex h-full min-h-0 flex-col">
+              {detail.pipeline ? (
+                <StageBar
+                  detail={detail}
+                  onOpenStages={() => setActiveTab('stages')}
+                  onChanged={() => void refresh()}
+                />
+              ) : (
+                <DsStudioActions projectId={projectId} />
+              )}
+              <div className="min-h-0 flex-1">
+                <AgentChat
+                  projectId={projectId}
+                  projectName={project.name}
+                  initialSessionId={initialCoderSessionId}
+                  selectionPrefixSessionId={projectId}
+                />
+              </div>
+            </div>
           </Panel>
           {activeTab && (
             <>

@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, X } from 'lucide-react';
+import { Bot, Check, Loader2, X } from 'lucide-react';
 import type { ParallelAgent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
 import {
@@ -10,9 +11,12 @@ import {
 } from '../../../components/ui/dialog.js';
 import { cn } from '../../../lib/utils.js';
 import { Markdown } from './Markdown.js';
+import { parsePersistedAgentsGroup } from './agents-group-parser.js';
+import type { AgentsGroupResultSource } from './AgentsGroupBlock.js';
 
 interface AgentDetailModalProps {
   agent: ParallelAgent;
+  resultSource?: AgentsGroupResultSource;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -22,12 +26,57 @@ interface AgentDetailModalProps {
  * final report, and metrics. Subagents are ephemeral (no persisted step-by-step
  * transcript), so this surfaces what survives — the report + task + meta.
  */
-export function AgentDetailModal({ agent, open, onOpenChange }: AgentDetailModalProps) {
+export function AgentDetailModal({ agent, resultSource, open, onOpenChange }: AgentDetailModalProps) {
   const { t } = useTranslation('chat');
-  const isError = !!agent.error;
-  const tokens = agent.usage ? agent.usage.input_tokens + agent.usage.output_tokens : null;
+  const [fullAgent, setFullAgent] = useState<ParallelAgent | null>(null);
+  const [loadingFull, setLoadingFull] = useState(false);
+  const [fullError, setFullError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFullAgent(null);
+    setLoadingFull(false);
+    setFullError(null);
+  }, [agent.index, resultSource?.toolUseId, open]);
+
+  const displayAgent = fullAgent ?? agent;
+  const isError = !!displayAgent.error;
+  const tokens = displayAgent.usage ? displayAgent.usage.input_tokens + displayAgent.usage.output_tokens : null;
   const providerLabel =
-    agent.provider && agent.model ? `${agent.provider}:${agent.model}` : agent.provider ?? agent.model ?? null;
+    displayAgent.provider && displayAgent.model
+      ? `${displayAgent.provider}:${displayAgent.model}`
+      : displayAgent.provider ?? displayAgent.model ?? null;
+  const canLoadFull =
+    !fullAgent &&
+    !loadingFull &&
+    !!resultSource?.isTruncated &&
+    !!resultSource.input &&
+    !!resultSource.sessionId &&
+    !!resultSource.toolUseId;
+
+  const loadFullReport = async () => {
+    if (!resultSource?.input || !resultSource.sessionId || !resultSource.toolUseId) return;
+    setLoadingFull(true);
+    setFullError(null);
+    try {
+      const r = await fetch(
+        `/api/coder/sessions/${resultSource.sessionId}/tool-results/${encodeURIComponent(resultSource.toolUseId)}/full`,
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = (await r.json()) as { content?: string; is_error?: boolean };
+      const group = parsePersistedAgentsGroup(resultSource.input, {
+        content: data.content ?? '',
+        isError: Boolean(data.is_error),
+      });
+      const next = group?.agents.find((a) => a.index === agent.index);
+      if (!next) throw new Error('agent not found in full result');
+      setFullAgent(next);
+    } catch (err) {
+      console.warn('[agent-detail] failed to load full report', err);
+      setFullError(t('agentGroup.showMoreError', { defaultValue: 'Could not load the full report.' }));
+    } finally {
+      setLoadingFull(false);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -43,20 +92,20 @@ export function AgentDetailModal({ agent, open, onOpenChange }: AgentDetailModal
               {isError ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
             </div>
             <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
-            <span className="font-mono truncate">{agent.label}</span>
+            <span className="font-mono truncate">{displayAgent.label}</span>
           </DialogTitle>
         </DialogHeader>
 
         {/* Meta badges */}
         <div className="flex flex-wrap items-center gap-1.5 -mt-1">
-          {agent.agentType && <Badge variant="outline" className="text-[10px]">{agent.agentType}</Badge>}
+          {displayAgent.agentType && <Badge variant="outline" className="text-[10px]">{displayAgent.agentType}</Badge>}
           {providerLabel && (
             <Badge variant="secondary" className="text-[10px] max-w-[240px] truncate" title={providerLabel}>
               {providerLabel}
             </Badge>
           )}
           <Badge variant="outline" className="text-[10px] tabular-nums">
-            {agent.toolCallCount} tool{agent.toolCallCount !== 1 ? 's' : ''}
+            {displayAgent.toolCallCount} tool{displayAgent.toolCallCount !== 1 ? 's' : ''}
           </Badge>
           {tokens !== null && (
             <Badge variant="outline" className="text-[10px] tabular-nums">{tokens.toLocaleString()} tokens</Badge>
@@ -64,13 +113,13 @@ export function AgentDetailModal({ agent, open, onOpenChange }: AgentDetailModal
         </div>
 
         {/* Task (the prompt the agent received) */}
-        {agent.task && (
+        {displayAgent.task && (
           <div>
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
               {t('agentGroup.task', { defaultValue: 'Task' })}
             </div>
             <div className="text-xs text-foreground/80 whitespace-pre-wrap rounded-md border bg-muted/30 p-2 max-h-48 overflow-y-auto">
-              {agent.task}
+              {displayAgent.task}
             </div>
           </div>
         )}
@@ -84,15 +133,33 @@ export function AgentDetailModal({ agent, open, onOpenChange }: AgentDetailModal
           </div>
           {isError ? (
             <pre className="font-mono text-[11px] text-destructive whitespace-pre-wrap break-all rounded-md border border-destructive/40 p-2">
-              {agent.error}
+              {displayAgent.error}
             </pre>
-          ) : agent.summary ? (
+          ) : displayAgent.summary ? (
             <div className="text-sm text-foreground/90">
-              <Markdown text={agent.summary} />
+              <Markdown text={displayAgent.summary} />
             </div>
           ) : (
             <div className="text-xs text-muted-foreground italic">
               {t('agentGroup.noReport', { defaultValue: 'No report produced.' })}
+            </div>
+          )}
+          {(canLoadFull || loadingFull) && (
+            <button
+              type="button"
+              onClick={loadFullReport}
+              disabled={loadingFull}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted disabled:cursor-wait disabled:opacity-70"
+            >
+              {loadingFull && <Loader2 className="h-3 w-3 animate-spin" />}
+              {loadingFull
+                ? t('agentGroup.loadingMore', { defaultValue: 'Loading...' })
+                : t('agentGroup.showMore', { defaultValue: 'Show more' })}
+            </button>
+          )}
+          {fullError && (
+            <div className="mt-2 text-xs text-destructive">
+              {fullError}
             </div>
           )}
         </div>

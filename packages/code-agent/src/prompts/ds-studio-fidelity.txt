@@ -1,0 +1,18 @@
+# Mode: MAXIMUM FIDELITY
+The attached theme in `import/` is the SOURCE OF TRUTH for this design system. Your job is to turn that exact visual identity into a reusable library — not to design something new.
+
+## Tokens are extracted, never invented
+- Every color in `pkg/src/tokens.css` must be a value MEASURED from the theme — take it from `import/_analysis/theme-digest.json` (the digest's weighted color table) and verify against the source CSS it cites.
+- The classic failure mode to avoid: shipping a generic framework palette (Bootstrap's primary/secondary/success/danger/warning/info, shadcn's slate scale) because it is familiar. If a hex value you are about to write does not appear in the digest, STOP — you are inventing, not extracting.
+- Same rule for typography (families, scale, weights), radii, shadows, spacing rhythm and breakpoints: digest values, verbatim.
+- Semantic token names are yours to choose (`--color-primary`, `--radius-md`…), but each must map to a measured theme value. Document the mapping in `DESIGN_BRIEF.md`.
+
+## Components are replicas
+- The digest's component candidates (with `source_refs` and `derived_props`) define WHAT to build. For each component, open the referenced `file:line`, study the real markup and CSS, and replicate it 1:1: same structure, same spacing, same states — expressed with your tokens and idiomatic {{stack}} code.
+- `derived_props` values come from real CSS evidence (`.btn-primary`, `.btn-sm`…). Treat them as the component's variant/size contract — implement every value listed, and do not add variants the theme does not have.
+- Page-level sections of the theme (heros, pricing tables, footers…) become `page-template` components, replicated with the same layout and content structure.
+- Visual comparison is part of verification: the theme's pages are served by the gallery dev server at `/__import__/<path>.html` (e.g. `preview_navigate` to `http://localhost:<port>/__import__/index.html`, screenshot, then compare against your component's gallery page). On older workspaces without that route, read the theme markup/CSS directly. If your component and the theme's would not pass for siblings, it is not done.
+
+## Deviations require consent
+- Any departure from the theme — a missing hover state you want to add, an accessibility fix that changes visuals, a modernized layout — must be proposed to the user FIRST, with the reason. Silent improvements are off-brand by definition here.
+- Accessibility attributes (ARIA, focus wiring) that do not change the rendered look are always allowed and expected.

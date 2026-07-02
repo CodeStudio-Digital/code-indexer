@@ -9,6 +9,11 @@ import {
   applyOperationalRulesPatch,
   type CreateSessionBody,
 } from './session-create-validation.js';
+import {
+  sanitizeAutonomyPatch,
+  mergeAutonomyPatch,
+  type AutonomyPatch,
+} from '@mcp/company/services/autonomy/autonomy-patch.js';
 
 export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore, db } = deps;
@@ -425,9 +430,24 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
        * Persisted to config_json and read by /start and /resume. `null`/'' clears.
        */
       master_reasoning_effort?: string | null;
+      /**
+       * C0 — per-session autonomy overrides (`config_json.autonomy`).
+       * Validated by `sanitizeAutonomyPatch` and shallow-merged per key over
+       * the existing object. Services don't consult it yet (flip phase).
+       */
+      autonomy?: unknown;
     }
     const body = await parseJsonBody<ConfigPatchBody>(c);
     if (!body) return c.json({ error: 'Invalid body' }, 400);
+
+    // C0 — validate the autonomy patch up-front so BOTH branches below
+    // (live worker vs direct persist) see the same sanitized shape.
+    let autonomyPatch: AutonomyPatch | undefined;
+    if (body.autonomy !== undefined) {
+      const parsed = sanitizeAutonomyPatch(body.autonomy);
+      if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+      autonomyPatch = parsed.patch;
+    }
 
     // Basic validation: every role_assignment entry must carry
     // role/provider/model. Deeper validation (model exists in provider,
@@ -484,6 +504,9 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
           })),
           skills: body.skills,
           allowed_models: body.allowed_models,
+          // Routed through the worker so the merge + `session.config_updated`
+          // publish happen where the autonomy provider's cache lives.
+          autonomy: autonomyPatch,
         });
       } catch (e) {
         return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
@@ -496,6 +519,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       if (body.role_assignments) cfg.role_assignments = body.role_assignments;
       if (body.skills) cfg.skills = body.skills;
       if (body.allowed_models) cfg.allowed_models = body.allowed_models;
+      if (autonomyPatch) cfg.autonomy = mergeAutonomyPatch(cfg.autonomy, autonomyPatch);
       companyStore.updateCompanySessionConfig(id, JSON.stringify(cfg));
     }
 

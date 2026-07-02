@@ -38,9 +38,12 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   // user/project snapshots (central) + memory
   'snapshots', 'snapshot_files', 'snapshot_versions', 'memory_distill_log',
   // company + kanban
-  'company_sessions', 'company_session_projects', 'company_session_envs', 'company_session_databases',
+  'company_sessions', 'company_session_projects', 'company_session_envs',
+  // tabela aposentada na migration 191 — manter 1 release p/ DBs antigos que ainda a tenham
+  'company_session_databases',
   'company_session_archives', 'company_sandboxes', 'company_sandbox_services', 'company_templates',
   'company_board', 'company_drive_files', 'company_local_projects', 'company_fronts', 'company_agent_runs',
+  'company_service_transitions', 'company_service_logs',
   'kanban_cards', 'kanban_card_agents', 'kanban_card_dependencies', 'kanban_checklist_items', 'kanban_comments',
   // quality / counterfactual
   'quality_classifications', 'quality_interventions', 'counterfactual_logs',

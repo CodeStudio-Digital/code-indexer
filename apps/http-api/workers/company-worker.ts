@@ -47,9 +47,17 @@ import { hydrateWorkerCapabilities } from './worker-capabilities.js';
 import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
 import { ApiClientStore } from '../../../packages/store/src/api-client-store.js';
 import { setApiClientStore } from '../../../packages/code-agent/src/tools/api-client/index.js';
+import { DbClientStore } from '../../../packages/store/src/db-client-store.js';
+import { setDbToolsStores, setDbSecretDecryptor } from '../../../packages/code-agent/src/tools/db/index.js';
 import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { CompanySessionEnvStore } from '../../../packages/store/src/company-session-env-store.js';
 import { QaTestRunStore } from '../../../packages/services/src/qa/store/qa-test-run-store.js';
+import { CompanyServiceTransitionsStore } from '../../../packages/store/src/company-service-transitions-store.js';
+import { CompanyServiceLogsStore } from '../../../packages/store/src/company-service-logs-store.js';
+import { CompanySandboxServicesHealth } from '../../../packages/store/src/company-sandbox-services-health.js';
+import { CompanySandboxServicesStore } from '../../../packages/store/src/company-sandbox-services-store.js';
+import { CompanyLocalProjectStore } from '../../../packages/store/src/company-local-project-store.js';
+import { setServiceSupervisorStores } from '../../../packages/company/src/services/service-supervisor/stores.js';
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
 import { COOLDOWN_RESURRECT_MS } from '../../../packages/company/src/services/RuntimeReconciler.js';
 import {
@@ -282,6 +290,15 @@ setDesignSystemStore(new DesignSystemStore(rawDb));
 // API client store for the `api_*` tools, re-wired per worker (module globals
 // don't cross worker_threads).
 setApiClientStore(new ApiClientStore(rawDb));
+// db_* v2 tools — worker-local DbClientStore on the shared central handle
+// (company sessions read central; per-project routing is a main-thread
+// concern) + the session's linked projects via CompanyStore. Secrets are
+// keychain-bound to the MAIN process → decrypt RPCs over the bridge
+// (registered by WorkerOrchestratorPool via worker-secrets-handlers).
+setDbToolsStores(new DbClientStore(rawDb), companyStore);
+setDbSecretDecryptor((blob) =>
+  bridge.request<string>('secretsDecrypt', { blob }, { timeoutMs: 10_000 }),
+);
 setDesignSystemSkillStore(new SkillStore(rawDb));
 // <indexed-docs> hint provider — worker-local DocStore reads (two SELECTs
 // per 30s/project; no RPC). Inlined for the same alias-resolution reason
@@ -317,6 +334,24 @@ setQaTestRunStore(new QaTestRunStore(rawDb));
 const sessionEnvStore = new CompanySessionEnvStore(rawDb);
 setQaEndpointEnvStore(sessionEnvStore);
 setEnvToolStore(sessionEnvStore);
+// B1 — per-service transition audit + ring-buffered logs (mig 188), built on
+// the worker's own shared handle like QaTestRunStore above.
+const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(rawDb);
+const companyServiceLogsStore = new CompanyServiceLogsStore(rawDb);
+// B3/B4/B5 — module bindings consumed by the ServiceSupervisor (health +
+// transitions + structured log sink) and by the service_* / list_services
+// tools (paged log reads + health projection). Worker-only by design: main
+// never calls this setter, so these paths exist only where the supervisor
+// and the company agents actually run.
+setServiceSupervisorStores({
+  health: new CompanySandboxServicesHealth(rawDb),
+  transitions: companyServiceTransitionsStore,
+  logs: companyServiceLogsStore,
+  services: new CompanySandboxServicesStore(rawDb),
+  // B8 — host-process discovery for the supervisor. The LocalProcessManager
+  // singleton lives on the MAIN process; the worker sees the SQLite row.
+  localProjects: new CompanyLocalProjectStore(rawDb),
+});
 
 // NOTE: this constructor synchronously wires every domain service.
 // If any of them blocks on env vars, registered store factories, or

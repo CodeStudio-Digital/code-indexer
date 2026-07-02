@@ -15,11 +15,14 @@
 
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { DOCS_MIRROR_PREFIX, isDocsMirrorPath } from './file-path-core.js';
 
 const WRITE_DESC =
-  'Write (create or overwrite) a file in the company shared drive.\n' +
+  'Write (create or overwrite) a WORK ARTIFACT in the company shared drive.\n' +
   "USE: when you need to hand a peer or the master a document too large to inline (>1KB) — specs, plans, dumps, reports, transcripts.\n" +
   'After writing, mention the path in your message (board post, ask_master, send_to_agent) so the recipient knows what to read.\n' +
+  "DON'T: living service documentation (ADRs, API refs, runbooks) — use `docs_write` for that; " +
+  `the \`${DOCS_MIRROR_PREFIX}\` namespace is reserved for the docs mirror and rejected here.\n` +
   "DON'T: store ephemeral scratch — the drive is persistent across sessions of the same company.";
 
 const READ_DESC =
@@ -31,7 +34,23 @@ const LIST_DESC =
 const DELETE_DESC = 'Delete a file from the company shared drive. Returns false if the path was not present.';
 
 const APPEND_DESC =
-  'Append text to a file in the company shared drive (creates the file if missing). Useful for shared logs / running notes between agents.';
+  'Append text to a WORK-ARTIFACT file in the company shared drive (creates the file if missing). ' +
+  'Useful for shared logs / running notes between agents. For living service documentation use ' +
+  `\`docs_write\` — the \`${DOCS_MIRROR_PREFIX}\` namespace is reserved for the docs mirror and rejected here.`;
+
+/**
+ * The `__docs__/` namespace is the durable mirror `docs_write` maintains;
+ * letting `write_shared_file` scribble into it would desync the sandbox
+ * copy from the mirror and confuse the Docs tab's provenance badges.
+ */
+function rejectDocsMirror(toolName: string, path: string): ToolResult | null {
+  if (!isDocsMirrorPath(path)) return null;
+  return err(
+    `${toolName}: the '${DOCS_MIRROR_PREFIX}' namespace is reserved for the documentation mirror. ` +
+    'Use `docs_write` to author service documentation — it writes to the sandbox docs/ tree and ' +
+    'mirrors here automatically.',
+  );
+}
 
 function requireCompany(ctx: Parameters<CoderTool['handler']>[1]) {
   const company = ctx.companyContext;
@@ -60,8 +79,11 @@ export const writeSharedFile: CoderTool = {
   },
   handler: async (args, ctx): Promise<ToolResult> => {
     try {
+      const path = String(args.path);
+      const rejected = rejectDocsMirror('write_shared_file', path);
+      if (rejected) return rejected;
       const { drive, scopeKey, owner } = requireCompany(ctx);
-      const meta = drive.write(scopeKey, String(args.path), String(args.content ?? ''), owner);
+      const meta = drive.write(scopeKey, path, String(args.content ?? ''), owner);
       return ok(
         `Wrote ${meta.path} (${meta.sizeBytes} bytes) to shared drive ${scopeKey}.\n` +
         JSON.stringify({ meta }, null, 2),
@@ -87,8 +109,11 @@ export const appendSharedFile: CoderTool = {
   },
   handler: async (args, ctx): Promise<ToolResult> => {
     try {
+      const path = String(args.path);
+      const rejected = rejectDocsMirror('append_shared_file', path);
+      if (rejected) return rejected;
       const { drive, scopeKey, owner } = requireCompany(ctx);
-      const meta = drive.append(scopeKey, String(args.path), String(args.content ?? ''), owner);
+      const meta = drive.append(scopeKey, path, String(args.content ?? ''), owner);
       return ok(
         `Appended to ${meta.path}; size now ${meta.sizeBytes} bytes.\n` +
         JSON.stringify({ meta }, null, 2),

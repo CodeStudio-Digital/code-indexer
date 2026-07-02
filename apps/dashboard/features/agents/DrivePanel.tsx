@@ -29,8 +29,9 @@ import {
   useCompanyStore,
 } from '../../state/company/index.js';
 import type { DriveFileMeta } from '../../state/company/driveSlice.js';
-import { buildDriveTree, collectFilePaths, type DriveTreeNode } from './drive/driveTree.js';
+import { buildDriveTree, collectFilePaths, partitionDriveFiles, type DriveTreeNode } from './drive/driveTree.js';
 import { DriveFileTree } from './drive/DriveFileTree.js';
+import { DocsMirrorSection } from './drive/DocsMirrorSection.js';
 
 type ViewMode = 'raw' | 'preview';
 
@@ -338,10 +339,19 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
   const files = useMemo(() => Array.from(slot.files.values()), [slot.files]);
   const scope = slot.scope ?? '';
 
+  // D2: `__docs__/…` rows are the docs mirror maintained by `docs_write` —
+  // they render in a separate read-only section, not in the work tree.
+  const { work: workFiles, docsMirror } = useMemo(() => partitionDriveFiles(files), [files]);
+
   // Folder-grouped, search-filtered tree. `searching` forces every folder
   // open so matches are never hidden behind a collapsed parent.
   const searching = query.trim().length > 0;
-  const treeNodes = useMemo(() => buildDriveTree(files, query), [files, query]);
+  const treeNodes = useMemo(() => buildDriveTree(workFiles, query), [workFiles, query]);
+  const mirrorFiltered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return docsMirror;
+    return docsMirror.filter((m) => m.displayPath.toLowerCase().includes(q));
+  }, [docsMirror, query]);
 
   return (
     <div className="flex h-full flex-col">
@@ -349,7 +359,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
         <div className="flex items-center gap-2">
           <FolderOpen className="h-4 w-4 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">
-            {t('drive.fileCount', { count: files.length })}
+            {t('drive.fileCount', { count: workFiles.length })}
           </span>
           {scope ? (
             <Badge variant="outline" className="text-[10px] font-mono">
@@ -530,19 +540,28 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
               <div className="p-3 text-xs text-muted-foreground">
                 {t('drive.empty', 'The drive is empty. Use Attach to upload a document, or let the agents write to it.')}
               </div>
-            ) : treeNodes.length === 0 ? (
-              <div className="p-3 text-xs text-muted-foreground">
-                {t('drive.noMatches', 'No files match your search.')}
-              </div>
             ) : (
-              <DriveFileTree
-                nodes={treeNodes}
-                forceOpen={searching}
-                selectedPath={selectedPath}
-                onOpen={(p) => void openFile(p)}
-                onDelete={(p) => void handleDelete(p)}
-                onDeleteFolder={(n) => void handleDeleteFolder(n)}
-              />
+              <>
+                {treeNodes.length > 0 ? (
+                  <DriveFileTree
+                    nodes={treeNodes}
+                    forceOpen={searching}
+                    selectedPath={selectedPath}
+                    onOpen={(p) => void openFile(p)}
+                    onDelete={(p) => void handleDelete(p)}
+                    onDeleteFolder={(n) => void handleDeleteFolder(n)}
+                  />
+                ) : searching && mirrorFiltered.length === 0 ? (
+                  <div className="p-3 text-xs text-muted-foreground">
+                    {t('drive.noMatches', 'No files match your search.')}
+                  </div>
+                ) : null}
+                <DocsMirrorSection
+                  files={mirrorFiltered}
+                  selectedPath={selectedPath}
+                  onOpen={(p) => void openFile(p)}
+                />
+              </>
             )}
           </div>
         </div>

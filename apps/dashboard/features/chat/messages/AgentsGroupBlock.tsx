@@ -8,6 +8,14 @@ import { AgentDetailModal } from './AgentDetailModal.js';
 
 interface AgentsGroupBlockProps {
   group: AgentsGroup;
+  resultSource?: AgentsGroupResultSource;
+}
+
+export interface AgentsGroupResultSource {
+  sessionId: number;
+  toolUseId: string;
+  input?: Record<string, unknown>;
+  isTruncated?: boolean;
 }
 
 export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) => {
@@ -17,6 +25,10 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
   if (prev.group.totalUsage !== next.group.totalUsage) return false;
   if (prev.group.provider !== next.group.provider) return false;
   if (prev.group.model !== next.group.model) return false;
+  if (prev.resultSource?.sessionId !== next.resultSource?.sessionId) return false;
+  if (prev.resultSource?.toolUseId !== next.resultSource?.toolUseId) return false;
+  if (prev.resultSource?.isTruncated !== next.resultSource?.isTruncated) return false;
+  if (prev.resultSource?.input !== next.resultSource?.input) return false;
   if (prev.group.agents.length !== next.group.agents.length) return false;
   for (let i = 0; i < prev.group.agents.length; i++) {
     const a = prev.group.agents[i];
@@ -42,7 +54,7 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
   return true;
 });
 
-function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
+function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
   const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(true);
   const [openAgent, setOpenAgent] = useState<number | null>(null);
@@ -123,6 +135,7 @@ function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
       {openAgentEntry && (
         <AgentDetailModal
           agent={openAgentEntry}
+          resultSource={resultSource}
           open
           onOpenChange={(o) => {
             if (!o) setOpenAgent(null);

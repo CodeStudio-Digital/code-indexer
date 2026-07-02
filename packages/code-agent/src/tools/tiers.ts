@@ -35,7 +35,7 @@ import { COMPANY_TOOLS, BUILDER_TOOLS } from '@mcp/code-agent/tools/tiers-compan
 // public entry point for tier data.
 export { COMPANY_TOOLS, BUILDER_TOOLS };
 
-export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview' | 'api' | 'diagram';
+export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview' | 'api' | 'diagram' | 'db';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -47,6 +47,7 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'preview',
   'api',
   'diagram',
+  'db',
 ]);
 
 /**
@@ -93,6 +94,19 @@ export const API_TOOLS: ReadonlySet<string> = new Set<string>([
   'api_update_request',
   'api_mark_verified',
   'api_run_collection',
+]);
+
+/**
+ * Database client tools — the dedicated `db` tier (Databases-tab connections,
+ * driver-backed). Registered unconditionally but listed explicitly so the
+ * bootstrap fallback in `getToolTier` can't expose them on turn 1; sessions
+ * unlock on demand via `expand_toolset('db')`.
+ */
+export const DB_TOOLS: ReadonlySet<string> = new Set<string>([
+  'db_list',
+  'db_schema',
+  'db_query',
+  'db_command',
 ]);
 
 /**
@@ -178,6 +192,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'ds_audit_package',
   'ds_set_version_status',
   'ds_publish_version',
+  // Design pipeline (máquina de etapas do DS Studio, mig 190).
+  'ds_get_pipeline',
+  'ds_submit_stage',
+  'ds_analyze_import',
   // DS consumer tools (builder projects linked to a PUBLISHED design
   // system — `builder_json.designSystem`). Read-only queries; always on
   // so the agent checks the inventory before inventing components.
@@ -190,6 +208,11 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // Lives in BOOTSTRAP (not NAVIGATE) so any session can delegate without
   // needing to unlock a tier first.
   'spawn_agent',
+  // collect_agents / resume_agent — the async companions of spawn_agent
+  // (background job wait + failed-agent relaunch). Same tier so the model
+  // can always await/retry a delegation it started.
+  'collect_agents',
+  'resume_agent',
   // execute_tasks — wave-based orchestrator (PR 3). Same rationale as
   // spawn_agent: orchestration that any session must be able to call.
   'execute_tasks',
@@ -474,6 +497,7 @@ export function getToolTier(
   if (PREVIEW_TOOLS.has(name)) return 'preview';
   if (API_TOOLS.has(name)) return 'api';
   if (DIAGRAM_TOOLS.has(name)) return 'diagram';
+  if (DB_TOOLS.has(name)) return 'db';
   // Always-on within their own session class; map to bootstrap (see set docs).
   if (COMPANY_TOOLS.has(name) || BUILDER_TOOLS.has(name)) return 'bootstrap';
   // Unlisted — no explicit tier.
@@ -498,6 +522,7 @@ export function allTieredToolNames(): Set<string> {
     ...PREVIEW_TOOLS,
     ...API_TOOLS,
     ...DIAGRAM_TOOLS,
+    ...DB_TOOLS,
     ...COMPANY_TOOLS,
     ...BUILDER_TOOLS,
   ]);
@@ -691,6 +716,11 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   mcp__list_models: 'List available LLM models',
   mcp__export_docs: 'Export project documentation',
   mcp__get_diff: 'Diff between indexing runs',
+  // ─── DB client (Databases tab) ────────────────────────────────
+  db_list: 'List registered database connections (never credentials; does not connect)',
+  db_schema: 'Introspect tables/columns of a registered connection',
+  db_query: 'Run ONE SQL statement on a registered connection (read-only connections block writes)',
+  db_command: 'Run a MongoDB/Redis command on a document/key-value connection',
   // ─── Diagram (draw.io) ────────────────────────────────────────
   diagram_create: 'Create a new draw.io diagram (.drawio) from mxGraph XML',
   diagram_update: 'Replace the full mxGraph XML of an existing diagram',
@@ -731,6 +761,7 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('preview', PREVIEW_TOOLS);
   push('api', API_TOOLS);
   push('diagram', DIAGRAM_TOOLS);
+  push('db', DB_TOOLS);
   // Company/builder tools resolve to bootstrap in getToolTier (always-on within
   // their session class); label them as such so the catalog matches.
   push('bootstrap', COMPANY_TOOLS);
@@ -747,6 +778,7 @@ export const TIER_COUNTS = {
   preview: PREVIEW_TOOLS.size,
   api: API_TOOLS.size,
   diagram: DIAGRAM_TOOLS.size,
+  db: DB_TOOLS.size,
   company: COMPANY_TOOLS.size,
   builder: BUILDER_TOOLS.size,
 } as const;

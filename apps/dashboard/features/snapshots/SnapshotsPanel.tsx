@@ -36,10 +36,12 @@ interface Props {
   /** When provided, the panel will refetch every time the value changes — used to react
    *  to live `session_snapshot_changed` SSE events from the chat stream. */
   refreshKey?: number;
+  /** Baseline to preselect on open (deep-link from a chat "View snapshot" action). */
+  initialBaselineId?: number | null;
   onSubmitReviewMessage?: (message: string) => Promise<void>;
 }
 
-export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMessage }: Props) {
+export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId, onSubmitReviewMessage }: Props) {
   const { t } = useTranslation('projects');
   const confirm = useConfirm();
   const [files, setFiles] = useState<SnapshotFileSummary[]>([]);
@@ -100,12 +102,16 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     onError: setError,
   });
 
-  // Auto-select first active file when nothing selected yet.
+  // Auto-select the deep-linked baseline if present, else the first active file.
   useEffect(() => {
     if (selectedBaselineId != null) return;
+    if (initialBaselineId != null && files.some((f) => f.baselineId === initialBaselineId)) {
+      setSelectedBaselineId(initialBaselineId);
+      return;
+    }
     const firstActive = files.find((f) => f.status === 'active');
     if (firstActive) setSelectedBaselineId(firstActive.baselineId);
-  }, [files, selectedBaselineId]);
+  }, [files, selectedBaselineId, initialBaselineId]);
 
   const handleSelect = useCallback((baselineId: number) => {
     setSelectedBaselineId(baselineId);

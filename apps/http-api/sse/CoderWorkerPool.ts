@@ -44,6 +44,7 @@ import type { CompanyRecommendFn } from '@mcp/company/services/scheduler/recomme
 import type { McpExternalPool } from './McpExternalPool.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers, type WorkerMemoryDeps } from './worker-memory-handlers.js';
+import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 
 /**
@@ -648,6 +649,9 @@ export class CoderWorkerPool {
     // injection AND run-end distillation (regression vs the in-process path
     // in routes/coder/stream.ts, which passes deps.memoryRetriever directly).
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
+    // Secret decryption (`enc:`/`plain:` blobs) — safeStorage lives only in
+    // the Electron main process; db_* tools in the worker RPC here.
+    const offSecrets = registerWorkerSecretsHandlers(bridge);
 
     // Agent LSP nav (lsp_definition/references/hover on non-TS files) —
     // routed to the main-process LSP router (external servers + structural
@@ -754,6 +758,7 @@ export class CoderWorkerPool {
         try { offPreviewDevtools(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
         try { offMemory(); } catch { /* best-effort */ }
+        try { offSecrets(); } catch { /* best-effort */ }
         try { offLsp(); } catch { /* best-effort */ }
         try { offMcpSnapshot(); } catch { /* best-effort */ }
         try { offMcpCallTool(); } catch { /* best-effort */ }

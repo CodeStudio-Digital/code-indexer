@@ -13,6 +13,8 @@ import { TodoWriteBlock } from './TodoWriteBlock.js';
 import { taskListIsApprove } from './MessageView.js';
 import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
+import { FileEditBlock } from './FileEditBlock.js';
+import { isEditTool } from './edit-tools.js';
 import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.js';
 
 export function renderStreamBlock(block: StreamBlock, key: number, handlers: PromptHandlers) {
@@ -56,6 +58,17 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
         <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} onToolApproval={handlers.onToolApproval}>
           <SelfReviewBlock text={block.call.result.content} />
         </ToolCallBlock>
+      );
+    }
+    // edit_file / multi_edit / write_file / create_file / apply_patch: render a
+    // file-first block (files + inline diffs) instead of raw tool JSON.
+    if (isEditTool(block.call.name)) {
+      return (
+        <FileEditBlock
+          key={`tc-${block.call.id}`}
+          call={block.call}
+          onToolApproval={handlers.onToolApproval}
+        />
       );
     }
     return <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} onToolApproval={handlers.onToolApproval} />;

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, Crown, Folder, GitBranch, Plus, ScrollText, Server, Trash2, Users } from 'lucide-react';
+import { Activity, Bot, Check, Crown, Folder, GitBranch, Plus, ScrollText, Server, Trash2, Users } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
 import { apiPost } from '../../../hooks/useApi.js';
@@ -9,6 +9,7 @@ import ServicesSidebar from '../ServicesSidebar.js';
 import { ProjectBadge } from './ProjectBadge.js';
 import { ProjectRolesBinding } from './ProjectRolesBinding.js';
 import { OperationalRulesEditor } from './OperationalRulesEditor.js';
+import { AutonomyPanel } from './AutonomyPanel.js';
 import type { RoleConfig } from '../RoleEditModal.js';
 import { SidebarSection } from './SidebarSection.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
@@ -320,6 +321,16 @@ export function AgentsSidebar({
           value={(config?.operational_rules as string | undefined) ?? ''}
           refetch={refetch}
         />
+      </SidebarSection>
+
+      {/* ── Autonomia (C1 — organismo: toggles + freeze + feed de atividade) ── */}
+      <SidebarSection
+        storageKey="autonomy"
+        icon={Activity}
+        title={t('company.autonomy.label')}
+        defaultOpen={false}
+      >
+        <AutonomyPanel sessionId={sessionId} />
       </SidebarSection>
 
       {/* ── Microservices — only when the session can actually have them:

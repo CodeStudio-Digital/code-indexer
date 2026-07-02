@@ -77,8 +77,26 @@ export interface IQaTestRunStore {
    * `playwright.config.ts` that dropped the streaming reporter.
    * Used by the boot-scheduled watchdog to mark them `errored` with a
    * clear hint instead of leaving the UI spinner forever.
+   *
+   * B7: age is measured from the run's LAST PROGRESS —
+   * `max(started_at, last_event_at)` — so a reporter that is still
+   * streaming events keeps resetting the clock.
    */
   findStaleRunningRuns(maxAgeMs: number): QaRun[];
+
+  /**
+   * B7: stamp `last_event_at = now` on a still-`running` row. Called by
+   * the test-event route on EVERY reporter event; no-op once the run
+   * left `running` (idempotent under reporter retries).
+   */
+  touchLastEvent(runId: number): void;
+
+  /**
+   * B7: every run currently in `running`, across ALL sessions. Used by
+   * the ChromeService lifecycle hook to fail runs fast when the shared
+   * browser container goes down (`error_class='sidecar_down'`).
+   */
+  listRunningRuns(): QaRun[];
 
   /**
    * v4.5: stamp the absolute host path where this run's artifacts were

@@ -76,6 +76,8 @@ import { DesignSystemStore } from '../../../packages/store/src/design-system-sto
 import { ApiClientStore } from '../../../packages/store/src/api-client-store.js';
 import { routedFeatureDbPath } from '../../../packages/store/src/project-db/routed-path.js';
 import { setApiClientStore } from '../../../packages/code-agent/src/tools/api-client/index.js';
+import { DbClientStore } from '../../../packages/store/src/db-client-store.js';
+import { setDbToolsStores, setDbSecretDecryptor } from '../../../packages/code-agent/src/tools/db/index.js';
 import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
 import {
@@ -304,6 +306,15 @@ const apiSessionProjectId = (
 const apiClientDbPath =
   (apiSessionProjectId != null && routedFeatureDbPath(dbConn.handle, apiSessionProjectId)) || dbPath;
 setApiClientStore(new ApiClientStore(apiClientDbPath));
+// db_* v2 tools — same routed feature-DB path as the api-client store (the
+// db_connections rows live wherever the project's feature tables live).
+// Single sessions have no company session-projects (null). Secrets are
+// keychain-bound to the MAIN process, so decryption RPCs over the bridge
+// (registered by CoderWorkerPool via worker-secrets-handlers).
+setDbToolsStores(new DbClientStore(apiClientDbPath), null);
+setDbSecretDecryptor((blob) =>
+  bridge.request<string>('secretsDecrypt', { blob }, { timeoutMs: 10_000 }),
+);
 setVerdaccioService(new VerdaccioService({ store: new VerdaccioStore(dbPath) }));
 
 // External-MCP proxy. Constructed once per worker; reuses the main

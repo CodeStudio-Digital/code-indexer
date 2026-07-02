@@ -112,6 +112,9 @@ function makeRun(over: Partial<QaRun> = {}): QaRun {
     report_persisted_path: null,
     kanban_feature_card_id: null,
     last_error: null,
+    error_class: null,
+    last_event_at: null,
+    plan_gate: null,
     ...over,
   };
 }

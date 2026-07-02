@@ -49,9 +49,9 @@ describe('resolveThemeId', () => {
       .toBe('one-dark-pro');
   });
 
-  it('rejects an unknown default id and falls back to the built-in', () => {
+  it('rejects an unknown default id and falls back to the app default', () => {
     const state: EditorThemeState = { darkTheme: 'ghost', lightTheme: 'vs', perLanguage: {} };
     expect(resolveThemeId({ appearance: 'dark', languageId: 'typescript', state }))
-      .toBe('vs-dark');
+      .toBe('codestudio-dark');
   });
 });

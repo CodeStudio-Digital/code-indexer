@@ -36,6 +36,8 @@ import { tryGetVerdaccioService } from '@mcp/services/verdaccio/verdaccio-servic
 import { bumpSemver, resolveBumpKind } from '@mcp/design-system/semver-bump.js';
 import { runNpm } from '@mcp/design-system/run-npm.js';
 import { auditDesignSystemPackage, formatPackageAudit } from '@mcp/design-system/package-audit.js';
+import { formatStudioAudit, runStudioAudit } from '@mcp/design-system/studio-audit/index.js';
+import { collectRecordedComponents } from '@mcp/company/tools/design-system/recorded-components.js';
 
 const NPM_PACK_TIMEOUT_MS = 120_000;
 
@@ -173,6 +175,36 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
               auditMessage,
             ].join('\n'),
           );
+        }
+
+        // Design-quality gate (studio): tokens-first, fidelidade ao tema,
+        // cobertura de galeria/variantes/docs e a11y. No escopo 'publish'
+        // um export sem ds_record_component é ERRO — fecha de vez o buraco
+        // do registro post-hoc (sessão 978: 84 componentes, 0 registros).
+        if (binding.profile === 'studio') {
+          const workspace = resolveHostPath('.', ctx);
+          if (workspace.kind !== 'no-bind-mount') {
+            const studio = await runStudioAudit({
+              workspaceDir: workspace.path,
+              stack: session.stack,
+              mode: session.mode,
+              recorded: collectRecordedComponents(store, session.id),
+              scope: 'publish',
+            });
+            if (!studio.ok) {
+              const studioMessage = formatStudioAudit(studio);
+              store.updateVersion(draft.id, {
+                status: 'failed',
+                error: shortenError(studioMessage),
+              });
+              return err(
+                [
+                  'Pre-publish design audit failed. The package was not packed or published.',
+                  studioMessage,
+                ].join('\n'),
+              );
+            }
+          }
         }
 
         // Tarball resolution. Either the master passed a pre-built path

@@ -5,6 +5,23 @@ This project is a **Design System workspace**. You and the user are building a c
 - `pkg/` — THE LIBRARY. The only thing that gets published. Components in `pkg/src/components/`, design tokens in `pkg/src/tokens.css`, public surface in `pkg/src/index.ts`, docs in `pkg/docs.md`.
 - `app/` — the live gallery/showcase the user watches. It imports the library via the `@ds` alias (hot-reloads on every pkg edit). NEVER ship app-only code into `pkg/`.
 - `import/` — raw reference material the user attached (an old theme, an existing project). READ-ONLY: port ideas/components from it into `pkg/`, never edit it, never import from it at runtime.
+- `import/_analysis/` — host-generated **theme digest**: `THEME.md` (tables of the theme's real colors with frequencies and roles, fonts, type scale, radii, shadows, spacing, breakpoints, plus component candidates with `file:line` source refs and props derived from CSS evidence) and `theme-digest.json` (same data, machine-readable). This is the ground truth about the theme — trust its measured values over your own impression of the files.
+
+## Design pipeline (when the session has one)
+Call `ds_get_pipeline` at the START of every task: it tells you the current stage, its status and the pending roadmap components. Work ONLY on the current stage. Deliver it with `ds_submit_stage({ stage, summary })` — the gate checks your work and, once it passes, the stage goes to USER review: STOP and wait for approval in the stage panel (there is no approval tool; approving is the user's move). If the gate fails, fix the listed issues and re-submit. `ds_analyze_import` regenerates the theme digest when `import/` changes.
+
+## Design process (MANDATORY whenever `import/` exists)
+Work through these phases IN ORDER. Do not skip ahead; each phase builds on the previous one's output.
+1. **Análise** — read `import/_analysis/THEME.md` first, then open the source files it references for the top components. Write `DESIGN_BRIEF.md` at the workspace root: the theme's palette (exact hex values from the digest), typography, shape language, and the component inventory you will build. Confirm the brief with the user before proceeding.
+2. **Tokens** — rewrite `pkg/src/tokens.css` FROM the digest values: semantic names (`--color-primary`, `--radius-md`…), the theme's real colors — never invent a palette. Update the gallery tokens page and verify it visually. **Never build a component while `tokens.css` still contains the scaffold defaults and a theme is attached.**
+3. **Primitivos** — buttons, inputs, badges, cards… every variant and state, consuming tokens only.
+4. **Compostos** — navbars, dialogs, tables, form patterns — composed FROM the primitives, never forking their styles.
+5. **Templates** — page-level compositions demonstrating the system in context.
+6. **Docs & registro** — `pkg/docs.md` complete, every approved component registered.
+Sem `import/`: same order, but phase 1 becomes a short briefing with the user (direction, references, tone) before any token or component work.
+
+## Depth bar (what "done" looks like)
+A finished system is shadcn/ui-level: ~40-50 solid components. Primitives: Button, IconButton, Link, Heading, Text, Label, Input, Textarea, Select, Checkbox, Radio, Switch, Slider, Badge, Tag, Avatar, Tooltip, Spinner, Progress, Skeleton, Divider, Alert, Kbd, Icon. Composites: Card, Dialog, Drawer, DropdownMenu, Tabs, Accordion, Table, Pagination, Breadcrumb, Toast, FormField, Navbar, Sidebar, Combobox, Stepper, Stat, EmptyState, Footer. A request like "create the buttons" is ONE step inside this roadmap — deliver it fully, then point at what is next; never treat it as the whole job.
 
 ## Tokens-first (the whole point of a design system)
 - Every color, font, radius, spacing and shadow lives as a CSS variable in `pkg/src/tokens.css`. Components consume tokens — never hard-coded hex/px values scattered in components.
@@ -14,21 +31,32 @@ This project is a **Design System workspace**. You and the user are building a c
 - Every component you create or change MUST have an up-to-date demo in the gallery (`app/src/gallery/registry`), showing its variants and states. The gallery is the living Storybook — if it's not in the gallery, the user can't see or approve it.
 - The tokens page of the gallery renders the current token values; keep it honest.
 
-## Build → verify → register loop
+## Definition of done — per component
+A component is only done when ALL of these hold:
+- every variant and size declared in its props exists and renders in the gallery demo;
+- interaction states are styled: hover, focus-visible, active, disabled (and loading where it applies);
+- basic accessibility: correct roles/ARIA, label wiring for inputs, keyboard reachable, visible focus;
+- it consumes tokens only — zero raw hex/px literals;
+- its gallery demo compiles clean (screenshot verified, console free of errors);
+- it is registered (see the loop below) and mentioned in `pkg/docs.md`.
+
+## Build → verify → record loop
 1. Build/change the component in `pkg/`, update its gallery demo.
 2. VERIFY visually: call `preview_open()` with NO url (we attach to this workspace's gallery dev server — reusing the running one, starting it only if needed, and closing what we start at run end; never launch `npm run dev` yourself), then `preview_screenshot` (use `lookFor` if you can't see images) and `preview_console` for errors. Fix before declaring done.
-3. When the USER approves the component in the preview, call `ds_record_component({ name, kind, props_schema_json, example_code })`. Never record unapproved work. Use `ds_list_components` to know what's registered vs new.
+3. Once YOUR verification passes (screenshot ok + console clean), call `ds_record_component({ name, kind, props_schema_json, example_code, verified_in_preview: true })` in the SAME task — registration is part of building, not a publish-time chore; `verified_in_preview` is your attestation that step 2 really happened this turn. The user reviews the gallery and asks for changes; updating a recorded component is normal. Use `ds_list_components` to know what is registered vs new.
 
 ## Element-targeted edits
 - `<selected-element loc="app/src/...:LINE:COL">` points into the GALLERY source. If the selected element is rendered BY a library component, edit the component in `pkg/` — only touch the demo when the request is about the demo itself.
 
 ## Publishing (only when the user asks)
 1. Make sure `pkg/docs.md` reflects the current components and tokens.
-2. `ds_audit_package({ pkg_dir: 'pkg' })` — fix every error it reports (warnings are advisory).
+2. `ds_audit_package({ pkg_dir: 'pkg' })` — fix every error it reports, including unregistered components (warnings are advisory).
 3. `ds_publish_version({ pkg_dir: 'pkg' })` — packs and publishes to the local registry, bumps semver, records the version. Report the published version and the install command back to the user.
+Publishing re-runs the FULL design audit as a blocking gate (token coverage per literal, theme fidelity, gallery/variant/docs coverage, a11y) — stricter than the per-stage gates, so a stage having been approved does not guarantee publish passes. If it fails: fix the listed files and call `ds_publish_version` again (the failed draft retries automatically); no stage needs reopening.
 {{publishExtra}}
 
 ## Reserved files — do NOT modify
 - `app/vite.config.ts` (or the workspace dev-server config) — MCP-managed: it pins the dev port and the element-selection instrumentation. Breaking it kills the live preview.
 - `.mcp/` and `app/src/mcp-inspector.ts` — element-selection runtime.
 - Root `package.json` workspaces/dev script — the dashboard relies on `npm run dev` at the root serving the gallery on the pinned port.
+- `import/_analysis/` — host-generated; regenerate via re-extract instead of editing.

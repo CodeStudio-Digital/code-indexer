@@ -26,6 +26,7 @@ import { resolve, join } from 'node:path';
 import { globIterate } from 'glob';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { ScannedFile, ScanResult, ScanStats } from '@mcp/shared/types.js';
+import { globPrunesForIndexIgnore, normalizeIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { applyGraphPromotion, classifyPath, isHardExcluded, type FileIndexTier } from '@mcp/indexer/indexer/mapper.js';
 import { buildScannerIgnore, GLOB_PRUNE_DIRS, type ScannerIgnore } from '@mcp/indexer/indexer/scanner-ignore.js';
 import { hashContent, countLines } from '@mcp/indexer/indexer/content-hash.js';
@@ -51,12 +52,14 @@ function yieldToEventLoop(): Promise<void> {
 export class FileScanner {
   private rootPath: string;
   private ig: ScannerIgnore;
+  private ignorePatterns: string[];
   private maxFileSizeBytes: number;
 
   constructor(rootPath: string, ignorePatterns: string[] = [], maxFileSizeKB: number = 200) {
     this.rootPath = resolve(rootPath);
+    this.ignorePatterns = normalizeIndexIgnorePatterns(ignorePatterns);
     this.maxFileSizeBytes = maxFileSizeKB * 1024;
-    this.ig = buildScannerIgnore(this.rootPath, ignorePatterns, isHardExcluded);
+    this.ig = buildScannerIgnore(this.rootPath, this.ignorePatterns, isHardExcluded);
   }
 
   async scan(db: CodeIndexDB, projectId: number, opts: ScanOptions = {}): Promise<ScanResult> {
@@ -69,7 +72,10 @@ export class FileScanner {
       absolute: false,
       // Prune hard-safe dirs in the walk itself — they were 100% filtered
       // out afterwards anyway; this skips listing them at all.
-      ignore: GLOB_PRUNE_DIRS.map((d) => `**/${d}/**`),
+      ignore: [
+        ...GLOB_PRUNE_DIRS.map((d) => `**/${d}/**`),
+        ...globPrunesForIndexIgnore(this.ignorePatterns),
+      ],
     })) {
       const relPath = String(rawRelPath).replace(/\\/g, '/');
       if (this.ig.ignores(relPath)) {

@@ -72,8 +72,8 @@ export function getEnvStore(): CompanySessionEnvStore | null { return envStore; 
 export function getQaPreviewConfig() { return qaPreviewConfig; }
 
 /** Passes the module-level envStore into the pure helper. */
-export function resolveSessionEnvs(sessionId: string): Record<string, string> {
-  return resolveSessionEnvsFrom(envStore, sessionId);
+export function resolveSessionEnvs(sessionId: string, serviceId?: string): Record<string, string> {
+  return resolveSessionEnvsFrom(envStore, sessionId, serviceId);
 }
 
 /** Passes the module-level envStore into the pure helper. */

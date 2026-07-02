@@ -36,10 +36,10 @@ describe('collectEnvSyncTargets', () => {
     expect(collectEnvSyncTargets(undefined, [])).toEqual([]);
   });
 
-  it('includes a healthy owned primary', () => {
+  it('includes a healthy owned primary as serviceId "main"', () => {
     const primary = makeSandbox({ containerId: 'p1', workdir: '/app' });
     expect(collectEnvSyncTargets(primary, [])).toEqual([
-      { containerId: 'p1', workdir: '/app' },
+      { serviceId: 'main', containerId: 'p1', workdir: '/app' },
     ]);
   });
 
@@ -58,7 +58,7 @@ describe('collectEnvSyncTargets', () => {
     expect(collectEnvSyncTargets(primary, [])).toEqual([]);
   });
 
-  it('includes healthy services alongside primary', () => {
+  it('includes healthy services alongside primary, carrying their serviceId', () => {
     const primary = makeSandbox({ containerId: 'p1', workdir: '/app' });
     const api = makeSandbox({ id: '42:api', containerId: 'c-api', workdir: '/svc-api' });
     const worker = makeSandbox({
@@ -66,10 +66,15 @@ describe('collectEnvSyncTargets', () => {
       containerId: 'c-worker',
       workdir: '/svc-worker',
     });
-    expect(collectEnvSyncTargets(primary, [api, worker])).toEqual([
-      { containerId: 'p1', workdir: '/app' },
-      { containerId: 'c-api', workdir: '/svc-api' },
-      { containerId: 'c-worker', workdir: '/svc-worker' },
+    expect(
+      collectEnvSyncTargets(primary, [
+        { serviceId: 'api', sandbox: api },
+        { serviceId: 'worker', sandbox: worker },
+      ]),
+    ).toEqual([
+      { serviceId: 'main', containerId: 'p1', workdir: '/app' },
+      { serviceId: 'api', containerId: 'c-api', workdir: '/svc-api' },
+      { serviceId: 'worker', containerId: 'c-worker', workdir: '/svc-worker' },
     ]);
   });
 
@@ -86,7 +91,11 @@ describe('collectEnvSyncTargets', () => {
       mountKind: 'external',
     });
     const healthy = makeSandbox({ id: '42:ok', containerId: 'c-ok', workdir: '/ok' });
-    const out = collectEnvSyncTargets(primary, [paused, external, healthy]);
+    const out = collectEnvSyncTargets(primary, [
+      { serviceId: 'paused', sandbox: paused },
+      { serviceId: 'ext', sandbox: external },
+      { serviceId: 'ok', sandbox: healthy },
+    ]);
     expect(out.map((t) => t.containerId)).toEqual(['p1', 'c-ok']);
   });
 });
@@ -100,32 +109,39 @@ describe('pushEnvsToContainers', () => {
     } as unknown as ISandboxDriver;
   }
 
-  it('writes the .env body to every target with `recursive: true`', async () => {
+  it('writes a PER-SERVICE rendered .env body to every target with `recursive: true`', async () => {
     const driver = mockDriver();
+    const bodyFor = vi.fn((serviceId: string) => `SVC=${serviceId}\n`);
     await pushEnvsToContainers(
       [
-        { containerId: 'a', workdir: '/app' },
-        { containerId: 'b', workdir: '/work' },
+        { serviceId: 'main', containerId: 'a', workdir: '/app' },
+        { serviceId: 'api', containerId: 'b', workdir: '/work' },
       ],
-      'FOO=bar\n',
+      bodyFor,
       driver,
     );
     const writeFile = driver.writeFile as ReturnType<typeof vi.fn>;
     expect(writeFile).toHaveBeenCalledTimes(2);
-    expect(writeFile).toHaveBeenCalledWith('a', '/app/.env', 'FOO=bar\n', { recursive: true });
-    expect(writeFile).toHaveBeenCalledWith('b', '/work/.env', 'FOO=bar\n', { recursive: true });
+    expect(writeFile).toHaveBeenCalledWith('a', '/app/.env', 'SVC=main\n', { recursive: true });
+    expect(writeFile).toHaveBeenCalledWith('b', '/work/.env', 'SVC=api\n', { recursive: true });
+    expect(bodyFor).toHaveBeenCalledWith('main');
+    expect(bodyFor).toHaveBeenCalledWith('api');
   });
 
   it('is a no-op when targets is empty', async () => {
     const driver = mockDriver();
-    await pushEnvsToContainers([], 'FOO=bar\n', driver);
+    await pushEnvsToContainers([], () => 'FOO=bar\n', driver);
     expect(driver.writeFile).not.toHaveBeenCalled();
   });
 
   it('is a no-op when driver is null', async () => {
     // No driver = no targets to write to; the call must resolve cleanly.
     await expect(
-      pushEnvsToContainers([{ containerId: 'a', workdir: '/app' }], 'FOO=bar\n', null),
+      pushEnvsToContainers(
+        [{ serviceId: 'main', containerId: 'a', workdir: '/app' }],
+        () => 'FOO=bar\n',
+        null,
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -138,10 +154,10 @@ describe('pushEnvsToContainers', () => {
     await expect(
       pushEnvsToContainers(
         [
-          { containerId: 'broken', workdir: '/app' },
-          { containerId: 'ok', workdir: '/app' },
+          { serviceId: 'main', containerId: 'broken', workdir: '/app' },
+          { serviceId: 'api', containerId: 'ok', workdir: '/app' },
         ],
-        'FOO=bar\n',
+        () => 'FOO=bar\n',
         driver,
       ),
     ).resolves.toBeUndefined();
