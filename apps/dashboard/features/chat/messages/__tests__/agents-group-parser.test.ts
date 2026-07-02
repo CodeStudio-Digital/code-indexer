@@ -64,4 +64,33 @@ describe('parsePersistedAgentsGroup', () => {
     });
     expect(group?.agents[5].summary).toBe('summary 6');
   });
+
+  it('reads the background flag from the tool input and attempt/reason from the meta', () => {
+    const input = {
+      background: true,
+      agents: [
+        { label: 'auth', task: 'trace auth', profile: 'explore' },
+        { label: 'db', task: 'trace db', profile: 'explore' },
+      ],
+    };
+    const content = [
+      '[parallel agents: 2 agents, group=9d2c41aa, provider=chatgpt model=gpt-5.4-mini, input=200 output=20 cache_hit=0]',
+      '',
+      '### Agent 1: auth',
+      '[type=explore reason=completed tools=5 input=100 output=10 attempt=2]',
+      'ok',
+      '',
+      '---',
+      '',
+      '### Agent 2: db',
+      '[type=explore reason=error tools=3 input=100 output=10]',
+      'boom',
+    ].join('\n');
+
+    const group = parsePersistedAgentsGroup(input, { content, isError: false });
+    expect(group?.background).toBe(true);
+    expect(group?.agents[0].attempt).toBe(2);
+    expect(group?.agents[1].reason).toBe('error');
+    expect(group?.agents[1].status).toBe('error');
+  });
 });

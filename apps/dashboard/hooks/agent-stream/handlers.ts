@@ -56,6 +56,11 @@ export type EventHandler = (data: Record<string, unknown>, eventName: string) =>
 export function createEventHandlers(ctx: HandlerContext): Record<string, EventHandler> {
   const { sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete } = ctx;
 
+  // groupId → jobId for background groups seen this stream, so agents_group_end
+  // (and per-agent failures) can raise a session notification the user may not
+  // be actively watching. Cleared when the group ends.
+  const backgroundJobByGroup = new Map<string, string>();
+
   return {
     text: (data) => {
       const t = String((data as { text?: string }).text ?? '');
@@ -498,34 +503,62 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         groupId: string;
         provider?: string;
         model?: string;
-        agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string }>;
+        background?: boolean;
+        jobId?: string;
+        resumed?: boolean;
+        agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string; status?: AgentStatus; attempt?: number }>;
       };
       const group: AgentsGroup = {
         groupId: d.groupId,
         status: 'running',
         provider: d.provider,
         model: d.model,
+        background: d.background,
+        jobId: d.jobId,
         agents: d.agents.map((a) => ({
           index: a.index,
           label: a.label,
-          status: 'pending' as AgentStatus,
+          status: a.status ?? ('pending' as AgentStatus),
           toolCallCount: 0,
           provider: a.provider ?? d.provider,
           model: a.model ?? d.model,
           task: a.task,
+          attempt: a.attempt,
         })),
       };
-      blocks.push({ type: 'agents', group });
+      if (d.background) backgroundJobByGroup.set(d.groupId, d.jobId ?? '');
+      // Upsert by groupId — a resume (resume_agent) or a cross-run re-emit of a
+      // still-running background job MERGES into the existing block (rows flip
+      // back to running) instead of pushing a duplicate. `message_complete`
+      // clears live blocks, so a later re-emit re-materializes the group here.
+      const existing = blocks.findIndex((b) => b.type === 'agents' && b.group.groupId === d.groupId);
+      if (existing >= 0) blocks[existing] = { type: 'agents', group };
+      else blocks.push({ type: 'agents', group });
       flush();
     },
 
     agent_progress: (data) => {
-      if (applyAgentProgress(blocks, data as AgentProgressPayload)) flush();
+      const d = data as AgentProgressPayload;
+      if (applyAgentProgress(blocks, d)) flush();
+      // Surface a background/resumed agent failure the user may not be watching.
+      if ((d.event === 'error' || d.event === 'timed_out') && backgroundJobByGroup.has(d.groupId)) {
+        pushNotification(sid, { kind: 'agent-failed', groupId: d.groupId, agentIndex: d.agentIndex, label: d.label, reason: d.event });
+      }
     },
 
     agents_group_end: (data) => {
-      const d = data as { groupId: string; totalUsage?: Usage };
+      const d = data as { groupId: string; totalUsage?: Usage; jobId?: string; status?: string; agentCount?: number; successCount?: number };
       if (applyAgentsGroupEnd(blocks, d)) flush();
+      const jobId = d.jobId ?? backgroundJobByGroup.get(d.groupId);
+      if (jobId != null && backgroundJobByGroup.has(d.groupId)) {
+        pushNotification(sid, {
+          kind: 'background-agents-done',
+          jobId,
+          agentCount: d.agentCount ?? 0,
+          successCount: d.successCount ?? 0,
+        });
+        backgroundJobByGroup.delete(d.groupId);
+      }
     },
 
     auto_continue: (data) => {

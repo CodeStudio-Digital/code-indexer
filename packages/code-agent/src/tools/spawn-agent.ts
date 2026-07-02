@@ -105,8 +105,11 @@ const SPAWN_AGENT_DESC =
   '\n' +
   'USE: when a task needs many tool calls whose outputs would pollute your context.\n' +
   'USE: with multiple agents to investigate independent topics in parallel.\n' +
+  'USE: `background:true` for long, independent work — it returns a job id IMMEDIATELY so you keep working; ' +
+  'you get a <system-reminder> when it finishes, or fetch results early with collect_agents({job_id}).\n' +
   'USE: `kind:"persistent"` inside a company master session for a full coder subordinate (kanban/board/wait).\n' +
   "DON'T: use implement for read-only work — explore is cheaper.\n" +
+  "DON'T: re-spawn a FAILED agent from scratch — resume_agent({spawn_id}) continues it with its progress intact.\n" +
   "DON'T: use persistent for one-shot exploration — default ephemeral fits.";
 
 function rawString(value: unknown): string | undefined {

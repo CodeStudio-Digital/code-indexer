@@ -48,6 +48,7 @@ export function parsePersistedAgentsGroup(
     input: number;
     output: number;
     summary: string;
+    attempt?: number;
   }>();
   const groupProviderMatch = result?.content?.match(
     /\[parallel agents:[^\]]*provider=([^\s,\]]+)\s+model=([^\s,\]]+)/,
@@ -66,7 +67,7 @@ export function parsePersistedAgentsGroup(
       // `profile=...` existed briefly in this slot; keep parsing old rows.
       // provider/model live on the group header, not per-agent.
       const metaMatch = section.match(
-        /\[type=(\S+)(?:\s+profile=\S+)?\s+reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)(?:\s+attempt=\d+)?\]/,
+        /\[type=(\S+)(?:\s+profile=\S+)?\s+reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)(?:\s+attempt=(\d+))?\]/,
       );
       const summaryStart = section.indexOf('\n', section.indexOf(']') + 1);
       const summary = summaryStart >= 0 ? stripTransportMarkers(section.slice(summaryStart)) : '';
@@ -77,6 +78,7 @@ export function parsePersistedAgentsGroup(
         input: parseInt(metaMatch?.[4] ?? '0', 10),
         output: parseInt(metaMatch?.[5] ?? '0', 10),
         summary,
+        attempt: metaMatch?.[6] ? parseInt(metaMatch[6], 10) : undefined,
       });
     }
 
@@ -110,11 +112,14 @@ export function parsePersistedAgentsGroup(
   const headerInputTotal = parseInt(groupUsageMatch?.[1] ?? '0', 10);
   const headerOutputTotal = parseInt(groupUsageMatch?.[2] ?? '0', 10);
 
+  const background = (input as { background?: unknown })?.background === true;
+
   return {
     groupId: `persisted-${Date.now()}`,
     status: isCompleted ? 'completed' : 'running',
     provider: groupProvider,
     model: groupModel,
+    background: background || undefined,
     totalUsage: isCompleted
       ? {
           input_tokens: headerInputTotal || parsedInputTotal,
@@ -141,6 +146,8 @@ export function parsePersistedAgentsGroup(
         summary: parsed?.summary || undefined,
         error: parsed?.reason === 'error' ? parsed.summary : undefined,
         task: typeof raw.task === 'string' ? raw.task : undefined,
+        attempt: parsed?.attempt,
+        reason: parsed?.reason,
         agentType:
           parsed?.type ??
           (typeof raw.type === 'string'

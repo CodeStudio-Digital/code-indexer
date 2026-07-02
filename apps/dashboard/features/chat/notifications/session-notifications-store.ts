@@ -27,7 +27,9 @@ export type SessionNotificationPayload =
       suspectTool: string;
       reason: string;
       turn: number;
-    };
+    }
+  | { kind: 'background-agents-done'; jobId: string; agentCount: number; successCount: number }
+  | { kind: 'agent-failed'; groupId: string; agentIndex: number; label: string; reason: string };
 
 export type NotificationSeverity = 'info' | 'warning' | 'error';
 
@@ -86,6 +88,12 @@ function derive(payload: SessionNotificationPayload): {
       return payload.verdict === 'error'
         ? { severity: 'error', autoDismissMs: null }
         : { severity: 'warning', autoDismissMs: WARN_DISMISS_MS };
+    case 'background-agents-done':
+      return payload.successCount < payload.agentCount
+        ? { severity: 'warning', autoDismissMs: WARN_DISMISS_MS }
+        : { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
+    case 'agent-failed':
+      return { severity: 'warning', autoDismissMs: WARN_DISMISS_MS };
   }
 }
 

@@ -25,6 +25,7 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
   if (prev.group.totalUsage !== next.group.totalUsage) return false;
   if (prev.group.provider !== next.group.provider) return false;
   if (prev.group.model !== next.group.model) return false;
+  if (prev.group.background !== next.group.background) return false;
   if (prev.resultSource?.sessionId !== next.resultSource?.sessionId) return false;
   if (prev.resultSource?.toolUseId !== next.resultSource?.toolUseId) return false;
   if (prev.resultSource?.isTruncated !== next.resultSource?.isTruncated) return false;
@@ -47,7 +48,8 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
       a.idleMs !== b.idleMs ||
       a.deadlineMs !== b.deadlineMs ||
       a.lastToolName !== b.lastToolName ||
-      a.usage !== b.usage
+      a.usage !== b.usage ||
+      a.attempt !== b.attempt
     )
       return false;
   }
@@ -95,6 +97,11 @@ function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
             ? t('agentGroup.singleAgent', { defaultValue: 'subagent' })
             : t('agentGroup.parallelAgents', { count: group.agents.length })}
         </span>
+        {group.background && (
+          <Badge variant="outline" className="shrink-0 text-[10px] border-info/50 text-info">
+            {t('agentGroup.background', { defaultValue: 'background' })}
+          </Badge>
+        )}
         <Badge variant="outline" className="shrink-0 tabular-nums">
           {t('agentGroup.toolCalls', { count: totalToolCalls })}
         </Badge>
@@ -201,6 +208,11 @@ function AgentRow({ agent, onOpen }: AgentRowProps) {
           />
         </div>
         <span className="font-mono text-foreground/80 truncate">{agent.label}</span>
+        {agent.attempt != null && agent.attempt >= 2 && (
+          <Badge variant="outline" className="shrink-0 text-[10px] border-warning/50 text-warning">
+            retry #{agent.attempt}
+          </Badge>
+        )}
         <Badge variant="outline" className="shrink-0 tabular-nums text-[10px]">
           {agent.toolCallCount} tool{agent.toolCallCount !== 1 ? 's' : ''}
         </Badge>

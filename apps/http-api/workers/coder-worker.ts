@@ -102,6 +102,7 @@ import { buildWorkerMemoryShims } from './memory-shims.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
+import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { installWorkerQualityWiring } from './quality-wiring.js';
 
 interface CoderWorkerData {
@@ -803,6 +804,9 @@ bridge.handle('setToolPermissionMode', (payload) => {
 bridge.handle('abort', () => {
   recordRpc('abort');
   try {
+    // User Stop kills background subagent jobs too (they're detached from the
+    // run signal, so run.runner.abort() alone would leave them running).
+    try { getSubagentJobManager().abortSession(sessionId, 'user abort'); } catch { /* best-effort */ }
     const run = activeRun;
     run?.ctrl.abort();
     if (run?.runner) {
@@ -833,6 +837,8 @@ bridge.handle('stop', async () => {
     if (run) {
       // Normal in-flight turn: abort and wait (bounded) for the run to settle
       // so flushPendingTurn + drainSession land before the worker is killed.
+      // Also kill any background subagent jobs — the worker is going away.
+      try { getSubagentJobManager().abortSession(sessionId, 'worker stop'); } catch { /* best-effort */ }
       const handle = run.handle;
       run.ctrl.abort();
       if (run.runner) {

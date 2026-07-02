@@ -96,6 +96,12 @@ export function mountCoderInteractionRoutes(
     }
     const bus = activeRuns.get(id);
     if (!bus) return c.json({ error: 'no active run' }, 404);
+    // In-process (non-worker) abort: kill background subagent jobs too — they
+    // are detached from the run signal, so runner.abort() alone leaves them.
+    try {
+      const { getSubagentJobManager } = await import('@mcp/code-agent/tools/subagent-jobs.js');
+      getSubagentJobManager().abortSession(id, 'user abort');
+    } catch { /* best-effort */ }
     bus.ctrl.abort();
     bus.runner?.abort();
     return c.json({ ok: true });

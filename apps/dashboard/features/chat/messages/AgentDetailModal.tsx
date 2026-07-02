@@ -99,6 +99,12 @@ export function AgentDetailModal({ agent, resultSource, open, onOpenChange }: Ag
         {/* Meta badges */}
         <div className="flex flex-wrap items-center gap-1.5 -mt-1">
           {displayAgent.agentType && <Badge variant="outline" className="text-[10px]">{displayAgent.agentType}</Badge>}
+          {displayAgent.attempt != null && displayAgent.attempt >= 2 && (
+            <Badge variant="outline" className="text-[10px] border-warning/50 text-warning">retry #{displayAgent.attempt}</Badge>
+          )}
+          {displayAgent.reason && displayAgent.reason !== 'completed' && (
+            <Badge variant="outline" className="text-[10px] border-destructive/40 text-destructive">{displayAgent.reason}</Badge>
+          )}
           {providerLabel && (
             <Badge variant="secondary" className="text-[10px] max-w-[240px] truncate" title={providerLabel}>
               {providerLabel}

@@ -10,6 +10,7 @@
 import { useEffect } from 'react';
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   RotateCcw,
   ShieldAlert,
@@ -43,6 +44,10 @@ function iconFor(n: SessionNotification): LucideIcon {
     case 'run-done':
       return n.severity === 'error' ? AlertTriangle : CheckCircle2;
     case 'run-error':
+      return AlertTriangle;
+    case 'background-agents-done':
+      return n.severity === 'warning' ? AlertTriangle : Bot;
+    case 'agent-failed':
       return AlertTriangle;
     default: // tool-loop
       return n.severity === 'info' ? RotateCcw : AlertTriangle;
@@ -136,6 +141,32 @@ function NotificationBody({ notification }: { notification: SessionNotification 
           </div>
           <p className="mt-0.5 leading-snug">
             {p.suspectTool && <span className="font-mono">{p.suspectTool}</span>} {p.reason}
+          </p>
+        </>
+      );
+    case 'background-agents-done':
+      return (
+        <>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-semibold">Background agents finished</span>
+            <span className="ml-auto text-[10px] uppercase opacity-70">
+              {p.successCount < p.agentCount ? `${p.agentCount - p.successCount} failed` : 'done'}
+            </span>
+          </div>
+          <p className="mt-0.5 leading-snug">
+            <span className="font-mono">{p.jobId}</span> — {p.successCount}/{p.agentCount} completed. Ask the agent to collect the results.
+          </p>
+        </>
+      );
+    case 'agent-failed':
+      return (
+        <>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-semibold">Subagent failed</span>
+            <span className="ml-auto text-[10px] uppercase opacity-70">{p.reason}</span>
+          </div>
+          <p className="mt-0.5 leading-snug">
+            <span className="font-mono">{p.label}</span> stopped — the agent can retry it with resume_agent.
           </p>
         </>
       );

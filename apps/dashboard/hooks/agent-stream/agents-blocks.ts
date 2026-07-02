@@ -16,6 +16,7 @@ export interface AgentProgressPayload {
   idleMs?: number;
   deadlineMs?: number;
   lastToolName?: string;
+  attempt?: number;
   usage?: Usage;
   summary?: string;
   error?: string;
@@ -71,6 +72,7 @@ function patchAgent(agent: ParallelAgent, d: AgentProgressPayload): ParallelAgen
     ...(d.idleMs != null ? { idleMs: d.idleMs } : {}),
     ...(d.deadlineMs != null ? { deadlineMs: d.deadlineMs } : {}),
     ...(d.lastToolName ? { lastToolName: d.lastToolName } : {}),
+    ...(d.attempt != null ? { attempt: d.attempt } : {}),
   };
 
   switch (d.event) {

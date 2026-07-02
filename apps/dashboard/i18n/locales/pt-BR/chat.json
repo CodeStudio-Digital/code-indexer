@@ -454,6 +454,7 @@
   "agentGroup.toolCalls_one": "{{count}} tool call",
   "agentGroup.toolCalls_other": "{{count}} tool calls",
   "agentGroup.completed": "{{completed}}/{{total}} concluídos",
+  "agentGroup.background": "segundo plano",
   "agentGroup.tokens": "{{tokens}} tokens",
   "agentGroup.showMore": "Veja mais",
   "agentGroup.loadingMore": "Carregando...",

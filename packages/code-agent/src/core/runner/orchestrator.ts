@@ -192,6 +192,24 @@ export async function runBehaviorTree(
       lastEvent = event;
       state = nextState(state, event);
       stateEnteredAt = Date.now();
+
+      // Liveness — a CLEAN finish must not end the run while background
+      // subagents are still working. Park until a job settles (the bridge
+      // injects a completion notice → we resume Executing to react), the user
+      // sends a message, the run aborts, or a safety cap elapses. Gated on
+      // `hasActive()`, so sessions/subagents without background jobs (the vast
+      // majority) see zero behavior change. Aborts/errors are NOT parked.
+      if (state === 'Done' && event.kind === 'CleanFinish' && ctx.bridge?.backgroundJobs?.hasActive()) {
+        const signal = ctx.opts.toolContext.signal ?? new AbortController().signal;
+        console.log(`[coder/bt] clean finish with active background jobs — parking runId=${ctx.runId}`);
+        const outcome = await ctx.bridge.backgroundJobs.park(signal);
+        console.log(`[coder/bt] park woke: ${outcome}`);
+        if (outcome === 'work' || outcome === 'message') {
+          state = 'Executing';
+          stateEnteredAt = Date.now();
+        }
+        // 'aborted' / 'timeout' → fall through to Done.
+      }
     }
   } finally {
     // Lifecycle cleanup — tasks left in `running` (because the BT exited

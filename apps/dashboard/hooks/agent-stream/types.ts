@@ -215,6 +215,10 @@ export interface ParallelAgent {
   idleMs?: number;
   deadlineMs?: number;
   lastToolName?: string;
+  /** Retry attempt (>=2 when this agent was resumed via resume_agent). */
+  attempt?: number;
+  /** Terminal stop reason, from history — shown in the detail modal. */
+  reason?: string;
 }
 
 export interface AgentsGroup {
@@ -224,6 +228,10 @@ export interface AgentsGroup {
   model?: string;
   totalUsage?: Usage;
   status: 'running' | 'completed';
+  /** Fire-and-forget background job (spawn_agent background:true). */
+  background?: boolean;
+  /** Background job handle — for collect/notification correlation. */
+  jobId?: string;
 }
 
 // ─── Stream blocks ────────────────────────────────────────────
