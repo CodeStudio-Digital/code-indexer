@@ -3,10 +3,12 @@
  *
  * Detects a `Cls::` / `self::` / `$this->` member-access trigger from the
  * buffer and lists that class's members from the index — the PHPStorm-feeling
- * "type the arrow, see the methods" without a language server. Honest limits
- * (name-based, no semantics): NO inherited members (no extends/implements
- * walk), NO typed-variable resolution (`$user->` where `$user` isn't `$this`
- * stays unresolved), NO traits. Those need a real LSP — the chip stays blue.
+ * "type the arrow, see the methods" without a language server. Inherited and
+ * trait members come from the relations walk (db.getClassMembersDeep —
+ * extends/implements/mixes, cycle-guarded) annotated with their origin class.
+ * Honest limit that remains (name-based, no semantics): NO typed-variable
+ * resolution (`$user->` where `$user` isn't `$this` stays unresolved). That
+ * needs a real LSP — the chip stays blue.
  */
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { CompletionItem, Position } from '@mcp/api-bus';
@@ -51,7 +53,12 @@ export function isTypePosition(lineBeforePrefix: string): boolean {
 }
 
 /** Namespace/package-style location for the IntelliJ-style right column. */
-export function describeLocation(filePath: string, languageId?: string): string {
+export function describeLocation(
+  filePath: string, languageId?: string, namespace?: string | null,
+): string {
+  // Mig 187: when the index carries the REAL namespace (PHP `App\Services`,
+  // Python dotted module), show it instead of the transformed dir path.
+  if (namespace) return namespace;
   const slash = filePath.lastIndexOf('/');
   const dir = slash < 0 ? '' : filePath.slice(0, slash);
   if (!dir) return '';
@@ -99,24 +106,19 @@ function phpUseInsertPosition(content: string): Position {
   return { line: insertAfter + 1, column: 1 };
 }
 
-export function phpImportPlanForCompletion(
-  currentContent: string,
-  targetContent: string,
-  symbolName: string,
-): PhpImportPlan {
-  const targetNs = phpNamespace(targetContent);
+/** Shared core: plan a `use` insertion given the target's namespace. */
+function phpImportPlan(currentContent: string, targetNs: string | null, symbolName: string): PhpImportPlan {
   if (!targetNs) return {};
 
   const targetFqn = `${targetNs}\\${symbolName}`;
-  const currentNs = phpNamespace(currentContent);
-  if (currentNs === targetNs) return {};
+  if (phpNamespace(currentContent) === targetNs) return {};
 
   const imported = phpImportedTypes(currentContent);
-  const existing = imported.get(symbolName);
-  if (existing === targetFqn) return {};
-  if (existing && existing !== targetFqn) {
-    return { insertText: `\\${targetFqn}` };
-  }
+  // `use X\Y;` OR `use X\Y as Z;` — the target FQN imported under ANY alias
+  // counts as already-imported (no duplicate use, no FQN fallback).
+  for (const fqn of imported.values()) if (fqn === targetFqn) return {};
+  // Short name already taken by a DIFFERENT FQN → insert fully qualified.
+  if (imported.has(symbolName)) return { insertText: `\\${targetFqn}` };
 
   const position = phpUseInsertPosition(currentContent);
   return {
@@ -125,6 +127,25 @@ export function phpImportPlanForCompletion(
       newText: `use ${targetFqn};\n`,
     }],
   };
+}
+
+export function phpImportPlanForCompletion(
+  currentContent: string,
+  targetContent: string,
+  symbolName: string,
+): PhpImportPlan {
+  return phpImportPlan(currentContent, phpNamespace(targetContent), symbolName);
+}
+
+/**
+ * DB-backed plan (mig 187): the target namespace comes straight from the
+ * indexed symbol — zero disk I/O per keystroke, and usable for ANY exported
+ * class completion, not just typesOnly positions.
+ */
+export function phpImportPlanForSymbol(currentContent: string, s: DBSymbol): PhpImportPlan {
+  if (!s.exported) return {};
+  const ns = (s.namespace ?? '').replace(/^\\+/, '').replace(/\\+$/, '');
+  return phpImportPlan(currentContent, ns || null, s.name);
 }
 
 function importInsertPosition(content: string): Position {
@@ -315,15 +336,18 @@ function parseModifiers(raw: string | null | undefined): string[] {
  * property name never lands in a snippet string.
  */
 export function buildSymbolCompletion(
-  s: DBSymbol, tier: number, opts: { showPath?: boolean; languageId?: string; editPlan?: CompletionEditPlan } = {},
+  s: DBSymbol, tier: number,
+  opts: { showPath?: boolean; languageId?: string; editPlan?: CompletionEditPlan; origin?: string } = {},
 ): CompletionItem {
   const callable = s.kind === 'method' || s.kind === 'function';
   const hasParams = !!s.parameters && s.parameters.replace(/[()\s]/g, '').length > 0;
   // IntelliJ-style label columns: params logo após o nome (labelDetails.detail) e, à
   // direita (labelDetails.description, dimmed), o namespace/dir (quando showPath) OU o
-  // tipo de retorno. Assim itens do índice mostram a assinatura mesmo sem LSP server.
-  const ns = opts.showPath ? describeLocation(s.file_path, opts.languageId) : '';
-  const description = ns || s.return_type || '';
+  // tipo de retorno — membros herdados anexam a origem (`from Base`). Assim itens do
+  // índice mostram a assinatura mesmo sem LSP server.
+  const ns = opts.showPath ? describeLocation(s.file_path, opts.languageId, s.namespace) : '';
+  const originTag = opts.origin ? `from ${opts.origin}` : '';
+  const description = ns || [s.return_type, originTag].filter(Boolean).join(' · ');
   const paramsCol = callable && hasParams ? s.parameters! : '';
   const labelDetails = paramsCol || description
     ? { ...(paramsCol ? { detail: paramsCol } : {}), ...(description ? { description } : {}) }
@@ -343,17 +367,22 @@ export function buildSymbolCompletion(
   };
 }
 
-/** Members of `className` (optionally static-only), prefix-filtered. */
+/**
+ * Members of `className` INCLUDING inherited/trait members (relations walk —
+ * extends/implements/mixes), optionally static-only, prefix-filtered.
+ * Inherited members sort after own members (tier 1 vs 0) and carry a
+ * `from Ancestor` origin tag in labelDetails.description.
+ */
 export function memberCompletions(
   db: CodeIndexDB, projectId: number, className: string,
   opts: { staticOnly: boolean; prefix: string },
 ): CompletionItem[] {
-  const members = db.getClassMembers(className, projectId);
+  const { members } = db.getClassMembersDeep(projectId, className);
   const out: CompletionItem[] = [];
   for (const m of members) {
     if (opts.prefix && !m.name.startsWith(opts.prefix)) continue;
     if (opts.staticOnly && !parseModifiers(m.modifiers).includes('static')) continue;
-    out.push(buildSymbolCompletion(m, 0));
+    out.push(buildSymbolCompletion(m, m.inherited_from ? 1 : 0, { origin: m.inherited_from }));
   }
   return out.slice(0, 100);
 }

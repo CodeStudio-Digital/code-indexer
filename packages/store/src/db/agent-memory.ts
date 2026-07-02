@@ -101,6 +101,17 @@ interface ReferencedFileSnapshot {
   hash: string | null;
 }
 
+/** False-stale guard: a project with NO rows in `files` (never indexed, or a
+ *  trimmed per-project DB) cannot be judged — every lookup would miss and mark
+ *  EVERYTHING stale (unfair 0.5 score discount + risky GC input). */
+function projectHasFileIndex(db: DB, projectId: number): boolean {
+  try {
+    return db.prepare('SELECT 1 FROM files WHERE project_id = ? LIMIT 1').get(projectId) != null;
+  } catch {
+    return false; // files table absent → not judgeable
+  }
+}
+
 /** Resolve current file hashes for the referenced paths (best-effort). */
 function captureReferencedFiles(
   db: DB,
@@ -165,6 +176,7 @@ export function getStaleReferencedFiles(db: DB, id: number): string[] {
   const row = db.prepare('SELECT project_id, referenced_files FROM agent_memory WHERE id = ?')
     .get(id) as { project_id: number; referenced_files: string | null } | undefined;
   if (!row?.referenced_files) return [];
+  if (!projectHasFileIndex(db, row.project_id)) return [];
   let refs: ReferencedFileSnapshot[];
   try {
     const parsed = JSON.parse(row.referenced_files);
@@ -203,11 +215,17 @@ export function getStaleBatch(
   if (ids.length === 0) return map;
   const rowStmt = db.prepare('SELECT project_id, referenced_files FROM agent_memory WHERE id = ?');
   const fileStmt = db.prepare('SELECT content_hash FROM files WHERE project_id = ? AND path = ?');
+  const indexedCache = new Map<number, boolean>();
+  const indexed = (pid: number): boolean => {
+    let v = indexedCache.get(pid);
+    if (v === undefined) { v = projectHasFileIndex(db, pid); indexedCache.set(pid, v); }
+    return v;
+  };
   for (const id of ids) {
     const row = rowStmt.get(id) as
       | { project_id: number; referenced_files: string | null }
       | undefined;
-    if (!row?.referenced_files) {
+    if (!row?.referenced_files || !indexed(row.project_id)) {
       map.set(id, { stale: [], total: 0 });
       continue;
     }
@@ -255,6 +273,30 @@ export function archive(db: DB, id: number, reason = 'forgotten'): void {
     `UPDATE agent_memory SET archived_at = datetime('now'), archived_reason = ?,
        updated_at = datetime('now') WHERE id = ? AND archived_at IS NULL`,
   ).run(reason, id);
+}
+
+/**
+ * Un-archive (the archive round-trip). Returns false when nothing was restored
+ * — id unknown, already live, or a LIVE row with the same (scope, project,
+ * name) exists (the partial unique index would reject the resurrection).
+ * The caller re-embeds the restored row.
+ */
+export function restore(db: DB, id: number): boolean {
+  const row = db.prepare('SELECT * FROM agent_memory WHERE id = ?').get(id) as
+    | AgentMemoryRow
+    | undefined;
+  if (!row || row.archived_at === null) return false;
+  const collision = db
+    .prepare(
+      `SELECT 1 FROM agent_memory WHERE scope = ? AND project_id = ? AND name = ? AND archived_at IS NULL`,
+    )
+    .get(row.scope, row.project_id, row.name);
+  if (collision) return false;
+  db.prepare(
+    `UPDATE agent_memory SET archived_at = NULL, archived_reason = NULL,
+       superseded_by_id = NULL, updated_at = datetime('now') WHERE id = ?`,
+  ).run(id);
+  return true;
 }
 
 /**
@@ -348,10 +390,20 @@ export function listMissingEmbedding(db: DB, projectId?: number): AgentMemoryRow
     .all(projectId) as AgentMemoryRow[];
 }
 
+/** Type weight for the turn-1 index ranking — the memory kinds that make the
+ *  agent adhere to user preferences / project style outrank loose notes when
+ *  competing for the ~1200-char index budget. (Mirrors the retriever's
+ *  CATEGORY_WEIGHT in services/memory/scoring.ts — kept local: store cannot
+ *  import services.) */
+const INDEX_TYPE_WEIGHT: Record<string, number> = {
+  preference: 1.0, convention: 0.9, gotcha: 0.8, decision: 0.75,
+  procedure: 0.7, architecture: 0.55, pattern: 0.5, external_pointer: 0.4, note: 0.25,
+};
+
 /**
  * Logical-frontmatter index for `recall_memory(mode:'list')` and the turn-1
- * memory index. Ranked by importance × 30-day recency decay. Does NOT mark
- * access (listing a title is not using the memory).
+ * memory index. Ranked by importance × 30-day recency decay × type weight.
+ * Does NOT mark access (listing a title is not using the memory).
  */
 export function listMemoryIndex(
   db: DB,
@@ -381,7 +433,8 @@ export function listMemoryIndex(
   const scored = rows.map((r) => {
     const ts = Date.parse(`${(r.last_accessed_at ?? r.created_at).replace(' ', 'T')}Z`);
     const age = Number.isNaN(ts) ? HALF_LIFE_MS : Math.max(0, now - ts);
-    return { r, score: (r.importance ?? 0.5) * Math.pow(0.5, age / HALF_LIFE_MS) };
+    const typeBoost = 0.5 + 0.5 * (INDEX_TYPE_WEIGHT[r.type] ?? 0.5);
+    return { r, score: (r.importance ?? 0.5) * Math.pow(0.5, age / HALF_LIFE_MS) * typeBoost };
   });
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, Math.max(1, limit)).map(({ r }) => ({
@@ -395,6 +448,30 @@ export function listMemoryIndex(
     last_accessed_at: r.last_accessed_at,
     excerpt: r.excerpt ?? undefined,
   }));
+}
+
+/**
+ * Full live rows for the curation surfaces (user-memory panel, AgentMemoryList)
+ * — unlike `listMemoryIndex` this returns COMPLETE content, optionally with the
+ * archived tail for restore. Ordered live-first, then importance.
+ */
+export function listLive(
+  db: DB,
+  scope: AgentMemoryScope,
+  projectId: number,
+  opts: { includeArchived?: boolean; limit?: number } = {},
+): AgentMemoryRow[] {
+  const pid = normalizeScopeProject(scope, projectId);
+  const limit = Math.max(1, Math.min(500, opts.limit ?? 200));
+  const archivedClause = opts.includeArchived ? '' : 'AND archived_at IS NULL';
+  return db
+    .prepare(
+      `SELECT * FROM agent_memory
+        WHERE scope = ? AND project_id = ? ${archivedClause}
+        ORDER BY (archived_at IS NULL) DESC, importance DESC, updated_at DESC
+        LIMIT ?`,
+    )
+    .all(scope, pid, limit) as AgentMemoryRow[];
 }
 
 /** FTS search within a scope/project. Falls back to LIKE when the MATCH fails. */

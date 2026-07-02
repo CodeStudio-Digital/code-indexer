@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import { compactWithLLM } from '../llm-compactor.js';
+import { compactWithLLM, truncateHeadMechanically } from '../llm-compactor.js';
 import { estimateMessageTokens } from '@mcp/code-agent/core/token-accounting.js';
 
 function user(text: string): AgentMessage {
@@ -181,5 +181,67 @@ describe('compactWithLLM', () => {
     expect(withBudget.collapsedTo).toBe(1);
     expect(withBudget.messages[0].role).toBe('user'); // synthetic summary
     expect(withBudget.messages.length).toBeLessThan(messages.length);
+  });
+});
+
+describe('truncateHeadMechanically', () => {
+  it('drops the head, keeps the tail verbatim, and never calls an LLM', () => {
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      messages.push(user(`u${i}`));
+      messages.push(assistant(`a${i}`));
+    }
+    const result = truncateHeadMechanically({ messages, protectTokens: 10 });
+
+    expect(result.ok).toBe(true);
+    expect(result.collapsedFrom).toBeGreaterThan(0);
+    expect(result.collapsedTo).toBe(1);
+    expect(result.summary).toBeNull();
+    // Synthetic marker heads the new history.
+    const marker = result.messages[0].content[0] as { text: string };
+    expect(result.messages[0].role).toBe('user');
+    expect(marker.text).toContain('[context truncated]');
+    expect(marker.text).toContain(`${result.collapsedFrom} earlier messages`);
+    // Tail preserved byte-identical.
+    const tail = messages.slice(result.cutoffApplied);
+    expect(result.messages.slice(1)).toEqual(tail);
+    // Input never mutated.
+    expect(messages).toHaveLength(40);
+  });
+
+  it('no-ops when everything fits in the protect budget', () => {
+    const messages = [user('hi'), assistant('hello')];
+    const result = truncateHeadMechanically({ messages, protectTokens: 1_000_000 });
+    expect(result.ok).toBe(true);
+    expect(result.collapsedFrom).toBe(0);
+    expect(result.messages).toBe(messages);
+  });
+
+  it('no-ops on empty history', () => {
+    const result = truncateHeadMechanically({ messages: [], protectTokens: 100 });
+    expect(result.ok).toBe(true);
+    expect(result.collapsedFrom).toBe(0);
+  });
+
+  it('never splits a tool_use / tool_result pair at the cutoff', () => {
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      messages.push(user(`u${i} ${'x'.repeat(40)}`));
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: `tu${i}`, name: 'run', input: {} }],
+      });
+      messages.push({
+        role: 'tool',
+        content: [{ type: 'tool_result', tool_use_id: `tu${i}`, content: `r${i}` }],
+      });
+    }
+    const per = estimateMessageTokens(messages[3]);
+    const result = truncateHeadMechanically({ messages, protectTokens: per * 4 });
+    if (result.collapsedFrom > 0) {
+      // First message after the marker must not be an orphaned tool_result.
+      const first = result.messages[1];
+      expect(first.role).not.toBe('tool');
+    }
   });
 });

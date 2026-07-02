@@ -98,6 +98,8 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     // ExecutingNode after each turn's dispatch; reset only when a guard fires.
     doomLoop: createDoomLoopState(),
     dominance: createDominanceState(),
+    // A1 — no retained dedup signatures until a loop guard fires.
+    retainedLoopKeys: null,
     // Fix B — loop-aware compaction signals start at zero; ExecutingNode
     // advances them each turn, CompactingNode checkpoints/resets on collapse.
     consecutiveNoTextTurns: 0,
@@ -118,6 +120,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       // Fix A — self_review nudge gate state (empty = nudge allowed once
       // there are unreviewed pending changes).
       selfReview: { suppressed: false },
+      correctionNudge: { lastHash: null, count: 0 },
     },
   };
 }

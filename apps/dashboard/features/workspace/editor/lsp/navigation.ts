@@ -7,6 +7,7 @@ import type * as MonacoNs from 'monaco-editor';
 import { apiCall, apiStream, electronApi } from '../../../../lib/api-client.js';
 import { logLsp } from '../lsp-log.js';
 import { throttledPerKey, clearThrottleKey } from '../semanticTokensThrottle.js';
+import { pushCurrentNavPosition } from '../nav-commands.js';
 import { relPath, toMonacoRange, type HoverDTO, type LspLocationDTO, type Monaco } from './dto.js';
 
 // MUST stay identical to MONACO_SEMANTIC_LEGEND in
@@ -255,6 +256,10 @@ export function registerEditorOpener(monaco: Monaco, projectId: number): MonacoN
       if (!root) return false;
       const rel = toRel(root, resource.fsPath);
       if (!rel) return false;
+
+      // Navegação estilo IntelliJ: registra a posição ATUAL antes do salto
+      // para que Ctrl+Alt+Left volte (também suprime o eco do tracking).
+      pushCurrentNavPosition();
 
       // Pull dynamically — keeps this module reusable in tests + helps tree-shaking.
       const { useWorkspaceStore } = await import('../../../../state/workspace.js');

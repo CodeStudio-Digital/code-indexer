@@ -550,14 +550,10 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
 export const EXPLORE_ALLOWLIST = new Set<string>([
   'mcp__get_project_pulse',
   'mcp__get_project_overview',
-  'mcp__get_architecture',
   'mcp__list_directory',
   'mcp__get_recently_modified_files',
   'mcp__get_file_skeleton',
-  'mcp__get_file_structure',
   'mcp__get_symbol_body',
-  'mcp__get_symbol_details',
-  'mcp__get_class_members',
   'mcp__get_dependencies',
   'mcp__get_dependents',
   'mcp__find_references',
@@ -567,8 +563,6 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
   'mcp__grep_code',
   'mcp__read_file',
   'mcp__search',
-  'mcp__search_by_kind',
-  'mcp__search_concepts',
   'mcp__search_memory',
   'mcp__prepare_edit',
   // Native read-only filesystem

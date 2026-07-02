@@ -71,7 +71,33 @@
 // (they were demoted from bootstrap in Phase B); explore.txt + base.txt reworded
 // to match the real turn-1 surface. Static prefix changed → invalidates stale
 // fingerprints.
-export const SYSTEM_PROMPT_VERSION = '20260628.2';
+// 2026-07-02.1 bump — prompt-audit batch: base.txt Style gains parallel-batching
+// + result-honesty bullets and Native tools gains the no-invented-tool-names
+// rule; build.txt verify bullet teaches command DISCOVERY (package.json /
+// Makefile / "Known verify commands" dynamic block); plan.txt right-size gains
+// the null-plan case; agent-loop + subagent framing differentiate broken-tool
+// retry vs Unknown-tool → find_tools; mcpSection drops the mcp__search_memory
+// paragraph on sessionDrive sessions (recall_memory covers the same store);
+// EXPLORE subagent gains the memory-staleness caveat, IMPLEMENT gains the
+// files-scope rule. Static prefix changed → invalidates stale fingerprints.
+// 2026-07-02.2 bump — tool description audit (docs/audit/TOOL_AUDIT.md):
+// terseDescription() aligned to the bridge's [.\n] sentence cut (the '. '
+// matcher hard-cut every '.\n'-styled description mid-word); 16 weak MCP-server
+// descriptions rewritten to the house style; 11 terse-unsafe first sentences
+// fixed across code-agent/company. Tool array bytes changed → invalidates
+// stale fingerprints.
+// 2026-07-02.3 bump — audit follow-ups: six 0-call MCP tools retired
+// (get_file_structure, search_concepts, search_by_kind, get_class_members,
+// get_symbol_details, get_architecture — see tier-contract retired list);
+// prepare_edit adoption fix (description + build.txt/builder.txt route edits
+// through it before get_symbol_body); base.txt overlay line and master
+// company prompt drop retired tool names. Tool surface + static prefix
+// changed → invalidates stale fingerprints.
+// 2026-07-02.4 bump — memory incentives: concrete save examples in
+// memorySection, recall step 0 in plan.txt, recall-first reword in
+// explore.txt + spec.txt, toolCap memory line, remember/recall description
+// tweaks. Static prefix changed → invalidates stale fingerprints.
+export const SYSTEM_PROMPT_VERSION = '20260702.4';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

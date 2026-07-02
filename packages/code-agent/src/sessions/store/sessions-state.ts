@@ -236,8 +236,10 @@ export function setWorktree(db: DB, id: number, worktreePath: string | null): vo
  * High-water mark of memory distillation (migration 136): the last message id
  * already covered by a distillation pass. The compaction harvest advances it
  * (to the boundary); the idle sweeper distills only messages PAST it and
- * advances it even on error (anti poison-pill). NOTE: never moves backwards —
- * concurrent passes can only widen coverage.
+ * advances it on success / genuine no-facts — a FAILED pass leaves it intact
+ * and bumps `memory_distill_attempts` instead (migration 185), so the span is
+ * retried with backoff up to a cap. NOTE: never moves backwards — concurrent
+ * passes can only widen coverage.
  */
 export function setMemoryDistilledBoundary(db: DB, id: number, messageId: number): void {
   db.prepare(
@@ -249,6 +251,18 @@ export function getMemoryDistilledBoundary(db: DB, id: number): number {
   const row = db.prepare('SELECT memory_distilled_message_id AS m FROM coder_sessions WHERE id = ?')
     .get(id) as { m: number | null } | undefined;
   return row?.m ?? 0;
+}
+
+/** One more FAILED distill attempt for the span past the high-water mark. */
+export function bumpMemoryDistillAttempts(db: DB, id: number): void {
+  db.prepare(
+    'UPDATE coder_sessions SET memory_distill_attempts = memory_distill_attempts + 1 WHERE id = ?',
+  ).run(id);
+}
+
+/** Clear the failure streak — called when a pass completes (or the cap gives up). */
+export function resetMemoryDistillAttempts(db: DB, id: number): void {
+  db.prepare('UPDATE coder_sessions SET memory_distill_attempts = 0 WHERE id = ?').run(id);
 }
 
 /** Get existing cloudcode_session_id or generate + persist a new one. */

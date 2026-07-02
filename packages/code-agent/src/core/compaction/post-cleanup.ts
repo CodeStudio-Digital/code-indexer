@@ -5,7 +5,6 @@ const POST_COMPACT_READ_TOOLS = new Set<string>([
   'read_file',
   'mcp__read_file',
   'mcp__get_file_skeleton',
-  'mcp__get_file_structure',
   'Read',
   'glob',
   'mcp__grep_code',

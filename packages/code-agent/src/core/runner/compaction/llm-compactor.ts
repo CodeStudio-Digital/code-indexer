@@ -85,21 +85,34 @@ export interface CompactResult {
   error?: Error;
 }
 
+/**
+ * Shared cutoff resolution — token scan, Kimi-style user-turn recede,
+ * renderable-turn floor, then pair-preserving snap. Used by both the LLM
+ * path and the mechanical fallback so they always agree on head/tail.
+ */
+function resolveCutoff(
+  messages: AgentMessage[],
+  protectTokens: number,
+  maxTailTokens?: number,
+): number {
+  let cutoff = computeCutoffIndexByTokens(messages, protectTokens);
+  cutoff = recedeToPreserveLastNTurns(messages, cutoff, preserveLastNTurns(), maxTailTokens);
+  // Message-count floor: keep at least the last N renderable turns verbatim so a
+  // token-dense tail can't collapse the recent working state. Bounded by the
+  // same recede ceiling (`maxTailTokens`) so it never overflows the window.
+  const renderableTurns = messages.reduce((acc, m) => acc + (m.role !== 'tool' ? 1 : 0), 0);
+  cutoff = recedeToPreserveLastNRenderableTurns(
+    messages, cutoff, computeMinTailTurns(renderableTurns), maxTailTokens,
+  );
+  return snapCutoffPreservingPairs(messages, cutoff);
+}
+
 export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> {
   if (args.messages.length === 0) {
     return noOp(args.messages);
   }
 
-  let cutoff = computeCutoffIndexByTokens(args.messages, args.protectTokens);
-  cutoff = recedeToPreserveLastNTurns(args.messages, cutoff, preserveLastNTurns(), args.maxTailTokens);
-  // Message-count floor: keep at least the last N renderable turns verbatim so a
-  // token-dense tail can't collapse the recent working state. Bounded by the
-  // same recede ceiling (`maxTailTokens`) so it never overflows the window.
-  const renderableTurns = args.messages.reduce((acc, m) => acc + (m.role !== 'tool' ? 1 : 0), 0);
-  cutoff = recedeToPreserveLastNRenderableTurns(
-    args.messages, cutoff, computeMinTailTurns(renderableTurns), args.maxTailTokens,
-  );
-  cutoff = snapCutoffPreservingPairs(args.messages, cutoff);
+  const cutoff = resolveCutoff(args.messages, args.protectTokens, args.maxTailTokens);
 
   // No-op when nothing is compactable.
   if (cutoff <= 0 || cutoff >= args.messages.length) {
@@ -146,6 +159,48 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
       error: e instanceof Error ? e : new Error(String(e)),
     };
   }
+}
+
+/**
+ * Deterministic last-resort compaction — same cutoff pipeline as
+ * `compactWithLLM` but NO summary: the head is simply dropped and replaced
+ * with a one-line marker. Used by the Compacting node when the summarizer
+ * has failed past the `compact-failure` cap: losing the summary is strictly
+ * better than losing the run. Never mutates the input array.
+ */
+export function truncateHeadMechanically(args: {
+  messages: AgentMessage[];
+  protectTokens: number;
+  maxTailTokens?: number;
+}): CompactResult {
+  if (args.messages.length === 0) return noOp(args.messages);
+
+  const cutoff = resolveCutoff(args.messages, args.protectTokens, args.maxTailTokens);
+  if (cutoff <= 0 || cutoff >= args.messages.length) {
+    return noOp(args.messages, cutoff);
+  }
+
+  const head = args.messages.slice(0, cutoff);
+  const tail = args.messages.slice(cutoff);
+  const synthetic: AgentMessage = {
+    role: 'user',
+    content: [{
+      type: 'text',
+      text:
+        `<system-reminder>[context truncated] The runner dropped ${head.length} earlier messages ` +
+        'after repeated summarizer failures (no summary available). Recent messages are intact. ' +
+        'Re-read files you still need; earlier tool outputs may be recoverable via ' +
+        '`get_tool_output`.</system-reminder>',
+    }],
+  };
+  return {
+    ok: true,
+    messages: [synthetic, ...tail],
+    summary: null,
+    collapsedFrom: head.length,
+    collapsedTo: 1,
+    cutoffApplied: cutoff,
+  };
 }
 
 function noOp(messages: AgentMessage[], cutoff = 0): CompactResult {

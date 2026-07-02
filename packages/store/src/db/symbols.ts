@@ -18,9 +18,9 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
 
     const insert = db.prepare(`
       INSERT INTO symbols (project_id, file_id, file_path, name, kind, signature,
-        parent, modifiers, return_type, parameters, line, col, end_line, exported,
+        parent, namespace, modifiers, return_type, parameters, line, col, end_line, exported,
         comment, tags, stable_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertRelation = db.prepare(`
@@ -39,7 +39,7 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
       });
       const result = insert.run(
         projectId, fileId, filePath, sym.name, sym.kind, sym.signature,
-        sym.parent, JSON.stringify(sym.modifiers), sym.return_type,
+        sym.parent, sym.namespace ?? null, JSON.stringify(sym.modifiers), sym.return_type,
         sym.parameters, sym.line, sym.col ?? null, sym.end_line ?? null,
         sym.exported ? 1 : 0, sym.comment, JSON.stringify(sym.tags),
         stableId
@@ -53,6 +53,12 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
       if (sym.implements_list && sym.implements_list.length > 0) {
         for (const iface of sym.implements_list) {
           insertRelation.run(projectId, symId, iface, 'implements');
+        }
+      }
+      // PHP trait mixins reuse the pre-existing 'mixes' relation type.
+      if (sym.uses_traits && sym.uses_traits.length > 0) {
+        for (const trait of sym.uses_traits) {
+          insertRelation.run(projectId, symId, trait, 'mixes');
         }
       }
     }

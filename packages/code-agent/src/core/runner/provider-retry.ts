@@ -36,6 +36,44 @@ export function nonRetryableProviderErrorReason(error: Error, raw: unknown): str
 }
 
 /**
+ * Substrings that mark a context-window overflow across provider families.
+ * Kept lowercase; matched against message + code. Sources:
+ *   - Anthropic: "prompt is too long: N tokens > M maximum",
+ *     "input length and max_tokens exceed context limit"
+ *   - OpenAI-compat (OpenAI/DeepSeek/ZAI): "This model's maximum context
+ *     length is N tokens...", code `context_length_exceeded`,
+ *     "exceeds the context window", "input length exceeds"
+ *   - Gemini: "input token count (N) exceeds the maximum number of tokens"
+ *   - Kimi/Moonshot: "exceeded model token limit"
+ */
+const OVERFLOW_SIGNATURES = [
+  'prompt is too long',
+  'context_length_exceeded',
+  'maximum context length',
+  'exceeds the context window',
+  'exceed context limit',
+  'exceeds the maximum number of tokens',
+  'exceeded model token limit',
+  'input length exceeds',
+  'maximum input length',
+  'too many tokens',
+] as const;
+
+/**
+ * True when a provider error is a context-window overflow. These are
+ * deterministic — retrying the same payload can never succeed — so the
+ * Recovering node routes them to Compacting instead of retry/abort.
+ */
+export function isContextOverflowError(message?: string, code?: string): boolean {
+  const text = [message, code]
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .join('\n')
+    .toLowerCase();
+  if (!text) return false;
+  return OVERFLOW_SIGNATURES.some((sig) => text.includes(sig));
+}
+
+/**
  * Tenacity-style exp+jitter backoff. Mirrors kimi-cli's
  * `wait_exponential_jitter(initial=0.3, max=5, jitter=0.5)`. Returns
  * the delay in milliseconds for a 1-based attempt number.

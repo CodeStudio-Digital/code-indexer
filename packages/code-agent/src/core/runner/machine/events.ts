@@ -10,15 +10,20 @@ export const events = {
     kind: 'TurnSucceeded',
     hasToolCalls: opts.hasToolCalls,
   }),
-  tokenThresholdHit: (opts: { ratio: number }): BehaviorEvent => ({
+  tokenThresholdHit: (opts: { ratio: number; trigger?: string }): BehaviorEvent => ({
     kind: 'TokenThresholdHit',
     ratio: opts.ratio,
+    ...(opts.trigger != null ? { trigger: opts.trigger } : {}),
   }),
   toolLoopDetected: (opts: {
     guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
+    toolName?: string;
+    count?: number;
   }): BehaviorEvent => ({
     kind: 'ToolLoopDetected',
     guard: opts.guard,
+    ...(opts.toolName != null ? { toolName: opts.toolName } : {}),
+    ...(opts.count != null ? { count: opts.count } : {}),
   }),
   maxTurnsReached: (opts: { autoContinueLeft: number }): BehaviorEvent => ({
     kind: 'MaxTurnsReached',

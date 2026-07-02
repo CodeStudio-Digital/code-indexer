@@ -266,6 +266,13 @@ export interface DispatchResult {
    */
   loopGuard?: 'tuple-hash' | 'failure-streak';
   /**
+   * A1 — tool + repetition count behind the most recent refusal in this
+   * batch (mirrors `loopGuard`: last one wins). Threaded into
+   * `events.toolLoopDetected` so Planning can NAME the loop in its
+   * reflection reminder instead of a generic "a repeated tool call".
+   */
+  loopDetail?: { toolName: string; count: number };
+  /**
    * Set when a tool+args was hard-refused enough times across planning
    * cycles (≥ `ENFORCE_AFTER_REFUSALS`) to count as an INSISTENT loop. The
    * Executing node reacts by injecting an active enforcement
@@ -289,6 +296,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   // PR 5 — which guard fired last. Tracked so the Executing node can
   // surface the correct guard kind to the orchestrator.
   let loopGuard: DispatchResult['loopGuard'] | undefined;
+  // A1 — tool/count behind the last refusal (mirrors loopGuard).
+  let loopDetail: DispatchResult['loopDetail'];
   // Insistent-loop enforcement signal (last refused call that crossed the
   // cross-cycle threshold wins).
   let loopEnforcement: DispatchResult['loopEnforcement'];
@@ -429,6 +438,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       });
       toolLoopDetected = true;
       loopGuard = 'tuple-hash';
+      loopDetail = { toolName: tu.name, count: verdict.entry.count };
       // Cross-cycle memory: the Planning reset clears `dupCalls`, so without
       // this the loop never escalates past one passive refusal. Count refusals
       // that survive the reset; once they pile up, flag active enforcement.
@@ -669,6 +679,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         refusalKind = 'failure-streak';
         toolLoopDetected = true;
         loopGuard = 'failure-streak';
+        loopDetail = { toolName: tu.name, count: verdict.count };
         args.onFailureStreakIntervention?.({
           toolName: tu.name,
           kind: 'refuse',
@@ -720,7 +731,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     });
   }
 
-  return { results, toolLoopDetected, loopGuard, loopEnforcement };
+  return { results, toolLoopDetected, loopGuard, loopDetail, loopEnforcement };
 }
 
 /** Compact error-to-string for the guarded bridge-callback warnings. */

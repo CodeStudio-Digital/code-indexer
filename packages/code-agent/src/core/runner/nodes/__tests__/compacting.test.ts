@@ -102,7 +102,7 @@ describe('CompactingNode', () => {
     expect(ctx.stopReason).toBe(null);
   });
 
-  it('aborts with stopReason=compact_failure when over the recovery cap', async () => {
+  it('falls back to mechanical truncation instead of aborting when over the recovery cap', async () => {
     vi.stubEnv('CODER_RECOVERY_COMPACT_MAX', '1');
     const { ctx, recordedEvents } = makeTestContext();
     const messages: AgentMessage[] = [];
@@ -119,12 +119,46 @@ describe('CompactingNode', () => {
     }).execute(ctx, null);
     expect(first.kind).toBe('ProviderError');
 
-    // Second call: 2/1 → aborts.
+    // Second call: 2/1 over cap → deterministic head-drop, run survives.
     const second = await new CompactingNode({
       protectTokensOverride: 10,
       summarizeOverride: async () => null,
     }).execute(ctx, null);
-    expect(second.kind).toBe('Aborted');
+    expect(second.kind).toBe('CompactionDone');
+    expect(ctx.stopReason).toBe(null);
+    expect(ctx.messages.length).toBeLessThan(messages.length);
+    const marker = ctx.messages[0].content[0] as { text: string };
+    expect(marker.text).toContain('[context truncated]');
+    // Breaker resets so the NEXT summarizer failure gets fresh retries.
+    expect(ctx.recovery.get('compact-failure')).toBe(0);
+    expect(recordedEvents.find((r) => r.event === 'recovery_aborted')).toBeUndefined();
+    const strategies = recordedEvents
+      .filter((r) => r.event === 'history_compacted')
+      .map((r) => (r.args[0] as { strategy: string }).strategy);
+    expect(strategies).toContain('deterministic');
+  });
+
+  it('still aborts over cap when the failure came from the user abort signal', async () => {
+    vi.stubEnv('CODER_RECOVERY_COMPACT_MAX', '0');
+    const abort = new AbortController();
+    abort.abort();
+    const { ctx, recordedEvents } = makeTestContext({
+      toolContext: { signal: abort.signal } as never,
+    });
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      messages.push(user(`u${i}`));
+      messages.push(assistant(`a${i}`));
+    }
+    ctx.messages = messages;
+
+    // Cap 0 → the first failure is already over cap; aborted signal blocks
+    // the mechanical fallback (a cancelled run must stay cancelled).
+    const event = await new CompactingNode({
+      protectTokensOverride: 10,
+      summarizeOverride: async () => null,
+    }).execute(ctx, null);
+    expect(event.kind).toBe('Aborted');
     expect(ctx.stopReason).toBe('compact_failure');
 
     const aborted = recordedEvents.find((r) => r.event === 'recovery_aborted');

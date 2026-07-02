@@ -64,6 +64,7 @@ import { apiCall as apiCallFs } from '../../lib/api-client.js';
 import { markRouteEvent, setRouteTab } from '../../lib/perf/route-startup-metrics.js';
 import { installKeymapDispatcher } from '../../keymap/dispatcher.js';
 import { registerProjectCommands } from './project-commands.js';
+import { registerEditorCommands } from '../workspace/editor/editor-commands.js';
 import { startRecentFilesTracking } from '../../state/recent-files.js';
 import { SearchEverywhere } from '../search-everywhere/SearchEverywhere.js';
 import { FileStructurePopup } from '../search-everywhere/FileStructurePopup.js';
@@ -304,7 +305,9 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       },
       toggleChat: () => setTab((cur) => (cur === 'chat' ? 'files' : 'chat')),
     });
+    const unregisterEditor = registerEditorCommands();
     return () => {
+      unregisterEditor();
       unregister();
       uninstall();
     };

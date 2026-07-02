@@ -25,6 +25,35 @@ function normalizeContent(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Deterministic decay of cold LOW-VALUE rows (sweeper hygiene, no LLM):
+ * archive `note`-type memories that were never accessed, sit under the
+ * note-tier importance bar, and are older than `maxAgeDays`. Reversible
+ * (reason `decayed:cold-note`, restorable from the UI). Preferences,
+ * conventions, gotchas etc. are NEVER touched — only `note`.
+ */
+export function decayColdNotes(
+  db: DB,
+  scope: 'project' | 'user' | 'local',
+  projectId: number,
+  opts: { maxAgeDays?: number; importanceBelow?: number } = {},
+): number {
+  const maxAgeDays = Math.max(7, opts.maxAgeDays ?? 60);
+  const importanceBelow = opts.importanceBelow ?? 0.4;
+  return db
+    .prepare(
+      `UPDATE agent_memory
+          SET archived_at = datetime('now'), archived_reason = 'decayed:cold-note',
+              updated_at = datetime('now')
+        WHERE scope = ? AND project_id = ? AND archived_at IS NULL
+          AND type = 'note'
+          AND access_count = 0
+          AND importance < ?
+          AND created_at < datetime('now', '-' || ? || ' days')`,
+    )
+    .run(scope, projectId, importanceBelow, maxAgeDays).changes;
+}
+
 export function consolidateProject(
   db: DB,
   scope: 'project' | 'user' | 'local',

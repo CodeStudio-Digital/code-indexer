@@ -3,6 +3,7 @@ import type { AgentMemoryScope, AgentMemoryType } from '@mcp/shared/types.js';
 import { recencyDecay } from '@mcp/candidate-pipeline';
 import type { AgentMemoryService } from './agent-memory-service.js';
 import type { RecallFilterFn, RecalledMemory, RetrievedMemory } from './retriever.js';
+import { blendedMemoryScore, diversify, PIN_IMPORTANCE } from './scoring.js';
 
 /**
  * Retrieves relevant Agent Memory (the dedicated `agent_memory` table) for the
@@ -17,10 +18,6 @@ import type { RecallFilterFn, RecalledMemory, RetrievedMemory } from './retrieve
  * score, never to the raw RRF rank (R5: RRF is not a calibrated relevance).
  */
 
-const W_BASE = 0.4;
-const W_IMP = 0.3;
-const W_REC = 0.2;
-const W_USE = 0.1;
 const STALE_MAX = 0.5; // max trust discount when ALL referenced files changed
 const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
 const USE_SATURATION = 20;
@@ -85,8 +82,9 @@ export class AgentMemoryRetriever {
       return [];
     }
 
-    // Floor the full candidate set, then map to RetrievedMemory.
-    let candidates: RetrievedMemory[] = this.applyFloor(this.scoreHits(hits)).map((t) => ({
+    // Floor the full candidate set, diversify (≤2 per type in the head so the
+    // injected trio is never monotype), then map to RetrievedMemory.
+    let candidates: RetrievedMemory[] = diversify(this.applyFloor(this.scoreHits(hits))).map((t) => ({
       id: String(t.row.id),
       title: t.row.name,
       content: t.row.content,
@@ -161,7 +159,9 @@ export class AgentMemoryRetriever {
         row,
         stale: st?.stale,
         type: row.type,
-        score: relevance * (W_BASE + W_IMP * imp + W_REC * rec + W_USE * use) * staleMult,
+        score: blendedMemoryScore({
+          relevance, importance: imp, recency: rec, usage: use, type: row.type, staleMult,
+        }),
       };
     });
     scored.sort((a, b) => b.score - a.score);
@@ -174,6 +174,8 @@ export class AgentMemoryRetriever {
     const conservative = this.opts.conservativeTypes;
     const factor = this.opts.conservativeFactor ?? 1.5;
     return scored.filter((s) => {
+      // Pins are user intent — never floored out.
+      if ((s.row.importance ?? 0) >= PIN_IMPORTANCE) return true;
       const bar = conservative && conservative.has(s.type) ? floor * factor : floor;
       return s.score >= bar;
     });

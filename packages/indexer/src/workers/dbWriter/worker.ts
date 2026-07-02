@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type { DbWriteReq, DbWriteRes, DbWriterWorkerData, PersistAssistantTurnPayload } from '@mcp/indexer/workers/dbWriter/protocol.js';
 import { classifyToolRefusal } from '@mcp/code-agent/sessions/store/tool-refusal.js';
+import { classifyToolError } from '@mcp/code-agent/sessions/store/tool-error-class.js';
 
 if (!parentPort) {
   throw new Error('dbWriter worker: must run inside worker_threads');
@@ -33,8 +34,8 @@ const insertTool = db.prepare(`
   INSERT INTO coder_tool_calls
     (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
      output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
-     parent_tool_use_id)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     parent_tool_use_id, error_class)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const bumpStmt = db.prepare(`
   UPDATE coder_sessions
@@ -92,6 +93,7 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
       tc.turn_telemetry_id ?? null,
       tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
       tc.parent_tool_use_id ?? null,
+      classifyToolError(tc.result_text, tc.is_error),
     );
   };
   for (const tc of p.tool_calls) runInsertTool(tc);

@@ -86,7 +86,8 @@ export const previewTypeTool: CoderTool = {
 export const previewPressTool: CoderTool = {
   name: 'preview_press',
   description:
-    'Press a key — a single character ("k"), a named key (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right), or a combo ("Meta+k", "Control+a", "Shift+Tab"). Optionally focus `selector` first. Use Enter to submit a focused form, or combos for app shortcuts (Cmd/Ctrl+K command palette).',
+    'Press a keyboard key in the preview: a single character, a named key, or a modifier combo.\n' +
+    'Examples: "k", Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, "Meta+k", "Control+a", "Shift+Tab". Optionally focus `selector` first. Use Enter to submit a focused form, or combos for app shortcuts (Cmd/Ctrl+K command palette).',
   source: 'native',
   parameters: {
     type: 'object',

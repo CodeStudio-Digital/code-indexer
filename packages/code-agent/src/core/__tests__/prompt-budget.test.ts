@@ -77,27 +77,27 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Tool strategy — token economy': 1150,
   '# Tool strategy — project NOT indexed': 1010,
   '# Tool strategy — native only (MCP bridge unavailable)': 770,
-  '# Native tools (edits, execution, git)': 680,
+  '# Native tools (edits, execution, git)': 870, // 2026-07-02: + no-invented-tool-names rule (measured 791)
   '# Images & vision': 500,
   '# Session overlay (automatic freshness)': 730,
   '# Subagents (isolated delegation)': 1120,
-  '# Memory': 1300, // company/no-Session-Drive long-term memory block
-  "# Memory (three distinct layers — don't conflate them)": 1900, // migration 181 memory overhaul
-  '# Style': 290,
+  '# Memory': 1450, // company/no-Session-Drive long-term memory block (+concrete save example, 2026-07)
+  "# Memory (three distinct layers — don't conflate them)": 2150, // migration 181 overhaul + concrete examples (2026-07)
+  '# Style': 560, // 2026-07-02: + parallel-batching + result-honesty bullets (measured 511)
   // Session-fixed directives (only rendered when configured): language (G1),
   // output style (G8), unsupervised framing (G3).
   '# Language': 420,
   '# Explanatory output': 420,
   '# Learning output': 420,
   '# Operating autonomously': 760,
-  '# Plan mode is ACTIVE': 5480, // plan.txt + ## Plan depth block + decision-gate step/section; complex variant ≈ 4974 + ~10%
+  '# Plan mode is ACTIVE': 5700, // plan.txt + ## Plan depth block + decision-gate step/section + recall step 0 (2026-07)
 
-  '# Explore mode is ACTIVE': 2420,
+  '# Explore mode is ACTIVE': 2600, // + recall-first reword + directory-skeleton hint (2026-07, measured 2564)
   '# Build mode is ACTIVE': 2980, // Track G: + pre-execution destructive-action evidence line
 
   '# Admin mode is ACTIVE': 2450,
   '# Interactive tools': 1020,
-  '# Agent loop': 1850, // Track G: + balanced anti-stop (report-vs-fix, reversible-vs-destructive) + plan/spec gate override
+  '# Agent loop': 2050, // Track G + 2026-07-02 broken-tool-vs-Unknown-tool error recovery (measured 1860)
 
   '# Preambles before tool calls': 370,
   '# Do not re-read what you already have': 430,
@@ -106,8 +106,8 @@ const SECTION_BUDGETS: Record<string, number> = {
 
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
-  default: 11500,   // zai · navigate · no plan · no agentId · loop v2 · drive (+ G4 memory-staleness caveat; ~10943 measured)
-  planMode: 16600,  // same + specialist plan.txt + ## Plan depth block + decision-gate guidance + memory overhaul (~16402 measured)
+  default: 12100,   // zai · navigate · no plan · no agentId · loop v2 · drive (2026-07-02 prompt-audit batch; ~11546 measured)
+  planMode: 17300,  // same + specialist plan.txt + ## Plan depth block + null-plan case (~16668 measured)
 };
 
 interface Composition {
@@ -199,6 +199,10 @@ describe('prompt-budget — cache boundary guarantees', () => {
       customTiers: [{ tier: 'cf', displayName: 'Cloudflare', toolCount: 9 }],
     })).toBe(bare);
     expect(prefix({ ...BASE_CTX, repoMap: '# Repo map\n- a.ts: foo()' })).toBe(bare);
+    expect(prefix({
+      ...BASE_CTX,
+      verifyCommands: '# Known verify commands (detected)\npackage.json scripts: test',
+    })).toBe(bare);
   });
 
   it('toolCap and customTiers render BELOW the boundary', () => {

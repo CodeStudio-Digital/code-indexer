@@ -12,6 +12,7 @@
  * own errors so a failed distillation can never affect the user's session.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
+import type { DistillDiag } from './distill-call.js';
 import { LlmMemoryDistiller } from './distiller.js';
 import { FailureDistiller } from './failure-distiller.js';
 import { ProcedureDistiller } from './procedure-distiller.js';
@@ -56,6 +57,10 @@ export interface RunEndMemoryResult {
   created: number;
   merged: number;
   skipped: number;
+  /** True when an LLM/transport failure interrupted the pass — the caller
+   *  must NOT advance the distill boundary (the span deserves a retry).
+   *  Structural-clonable: crosses the worker→main shims unchanged. */
+  hadError: boolean;
 }
 
 export interface RunEndMemory {
@@ -91,15 +96,29 @@ export interface RunEndMemoryDeps {
     entry: {
       sessionId?: number | null;
       trigger: string;
-      status: 'ok' | 'empty' | 'error';
+      status: 'ok' | 'empty' | 'error' | 'skipped';
       created: number;
       merged: number;
       skipped: number;
       error?: string | null;
+      /** Machine-readable refinement: `llm_error:401`, `no_facts`,
+       *  `fallback_used`, `no_input`, … (migration 185). */
+      detail?: string | null;
+      provider?: string | null;
+      model?: string | null;
+      rawChars?: number | null;
+      durationMs?: number | null;
+      createdUser?: number;
     },
   ) => void;
   /** Test seam — inject distillers; defaults to the real LLM-backed trio. */
   distillers?: { positive: MemoryDistiller; failure: MemoryDistiller; procedure: MemoryDistiller };
+  /**
+   * Style-profile fold (MCP_MEMORY_STYLE_PROFILE) — returns the CURRENT
+   * "Project style profile" content for a project (null = none yet). Wired
+   * only when the flag is on; absent = fold disabled, prompt unchanged.
+   */
+  getStyleProfile?: (projectId: number) => string | null;
 }
 
 const SOURCE = 'session';
@@ -112,15 +131,19 @@ const NOOP_DISTILLER: MemoryDistiller = { async distill() { return []; } };
  *  the generic extractor (dedup + importance floors + merge) for each. */
 export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
   const { writer, search, resolver, resolveContext, getFallbackDefault } = deps;
+  // Per-pass observability channel: every LLM attempt reports its diag here
+  // so the distill log can carry provider/model/raw_chars even on success.
+  let passDiags: DistillDiag[] = [];
+  const onDiag = (d: DistillDiag): void => { passDiags.push(d); };
   const positiveDistiller =
     deps.distillers?.positive ??
-    (resolver ? new LlmMemoryDistiller({ resolver, resolveContext, getFallbackDefault }) : NOOP_DISTILLER);
+    (resolver ? new LlmMemoryDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER);
   const failureDistiller =
     deps.distillers?.failure ??
-    (resolver ? new FailureDistiller({ resolver, resolveContext, getFallbackDefault }) : NOOP_DISTILLER);
+    (resolver ? new FailureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER);
   const procedureDistiller =
     deps.distillers?.procedure ??
-    (resolver ? new ProcedureDistiller({ resolver, resolveContext, getFallbackDefault }) : NOOP_DISTILLER);
+    (resolver ? new ProcedureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER);
   const failure = new MemoryExtractor(failureDistiller, writer, search);
   const procedure = new MemoryExtractor(procedureDistiller, writer, search);
 
@@ -166,6 +189,8 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
       return true;
     },
     async extractAndPersist(projectId, projectName, input) {
+      const startedAt = Date.now();
+      passDiags = []; // fresh observability window for this pass
       const totals = { created: 0, merged: 0, skipped: 0 };
       let userTotals: { created: number; merged: number; skipped: number } | undefined;
       let lastError: string | null = null;
@@ -191,6 +216,8 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
             primaryRequest: input.primaryRequest,
             summary: input.summary,
             filesTouched: input.filesTouched,
+            // undefined = fold off; null = fold on, no profile yet.
+            styleProfile: deps.getStyleProfile ? deps.getStyleProfile(projectId) : undefined,
           });
         } catch (e) {
           swallow(e);
@@ -239,13 +266,38 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
         add(await literal.extractAndPersist(projectId, projectName, 'session', {}).catch(swallow));
       }
 
+      const hadInput = Boolean(
+        input.primaryRequest || input.summary || input.errorsAndFixes?.length ||
+        (input.succeeded && input.toolTrail?.length) || noteCandidates.length,
+      );
+      const wrote = totals.created + totals.merged + totals.skipped > 0;
+      // Status semantics (migration 185): `error` = LLM/infra failed (span is
+      // retryable), `empty` = distillers ran and found nothing durable,
+      // `skipped:no_input` = there was no signal to distill at all.
+      const status: 'ok' | 'empty' | 'error' | 'skipped' =
+        lastError ? 'error' : wrote ? 'ok' : hadInput ? 'empty' : 'skipped';
+      const lastDiag = passDiags[passDiags.length - 1];
+      const fallbackUsed = passDiags.some((d) => d.fallbackUsed);
+      const detail = lastError
+        ? lastDiag && lastDiag.outcome !== 'ok'
+          ? `${lastDiag.outcome}${lastDiag.httpStatus ? `:${lastDiag.httpStatus}` : ''}`
+          : 'error'
+        : status === 'skipped' ? 'no_input'
+        : status === 'empty' ? 'no_facts'
+        : fallbackUsed ? 'fallback_used' : null;
       try {
         deps.distillLog?.(projectId, {
           sessionId: input.sessionId ?? null,
           trigger: input.trigger ?? 'run',
-          status: lastError ? 'error' : totals.created + totals.merged + totals.skipped === 0 ? 'empty' : 'ok',
+          status,
           ...totals,
           error: lastError,
+          detail,
+          provider: lastDiag?.providerId ?? null,
+          model: lastDiag?.modelId ?? null,
+          rawChars: passDiags.reduce((n, d) => n + d.rawChars, 0),
+          durationMs: Date.now() - startedAt,
+          createdUser: userTotals?.created ?? 0,
         });
         // User-memory pass logs to project 0 so the user-memory health card
         // shows its own learning timeline, separate from the project's.
@@ -261,7 +313,7 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
       } catch {
         /* diagnostics must never affect the pass */
       }
-      return totals;
+      return { ...totals, hadError: lastError != null };
     },
   };
 }

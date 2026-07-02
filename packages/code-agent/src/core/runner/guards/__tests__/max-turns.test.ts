@@ -15,6 +15,9 @@ afterEach(() => {
 
 describe('maxAutoContinues', () => {
   it('defaults to 3', () => {
+    // The repo .env (loaded by vitest.setup.ts) may override the cap for the
+    // running app — stub it back to unset so this really tests the DEFAULT.
+    vi.stubEnv('CODER_MAX_AUTO_CONTINUES', '');
     expect(maxAutoContinues()).toBe(3);
   });
 
@@ -54,6 +57,8 @@ describe('checkMaxTurns', () => {
   });
 
   it('stops once the final batch is exhausted', () => {
+    // Default cap — see the stub note above (repo .env may override it).
+    vi.stubEnv('CODER_MAX_AUTO_CONTINUES', '');
     // cap=3 → total budget = 50 × (1 + 3) = 200 turns.
     expect(checkMaxTurns({ turn: 200, autoContinues: 3, maxTurns: 50 }).kind).toBe('stop');
   });

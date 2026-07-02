@@ -9,7 +9,8 @@ import { invokePreview } from './bridge.js';
 export const previewOpenTool: CoderTool = {
   name: 'preview_open',
   description:
-    'Open a DEDICATED preview window for the running app and attach the DevTools (CDP) to it, so you can read its console/network, run JS, and screenshot it — a clean, isolated page (no interference).\n' +
+    'Open a DEDICATED preview window for the running app with DevTools (CDP) attached.\n' +
+    'Lets you read its console/network, run JS, and screenshot it — a clean, isolated page (no interference).\n' +
     'PREFER calling it with NO url: we attach to THIS project\'s dev server — reusing the one already running, or starting one for you — and shut it down at the end. Do NOT run `npm run dev` yourself in the shell.\n' +
     'Pass `url` (loopback, e.g. http://localhost:5173) only for a special case (a server we cannot detect). If a window is already open for this session it is reused/navigated.\n' +
     'USE before preview_console/network/eval/screenshot. The window is yours for this session and is closed automatically when the run ends.',

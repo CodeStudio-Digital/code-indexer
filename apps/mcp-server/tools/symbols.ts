@@ -71,60 +71,10 @@ async function findCallersOnDisk(
     .slice(0, max);
 }
 
-const get_symbol_details = defineTool({
-  name: 'get_symbol_details',
-  description: 'Get symbol details by ID',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      symbol_id: { type: 'number' },
-      project_name: { type: 'string', description: 'Project that owns the symbol — needed to resolve the id when per-project DBs are split.' },
-    },
-    required: ['symbol_id'],
-  },
-  handler: (args, { db }) => {
-    // Surrogate ids are unique only within a project DB post-split; resolve the
-    // owning project when given (central fallback keeps the pre-split behavior).
-    const project = args.project_name ? db.getProjectByName(args.project_name as string) : undefined;
-    const sym = db.getSymbolById(args.symbol_id as number, project?.id);
-    if (!sym) throw new Error(`Symbol with id ${args.symbol_id} not found. Use search or get_file_skeleton to find valid symbol IDs. Do not retry with the same symbol_id.`);
-    const tags = JSON.parse(sym.tags) as string[];
-    const refs = db.getSymbolCallers(sym.project_id, sym.name);
-    const rels = db.getSymbolRelations(sym.id, sym.project_id);
-
-    const sections = [
-      `# ${sym.kind} \`${sym.name}\``,
-      `Signature: \`${sym.signature}\``,
-      `File: ${sym.file_path}:${sym.line ?? '?'}`,
-      sym.parent ? `Parent: ${sym.parent}` : '',
-      sym.comment ? `\n## Description\n${sym.comment}` : '',
-      tags.length > 0 ? `Tags: ${tags.join(', ')}` : '',
-    ].filter(Boolean);
-
-    if (rels.length > 0) {
-      sections.push('', '## Relations', rels.map(r => `- ${r.relation_type}: ${r.related_symbol_name}`).join('\n'));
-    }
-    if (refs.length > 0) {
-      sections.push('', '## Referenced by', refs.map(r => `- ${r.referencing_file_path}:${r.line ?? '?'}${r.context ? ` — ${r.context}` : ''}`).join('\n'));
-    }
-    return sections.join('\n');
-  },
-});
-
-const get_class_members = defineTool({
-  name: 'get_class_members',
-  description: 'Get members of a class',
-  inputSchema: {
-    type: 'object',
-    properties: { class_name: { type: 'string' }, project_name: { type: 'string' } },
-    required: ['class_name', 'project_name'],
-  },
-  handler: withProject((args, { db }, project) => {
-    const members = db.getClassMembers(args.class_name as string, project.id);
-    return members.map(m => `  ${m.kind} ${m.name} — ${m.signature}`).join('\n') || 'No members found.';
-  }),
-});
-
+// `get_symbol_details` (lookup by surrogate id) and `get_class_members` were
+// retired from the MCP surface (tool audit 2026-07, docs/audit/TOOL_AUDIT.md):
+// 0 calls in telemetry — the id-based flow is dead (nothing surfaces ids the
+// model keeps), and skeleton/symbol_body cover the class-outline need.
 const find_references = defineTool({
   name: 'find_references',
   description: 'Find all files that reference a symbol. When the symbol name is ambiguous, the response includes a list of candidate definitions; pass file_path to scope references to a specific definition. Pass format="json" for a structured response.',
@@ -162,6 +112,7 @@ const find_references = defineTool({
                 file_path: c.file_path,
                 line: c.line,
                 kind: c.kind,
+                namespace: c.namespace,
                 stable_id: c.stable_id,
               }))
             : undefined,
@@ -177,7 +128,7 @@ const find_references = defineTool({
       if (ambiguous) {
         defBlock.push(`[note] '${symbolName}' is defined in ${candidates.length} files:`);
         for (const c of candidates.slice(0, 10)) {
-          defBlock.push(`  - ${c.file_path}:${c.line ?? '?'} [${c.kind}]`);
+          defBlock.push(`  - ${c.file_path}:${c.line ?? '?'} [${c.kind}]${c.namespace ? ` ns:${c.namespace}` : ''}`);
         }
         defBlock.push('Pass file_path to scope references to a specific definition.');
         defBlock.push('');
@@ -217,7 +168,12 @@ const find_references = defineTool({
 
 const get_hierarchy = defineTool({
   name: 'get_hierarchy',
-  description: 'Get class/interface hierarchy (extends, implements, subclasses)',
+  description:
+    'Show the full type hierarchy of a class or interface, with file:line and namespace per entry.\n' +
+    'Covers the transitive extends chain, implemented interfaces, PHP traits used, subclasses, and implementors.\n' +
+    'USE: before editing/extending a class — overrides and subclasses are the blast radius grep cannot see.\n' +
+    "DON'T: grep for `extends X` — this reads the pre-built relation graph.\n" +
+    'Returns "No hierarchy information found." when the index has no inheritance edges for the symbol.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -231,19 +187,32 @@ const get_hierarchy = defineTool({
     required: ['project_name', 'symbol_name'],
   },
   handler: withProject((args, { db }, project) => {
-    const hierarchy = db.getSymbolHierarchy(project.id, args.symbol_name as string);
+    const symbolName = args.symbol_name as string;
+    const hierarchy = db.getSymbolHierarchy(project.id, symbolName);
+    // Transitive walk (A → B → C, cycle-guarded); the direct relation is the floor.
+    const chain = db.getExtendsChain(project.id, symbolName);
+    const extendsChain = chain.length > hierarchy.extends_chain.length ? chain : hierarchy.extends_chain;
+    const fq = (s: DBSymbol) => `${s.name}${s.namespace ? ` [${s.namespace}]` : ''} (${s.file_path}:${s.line})`;
     const lines: string[] = [];
-    if (hierarchy.extends_chain.length > 0) lines.push(`Extends: ${hierarchy.extends_chain.join(' → ')}`);
+    if (extendsChain.length > 0) lines.push(`Extends: ${extendsChain.join(' → ')}`);
     if (hierarchy.implements_list.length > 0) lines.push(`Implements: ${hierarchy.implements_list.join(', ')}`);
-    if (hierarchy.subclasses.length > 0) lines.push(`Subclasses: ${hierarchy.subclasses.join(', ')}`);
-    if (hierarchy.implementors.length > 0) lines.push(`Implementors: ${hierarchy.implementors.join(', ')}`);
+    if (hierarchy.symbol) {
+      const traits = db.getSymbolRelations(hierarchy.symbol.id, project.id)
+        .filter((r) => r.relation_type === 'mixes')
+        .map((r) => r.related_symbol_name);
+      if (traits.length > 0) lines.push(`Uses traits: ${traits.join(', ')}`);
+    }
+    if (hierarchy.subclasses.length > 0) lines.push(`Subclasses: ${hierarchy.subclasses.map(fq).join(', ')}`);
+    if (hierarchy.implementors.length > 0) lines.push(`Implementors: ${hierarchy.implementors.map(fq).join(', ')}`);
     return lines.join('\n') || 'No hierarchy information found.';
   }),
 });
 
 const find_implementations = defineTool({
   name: 'find_implementations',
-  description: 'Find implementations of an interface',
+  description:
+    'List every class that implements a given interface, with file:line for each.\n' +
+    "DON'T: use for the full type tree (parents + children) — that's get_hierarchy.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -389,6 +358,7 @@ const get_symbol_body = defineTool({
             file_path: c.file_path,
             line: c.line,
             kind: c.kind,
+            namespace: c.namespace,
             stable_id: c.stable_id,
           })),
         });
@@ -445,7 +415,11 @@ const get_symbol_body = defineTool({
 
 const prepare_edit = defineTool({
   name: 'prepare_edit',
-  description: 'One-shot context bundle for editing a symbol: body + callers + neighbors + imports + tests. Replaces 5+ separate calls. Callers are capped by max_callers (default 10) and sorted by proximity (same file > same dir > rest). If the symbol name is ambiguous, returns candidate list — pass file_path to disambiguate. Pass format="json" for a structured response.',
+  description:
+    'Fetch everything needed to edit a symbol in ONE call: body + callers + neighbors + imports + tests.\n' +
+    'Replaces 5+ separate calls. Callers are capped by max_callers (default 10) and sorted by proximity (same file > same dir > rest). If the symbol name is ambiguous, returns candidate list — pass file_path to disambiguate. Pass format="json" for a structured response.\n' +
+    'USE: BEFORE any non-trivial edit to an existing symbol (behavior/signature change, refactor, bug fix) — you see the blast radius before touching it.\n' +
+    "DON'T: settle for get_symbol_body when you are about to EDIT — that skips callers/tests and you'll round-trip for them.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -542,12 +516,13 @@ const prepare_edit = defineTool({
               line: c.line,
               kind: c.kind,
               signature: c.signature,
+              namespace: c.namespace,
               stable_id: c.stable_id,
             })),
           });
         }
         const list = candidates.slice(0, 10).map(
-          c => `  - ${c.file_path}:${c.line ?? '?'} [${c.kind}] ${c.signature || c.name}`
+          c => `  - ${c.file_path}:${c.line ?? '?'} [${c.kind}]${c.namespace ? ` ns:${c.namespace}` : ''} ${c.signature || c.name}`
         ).join('\n');
         return [
           `Ambiguous symbol '${symbolName}' — ${candidates.length} matches. Re-run with file_path to disambiguate:`,
@@ -663,7 +638,7 @@ const semantic_neighbors = defineTool({
   inputSchema: {
     type: 'object',
     properties: {
-      symbol_id: { type: 'number', description: 'Seed symbol id. Use search_by_kind or get_file_skeleton to discover ids.' },
+      symbol_id: { type: 'number', description: 'Seed symbol id. Use search or get_file_skeleton to discover ids.' },
       project_name: { type: 'string', description: 'Project that owns the symbol — needed to resolve the id when per-project DBs are split.' },
       limit: { type: 'number', description: 'Max neighbors to return (default 10)' },
       force_reread: {
@@ -731,8 +706,6 @@ const semantic_neighbors = defineTool({
 });
 
 export const symbolTools: McpTool[] = [
-  get_symbol_details,
-  get_class_members,
   find_references,
   get_hierarchy,
   find_implementations,

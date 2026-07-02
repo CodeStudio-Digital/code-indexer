@@ -29,11 +29,14 @@ import * as filesStructural from './db/files-structural.js';
 import * as fileContents from './db/file-contents.js';
 import * as symbols from './db/symbols.js';
 import * as symbolRelations from './db/symbol-relations.js';
+import * as symbolMembersDeep from './db/symbol-members-deep.js';
+import * as indexHealthMod from './db/index-health.js';
 import * as runs from './db/runs.js';
 import * as snapshots from './db/snapshots.js';
 import * as snapshotsArchive from './db/snapshots-archive.js';
 import * as agentMemory from './db/agent-memory.js';
 import * as agentMemoryConsolidation from './db/agent-memory-consolidation.js';
+import * as agentMemoryKpis from './db/agent-memory-kpis.js';
 import * as memoryConsolidation from './db/memory-consolidation.js';
 import * as memoryDistillLog from './db/memory-distill-log.js';
 import * as costs from './db/costs.js';
@@ -731,6 +734,12 @@ export class CodeIndexDB {
   getImplementors(projectId: number, interfaceName: string): DBSymbol[] { return symbolRelations.getImplementors(this.idx(projectId), projectId, interfaceName); }
   getSubclasses(projectId: number, className: string): DBSymbol[] { return symbolRelations.getSubclasses(this.idx(projectId), projectId, className); }
   getSymbolHierarchy(projectId: number, symbolName: string): symbolRelations.SymbolHierarchy { return symbolRelations.getHierarchy(this.idx(projectId), projectId, symbolName); }
+  /** Members INCLUDING inherited/trait members (BFS over extends/implements/mixes, override-aware). */
+  getClassMembersDeep(projectId: number, className: string, includeInherited: boolean = true): symbolMembersDeep.DeepMembersResult { return symbolMembersDeep.getClassMembersDeep(this.idx(projectId), projectId, className, includeInherited); }
+  /** Transitive extends chain (A → B → C), cycle-guarded, depth ≤5. */
+  getExtendsChain(projectId: number, className: string): string[] { return symbolMembersDeep.getExtendsChain(this.idx(projectId), projectId, className); }
+  /** Read-only sanity report over the live index (coverage, dangling refs, parse suspects). */
+  indexHealthReport(projectId: number): indexHealthMod.IndexHealthReport { return indexHealthMod.indexHealth(this.idx(projectId), projectId); }
   traceSymbolUsage(projectId: number, symbolName: string, maxDepth: number = 3): symbolRelations.UsageTraceResult { return symbolRelations.traceUsage(this.idx(projectId), projectId, symbolName, maxDepth); }
 
   // ─── Runs ───────────────────────────────────────────────────────
@@ -747,7 +756,9 @@ export class CodeIndexDB {
   markSnapshotAccessed(ids: number[]): void { snapshots.markAccessed(this.db, ids); }
   createAgentMemory(data: agentMemory.CreateAgentMemoryData): AgentMemoryRow { return agentMemory.create(this.db, data); }
   archiveAgentMemory(id: number, reason = 'forgotten'): void { agentMemory.archive(this.db, id, reason); }
+  restoreAgentMemory(id: number): boolean { return agentMemory.restore(this.db, id); }
   replaceAgentMemory(id: number, data: agentMemory.CreateAgentMemoryData): AgentMemoryRow { return agentMemory.replace(this.db, id, data); }
+  listAgentMemoryLive(scope: AgentMemoryScope, projectId: number, opts: { includeArchived?: boolean; limit?: number } = {}): AgentMemoryRow[] { return agentMemory.listLive(this.db, scope, projectId, opts); }
   getAgentMemoryById(id: number): AgentMemoryRow | undefined { return agentMemory.getById(this.db, id); }
   getAgentMemoryByName(scope: AgentMemoryScope, projectId: number, name: string): AgentMemoryRow | undefined { return agentMemory.getByName(this.db, scope, projectId, name); }
   listAgentMemoryIndex(scope: AgentMemoryScope, projectId: number, limit = 12, type?: AgentMemoryType): agentMemory.AgentMemoryIndexEntry[] { return agentMemory.listMemoryIndex(this.db, scope, projectId, limit, type); }
@@ -763,8 +774,12 @@ export class CodeIndexDB {
   setAgentMemoryImportance(id: number, importance: number): void { agentMemory.setImportance(this.db, id, importance); }
   /** WS8 — conservative consolidation (collapse exact-duplicate live memories). */
   consolidateAgentMemory(scope: AgentMemoryScope, projectId: number): agentMemoryConsolidation.ConsolidationResult { return agentMemoryConsolidation.consolidateProject(this.db, scope, projectId); }
+  /** WS8 — reversible decay of cold, unused, low-importance `note` memories. */
+  decayColdAgentMemoryNotes(scope: AgentMemoryScope, projectId: number): number { return agentMemoryConsolidation.decayColdNotes(this.db, scope, projectId); }
   /** WS10 — aggregate memory-health stats (live counts + telemetry by event). */
   getAgentMemoryStats(projectId?: number): agentMemory.AgentMemoryStats { return agentMemory.getStats(this.db, projectId); }
+  /** Effectiveness KPIs (30d window, pure SQL) — AgentMemoryHealthCard chips. */
+  getMemoryEffectivenessKpis(projectId: number): agentMemoryKpis.AgentMemoryKpis { return agentMemoryKpis.getMemoryEffectivenessKpis(this.db, projectId); }
   /** Per-project memory toggle (migration 115). Default ON. */
   getProjectMemoryEnabled(projectId: number): boolean {
     const row = this.db.prepare('SELECT memory_enabled FROM projects WHERE id = ?')

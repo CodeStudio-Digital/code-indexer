@@ -1,7 +1,9 @@
 /**
- * On-demand LSP server installation — npm install into
- * `<dataDir>/lsp-servers/<id>@<version>/` via the proven runHostCommand
- * path (clean env, .cmd shims on Windows). Progress is an AsyncGenerator
+ * On-demand LSP server installation into
+ * `<dataDir>/lsp-servers/<id>@<version>/`. Dispatches on install.kind:
+ * npm packages go through the proven runHostCommand path (clean env,
+ * .cmd shims on Windows); native binaries through binary-installer
+ * (download + sha256 + extract). Progress is an AsyncGenerator
  * (node-manager pattern): npm gives no byte counts, so frames carry the
  * log tail — indeterminate but honest.
  *
@@ -12,6 +14,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { lspServersBaseDir } from '@mcp/shared/utils/data-paths.js';
 import { runHostCommand } from '../host-scaffold/run-host-command.js';
+import { installBinaryServer } from './binary-installer.js';
 import { LSP_SERVER_REGISTRY, installDirFor, isInstalled, serverById, type LspServerDef } from './server-registry.js';
 
 export type LspInstallProgress =
@@ -52,6 +55,12 @@ export async function* installServer(
   const baseDir = opts.baseDir ?? lspServersBaseDir();
   const installDir = installDirFor(baseDir, def);
   yield { phase: 'start', serverId: def.id, version: def.install.version, targetDir: installDir };
+
+  // Native binaries: download/verify/extract — no npm, no Node involved.
+  if (def.install.kind === 'binary') {
+    yield* installBinaryServer(def, installDir, { signal: opts.signal });
+    return;
+  }
 
   try {
     mkdirSync(installDir, { recursive: true });

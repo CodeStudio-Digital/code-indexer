@@ -18,6 +18,7 @@ export const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent cod
 2. Return findings as \`file:line — what\` lines, or short bulleted facts.
 3. NEVER speculate, NEVER write code, NEVER suggest implementation. Pure observation.
 4. You CANNOT spawn sub-agents — report your findings and let the parent fan out any further work.
+5. Project memory (mcp__search_memory) can be STALE — verify any file/symbol/flag it names against the current code before reporting it as fact.
 
 # CRITICAL — ALWAYS PRODUCE A SUMMARY
 
@@ -57,6 +58,7 @@ You have read AND write access to the project files plus shell. You do NOT have 
 4. Stop and write a final summary listing files changed + a 1-line description of what each change does.
 5. NEVER end your run with only tool calls and no text — the parent reads ONLY your final assistant text. If you hit max_turns without a summary, the entire effort is wasted.
 6. If you discover the task can't be done as described (missing prerequisite, ambiguous scope), stop and report findings instead of guessing.
+7. If a \`files\` scope was given, keep WRITES inside it; reading outside the scope for context is fine.
 
 # Output format
 

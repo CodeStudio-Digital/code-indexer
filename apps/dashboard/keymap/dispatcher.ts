@@ -21,6 +21,9 @@ const CODE_KEYS: Record<string, string> = {
   Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
   Semicolon: ';', Quote: "'", Backquote: '`', Backslash: '\\',
   Comma: ',', Period: '.', Slash: '/', Space: 'Space',
+  // ABNT2's slash key + numpad divide — same '/' token as Slash, so one
+  // 'Ctrl+/' binding covers every physical slash key.
+  IntlRo: '/', NumpadDivide: '/',
   Enter: 'Enter', Escape: 'Esc', Tab: 'Tab', Backspace: 'Backspace',
   Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
   ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',

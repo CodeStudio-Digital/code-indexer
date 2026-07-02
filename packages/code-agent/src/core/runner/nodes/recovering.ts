@@ -21,7 +21,7 @@
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import { events } from '../machine/events.js';
 import { bumpRecovery } from '../machine/context.js';
-import { backoffDelayMs } from '../provider-retry.js';
+import { backoffDelayMs, isContextOverflowError } from '../provider-retry.js';
 import { recoveryCap, type RecoveryKind } from '../recovery-config.js';
 
 export class RecoveringNode implements BehaviorNode {
@@ -35,6 +35,32 @@ export class RecoveringNode implements BehaviorNode {
       ctx.transition = 'provider-transient-retry';
       ctx.error = new Error('Recovering invoked without ProviderError context');
       return events.aborted();
+    }
+
+    // Context-window overflow is deterministic — retrying the same payload
+    // (or aborting on the 400) is always wrong. Route to Compacting so the
+    // history shrinks before the next provider call. Checked BEFORE the
+    // retryable gate: overflow 400s arrive as retryable:false, and the
+    // status-less mid-stream variant (status 0) would otherwise blind-retry.
+    if (isContextOverflowError(lastEvent.message, lastEvent.code)) {
+      const attempts = bumpRecovery(ctx, 'context-overflow');
+      const cap = recoveryCap('context-overflow');
+      if (attempts > cap) {
+        ctx.emit('recovery_aborted', {
+          kind: 'context-overflow',
+          attempts,
+          cap,
+          contextHint: `status=${lastEvent.status}${lastEvent.message ? ` message=${lastEvent.message}` : ''}`,
+        });
+        ctx.stopReason = 'compact_exhausted';
+        ctx.transition = classifyTransition(lastEvent.status);
+        ctx.error = new Error(
+          `Context overflow persisted after ${cap} compaction round-trips: ` +
+            (lastEvent.message ?? `status ${lastEvent.status}`),
+        );
+        return events.aborted();
+      }
+      return events.tokenThresholdHit({ ratio: 1, trigger: 'context-overflow' });
     }
 
     if (!lastEvent.retryable) {

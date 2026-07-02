@@ -5,15 +5,20 @@
  * assets when tied to their resolution.
  *
  * Sibling of {@link LlmMemoryDistiller}: same provider binding
- * (`memory_extraction` / `distiller`), same []-on-failure posture, and it
- * REUSES `parseMemoryCandidates` so there is exactly one defensive parser.
+ * (`memory_extraction` / `distiller`) via {@link callDistillLlm} (throws a
+ * typed `DistillLlmError` on transport/parse failure; [] only on a genuine
+ * "no lesson"), and it REUSES `parseMemoryCandidates` — one defensive parser.
  * It differs only in prompt + that it FORCES `category:'gotcha'` regardless of
  * what the model emits. Plugs into the generic `MemoryExtractor` (dedup +
  * importance floors + persist) unchanged.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
-import { pickChatFn, suppressThinkingFor } from '../quality/chat-dispatcher.js';
-import { parseMemoryCandidates } from './distiller.js';
+import {
+  assertParsableDistillResponse,
+  callDistillLlm,
+  parseMemoryCandidates,
+  type DistillDiag,
+} from './distill-call.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
 
 export interface FailureDistillerOptions {
@@ -21,6 +26,8 @@ export interface FailureDistillerOptions {
   resolveContext?: ResolveContext;
   /** Zero-config fallback consulted when no binding row resolves (lazy). */
   getFallbackDefault?: () => FallbackDefault | null;
+  /** Observability tap — receives the diag of every LLM attempt. */
+  onDiag?: (diag: DistillDiag) => void;
   /** Skip the LLM (tests) — returns []. */
   skipLlm?: boolean;
 }
@@ -33,25 +40,15 @@ export class FailureDistiller implements MemoryDistiller {
     const errors = (input.errorsAndFixes ?? []).map((e) => e.trim()).filter(Boolean);
     if (errors.length === 0) return []; // nothing to learn from → cheap exit, no LLM call
 
-    const binding = await this.opts.resolver
-      .resolveOrNull(
-        'memory_extraction', 'distiller', this.opts.resolveContext ?? {},
-        this.opts.getFallbackDefault?.() ?? undefined,
-      )
-      .catch(() => null);
-    if (!binding) return [];
-    try {
-      const chat = pickChatFn(binding);
-      const result = await chat(binding, [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: buildPrompt(input, errors) },
-      ], { disableThinking: suppressThinkingFor(binding) });
-      // This distiller mints lessons only — force the category so a model that
-      // forgets/mislabels it still lands as a retrievable gotcha.
-      return parseMemoryCandidates(result.content).map((c) => ({ ...c, category: 'gotcha' as const }));
-    } catch {
-      return [];
-    }
+    const { content, diag } = await callDistillLlm(this.opts, [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: buildPrompt(input, errors) },
+    ]);
+    // This distiller mints lessons only — force the category so a model that
+    // forgets/mislabels it still lands as a retrievable gotcha.
+    const candidates = parseMemoryCandidates(content).map((c) => ({ ...c, category: 'gotcha' as const }));
+    assertParsableDistillResponse(content, candidates.length, diag);
+    return candidates;
   }
 }
 
@@ -66,7 +63,7 @@ Do NOT capture transient noise: typos fixed immediately, flaky network, one-off 
 For each lesson return:
 - title: the symptom, short and searchable (e.g. "better-sqlite3 ERR_DLOPEN_FAILED in tests")
 - content: "Symptom: … Root cause: … Fix: … Avoid: …" — 1-4 sentences, self-contained
-- importance: 0..1 — how likely it recurs / how costly it is
+- importance: 0..1 — proportional to the time lost and how likely the failure is to recur
 - referencedFiles: file paths involved, if any
 
 Respond ONLY with a JSON array, no prose. Empty array if no durable lesson:

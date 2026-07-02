@@ -22,7 +22,7 @@ let symId = 0;
 function sym(p: Partial<DBSymbol>): DBSymbol {
   return {
     id: ++symId, project_id: 1, file_id: 1, file_path: 'x.php', name: 'x', kind: 'method',
-    signature: '', parent: null, modifiers: '[]', return_type: null, parameters: null,
+    signature: '', parent: null, namespace: null, modifiers: '[]', return_type: null, parameters: null,
     line: 1, col: 1, end_line: 1, exported: 1, comment: null, tags: '[]',
     created_at: '', stable_id: null, ...p,
   };
@@ -30,16 +30,21 @@ function sym(p: Partial<DBSymbol>): DBSymbol {
 
 /** Minimal CodeIndexDB stub — only the methods the tiers call. */
 function fakeDb(over: Partial<Record<string, (...a: unknown[]) => unknown>> = {}) {
-  return {
+  const db: Record<string, (...a: unknown[]) => unknown> = {
     getProject: () => ({ root_path: '/repo' }),
     getFile: () => ({ id: 1 }),
     getDependencies: () => [],
     getSymbolsByFile: () => [],
     getClassMembers: () => [],
+    // Default deep walk = flat members (delegates through the final object so
+    // per-test getClassMembers overrides keep working).
+    getClassMembersDeep: (_p: unknown, name: unknown) => ({ members: db.getClassMembers!(name, _p), ancestry: [] }),
+    getExtendsChain: () => [],
     findSymbolsByName: () => [],
     getSymbolHierarchy: () => ({ extends_chain: [], implements_list: [], subclasses: [], implementors: [], symbol: undefined }),
     ...over,
-  } as never;
+  };
+  return db as never;
 }
 
 beforeEach(() => {
@@ -98,10 +103,15 @@ describe('receiverMembers (index path)', () => {
 
   it('resolves $this-> to the enclosing class + inherited members', async () => {
     const db = fakeDb({
-      getClassMembers: (name: unknown) =>
-        name === 'Child' ? [sym({ name: 'own', kind: 'method' })]
-          : name === 'Base' ? [sym({ name: 'inherited', kind: 'method' })] : [],
-      getSymbolHierarchy: () => ({ extends_chain: ['Base'], implements_list: [], subclasses: [], implementors: [], symbol: undefined }),
+      getClassMembersDeep: (_p: unknown, name: unknown) => name === 'Child'
+        ? {
+            members: [
+              sym({ name: 'own', kind: 'method' }),
+              { ...sym({ name: 'inherited', kind: 'method' }), inherited_from: 'Base' },
+            ],
+            ancestry: ['Base'],
+          }
+        : { members: [], ancestry: [] },
     });
     const syms = [sym({ name: 'Child', kind: 'class', line: 1, end_line: 99 })];
     const r = await receiverMembers({

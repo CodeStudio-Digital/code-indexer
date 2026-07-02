@@ -60,6 +60,32 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('ExecutingNode', () => {
+  it('expires retained loop keys after exactly one turn (A1)', async () => {
+    const provider = makeStreamingProvider([
+      { type: 'text_delta', text: 'ok' },
+      { type: 'done', stop_reason: 'end_turn' },
+    ]);
+    const { ctx } = makeTestContext({
+      provider,
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
+    });
+    // Simulate Planning's retention after a guard fire at turn 1.
+    ctx.turn = 1;
+    ctx.dupCalls.set('grep|{"q":"x"}', { count: 3, firstTurn: 1, lastUseId: 'u1' });
+    ctx.retainedLoopKeys = { keys: ['grep|{"q":"x"}'], expiresAfterTurn: 2 };
+
+    // Turn 2 — still within the block window: the signature must survive.
+    await new ExecutingNode().execute(ctx, null);
+    expect(ctx.dupCalls.has('grep|{"q":"x"}')).toBe(true);
+    expect(ctx.retainedLoopKeys).not.toBeNull();
+
+    // Turn 3 — past the window: clean slate restored.
+    await new ExecutingNode().execute(ctx, null);
+    expect(ctx.dupCalls.has('grep|{"q":"x"}')).toBe(false);
+    expect(ctx.retainedLoopKeys).toBeNull();
+  });
+
   it('emits CleanFinish when the assistant returns text and no tool_use', async () => {
     const { ctx } = makeTestContext({
       provider: makeStreamingProvider([

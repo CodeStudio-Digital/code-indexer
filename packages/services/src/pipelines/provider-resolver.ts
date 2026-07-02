@@ -172,6 +172,31 @@ export class PipelineProviderResolver {
     }
   }
 
+  /**
+   * Build a binding from the fallback default ONLY, ignoring binding rows.
+   * A bound provider that exists but FAILS at runtime never falls back via
+   * `resolve` (rows win); callers that want a one-shot retry on the general
+   * default (memory distill) use this to get the fallback binding directly.
+   */
+  resolveFallbackOnly(
+    pipelineName: string,
+    bindingRole: string,
+    fallbackDefault: FallbackDefault,
+  ): ResolvedBinding | null {
+    const provider = this.findFallbackProvider(fallbackDefault);
+    if (!provider) return null;
+    return {
+      pipelineName,
+      bindingRole,
+      provider,
+      modelId: fallbackDefault.modelId,
+      modelMode: fallbackDefault.modelMode ?? '',
+      config: fallbackDefault.config ?? {},
+      resolvedFrom: 'fallback',
+      bindingId: null,
+    };
+  }
+
   private async tryEnrich(
     row: PipelineProviderBinding | null,
     pipelineName: string,

@@ -119,6 +119,9 @@ export interface MemoryDistillPendingRow {
   provider: string;
   model: string;
   distilled_mark: number;
+  /** Consecutive FAILED sweeps for this span (migration 185) — drives backoff
+   *  in SQL and the retry cap in the sweeper. */
+  attempts: number;
 }
 
 /**
@@ -126,19 +129,23 @@ export interface MemoryDistillPendingRow {
  * went idle — candidates for the idle memory sweeper. All-SQL time math
  * (sqlite `datetime('now')` is UTC without 'Z'; comparing in SQL avoids the
  * JS parse pitfall). Joined against `projects.memory_enabled` so disabled
- * projects never even surface.
+ * projects never even surface. The idle threshold grows with the failure
+ * streak (cheap linear backoff) — capped sessions still surface once so the
+ * sweeper can close them out as `retry_cap`.
  */
 export function listMemoryDistillPending(
   db: DB, idleSeconds: number, limit: number,
 ): MemoryDistillPendingRow[] {
   return db.prepare(`
     SELECT s.id AS session_id, s.project_id, s.provider, s.model,
-           s.memory_distilled_message_id AS distilled_mark
+           s.memory_distilled_message_id AS distilled_mark,
+           s.memory_distill_attempts AS attempts
     FROM coder_sessions s
     JOIN projects p ON p.id = s.project_id
     WHERE s.status = 'idle'
       AND p.memory_enabled = 1
-      AND s.updated_at < datetime('now', '-' || CAST(? AS INTEGER) || ' seconds')
+      AND s.updated_at < datetime('now', '-' ||
+            CAST((? * (1 + s.memory_distill_attempts)) AS INTEGER) || ' seconds')
       AND EXISTS (
         SELECT 1 FROM coder_messages m
         WHERE m.session_id = s.id AND m.id > s.memory_distilled_message_id

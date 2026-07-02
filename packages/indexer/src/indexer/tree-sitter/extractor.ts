@@ -18,6 +18,7 @@ import {
   initTreeSitter,
 } from '@mcp/indexer/indexer/tree-sitter/languages.js';
 import { extractCalls } from '@mcp/indexer/indexer/tree-sitter/call-extractor.js';
+import { extractNamespace, extractPhpTraitUses } from '@mcp/indexer/indexer/tree-sitter/namespace-extractor.js';
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -224,6 +225,10 @@ export class TreeSitterExtractor {
 
     try {
       const symbols = this.extractSymbols(tree.rootNode, language, content);
+      // Namespace applies file-wide (migration 187): one extraction, stamped
+      // on every symbol. Null for languages without namespaces.
+      const ns = extractNamespace(tree.rootNode, language, filePath);
+      if (ns) for (const s of symbols) s.namespace = ns;
       const { internalDeps, externalDeps, allDeps, references } =
         this.extractImportsAndRefs(tree.rootNode, language, content, filePath);
 
@@ -349,6 +354,8 @@ export class TreeSitterExtractor {
     const comment = this.getLeadingComment(node, lines);
     const tags = this.inferTags(name, kind, modifiers, node, language);
 
+    const usesTraits = language === 'php' && kind === 'class' ? extractPhpTraitUses(node) : [];
+
     return {
       name,
       kind,
@@ -356,6 +363,7 @@ export class TreeSitterExtractor {
       parent: parentName,
       extends_from: extendsFrom || undefined,
       implements_list: implementsList.length > 0 ? implementsList : undefined,
+      uses_traits: usesTraits.length > 0 ? usesTraits : undefined,
       modifiers,
       return_type: returnType,
       parameters: params,

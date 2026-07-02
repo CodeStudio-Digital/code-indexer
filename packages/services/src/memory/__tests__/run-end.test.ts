@@ -133,7 +133,7 @@ describe('createRunEndMemory', () => {
     expect(byProject[5]).toEqual(['decision']); // project-scope fact → the project
     expect((byProject[0] as string[]).sort()).toEqual(['feedback', 'user']); // user-scope → project 0
     // Project totals exclude the user-scope writes.
-    expect(result).toEqual({ created: 1, merged: 0, skipped: 0 });
+    expect(result).toEqual({ created: 1, merged: 0, skipped: 0, hadError: false });
     // Two log rows: the project run + the user-memory pass.
     expect(logs.map((l) => l.projectId).sort()).toEqual([0, 5]);
   });
@@ -161,7 +161,7 @@ describe('createRunEndMemory', () => {
     });
     await expect(
       rem.extractAndPersist(1, 'proj', { summary: 's', errorsAndFixes: ['x -> y'], succeeded: true, toolTrail: ['pnpm test'] }),
-    ).resolves.toEqual({ created: 0, merged: 0, skipped: 0 });
+    ).resolves.toEqual({ created: 0, merged: 0, skipped: 0, hadError: true });
     expect(w.creates).toHaveLength(0);
   });
 
@@ -188,7 +188,7 @@ describe('createRunEndMemory', () => {
     });
 
     // gotcha promotes; plain 'fact' promotes as note; empty title dropped.
-    expect(result).toEqual({ created: 2, merged: 0, skipped: 0 });
+    expect(result).toEqual({ created: 2, merged: 0, skipped: 0, hadError: false });
     expect(w.creates.map((c) => c.data.category)).toEqual(['gotcha', 'note']);
     expect(w.creates.map((c) => c.data.source)).toEqual(['session', 'session']);
     expect(logs).toHaveLength(1);

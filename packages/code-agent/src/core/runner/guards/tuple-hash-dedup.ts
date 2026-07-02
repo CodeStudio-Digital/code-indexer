@@ -16,6 +16,13 @@ import type { DupCallEntry } from '../machine/types.js';
 import { stableArgsKey, previewToolArgs } from '../dup-utils.js';
 import { REPEATABLE_NAME_PATTERN } from '../constants.js';
 
+/**
+ * Call count at which `checkDupCall` hard-refuses (count 2 = reminder,
+ * count ≥ 3 = refuse). Exported so the Planning node can identify which
+ * entries were already refusing when it applies the clean-slate reset.
+ */
+export const DUP_REFUSE_MIN = 3;
+
 export type DupVerdict =
   | { kind: 'allow'; entry: DupCallEntry; key: string }
   | { kind: 'allow-with-reminder'; entry: DupCallEntry; key: string; reminderText: string }

@@ -41,6 +41,36 @@ export interface CodeActionDTO {
   edit?: WorkspaceEditDTO;
 }
 
+/**
+ * Signature help (parameter hints) — Ctrl+P / typing `(`/`,`. Produced by
+ * the TS service, external LSP servers, or the index fallback; the shape is
+ * Monaco's SignatureHelp minus the Monaco-only fields.
+ */
+export interface SignatureHelpDTO {
+  signatures: Array<{
+    label: string;
+    parameters: Array<{ label: string; documentation?: string }>;
+    documentation?: string;
+  }>;
+  activeSignature: number;
+  activeParameter: number;
+}
+
+/**
+ * One outline node (document symbol) — 1-based ranges like every DTO here.
+ * `kind` is a lowercase string ('class' | 'method' | …); the renderer maps
+ * it onto Monaco's numeric SymbolKind. `range` spans the full body,
+ * `selectionRange` just the name (breadcrumbs/sticky-scroll contract).
+ */
+export interface DocumentSymbolDTO {
+  name: string;
+  detail?: string;
+  kind: string;
+  range: { start: Position; end: Position };
+  selectionRange: { start: Position; end: Position };
+  children?: DocumentSymbolDTO[];
+}
+
 export interface CompletionItem {
   label: string;
   kind: string;
@@ -318,6 +348,25 @@ export interface LspApi {
     input: { projectId: number; file: string; position: Position; newName: string },
     ctx: ApiContext,
   ): Promise<{ edits: Array<{ file: string; range: { start: Position; end: Position }; newText: string }> }>;
+
+  /**
+   * Parameter hints at a call site. Routed like the other position ops
+   * (ts/js → TS service; server languages → textDocument/signatureHelp;
+   * index fallback otherwise). Null = nothing to show.
+   */
+  signatureHelp(
+    input: { projectId: number; file: string; position: Position },
+    ctx: ApiContext,
+  ): Promise<SignatureHelpDTO | null>;
+
+  /**
+   * Outline tree for a file (breadcrumbs / sticky scroll / Ctrl+F12).
+   * Hierarchical when the backend supports it; empty array = no symbols.
+   */
+  documentSymbols(
+    input: { projectId: number; file: string },
+    ctx: ApiContext,
+  ): Promise<DocumentSymbolDTO[]>;
 
   codeActions(
     input: { projectId: number; file: string; range: { start: Position; end: Position } },

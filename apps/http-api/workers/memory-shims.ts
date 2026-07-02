@@ -47,6 +47,10 @@ export interface ShimRunEndResult {
   created: number;
   merged: number;
   skipped: number;
+  /** True when an LLM/transport failure interrupted the pass — the caller must
+   *  NOT advance the distill boundary (mirrors RunEndMemoryResult.hadError;
+   *  structural-clonable, rides the bridge verbatim). */
+  hadError?: boolean;
 }
 
 /** Full-content row returned by the explicit recall path (recall_memory tool). */

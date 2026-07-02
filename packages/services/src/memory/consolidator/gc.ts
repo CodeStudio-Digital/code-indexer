@@ -13,6 +13,13 @@ import type { ConsolSnapshot, ConsolidatorOptions } from './types.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Never auto-archived, regardless of staleness/coldness: user identity and
+ *  stated preferences are the highest-value memory kind and only the USER
+ *  retires them (explicit archive in the UI / forget_memory). */
+const PROTECTED_CATEGORIES = new Set(['user', 'feedback', 'preference']);
+/** Pins carry explicit user intent — the GC never overrides them. */
+const PIN_IMPORTANCE = 0.9;
+
 function ageDays(ts: string | null, nowMs: number): number {
   if (!ts) return Infinity; // never accessed → treat as maximally cold
   const parsed = Date.parse(`${ts.replace(' ', 'T')}Z`);
@@ -33,6 +40,11 @@ export function selectArchivable(
 ): ArchiveTarget[] {
   const out: ArchiveTarget[] = [];
   for (const s of snaps) {
+    // Explicit protections (previously only implicit via the importance
+    // ceiling): preferences/user facts and pinned rows are user territory.
+    if (s.category && PROTECTED_CATEGORIES.has(s.category)) continue;
+    if ((s.importance ?? 0.5) >= PIN_IMPORTANCE) continue;
+
     const files = staleMap.get(s.id);
     // No referenced files → can't assess staleness → never auto-archive.
     if (!files || files.total === 0) continue;

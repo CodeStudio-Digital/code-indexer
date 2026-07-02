@@ -5,14 +5,19 @@
  * (Voyager-style skill library), specialized to this repo and verified by the
  * run having actually succeeded.
  *
- * Sibling of {@link LlmMemoryDistiller}: same provider binding, same
- * []-on-failure posture, REUSES `parseMemoryCandidates`. Forces category
- * `procedure`. The run-end orchestrator only invokes it when the run SUCCEEDED,
- * so the steps come from commands that actually worked.
+ * Sibling of {@link LlmMemoryDistiller}: same provider binding via
+ * {@link callDistillLlm} (typed `DistillLlmError` on transport/parse failure;
+ * [] only on a genuine "no recipe"), REUSES `parseMemoryCandidates`. Forces
+ * category `procedure`. The run-end orchestrator only invokes it when the run
+ * SUCCEEDED, so the steps come from commands that actually worked.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
-import { pickChatFn, suppressThinkingFor } from '../quality/chat-dispatcher.js';
-import { parseMemoryCandidates } from './distiller.js';
+import {
+  assertParsableDistillResponse,
+  callDistillLlm,
+  parseMemoryCandidates,
+  type DistillDiag,
+} from './distill-call.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
 
 export interface ProcedureDistillerOptions {
@@ -20,6 +25,8 @@ export interface ProcedureDistillerOptions {
   resolveContext?: ResolveContext;
   /** Zero-config fallback consulted when no binding row resolves (lazy). */
   getFallbackDefault?: () => FallbackDefault | null;
+  /** Observability tap — receives the diag of every LLM attempt. */
+  onDiag?: (diag: DistillDiag) => void;
   /** Skip the LLM (tests) — returns []. */
   skipLlm?: boolean;
 }
@@ -32,25 +39,15 @@ export class ProcedureDistiller implements MemoryDistiller {
     const commands = (input.toolTrail ?? []).map((c) => c.trim()).filter(Boolean);
     if (commands.length === 0) return []; // no commands ran → no procedure to capture
 
-    const binding = await this.opts.resolver
-      .resolveOrNull(
-        'memory_extraction', 'distiller', this.opts.resolveContext ?? {},
-        this.opts.getFallbackDefault?.() ?? undefined,
-      )
-      .catch(() => null);
-    if (!binding) return [];
-    try {
-      const chat = pickChatFn(binding);
-      const result = await chat(binding, [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: buildPrompt(input, commands) },
-      ], { disableThinking: suppressThinkingFor(binding) });
-      // Mint recipes only — force the category so a mislabeling model still lands
-      // as a retrievable procedure.
-      return parseMemoryCandidates(result.content).map((c) => ({ ...c, category: 'procedure' as const }));
-    } catch {
-      return [];
-    }
+    const { content, diag } = await callDistillLlm(this.opts, [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: buildPrompt(input, commands) },
+    ]);
+    // Mint recipes only — force the category so a mislabeling model still lands
+    // as a retrievable procedure.
+    const candidates = parseMemoryCandidates(content).map((c) => ({ ...c, category: 'procedure' as const }));
+    assertParsableDistillResponse(content, candidates.length, diag);
+    return candidates;
   }
 }
 

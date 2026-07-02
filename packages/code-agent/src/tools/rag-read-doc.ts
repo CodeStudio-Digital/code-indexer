@@ -23,7 +23,8 @@ const SECTION_CAP = 12;
 export const ragReadDocTool: CoderTool = {
   name: 'rag_read_doc',
   description:
-    'Read one indexed documentation section IN FULL by chunk_id (from rag_search_docs results), with a preview of the previous/next sections of the same document.\n' +
+    'Read one indexed documentation section IN FULL by chunk_id from rag_search_docs results.\n' +
+    'Includes a preview of the previous/next sections of the same document.\n' +
     'USE: whenever a rag_search_docs snippet looks relevant but is cut off — never answer from a truncated snippet when the full section is one call away.\n' +
     'USE: to follow a passage across sections — neighbor previews carry their own chunk_id; call rag_read_doc on those to keep reading.\n' +
     "USE mode:'section' to reassemble a heading that was split into several chunks into ONE contiguous read (no neighbor previews).\n" +

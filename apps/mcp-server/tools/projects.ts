@@ -8,7 +8,9 @@ import { withProject } from './_helpers.js';
 
 const index_project = defineTool({
   name: 'index_project',
-  description: 'Index or re-index a project',
+  description:
+    'Index or re-index a project from disk: parse files, extract symbols, and (when configured) embed for semantic search.\n' +
+    'Uses the default provider/model unless overridden; pass force=true to re-analyze unchanged files. Long-running and costs money — check estimate_cost first on large projects.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -167,20 +169,9 @@ const get_project_pulse = defineTool({
   }),
 });
 
-const get_architecture = defineTool({
-  name: 'get_architecture',
-  description: 'Get project architecture overview (files grouped by layer)',
-  inputSchema: {
-    type: 'object',
-    properties: { project_name: { type: 'string' } },
-    required: ['project_name'],
-  },
-  handler: withProject((args, { db }, project) => {
-    const overview = db.getArchitectureOverview(project.id);
-    return overview.map(l => `${l.layer}: ${l.count} files`).join('\n') || 'No architecture data.';
-  }),
-});
-
+// `get_architecture` was retired from the MCP surface (tool audit 2026-07,
+// docs/audit/TOOL_AUDIT.md): 2 calls in 30 days, and its layer/file-count
+// list is a strict subset of get_project_overview / get_project_pulse.
 const get_repo_map = defineTool({
   name: 'get_repo_map',
   description: 'Structural map of the repository (~2000 tokens). Shows key files weighted by importance (entry points, hubs, high-complexity) with their top symbols. Use after get_project_pulse for a mental model of the codebase architecture. Based on dependency graph analysis (PageRank-style scoring).',
@@ -203,5 +194,4 @@ export const projectTools: McpTool[] = [
   get_project_overview,
   get_project_pulse,
   get_repo_map,
-  get_architecture,
 ];

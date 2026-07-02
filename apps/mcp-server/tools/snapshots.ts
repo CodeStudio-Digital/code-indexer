@@ -81,7 +81,10 @@ const search_memory = defineTool({
 const save_memory = defineTool({
   name: 'save_memory',
   description:
-    'Save a DURABLE fact to PROJECT MEMORY for future sessions — a decision (and why), a convention, a non-obvious gotcha/constraint, a reusable how-to recipe, or an architecture note. USE for things that stay true beyond the current task. DON\'T use for transient task state. Provide a specific title + 1-4 sentence content.',
+    'Save a DURABLE fact to PROJECT MEMORY so future sessions can recall it.\n' +
+    'Good memories: a decision (and why), a convention, a non-obvious gotcha/constraint, a reusable how-to recipe, an architecture note. Provide a specific title + 1-4 sentence content.\n' +
+    "USE: for things that stay true beyond the current task.\n" +
+    "DON'T: use for transient task state — that belongs in the task list, not memory.",
   inputSchema: {
     type: 'object',
     properties: {

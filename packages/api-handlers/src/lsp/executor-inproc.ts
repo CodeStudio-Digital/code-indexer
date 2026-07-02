@@ -99,6 +99,24 @@ export function createInProcessLspExecutor(db: CodeIndexDB): LspBackendExecutor 
       return getTsService(ctx.root).getCodeActions(ctx.file, requireRange(ctx));
     },
 
+    async tsRename(ctx) {
+      const pos = requirePosition(ctx);
+      if (!ctx.newName) throw new Error(`lsp op on ${ctx.file}: newName required`);
+      syncTs(ctx);
+      return getTsService(ctx.root).getRenameEdits(ctx.file, pos.line, pos.column, ctx.newName);
+    },
+
+    async tsSignatureHelp(ctx) {
+      const pos = requirePosition(ctx);
+      syncTs(ctx);
+      return getTsService(ctx.root).getSignatureHelp(ctx.file, pos.line, pos.column);
+    },
+
+    async tsDocumentSymbols(ctx) {
+      syncTs(ctx);
+      return getTsService(ctx.root).getDocumentSymbols(ctx.file);
+    },
+
     async fallbackCompletion(ctx) {
       return fallbackCompletion(db, ctx.projectId, ctx.root, ctx.file, requirePosition(ctx), ctx.languageId);
     },

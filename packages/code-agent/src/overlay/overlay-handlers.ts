@@ -64,7 +64,7 @@ const handleReadFile: OverlayHandler = {
   },
 };
 
-// ─── get_file_skeleton / get_file_structure ──────────────────────
+// ─── get_file_skeleton ───────────────────────────────────────────
 
 function skeletonResult(filePath: string, projectRoot: string): ToolResult {
   const abs = join(projectRoot, filePath);
@@ -85,14 +85,6 @@ function skeletonResult(filePath: string, projectRoot: string): ToolResult {
 }
 
 const handleGetFileSkeleton: OverlayHandler = {
-  pre: (args, overlay, projectRoot) => {
-    const filePath = getStr(args, 'file_path');
-    if (!filePath || !overlay.isDirty(filePath)) return null;
-    return skeletonResult(filePath, projectRoot);
-  },
-};
-
-const handleGetFileStructure: OverlayHandler = {
   pre: (args, overlay, projectRoot) => {
     const filePath = getStr(args, 'file_path');
     if (!filePath || !overlay.isDirty(filePath)) return null;
@@ -212,7 +204,6 @@ const handleGrepCode: OverlayHandler = {
 const HANDLERS: Record<string, OverlayHandler> = {
   read_file: handleReadFile,
   get_file_skeleton: handleGetFileSkeleton,
-  get_file_structure: handleGetFileStructure,
   get_symbol_body: handleGetSymbolBody,
   list_directory: handleListDirectory,
   grep_code: handleGrepCode,

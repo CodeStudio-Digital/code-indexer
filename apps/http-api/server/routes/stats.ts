@@ -22,7 +22,12 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
     const projectId = parseIdParam(c);
     const project = db.getProject(projectId);
     if (!project) return notFound(c);
-    return c.json(db.getAgentMemoryStats(projectId));
+    return c.json({
+      ...db.getAgentMemoryStats(projectId),
+      // Effectiveness KPIs (30d, pure SQL) — the measurable loop behind
+      // "is memory making the agent better over time?" (chips on the card).
+      kpis: db.getMemoryEffectivenessKpis(projectId),
+    });
   });
 
   /**

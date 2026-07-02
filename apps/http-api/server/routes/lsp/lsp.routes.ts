@@ -237,6 +237,16 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  app.post('/api/lsp/:projectId/rename', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; position: Position; newName: string }>();
+      return c.json(await h.rename({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   app.post('/api/lsp/:projectId/diagnostics', async (c) => {
     try {
       const projectId = parseIdParam(c, 'projectId');

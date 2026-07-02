@@ -29,7 +29,7 @@ describe('implement subagent — READ_WRITE_FILTER is lean', () => {
   });
 
   it('does NOT inherit explore-only reads', () => {
-    const exploreOnly = ['web_search', 'web_fetch', 'mcp__get_architecture',
+    const exploreOnly = ['web_search', 'web_fetch', 'mcp__get_recently_modified_files',
       'mcp__trace_usage', 'mcp__get_project_overview', 'mcp__search'];
     for (const n of exploreOnly) {
       // these live in EXPLORE_ALLOWLIST but not IMPLEMENT_ALLOWLIST — they must

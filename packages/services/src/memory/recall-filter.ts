@@ -14,7 +14,8 @@
  * Gated by the caller (CODER_MEMORY_LLM_FILTER); off → never constructed.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
-import { pickChatFn, suppressThinkingFor } from '../quality/chat-dispatcher.js';
+import { bindingProblem, callConfiguredChat } from '../quality/binding-chat.js';
+import { suppressThinkingFor } from '../quality/chat-dispatcher.js';
 import type { RetrievedMemory } from './retriever.js';
 
 export interface LlmRecallFilterOptions {
@@ -45,16 +46,25 @@ export class LlmRecallFilter {
       )
       .catch(() => null);
     if (!binding) return items; // not configured → no filtering
+    // OAuth kinds (google-oauth, chatgpt, …) need the full coder client —
+    // the raw REST adapters authenticate by API key only and silently 401.
+    if (bindingProblem(binding, { label: 'memory recall filter', codePrefix: 'memory_recall' })) {
+      return items; // uncallable binding → fail-open, no doomed HTTP call
+    }
     try {
-      const chat = pickChatFn(binding);
-      const result = await chat(
+      const result = await callConfiguredChat(
         binding,
         [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: buildPrompt(taskText, items) },
         ],
-        { disableThinking: suppressThinkingFor(binding) },
+        {
+          disableThinking: suppressThinkingFor(binding),
+          timeoutMs: 20_000,
+          signal: AbortSignal.timeout(20_000),
+        },
       );
+      if (result.errorBody || !result.content.trim()) return items; // fail-open
       return decideKeep(items, parseKeepIds(result.content));
     } catch {
       return items; // fail-open

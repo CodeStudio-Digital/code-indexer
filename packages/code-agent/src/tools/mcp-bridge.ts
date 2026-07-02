@@ -20,8 +20,6 @@ import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
  */
 const DEFAULT_MAX_TOKENS_BUILTIN: Record<string, number> = {
   get_project_overview: 2000,
-  get_architecture: 1500,
-  search_concepts: 1500,
   search_memory: 1500,
 };
 

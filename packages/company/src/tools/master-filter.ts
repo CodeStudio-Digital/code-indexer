@@ -62,11 +62,17 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
  *
  * Only high-level overview tools — NO code-reading tools like read_file,
  * get_file_skeleton, grep_code, get_symbol_body, etc.
+ *
+ * Deliberate asymmetry: `search` (hybrid concept/FTS lookup) stays IN while
+ * `grep_code` (line-level text search) stays OUT. The master needs "which
+ * area of the codebase owns X?" to scope a delegation; the moment it needs
+ * exact lines it should be spawning a subordinate, not reading code itself.
  */
 export const MASTER_ALLOWED_MCP_SUFFIXES: ReadonlySet<string> = new Set([
   'get_project_pulse',
   'get_project_overview',
-  'get_architecture',
+  // `get_architecture` was retired from the server (tool audit 2026-07) —
+  // pulse/overview carry the same layer data.
   'list_directory',
   'search',
   'get_recently_modified_files',

@@ -181,6 +181,14 @@ export interface LLMSymbol {
   parent: string | null;
   extends_from?: string;
   implements_list?: string[];
+  /** PHP trait mixins (`use TraitName;` in the class body) — persisted as 'mixes' relations. */
+  uses_traits?: string[];
+  /**
+   * Language-level container path (migration 187): PHP namespace, Python
+   * dotted module, Go/Java/C#/Kotlin package, Rust mod path. Null/absent =
+   * global or a language without namespaces (TS/JS import by file path).
+   */
+  namespace?: string | null;
   modifiers: string[];
   return_type: string | null;
   parameters: string | null;
@@ -262,6 +270,8 @@ export interface DBSymbol {
   kind: SymbolKind;
   signature: string;
   parent: string | null;
+  /** Language-level container path (migration 187) — see LLMSymbol.namespace. NULL on pre-187 rows until re-extract. */
+  namespace: string | null;
   modifiers: string; // JSON array
   return_type: string | null;
   parameters: string | null;

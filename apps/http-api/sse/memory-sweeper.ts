@@ -9,9 +9,13 @@
  *
  * Runs in the MAIN process (mirrors `coder-watchdog.ts`): worker timers die
  * with the worker pool, while the mark is a DB column — so the sweep survives
- * restarts and covers "user closed the app" for free. Anti poison-pill: the
- * mark advances even when a candidate errors (the failure is recorded in
- * `memory_distill_log`, visible in the project's memory-health card).
+ * restarts and covers "user closed the app" for free.
+ *
+ * Failure semantics (migration 185): a FAILED pass (LLM error, timeout) keeps
+ * the mark intact and bumps `memory_distill_attempts` — the span is retried
+ * with linear backoff. Anti poison-pill lives in the RETRY CAP instead: after
+ * `MAX_DISTILL_ATTEMPTS` failures the mark advances anyway (`retry_cap` in
+ * the log) so one broken session can't wedge every sweep forever.
  */
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { summarizeSpanV2 } from '@mcp/code-agent/core/summarizer.js';
@@ -26,6 +30,8 @@ const DEFAULT_MAX_PER_SWEEP = Number(process.env.MCP_MEMORY_SWEEP_MAX_SESSIONS ?
 /** Spans shorter than this aren't worth an LLM pass — mark them covered. */
 const MIN_SPAN_MESSAGES = 4;
 const STEP_TIMEOUT_MS = 60_000;
+/** Give up on a span after this many failed passes (poison-pill guard). */
+const MAX_DISTILL_ATTEMPTS = 3;
 
 export function memorySweeperEnabled(): boolean {
   const raw = process.env.MCP_MEMORY_SWEEPER;
@@ -73,14 +79,45 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   let stopped = false;
   let inFlight = false;
 
+  /** Advance the mark and clear the failure streak — the span is settled. */
+  const settleSpan = (sessionId: number, maxId: number): void => {
+    try {
+      sessionStore.setMemoryDistilledBoundary(sessionId, maxId);
+      sessionStore.resetMemoryDistillAttempts(sessionId);
+    } catch { /* best-effort */ }
+  };
+  /** Record one more failed pass — mark stays put so the span retries. */
+  const recordFailure = (
+    cand: { session_id: number; project_id: number }, detail: string, msg: string,
+  ): void => {
+    try { sessionStore.bumpMemoryDistillAttempts(cand.session_id); } catch { /* best-effort */ }
+    try {
+      db.insertMemoryDistillLog(cand.project_id, {
+        sessionId: cand.session_id, trigger: 'idle', status: 'error', detail, error: msg,
+      });
+    } catch { /* diagnostics are best-effort */ }
+  };
+
   const sweepSession = async (cand: {
-    session_id: number; project_id: number; provider: string; model: string; distilled_mark: number;
+    session_id: number; project_id: number; provider: string; model: string;
+    distilled_mark: number; attempts: number;
   }): Promise<boolean> => {
     const span = sessionStore.listMessagesAfter(cand.session_id, cand.distilled_mark);
     if (span.messages.length === 0) return false;
+    if (cand.attempts >= MAX_DISTILL_ATTEMPTS) {
+      // Poison-pill guard: give up on this span so it can't wedge every sweep.
+      settleSpan(cand.session_id, span.maxId);
+      try {
+        db.insertMemoryDistillLog(cand.project_id, {
+          sessionId: cand.session_id, trigger: 'idle', status: 'skipped', detail: 'retry_cap',
+          error: `gave up after ${cand.attempts} failed distill attempts`,
+        });
+      } catch { /* diagnostics are best-effort */ }
+      return false;
+    }
     if (span.messages.length < MIN_SPAN_MESSAGES) {
       // Not worth an LLM pass — mark covered so the candidate stops resurfacing.
-      sessionStore.setMemoryDistilledBoundary(cand.session_id, span.maxId);
+      settleSpan(cand.session_id, span.maxId);
       return false;
     }
 
@@ -88,10 +125,7 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       const provider = await makeProvider(cand.provider, cand.model);
       const summary = await withTimeout(summarizeSpanV2(span.messages, provider), STEP_TIMEOUT_MS);
       if (!summary) {
-        db.insertMemoryDistillLog(cand.project_id, {
-          sessionId: cand.session_id, trigger: 'idle', status: 'empty',
-          error: 'summarizer returned no result',
-        });
+        recordFailure(cand, 'summarizer_timeout', 'summarizer returned no result');
         return false;
       }
       const input = buildHarvestInput({
@@ -104,23 +138,27 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       });
       const projectName = db.getProject(cand.project_id)?.name ?? '';
       // extractAndPersist writes its own memory_distill_log entry.
-      await withTimeout(
+      const result = await withTimeout(
         Promise.resolve(runEndMemory.extractAndPersist(cand.project_id, projectName, input)),
         STEP_TIMEOUT_MS,
       );
+      if (result === undefined) {
+        // Timed out mid-extract — run-end never logged; the span retries.
+        recordFailure(cand, 'extract_timeout', `extract exceeded ${STEP_TIMEOUT_MS}ms`);
+        return false;
+      }
+      if (result && result.hadError) {
+        // run-end already logged the error row with its diag — just keep the span.
+        try { sessionStore.bumpMemoryDistillAttempts(cand.session_id); } catch { /* best-effort */ }
+        return false;
+      }
+      settleSpan(cand.session_id, span.maxId);
       return true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn(`[memory/sweeper] session ${cand.session_id} failed: ${msg}`);
-      try {
-        db.insertMemoryDistillLog(cand.project_id, {
-          sessionId: cand.session_id, trigger: 'idle', status: 'error', error: msg,
-        });
-      } catch { /* diagnostics are best-effort */ }
+      recordFailure(cand, 'sweep_error', msg);
       return false;
-    } finally {
-      // Advance even on error — a poison session must not wedge every sweep.
-      try { sessionStore.setMemoryDistilledBoundary(cand.session_id, span.maxId); } catch { /* best-effort */ }
     }
   };
 
@@ -148,11 +186,17 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       try {
         const projects = new Set(candidates.map((c) => c.project_id));
         let archived = 0;
-        for (const pid of projects) archived += db.consolidateAgentMemory('project', pid).archived;
+        let decayed = 0;
+        for (const pid of projects) {
+          archived += db.consolidateAgentMemory('project', pid).archived;
+          // Reversible decay of cold, never-accessed, low-importance `note`s
+          // (>60d) — project scope only; user-scope preferences never decay.
+          decayed += db.decayColdAgentMemoryNotes('project', pid);
+        }
         archived += db.consolidateAgentMemory('user', 0).archived;
         const prunedEvents = db.pruneAgentMemoryEvents();
-        if (archived > 0 || prunedEvents > 0) {
-          console.log(`[memory/sweeper] hygiene — archived=${archived} dup memories, pruned=${prunedEvents} events`);
+        if (archived > 0 || decayed > 0 || prunedEvents > 0) {
+          console.log(`[memory/sweeper] hygiene — archived=${archived} dup memories, decayed=${decayed} cold notes, pruned=${prunedEvents} events`);
         }
       } catch (e) {
         console.warn(`[memory/sweeper] hygiene failed: ${e instanceof Error ? e.message : String(e)}`);

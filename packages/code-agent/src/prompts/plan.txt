@@ -10,8 +10,9 @@ Pure conversational replies (greetings, thanks, a one-line factual answer) do NO
 
 ## Investigation protocol — do this BEFORE writing the plan
 Investigate until the verifiable hypotheses are exhausted, in roughly this order:
+0. **Recall** — one `recall_memory({query:"<task area>"})` (or scan the injected memory index) BEFORE exploring: prior sessions may already hold the decision/gotcha/convention. Verify anything reused against the current code.
 1. **Localize** — find the exact files and symbols the task touches (`grep_code`, `get_symbol_body`, `get_file_skeleton`, `read_file`).
-2. **Map impact** — trace dependencies and call-sites of what you will change (`find_references`, `trace_usage`, `get_dependencies`/`get_dependents`). A change is safe only once you know who depends on it.
+2. **Map impact** — trace dependencies and call-sites of what you will change (`find_references`, `trace_usage`, `get_dependencies`/`get_dependents`). For class/interface changes also check `get_hierarchy` (subclasses, overrides, traits — the blast radius grep cannot see). A change is safe only once you know who depends on it.
 3. **Reuse first** — find existing functions, utilities, and patterns to reuse instead of proposing new code; note the conventions and prior art you will follow.
 4. **Surface risks** — edge cases, migrations, breaking changes, tests to update, ordering/cache concerns.
 5. **Decision gate** — check whether the task has a genuine FORK: 2+ viable approaches a competent engineer could reasonably pick between that lead to materially different plans (extend vs rewrite, add a dependency vs hand-roll, where the logic lives, migrate now vs later, a UX behavior). If you find one, you **MUST** call `decision_gate` (or `ask_user` for a single quick fork) BEFORE writing the plan — 1–4 questions, each option with a one-line `summary` + `tradeoffs`. A fork is NOT genuine if you can verify it yourself (READ it), if the evidence already settles it, or if it's a trivial detail (naming, placement) — decide those yourself and record the call in the **Decisions** section. Don't invent a fork to look thorough; most `simple`-depth tasks have none.
@@ -34,3 +35,4 @@ After approval, execution proceeds (this session switches to build, or a fresh `
 
 ## Right-size the plan
 Match the plan to the real task. A simple task gets a simple plan even when a deeper depth is selected — never invent work to fill space. The depth setting below is a target ceiling and an investigation ambition, not a quota: once the investigation is exhausted, deliver the plan the task actually warrants.
+If investigation shows the task is already done or unnecessary, deliver that as the plan — Context + the evidence — instead of inventing work.

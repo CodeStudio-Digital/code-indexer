@@ -22,7 +22,7 @@ import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.j
 import { events } from '../machine/events.js';
 import { bumpRecovery } from '../machine/context.js';
 import { recoveryCap } from '../recovery-config.js';
-import { compactWithLLM } from '../compaction/llm-compactor.js';
+import { compactWithLLM, truncateHeadMechanically } from '../compaction/llm-compactor.js';
 import { computeProtectTokens, resolveRecedeTailRatio } from '../compaction/threshold.js';
 import { spillOversizedToolResults } from '../compaction/spill-oversized.js';
 
@@ -44,7 +44,11 @@ export class CompactingNode implements BehaviorNode {
 
   constructor(private readonly nodeOpts: CompactingNodeOptions = {}) {}
 
-  async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
+  async execute(ctx: RunContext, lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
+    // A6 — which gate routed us here (loop-aware reason / size gate /
+    // context-overflow). Threaded into every history_compacted emission so
+    // the dashboard can answer "WHY did this compaction fire?".
+    const trigger = lastEvent?.kind === 'TokenThresholdHit' ? lastEvent.trigger : undefined;
     const summaryProvider = ctx.opts.provider;
     const protectTokens = this.nodeOpts.protectTokensOverride
       ?? computeProtectTokens({ model: summaryProvider.model });
@@ -79,9 +83,48 @@ export class CompactingNode implements BehaviorNode {
         total_chars_before: charsBefore,
         total_chars_after: charsBefore,
         auto_continue: ctx.autoContinues,
+        trigger,
       });
 
       if (attempts > cap) {
+        // Last resort before killing the run: the summarizer is unavailable
+        // (cap consecutive failures), but the history may still shrink
+        // mechanically — losing the summary is strictly better than losing
+        // the run. Abort only when even the deterministic cut is a no-op —
+        // or when the "failure" is actually the user's abort signal (a run
+        // the user cancelled must not be revived by the fallback).
+        const fallback = ctx.opts.toolContext.signal?.aborted
+          ? null
+          : truncateHeadMechanically({
+              messages: ctx.messages,
+              protectTokens,
+              maxTailTokens,
+            });
+        if (fallback && fallback.collapsedFrom > 0) {
+          ctx.messages = fallback.messages;
+          ctx.consecutiveNoopCompactions = 0;
+          ctx.recovery.set('compact-failure', 0);
+          ctx.injectionState.recentCompactionAt = ctx.turn;
+          // Checkpoint the loop-aware signals like the summarizer path does,
+          // so `cumulative` / `stuck-progress` don't re-fire immediately.
+          ctx.cumulativeAtLastCompaction = ctx.cumulativeInputTokens;
+          ctx.consecutiveNoTextTurns = 0;
+          const charsAfter = approxChars(ctx.messages);
+          ctx.emit('history_compacted', {
+            strategy: 'deterministic',
+            pruned_messages: Math.max(0, fallback.collapsedFrom - fallback.collapsedTo),
+            pruned_chars: Math.max(0, charsBefore - charsAfter),
+            total_chars_before: charsBefore,
+            total_chars_after: charsAfter,
+            auto_continue: ctx.autoContinues,
+            trigger,
+          });
+          return events.compactionDone({
+            collapsedFrom: fallback.collapsedFrom,
+            collapsedTo: fallback.collapsedTo,
+          });
+        }
+
         ctx.emit('recovery_aborted', {
           kind: 'compact-failure',
           attempts,
@@ -139,6 +182,7 @@ export class CompactingNode implements BehaviorNode {
           total_chars_before: charsBefore,
           total_chars_after: charsAfter,
           auto_continue: ctx.autoContinues,
+          trigger,
         });
         return events.compactionDone({ collapsedFrom: 0, collapsedTo: 0 });
       }
@@ -156,6 +200,7 @@ export class CompactingNode implements BehaviorNode {
         total_chars_before: charsBefore,
         total_chars_after: charsBefore,
         auto_continue: ctx.autoContinues,
+        trigger,
       });
       return events.compactionDone({ collapsedFrom: 0, collapsedTo: 0 });
     }
@@ -179,6 +224,7 @@ export class CompactingNode implements BehaviorNode {
       total_chars_before: charsBefore,
       total_chars_after: charsAfter,
       auto_continue: ctx.autoContinues,
+      trigger,
     });
 
     return events.compactionDone({

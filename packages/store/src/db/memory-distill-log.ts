@@ -18,6 +18,18 @@ export interface MemoryDistillLogEntry {
   merged?: number;
   skipped?: number;
   error?: string | null;
+  /** Machine-readable status refinement (migration 185):
+   *  `llm_error:401`, `no_facts`, `no_input`, `summarizer_timeout`,
+   *  `retry_cap`, `fallback_used`, … */
+  detail?: string | null;
+  /** Provider/model that actually served the pass (migration 185). */
+  provider?: string | null;
+  model?: string | null;
+  /** Raw LLM response length — 0 means the call never produced text. */
+  rawChars?: number | null;
+  durationMs?: number | null;
+  /** User-scope memories folded out of the same pass. */
+  createdUser?: number;
 }
 
 export interface MemoryDistillLogRow {
@@ -30,13 +42,21 @@ export interface MemoryDistillLogRow {
   merged: number;
   skipped: number;
   error: string | null;
+  detail: string | null;
+  provider: string | null;
+  model: string | null;
+  raw_chars: number | null;
+  duration_ms: number | null;
+  created_user: number;
   created_at: string;
 }
 
 export function insert(db: DB, projectId: number, entry: MemoryDistillLogEntry): void {
   db.prepare(`
-    INSERT INTO memory_distill_log (project_id, session_id, trigger, status, created, merged, skipped, error)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO memory_distill_log
+      (project_id, session_id, trigger, status, created, merged, skipped, error,
+       detail, provider, model, raw_chars, duration_ms, created_user)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     projectId,
     entry.sessionId ?? null,
@@ -46,6 +66,12 @@ export function insert(db: DB, projectId: number, entry: MemoryDistillLogEntry):
     entry.merged ?? 0,
     entry.skipped ?? 0,
     entry.error ?? null,
+    entry.detail ?? null,
+    entry.provider ?? null,
+    entry.model ?? null,
+    entry.rawChars ?? null,
+    entry.durationMs ?? null,
+    entry.createdUser ?? 0,
   );
 }
 

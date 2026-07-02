@@ -17,6 +17,7 @@ export const RECOVERY_KINDS = [
   'provider-unknown-retry',
   'provider-fallback',
   'compact-failure',
+  'context-overflow',
 ] as const;
 export type RecoveryKind = typeof RECOVERY_KINDS[number];
 
@@ -36,6 +37,9 @@ export const RECOVERY_CAP_DEFAULTS: Record<RecoveryKind, number> = {
   'provider-unknown-retry': 4,
   'provider-fallback': 5,
   'compact-failure': 3,
+  // Overflow → Compacting round-trips. Each attempt SHOULD shrink the
+  // history; if 3 compactions still overflow, the context is irreducible.
+  'context-overflow': 3,
 };
 const RECOVERY_CAP_ENV_KEYS: Record<RecoveryKind, string> = {
   'provider-400-retry': 'CODER_RECOVERY_400_MAX',
@@ -44,6 +48,7 @@ const RECOVERY_CAP_ENV_KEYS: Record<RecoveryKind, string> = {
   'provider-unknown-retry': 'CODER_RECOVERY_UNKNOWN_MAX',
   'provider-fallback': 'CODER_RECOVERY_FALLBACK_MAX',
   'compact-failure': 'CODER_RECOVERY_COMPACT_MAX',
+  'context-overflow': 'CODER_RECOVERY_OVERFLOW_MAX',
 };
 export function recoveryCap(kind: RecoveryKind): number {
   const envVal = process.env[RECOVERY_CAP_ENV_KEYS[kind]];

@@ -353,7 +353,9 @@ const CATALOG_SEED: CatalogSeed[] = [
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.1-8b-instruct',
-      config: { temperature: 0, max_tokens: 1200 },
+      // 4000 — a JSON array of memories truncated mid-item parses as empty;
+      // thinking-capable models need the headroom (distill-call also clamps).
+      config: { temperature: 0, max_tokens: 4000 },
     },
     introducedInPhase: 'memory',
   },

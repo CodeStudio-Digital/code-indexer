@@ -85,4 +85,8 @@ describe('Behavior Tree transitions', () => {
     expect(nextState('Recovering', events.providerError({ retryable: true, status: 503 }))).toBe('Recovering');
     expect(nextState('Recovering', events.turnSucceeded({ hasToolCalls: false }))).toBe('Executing');
   });
+
+  it('Recovering routes context-overflow (TokenThresholdHit) to Compacting', () => {
+    expect(nextState('Recovering', events.tokenThresholdHit({ ratio: 1 }))).toBe('Compacting');
+  });
 });

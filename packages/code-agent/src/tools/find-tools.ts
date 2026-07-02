@@ -28,8 +28,8 @@ import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
  *
  * Implementation notes:
  *  - Cheap lexical match: substring + per-token overlap. No vector store
- *    dependency — this tool is the cheap path; if you need semantic, use
- *    mcp__search_concepts.
+ *    dependency — this tool is the cheap path; if you need semantic search
+ *    over code, use mcp__search.
  *  - Returns up to `limit` candidates (default 5, cap 10) — keep the result
  *    small so it doesn't itself become a token tax.
  *  - Excludes tools already in the active tier (those are visible already).
@@ -159,7 +159,7 @@ export function buildFindToolsTool(
       if (scored.length === 0) {
         return ok(
           `No tools matched "${query}". Try simpler verbs ("edit", "run", "search") or ` +
-            `mcp__search_concepts for code-level concepts.`,
+            `mcp__search for code-level concepts.`,
         );
       }
 

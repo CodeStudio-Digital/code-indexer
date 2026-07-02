@@ -197,6 +197,9 @@ import { agentMemory181 } from './181_agent_memory.js';
 import { projectWslRuntimeVersions182 } from './182_project_wsl_runtime_versions.js';
 import { projectWslPackageManagers183 } from './183_project_wsl_package_managers.js';
 import { agentInboxThreading184 } from './184_agent_inbox_threading.js';
+import { memoryDistillDiagnostics185 } from './185_memory_distill_diagnostics.js';
+import { coderToolCallsErrorClass186 } from './186_coder_tool_calls_error_class.js';
+import { symbolsNamespace187 } from './187_symbols_namespace.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -410,6 +413,9 @@ export const MIGRATIONS: Migration[] = [
   projectWslRuntimeVersions182,
   projectWslPackageManagers183,
   agentInboxThreading184,
+  memoryDistillDiagnostics185,
+  coderToolCallsErrorClass186,
+  symbolsNamespace187,
 ];
 
 /**

@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RecoveringNode } from '../recovering.js';
+import { isContextOverflowError } from '../../provider-retry.js';
 import { makeTestContext } from './test-helpers.js';
 
 beforeEach(() => {
@@ -171,6 +172,80 @@ describe('RecoveringNode', () => {
     });
   });
 
+  it('routes an overflow 400 (retryable:false) to Compacting instead of aborting', async () => {
+    const { ctx } = makeTestContext();
+    const event = await new RecoveringNode().execute(ctx, {
+      kind: 'ProviderError',
+      retryable: false,
+      status: 400,
+      message: 'prompt is too long: 210034 tokens > 200000 maximum',
+    });
+    expect(event.kind).toBe('TokenThresholdHit');
+    expect(ctx.recovery.get('context-overflow')).toBe(1);
+    expect(ctx.stopReason).toBeNull();
+  });
+
+  it('routes a status-less overflow to Compacting, not provider-unknown-retry', async () => {
+    const { ctx } = makeTestContext();
+    const event = await new RecoveringNode().execute(ctx, {
+      kind: 'ProviderError',
+      retryable: true,
+      status: 0,
+      message: "This model's maximum context length is 128000 tokens.",
+    });
+    expect(event.kind).toBe('TokenThresholdHit');
+    expect(ctx.recovery.get('context-overflow')).toBe(1);
+    expect(ctx.recovery.has('provider-unknown-retry')).toBe(false);
+  });
+
+  it('detects overflow via the error code when the message is opaque', async () => {
+    const { ctx } = makeTestContext();
+    const event = await new RecoveringNode().execute(ctx, {
+      kind: 'ProviderError',
+      retryable: false,
+      status: 400,
+      message: 'Bad request',
+      code: 'context_length_exceeded',
+    });
+    expect(event.kind).toBe('TokenThresholdHit');
+    expect(ctx.recovery.get('context-overflow')).toBe(1);
+  });
+
+  it('aborts with compact_exhausted when overflow persists past the cap', async () => {
+    vi.stubEnv('CODER_RECOVERY_OVERFLOW_MAX', '1');
+    const { ctx, recordedEvents } = makeTestContext();
+    const err = {
+      kind: 'ProviderError' as const,
+      retryable: false,
+      status: 400,
+      message: 'input length and max_tokens exceed context limit',
+    };
+
+    // 1/1 → Compacting round-trip.
+    expect((await new RecoveringNode().execute(ctx, err)).kind).toBe('TokenThresholdHit');
+    // 2/1 → context is irreducible → Aborted.
+    const second = await new RecoveringNode().execute(ctx, err);
+    expect(second.kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('compact_exhausted');
+    expect(ctx.error?.message).toContain('exceed context limit');
+
+    const aborted = recordedEvents.find((r) => r.event === 'recovery_aborted');
+    expect(aborted!.args[0]).toMatchObject({ kind: 'context-overflow', attempts: 2, cap: 1 });
+  });
+
+  it('still aborts a non-overflow 400 without touching the overflow counter', async () => {
+    const { ctx } = makeTestContext();
+    const event = await new RecoveringNode().execute(ctx, {
+      kind: 'ProviderError',
+      retryable: false,
+      status: 400,
+      message: 'invalid_request: unknown field `foo`',
+    });
+    expect(event.kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('error');
+    expect(ctx.recovery.has('context-overflow')).toBe(false);
+  });
+
   it('preserves per-kind isolation — 401 cap does not affect transient', async () => {
     vi.stubEnv('CODER_RECOVERY_401_MAX', '0');
     const { ctx } = makeTestContext();
@@ -196,5 +271,30 @@ describe('RecoveringNode', () => {
       status: 503,
     });
     expect(transient.kind).toBe('TurnSucceeded');
+  });
+});
+
+describe('isContextOverflowError', () => {
+  it.each([
+    ['prompt is too long: 210034 tokens > 200000 maximum', undefined], // anthropic
+    ['input length and max_tokens exceed context limit: 199000 + 8192', undefined], // anthropic
+    ["This model's maximum context length is 128000 tokens.", undefined], // openai/deepseek
+    ['Your input exceeds the context window of this model', undefined], // openai responses
+    ['Bad request', 'context_length_exceeded'], // openai code-only
+    ['The input token count (1048577) exceeds the maximum number of tokens allowed', undefined], // gemini
+    ['Request failed: exceeded model token limit', undefined], // kimi/moonshot
+    ['input length exceeds the maximum input length 131072', undefined], // zai/glm
+  ])('matches %s', (message, code) => {
+    expect(isContextOverflowError(message, code)).toBe(true);
+  });
+
+  it.each([
+    ['rate limit exceeded, retry after 3s', undefined],
+    ['The model `glm-5.2` does not exist', 'model_not_found'],
+    ['socket hang up', undefined],
+    ['', undefined],
+    [undefined, undefined],
+  ])('does not match %s', (message, code) => {
+    expect(isContextOverflowError(message as string | undefined, code)).toBe(false);
   });
 });

@@ -79,6 +79,39 @@ export interface LspHover {
     | Array<string | { language?: string; value: string }>;
 }
 
+/** `textDocument/signatureHelp` answer. Parameter label may be a plain
+ *  string OR a [start,end] offset pair into the signature label. */
+export interface LspSignatureHelp {
+  signatures?: Array<{
+    label: string;
+    documentation?: string | { value: string };
+    parameters?: Array<{
+      label: string | [number, number];
+      documentation?: string | { value: string };
+    }>;
+  }>;
+  activeSignature?: number | null;
+  activeParameter?: number | null;
+}
+
+/** Hierarchical shape of `textDocument/documentSymbol` (has `range`). */
+export interface LspDocumentSymbol {
+  name: string;
+  detail?: string;
+  kind?: number;
+  range?: LspRange0;
+  selectionRange?: LspRange0;
+  children?: LspDocumentSymbol[];
+}
+
+/** Flat legacy shape of `textDocument/documentSymbol` (has `location`). */
+export interface LspSymbolInformation {
+  name: string;
+  kind?: number;
+  location?: { uri?: string; range?: LspRange0 };
+  containerName?: string;
+}
+
 export interface SemanticTokensLegend {
   tokenTypes: string[];
   tokenModifiers: string[];

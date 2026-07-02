@@ -20,6 +20,17 @@ import type { ChangeToolbarLabels } from './change-toolbar-dom.js';
 
 const RECOMPUTE_DEBOUNCE_MS = 150;
 
+// Blocos de mudança vivos por chave de URI do modelo (`model.uri.path` sem a
+// barra inicial, ex. `p5/src/x.ts` — mesma forma que editor-models usa). Os
+// comandos next/prev change (nav-commands.ts) leem daqui em vez de alcançar
+// dentro do closure do tracker. Atualizado a cada recompute; limpo no dispose.
+const changesByModel = new Map<string, Change[]>();
+
+/** Snapshot dos change-blocks do modelo (vazio quando sem tracker/repo). */
+export function getChangeRanges(modelUriKey: string): readonly Change[] {
+  return changesByModel.get(modelUriKey) ?? [];
+}
+
 /** 1-based line range on the working-tree (new) side, for partial staging. */
 export interface StageRange {
   newStart: number;
@@ -59,10 +70,12 @@ export function attachChangeTracker(
   let changes: Change[] = [];
   let activeIdx = -1;
   const collection = editor.createDecorationsCollection([]);
+  const uriKey = model.uri.path.replace(/^\//, '');
 
   const recompute = (): void => {
     if (model.isDisposed()) return;
     changes = computeChanges(baseline, model.getValue());
+    changesByModel.set(uriKey, changes);
     collection.set(buildChangeDecorations(monaco, changes, model.getLineCount()));
   };
 
@@ -130,6 +143,7 @@ export function attachChangeTracker(
     },
     dispose() {
       if (timer) clearTimeout(timer);
+      changesByModel.delete(uriKey);
       subContent.dispose();
       subMouse.dispose();
       widget.dispose();

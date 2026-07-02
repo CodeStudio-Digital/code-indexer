@@ -31,6 +31,13 @@ export interface SessionMemoryInput {
   summary?: string;
   filesTouched?: string[];
   /**
+   * Current "Project style profile" content (MCP_MEMORY_STYLE_PROFILE fold).
+   * `null` = feature ON but no profile yet; `undefined` = feature off. When
+   * present, the positive distiller is also asked to emit ONE complete
+   * updated profile candidate (replace-not-append handled by the extractor).
+   */
+  styleProfile?: string | null;
+  /**
    * Errors hit and how they were resolved (from the compaction summarizer's
    * `errors_and_fixes`). Consumed by the failure distiller to mint `gotcha`
    * lessons; the positive distiller ignores it.
@@ -80,6 +87,15 @@ export interface ExtractResult {
   skipped: number;
 }
 
+/** The maintained-fold singleton (MCP_MEMORY_STYLE_PROFILE): ONE memory whose
+ *  content is always the COMPLETE current profile — merges REPLACE the body
+ *  instead of appending (append would grow a frankenprofile forever), and its
+ *  importance pins at ≥0.9 so it tops the index and survives GC. */
+const STYLE_PROFILE_TITLE = 'project style profile';
+const STYLE_PROFILE_IMPORTANCE = 0.9;
+const isStyleProfile = (title: string): boolean =>
+  title.trim().toLowerCase() === STYLE_PROFILE_TITLE;
+
 const IMPORTANCE_FLOOR: Partial<Record<SnapshotCategory, number>> = {
   feedback: 0.75,
   user: 0.7,
@@ -112,8 +128,12 @@ export class MemoryExtractor {
     let candidates: MemoryCandidate[];
     try {
       candidates = await this.distiller.distill(input);
-    } catch {
-      return out; // distillation is best-effort — never break the session over it
+    } catch (e) {
+      // Typed LLM/transport failures must reach the orchestrator so the
+      // distill log records `error` (retryable) instead of a silent zero.
+      // Name check (not instanceof) to keep this module import-cycle-free.
+      if (e instanceof Error && e.name === 'DistillLlmError') throw e;
+      return out; // anything else is best-effort — never break the session over it
     }
 
     for (const c of candidates) {
@@ -136,10 +156,16 @@ export class MemoryExtractor {
         // session keeps re-deriving rises above the injection bar. When the
         // body doesn't actually grow, the importance-only update stays on the
         // cheap metadata path (no version row, no embedding invalidation).
-        const merged = dup.content.includes(c.content.trim())
-          ? dup.content
-          : `${dup.content}\n\n${c.content.trim()}`;
-        const importanceBump = Math.min(1, (dup.importance ?? 0.5) + 0.02);
+        // The style-profile singleton REPLACES its body (the candidate is the
+        // complete updated profile) instead of appending.
+        const merged = isStyleProfile(c.title)
+          ? c.content.trim()
+          : dup.content.includes(c.content.trim())
+            ? dup.content
+            : `${dup.content}\n\n${c.content.trim()}`;
+        const importanceBump = isStyleProfile(c.title)
+          ? Math.max(dup.importance ?? 0.5, STYLE_PROFILE_IMPORTANCE)
+          : Math.min(1, (dup.importance ?? 0.5) + 0.02);
         await this.writer.update(dup.id, {
           ...(merged !== dup.content ? { content: merged } : {}),
           projectId,
@@ -152,7 +178,7 @@ export class MemoryExtractor {
           category: c.category,
           content: c.content.trim(),
           source,
-          importance,
+          importance: isStyleProfile(c.title) ? Math.max(importance, STYLE_PROFILE_IMPORTANCE) : importance,
           referencedFiles: c.referencedFiles,
         });
         out.created++;

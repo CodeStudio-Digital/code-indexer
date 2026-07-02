@@ -16,7 +16,7 @@ import { lspServersBaseDir } from '@mcp/shared/utils/data-paths.js';
 import { relToAbsCanonical } from '@mcp/shared/utils/fs-canonical.js';
 import { LspServerHandle } from './lsp-server-handle.js';
 import type { LspDiagnostic } from './lsp-protocol.js';
-import { entryFor, installDirFor, isInstalled, serverForLanguage, type LspServerDef } from './server-registry.js';
+import { installDirFor, isInstalled, serverForLanguage, spawnSpecFor, type LspServerDef } from './server-registry.js';
 
 export interface LspManagerDeps {
   baseDir?: string;
@@ -187,25 +187,27 @@ export class LspServerManager {
     if (recent > 0) await new Promise((r) => setTimeout(r, BACKOFF_MS[Math.min(recent, BACKOFF_MS.length) - 1]));
 
     const installDir = installDirFor(baseDir, def);
-    const entryJs = entryFor(installDir, def, languageId);
-    if (!existsSync(entryJs)) {
-      this.deps.log?.(`[lsp] entry missing for ${def.id}: ${entryJs}`);
+    // npm defs launch as `node <entry> --stdio`; binary defs exec the
+    // executable directly (resolveServerNode is only consulted for npm —
+    // native servers must not inherit ELECTRON_RUN_AS_NODE).
+    const spawnSpec = spawnSpecFor(def, installDir, () => this.resolveServerNode(projectId), languageId);
+    if (!existsSync(spawnSpec.checkPath)) {
+      this.deps.log?.(`[lsp] entry missing for ${def.id}: ${spawnSpec.checkPath}`);
       entry.spawning = null;
-      this.emit(entry, 'failed', `server entry missing: ${entryJs}`);
+      this.emit(entry, 'failed', `server entry missing: ${spawnSpec.checkPath}`);
       return null;
     }
-    const node = this.resolveServerNode(projectId);
 
     let handle: LspServerHandle | null = null;
     try {
       const languageLevel = this.deps.resolveLanguageLevel?.(projectId, def.id);
       handle = new LspServerHandle(
         {
-          command: node.command,
-          args: [entryJs, ...def.args],
+          command: spawnSpec.command,
+          args: spawnSpec.args,
           cwd: root,
           rootPath: root,
-          env: node.env,
+          env: spawnSpec.env,
           initializationOptions: def.initializationOptions?.({ cacheDir: join(baseDir, '.cache'), languageLevel }),
           resolveConfig: (section) => this.deps.resolveLspConfig?.(projectId, def.id, section) ?? null,
         },

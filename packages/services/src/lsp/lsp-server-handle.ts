@@ -37,6 +37,10 @@ const REQ_TIMEOUT_MS = {
   resolve: 5_000,
   codeAction: 10_000,
   semanticTokens: 10_000,
+  // Rename touches every reference in the workspace — references-grade cost.
+  rename: 30_000,
+  signatureHelp: 5_000,
+  documentSymbol: 10_000,
 } as const;
 const STDERR_RING = 8 * 1024;
 
@@ -156,7 +160,17 @@ export class LspServerHandle {
             },
             isPreferredSupport: true,
           },
-          definition: {}, references: {}, documentSymbol: {}, signatureHelp: {},
+          definition: {}, references: {},
+          // Hierarchical outline (DocumentSymbol[] with children). Servers
+          // ignoring this flag answer flat SymbolInformation[] — the mapper
+          // in server-backend-ops accepts both shapes.
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          // No labelOffsetSupport: we still MAP [start,end] offset labels
+          // (substring of the signature label) in case a server sends them.
+          signatureHelp: { signatureInformation: { parameterInformation: { labelOffsetSupport: false } } },
+          // No prepareSupport — the client renames whatever word is at the
+          // cursor; the server validates and answers the WorkspaceEdit.
+          rename: { dynamicRegistration: false },
           // Semantic highlighting — without declaring this some servers don't
           // advertise `semanticTokensProvider`. The tokenTypes/tokenModifiers
           // are the full LSP standard set we understand; the server replies
@@ -276,6 +290,34 @@ export class LspServerHandle {
       position: toLsp(position),
       context: { includeDeclaration: true },
     }, REQ_TIMEOUT_MS.references);
+  }
+
+  /** `textDocument/rename` — the server computes the full WorkspaceEdit. */
+  rename(
+    absPath: string,
+    position: { line: number; column: number },
+    newName: string,
+  ): Promise<unknown> {
+    return this.rpc.request('textDocument/rename', {
+      textDocument: { uri: pathToUri(absPath) },
+      position: toLsp(position),
+      newName,
+    }, REQ_TIMEOUT_MS.rename);
+  }
+
+  /** `textDocument/signatureHelp` — parameter hints at a call site. */
+  signatureHelp(absPath: string, position: { line: number; column: number }): Promise<unknown> {
+    return this.rpc.request('textDocument/signatureHelp', {
+      textDocument: { uri: pathToUri(absPath) },
+      position: toLsp(position),
+    }, REQ_TIMEOUT_MS.signatureHelp);
+  }
+
+  /** `textDocument/documentSymbol` — DocumentSymbol[] (hierarchical) or SymbolInformation[] (flat). */
+  documentSymbol(absPath: string): Promise<unknown> {
+    return this.rpc.request('textDocument/documentSymbol', {
+      textDocument: { uri: pathToUri(absPath) },
+    }, REQ_TIMEOUT_MS.documentSymbol);
   }
 
   codeActions(

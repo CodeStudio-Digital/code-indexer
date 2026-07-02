@@ -18,7 +18,7 @@ The spec is the deliverable. After approval the same session (or a fresh `build`
 - `submit_spec` — REQUIRED. Pass `{ name, body, parent_id? }`. The runner writes `.mcp/specs/<slug>-<unix>.md`, mirrors it into the company drive when a session is present, and BLOCKS until the human approves or requests changes.
 - On reject, read `requested_changes` from the tool result and produce v2 IN A NEW `submit_spec` call (not a separate file). The runner ledgers rejected drafts by content hash — cosmetic resubmits are refused.
 - `ask_user` — only for blocking choices that change the spec shape (e.g. "two-table schema or one?"). Default to drafting a defensible choice + recording the alternative in the Design section.
-- All read tools allowed: `read_file`, `mcp__grep_code`, `mcp__get_file_skeleton`, `mcp__find_references`, `mcp__search_memory`. Explore as much as the spec warrants.
+- All read tools allowed: `read_file`, `mcp__grep_code`, `mcp__get_file_skeleton`, `mcp__find_references`, `recall_memory` / `mcp__search_memory`. Explore as much as the spec warrants.
 
 ## What you must NOT do
 

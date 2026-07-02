@@ -129,7 +129,8 @@ function dsDocs(binding: DsConsumerBinding): CoderTool {
   return {
     name: 'ds_docs',
     description:
-      'Documentation (docs.md) of the linked design system — theming, setup, conventions. Without arguments returns the whole doc (or a section index when long); pass `heading` to fetch one `## ` section.',
+      'Read the documentation of the linked design system — theming, setup, conventions.\n' +
+      'Source is the published docs.md. Without arguments returns the whole doc (or a section index when long); pass `heading` to fetch one `## ` section.',
     parameters: {
       type: 'object',
       properties: { heading: { type: 'string', description: 'Optional `## ` section heading to fetch.' } },

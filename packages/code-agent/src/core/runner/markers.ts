@@ -190,6 +190,58 @@ export function buildDupMediumMarker(args: {
 }
 
 /**
+ * A1 — Planning-node reflection reminder. Injected as a user message on the
+ * FIRST guard fire (the enforcement marker below only kicks in after ~2 full
+ * refusal cycles). Names the guard + tool, then orders a brief reflect-then-
+ * pivot: without this the model re-enters Executing with zero steering and
+ * usually replays the same call.
+ *
+ * Deterministic — all inputs are primitives — so the transcript stays
+ * prefix-cache stable.
+ */
+export function buildLoopGuardReflectionMarker(args: {
+  guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
+  toolName?: string;
+  count?: number;
+}): string {
+  const name = args.toolName ? `\`${args.toolName}\`` : 'a tool';
+  const times = args.count != null ? `${args.count} times` : 'repeatedly';
+  let label: string;
+  let detail: string;
+  switch (args.guard) {
+    case 'tuple-hash':
+      label = 'duplicate-call';
+      detail =
+        `${name} was called with identical arguments ${times}; the last call was refused. ` +
+        `Repeating it next turn will be refused again.`;
+      break;
+    case 'doom-loop':
+      label = 'doom-loop';
+      detail = `the same tool signature (${name}) recurred across ${args.count ?? 'several'} turns.`;
+      break;
+    case 'dominance':
+      label = 'single-tool-dominance';
+      detail = `${name} dominated ${args.count ?? 'many'} recent turns with zero assistant text between calls.`;
+      break;
+    case 'failure-streak':
+      label = 'failure-streak';
+      detail =
+        `${name} failed ${args.count != null ? `${args.count} consecutive times` : 'repeatedly'} — ` +
+        `the approach, not the call, is wrong.`;
+      break;
+  }
+  return (
+    `<system-reminder>\n` +
+    `[loop-guard: ${label}] The runner interrupted your tool loop: ${detail}\n` +
+    `Before your next tool batch, reflect briefly: (1) state what the repeated call was ` +
+    `supposed to achieve, (2) why repeating it cannot achieve it, (3) then act with a ` +
+    `DIFFERENT tool or materially different arguments. If you are blocked, ask the user ` +
+    `(ask_user / ask_master) instead of retrying.\n` +
+    `</system-reminder>`
+  );
+}
+
+/**
  * Active loop-enforcement reminder. Injected as a user `<system-reminder>`
  * when the SAME tool+args has been hard-refused across multiple planning
  * cycles (the dedup table resets each cycle, so a passive refusal alone never

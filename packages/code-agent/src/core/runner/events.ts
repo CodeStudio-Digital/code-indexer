@@ -6,6 +6,7 @@ import type {
   QuestionBlock,
 } from '@mcp/code-agent/core/messages.js';
 import type { StopReason, TransitionKind } from './types.js';
+import type { RecoveryKind } from './recovery-config.js';
 import type { AsyncOperationSnapshot } from './operations.js';
 
 /**
@@ -248,7 +249,9 @@ export interface RunnerEvents {
   /** PR-2 (R1): emitted when a per-recovery-path circuit breaker exceeds
    *  its cap and the loop bails with reason='error'. */
   recovery_aborted: (payload: {
-    kind: 'provider-400-retry' | 'provider-401-refresh' | 'provider-transient-retry' | 'provider-unknown-retry' | 'provider-fallback' | 'compact-failure';
+    // Sourced from RECOVERY_KINDS (recovery-config.ts) so a new recovery
+    // path never drifts out of this payload again.
+    kind: RecoveryKind;
     attempts: number;
     cap: number;
     contextHint: string | null;
@@ -335,6 +338,13 @@ export interface RunnerEvents {
     total_chars_before: number;
     total_chars_after: number;
     auto_continue: number;
+    /**
+     * A6 — WHICH gate routed the run into Compacting: a loop-aware reason
+     * ('polling-loop' | 'stuck-progress' | 'cumulative'), a size gate
+     * ('token-budget' | 'body-after-prefix'), or 'context-overflow' (the
+     * provider rejected the payload). Absent on legacy emit sites.
+     */
+    trigger?: string;
   }) => void;
   /**
    * Emitted exactly once at the start of `run()`. Carries a fresh runId so

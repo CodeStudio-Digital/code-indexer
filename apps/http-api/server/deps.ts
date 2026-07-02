@@ -874,6 +874,16 @@ export function createDeps(): ServerDeps {
     distillLog: (projectId, entry) => {
       try { db.insertMemoryDistillLog(projectId, entry); } catch { /* best-effort */ }
     },
+    // Style-profile fold (opt-in): the positive distiller maintains ONE
+    // "Project style profile" memory per project — same LLM call, replace-
+    // not-append merge in the extractor. Off unless the flag is set.
+    getStyleProfile: process.env.MCP_MEMORY_STYLE_PROFILE === '1'
+      ? (projectId) => {
+          try {
+            return db.getAgentMemoryByName('project', projectId, 'project-style-profile')?.content ?? null;
+          } catch { return null; }
+        }
+      : undefined,
   });
   // Global-session WRITE redirect: a SYNTHETIC union project (mig 155) has no
   // durable home — its directory is swept when orphaned — so map its id to the

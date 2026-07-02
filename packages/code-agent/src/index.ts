@@ -15,6 +15,7 @@ import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction
 import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
 import { buildSystemPrompt, normalizeProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
+import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import { applyPatchTool } from '@mcp/code-agent/tools/apply-patch.js';
@@ -1302,16 +1303,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Tools that genuinely need the symbol DB or vector store. Tools that
     // gained a tree-sitter / disk-grep fallback (find_references,
     // prepare_edit, trace_usage, get_symbol_body, get_file_skeleton,
-    // get_file_structure, grep_code) are kept registered — they work
-    // without an index and degrade gracefully.
+    // grep_code) are kept registered — they work without an index and
+    // degrade gracefully.
     const indexDependent = new Set<string>([
-      'get_symbol_details', 'get_class_members',
       'get_hierarchy', 'find_implementations',
       'semantic_neighbors',
       'get_dependencies', 'get_dependents',
-      'search', 'search_concepts', 'search_by_kind',
+      'search',
       'get_project_overview', 'get_project_pulse',
-      'get_architecture', 'get_repo_map',
+      'get_repo_map',
     ]);
     const isIndexDep = (toolName: string): boolean => {
       // Strip mcp__ prefix and any company-master per-project slug
@@ -1335,6 +1335,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const repoMap = repoMapBudget > 0
     ? buildRepoMap(db, project.id, repoMapBudget)
     : '';
+
+  // Detected verify commands (B2-dyn) — package.json scripts + package
+  // manager, rendered below the dynamic boundary next to the repo map so the
+  // agent runs the project's REAL test/typecheck instead of guessing.
+  const verifyCommands = detectVerifyCommands(project.root_path);
 
   // Agent Loop v2 — ON by default for new sessions. Set CODER_AGENT_LOOP_V2=0
   // to opt out (e.g. for cache-stability comparisons or to roll back without
@@ -1361,6 +1366,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     mcpAvailable: mcpBridgeOk,
     isIndexed,
     repoMap,
+    verifyCommands,
     agentLoopV2: agentLoopV2EnvFlag,
     agentId: effectiveAgentId ?? undefined,
     // Plan-depth directive (consumed only in plan mode; the `spec` agent is

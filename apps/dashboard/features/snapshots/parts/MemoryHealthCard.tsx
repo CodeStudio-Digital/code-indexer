@@ -7,7 +7,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, CircleAlert, RefreshCw, Sparkles, Loader2 } from 'lucide-react';
+import { Brain, CircleAlert, FlaskConical, RefreshCw, Sparkles, Loader2 } from 'lucide-react';
 import { Switch } from '../../../components/ui/switch.js';
 import { apiPatch, apiPost, useApi } from '../../../hooks/useApi.js';
 import { cn, formatRelativeTime } from '../../../lib/utils.js';
@@ -21,7 +21,25 @@ interface DistillEntry {
   merged: number;
   skipped: number;
   error: string | null;
+  /** Migration 185 diagnostics — why a pass came back the way it did. */
+  detail?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  raw_chars?: number | null;
+  duration_ms?: number | null;
   created_at: string;
+}
+
+interface DryRunResult {
+  ok: boolean;
+  step?: string;
+  sessionId?: number;
+  binding?: { provider: string; kind: string; model: string; resolvedFrom: string } | null;
+  diag?: { outcome: string; httpStatus?: number; errorSnippet?: string; rawChars: number; latencyMs: number };
+  rawResponse?: string;
+  candidates?: Array<{ title: string; category: string }>;
+  error?: string;
+  durationMs?: number;
 }
 
 interface MemoryHealth {
@@ -41,9 +59,23 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
   const [consolidating, setConsolidating] = useState(false);
   const [consolidateMsg, setConsolidateMsg] = useState<string | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
+  const [dryRunning, setDryRunning] = useState(false);
+  const [dryRun, setDryRun] = useState<DryRunResult | null>(null);
 
   if (!data) return null;
   const { last, totals } = data;
+
+  const testDistill = async () => {
+    setDryRunning(true);
+    setDryRun(null);
+    try {
+      setDryRun(await apiPost<DryRunResult>(`/projects/${projectId}/memory/distill-dry-run`, {}));
+    } catch (e) {
+      setDryRun({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setDryRunning(false);
+    }
+  };
 
   const toggle = async (enabled: boolean) => {
     await apiPatch(`/projects/${projectId}`, { memory_enabled: enabled });
@@ -99,6 +131,16 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
         >
           {consolidating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
         </button>
+        <button
+          type="button"
+          onClick={testDistill}
+          disabled={dryRunning}
+          aria-label={t('memory.health.testDistill')}
+          title={t('memory.health.testDistill')}
+          className="p-1 rounded hover:bg-muted text-muted-foreground disabled:opacity-50"
+        >
+          {dryRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
+        </button>
         {consolidateMsg && <span className="text-[10px] text-muted-foreground truncate">{consolidateMsg}</span>}
         <label className="ml-auto flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
           {t('memory.toggle.label')}
@@ -114,12 +156,17 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
                 'px-1 rounded font-medium',
                 last.status === 'error'
                   ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                  : last.status === 'empty'
+                  : last.status === 'empty' || last.status === 'skipped'
                     ? 'bg-muted'
                     : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
               )}
+              title={[
+                last.provider && last.model ? `${last.provider}/${last.model}` : null,
+                last.raw_chars != null ? `raw ${last.raw_chars} chars` : null,
+                last.duration_ms != null ? `${last.duration_ms}ms` : null,
+              ].filter(Boolean).join(' · ') || undefined}
             >
-              {last.status}
+              {last.detail ? `${last.status} · ${last.detail}` : last.status}
             </span>
             <span className="truncate">
               {last.trigger === 'consolidation'
@@ -176,6 +223,49 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
             </button>
           )}
         </div>
+      )}
+
+      {dryRun && (
+        <details className="text-[10px] rounded border bg-background/60 px-2 py-1" open={!dryRun.ok}>
+          <summary
+            className={cn(
+              'cursor-pointer select-none font-medium',
+              dryRun.ok ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-600 dark:text-red-300',
+            )}
+          >
+            {dryRun.ok
+              ? t('memory.health.testOk', { count: dryRun.candidates?.length ?? 0 })
+              : t('memory.health.testFail', { step: dryRun.step ?? 'distill' })}
+            {dryRun.binding && (
+              <span className="text-muted-foreground font-normal">
+                {' '}· {dryRun.binding.provider}/{dryRun.binding.model} ({dryRun.binding.resolvedFrom})
+              </span>
+            )}
+          </summary>
+          <div className="mt-1 space-y-1 text-muted-foreground">
+            {dryRun.diag && (
+              <div>
+                {dryRun.diag.outcome}
+                {dryRun.diag.httpStatus ? ` · HTTP ${dryRun.diag.httpStatus}` : ''}
+                {` · ${dryRun.diag.rawChars} chars · ${Math.round(dryRun.diag.latencyMs)}ms`}
+                {dryRun.diag.errorSnippet ? ` — ${dryRun.diag.errorSnippet}` : ''}
+              </div>
+            )}
+            {dryRun.error && <div className="text-red-500 break-all">{dryRun.error}</div>}
+            {!!dryRun.candidates?.length && (
+              <ul className="list-disc pl-4">
+                {dryRun.candidates.map((cand, i) => (
+                  <li key={i}>[{cand.category}] {cand.title}</li>
+                ))}
+              </ul>
+            )}
+            {dryRun.rawResponse && (
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all bg-muted/40 rounded p-1">
+                {dryRun.rawResponse}
+              </pre>
+            )}
+          </div>
+        </details>
       )}
 
       <RestoreArchivedDialog

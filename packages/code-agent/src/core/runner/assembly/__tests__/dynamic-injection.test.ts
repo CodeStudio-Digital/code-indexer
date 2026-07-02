@@ -32,6 +32,25 @@ describe('computeDynamicInjection', () => {
     expect(computeDynamicInjection(baseCtx())).toBeNull();
   });
 
+  it('correction hint alone produces a reminder and flags the result', () => {
+    const out = computeDynamicInjection(baseCtx({
+      correctionHint: 'the user corrected you — remember() it',
+    }));
+    expect(out).not.toBeNull();
+    expect(out!.reminder).toContain('remember() it');
+    expect(out!.includedCorrectionHint).toBe(true);
+  });
+
+  it('null correction hint neither renders nor flags', () => {
+    const out = computeDynamicInjection(baseCtx({
+      correctionHint: null,
+      newlyRegisteredSkillIds: ['s1'],
+    }));
+    expect(out).not.toBeNull();
+    expect(out!.includedCorrectionHint).toBe(false);
+    expect(out!.reminder).not.toContain('remember()');
+  });
+
   it('testMode short-circuits to null regardless of state', () => {
     const ctx = baseCtx({
       newlyRegisteredSkillIds: ['s1'],

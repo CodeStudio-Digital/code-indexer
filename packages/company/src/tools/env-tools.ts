@@ -218,9 +218,10 @@ const envValidate: CoderTool = {
 const envDelete: CoderTool = {
   name: 'env_delete',
   description:
-    'Remove a shared env var. Both the DB row and the in-container `.env` entry go away; the ' +
-    'next provision will not re-inject the key. Use when a service is removed or an env is ' +
-    'renamed. Idempotent — deleting a non-existent key is a no-op.',
+    'Remove a shared env var from the session and from every live container `.env`.\n' +
+    'Both the DB row and the in-container entry go away; the next provision will not re-inject ' +
+    'the key. Use when a service is removed or an env is renamed. Idempotent — deleting a ' +
+    'non-existent key is a no-op.',
   source: 'native',
   parameters: {
     type: 'object',

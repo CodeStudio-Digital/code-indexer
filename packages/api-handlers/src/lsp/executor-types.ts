@@ -5,7 +5,15 @@
  * inside the dedicated lsp worker_thread, so behavior is identical by
  * construction; only the thread changes.
  */
-import type { CodeActionDTO, CompletionItem, DocChange, HoverInfo, LspLocation } from '@mcp/api-bus';
+import type {
+  CodeActionDTO,
+  CompletionItem,
+  DocChange,
+  DocumentSymbolDTO,
+  HoverInfo,
+  LspLocation,
+  SignatureHelpDTO,
+} from '@mcp/api-bus';
 import type {
   CompletionEntry,
   CompletionDetails,
@@ -13,6 +21,7 @@ import type {
   DiagnosticResult,
   HoverResult,
   ReferenceResult,
+  RenameEdit,
 } from '@mcp/code-agent/lsp/ts-service.js';
 
 export interface LspOpCtx {
@@ -35,6 +44,8 @@ export interface LspOpCtx {
   docVersion?: number;
   /** completionItem/resolve (TS auto-import): a entry escolhida + seu source/data opacos. */
   completionEntry?: { name: string; source?: string; data?: unknown };
+  /** tsRename: the identifier the symbol at `position` becomes. */
+  newName?: string;
 }
 
 export interface LspBackendExecutor {
@@ -48,6 +59,12 @@ export interface LspBackendExecutor {
   tsDiagnostics(ctx: LspOpCtx): Promise<DiagnosticResult[]>;
   tsSemanticTokens(ctx: LspOpCtx): Promise<number[]>;
   tsCodeActions(ctx: LspOpCtx): Promise<CodeActionDTO[]>;
+  /** Rename edits for the symbol at ctx.position → ctx.newName (TS/JS only). */
+  tsRename(ctx: LspOpCtx): Promise<RenameEdit[]>;
+  /** Parameter hints at ctx.position (TS/JS only). Wire DTO already. */
+  tsSignatureHelp(ctx: LspOpCtx): Promise<SignatureHelpDTO | null>;
+  /** Outline tree for ctx.file (TS/JS only). Wire DTO already. */
+  tsDocumentSymbols(ctx: LspOpCtx): Promise<DocumentSymbolDTO[]>;
   // Structural-index fallback ops — these already return wire DTOs.
   fallbackCompletion(ctx: LspOpCtx): Promise<CompletionItem[]>;
   fallbackDefinition(ctx: LspOpCtx): Promise<LspLocation[]>;
@@ -71,6 +88,9 @@ export const EMPTY_RESULTS: Record<LspExecutorOp, unknown> = {
   tsDiagnostics: [],
   tsSemanticTokens: [],
   tsCodeActions: [],
+  tsRename: [],
+  tsSignatureHelp: null,
+  tsDocumentSymbols: [],
   fallbackCompletion: [],
   fallbackDefinition: [],
   fallbackHover: null,

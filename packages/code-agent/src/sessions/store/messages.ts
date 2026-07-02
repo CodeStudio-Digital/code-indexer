@@ -83,15 +83,16 @@ export interface AppendToolCallInput {
 // Moved to tool-refusal.ts (dependency-free) so the dbWriter worker mirror
 // classifies identically; re-exported here for existing importers.
 import { classifyToolRefusal } from './tool-refusal.js';
-export { classifyToolRefusal };
+import { classifyToolError } from './tool-error-class.js';
+export { classifyToolRefusal, classifyToolError };
 
 export function appendToolCall(db: DB, input: AppendToolCallInput): void {
   db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
        output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
-       parent_tool_use_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       parent_tool_use_id, error_class)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.message_id, input.tool_use_id, input.tool_name, JSON.stringify(input.args),
     input.result_text, input.is_error ? 1 : 0, input.duration_ms,
@@ -100,6 +101,7 @@ export function appendToolCall(db: DB, input: AppendToolCallInput): void {
     input.truncated ? 1 : 0, input.phase ?? null, input.turn_telemetry_id ?? null,
     input.refusal_kind ?? classifyToolRefusal(input.result_text, input.is_error),
     input.parent_tool_use_id ?? null,
+    classifyToolError(input.result_text, input.is_error),
   );
 }
 
@@ -154,8 +156,8 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
        output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
-       parent_tool_use_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       parent_tool_use_id, error_class)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const bumpStmt = db.prepare(`
     UPDATE coder_sessions
@@ -205,6 +207,7 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
         tc.truncated ? 1 : 0, tc.phase ?? null, tc.turn_telemetry_id ?? null,
         tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
         tc.parent_tool_use_id ?? null,
+        classifyToolError(tc.result_text, tc.is_error),
       );
     };
     for (const tc of input.tool_calls) runInsertTool(tc);

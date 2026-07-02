@@ -10,13 +10,28 @@ import { Database, RefreshCw, Check } from 'lucide-react';
 import { useApi } from '../../../hooks/useApi.js';
 import { usePolling } from '../../../hooks/usePolling.js';
 
+interface AgentMemoryKpis {
+  windowDays: number;
+  learningRate: number | null;
+  sessionsInWindow: number;
+  recallHitRate: number | null;
+  recallsInWindow: number;
+  usageCoverage: number | null;
+  liveStock: number;
+  goldStock: number;
+  explicitCalls: Record<string, number>;
+}
+
 interface AgentMemoryStats {
   liveProject: number;
   liveUser: number;
   events: Record<string, number>;
   recallHits: number;
   recallEmpty: number;
+  kpis?: AgentMemoryKpis;
 }
+
+const pct = (v: number | null): string => (v == null ? '—' : `${Math.round(v * 100)}%`);
 
 export function AgentMemoryHealthCard({ projectId }: { projectId: number }) {
   const { t } = useTranslation('projects');
@@ -63,6 +78,25 @@ export function AgentMemoryHealthCard({ projectId }: { projectId: number }) {
           forget: events.forget ?? 0,
         })}
       </div>
+
+      {data.kpis && (
+        <div className="flex flex-wrap items-center gap-1">
+          {([
+            ['k1', t('memory.kpi.learning'), pct(data.kpis.learningRate), t('memory.kpi.learningTip', { sessions: data.kpis.sessionsInWindow, days: data.kpis.windowDays })],
+            ['k2', t('memory.kpi.recallHit'), pct(data.kpis.recallHitRate), t('memory.kpi.recallHitTip', { recalls: data.kpis.recallsInWindow, days: data.kpis.windowDays })],
+            ['k3', t('memory.kpi.coverage'), pct(data.kpis.usageCoverage), t('memory.kpi.coverageTip', { live: data.kpis.liveStock, days: data.kpis.windowDays })],
+            ['k4', t('memory.kpi.gold'), String(data.kpis.goldStock), t('memory.kpi.goldTip')],
+          ] as const).map(([key, label, value, tip]) => (
+            <span
+              key={key}
+              title={tip}
+              className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-muted text-muted-foreground"
+            >
+              {label} <span className="text-foreground">{value}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -41,7 +41,6 @@ export const REVIEW_ALLOWLIST = new Set<string>([
   'mcp__read_file',
   'mcp__get_file_skeleton',
   'mcp__get_symbol_body',
-  'mcp__get_symbol_details',
   'mcp__find_references',
   'mcp__grep_code',
   'mcp__get_dependents',

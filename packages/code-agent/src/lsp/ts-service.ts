@@ -770,6 +770,130 @@ export class TsLanguageService {
     return { references };
   }
 
+  /**
+   * All edits required to rename the symbol at (line, column) to `newName`.
+   * Backed by `findRenameLocations` (findInStrings/findInComments off) —
+   * scope-aware, cross-file. Output follows the neighbours' conventions:
+   * TS-canonical absolute file paths + 1-based ranges (start inclusive,
+   * end exclusive). Empty array = nothing renameable at the position.
+   */
+  getRenameEdits(file: string, line: number, column: number, newName: string): RenameEdit[] {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+    const offset = this.positionToOffset(abs, line, column);
+    if (offset === null) return [];
+    let locations: readonly ts.RenameLocation[];
+    try {
+      locations = service.findRenameLocations(abs, offset, false, false) ?? [];
+    } catch (e) {
+      console.warn(
+        `[lsp] getRenameEdits: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
+    return locations.map((l) => ({
+      file: tsCanonical(l.fileName),
+      range: {
+        start: this.offsetToPosition(l.fileName, l.textSpan.start),
+        end: this.offsetToPosition(l.fileName, l.textSpan.start + l.textSpan.length),
+      },
+      // prefix/suffix only appear when the preference is on — kept for safety
+      // (e.g. shorthand property `{ foo }` → `{ foo: newName }`).
+      newText: (l.prefixText ?? '') + newName + (l.suffixText ?? ''),
+    }));
+  }
+
+  /**
+   * Parameter hints at a call site (Ctrl+P / `(`/`,` triggers). Backed by
+   * `getSignatureHelpItems`; labels are display-parts joins, the signature
+   * label is prefix + params.join(separator) + suffix — exactly what the
+   * TS server renders in VS Code. Null = not inside a call.
+   */
+  getSignatureHelp(file: string, line: number, column: number): SignatureHelpInfo | null {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+    const offset = this.positionToOffset(abs, line, column);
+    if (offset === null) return null;
+    let help: ts.SignatureHelpItems | undefined;
+    try {
+      help = service.getSignatureHelpItems(abs, offset, undefined);
+    } catch (e) {
+      console.warn(
+        `[lsp] getSignatureHelp: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return null;
+    }
+    if (!help || help.items.length === 0) return null;
+    const signatures = help.items.map((item) => {
+      const prefix = ts.displayPartsToString(item.prefixDisplayParts);
+      const suffix = ts.displayPartsToString(item.suffixDisplayParts);
+      const separator = ts.displayPartsToString(item.separatorDisplayParts);
+      const params = item.parameters.map((p) => ({
+        label: ts.displayPartsToString(p.displayParts),
+        documentation: ts.displayPartsToString(p.documentation) || undefined,
+      }));
+      return {
+        label: prefix + params.map((p) => p.label).join(separator) + suffix,
+        parameters: params,
+        documentation: ts.displayPartsToString(item.documentation) || undefined,
+      };
+    });
+    return {
+      signatures,
+      activeSignature: help.selectedItemIndex,
+      activeParameter: help.argumentIndex,
+    };
+  }
+
+  /**
+   * Outline tree via `getNavigationTree`. The synthetic root (the module
+   * itself, text "<global>"/filename) is skipped — its children are the
+   * top-level symbols. Kinds are raw ScriptElementKind strings; ranges are
+   * 1-based (span start → span end, selectionRange = nameSpan ?? span).
+   */
+  getDocumentSymbols(file: string): DocumentSymbolInfo[] {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+    let tree: ts.NavigationTree;
+    try {
+      tree = service.getNavigationTree(abs);
+    } catch (e) {
+      console.warn(
+        `[lsp] getDocumentSymbols: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
+    const toRange = (span: ts.TextSpan): DocumentSymbolInfo['range'] => ({
+      start: this.offsetToPosition(abs, span.start),
+      end: this.offsetToPosition(abs, span.start + span.length),
+    });
+    const convert = (node: ts.NavigationTree): DocumentSymbolInfo | null => {
+      if (node.spans.length === 0) return null;
+      const first = node.spans[0];
+      const last = node.spans[node.spans.length - 1];
+      const range = {
+        start: this.offsetToPosition(abs, first.start),
+        end: this.offsetToPosition(abs, last.start + last.length),
+      };
+      const children = (node.childItems ?? [])
+        .map(convert)
+        .filter((c): c is DocumentSymbolInfo => !!c);
+      return {
+        name: node.text,
+        kind: String(node.kind),
+        range,
+        selectionRange: node.nameSpan ? toRange(node.nameSpan) : { start: range.start, end: range.start },
+        children: children.length > 0 ? children : undefined,
+      };
+    };
+    return (tree.childItems ?? [])
+      .map(convert)
+      .filter((c): c is DocumentSymbolInfo => !!c);
+  }
+
   getHover(file: string, line: number, column: number): HoverResult | null {
     const abs = this.toAbs(file);
     this.ensureFileTracked(abs);
@@ -1259,6 +1383,33 @@ export interface CompletionDetails {
 export interface TsTextEdit {
   range: { start: { line: number; column: number }; end: { line: number; column: number } };
   newText: string;
+}
+
+/** One rename edit — TS-canonical absolute path, 1-based range (end exclusive). */
+export interface RenameEdit extends TsTextEdit {
+  file: string;
+}
+
+/** Signature help (parameter hints) — structurally identical to api-bus SignatureHelpDTO. */
+export interface SignatureHelpInfo {
+  signatures: Array<{
+    label: string;
+    parameters: Array<{ label: string; documentation?: string }>;
+    documentation?: string;
+  }>;
+  activeSignature: number;
+  activeParameter: number;
+}
+
+/** One outline node — structurally identical to api-bus DocumentSymbolDTO (1-based). */
+export interface DocumentSymbolInfo {
+  name: string;
+  detail?: string;
+  /** Raw ts.ScriptElementKind string ('class' | 'function' | 'const' | …). */
+  kind: string;
+  range: { start: { line: number; column: number }; end: { line: number; column: number } };
+  selectionRange: { start: { line: number; column: number }; end: { line: number; column: number } };
+  children?: DocumentSymbolInfo[];
 }
 
 export interface CodeActionResult {

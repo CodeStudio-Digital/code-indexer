@@ -5,7 +5,9 @@ import { withProject } from './_helpers.js';
 
 const get_costs = defineTool({
   name: 'get_costs',
-  description: 'Get cost summary',
+  description:
+    'Summarize LLM spend (USD and tokens) recorded by the indexer.\n' +
+    'Scope to one project via project_name or omit it for the global total; pass since (ISO date) to bound the window.',
   inputSchema: {
     type: 'object',
     properties: { project_name: { type: 'string' }, since: { type: 'string' } },
@@ -21,7 +23,9 @@ const get_costs = defineTool({
 
 const estimate_cost = defineTool({
   name: 'estimate_cost',
-  description: 'Estimate indexing cost',
+  description:
+    'Estimate the USD cost of indexing a project before running index_project.\n' +
+    "Uses the project's file count and the configured default provider/model unless provider/model are passed; includes embedding tokens when embeddings are enabled.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -47,7 +51,9 @@ const estimate_cost = defineTool({
 
 const get_diff = defineTool({
   name: 'get_diff',
-  description: 'Get diff between indexing runs',
+  description:
+    'Compare two indexing runs of a project and report files added, changed, and removed.\n' +
+    "Pass run_before + run_after for specific runs; omit both to diff the two most recent. Returns 'Not enough runs' when the project has fewer than two.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -68,7 +74,9 @@ const get_diff = defineTool({
 
 const export_docs = defineTool({
   name: 'export_docs',
-  description: 'Export project documentation',
+  description:
+    'Export the indexed project documentation (overview, architecture, files, snapshots, costs) as one document.\n' +
+    'Default format is markdown; pass format="json" for structured output, and sections to limit which parts are included.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -92,7 +100,9 @@ const export_docs = defineTool({
 
 const list_models = defineTool({
   name: 'list_models',
-  description: 'List available LLM models',
+  description:
+    'List LLM models known to the configured providers, one line per model.\n' +
+    'Filter with provider; pass live=true to query provider APIs for fresh listings instead of the cached catalog.',
   inputSchema: {
     type: 'object',
     properties: { provider: { type: 'string' }, live: { type: 'boolean' } },

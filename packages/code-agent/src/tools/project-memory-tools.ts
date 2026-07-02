@@ -27,7 +27,9 @@ const MEMORY_TYPES = [
 ] as const;
 
 /** Closed type → a project-memory category the host writer understands
- *  (the overlapping kinds round-trip; preference/external_pointer → note). */
+ *  (the overlapping kinds round-trip; external_pointer → note). `preference`
+ *  maps to `feedback` — floor 0.75, round-trips back to type `preference` —
+ *  NOT to `note` (floor 0.3), which buried the highest-value memory kind. */
 const TYPE_TO_PROJECT_CATEGORY: Record<string, string> = {
   decision: 'decision',
   convention: 'convention',
@@ -36,7 +38,7 @@ const TYPE_TO_PROJECT_CATEGORY: Record<string, string> = {
   gotcha: 'gotcha',
   pattern: 'pattern',
   note: 'note',
-  preference: 'note',
+  preference: 'feedback',
   external_pointer: 'note',
 };
 
@@ -45,7 +47,8 @@ export const rememberTool: CoderTool = {
   description:
     'Save a DURABLE memory that future sessions on this project (or every project, for user scope) will recall. ' +
     'Use it THE MOMENT you learn something a future agent would otherwise rediscover the hard way — a decision and ' +
-    'its why, a confirmed convention, a non-obvious gotcha, a reusable recipe. Not at the end; right then.\n' +
+    'its why, a confirmed convention, a non-obvious gotcha, a reusable recipe. Not at the end; right then. ' +
+    'A user correction or stated preference is the single most valuable thing to remember.\n' +
     'scope "project" (default): a fact about THIS codebase. scope "user": a GLOBAL fact about the user or how they ' +
     'want you to work (applies to EVERY project).\n' +
     "DON'T save transient task state, progress notes, or file dumps. Re-saving a close duplicate is deduplicated.",
@@ -159,7 +162,8 @@ export const recallMemoryTool: CoderTool = {
       const rows = await pm.recall(query, limit);
       if (rows.length === 0) {
         return ok(
-          `No agent memory matches "${query}". If you learn something durable here, save it with \`remember\`.`,
+          `No agent memory matches "${query}". Browse what IS stored with recall_memory({mode:'list'}) — ` +
+          'a different title may cover it. If you learn something durable here, save it with `remember`.',
         );
       }
       const body = rows

@@ -292,8 +292,9 @@ const docsList: CoderTool = {
 const docsIndexUpdate: CoderTool = {
   name: 'docs_index_update',
   description:
-    'Rewrite `docs/index.json` — the table of contents the dashboard\'s Docs tab uses to render a ' +
-    'navigable tree. Pass a JSON array of entries; each entry has `title`, `path` (relative to docs/), ' +
+    'Rewrite the docs index — the table of contents the dashboard\'s Docs tab uses to render a ' +
+    'navigable tree.\n' +
+    'Target file is `docs/index.json`. Pass a JSON array of entries; each entry has `title`, `path` (relative to docs/), ' +
     'and optional `children` (recursive same shape). Keep entries in the order you want them shown. ' +
     'The schema is validated before writing — an invalid payload is rejected with the parse error.',
   source: 'native',

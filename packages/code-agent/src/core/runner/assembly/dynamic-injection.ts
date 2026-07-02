@@ -115,6 +115,13 @@ export interface DynamicInjectionContext {
   preflightHint?: { text: string; hash: string } | null;
   lastInjectedPreflightHash?: string | null;
   /**
+   * Correction nudge (assembly/correction-nudge.ts) — the user's last message
+   * looked like a correction/durable preference, so suggest remember() NOW.
+   * Already throttled by the Executing node (hash-gated per user message,
+   * capped per session); non-null means "include this turn".
+   */
+  correctionHint?: string | null;
+  /**
    * Test-mode escape hatch — when true, the provider always returns
    * null so snapshot tests don't see non-deterministic injections.
    */
@@ -138,6 +145,8 @@ export interface DynamicInjectionResult {
   includedUserMemoryHash?: string | null;
   /** Hash of the preflight hint included — caller stores for dedup. */
   includedPreflightHash?: string | null;
+  /** True when the correction nudge was included — caller bumps its throttle. */
+  includedCorrectionHint?: boolean;
 }
 
 const DEFAULT_MAX_FILES = 6;
@@ -218,7 +227,8 @@ export function computeDynamicInjection(
     !showUserMemory &&
     !showPreflight &&
     !recentCompaction &&
-    !ctx.hasReviewableChanges
+    !ctx.hasReviewableChanges &&
+    !ctx.correctionHint
   ) {
     return null;
   }
@@ -238,6 +248,9 @@ export function computeDynamicInjection(
   }
   if (showPreflight && ctx.preflightHint) {
     lines.push(ctx.preflightHint.text);
+  }
+  if (ctx.correctionHint) {
+    lines.push(ctx.correctionHint);
   }
   if (includedSkillIds.length > 0) {
     lines.push(`skills registered this session and worth consulting: ${includedSkillIds.join(', ')}`);
@@ -285,6 +298,7 @@ export function computeDynamicInjection(
     includedProjectIndexHash: showProjectIndex ? ctx.projectMemoryIndex!.hash : null,
     includedUserMemoryHash: showUserMemory ? ctx.userMemoryIndex!.hash : null,
     includedPreflightHash: showPreflight ? ctx.preflightHint!.hash : null,
+    includedCorrectionHint: !!ctx.correctionHint,
   };
 }
 

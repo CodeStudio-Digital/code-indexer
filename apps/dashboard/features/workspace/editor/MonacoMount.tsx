@@ -38,13 +38,14 @@ import {
 } from './editor-models.js';
 import { modelPathFor } from './editor-models-path.js';
 import { consumePendingReveal } from './pending-reveal.js';
+import { attachNavTracking } from './nav-commands.js';
 import { registerChatActions } from './chat-actions.js';
 import { useEnsureFileContent } from './useEnsureFileContent.js';
 import { useConflictMarkers } from './useConflictMarkers.js';
 import { useChangeMarkers } from './useChangeMarkers.js';
 import { useRunGutter } from './run/useRunGutter.js';
 import { registerRunActions } from './run/run-actions.js';
-import { applyMonacoKeymap } from './monaco-keymap.js';
+import { applyMonacoKeymap, watchKeymapPreset } from './monaco-keymap.js';
 import { useKeymapStore } from '../../../keymap/keymap-store.js';
 
 function detectDarkMode(): boolean {
@@ -133,6 +134,7 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // Editor-level keymap (Ctrl+D duplicate, Ctrl+B declaration, …) per
       // the active preset — IntelliJ by default.
       applyMonacoKeymap(monaco, useKeymapStore.getState().preset);
+      watchKeymapPreset(monaco); // live re-apply on preset switch (no reload)
       // NB: LSP providers are NOT wired here. Their lifetime is owned by the
       // project-scoped effect below (register on mount / projectId change,
       // unregister on cleanup) so switching or closing a project tears the
@@ -143,6 +145,10 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       registerChatActions(editor, monaco);
       // "Run File" (Shift+F10) — runs the active file with its runtime.
       registerRunActions(editor, monaco);
+      // Histórico de navegação do cursor (Ctrl+Alt+Left/Right): empilha a
+      // posição DEIXADA em saltos >10 linhas (debounce) e trocas de aba.
+      // Vida útil atada ao editor (onDidDispose) — nada a limpar aqui.
+      attachNavTracking(editor);
       // Cursor/scroll/selection across UNMOUNTS (diff/welcome detours) —
       // while mounted, the wrapper handles per-path swaps itself.
       restoreViewStateFor(modelKey, editor);

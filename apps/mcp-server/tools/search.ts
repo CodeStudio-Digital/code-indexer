@@ -91,38 +91,10 @@ const search = defineTool({
   }),
 });
 
-const search_concepts = defineTool({
-  name: 'search_concepts',
-  description: 'Find files by concept',
-  inputSchema: {
-    type: 'object',
-    properties: { project_name: { type: 'string' }, concept: { type: 'string' } },
-    required: ['project_name', 'concept'],
-  },
-  handler: withProject((args, { db }, project) => {
-    const files = db.getFilesByConcept(project.id, args.concept as string);
-    return files.map(f => `- **${f.path}** (${f.language}, ${f.line_count} lines) — ${f.summary}`).join('\n') || 'No files found.';
-  }),
-});
-
-const search_by_kind = defineTool({
-  name: 'search_by_kind',
-  description: 'Search symbols by kind. Common kinds: function, class, interface, type, enum, method, property, variable, constant.',
-  inputSchema: {
-    type: 'object',
-    properties: { project_name: { type: 'string' }, kind: { type: 'string' }, limit: { type: 'number' } },
-    required: ['project_name', 'kind'],
-  },
-  handler: withProject((args, { db }, project) => {
-    const kind = args.kind as string;
-    const symbols = db.listSymbolsByKind(project.id, kind, (args.limit as number) ?? 20);
-    if (symbols.length === 0) {
-      return `No symbols found with kind "${kind}". Common kinds: function, class, interface, type, enum, method, property, variable, constant.`;
-    }
-    return symbols.map(s => `${s.kind} ${s.name} — ${s.file_path}:${s.line ?? '?'} | ${s.signature}`).join('\n');
-  }),
-});
-
+// `search_concepts` and `search_by_kind` were retired from the MCP surface
+// (tool audit 2026-07, docs/audit/TOOL_AUDIT.md): 0 calls in telemetry — the
+// `search` planner routes free-text and identifier queries, and grep_code
+// covers exact-shape hunts, leaving no niche for the specialized variants.
 const grep_code = defineTool({
   name: 'grep_code',
   description: 'Textual search across project files with filters (language/layer/glob). Results capped at max_results (default 20). Use literal=true for exact string matching.',
@@ -240,4 +212,4 @@ const grep_code = defineTool({
   }),
 });
 
-export const searchTools: McpTool[] = [search, search_concepts, search_by_kind, grep_code];
+export const searchTools: McpTool[] = [search, grep_code];

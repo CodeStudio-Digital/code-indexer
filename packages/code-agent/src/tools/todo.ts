@@ -309,7 +309,8 @@ function parsePatch(raw: Record<string, unknown>, label: string): { ok: true; pa
 export const updateTodo: CoderTool = {
   name: 'update_todo',
   description:
-    'Patch one or more todos by id in a SINGLE call — flip status (pending → in_progress → completed) or rename content/activeForm without re-sending the whole list. ' +
+    'Patch one or more todos by id in a SINGLE call, without re-sending the whole list.\n' +
+    'Flips status (pending → in_progress → completed) or renames content/activeForm. ' +
     'Get ids from the most recent todo_write result or from the <active-context> block.\n' +
     '\n' +
     'Single patch: pass {id, status?, content?, activeForm?} at the top level.\n' +

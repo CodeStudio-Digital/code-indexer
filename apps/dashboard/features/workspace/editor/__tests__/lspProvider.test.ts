@@ -29,6 +29,9 @@ vi.mock('../lsp/codeActions.js', () => ({
 vi.mock('../lsp/completion.js', () => ({
   registerCompletionProviders: vi.fn(() => [disposer()]),
 }));
+vi.mock('../lsp/rename.js', () => ({
+  registerRenameProviders: vi.fn(() => [disposer()]),
+}));
 vi.mock('../lsp/navigation.js', () => ({
   registerSemanticTokenProviders: vi.fn(() => [disposer()]),
   registerNavProviders: vi.fn(() => [disposer()]),
@@ -41,6 +44,7 @@ import { startDiagnosticsStream } from '../diagnosticsStream.js';
 import { registerInlineCompletions } from '../inlineCompletionProvider.js';
 import { registerCodeActionProvider } from '../lsp/codeActions.js';
 import { registerCompletionProviders } from '../lsp/completion.js';
+import { registerRenameProviders } from '../lsp/rename.js';
 import {
   registerSemanticTokenProviders,
   registerNavProviders,
@@ -56,6 +60,7 @@ const SUB_PROVIDERS = [
   registerInlineCompletions,
   registerCodeActionProvider,
   registerCompletionProviders,
+  registerRenameProviders,
   registerSemanticTokenProviders,
   registerNavProviders,
   registerEditorOpener,

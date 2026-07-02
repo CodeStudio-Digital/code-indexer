@@ -70,108 +70,14 @@ async function diskSkeletonFallback(
   };
 }
 
-const get_file_structure = defineTool({
-  name: 'get_file_structure',
-  description: 'Get file details and symbols. Hard-capped to max_symbols (default 50) to protect context limits. Use get_file_skeleton if you just need a broad outline.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-        project_name: { type: 'string' },
-        file_path: { type: 'string' },
-        max_symbols: { type: 'number', description: 'Max symbols to list. Default 50.' },
-        force_reread: {
-          type: 'boolean',
-          description: 'Bypass the duplicate-result marker. Set true if you believe the file changed since a previous call. Default false.',
-        },
-    },
-    required: ['project_name', 'file_path'],
-  },
-  handler: withProject(async (args, { db }, project) => {
-    const filePath = normalizeFilePath(args.file_path as string, project.root_path);
-    const file = db.getFile(project.id, filePath);
-    if (!file) {
-      // Tree-sitter fallback (same logic as get_file_skeleton). Skips
-      // dependency / dependents data since those are DB-only — the agent
-      // gets a structural outline instead of a full file_structure record.
-      const fallback = await diskSkeletonFallback(project.root_path, filePath);
-      if (!fallback) {
-        throw new Error(
-          `File "${filePath}" not found in index nor on disk (or its language is unsupported). ` +
-          `Use list_directory or search to find the correct path. Do not retry with the same file_path.`,
-        );
-      }
-      const maxSymbolsX = (args.max_symbols as number) ?? 50;
-      const shownX = fallback.symbols.slice(0, maxSymbolsX);
-      const sectionsX: string[] = [
-        `# ${filePath}`,
-        `Lines: ${fallback.lineCount} | Source: tree-sitter fallback (project not indexed)`,
-        '',
-        `## Symbols (${fallback.symbols.length})`,
-      ];
-      if (fallback.symbols.length > maxSymbolsX) {
-        sectionsX.push(`[truncated: showing ${shownX.length}/${fallback.symbols.length} symbols — pass max_symbols to broaden, or use get_file_skeleton.]`);
-      }
-      for (const s of shownX) {
-        const parts = [`### ${s.kind} \`${s.name}\``];
-        if (s.signature) parts.push(`Signature: \`${s.signature}\``);
-        if (s.parent) parts.push(`Parent: ${s.parent}`);
-        if (s.line) parts.push(`Line: ${s.line}`);
-        sectionsX.push(parts.join('\n'));
-      }
-      return sectionsX.join('\n');
-    }
-    const symbols = db.getSymbolsByFile(project.id, filePath);
-    const concepts = JSON.parse(file.concepts) as string[];
-    const deps = db.getDependencies(file.id, project.id);
-    const dependents = db.getDependents(project.id, file.id);
-
-    const sections = [
-      `# ${file.path}`,
-      `Language: ${file.language} | Lines: ${file.line_count} | Complexity: ${file.complexity} | Layer: ${file.layer}`,
-      file.is_entry_point ? 'Entry Point: yes' : '',
-      file.is_test ? 'Test File: yes' : '',
-      '',
-      `## Summary`,
-      file.summary || '(not semantically indexed yet — structural data below is current)',
-      '',
-      `## Concepts`,
-      concepts.join(', '),
-    ].filter(Boolean);
-
-    if (deps.length > 0) {
-      sections.push('', '## Dependencies (imports)', deps.map(d => `- [${d.dep_type}] ${d.import_path}${d.target_file_path ? ` → ${d.target_file_path}` : ''}`).join('\n'));
-    }
-    if (dependents.length > 0) {
-      sections.push('', '## Dependents (imported by)', dependents.map(d => `- ${d.source_file_path} (via ${d.import_path})`).join('\n'));
-    }
-
-    if (symbols.length > 0) {
-      const maxSymbols = (args.max_symbols as number) ?? 50;
-      const shownSymbols = symbols.slice(0, maxSymbols);
-
-      sections.push('', `## Symbols (${symbols.length})`);
-      if (symbols.length > maxSymbols) {
-          sections.push(`[truncated: showing ${maxSymbols}/${symbols.length} symbols — file has too many symbols. Use get_file_skeleton or grep_code for deeper exploration without context bloat.]`);
-      }
-
-      for (const s of shownSymbols) {
-        const parts = [`### ${s.kind} \`${s.name}\``];
-        if (s.signature) parts.push(`Signature: \`${s.signature}\``);
-        if (s.comment) parts.push(s.comment);
-        if (s.parent) parts.push(`Parent: ${s.parent}`);
-        if (s.line) parts.push(`Line: ${s.line}`);
-        const tags = JSON.parse(s.tags) as string[];
-        if (tags.length > 0) parts.push(`Tags: ${tags.join(', ')}`);
-        sections.push(parts.join('\n'));
-      }
-    }
-    return sections.join('\n');
-  }),
-});
-
+// `get_file_structure` was retired from the MCP surface (tool audit 2026-07,
+// docs/audit/TOOL_AUDIT.md): 0 calls in telemetry — get_file_skeleton won as
+// the outline tool, and the extra per-symbol metadata (comments, tags,
+// deps/dependents inline) is available via read_file / get_dependencies.
 const get_file_skeleton = defineTool({
   name: 'get_file_skeleton',
-  description: 'Compact outline of a file: header + symbol list (line, kind, name, signature). Token-cheap alternative to get_file_structure. Symbol count is capped by max_symbols (default 100). Pass format="json" for a structured response.',
+  description: 'Compact outline of a file: header + symbol list (line, kind, name, signature). Symbol count is capped by max_symbols (default 100). Pass format="json" for a structured response.\n' +
+    'file_path may also be a DIRECTORY — returns the exported symbols of the indexed files under it (grouped per file), which is the cheapest way to map an unfamiliar module.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -193,6 +99,50 @@ const get_file_skeleton = defineTool({
     const filePath = normalizeFilePath(args.file_path as string, project.root_path);
     const file = db.getFile(project.id, filePath);
     if (!file) {
+      // Directory skeleton: aggregate EXPORTED symbols of the indexed files
+      // under the path — the cheapest "map this module" call for agents.
+      const dirPrefix = filePath.replace(/\/+$/, '') + '/';
+      const dirFiles = db.listFiles(project.id).filter((f) => f.path.startsWith(dirPrefix));
+      if (dirFiles.length > 0) {
+        const maxSymbols = (args.max_symbols as number) ?? 100;
+        const kindFilterD = args.kind as string | undefined;
+        const nameFilterD = args.filter as string | undefined;
+        let nameRe: RegExp | null = null;
+        if (nameFilterD) { try { nameRe = new RegExp(nameFilterD); } catch { /* ignore */ } }
+        const groups: Array<{ path: string; syms: ReturnType<typeof db.getSymbolsByFile> }> = [];
+        let total = 0;
+        for (const f of dirFiles.slice(0, 40)) {
+          let syms = db.getSymbolsByFile(project.id, f.path).filter((s) => s.exported);
+          if (kindFilterD) syms = syms.filter((s) => s.kind === kindFilterD);
+          if (nameRe) syms = syms.filter((s) => nameRe.test(s.name));
+          if (syms.length === 0) continue;
+          groups.push({ path: f.path, syms });
+          total += syms.length;
+        }
+        let shown = 0;
+        const truncatedDir = total > maxSymbols || dirFiles.length > 40;
+        if (args.format === 'json') {
+          return JSON.stringify({
+            directory: filePath, files_in_dir: dirFiles.length, total_symbols: total, truncated: truncatedDir,
+            files: groups.flatMap((g) => {
+              if (shown >= maxSymbols) return [];
+              const take = g.syms.slice(0, maxSymbols - shown); shown += take.length;
+              return [{ path: g.path, symbols: take.map((s) => ({ line: s.line, kind: s.kind, name: s.name, signature: s.signature })) }];
+            }),
+          });
+        }
+        const lines: string[] = [`DIR ${filePath} | ${dirFiles.length} files | exported symbols${truncatedDir ? ` [showing ${Math.min(total, maxSymbols)}/${total}]` : ''}`, ''];
+        for (const g of groups) {
+          if (shown >= maxSymbols) break;
+          lines.push(g.path);
+          for (const s of g.syms) {
+            if (shown >= maxSymbols) break;
+            lines.push(`${String(s.line ?? '?').padStart(5)} ${s.kind} ${s.parent ? `${s.parent}.` : ''}${s.name}${s.signature && s.signature !== s.name ? ` ${s.signature}` : ''}`);
+            shown++;
+          }
+        }
+        return lines.join('\n');
+      }
       // Tree-sitter fallback: parse the file off disk so the agent gets a
       // useful skeleton even when the project has never been indexed (or
       // the file is brand-new and not in `files` yet).
@@ -593,7 +543,9 @@ function listDirectoryFromDisk(rootPath: string, prefix: string, depth: number):
 
 const get_recently_modified_files = defineTool({
   name: 'get_recently_modified_files',
-  description: 'List recently indexed/modified files.',
+  description:
+    'List the most recently modified files in the index, newest first (timestamp, path, line count).\n' +
+    'Default limit 20. Useful to see what changed lately or where current work is happening.',
   inputSchema: {
     type: 'object',
     properties: { project_name: { type: 'string' }, limit: { type: 'number' } },
@@ -610,7 +562,9 @@ const get_recently_modified_files = defineTool({
 
 const get_dependencies = defineTool({
   name: 'get_dependencies',
-  description: 'Get file dependencies (imports)',
+  description:
+    'List everything a file imports, with resolved in-project target paths where known.\n' +
+    "DON'T: use to find who imports THIS file — that's get_dependents.",
   inputSchema: {
     type: 'object',
     properties: { project_name: { type: 'string' }, file_path: { type: 'string' } },
@@ -627,7 +581,9 @@ const get_dependencies = defineTool({
 
 const get_dependents = defineTool({
   name: 'get_dependents',
-  description: 'Get files that depend on a given file',
+  description:
+    'List every file that imports a given file (reverse dependencies) — the blast radius of editing it.\n' +
+    "DON'T: use to see what this file itself imports — that's get_dependencies.",
   inputSchema: {
     type: 'object',
     properties: { project_name: { type: 'string' }, file_path: { type: 'string' } },
@@ -643,7 +599,6 @@ const get_dependents = defineTool({
 });
 
 export const fileTools: McpTool[] = [
-  get_file_structure,
   get_file_skeleton,
   read_file,
   list_directory,

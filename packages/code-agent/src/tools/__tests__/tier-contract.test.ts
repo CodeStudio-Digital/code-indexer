@@ -163,6 +163,15 @@ describe('tier contract — Phase A/B placements are locked', () => {
     }
   });
 
+  it('drops the 0-call symbol/overview MCP tools retired by the 2026-07 tool audit (strict mode throws)', () => {
+    for (const n of [
+      'mcp__get_file_structure', 'mcp__search_concepts', 'mcp__search_by_kind',
+      'mcp__get_class_members', 'mcp__get_symbol_details', 'mcp__get_architecture',
+    ]) {
+      expect(() => getToolTier(n, undefined, { strict: true }), n).toThrow();
+    }
+  });
+
   it('drops the retired kanban aliases from every tier (strict mode throws)', () => {
     for (const n of [
       'kanban_my_comment', 'kanban_my_checklist',

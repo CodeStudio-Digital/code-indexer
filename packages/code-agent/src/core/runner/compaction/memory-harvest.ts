@@ -20,7 +20,7 @@ export interface HarvestRunEndMemory {
     projectId: number,
     projectName: string,
     input: HarvestInput,
-  ): Promise<{ created: number; merged: number; skipped: number } | void>;
+  ): Promise<{ created: number; merged: number; skipped: number; hadError?: boolean } | void>;
   isConfigured(): Promise<boolean>;
 }
 
@@ -114,16 +114,20 @@ export async function harvestCompactionMemory(args: {
       sessionId,
     });
 
-    await Promise.race([
+    const result = await Promise.race([
       runEndMemory.extractAndPersist(args.projectId, args.projectName, input),
       new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, HARVEST_TIMEOUT_MS);
         (timer as { unref?: () => void }).unref?.();
       }),
     ]);
-    // Advance the mark even if extract timed out — re-distilling the same
-    // span would only churn the dedup; the next compaction covers new ground.
-    store.setMemoryDistilledBoundary(sessionId, args.boundaryId);
+    // Advance the mark on success and even on TIMEOUT (re-paying the summary
+    // to re-distill the same span would only churn the dedup) — but NOT on a
+    // real LLM failure: the span stays for the idle sweeper to retry, which
+    // caps attempts so a poison span still can't wedge the pipeline.
+    if (!(result && result.hadError === true)) {
+      store.setMemoryDistilledBoundary(sessionId, args.boundaryId);
+    }
   } catch (e) {
     console.warn(
       `[memory] compaction harvest failed (session ${sessionId}): ${e instanceof Error ? e.message : String(e)}`,

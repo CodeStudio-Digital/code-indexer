@@ -147,6 +147,8 @@ export class SessionStore {
   markSessionReviewedNow(sessionId: number): void { state.markReviewedNow(this.db, sessionId); }
   setMemoryDistilledBoundary(id: number, messageId: number): void { state.setMemoryDistilledBoundary(this.db, id, messageId); }
   getMemoryDistilledBoundary(id: number): number { return state.getMemoryDistilledBoundary(this.db, id); }
+  bumpMemoryDistillAttempts(id: number): void { state.bumpMemoryDistillAttempts(this.db, id); }
+  resetMemoryDistillAttempts(id: number): void { state.resetMemoryDistillAttempts(this.db, id); }
 
   // ─── Sessions ops (stats, fork, duplicate) ─────────────────────
   getSessionStats(id: number): CoderSessionStats | null { return ops.getStats(this.db, id); }

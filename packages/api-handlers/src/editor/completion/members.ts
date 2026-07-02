@@ -8,7 +8,8 @@
  *    waits a cold boot; bounded by a 60ms race. Resolves typed `$var->`,
  *    inherited members, traits, vendor/magic methods the index can't see.
  *  - Structural index fallback: receiver → class (via the shared
- *    resolveReceiverClass) → getClassMembers + a shallow `extends` walk.
+ *    resolveReceiverClass) → getClassMembersDeep (inherited + trait members
+ *    via the extends/implements/mixes relations walk, cycle-guarded).
  * Member text is micro-cached per (project,file,receiver,prefix) so a typing
  * burst pays at most one LSP round-trip.
  */
@@ -55,7 +56,6 @@ const TRIGGERED_EMPTY: ReceiverMembersResult = { ...EMPTY, triggered: true };
 const DOT_MEMBER_LANG = /^(typescript|javascript|typescriptreact|javascriptreact|tsx|jsx|python|java|csharp|c#|go|kotlin|scala|swift|dart)$/i;
 const LSP_MEMBER_TIMEOUT_MS = 60;
 const MAX_MEMBERS = 30;
-const MAX_EXTENDS_WALK = 2;
 /** Kinds that are noise as "members of a receiver" — exclude, keep the rest. */
 const NOISE_KINDS = new Set([
   'keyword', 'snippet', 'text', 'module', 'file', 'folder', 'color', 'unit', 'event', 'operator',
@@ -169,30 +169,30 @@ function lspMemberLines(items: CompletionItem[], prefix: string): string[] {
 }
 
 /**
- * Members of `className` + a shallow `extends` walk for inherited members,
- * prefix-filtered, deduped by name. No static-only filter: this is HINT
- * context (recall over strictness), and PHP magic statics (`Model::where`)
- * would be lost by a strict filter anyway.
+ * Members of `className` INCLUDING inherited/trait members — delegates to the
+ * shared relations walk (db.getClassMembersDeep: extends/implements/mixes,
+ * cycle-guarded, own members shadow ancestors'). Prefix-filtered, deduped by
+ * name, capped at MAX_MEMBERS. No static-only filter: this is HINT context
+ * (recall over strictness), and PHP magic statics (`Model::where`) would be
+ * lost by a strict filter anyway.
  */
 function collectIndexMembers(
   db: CodeIndexDB, projectId: number, className: string, trigger: MemberTrigger,
 ): DBSymbol[] {
+  let members: DBSymbol[];
+  try {
+    members = db.getClassMembersDeep(projectId, className).members;
+  } catch {
+    members = db.getClassMembers(className, projectId); // deep walk is best-effort
+  }
   const seen = new Set<string>();
   const out: DBSymbol[] = [];
-  const addFrom = (cls: string): boolean => {
-    for (const m of db.getClassMembers(cls, projectId)) {
-      if (trigger.prefix && !m.name.startsWith(trigger.prefix)) continue;
-      if (seen.has(m.name)) continue;
-      seen.add(m.name);
-      out.push(m);
-      if (out.length >= MAX_MEMBERS) return true;
-    }
-    return false;
-  };
-  if (addFrom(className)) return out;
-  try {
-    const chain = db.getSymbolHierarchy(projectId, className).extends_chain.slice(0, MAX_EXTENDS_WALK);
-    for (const parent of chain) if (addFrom(parent)) break;
-  } catch { /* hierarchy is best-effort */ }
+  for (const m of members) {
+    if (trigger.prefix && !m.name.startsWith(trigger.prefix)) continue;
+    if (seen.has(m.name)) continue;
+    seen.add(m.name);
+    out.push(m);
+    if (out.length >= MAX_MEMBERS) break;
+  }
   return out;
 }

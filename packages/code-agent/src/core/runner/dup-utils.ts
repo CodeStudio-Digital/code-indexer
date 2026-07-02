@@ -85,7 +85,7 @@ export function stableArgsKey(input: unknown): string {
 /**
  * PR-5 (Row 32 from docs/agent-research/COMPARISON.md): pre-read enforcement.
  * Refuses BEFORE dispatch when a read-family tool (read_file, mcp__read_file,
- * mcp__get_file_skeleton, mcp__get_file_structure) is called with the SAME
+ * mcp__get_file_skeleton) is called with the SAME
  * path + slice fields seen recently. Tighter than the generic dup-call cap
  * (which fires only on the 5th identical call) and proactive — saves the
  * round-trip the result-dup cap would otherwise burn. Lazy-resolved so tests

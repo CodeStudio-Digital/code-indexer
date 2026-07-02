@@ -21,12 +21,12 @@ describe('tool tiers', () => {
   });
 
   it('navigate tier contains the expected tools', () => {
-    // 60 after retiring the cross-project + snapshot-query MCP tools
-    // (list_projects / get_project_stats / search_global / get_project_context /
-    // get_context_for / query_snapshots / list_snapshots — −7) and adding the
-    // previously-untiered get_repo_map (+1). (The prior hardcoded 62 had
-    // drifted; actual pre-retirement size was 66.) See plan cozy-scone.
-    expect(TIER_COUNTS.navigate).toBe(60);
+    // 54 after the 2026-07 tool audit retired the six 0-call symbol/overview
+    // MCP tools (get_file_structure / search_concepts / search_by_kind /
+    // get_class_members / get_symbol_details / get_architecture — −6 from the
+    // prior 60, which itself reflected the cozy-scone cross-project/snapshot
+    // retirement). See docs/audit/TOOL_AUDIT.md.
+    expect(TIER_COUNTS.navigate).toBe(54);
   });
 
   it('admin tier contains the expected tools', () => {

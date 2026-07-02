@@ -22,6 +22,7 @@ import { startDiagnosticsStream } from './diagnosticsStream.js';
 import { registerInlineCompletions } from './inlineCompletionProvider.js';
 import { registerCodeActionProvider } from './lsp/codeActions.js';
 import { registerCompletionProviders } from './lsp/completion.js';
+import { registerRenameProviders } from './lsp/rename.js';
 import {
   registerEditorOpener,
   registerNavProviders,
@@ -63,6 +64,7 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
   disposers.push(...registerSemanticTokenProviders(monaco, projectId));
   disposers.push(...registerCompletionProviders(monaco, projectId, docSync.flush));
   disposers.push(registerCodeActionProvider(monaco, projectId, docSync.flush));
+  disposers.push(...registerRenameProviders(monaco, projectId, docSync.flush));
   disposers.push(...registerNavProviders(monaco, projectId));
   disposers.push(registerEditorOpener(monaco, projectId));
   // AI ghost text — heavily gated (default OFF; see inlineCompletionProvider).

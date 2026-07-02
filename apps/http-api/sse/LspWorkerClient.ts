@@ -43,6 +43,11 @@ const OP_TIMEOUTS: Record<LspExecutorOp, number> = {
   tsDiagnostics: 20_000,
   tsSemanticTokens: 10_000,
   tsCodeActions: 10_000,
+  // Rename walks every reference across the program — closer to a
+  // references pass plus edit assembly than to a hover.
+  tsRename: 30_000,
+  tsSignatureHelp: 5_000,
+  tsDocumentSymbols: 5_000,
   fallbackCompletion: 5_000,
   fallbackDefinition: 5_000,
   fallbackHover: 5_000,
@@ -95,6 +100,9 @@ export class LspWorkerClient implements LspBackendExecutor {
   tsDiagnostics: LspBackendExecutor['tsDiagnostics'] = (ctx) => this.call('tsDiagnostics', ctx);
   tsSemanticTokens: LspBackendExecutor['tsSemanticTokens'] = (ctx) => this.call('tsSemanticTokens', ctx);
   tsCodeActions: LspBackendExecutor['tsCodeActions'] = (ctx) => this.call('tsCodeActions', ctx);
+  tsRename: LspBackendExecutor['tsRename'] = (ctx) => this.call('tsRename', ctx);
+  tsSignatureHelp: LspBackendExecutor['tsSignatureHelp'] = (ctx) => this.call('tsSignatureHelp', ctx);
+  tsDocumentSymbols: LspBackendExecutor['tsDocumentSymbols'] = (ctx) => this.call('tsDocumentSymbols', ctx);
   fallbackCompletion: LspBackendExecutor['fallbackCompletion'] = (ctx) => this.call('fallbackCompletion', ctx);
   fallbackDefinition: LspBackendExecutor['fallbackDefinition'] = (ctx) => this.call('fallbackDefinition', ctx);
   fallbackHover: LspBackendExecutor['fallbackHover'] = (ctx) => this.call('fallbackHover', ctx);

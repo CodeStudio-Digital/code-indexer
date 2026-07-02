@@ -29,8 +29,22 @@ export type NodeState =
 
 export type BehaviorEvent =
   | { kind: 'TurnSucceeded'; hasToolCalls: boolean }
-  | { kind: 'TokenThresholdHit'; ratio: number }
-  | { kind: 'ToolLoopDetected'; guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak' }
+  | {
+      kind: 'TokenThresholdHit';
+      ratio: number;
+      /** A6 — which gate fired ('polling-loop' | 'stuck-progress' | 'cumulative'
+       *  | 'token-budget' | 'body-after-prefix' | 'context-overflow'). */
+      trigger?: string;
+    }
+  | {
+      kind: 'ToolLoopDetected';
+      guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
+      /** Tool that tripped the guard + repetition count — lets Planning name
+       *  the loop in its reflection reminder. Optional: older emit sites and
+       *  defensive paths omit them. */
+      toolName?: string;
+      count?: number;
+    }
   | { kind: 'MaxTurnsReached'; autoContinueLeft: number }
   | { kind: 'ProviderError'; retryable: boolean; status: number; message?: string; code?: string }
   | { kind: 'CompactionDone'; collapsedFrom: number; collapsedTo: number }
@@ -94,6 +108,16 @@ export interface RunContext {
    * (refuse → planning resets → retry → refuse → …) never escalates.
    */
   loopRefusals: Map<string, number>;
+  /**
+   * A1 — offending dedup signatures retained across the Planning clean-slate
+   * reset. `resetDupCalls` wipes the whole table so legit re-verify workflows
+   * (re-running `npm test` after a fix) aren't permanently blocked — but a
+   * FULL wipe also lets the exact call that tripped the guard execute 2 more
+   * times before refusing again. Planning re-inserts the refused (count ≥
+   * `DUP_REFUSE_MIN`) entries and records them here; Executing drops them
+   * once `turn > expiresAfterTurn` (1-turn block, then true clean slate).
+   */
+  retainedLoopKeys: { keys: string[]; expiresAfterTurn: number } | null;
   autoContinues: number;
   /**
    * Consecutive pre-emit compaction routings since the last turn that
@@ -281,6 +305,13 @@ export interface RunContext {
     pendingMemory?: ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>;
     /** Task text the pending memory was retrieved for (throttle key). */
     lastMemoryQuery?: string;
+    /**
+     * Correction-nudge throttle (assembly/correction-nudge.ts): the nudge
+     * fires at most once per distinct user message (hash) and at most
+     * `count` = 3 times per session — a steering-heavy session must not turn
+     * every turn into a "remember this!" reminder.
+     */
+    correctionNudge: { lastHash: string | null; count: number };
   };
 }
 

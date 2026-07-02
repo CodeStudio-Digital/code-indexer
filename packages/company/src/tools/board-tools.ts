@@ -339,7 +339,9 @@ function setAgentStatus(
 
   return {
     name: 'set_agent_status',
-    description: 'Set your current status. Use "waiting" when you finish a task and are ready for the next one — this keeps you alive for reuse instead of being discarded.',
+    description:
+      'Set your current agent status on the company board (working/waiting/reviewing/blocked/done).\n' +
+      'Use "waiting" when you finish a task and are ready for the next one — this keeps you alive for reuse instead of being discarded.',
     parameters,
     source: 'native',
     handler: async (args) => {

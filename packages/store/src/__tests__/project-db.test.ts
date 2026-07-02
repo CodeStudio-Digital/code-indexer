@@ -31,6 +31,22 @@ function freshDir(): string {
   tmpDirs.push(d);
   return d;
 }
+
+function withProjectDbTrim<T>(fn: () => T): T {
+  const prevProjectDb = process.env.MCP_PROJECT_DB;
+  const prevTrim = process.env.MCP_PROJECT_DB_TRIM;
+  process.env.MCP_PROJECT_DB = '1';
+  delete process.env.MCP_PROJECT_DB_TRIM;
+  try {
+    return fn();
+  } finally {
+    if (prevProjectDb === undefined) delete process.env.MCP_PROJECT_DB;
+    else process.env.MCP_PROJECT_DB = prevProjectDb;
+    if (prevTrim === undefined) delete process.env.MCP_PROJECT_DB_TRIM;
+    else process.env.MCP_PROJECT_DB_TRIM = prevTrim;
+  }
+}
+
 afterEach(() => {
   while (tmpDirs.length) {
     try {
@@ -99,6 +115,44 @@ describe('ProjectDb (schema reuse)', () => {
     } finally {
       again.close();
     }
+  });
+
+  it('applies pending migrations when reopening an already-trimmed project DB', () => {
+    withProjectDbTrim(() => {
+      const root = freshDir();
+      const loc = resolveProjectDbLocation(4, root);
+
+      const initial = new ProjectDb(4, loc.dbPath);
+      try {
+        expect(
+          initial.raw()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='coder_tool_calls'")
+            .get(),
+        ).toBeUndefined();
+        initial.raw().prepare('DELETE FROM schema_version WHERE version >= ?').run(186);
+      } finally {
+        initial.close();
+      }
+
+      const reopened = new ProjectDb(4, loc.dbPath);
+      try {
+        const version = reopened.raw()
+          .prepare('SELECT MAX(version) v FROM schema_version')
+          .get() as { v: number };
+        expect(version.v).toBeGreaterThanOrEqual(187);
+        expect(
+          reopened.raw()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='coder_tool_calls'")
+            .get(),
+        ).toBeUndefined();
+        const symbolCols = reopened.raw().prepare('PRAGMA table_info(symbols)').all() as {
+          name: string;
+        }[];
+        expect(symbolCols.some((c) => c.name === 'namespace')).toBe(true);
+      } finally {
+        reopened.close();
+      }
+    });
   });
 });
 

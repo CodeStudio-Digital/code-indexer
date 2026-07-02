@@ -48,6 +48,9 @@ export const TRANSITIONS: TransitionTable = {
   },
   Recovering: {
     TurnSucceeded: 'Executing',
+    // Context-overflow provider errors route to Compacting (shrink the
+    // history) instead of re-sending the same oversized payload.
+    TokenThresholdHit: 'Compacting',
     ProviderError: 'Recovering',
     Aborted: 'Done',
   },

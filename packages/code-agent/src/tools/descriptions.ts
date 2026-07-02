@@ -29,7 +29,7 @@ export const WRITE_FILE_DESC =
   "DON'T: add emojis to file content unless the user used them first or explicitly asked.";
 
 export const CREATE_FILE_DESC =
-  'Create a brand-new file. Fails cleanly if the path already exists.\n' +
+  'Create a brand-new file (fails cleanly if the path already exists).\n' +
   "USE: adding a new source file, test, or config.\n" +
   "DON'T: use this to replace an existing file — it will error. Use write_file for replacements.\n" +
   "DON'T: create placeholder/empty files speculatively. Create only when you have the final content ready.\n" +
@@ -91,7 +91,7 @@ export const GIT_STATUS_DESC =
   "DON'T: run this every turn as a sanity check — git state rarely changes between your own tool calls.";
 
 export const GIT_DIFF_DESC =
-  "Show working tree diff. Pass `staged: true` for the staged diff.\n" +
+  "Show the working tree diff (pass `staged: true` for the staged diff).\n" +
   "USE: reviewing what you (or the user) are about to commit.\n" +
   "USE: answering 'what changed?' questions about uncommitted work.\n" +
   "DON'T: diff a whole repo to understand history — use git_log for that.";
@@ -102,7 +102,7 @@ export const GIT_LOG_DESC =
   "DON'T: use as a substitute for reading the code — log messages lie, code doesn't.";
 
 export const GIT_ADD_DESC =
-  'Stage files for commit. Pass an array of specific paths.\n' +
+  'Stage specific files for commit, passed as an array of explicit paths.\n' +
   "USE: staging the files you intentionally changed, by explicit name.\n" +
   "DON'T: pass '.' or '-A' — you'll accidentally stage untracked noise, secrets, or the user's work-in-progress. Always list paths.";
 
@@ -204,9 +204,13 @@ export const TASK_COMPLETE_DESC =
  */
 export function terseDescription(desc: string): string {
   if (desc.length <= 150) return desc;
-  const firstPeriod = desc.indexOf('. ');
-  if (firstPeriod > 0 && firstPeriod < 200) return desc.slice(0, firstPeriod + 1);
-  return desc.slice(0, 150) + '…';
+  // First '.' OR newline ends the summary — same rule as the MCP bridge's
+  // terse transform (mcp-bridge.ts). The house style separates the first
+  // sentence from USE/DON'T blocks with '.\n' (no space), which the old
+  // `indexOf('. ')` never matched, hard-cutting mid-word at 150 chars.
+  const firstStop = desc.search(/[.\n]/);
+  if (firstStop > 0 && firstStop <= 150) return desc.slice(0, firstStop + 1).trim();
+  return desc.slice(0, 150).trim() + '…';
 }
 
 /**

@@ -1,64 +1,117 @@
 import type { Hono } from 'hono';
-import type { SnapshotCategory } from '@mcp/shared/types.js';
+import { AgentMemoryWriter } from '@mcp/services/memory/agent-memory-writer.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam } from './_helpers.js';
 
 /**
- * Global USER memory CRUD (migration 145) — the human-facing surface for the
- * cross-project "who I am / how I want you to work" facts the agent reads on
- * every project. Backed by the reserved user project (id 0) with scope 'user';
- * every write is stamped scope 'user' and the category is constrained to
- * user | feedback so this surface can never create project-scoped rows.
+ * Global USER memory CRUD — the human-facing surface for the cross-project
+ * "who I am / how I want you to work" facts the agent reads on every project.
+ *
+ * Backed by the LIVE `agent_memory` store (scope 'user', reserved project 0)
+ * — the same table `<user-preferences>` injection and `remember({scope:'user'})`
+ * read/write. It previously wrote to legacy `snapshots`, which the injector
+ * never reads: preferences typed in the UI silently never reached the agent.
+ * Response rows keep the panel's `{id,title,content,category,importance}`
+ * shape (category mirrors the closed agent-memory `type`).
  */
 const USER_PROJECT_ID = 0;
 
-function userCategory(raw: unknown): SnapshotCategory {
-  return raw === 'user' ? 'user' : 'feedback';
+interface PanelRow {
+  id: number;
+  title: string;
+  content: string;
+  category: string;
+  importance: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function toPanelRow(row: {
+  id: number; name: string; content: string; type: string; importance: number;
+  created_at: string; updated_at: string;
+}): PanelRow {
+  return {
+    id: row.id,
+    title: row.name,
+    content: row.content,
+    // The closed store type for user-scope facts is 'preference'; the panel
+    // renders it with the 'feedback' chip it already knows.
+    category: row.type === 'preference' ? 'feedback' : row.type,
+    importance: row.importance,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
 }
 
 export function mountUserMemoryRoutes(app: Hono, deps: ServerDeps): void {
-  app.get('/api/user-memory', (c) => c.json(deps.db.listSnapshots(USER_PROJECT_ID)));
+  const writer = new AgentMemoryWriter(deps.db, deps.agentMemoryService);
 
-  app.get('/api/user-memory/health', (c) =>
-    c.json({
+  app.get('/api/user-memory', (c) =>
+    c.json(deps.db.listAgentMemoryLive('user', USER_PROJECT_ID).map(toPanelRow)));
+
+  app.get('/api/user-memory/health', (c) => {
+    const all = deps.db.listAgentMemoryLive('user', USER_PROJECT_ID, { includeArchived: true });
+    const live = all.filter((r) => r.archived_at === null);
+    const byCategory: Record<string, number> = {};
+    for (const r of live) byCategory[r.type] = (byCategory[r.type] ?? 0) + 1;
+    const bySource: Record<string, number> = {};
+    for (const r of live) bySource[r.source] = (bySource[r.source] ?? 0) + 1;
+    return c.json({
       memory_enabled: true,
       last: deps.db.latestMemoryDistill(USER_PROJECT_ID),
       recent: deps.db.recentMemoryDistills(USER_PROJECT_ID, 10),
       totals: {
-        total: deps.db.countSnapshots(USER_PROJECT_ID),
-        byCategory: deps.db.countMemoryByCategory(USER_PROJECT_ID),
-        bySource: deps.db.countMemoryBySource(USER_PROJECT_ID),
-        archived: deps.db.countArchivedSnapshots(USER_PROJECT_ID),
+        total: live.length,
+        byCategory,
+        bySource,
+        archived: all.length - live.length,
       },
-    }),
-  );
+    });
+  });
 
   app.post('/api/user-memory', async (c) => {
     const body = await c.req.json<{ title: string; content: string; category?: string }>();
-    const res = await deps.snapshotService.create(USER_PROJECT_ID, {
-      title: body.title,
-      content: body.content,
-      category: userCategory(body.category),
-      source: 'manual',
+    const row = deps.db.createAgentMemory({
       scope: 'user',
+      projectId: USER_PROJECT_ID,
+      name: body.title,
+      type: 'preference',
+      content: body.content,
+      source: 'manual',
+      // Manual entries carry explicit user intent — the feedback-tier floor.
+      importance: 0.75,
     });
-    return c.json(res.snap, 201);
+    await deps.agentMemoryService.embedAndUpsert(row).catch(() => undefined);
+    try {
+      deps.db.recordAgentMemoryEvent({
+        eventType: 'remember', scope: 'user', projectId: USER_PROJECT_ID, memoryId: row.id, kept: 1,
+      });
+    } catch { /* best-effort */ }
+    return c.json(toPanelRow(row), 201);
   });
 
   app.put('/api/user-memory/:id', async (c) => {
-    const body = await c.req.json<{ title?: string; content?: string; category?: string; importance?: number }>();
-    const res = await deps.snapshotService.update(parseIdParam(c), {
-      title: body.title,
+    const id = parseIdParam(c);
+    const body = await c.req.json<{ content?: string; importance?: number }>();
+    const updated = await writer.update(id, {
       content: body.content,
-      category: body.category != null ? userCategory(body.category) : undefined,
       importance: body.importance,
-      projectId: USER_PROJECT_ID,
     });
-    return c.json(res.snap);
+    if (!updated) return c.json({ error: 'not found' }, 404);
+    return c.json(toPanelRow(updated));
   });
 
-  app.delete('/api/user-memory/:id', (c) => {
-    deps.snapshotService.delete(parseIdParam(c));
+  app.delete('/api/user-memory/:id', async (c) => {
+    const id = parseIdParam(c);
+    const row = deps.db.getAgentMemoryById(id);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    deps.db.archiveAgentMemory(id, 'forgotten:user');
+    await deps.agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
+    try {
+      deps.db.recordAgentMemoryEvent({
+        eventType: 'forget', scope: 'user', projectId: USER_PROJECT_ID, memoryId: row.id,
+      });
+    } catch { /* best-effort */ }
     return c.json({ ok: true });
   });
 }

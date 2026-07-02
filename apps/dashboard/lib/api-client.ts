@@ -331,6 +331,8 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
     }
     case 'lsp.codeActions':
       return { url: `/api/lsp/${ip!.projectId}/code-actions`, init: json({ file: ip!.file, range: ip!.range }) };
+    case 'lsp.rename':
+      return { url: `/api/lsp/${ip!.projectId}/rename`, init: json({ file: ip!.file, position: ip!.position, newName: ip!.newName }) };
     case 'lsp.didOpen':
       return {
         url: `/api/lsp/${ip!.projectId}/did-open`,

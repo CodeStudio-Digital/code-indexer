@@ -6,7 +6,6 @@ import { CodeIndexDB } from '@mcp/store/db.js';
 import { fileTools } from '@apps/mcp-server/tools/file.js';
 
 const get_file_skeleton = fileTools.find((t) => t.name === 'get_file_skeleton')!;
-const get_file_structure = fileTools.find((t) => t.name === 'get_file_structure')!;
 const list_directory = fileTools.find((t) => t.name === 'list_directory')!;
 const read_file = fileTools.find((t) => t.name === 'read_file')!;
 
@@ -101,20 +100,6 @@ describe('get_file_skeleton — tree-sitter fallback for non-indexed files', () 
         ctx,
       ),
     ).rejects.toThrow(/not found in index nor on disk/);
-  });
-
-  it('get_file_structure also falls back to tree-sitter', async () => {
-    const ctx = { db } as unknown as Parameters<typeof get_file_structure.handler>[1];
-    const out = await get_file_structure.handler(
-      {
-        project_name: 'test-proj',
-        file_path: 'src/app/elementos/receita/receita.component.ts',
-      },
-      ctx,
-    );
-    const text = String(out);
-    expect(text).toContain('tree-sitter fallback');
-    expect(text).toContain('ReceitaComponent');
   });
 
   it('list_directory falls back to disk when the index is empty', async () => {

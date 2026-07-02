@@ -14,6 +14,8 @@ import { mountFilesRoutes } from './server/routes/files.js';
 import { mountDrawioStaticRoutes } from './server/routes/drawio-static.js';
 import { mountGraphRoutes } from './server/routes/graph.js';
 import { mountSnapshotsRoutes } from './server/routes/snapshots.js';
+import { mountMemoryDiagnosticsRoutes } from './server/routes/memory-diagnostics.js';
+import { mountAgentMemoryRoutes } from './server/routes/agent-memory.js';
 import { mountUserMemoryRoutes } from './server/routes/user-memory.js';
 import { mountRunsRoutes } from './server/routes/runs.js';
 import { mountDiffRoutes } from './server/routes/diff.js';
@@ -827,6 +829,8 @@ export function createApp() {
   mountFilesRoutes(app, deps);
   mountGraphRoutes(app, deps);
   mountSnapshotsRoutes(app, deps);
+  mountMemoryDiagnosticsRoutes(app, deps);
+  mountAgentMemoryRoutes(app, deps);
   mountUserMemoryRoutes(app, deps);
   mountRunsRoutes(app, deps);
   mountDiffRoutes(app, deps);

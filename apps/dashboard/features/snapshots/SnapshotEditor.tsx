@@ -27,6 +27,7 @@ import { SnapshotDetail } from './parts/SnapshotDetail.js';
 import { SnapshotForm } from './parts/SnapshotForm.js';
 import { MemoryHealthCard } from './parts/MemoryHealthCard.js';
 import { AgentMemoryHealthCard } from './parts/AgentMemoryHealthCard.js';
+import { AgentMemoryList } from './parts/AgentMemoryList.js';
 import type { Snapshot } from './snapshot-types.js';
 
 /** Pin = boost retrieval salience; unpin returns to the default mid-weight. */
@@ -118,6 +119,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
     <div className="flex flex-col h-full min-h-0">
       <MemoryHealthCard projectId={projectId} />
       <AgentMemoryHealthCard projectId={projectId} />
+      <AgentMemoryList projectId={projectId} />
       <div className="flex flex-1 min-h-0">
       <PanelGroup
         direction="horizontal"

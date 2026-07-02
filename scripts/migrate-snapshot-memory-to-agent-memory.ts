@@ -86,7 +86,11 @@ function main(): void {
     let errors = 0;
 
     for (const s of rows) {
-      if (!s.source || !MEMORY_SOURCES.has(s.source)) {
+      // User-scope MANUAL rows are preferences typed in the old UI (which
+      // wrote to snapshots while the injector reads agent_memory) — carry
+      // them over. Project-scope manual/index snapshots stay excluded.
+      const isManualUserPref = s.source === 'manual' && (s.scope === 'user' || s.project_id === 0);
+      if (!isManualUserPref && (!s.source || !MEMORY_SOURCES.has(s.source))) {
         skippedSource++;
         continue;
       }

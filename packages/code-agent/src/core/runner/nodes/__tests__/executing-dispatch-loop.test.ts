@@ -56,6 +56,8 @@ describe('dispatchTools — insistent-loop enforcement', () => {
     const r1 = await dispatchTools(batch(registry, 'update_todo', 3, 1, dupCalls, loopRefusals));
     expect(r1.toolLoopDetected).toBe(true);
     expect(r1.loopEnforcement).toBeUndefined();
+    // A1 — the refusal carries the offending tool + count for Planning's reminder.
+    expect(r1.loopDetail).toEqual({ toolName: 'update_todo', count: 3 });
 
     // Planning resets the dedup table — but NOT loopRefusals.
     resetDupCalls(dupCalls);

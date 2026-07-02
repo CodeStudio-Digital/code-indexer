@@ -109,6 +109,8 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     // per-turn backstops seed these directly.
     doomLoop: { strict: [], fuzzy: [] },
     dominance: { window: [] },
+    // A1 — no retained dedup signatures until a loop guard fires.
+    retainedLoopKeys: null,
     // Fix B — loop-aware compaction signals start at zero.
     consecutiveNoTextTurns: 0,
     cumulativeInputTokens: 0,
@@ -128,6 +130,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       lastInjectedPreflightHash: null,
       // Fix A — self_review nudge gate state.
       selfReview: { suppressed: false },
+      correctionNudge: { lastHash: null, count: 0 },
     },
   };
   return { ctx, recordedEvents };

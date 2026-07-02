@@ -45,6 +45,7 @@ import {
 import { shouldCompactPreEmit, estimateMessagesTokens } from '../compaction/pending-tokens.js';
 import { evaluateLoopAwareCompaction } from '../compaction/loop-aware-trigger.js';
 import { computeDynamicInjection, type DynamicInjectionResult } from '../assembly/dynamic-injection.js';
+import { detectCorrectionSignal, renderCorrectionHint } from '../assembly/correction-nudge.js';
 import {
   renderSessionStateBlock,
   renderMemoryIndex,
@@ -122,6 +123,13 @@ export class ExecutingNode implements BehaviorNode {
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
     ctx.turn++;
     ctx.emit('turn_start', ctx.turn);
+    // A1 — expire the loop signatures Planning retained across its dedup
+    // reset. They block ONLY the immediately-following turn; after that the
+    // agent gets the true clean slate (legit re-verify workflows resume).
+    if (ctx.retainedLoopKeys && ctx.turn > ctx.retainedLoopKeys.expiresAfterTurn) {
+      for (const key of ctx.retainedLoopKeys.keys) ctx.dupCalls.delete(key);
+      ctx.retainedLoopKeys = null;
+    }
     // Drain any messages queued via `runner.pushUserMessage` (master →
     // subordinate forward, SSE-side push from the dashboard, etc.) so
     // they appear in `ctx.messages` BEFORE we build the request. The
@@ -157,6 +165,20 @@ export class ExecutingNode implements BehaviorNode {
         } catch (e) {
           dbg('memory retrieval failed', (e as Error).message);
         }
+      }
+    }
+
+    // Correction nudge — the user's last message looks like a correction or a
+    // durable preference: suggest remember() THIS turn. Cheap regex, throttled
+    // (once per distinct message hash, ≤3/session). Gated to single sessions
+    // (getProjectMemoryIndex is only wired outside company contexts — a
+    // subordinate's "user" is the master, not a person).
+    let correctionHint: string | null = null;
+    const nudgeState = ctx.injectionState.correctionNudge;
+    if (!ignoreMemory && memoryTaskText && nudgeState.count < 3 && ctx.bridge?.getProjectMemoryIndex) {
+      const signal = detectCorrectionSignal(memoryTaskText);
+      if (signal && hashSessionState(memoryTaskText) !== nudgeState.lastHash) {
+        correctionHint = renderCorrectionHint(signal);
       }
     }
 
@@ -246,7 +268,8 @@ export class ExecutingNode implements BehaviorNode {
         !sessionState &&
         !projectMemoryIndex &&
         !userMemoryIndex &&
-        !preflightHint
+        !preflightHint &&
+        !correctionHint
       )
         return null;
       const result = computeDynamicInjection({
@@ -274,6 +297,7 @@ export class ExecutingNode implements BehaviorNode {
         lastInjectedUserMemoryHash: ctx.injectionState.lastInjectedUserMemoryHash,
         preflightHint,
         lastInjectedPreflightHash: ctx.injectionState.lastInjectedPreflightHash,
+        correctionHint,
       });
       // Stash for post-assembly commit so we don't double-update state
       // when the same injection is consulted (e.g. by tests).
@@ -317,6 +341,10 @@ export class ExecutingNode implements BehaviorNode {
       }
       if (injectionToCommit.includedPreflightHash) {
         ctx.injectionState.lastInjectedPreflightHash = injectionToCommit.includedPreflightHash;
+      }
+      if (injectionToCommit.includedCorrectionHint && memoryTaskText) {
+        nudgeState.lastHash = hashSessionState(memoryTaskText);
+        nudgeState.count++;
       }
     }
     // B1/G3 — record this turn's active skills (every turn, independent of the
@@ -921,12 +949,19 @@ export class ExecutingNode implements BehaviorNode {
           snapshot: perTurnLoop.snapshot,
           reason: perTurnLoop.reason,
         });
-        return events.toolLoopDetected({ guard: perTurnLoop.guard });
+        return events.toolLoopDetected({
+          guard: perTurnLoop.guard,
+          toolName: perTurnLoop.toolName,
+          count: perTurnLoop.count,
+        });
       }
     }
 
     if (dispatch.toolLoopDetected) {
-      return events.toolLoopDetected({ guard: dispatch.loopGuard ?? 'tuple-hash' });
+      return events.toolLoopDetected({
+        guard: dispatch.loopGuard ?? 'tuple-hash',
+        ...(dispatch.loopDetail ?? {}),
+      });
     }
 
     // Fix B — compaction decision. Works WITH or WITHOUT provider `usage`:
@@ -976,7 +1011,14 @@ export class ExecutingNode implements BehaviorNode {
       // Prefer the higher size ratio for the event payload; behavioral-only
       // fires (ratio 0) report 1 so downstream telemetry reads "at cap".
       const ratio = Math.max(bodyDecision.ratio, totalDecision.ratio);
-      return events.tokenThresholdHit({ ratio: ratio > 0 ? ratio : 1 });
+      // A6 — most specific gate wins for telemetry: a behavioral reason
+      // (polling-loop/stuck-progress/cumulative) over the generic size gates.
+      const trigger = loopAware.shouldCompact
+        ? loopAware.reason
+        : totalDecision.shouldCompact
+          ? 'token-budget'
+          : 'body-after-prefix';
+      return events.tokenThresholdHit({ ratio: ratio > 0 ? ratio : 1, trigger });
     }
 
     // Gate quiet — the prompt is back under the trigger, so any future genuine

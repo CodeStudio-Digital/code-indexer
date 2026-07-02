@@ -1,5 +1,6 @@
 import type { ContextSnapshot } from '@mcp/shared/types.js';
 import { recencyDecay } from '@mcp/candidate-pipeline';
+import { blendedMemoryScore } from './scoring.js';
 
 /**
  * Retrieves relevant project memory (snapshots) for the agent's current task,
@@ -96,14 +97,11 @@ export interface RecalledMemory extends RetrievedMemory {
   source?: string;
 }
 
-// Decay/staleness scoring weights. The additive block (base+imp+rec+use) sums
-// to 1.0 — comparable in magnitude to the legacy `0.5 + 0.5*importance` — then
-// a MULTIPLICATIVE staleness discount scales the whole score, so a very-relevant
-// but stale memory drops below a fresh one (the thesis: memory must expire).
-const W_BASE = 0.4;
-const W_IMP = 0.3;
-const W_REC = 0.2;
-const W_USE = 0.1;
+// Decay/staleness scoring: the additive blend lives in scoring.ts (shared
+// with AgentMemoryRetriever, now including a CATEGORY term so preferences/
+// conventions outrank loose notes), then a MULTIPLICATIVE staleness discount
+// scales the whole score, so a very-relevant but stale memory drops below a
+// fresh one (the thesis: memory must expire).
 const STALE_MAX = 0.5; // max trust discount when ALL referenced files changed
 const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const USE_SATURATION = 20; // access_count at which the "frequently useful" term ~saturates
@@ -244,7 +242,14 @@ export class MemoryRetriever {
       const st = staleMap?.get(snap.id);
       const staleMult = st && st.total > 0 ? 1 - STALE_MAX * Math.min(1, st.stale.length / st.total) : 1;
       const relevance = 1 / (i + 1);
-      return { snap, st, score: relevance * (W_BASE + W_IMP * imp + W_REC * rec + W_USE * use) * staleMult };
+      return {
+        snap,
+        st,
+        score: blendedMemoryScore({
+          relevance, importance: imp, recency: rec, usage: use,
+          type: snap.category ?? 'note', staleMult,
+        }),
+      };
     });
     scored.sort((a, b) => b.score - a.score);
     return scored;

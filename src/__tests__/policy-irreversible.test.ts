@@ -64,7 +64,7 @@ describe('isIrreversibleTool — destructive-verb heuristic (external MCPs)', ()
   it('does NOT flag tools whose name lacks a destructive verb', () => {
     expect(isIrreversibleTool('mcp__list_models')).toBe(false);
     expect(isIrreversibleTool('mcp__find_implementations')).toBe(false);
-    expect(isIrreversibleTool('mcp__search_concepts')).toBe(false);
+    expect(isIrreversibleTool('mcp__search_memory')).toBe(false);
     expect(isIrreversibleTool('read_file')).toBe(false);
     expect(isIrreversibleTool('list_directory')).toBe(false);
     expect(isIrreversibleTool('grep_code')).toBe(false);

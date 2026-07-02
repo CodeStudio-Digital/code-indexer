@@ -27,7 +27,8 @@ const SELECTOR_DESC = 'A CSS selector OR `text="visible text"` (e.g. `text="Sett
 export const previewScrollTool: CoderTool = {
   name: 'preview_scroll',
   description:
-    'Scroll the preview page. Pass `selector` to scroll that element into view (center), or `x`/`y` deltas to scroll the window (e.g. y:600 = down). Use for long pages / lazy-loaded content before screenshot/click.',
+    'Scroll the preview window by x/y deltas, or scroll a specific element into view.\n' +
+    'Pass `selector` to center that element in view, or `x`/`y` deltas to scroll the window (y:600 = down). Use for long pages / lazy-loaded content before screenshot/click.',
   source: 'native',
   parameters: {
     type: 'object',
