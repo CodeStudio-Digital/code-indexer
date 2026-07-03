@@ -69,16 +69,24 @@ export async function parkForBackgroundWork(deps: ParkDeps): Promise<ParkOutcome
   if (deps.hasPendingMessage()) return 'message';
   if (deps.signal.aborted) return 'aborted';
 
-  // `local` releases the message waiter once the job side wins the race.
+  // `local` fans a run abort into BOTH waiters AND lets `finally` cancel the
+  // loser: whichever side wins the race, `local.abort()` releases the other's
+  // timer/listener (else the losing `waitAny` would keep a 30-min timer + a
+  // run-signal listener alive per park cycle — a leak on message-wins).
   const local = new AbortController();
+  const onRunAbort = () => local.abort();
+  if (deps.signal.aborted) local.abort();
+  else deps.signal.addEventListener('abort', onRunAbort, { once: true });
   try {
     const msgP: Promise<'message'> = deps.waitForMessage(local.signal).then(() => 'message' as const);
     const jobP: Promise<'aborted' | 'timeout' | { job: SubagentJob }> = deps.manager
-      .waitAny(deps.sessionId, null, deps.signal, deps.capMs)
+      .waitAny(deps.sessionId, null, local.signal, deps.capMs, { pendingOnly: true })
       .then((r) => (r.kind === 'done' ? { job: r.job } : r.kind === 'aborted' ? 'aborted' as const : 'timeout' as const));
 
     const winner = await Promise.race([msgP, jobP]);
-    if (winner === 'message') return deps.signal.aborted ? 'aborted' : 'message';
+    // A user abort that raced a settle/message still ends the run.
+    if (deps.signal.aborted) return 'aborted';
+    if (winner === 'message') return 'message';
     if (winner === 'aborted' || winner === 'timeout') return winner;
 
     // A job settled — deliver its notice exactly once.
@@ -92,5 +100,6 @@ export async function parkForBackgroundWork(deps: ParkDeps): Promise<ParkOutcome
     return 'work';
   } finally {
     local.abort();
+    deps.signal.removeEventListener('abort', onRunAbort);
   }
 }

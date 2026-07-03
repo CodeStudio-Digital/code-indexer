@@ -508,30 +508,39 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         resumed?: boolean;
         agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string; status?: AgentStatus; attempt?: number }>;
       };
-      const group: AgentsGroup = {
-        groupId: d.groupId,
-        status: 'running',
-        provider: d.provider,
-        model: d.model,
-        background: d.background,
-        jobId: d.jobId,
-        agents: d.agents.map((a) => ({
-          index: a.index,
-          label: a.label,
-          status: a.status ?? ('pending' as AgentStatus),
-          toolCallCount: 0,
-          provider: a.provider ?? d.provider,
-          model: a.model ?? d.model,
-          task: a.task,
-          attempt: a.attempt,
-        })),
-      };
       if (d.background) backgroundJobByGroup.set(d.groupId, d.jobId ?? '');
       // Upsert by groupId — a resume (resume_agent) or a cross-run re-emit of a
       // still-running background job MERGES into the existing block (rows flip
       // back to running) instead of pushing a duplicate. `message_complete`
       // clears live blocks, so a later re-emit re-materializes the group here.
       const existing = blocks.findIndex((b) => b.type === 'agents' && b.group.groupId === d.groupId);
+      const prior = existing >= 0 && blocks[existing].type === 'agents' ? blocks[existing].group : null;
+      const priorByIndex = new Map(prior?.agents.map((a) => [a.index, a]) ?? []);
+      const group: AgentsGroup = {
+        groupId: d.groupId,
+        status: 'running',
+        provider: d.provider ?? prior?.provider,
+        model: d.model ?? prior?.model,
+        background: d.background ?? prior?.background,
+        jobId: d.jobId ?? prior?.jobId,
+        agents: d.agents.map((a) => {
+          // Preserve a previously-completed agent's data (summary/usage/tools)
+          // on a resume re-emit — only the payload's fresh status/attempt win,
+          // so non-resumed rows don't blank out. New agents start clean.
+          const was = priorByIndex.get(a.index);
+          return {
+            ...was,
+            index: a.index,
+            label: a.label,
+            status: a.status ?? ('pending' as AgentStatus),
+            toolCallCount: was?.toolCallCount ?? 0,
+            provider: a.provider ?? d.provider ?? was?.provider,
+            model: a.model ?? d.model ?? was?.model,
+            task: a.task ?? was?.task,
+            attempt: a.attempt ?? was?.attempt,
+          };
+        }),
+      };
       if (existing >= 0) blocks[existing] = { type: 'agents', group };
       else blocks.push({ type: 'agents', group });
       flush();

@@ -130,6 +130,33 @@ describe('resume_agent', () => {
     expect(runParallelAgents).not.toHaveBeenCalled();
   });
 
+  it('preserves the prior transcript when a re-failure returns none (M1)', async () => {
+    retain('error', { failureNote: 'boom' });
+    // Relaunch fails again but via the outer-catch path → no transcript.
+    (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      results: [{
+        reason: 'error', finalText: 'still broken', usage, sandboxViolations: [],
+        collected: { memos: [], snapshots: [], boardPosts: [] }, transcript: undefined, label: 'auth', toolCallCount: 0,
+      }],
+      totalUsage: usage,
+    });
+    const t = buildResumeAgentTool(deps);
+    await t.handler({ spawn_id: 'g1' }, ctx);
+    const st = getGroup(SID, 'g1')!.agents[0];
+    expect(st.attempt).toBe(2);
+    expect(st.transcript).toBeDefined(); // NOT cannibalized → still resumable
+  });
+
+  it('numbers a resumed agent by its ORIGINAL roster index (L4)', async () => {
+    // Agent at original index 1 failed; resume it alone.
+    retain('error', { failureNote: 'boom', index: 1 });
+    mockRun('completed');
+    const t = buildResumeAgentTool(deps);
+    const r = await t.handler({ spawn_id: 'g1', agents: [2] }, ctx); // 1-based → index 1
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content)).toContain('### Agent 2:'); // original index+1, not "### Agent 1"
+  });
+
   it('caps quality failures at 2 attempts', async () => {
     retain('error', { attempt: 2, failureNote: 'subagent_quality_watchdog: 3 turns no tool' });
     const t = buildResumeAgentTool(deps);

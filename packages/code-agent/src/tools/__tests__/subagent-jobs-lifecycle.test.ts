@@ -71,13 +71,14 @@ describe('parkForBackgroundWork', () => {
     expect(j.delivery).toBe('notified');
   });
 
-  it('does not re-inject a notice for an already-notified job', async () => {
+  it('a sole already-notified job leaves nothing pending → timeout, no re-inject', async () => {
     const j = runningJob();
     mgr.settle(j, 'RESULT', usage, 'done');
     mgr.markDelivery(j, 'notified');
     const pushed: string[] = [];
-    const r = await parkForBackgroundWork(base({ pushNotice: (t) => pushed.push(t) }));
-    expect(r).toBe('work');
+    // Nothing running and nothing undelivered → park has nothing to wait for.
+    const r = await parkForBackgroundWork(base({ capMs: 30, pushNotice: (t) => pushed.push(t) }));
+    expect(r).toBe('timeout');
     expect(pushed).toHaveLength(0);
   });
 
@@ -99,5 +100,22 @@ describe('parkForBackgroundWork', () => {
     runningJob();
     const r = await parkForBackgroundWork(base({ capMs: 20 }));
     expect(r).toBe('timeout');
+  });
+
+  it('does NOT busy-return on an already-notified job while another runs (loop regression)', async () => {
+    const a = runningJob(); // job-1
+    const b = mgr.create({ sessionId: SID, jobId: 'job-2', groupId: 'g2', provider: 'p', model: 'm', agents: slots() });
+    if ('error' in b) throw new Error('unexpected');
+    mgr.settle(a, 'ra', usage, 'done');
+    mgr.markDelivery(a, 'notified'); // job-1 terminal but already delivered.
+    const pushed: string[] = [];
+    // If the bug were present, park would return 'work' immediately with NO push
+    // (job-1 already notified). With the fix it waits for the RUNNING job-2.
+    setTimeout(() => mgr.settle(b, 'rb', usage, 'done'), 20);
+    const r = await parkForBackgroundWork(base({ pushNotice: (t) => pushed.push(t) }));
+    expect(r).toBe('work');
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toContain('job-2'); // delivered the newly-settled one
+    expect(b.delivery).toBe('notified');
   });
 });

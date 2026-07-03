@@ -1769,7 +1769,14 @@ export class CoderRunner extends EventEmitter {
   waitForPendingMessage(signal?: AbortSignal): Promise<void> {
     if (this.pendingUserMessages.length > 0 || signal?.aborted) return Promise.resolve();
     return new Promise<void>((resolve) => {
-      const done = () => { signal?.removeEventListener('abort', done); resolve(); };
+      const done = () => {
+        // Splice self out so an abort-resolved waiter doesn't linger in the
+        // array until the next pushUserMessage (which would double-invoke it).
+        const i = this.pendingMessageWaiters.indexOf(done);
+        if (i >= 0) this.pendingMessageWaiters.splice(i, 1);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
       this.pendingMessageWaiters.push(done);
       signal?.addEventListener('abort', done, { once: true });
     });

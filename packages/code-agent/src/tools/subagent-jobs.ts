@@ -167,13 +167,31 @@ export class SubagentJobManager {
     }
   }
 
-  /** Event-driven wait — resolves when a target job settles (no polling). */
-  async waitAny(sessionId: number, jobIds: string[] | null, signal: AbortSignal | undefined, timeoutMs: number): Promise<WaitResult> {
+  /**
+   * Event-driven wait — resolves when a target job settles (no polling).
+   *
+   * `opts.pendingOnly` (the parking gate) considers ONLY running jobs and
+   * UNDELIVERED terminals (`delivery==='none'`). Without it, an
+   * already-`notified` terminal would satisfy the "terminal found" shortcut
+   * on every call, so the orchestrator would busy-loop park→Executing→park
+   * while another job is still running. Collect (default) instead returns any
+   * not-yet-collected terminal so the agent can fetch a notified job's full
+   * result.
+   */
+  async waitAny(
+    sessionId: number,
+    jobIds: string[] | null,
+    signal: AbortSignal | undefined,
+    timeoutMs: number,
+    opts?: { pendingOnly?: boolean },
+  ): Promise<WaitResult> {
     const groups = this.bySession.get(sessionId);
     if (!groups || groups.size === 0) return { kind: jobIds ? 'not_found' : 'empty' };
     const jobs = jobIds
       ? jobIds.map((id) => groups.get(id)).filter((j): j is SubagentJob => !!j)
-      : [...groups.values()].filter((j) => j.delivery !== 'collected');
+      : [...groups.values()].filter((j) =>
+          opts?.pendingOnly ? j.status === 'running' || j.delivery === 'none' : j.delivery !== 'collected',
+        );
     if (jobs.length === 0) return { kind: jobIds ? 'not_found' : 'empty' };
     const terminal = jobs.find((j) => j.status !== 'running');
     if (terminal) return { kind: 'done', job: terminal };

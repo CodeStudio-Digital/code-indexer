@@ -91,20 +91,23 @@ function approxBytesOf(value: unknown): number {
 }
 
 /**
- * Deterministic byte-cap: walk from the START replacing large tool_result
- * contents with a marker until under `MAX_AGENT_BYTES`, never touching the
- * last `PROTECTED_TAIL_MESSAGES` messages. Prefix-stable across repeated
- * calls on the same transcript.
+ * Deterministic byte-cap: replace large tool_result contents with a marker
+ * until under `MAX_AGENT_BYTES`. Prefers to keep the last
+ * `PROTECTED_TAIL_MESSAGES` (recent context, prefix-stable) — a FIRST pass
+ * elides only from the front. But the cap is a HARD guarantee: if the front
+ * pass can't get under it (a giant single tool_result, or a transcript ≤
+ * PROTECTED_TAIL messages where `editable===0`), a SECOND pass elides the tail
+ * too, back-to-front, so an oversized short transcript can't blow the provider
+ * context window when re-sent as the resume seed.
  */
 function capTranscriptBytes(transcript: AgentMessage[]): AgentMessage[] {
   const cap = maxAgentBytes();
   let total = approxBytesOf(transcript);
   if (total <= cap) return transcript;
   const out = transcript.map((m) => ({ ...m, content: [...m.content] }));
-  const editable = Math.max(0, out.length - PROTECTED_TAIL_MESSAGES);
-  for (let i = 0; i < editable && total > cap; i++) {
-    const m = out[i];
-    if (m.role !== 'tool') continue;
+
+  const elideMsg = (m: AgentMessage): void => {
+    if (m.role !== 'tool') return;
     m.content = m.content.map((b) => {
       if (total <= cap) return b;
       if (b.type !== 'tool_result' || typeof b.content !== 'string') return b;
@@ -112,7 +115,13 @@ function capTranscriptBytes(transcript: AgentMessage[]): AgentMessage[] {
       total -= b.content.length - ELIDED_MARKER.length;
       return { ...b, content: ELIDED_MARKER };
     });
-  }
+  };
+
+  // Pass 1 — front (protect the tail).
+  const editable = Math.max(0, out.length - PROTECTED_TAIL_MESSAGES);
+  for (let i = 0; i < editable && total > cap; i++) elideMsg(out[i]);
+  // Pass 2 — still over: elide the protected tail too, newest last.
+  for (let i = out.length - 1; i >= editable && total > cap; i--) elideMsg(out[i]);
   return out;
 }
 

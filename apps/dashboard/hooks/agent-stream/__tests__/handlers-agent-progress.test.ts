@@ -153,19 +153,33 @@ describe('agent_progress handlers', () => {
     expect(blocks.some((block) => block.type === 'activity')).toBe(false);
   });
 
-  it('upserts a re-emitted group by groupId (resume) instead of duplicating', () => {
+  it('upserts a re-emitted group by groupId (resume) and preserves non-resumed agent data', () => {
     const { handlers, blocks } = setup();
-    handlers.agents_group_start({ groupId: 'grp_1', agents: [{ index: 0, label: 'auth' }] }, 'agents_group_start');
-    handlers.agents_group_end({ groupId: 'grp_1', totalUsage: { input_tokens: 1, output_tokens: 1 } }, 'agents_group_end');
-    // Resume re-emits the same group with attempt bumped + running again.
     handlers.agents_group_start(
-      { groupId: 'grp_1', resumed: true, agents: [{ index: 0, label: 'auth', status: 'pending', attempt: 2 }] },
+      { groupId: 'grp_1', agents: [{ index: 0, label: 'auth' }, { index: 1, label: 'db' }] },
+      'agents_group_start',
+    );
+    // agent 0 completes with a summary; agent 1 fails. (toolCallCount is set by
+    // tool_call/heartbeat events, not the completed event — mirror real flow.)
+    handlers.agent_progress({ groupId: 'grp_1', agentIndex: 0, label: 'auth', event: 'heartbeat', status: 'running', toolCallCount: 7 }, 'agent_progress');
+    handlers.agent_progress({ groupId: 'grp_1', agentIndex: 0, label: 'auth', event: 'completed', summary: 'JWT ok', usage: { input_tokens: 5, output_tokens: 2 } }, 'agent_progress');
+    handlers.agent_progress({ groupId: 'grp_1', agentIndex: 1, label: 'db', event: 'error', error: 'boom' }, 'agent_progress');
+    handlers.agents_group_end({ groupId: 'grp_1', totalUsage: { input_tokens: 5, output_tokens: 2 } }, 'agents_group_end');
+    // Resume re-emits the group: agent 1 back to pending (attempt 2), agent 0 unchanged.
+    handlers.agents_group_start(
+      { groupId: 'grp_1', resumed: true, agents: [
+        { index: 0, label: 'auth', status: 'completed' },
+        { index: 1, label: 'db', status: 'pending', attempt: 2 },
+      ] },
       'agents_group_start',
     );
     const agentBlocks = blocks.filter((b) => b.type === 'agents');
     expect(agentBlocks).toHaveLength(1); // merged, not duplicated
     expect(group(blocks).status).toBe('running');
-    expect(group(blocks).agents[0].attempt).toBe(2);
+    // Non-resumed agent 0 keeps its summary + tool count (not blanked).
+    expect(group(blocks).agents[0]).toMatchObject({ status: 'completed', summary: 'JWT ok', toolCallCount: 7 });
+    // Resumed agent 1 flips to pending with the retry attempt.
+    expect(group(blocks).agents[1]).toMatchObject({ status: 'pending', attempt: 2 });
   });
 
   it('marks a background group and threads the jobId', () => {

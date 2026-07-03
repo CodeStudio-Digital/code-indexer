@@ -87,14 +87,15 @@ describe('subagent-resume-registry', () => {
   it('front-elides large tool_results but protects the tail under the byte cap', () => {
     const big = 'x'.repeat(5000);
     const long: AgentMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
-    // 30 tool turns each with a big result; cap forces front elision, last 20 kept.
+    // 30 tool turns each with a big result. Cap chosen so the FRONT pass alone
+    // gets under it → the protected tail (last 20 msgs) stays intact.
     for (let i = 0; i < 30; i++) {
       long.push({ role: 'assistant', content: [{ type: 'tool_use', id: `t${i}`, name: 'read_file', input: {} }] });
       long.push({ role: 'tool', content: [{ type: 'tool_result', tool_use_id: `t${i}`, content: big }] });
     }
-    // Force a tiny cap via env.
+    // ~150KB total; front-editable ≈ 20 results × 5KB ≈ 100KB → under 60KB.
     const prev = process.env.CODER_RESUME_MAX_AGENT_BYTES;
-    process.env.CODER_RESUME_MAX_AGENT_BYTES = '40000';
+    process.env.CODER_RESUME_MAX_AGENT_BYTES = '60000';
     try {
       retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: long })]));
     } finally {
@@ -109,6 +110,28 @@ describe('subagent-resume-registry', () => {
     // Some early tool_result was elided.
     const early = t.slice(0, 6).map(findResult).filter(Boolean) as Array<{ content: string }>;
     expect(early.some((r) => r.content.includes('elided'))).toBe(true);
+  });
+
+  it('enforces the byte cap even for a short (<=20 msg) transcript with a giant result (M2)', () => {
+    const giant = 'y'.repeat(200_000);
+    const short: AgentMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1', content: giant }] },
+    ];
+    const prev = process.env.CODER_RESUME_MAX_AGENT_BYTES;
+    process.env.CODER_RESUME_MAX_AGENT_BYTES = '10000';
+    try {
+      retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: short })]));
+    } finally {
+      if (prev == null) delete process.env.CODER_RESUME_MAX_AGENT_BYTES; else process.env.CODER_RESUME_MAX_AGENT_BYTES = prev;
+    }
+    const t = getGroup(SID, 'g1')!.agents[0].transcript!;
+    const res = t.find((m) => m.role === 'tool')!.content.find((b) => b.type === 'tool_result') as { content: string };
+    // The giant result was elided despite the transcript being only 3 messages.
+    expect(res.content).toContain('elided');
+    // Pairing preserved (tool_use_id kept) and message count unchanged.
+    expect(t).toHaveLength(3);
   });
 
   it('evicts the LRU group beyond the 8-group cap', () => {

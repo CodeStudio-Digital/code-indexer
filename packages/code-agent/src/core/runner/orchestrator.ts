@@ -199,10 +199,14 @@ export async function runBehaviorTree(
       // sends a message, the run aborts, or a safety cap elapses. Gated on
       // `hasActive()`, so sessions/subagents without background jobs (the vast
       // majority) see zero behavior change. Aborts/errors are NOT parked.
-      if (state === 'Done' && event.kind === 'CleanFinish' && ctx.bridge?.backgroundJobs?.hasActive()) {
-        const signal = ctx.opts.toolContext.signal ?? new AbortController().signal;
+      // Require a real run signal to park — else a user Stop couldn't break the
+      // park (it'd hang to the 30-min cap). The worker/in-process runners always
+      // set toolContext.signal; a signal-less path just ends (jobs stay
+      // collectable next run) rather than parking un-abortably.
+      const runSignal = ctx.opts.toolContext.signal;
+      if (state === 'Done' && event.kind === 'CleanFinish' && runSignal && ctx.bridge?.backgroundJobs?.hasActive()) {
         console.log(`[coder/bt] clean finish with active background jobs — parking runId=${ctx.runId}`);
-        const outcome = await ctx.bridge.backgroundJobs.park(signal);
+        const outcome = await ctx.bridge.backgroundJobs.park(runSignal);
         console.log(`[coder/bt] park woke: ${outcome}`);
         if (outcome === 'work' || outcome === 'message') {
           state = 'Executing';

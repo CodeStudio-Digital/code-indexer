@@ -31,6 +31,10 @@ export interface RenderableAgentResult {
   collected?: SubagentCollected;
   /** Rendered as ` attempt=N` only when >= 2 (resume results). */
   attempt?: number;
+  /** 0-based original roster index for the "### Agent N" heading. Defaults to
+   *  the array position — resume passes the ORIGINAL index so a partial
+   *  relaunch doesn't renumber (which would let the model target wrong). */
+  displayIndex?: number;
 }
 
 /** Frente C — structured trail (memos/snapshots/board). '' when empty. */
@@ -79,7 +83,8 @@ export function renderAgentSection(index: number, r: RenderableAgentResult): str
     `tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}${attemptTok}]`;
   const text = r.finalText || '(no summary produced)';
   const trail = renderTrail(r.collected);
-  return `### Agent ${index + 1}: ${r.label}\n${meta}\n${text}${trail}`;
+  const n = (r.displayIndex ?? index) + 1;
+  return `### Agent ${n}: ${r.label}\n${meta}\n${text}${trail}`;
 }
 
 export function renderParallelBody(results: RenderableAgentResult[]): string {

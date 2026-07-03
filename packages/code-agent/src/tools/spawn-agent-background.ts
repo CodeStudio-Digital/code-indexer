@@ -121,17 +121,7 @@ async function runBackgroundJob(
       },
     );
 
-    // Account tokens ONCE, at settle — whether or not the parent collects.
-    deps.sessionStore?.bumpSessionUsage(sessionId, totalUsage);
-    job.usageAccounted = true;
-    for (let i = 0; i < results.length; i++) {
-      captureInvestigation(deps, ctx, agents[i], results[i].finalText ?? '', '', results[i].usage.input_tokens + results[i].usage.output_tokens);
-    }
-    retainSpawnGroup({
-      sessionId, spawnId: job.groupId, provider: info.provider, model: info.model,
-      agents: results.map((r, i) => ({ ...toRetentionAgent(i, agents[i], r), toolCallCount: r.toolCallCount })),
-    });
-
+    // Build the real aggregated report FIRST (pure string assembly).
     const header = renderParallelHeader(results.length, info, totalUsage, job.groupId);
     const body = renderParallelBody(results.map((r, i) => ({
       label: r.label, type: agents[i].type, reason: r.reason, toolCallCount: r.toolCallCount,
@@ -139,10 +129,31 @@ async function runBackgroundJob(
     })));
     const failed = results.filter((r) => r.reason !== 'completed').length;
     const hint = failed > 0 ? renderResumeHint(job.groupId, failed) : '';
-    ctx.runner?.emit('agents_group_end', {
-      groupId: job.groupId, jobId: job.jobId, status: 'completed', totalUsage,
-      agentCount: results.length, successCount: results.length - failed,
-    });
+
+    // Persistence side-effects are BEST-EFFORT: a background job outlives its
+    // spawning run, so the worker/DB may be tearing down when it settles. A
+    // throw here (SQLITE_BUSY, closed connection) must NOT rewrite a
+    // successful job into a "failed" one and discard the real findings.
+    try { deps.sessionStore?.bumpSessionUsage(sessionId, totalUsage); job.usageAccounted = true; }
+    catch (e) { console.warn(`[coder] background bumpSessionUsage failed: ${e instanceof Error ? e.message : String(e)}`); }
+    try {
+      for (let i = 0; i < results.length; i++) {
+        captureInvestigation(deps, ctx, agents[i], results[i].finalText ?? '', '', results[i].usage.input_tokens + results[i].usage.output_tokens);
+      }
+    } catch { /* captureInvestigation is itself guarded; belt-and-suspenders */ }
+    try {
+      retainSpawnGroup({
+        sessionId, spawnId: job.groupId, provider: info.provider, model: info.model,
+        agents: results.map((r, i) => ({ ...toRetentionAgent(i, agents[i], r), toolCallCount: r.toolCallCount })),
+      });
+    } catch (e) { console.warn(`[coder] background retainSpawnGroup failed: ${e instanceof Error ? e.message : String(e)}`); }
+
+    try {
+      ctx.runner?.emit('agents_group_end', {
+        groupId: job.groupId, jobId: job.jobId, status: 'completed', totalUsage,
+        agentCount: results.length, successCount: results.length - failed,
+      });
+    } catch { /* emit is best-effort */ }
     manager.settle(job, header + body + hint, totalUsage, 'done');
   } catch (e) {
     const aborted = job.abort.signal.aborted;

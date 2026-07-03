@@ -122,11 +122,16 @@ export async function relaunchResumedAgents(
     const profile = profiles[i];
     const attempt = state.attempt + 1;
     if (sessionId != null) {
+      // If the relaunch failed AGAIN but produced no fresh transcript (a throw
+      // before/around runSubagent → outer-catch result has transcript=undefined),
+      // KEEP the prior transcript so resume state isn't cannibalized (the agent
+      // could still retry). A completed resume legitimately clears it.
+      const nextTranscript = r.reason === 'completed' ? undefined : (r.transcript ?? state.transcript);
       replaceAgentState(sessionId, group.spawnId, {
         ...state,
         reason: r.reason,
         failureNote: r.reason !== 'completed' ? (r.failureDetail || r.finalText).slice(0, 500) : undefined,
-        transcript: r.transcript,
+        transcript: nextTranscript,
         toolCallCount: r.toolCallCount,
         usage: r.usage,
         attempt,
@@ -150,6 +155,9 @@ export async function relaunchResumedAgents(
       finalText: r.finalText,
       collected: r.collected,
       attempt,
+      // Number by ORIGINAL roster index so a partial relaunch doesn't renumber
+      // (else the model's next resume_agent({agents:[N]}) targets the wrong one).
+      displayIndex: state.agentIndex,
     };
   });
 

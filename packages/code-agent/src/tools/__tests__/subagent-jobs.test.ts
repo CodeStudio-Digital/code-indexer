@@ -95,6 +95,23 @@ describe('SubagentJobManager', () => {
     expect((await mgr.waitAny(SID, ['nope'], undefined, 10)).kind).toBe('not_found');
   });
 
+  it('pendingOnly ignores an already-delivered terminal and waits for a running job', async () => {
+    const a = mk('jA'); const b = mk('jB');
+    if ('error' in a || 'error' in b) throw new Error('unexpected');
+    mgr.settle(a, 'ra', usage, 'done');
+    mgr.markDelivery(a, 'notified'); // A is terminal but already delivered.
+    // Default (collect) still surfaces A.
+    expect((await mgr.waitAny(SID, null, undefined, 10)).kind).toBe('done');
+    // pendingOnly (park) must NOT return A — it waits (→ timeout here, B running).
+    expect((await mgr.waitAny(SID, null, undefined, 30, { pendingOnly: true })).kind).toBe('timeout');
+    // …and wakes when the RUNNING job settles.
+    const p = mgr.waitAny(SID, null, undefined, 5000, { pendingOnly: true });
+    setTimeout(() => mgr.settle(b, 'rb', usage, 'done'), 20);
+    const r = await p;
+    expect(r.kind).toBe('done');
+    if (r.kind === 'done') expect(r.job.jobId).toBe('jB');
+  });
+
   it('abortSession aborts every running job', () => {
     const j1 = mk('j1'); const j2 = mk('j2');
     if ('error' in j1 || 'error' in j2) throw new Error('unexpected');

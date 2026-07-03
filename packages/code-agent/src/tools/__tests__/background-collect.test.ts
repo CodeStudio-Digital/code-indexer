@@ -102,6 +102,22 @@ describe('spawn_agent background + collect_agents', () => {
     expect(String(r.content)).toContain('call collect_agents again');
   });
 
+  it('a bumpSessionUsage throw does NOT turn a successful job into a failure (H1)', async () => {
+    mockResult('completed');
+    // DB hiccup at settle: bumpSessionUsage throws (worker DB tearing down).
+    (deps as unknown as { sessionStore: { bumpSessionUsage: ReturnType<typeof vi.fn> } }).sessionStore.bumpSessionUsage =
+      vi.fn(() => { throw new Error('SQLITE_BUSY'); });
+    const spawn = await runBackgroundEphemeral(deps, [agent('scout')], ctx);
+    const jobId = jobIdFrom(String(spawn.content));
+    await getSubagentJobManager().get(SID, jobId)!.settled;
+    const collect = buildCollectAgentsTool(deps);
+    const r = await collect.handler({ job_id: jobId, wait: true }, ctx);
+    // Real findings delivered, NOT a "background job failed" message.
+    expect(String(r.content)).toContain('FOUND: the thing');
+    expect(String(r.content)).not.toContain('failed');
+    expect(getSubagentJobManager().get(SID, jobId)!.status).toBe('done');
+  });
+
   it('collect on an unknown job id errors clearly', async () => {
     const collect = buildCollectAgentsTool(deps);
     const r = await collect.handler({ job_id: 'job-deadbeef' }, ctx);
