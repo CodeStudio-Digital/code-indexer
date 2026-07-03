@@ -43,10 +43,29 @@ describe('parseAppManifest', () => {
   it('accepts tool windows + commands + themes', () => {
     const app = parseAppManifest({
       toolWindows: [{ id: 'tw', title: 'TW', side: 'left', entry: 'ui/index.html' }],
-      commands: [{ id: 'c', label: 'C' }],
+      commands: [{ id: 'c', label: 'C', runsTool: 'echo' }],
       themes: [{ id: 't', label: 'T', appearance: 'dark', tokens: {} }],
+      editorActions: [{ id: 'ea', label: 'EA', runsTool: 'echo', scope: 'project' }],
+      statusBarItems: [{ id: 'sb', label: 'SB', alignment: 'right', runsTool: 'echo' }],
+      runConfigurations: [{ id: 'run', title: 'Run', command: 'npm', args: ['test'] }],
+      providerRuntime: {
+        protocol: 'provider-adapter-v2',
+        entry: './dist/plugin.js',
+        kinds: ['acme'],
+      },
+      modules: [
+        {
+          id: 'node-project',
+          title: 'Node Project',
+          activation: { whenFiles: ['package.json'] },
+          tools: ['echo'],
+          editorActions: [{ id: 'mod-action', label: 'Mod Action', runsTool: 'echo' }],
+        },
+      ],
     });
     expect(app.toolWindows?.[0].side).toBe('left');
+    expect(app.modules?.[0].editorActions?.[0].id).toBe('mod-action');
+    expect(app.providerRuntime?.kinds).toEqual(['acme']);
   });
 
   it('rejects an invalid tool-window side', () => {

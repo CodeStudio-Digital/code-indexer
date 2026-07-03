@@ -9,8 +9,31 @@
  * Podman is a project-agnostic capability (you may run any image regardless of
  * what files the project ships).
  */
-import { definePlugin, contributeToolWindow } from '@mcp/plugin-sdk/define.js';
+import {
+  definePlugin,
+  contributeToolWindow,
+  contributeProjectModule,
+  contributeEditorAction,
+  contributeStatusBarItem,
+  contributeRunConfiguration,
+} from '@mcp/plugin-sdk/define.js';
 import { allTools } from './all-tools.js';
+
+const containerProject = {
+  whenFiles: [
+    'Containerfile',
+    'Dockerfile',
+    'compose.yaml',
+    'compose.yml',
+    'docker-compose.yml',
+    'docker-compose.yaml',
+    'package.json',
+    'requirements.txt',
+    'pyproject.toml',
+    'go.mod',
+    'index.html',
+  ],
+};
 
 export default definePlugin({
   permissions: {
@@ -36,6 +59,68 @@ export default definePlugin({
     storage: true,
   },
   tools: allTools,
+  modules: [
+    contributeProjectModule({
+      id: 'containerized-project',
+      title: 'Containerized Project',
+      description: 'Podman project module with detect, containerize, build/run and compose actions.',
+      icon: 'container',
+      activation: containerProject,
+      tools: ['podman_detect', 'podman_containerize', 'podman_project_run', 'podman_compose'],
+      editorActions: [
+        contributeEditorAction({
+          id: 'podman-detect-project',
+          label: 'Podman: Detect Project',
+          category: 'Podman',
+          runsTool: 'podman_detect',
+          scope: 'project',
+        }),
+        contributeEditorAction({
+          id: 'podman-containerize-project',
+          label: 'Podman: Generate Containerfile',
+          category: 'Podman',
+          runsTool: 'podman_containerize',
+          scope: 'project',
+        }),
+        contributeEditorAction({
+          id: 'podman-run-project',
+          label: 'Podman: Build and Run Project',
+          category: 'Podman',
+          runsTool: 'podman_project_run',
+          scope: 'project',
+        }),
+      ],
+      statusBarItems: [
+        contributeStatusBarItem({
+          id: 'podman-project',
+          label: 'Podman',
+          tooltip: 'Container project tools available',
+          alignment: 'right',
+          priority: 30,
+          runsTool: 'podman_detect',
+          scope: 'project',
+        }),
+      ],
+      runConfigurations: [
+        contributeRunConfiguration({
+          id: 'podman-build-run',
+          title: 'Podman Build and Run',
+          kind: 'podman',
+          command: 'podman',
+          args: ['build', '-t', 'project:dev', '.'],
+          scope: 'project',
+        }),
+        contributeRunConfiguration({
+          id: 'podman-compose-up',
+          title: 'Podman Compose Up',
+          kind: 'podman',
+          command: 'podman',
+          args: ['compose', 'up', '-d'],
+          scope: 'project',
+        }),
+      ],
+    }),
+  ],
   toolWindows: [
     contributeToolWindow({
       id: 'podman-manage',

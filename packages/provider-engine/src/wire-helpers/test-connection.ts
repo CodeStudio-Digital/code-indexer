@@ -69,7 +69,7 @@ export function buildTestConnection(spec: ProviderSpec): TestConnection | undefi
 
     case 'codex-health':
       // chatgpt: the Codex backend has no public /models; accept any non-auth
-      // response from /health. Verbatim from definitions/chatgpt.ts.
+      // response from /health.
       return async ({ creds }) => {
         if (!creds.apiKey) throw new Error('no access token stored — re-connect');
         const base = (creds.baseURL ?? t.fallbackBaseURL ?? CHATGPT_CODEX_BASE_URL).replace(/\/$/, '');
@@ -94,7 +94,7 @@ export function buildTestConnection(spec: ProviderSpec): TestConnection | undefi
 
     case 'sdk:kimi-code':
       // kimi-code: on a 401 with a clock-fresh token, force a refresh + retry
-      // once. Verbatim from definitions/kimi-code.ts.
+      // once.
       return async ({ creds, config }) => {
         const headers = creds.extraHeaders;
         const baseURL = creds.baseURL ?? config.base_url;

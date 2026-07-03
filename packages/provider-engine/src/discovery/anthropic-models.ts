@@ -1,11 +1,6 @@
 /**
  * Live model discovery for the `anthropic-models` format.
  *
- * Lifted verbatim from the hand-written admin helper
- * `apps/http-api/admin/model-discovery/anthropic.ts` (`discoverAnthropic`).
- * The behaviour is identical — the equivalence test asserts deep equality of
- * the returned `UpsertModelInput[]`.
- *
  * The Anthropic format takes no parameters from `spec.discovery` (the URL is
  * fixed at `/v1/models` and the base URL is derived from the provider row), so
  * `spec` is unused beyond the signature.

@@ -28,6 +28,7 @@ const ref = (namespace: string, specs: unknown[], over: Partial<ProviderPluginRe
   specs,
   signature: null,
   source: 'local',
+  runtime: null,
   ...over,
 });
 
@@ -140,6 +141,30 @@ describe('loadPluginProviders (declarative DATA → buildDefinition → register
     });
     expect(register).toHaveBeenCalledTimes(1);
     expect(res.loaded).toEqual([{ namespace: 'provider-anthropic', kinds: ['anthropic'] }]);
+  });
+
+  it('firstParty ref with providerRuntime registers a plugin-owned adapter definition', () => {
+    const register = vi.fn();
+    const buildDefinition = vi.fn(fakeDef);
+    const res = loadPluginProviders({
+      register,
+      buildDefinition,
+      firstParty: (r) => r.source === 'bundled',
+      refs: [
+        ref('provider-acme', [validSpec('acme')], {
+          source: 'bundled',
+          runtime: {
+            namespace: 'provider-acme',
+            file: '/tmp/provider-acme/dist/plugin.js',
+            kinds: ['acme'],
+          },
+        }),
+      ],
+    });
+    expect(buildDefinition).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(1);
+    expect((register.mock.calls[0][0] as ProviderDefinition).resolveCredentials).toEqual(expect.any(Function));
+    expect(res.loaded).toEqual([{ namespace: 'provider-acme', kinds: ['acme'] }]);
   });
 
   it('a NON-firstParty ref with host-only auth.hooks is still rejected (third-party gate)', () => {

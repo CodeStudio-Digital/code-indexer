@@ -495,6 +495,32 @@ export function setCompactionBoundary(
   return tx();
 }
 
+/**
+ * Text of the FIRST user message of a session — the original request. Used
+ * as review-context intent (session-intent.ts). Deliberately ignores the
+ * summary boundary: rows persist after "summarize & clear", and the original
+ * intent is exactly the kind of thing the boundary hides.
+ */
+export function getFirstUserText(db: DB, sessionId: number): string | null {
+  const row = db
+    .prepare(
+      "SELECT content_json FROM coder_messages WHERE session_id = ? AND role = 'user' ORDER BY id ASC LIMIT 1",
+    )
+    .get(sessionId) as { content_json: string } | undefined;
+  if (!row) return null;
+  try {
+    const blocks = JSON.parse(row.content_json) as Array<{ type: string; text?: string }>;
+    const text = blocks
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text ?? '')
+      .join('\n')
+      .trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Load a single message by id (targeted query, no full-session load). */
 export function getById(
   db: DB, sessionId: number, messageId: number,

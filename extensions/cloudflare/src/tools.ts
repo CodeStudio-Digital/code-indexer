@@ -19,6 +19,18 @@ interface Account {
   name: string;
 }
 
+const CLOUDFLARE_PROJECT = {
+  whenFiles: [
+    'wrangler.toml',
+    'wrangler.jsonc',
+    'wrangler.json',
+    'open-next.config.ts',
+    'open-next.config.js',
+    'open-next.config.mjs',
+  ],
+  whenPackageDep: ['wrangler', '@cloudflare/workers-types', '@opennextjs/cloudflare'],
+};
+
 export const tools = [
   contributeTool({
     name: 'cf_detect',
@@ -28,6 +40,7 @@ export const tools = [
       '(cf_deploy/cf_build/cf_preview). Account-level tools (D1/KV/R2/DNS/...) work regardless.',
     riskLevel: 'read',
     mutates: false,
+    activation: CLOUDFLARE_PROJECT,
     parameters: { type: 'object', properties: {} },
     handler: async (_a, ctx: PluginToolContext) => {
       const d = await detectCloudflare(ctx);
@@ -124,6 +137,7 @@ export const tools = [
       'For live build output prefer the panel (streamed); this one-shot returns at the end.',
     riskLevel: 'execute',
     mutates: true,
+    activation: CLOUDFLARE_PROJECT,
     parameters: { type: 'object', properties: {} },
     handler: async (_a, ctx: PluginToolContext) => {
       const d = await detectCloudflare(ctx);
@@ -148,6 +162,7 @@ export const tools = [
     description: 'Build the project for Cloudflare (OpenNext: opennextjs-cloudflare build).',
     riskLevel: 'execute',
     mutates: false,
+    activation: CLOUDFLARE_PROJECT,
     parameters: { type: 'object', properties: {} },
     handler: async (_a, ctx: PluginToolContext) => {
       const d = await detectCloudflare(ctx);
@@ -165,6 +180,7 @@ export const tools = [
     description: 'Build + run a local Cloudflare preview (OpenNext: opennextjs-cloudflare preview).',
     riskLevel: 'execute',
     mutates: false,
+    activation: CLOUDFLARE_PROJECT,
     parameters: { type: 'object', properties: {} },
     handler: async (_a, ctx: PluginToolContext) => {
       const d = await detectCloudflare(ctx);

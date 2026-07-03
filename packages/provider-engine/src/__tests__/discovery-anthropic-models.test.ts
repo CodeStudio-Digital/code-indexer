@@ -1,12 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 
-import { discoverAnthropic } from '@apps/http-api/admin/model-discovery/anthropic.js';
 import { discoverAnthropicModels } from '../discovery/anthropic-models.js';
 import { anthropicSpec } from '../specs/anthropic.js';
 
-// The admin helper only reads `api_key` and `base_url` off the config, so a
-// minimal partial is enough; cast to the full row type for the shared call.
+// The discovery helper only reads `api_key` and `base_url` off the config, so a
+// minimal partial is enough; cast to the full row type for the call.
 const CFG = { api_key: 'k', base_url: null } as unknown as ProviderConfig;
 
 // Representative `/v1/models` payload: id + optional display_name. `claude-x`
@@ -31,16 +30,11 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe('anthropic-models discovery equivalence: engine(spec, cfg) == admin discoverAnthropic(cfg)', () => {
-  it('returns identical UpsertModelInput[]', async () => {
-    mockFetchOk(API_RESPONSE);
-    const a = await discoverAnthropic(CFG);
-
+describe('anthropic-models discovery', () => {
+  it('maps Anthropic /v1/models into UpsertModelInput[]', async () => {
     mockFetchOk(API_RESPONSE);
     const b = await discoverAnthropicModels(anthropicSpec, CFG);
 
-    expect(b).toEqual(a);
-    // Pin the lifted shape so a future drift in either builder is caught.
     expect(b).toEqual([
       {
         model_id: 'claude-x',

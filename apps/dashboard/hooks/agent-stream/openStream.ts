@@ -3,7 +3,7 @@ import type { StreamBlock, UpdateSession, WorkerLogEntry } from './types.js';
 import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import { apiBaseUrl } from '../../lib/api-client.js';
-import { pushWorkerLog } from './worker-log-store.js';
+import { noteWorkerLogBus, pushWorkerLog } from './worker-log-store.js';
 import { notifyCoderStreamEvent, type NotificationSourceContext } from '../../features/notifications/index.js';
 
 /**
@@ -195,6 +195,23 @@ export async function openStream(
     signal: ctrl.signal,
     getLastEventId: () => lastSeenSeq,
     onEvent: (ev) => {
+      // Transport-level preamble sent once per (re)connection, before any
+      // replay: identifies the bus instance so the worker-log store can
+      // dedup by (busId, seq). Never logged and never fed to handlers.
+      if (ev.event === 'bus_info') {
+        try {
+          const info = JSON.parse(ev.data || '{}') as { bus_id?: string };
+          if (info.bus_id && noteWorkerLogBus(sid, info.bus_id)) {
+            // Bus changed under the same stream (a reconnect crossed a run
+            // boundary): seq restarted at 0 on the new bus, so zero the
+            // cursor — the next reconnect must replay the new bus from the
+            // start instead of skipping past a stale high Last-Event-ID.
+            lastSeenSeq = -1;
+            lastSeenSeqMap.delete(sid);
+          }
+        } catch { /* malformed preamble — ignore */ }
+        return;
+      }
       // Persist the highest id for reattach in a ref (no re-render). This
       // fires on every event; writing it to React state was a hidden 50+/s
       // churn source even though nothing renders the value.
@@ -218,7 +235,7 @@ export async function openStream(
       // through a coalesced store so the firehose doesn't re-render the
       // chat (only the Worker Log panel, when open, subscribes).
       const entry = buildLogEntry(ev.event, data);
-      pushWorkerLog(sid, entry);
+      pushWorkerLog(sid, entry, ev.id);
       // Stall detector (StuckBanner) only needs ~1s granularity — throttle
       // the lastEventAt commit so it isn't a per-event re-render of AgentChat.
       if (entry.ts - lastEventAtCommit >= 1000) {

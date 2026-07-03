@@ -7,6 +7,7 @@ import type {
 } from '@mcp/code-agent/sessions/types.js';
 import { mapSessionRow, type SessionRow } from './mappers.js';
 import * as sessionProjects from './session-projects.js';
+import { recordSessionEvent } from './events-recorder.js';
 
 export interface CreateSessionInput {
   project_id: number;
@@ -56,7 +57,15 @@ export function create(db: DB, input: CreateSessionInput): CoderSession {
     input.phase_profile_id ?? null,
     input.is_global ? 1 : 0,
   );
-  return get(db, Number(r.lastInsertRowid))!;
+  const id = Number(r.lastInsertRowid);
+  recordSessionEvent(db, {
+    session_id: id,
+    kind: 'session_created',
+    to_state: `${input.provider}/${input.model}`,
+    reason: input.agent ?? null,
+    actor: 'system',
+  });
+  return get(db, id)!;
 }
 
 /**

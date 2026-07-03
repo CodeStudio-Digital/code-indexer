@@ -65,6 +65,8 @@ import { markRouteEvent, setRouteTab } from '../../lib/perf/route-startup-metric
 import { installKeymapDispatcher } from '../../keymap/dispatcher.js';
 import { registerProjectCommands } from './project-commands.js';
 import { registerEditorCommands } from '../workspace/editor/editor-commands.js';
+import { registerCommands } from '../../keymap/commands.js';
+import { apiCall } from '../../lib/api-client.js';
 import { startRecentFilesTracking } from '../../state/recent-files.js';
 import { SearchEverywhere } from '../search-everywhere/SearchEverywhere.js';
 import { FileStructurePopup } from '../search-everywhere/FileStructurePopup.js';
@@ -95,6 +97,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   const { t } = useTranslation('workspace');
   const layout = useWorkspaceLayout();
   const contribWindows = useContributions((s) => s.toolWindows);
+  const contribEditorActions = useContributions((s) => s.editorActions);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const setProject = useWorkspaceStore((s) => s.setProject);
@@ -325,6 +328,28 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   useEffect(() => {
     void hydrateContributions(projectId);
   }, [projectId]);
+
+  useEffect(() => {
+    if (!contribEditorActions.length) return undefined;
+    return registerCommands(
+      contribEditorActions.map((action) => ({
+        id: `plugin.${action.pluginNs}.${action.id}`,
+        title: action.label,
+        category: action.category ?? `Plugin: ${action.pluginNs}`,
+        defaultKeys: action.shortcut ? { intellij: action.shortcut, vscode: action.shortcut } : undefined,
+        allowInInputs: true,
+        run: async () => {
+          if (!action.runsTool) return;
+          await apiCall('plugins.invokeTool', {
+            namespace: action.pluginNs,
+            tool: action.runsTool,
+            args: {},
+            projectId,
+          });
+        },
+      })),
+    );
+  }, [contribEditorActions, projectId]);
   // Honor the author's declared `side`: the Project view has a single
   // vertical rail, so `left` and `right` windows both surface here. `bottom`
   // windows are reserved for the bottom panel and are filtered out (until

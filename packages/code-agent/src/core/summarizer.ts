@@ -419,8 +419,15 @@ function parseV2(json: string): CompactionSummaryV2 | null {
  *   problem_solving   → <problem_solving>
  *   all_user_messages → <user_messages>
  */
+/**
+ * Prefix prepended to every rendered compaction summary so the model reliably
+ * recognizes injected summary content (mirrors Codex's `SUMMARY_PREFIX`). Single
+ * source of truth reused by both renderers.
+ */
+export const SUMMARY_PREFIX = '[auto-compacted summary of older turns]';
+
 export function renderSummaryV2(s: CompactionSummaryV2): string {
-  const lines: string[] = ['[auto-compacted summary of older turns]', ''];
+  const lines: string[] = [SUMMARY_PREFIX, ''];
 
   const block = (tag: string, body: string): void => {
     if (!body || !body.trim()) return;
@@ -478,7 +485,7 @@ export function renderSummaryV2(s: CompactionSummaryV2): string {
 
 /** Render a summary as a single human-readable markdown block for injection into history. */
 export function renderSummary(s: CompactionSummary): string {
-  const lines: string[] = ['[auto-compacted summary of older turns]', ''];
+  const lines: string[] = [SUMMARY_PREFIX, ''];
   if (s.what_done) lines.push(`**Done:** ${s.what_done}`);
   if (s.current_work) lines.push(`**In progress:** ${s.current_work}`);
   if (s.files_touched.length) lines.push(`**Files:** ${s.files_touched.join(', ')}`);

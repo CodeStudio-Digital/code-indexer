@@ -37,6 +37,23 @@ export interface ApiContext {
    * the call or the window closes.
    */
   signal: AbortSignal;
+  /**
+   * Request provenance — which surface (Electron / HTTP / CLI / internal)
+   * issued the call, plus optional client identity. Populated by each
+   * transport adapter; used for log correlation, telemetry, and compliance.
+   * Mirrors Codex's `clientInfo` on the app-server initialize.
+   */
+  clientInfo?: ClientInfo;
+}
+
+/** Request-source provenance attached to every {@link ApiContext}. */
+export interface ClientInfo {
+  /** Which surface issued the request. */
+  sourceType: 'electron' | 'http' | 'cli' | 'internal';
+  /** Optional client name/version (e.g. the HTTP User-Agent). */
+  userAgent?: string;
+  /** Optional origin (HTTP `Origin` header, or an IPC channel label). */
+  origin?: string;
 }
 
 export interface AuthenticatedUser {

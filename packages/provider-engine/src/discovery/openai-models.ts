@@ -1,19 +1,13 @@
 /**
  * openai-models live discovery (declarative).
  *
- * Lifts the hand-written admin `discoverOpenai` / `discoverMoonshot` (same
- * OpenAI-compatible `{base_url}/models` family) into a spec-driven builder. The
- * output is byte-for-byte identical to those functions:
+ * Spec-driven discovery for the OpenAI-compatible `{base_url}/models` family:
  *
  *  - base URL: `spec.discovery.modelsUrl` override, else `{base_url ?? defaultBaseURL
  *    ?? api.openai.com}/models` (trailing slash trimmed).
  *  - `filterPrefixes` reproduces Moonshot's `kimi-`/`moonshot-` allow-list.
  *  - `supportsModes` + `cfg.extra.zai_has_coding_mode` reproduces ZAI's
  *    normal/coding duplication.
- *
- * The equivalence tests (discovery-openai-models.test.ts) assert deepEqual
- * against the admin functions for the OpenAI/Moonshot cases; the ZAI case is the
- * new capability (no admin discoverX exists for kind 'zai').
  */
 import type { ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { getRegistryContextWindow } from '@mcp/code-agent/providers/capabilities.js';

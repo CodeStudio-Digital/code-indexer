@@ -17,6 +17,11 @@ import {
 } from '@mcp/services/services/oauth/copilot.js';
 import { parseCopilotOpts } from './shared/copilot-opts.js';
 import { discoverModels } from './model-discovery/index.js';
+import {
+  providerAuthContext,
+  providerAuthHandlers,
+  syntheticProviderConfig,
+} from './provider-auth-runtime.js';
 
 export function copilotOAuthRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -29,7 +34,12 @@ export function copilotOAuthRouter(store: ProviderStore): Hono {
     try {
       const body = await c.req.json<unknown>().catch(() => ({}));
       const opts = parseCopilotOpts(body);
-      const flow = await startDeviceFlow(opts);
+      const handlers = providerAuthHandlers('copilot');
+      const providerId = opts.edition === 'enterprise' ? 'copilot-enterprise' : 'copilot';
+      const cfg = syntheticProviderConfig({ id: providerId, kind: 'copilot', extra: { copilot_opts: opts } });
+      const flow = handlers?.start
+        ? await handlers.start(providerAuthContext(store, cfg), opts)
+        : await startDeviceFlow(opts);
       // Echo the resolved opts back so the UI can attach them to the poll
       // request verbatim without tracking state across the two calls.
       return c.json({ ...flow, opts });
@@ -63,13 +73,36 @@ export function copilotOAuthRouter(store: ProviderStore): Hono {
       body.provider_id ?? (opts.edition === 'enterprise' ? 'copilot-enterprise' : 'copilot');
 
     try {
-      const result = await pollDeviceFlow(body.device_code, opts);
+      const handlers = providerAuthHandlers('copilot');
+      const cfg = store.getProvider(providerId) ?? syntheticProviderConfig({
+        id: providerId,
+        kind: 'copilot',
+        extra: { copilot_opts: opts },
+      });
+      const result = handlers?.poll
+        ? await handlers.poll(providerAuthContext(store, cfg), { ...body, opts })
+        : await pollDeviceFlow(body.device_code, opts);
       if (result.status !== 'authorized') {
-        return c.json(result);
+        return c.json(normalizePollResult(result));
       }
 
-      // User approved. Exchange the GitHub PAT for a Copilot API token.
-      const copilot = await exchangeForCopilotToken(result.access_token, opts);
+      const pluginAccessToken = readString(result, 'access_token');
+      const pluginExpiresAt = readNumber(result, 'expires_at');
+      const pluginRefreshToken = readString(result, 'refresh_token');
+      const pluginExtra = readRecord(result, 'extra');
+      const pluginEndpoints = readRecord(result, 'endpoints') as Record<string, string> | undefined;
+      const copilot = pluginAccessToken && pluginExpiresAt
+        ? {
+            token: pluginAccessToken,
+            expires_at: pluginExpiresAt,
+            endpoints: pluginEndpoints,
+            extra: pluginExtra ?? {},
+          }
+        : await exchangeForCopilotToken(readString(result, 'access_token') ?? '', opts);
+      const githubPat = pluginRefreshToken ?? readString(result, 'access_token') ?? '';
+      if (!copilot.token || !githubPat) {
+        return c.json({ status: 'error', error: 'Copilot auth did not return usable credentials' }, 502);
+      }
 
       // Prefer the API endpoint the token exchange published; fall back to
       // the public default for individual or construct from ghes_host for
@@ -113,9 +146,9 @@ export function copilotOAuthRouter(store: ProviderStore): Hono {
       store.setOAuth({
         provider_id: providerId,
         access_token: copilot.token,
-        refresh_token: result.access_token, // GitHub PAT used for re-exchange.
+        refresh_token: githubPat, // GitHub PAT used for re-exchange.
         expires_at: copilot.expires_at,
-        scope: result.scope,
+        scope: readString(result, 'scope') ?? null,
         extra: { ...copilot.extra, copilot_opts: opts },
       });
 
@@ -146,4 +179,28 @@ export function copilotOAuthRouter(store: ProviderStore): Hono {
   });
 
   return app;
+}
+
+function normalizePollResult(result: { status: string; message?: string; error?: string }) {
+  return result.message && !result.error ? { ...result, error: result.message } : result;
+}
+
+function readString(source: unknown, key: string): string | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function readNumber(source: unknown, key: string): number | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readRecord(source: unknown, key: string): Record<string, unknown> | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }

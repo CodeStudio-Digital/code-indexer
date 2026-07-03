@@ -5,13 +5,15 @@
  * Handlers never construct context themselves — they receive it.
  */
 
-import type { ApiContext, AuthenticatedUser } from '@mcp/api-bus';
+import type { ApiContext, AuthenticatedUser, ClientInfo } from '@mcp/api-bus';
 import { randomUUID } from 'node:crypto';
 
 export interface CreateContextInput {
   user?: AuthenticatedUser;
   requestId?: string;
   signal?: AbortSignal;
+  /** Request provenance — which surface issued the call. */
+  clientInfo?: ClientInfo;
 }
 
 export function createContext(input: CreateContextInput = {}): ApiContext {
@@ -19,6 +21,7 @@ export function createContext(input: CreateContextInput = {}): ApiContext {
     user: input.user,
     requestId: input.requestId ?? randomUUID(),
     signal: input.signal ?? new AbortController().signal,
+    clientInfo: input.clientInfo,
   };
 }
 
@@ -34,5 +37,6 @@ export function createInternalContext(): ApiContext {
       email: 'internal@local',
       tier: 'pro',
     },
+    clientInfo: { sourceType: 'internal' },
   });
 }

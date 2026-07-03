@@ -1,10 +1,5 @@
 /**
- * sdk:copilot live model discovery (declarative).
- *
- * Lifted verbatim from the hand-written admin helper
- * `apps/http-api/admin/model-discovery/copilot.ts` (`discoverCopilot`). The
- * behaviour is identical — the equivalence test asserts deep equality of the
- * returned `UpsertModelInput[]` and that both throw on the same failure paths.
+ * sdk:copilot live model discovery.
  *
  * GitHub Copilot discovery:
  *  1. Refresh the short-lived Copilot token (~25min TTL). The api_key mirror on

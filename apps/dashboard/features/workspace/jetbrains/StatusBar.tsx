@@ -22,6 +22,7 @@ import { useGitRevision } from '../../../state/git-revision.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { apiCall } from '../../../lib/api-client.js';
+import { useContributions, type ContribStatusBarItem } from '../../../state/contribution-registry.js';
 import { startRouteSpan } from '../../../lib/perf/route-startup-metrics.js';
 import { cn } from '../../../lib/utils.js';
 import { ProjectSwitcher } from '../../../components/ProjectSwitcher.js';
@@ -105,6 +106,24 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
   const [commitStagedCount, setCommitStagedCount] = useState(0);
+  const statusItems = useContributions((s) => s.statusBarItems);
+
+  const runStatusItem = async (item: ContribStatusBarItem): Promise<void> => {
+    if (!item.runsTool) return;
+    await apiCall('plugins.invokeTool', {
+      namespace: item.pluginNs,
+      tool: item.runsTool,
+      args: {},
+      projectId,
+    }).catch(() => undefined);
+  };
+
+  const leftStatusItems = statusItems
+    .filter((item) => (item.alignment ?? 'left') === 'left')
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  const rightStatusItems = statusItems
+    .filter((item) => item.alignment === 'right')
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
   // Reduce `files` once — gitDirty drives the amber dot, stagedCount
   // gates the Commit dialog's button. The handler returns one entry
@@ -145,6 +164,17 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
         <Circle className="h-1.5 w-1.5 fill-green-500 text-green-500" />
         <span className="truncate max-w-[160px]">{projectName}</span>
       </ProjectSwitcher>
+      {leftStatusItems.map((item) => (
+        <button
+          key={`${item.pluginNs}:${item.id}`}
+          type="button"
+          title={item.tooltip ?? item.label}
+          onClick={() => void runStatusItem(item)}
+          className="inline-flex items-center gap-1 rounded px-1 -mx-1 transition-colors hover:bg-muted/40 hover:text-foreground"
+        >
+          <span className="text-muted-foreground">{item.label}</span>
+        </button>
+      ))}
       {git === null ? (
         // Reserve the branch-chip slot while status loads (~1.2s) so its
         // arrival doesn't shove the file path + right-aligned chips rightward
@@ -233,6 +263,17 @@ function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
         )}
       </span>
       <span className="ml-auto inline-flex items-center gap-3">
+        {rightStatusItems.map((item) => (
+          <button
+            key={`${item.pluginNs}:${item.id}`}
+            type="button"
+            title={item.tooltip ?? item.label}
+            onClick={() => void runStatusItem(item)}
+            className="inline-flex items-center gap-1 rounded px-1 -mx-1 transition-colors hover:bg-muted/40 hover:text-foreground"
+          >
+            <span>{item.label}</span>
+          </button>
+        ))}
         <IndexStatusSection projectId={projectId} />
         {/* Language-intelligence tier for the active file: built-in TS
             service / installed LSP server (green), structural-index

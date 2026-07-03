@@ -33,7 +33,8 @@ vi.mock('@mcp/services/providers/shared/oauth.js', async () => {
 
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
-import { discoverChatgpt } from '@apps/http-api/admin/model-discovery/chatgpt.js';
+import { discoverChatgptModels } from '@mcp/provider-engine/discovery/chatgpt-models.js';
+import { chatgptSpec } from '@mcp/provider-engine/specs/chatgpt.js';
 import { CHATGPT_SEED_MODELS } from '@mcp/services/services/oauth/openai.js';
 
 const PROVIDER_ID = 'chatgpt';
@@ -118,7 +119,7 @@ describe('ChatGPT model discovery', () => {
     );
 
     const cfg = store.getProvider(PROVIDER_ID)!;
-    const result = await discoverChatgpt(cfg, null);
+    const result = await discoverChatgptModels(chatgptSpec, cfg, null);
 
     expect(result.notModified).toBe(false);
     expect(result.etag).toBe('W/"abc"');
@@ -156,7 +157,7 @@ describe('ChatGPT model discovery', () => {
         body: { models: [{ ...sampleModel, slug: 'internal-x', visibility: 'hidden' }] },
       }),
     );
-    const result = await discoverChatgpt(store.getProvider(PROVIDER_ID)!, null);
+    const result = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, null);
     store.replaceModelsFromSource(PROVIDER_ID, 'live', result.models);
     const row = store.listModels(PROVIDER_ID)[0];
     expect(row.enabled).toBe(false);
@@ -170,7 +171,7 @@ describe('ChatGPT model discovery', () => {
         body: { models: [{ ...sampleModel, slug: 'cli-only', supported_in_api: false }] },
       }),
     );
-    const result = await discoverChatgpt(store.getProvider(PROVIDER_ID)!, null);
+    const result = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, null);
     store.replaceModelsFromSource(PROVIDER_ID, 'live', result.models);
     const row = store.listModels(PROVIDER_ID)[0];
     expect(row.enabled).toBe(false);
@@ -179,7 +180,7 @@ describe('ChatGPT model discovery', () => {
 
   it('304 Not Modified → result.notModified, no rewrite', async () => {
     fetchSpy.mockResolvedValueOnce(mockResponse({ status: 304 }));
-    const result = await discoverChatgpt(store.getProvider(PROVIDER_ID)!, 'W/"abc"');
+    const result = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, 'W/"abc"');
     expect(result.notModified).toBe(true);
     expect(result.models).toEqual([]);
     expect(result.etag).toBe('W/"abc"');
@@ -193,7 +194,7 @@ describe('ChatGPT model discovery', () => {
 
   it('network failure → falls back to seed list', async () => {
     fetchSpy.mockRejectedValueOnce(new Error('ECONNRESET'));
-    const result = await discoverChatgpt(store.getProvider(PROVIDER_ID)!, null);
+    const result = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, null);
     expect(result.notModified).toBe(false);
     expect(result.etag).toBeNull();
     expect(result.models).toHaveLength(CHATGPT_SEED_MODELS.length);
@@ -202,7 +203,7 @@ describe('ChatGPT model discovery', () => {
 
   it('500 from upstream → falls back to seed list', async () => {
     fetchSpy.mockResolvedValueOnce(mockResponse({ status: 502, body: 'bad gateway' }));
-    const result = await discoverChatgpt(store.getProvider(PROVIDER_ID)!, null);
+    const result = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, null);
     expect(result.models).toHaveLength(CHATGPT_SEED_MODELS.length);
   });
 
@@ -211,7 +212,7 @@ describe('ChatGPT model discovery', () => {
     fetchSpy.mockResolvedValueOnce(
       mockResponse({ status: 200, body: { models: [sampleModel] }, etag: 'v1' }),
     );
-    const r1 = await discoverChatgpt(store.getProvider(PROVIDER_ID)!, null);
+    const r1 = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, null);
     store.replaceModelsFromSource(PROVIDER_ID, 'live', r1.models);
     expect(store.listModels(PROVIDER_ID)[0].enabled).toBe(true);
 
@@ -223,7 +224,7 @@ describe('ChatGPT model discovery', () => {
     fetchSpy.mockResolvedValueOnce(
       mockResponse({ status: 200, body: { models: [sampleModel] }, etag: 'v2' }),
     );
-    const r2 = await discoverChatgpt(store.getProvider(PROVIDER_ID)!, 'v1');
+    const r2 = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, 'v1');
     store.replaceModelsFromSource(PROVIDER_ID, 'live', r2.models);
     expect(store.listModels(PROVIDER_ID)[0].enabled).toBe(false);
   });
@@ -232,7 +233,7 @@ describe('ChatGPT model discovery', () => {
     fetchSpy.mockResolvedValueOnce(
       mockResponse({ status: 200, body: { models: [] } }),
     );
-    await discoverChatgpt(store.getProvider(PROVIDER_ID)!, null);
+    await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, null);
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toMatch(/\/models\?client_version=/);
     const headers = init.headers as Record<string, string>;

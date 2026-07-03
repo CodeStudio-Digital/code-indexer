@@ -83,8 +83,12 @@ vi.mock('@mcp/code-agent/providers/chatgpt.js', async () => {
 import type { ProviderConfig, ProviderStore } from '@mcp/store/provider-store.js';
 import type { ResolvedCreds } from '@mcp/services/providers/types.js';
 import { parseModelWithMode } from '@mcp/services/providers/shared/model-mode.js';
-import { zai } from '@mcp/services/providers/definitions/zai.js';
-import { googleOAuth } from '@mcp/services/providers/definitions/google-oauth.js';
+import { buildProviderDefinition } from '@mcp/provider-engine/build-definition.js';
+import { zaiSpec } from '@mcp/provider-engine/specs/openai-compat.js';
+import { googleOAuthSpec } from '@mcp/provider-engine/specs/google-oauth.js';
+
+const zai = buildProviderDefinition(zaiSpec);
+const googleOAuth = buildProviderDefinition(googleOAuthSpec);
 
 beforeEach(() => {
   openAICalls.length = 0;

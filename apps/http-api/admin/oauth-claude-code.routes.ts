@@ -16,7 +16,7 @@ import {
   CLAUDE_CODE_CONFIGURED_REDIRECT_PORT,
   fetchClaudeCodeUsageSnapshot,
 } from '@mcp/services/services/oauth/claude-code.js';
-import { CLAUDE_CODE_SEED_MODELS } from '@mcp/services/providers/definitions/claude-code.js';
+import { CLAUDE_CODE_SEED_MODELS } from '@mcp/provider-engine/specs/claude-code.js';
 import { discoverModels } from './model-discovery/index.js';
 
 interface StartClaudeCodeBody {

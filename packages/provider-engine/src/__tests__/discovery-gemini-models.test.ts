@@ -1,15 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 
-import { discoverGemini } from '@apps/http-api/admin/model-discovery/gemini.js';
 import { discoverGeminiModels } from '../discovery/gemini-models.js';
 import { geminiSpec } from '../specs/gemini.js';
 
 /**
- * Equivalence guard for the `gemini-models` discovery lift: the declarative
- * `discoverGeminiModels(spec, cfg)` must return EXACTLY what the hand-written
- * admin `discoverGemini(cfg)` returns for the same upstream payload.
- *
  * The representative response covers the three branches the mapper cares about:
  *  - a model WITH `generateContent` and full token limits (kept, mapped),
  *  - a model with `supportedGenerationMethods` present but lacking
@@ -66,21 +61,16 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe('discoverGeminiModels equivalence: engine(spec, cfg) == admin discoverGemini(cfg)', () => {
-  it('returns an identical UpsertModelInput[] for a representative response', async () => {
+describe('discoverGeminiModels', () => {
+  it('maps a representative Gemini response', async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify(MODELS_RESPONSE), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })) as typeof globalThis.fetch;
 
-    const a = await discoverGemini(CFG);
     const b = await discoverGeminiModels(geminiSpec, CFG);
 
-    expect(b).toEqual(a);
-
-    // Sanity on the lifted shape: the embedding model is filtered, the other
-    // two survive (one mapped fully, one through the null/displayName fallbacks).
     expect(b).toEqual([
       {
         model_id: 'gemini-2.5-pro',
@@ -99,12 +89,9 @@ describe('discoverGeminiModels equivalence: engine(spec, cfg) == admin discoverG
     ]);
   });
 
-  it('both throw on a non-ok response', async () => {
+  it('throws on a non-ok response', async () => {
     globalThis.fetch = (async () => new Response('nope', { status: 403 })) as typeof globalThis.fetch;
 
-    await expect(discoverGemini(CFG)).rejects.toThrow('HTTP 403');
-
-    globalThis.fetch = (async () => new Response('nope', { status: 403 })) as typeof globalThis.fetch;
     await expect(discoverGeminiModels(geminiSpec, CFG)).rejects.toThrow('HTTP 403');
   });
 });

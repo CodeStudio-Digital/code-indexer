@@ -1,17 +1,14 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
 
 /**
- * Declarative spec for the Kimi Code (OAuth) built-in. Metadata mirrors the
- * hand-written `services/.../definitions/kimi-code.ts` exactly (the equivalence
- * test asserts it); the inline `readKimiCodeThinkingMode` logic becomes the
- * `wireOpts.thinkingMode` data the engine interprets.
+ * Declarative spec for the Kimi Code (OAuth) built-in. The inline
+ * `readKimiCodeThinkingMode` logic is represented as `wireOpts.thinkingMode`
+ * data the engine interprets.
  *
  * `KIMI_CODE_BASE_URL` (`'https://api.kimi.com/coding/v1'`) and the seed model
  * ids are inlined here rather than imported from `@mcp/services` — the spec
  * lives in `@mcp/provider-engine`, which `@mcp/services` depends on, so a
- * runtime import would close a dependency cycle. The equivalence test pins both
- * values to the definition (which DOES import the constants), so any drift in
- * the upstream source fails the build.
+ * runtime import would close a dependency cycle.
  */
 
 // = KIMI_CODE_BASE_URL from @mcp/services/services/oauth/kimi-code.ts

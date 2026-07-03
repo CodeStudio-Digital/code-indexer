@@ -1,11 +1,3 @@
-/**
- * Equivalence: the engine's spec-driven `discoverCloudflareModels(spec, cfg)`
- * returns the SAME UpsertModelInput[] as the hand-written admin
- * `discoverCloudflare(cfg)`. We mock globalThis.fetch with a representative
- * Cloudflare catalog response (copied from src/__tests__/cloudflare-provider.test.ts:
- * a chat model, an embedding model, an image model and a non-@cf/ row) and
- * deepEqual the two outputs.
- */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 import { discoverCloudflareModels } from '../discovery/cloudflare-models.js';
@@ -54,19 +46,18 @@ afterEach(() => {
   globalThis.fetch = origFetch;
 });
 
-describe('cloudflare-models discovery equivalence: engine(spec) == admin discoverX', () => {
-  it('returns an identical UpsertModelInput[]', async () => {
-    // Admin discoverX
-    globalThis.fetch = mockFetch();
-    const { discoverCloudflare } = await import(
-      '@apps/http-api/admin/model-discovery/cloudflare.js'
-    );
-    const a = await discoverCloudflare(cfg);
-
-    // Engine spec-driven
+describe('cloudflare-models discovery', () => {
+  it('keeps text-generation/text-embedding @cf models and drops images/non-@cf rows', async () => {
     globalThis.fetch = mockFetch();
     const b = await discoverCloudflareModels(cloudflareSpec, cfg);
 
-    expect(b).toEqual(a);
+    expect(b.map((m) => m.model_id)).toEqual([
+      '@cf/meta/llama-3.1-8b-instruct-fp8',
+      '@cf/baai/bge-m3',
+    ]);
+    expect(b[0]).toMatchObject({
+      name: '@cf/meta/llama-3.1-8b-instruct-fp8',
+      source: 'live',
+    });
   });
 });

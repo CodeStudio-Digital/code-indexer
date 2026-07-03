@@ -163,6 +163,11 @@ export interface RunFreshOpts {
   /** Skill IDs the user pre-selected in the sidebar; forwarded to runCoder. */
   selectedSkillIds?: string[];
   /**
+   * Structured IDE context (active file / selections / open tabs) — POJO,
+   * survives structuredClone across the MessagePort. Forwarded to runCoder.
+   */
+  ideContext?: import('@mcp/code-agent/core/ide-context.js').IdeContext;
+  /**
    * Task-preflight seed (fresh sessions) — POJO, survives structuredClone
    * across the MessagePort. Forwarded verbatim to `runCoder({ preflight })`.
    */

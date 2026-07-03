@@ -53,9 +53,9 @@ const ICON_BY_NAME: Record<string, LucideIcon> = {
 };
 
 /**
- * Static per-kind fallback, mirroring each definition's `visual`. Used when a
- * provider row carries no `visual` (older backend / a path that didn't enrich
- * it). Kept in sync with packages/services/src/providers/definitions/*.ts.
+ * Static per-kind fallback, mirroring each provider spec's `visual`. Used when
+ * a provider row carries no `visual` (older backend / a path that didn't enrich
+ * it).
  */
 const FALLBACK_BY_KIND: Record<string, ProviderVisualData> = {
   anthropic: { icon: 'Sparkles', fg: 'text-orange-500', bg: 'bg-orange-500/15' },

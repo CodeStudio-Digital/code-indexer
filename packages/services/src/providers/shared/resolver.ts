@@ -1,4 +1,4 @@
-import type { ProviderDefinition, ResolvedCreds } from '../types.js';
+import type { ProviderDefinition, ProviderCredentials, ResolvedCreds, StoredOAuth } from '../types.js';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 import {
   resolveCopilotCreds,
@@ -9,6 +9,50 @@ import {
   runOAuthRefresh,
 } from './oauth.js';
 import { resolveBedrockCreds } from './aws.js';
+import { getStore } from './store.js';
+
+function toStoredOAuth(row: ReturnType<NonNullable<ReturnType<typeof getStore>>['getOAuth']>): StoredOAuth | null {
+  if (!row) return null;
+  return {
+    access_token: row.access_token,
+    refresh_token: row.refresh_token,
+    expires_at: row.expires_at,
+    scope: row.scope,
+    extra: row.extra ?? {},
+  };
+}
+
+function providerCredentials(cfg: ProviderConfig): ProviderCredentials {
+  return {
+    async get() {
+      const store = getStore();
+      return toStoredOAuth(store?.getOAuth(cfg.id) ?? null);
+    },
+    async set(tokens) {
+      const store = getStore();
+      if (!store) throw new Error('Provider credential store is not available');
+      store.setOAuth({
+        provider_id: cfg.id,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: tokens.expires_at,
+        scope: tokens.scope,
+        extra: tokens.extra,
+      });
+    },
+    async mirrorApiKey(token) {
+      const store = getStore();
+      if (!store) throw new Error('Provider credential store is not available');
+      const latest = store.getProvider(cfg.id) ?? cfg;
+      store.upsertProvider({ ...latest, api_key: token });
+    },
+    async clear() {
+      const store = getStore();
+      if (!store) throw new Error('Provider credential store is not available');
+      store.deleteOAuth(cfg.id);
+    },
+  };
+}
 
 /**
  * Whether to route this kind through the data-driven generic OAuth path
@@ -41,6 +85,20 @@ export async function resolveCreds(
   def: ProviderDefinition,
   cfg: ProviderConfig | null,
 ): Promise<ResolvedCreds> {
+  if (def.resolveCredentials) {
+    if (!cfg) {
+      throw new Error(
+        `Provider '${def.kind}' requires a ProviderStore row for plugin-owned credential resolution.`,
+      );
+    }
+    return def.resolveCredentials({
+      config: cfg,
+      credentials: providerCredentials(cfg),
+      fetch,
+      log: (message) => console.warn(`[provider:${def.kind}] ${message}`),
+    });
+  }
+
   switch (def.credKind) {
     case 'api-key':
       return {

@@ -1,15 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { ProviderConfig, ProviderStore } from '@mcp/store/provider-store.js';
 
-// Mock the shared OAuth refresh at the module boundary. Both the admin helper
-// and the engine builder import `refreshIfExpired` from this same specifier, so
-// a single vi.mock drives them identically. Default: return a fresh token.
+// Mock the shared OAuth refresh at the module boundary. Default: return a fresh token.
 vi.mock('@mcp/services/services/oauth/google.js', () => ({
   refreshIfExpired: vi.fn(async () => 'fresh-token'),
 }));
 
 import { refreshIfExpired } from '@mcp/services/services/oauth/google.js';
-import { discoverGoogleOAuth } from '@apps/http-api/admin/model-discovery/google-oauth.js';
 import { discoverGoogleOAuthModels } from '../discovery/google-oauth-models.js';
 import { googleOAuthSpec } from '../specs/google-oauth.js';
 
@@ -67,16 +64,11 @@ afterEach(() => {
   vi.mocked(refreshIfExpired).mockResolvedValue('fresh-token');
 });
 
-describe('google-oauth-models discovery equivalence: engine(spec, cfg, store) == admin discoverGoogleOAuth(store, cfg)', () => {
-  it('returns identical UpsertModelInput[]', async () => {
-    mockFetchOk(API_RESPONSE);
-    const a = await discoverGoogleOAuth(STORE, CFG);
-
+describe('google-oauth-models discovery', () => {
+  it('maps Google OAuth /models into UpsertModelInput[]', async () => {
     mockFetchOk(API_RESPONSE);
     const b = await discoverGoogleOAuthModels(googleOAuthSpec, CFG, STORE);
 
-    expect(b).toEqual(a);
-    // Pin the lifted shape: embedding-001 filtered out, gemini-no-methods kept.
     expect(b).toEqual([
       {
         model_id: 'gemini-2.5-pro',
@@ -95,22 +87,16 @@ describe('google-oauth-models discovery equivalence: engine(spec, cfg, store) ==
     ]);
   });
 
-  it('falls back to the stale api_key token when refresh throws — identical for both', async () => {
+  it('falls back to the stale api_key token when refresh throws', async () => {
     vi.mocked(refreshIfExpired).mockRejectedValue(new Error('boom'));
-
-    mockFetchOk(API_RESPONSE);
-    const a = await discoverGoogleOAuth(STORE, CFG);
 
     mockFetchOk(API_RESPONSE);
     const b = await discoverGoogleOAuthModels(googleOAuthSpec, CFG, STORE);
 
-    expect(b).toEqual(a);
+    expect(b.map((m) => m.model_id)).toEqual(['gemini-2.5-pro', 'gemini-no-methods']);
   });
 
-  it('both throw on non-ok HTTP response', async () => {
-    mockFetchFail(403);
-    await expect(discoverGoogleOAuth(STORE, CFG)).rejects.toThrow('HTTP 403');
-
+  it('throws on non-ok HTTP response', async () => {
     mockFetchFail(403);
     await expect(discoverGoogleOAuthModels(googleOAuthSpec, CFG, STORE)).rejects.toThrow('HTTP 403');
   });

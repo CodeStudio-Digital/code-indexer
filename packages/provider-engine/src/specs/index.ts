@@ -11,8 +11,8 @@ import { kimiCodeSpec } from './kimi.js';
 import { moonshotSpec } from './moonshot.js';
 
 /**
- * All 15 built-in provider specs, in the EXACT order of registry.ts's former
- * BUILTIN_DEFINITIONS. The order is load-bearing: pricing.ts first-match
+ * All built-in provider specs, in the stable registry order. The order is
+ * load-bearing: pricing.ts first-match
  * resolution of duplicate model ids (gpt-4o across openai/copilot/chatgpt;
  * kimi-k2-*-turbo across kimi-code/moonshot) and factory env-var fallback both
  * iterate the registry in insertion order. Built from single-spec imports (NOT

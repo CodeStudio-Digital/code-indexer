@@ -207,8 +207,11 @@ export function buildFindToolsTool(
  * first, optional ones suffixed `?`. Capped ~90 chars so a wide schema can't
  * bloat the discovery result. Exists so a model can call a HIDDEN tool with
  * correct args on the first try (it never saw the tool's full schema).
+ *
+ * Exported for reuse by code_exec's in-sandbox `list_tools()` helper, which
+ * renders the same compact arg summary for the full (tier-agnostic) catalog.
  */
-function paramSummary(schema: JsonSchema | undefined): string {
+export function paramSummary(schema: JsonSchema | undefined): string {
   const s = schema as
     | { properties?: Record<string, { type?: string | string[] }>; required?: string[] }
     | undefined;

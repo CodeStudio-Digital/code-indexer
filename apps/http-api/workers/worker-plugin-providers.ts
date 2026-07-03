@@ -1,8 +1,9 @@
 /**
- * Overlay declarative plugin providers into THIS worker_thread's provider
+ * Overlay plugin providers into THIS worker_thread's provider
  * registry, so the agent running inside the worker can resolve a kind that is
  * contributed only by a plugin (a worker has its own module graph — the main
- * process's registry is not shared).
+ * process's registry is not shared). V2 provider definitions lazy-import the
+ * plugin-owned adapter from the installed plugin bundle.
  *
  * IMPORTANT: workers import via RELATIVE paths only (Node resolves before tsx/
  * tsconfig `paths`, so `@mcp/*` aliases throw inside a worker_thread). This is a

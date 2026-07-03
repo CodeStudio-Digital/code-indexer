@@ -13,6 +13,17 @@ describe('collectContributions', () => {
           ],
           commands: [{ id: 'c', label: 'C' }],
           toolWindows: [{ id: 'w', title: 'W', icon: 'cloud', side: 'right', entry: 'ui/p.html' }],
+          editorActions: [{ id: 'ea', label: 'EA', runsTool: 'echo' }],
+          statusBarItems: [{ id: 'sb', label: 'SB', alignment: 'right' }],
+          runConfigurations: [{ id: 'run', title: 'Run', command: 'npm' }],
+          modules: [
+            {
+              id: 'node-project',
+              title: 'Node Project',
+              tools: ['echo'],
+              editorActions: [{ id: 'module-ea', label: 'Module EA' }],
+            },
+          ],
         },
       },
       {
@@ -28,5 +39,9 @@ describe('collectContributions', () => {
     expect(result.toolWindows[0].side).toBe('right');
     // Declared icon names ride along (rails map them via pluginWindowIcon).
     expect(result.toolWindows[0].icon).toBe('cloud');
+    expect(result.editorActions.map((a) => a.id)).toEqual(['ea', 'module-ea']);
+    expect(result.statusBarItems[0].id).toBe('sb');
+    expect(result.runConfigurations[0].id).toBe('run');
+    expect(result.modules[0].id).toBe('node-project');
   });
 });

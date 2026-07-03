@@ -34,6 +34,9 @@ import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
+import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
+import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
+import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
@@ -74,7 +77,8 @@ const CODE_EXEC_DESC =
   'Execute a JS snippet that batches tool calls in one turn. Saves round-trips when you need to chain reads/searches/edits with logic, loops, or filtering.\n' +
   '\n' +
   'API inside the snippet:\n' +
-  '  - `tools.<name>(args)` OR `<name>(args)` — both work. The latter is a bare-global alias for every registered tool whose name does not collide with a JS builtin (read_file, edit_file, mcp__grep_code, etc). Returns the tool\'s text content (string). Throws on tool error.\n' +
+  '  - `tools.<name>(args)` OR `<name>(args)` — both work. Calls ANY registered tool, INCLUDING tools that are NOT in your current visible toolset / tier: code_exec runs against the full tool catalog, so you never need `expand_toolset` to reach a tool from in here (the per-call plan-mode / task-scope policy still applies to each call). The bare-global alias exists for every tool whose name does not collide with a JS builtin (read_file, edit_file, mcp__grep_code, etc). Returns the tool\'s text content (string). Throws on tool error.\n' +
+  '  - `list_tools()` → `[{name, tier, params, description}]` for EVERY callable tool (incl. ones hidden from your visible toolset). `tool_schema(name)` → that tool\'s full JSON Schema. Use these (or `find_tools({query})`) to discover the exact name + args of a tool you cannot see, then call it directly here.\n' +
   '  - `log(...)` — appends to the captured output. JSON-friendly.\n' +
   '  - `JSON`, `Math`, `String`, `Number`, `Boolean`, `Array`, `Object`, `Promise`, `Set`, `Map` are available.\n' +
   '  - The snippet runs as an async IIFE; use top-level `await` and `return` the result.\n' +
@@ -401,7 +405,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const RESERVED_GLOBALS = new Set([
         'JSON', 'Math', 'Number', 'String', 'Boolean', 'Array', 'Object',
         'Promise', 'Set', 'Map', 'Date', 'RegExp', 'Error', 'console', 'log',
-        'tools',
+        'tools', 'list_tools', 'tool_schema',
       ]);
       // Shadow-safe bare-global aliases. Without this, the agent's natural
       // `await edit_file(...)` throws ReferenceError; with this, both
@@ -414,6 +418,38 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         bareGlobals[name] = fn;
       }
 
+      // In-sandbox tool discovery. code_exec is tier-agnostic (it runs the full
+      // catalog minus isSafeTool), but the model may not know a hidden tool's
+      // name/args. `list_tools()` enumerates the callable surface; `tool_schema`
+      // returns one tool's full schema — no prior `find_tools` turn required.
+      const listTools = (): Array<{ name: string; tier: string; params: string; description: string }> =>
+        safe.map((t) => ({
+          name: t.name,
+          tier: getToolTier(t.name),
+          params: paramSummary(t.parameters),
+          description: (t.description ?? '').split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '',
+        }));
+      const toolSchema = (name: unknown): { name: string; tier: string; params: string; schema: unknown } => {
+        const key = String(name ?? '');
+        const t = safe.find((x) => x.name === key);
+        if (t) {
+          return { name: t.name, tier: getToolTier(t.name), params: paramSummary(t.parameters), schema: t.parameters ?? null };
+        }
+        // Registered but sandbox-excluded (control/lifecycle) → say so instead
+        // of a bare "unknown", mirroring the ReferenceError hint's distinction.
+        if (allToolNames.has(key)) {
+          throw new Error(
+            `tool_schema: "${key}" is registered but NOT callable inside code_exec ` +
+            `(control/lifecycle tool). Call it directly as a top-level tool.`,
+          );
+        }
+        const close = suggestToolName(key, exposedNames);
+        throw new Error(
+          `tool_schema: unknown tool "${key}"${close ? ` — did you mean "${close}"?` : ''}. ` +
+          `Call list_tools() to enumerate the ${exposedNames.length} callable tools.`,
+        );
+      };
+
       const sandbox: Context = {
         // Bare aliases first so the explicit fields below win on conflict
         // (e.g. a future tool named `JSON` would not shadow the global).
@@ -421,6 +457,8 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         // Unknown `tools.<name>` access throws a suggestion-bearing error
         // instead of yielding undefined → "is not a function" (telemetry).
         tools: wrapToolsBinding(toolsProxy, exposedNames),
+        list_tools: listTools,
+        tool_schema: toolSchema,
         log: appendLog,
         console: { log: appendLog, warn: appendLog, error: appendLog },
         JSON,

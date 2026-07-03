@@ -2,15 +2,16 @@
  * Provider-host loader — registers LLM providers contributed DECLARATIVELY by
  * enabled plugins into the core provider registry.
  *
- * A plugin authors a `ProviderSpec` as DATA in its `.app.json` (importing only
- * `@mcp/plugin-sdk`); NO plugin JS runs in-process. This loader:
- *   1. reads the declared `ProviderSpec[]` from the stored snapshot (no import);
+ * A plugin always authors a `ProviderSpec` as DATA in its `.app.json`. A
+ * bundled first-party provider may also export an executable adapter V2 from
+ * its worker bundle. This loader:
+ *   1. reads the declared `ProviderSpec[]` from the stored snapshot;
  *   2. validates each against `thirdPartyProviderSpecSchema` — rejecting the
  *      host-only capabilities a third party must not claim (auth.hooks, the
  *      `sdk:*`/`chatgpt-models` discovery/test formats, unknown wires);
- *   3. turns the spec into a `ProviderDefinition` via the INJECTED
- *      `buildDefinition` (the host's `@mcp/provider-engine.buildProviderDefinition`),
- *      so plugin-host never imports the engine; and
+ *   3. turns the spec into either a declarative V1 `ProviderDefinition` via
+ *      the injected `buildDefinition`, or a V2 plugin-owned proxy definition
+ *      whose methods lazy-import the plugin adapter; and
  *   4. registers it via the injected `register` (e.g. `upsertProvider`).
  *
  * Because no bundle is executed, the old MCP_TRUSTED_PROVIDER_PLUGINS code-exec
@@ -24,6 +25,9 @@ import { loadConfig } from '@mcp/shared/utils/config.js';
 import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
 import type { ProviderDefinition, ProviderSpec } from '@mcp/provider-sdk';
 import { thirdPartyProviderSpecSchema, providerSpecSchema } from '@mcp/provider-sdk';
+import { join } from 'node:path';
+import { pluginDir } from './paths.js';
+import { buildProviderPluginDefinition, type ProviderAdapterRuntimeRef } from './provider-adapter-definition.js';
 
 export interface ProviderPluginRef {
   namespace: string;
@@ -33,12 +37,14 @@ export interface ProviderPluginRef {
   signature: string | null;
   /** Install source — 'market' | 'github' | 'local' | 'bundled' | … */
   source: string;
+  /** Executable provider-adapter runtime, present for V2 plugin-owned providers. */
+  runtime: ProviderAdapterRuntimeRef | null;
 }
 
 /**
  * Enumerate enabled plugins that contribute at least one provider spec. Reads
- * only the stored snapshot — no bundle, no worker requirement (a declarative
- * provider plugin ships no worker).
+ * only the stored snapshot. V2 adapters are imported lazily later, when the
+ * registered provider is actually used.
  */
 export function listProviderPlugins(): ProviderPluginRef[] {
   const { dbPath } = loadConfig();
@@ -46,10 +52,24 @@ export function listProviderPlugins(): ProviderPluginRef[] {
   const out: ProviderPluginRef[] = [];
   try {
     for (const p of store.list({ enabled: true })) {
-      const contrib = (p.contributions ?? {}) as { providers?: unknown[] };
+      const contrib = (p.contributions ?? {}) as {
+        providers?: unknown[];
+        worker?: string | null;
+        providerRuntime?: { protocol?: string; entry?: string; kinds?: string[] } | null;
+      };
       const specs = Array.isArray(contrib.providers) ? contrib.providers : [];
       if (specs.length === 0) continue;
-      out.push({ namespace: p.namespace, specs, signature: p.signature, source: p.source });
+      const runtime =
+        contrib.providerRuntime?.protocol === 'provider-adapter-v2' &&
+        Array.isArray(contrib.providerRuntime.kinds) &&
+        contrib.providerRuntime.kinds.length > 0
+          ? {
+              namespace: p.namespace,
+              file: join(pluginDir(p.namespace), contrib.providerRuntime.entry ?? contrib.worker ?? './dist/plugin.js'),
+              kinds: contrib.providerRuntime.kinds,
+            }
+          : null;
+      out.push({ namespace: p.namespace, specs, signature: p.signature, source: p.source, runtime });
     }
   } finally {
     store.close();
@@ -102,11 +122,13 @@ export interface LoadPluginProvidersResult {
 }
 
 /**
- * Validate + build + register providers contributed by enabled plugins. Pure
- * DATA → buildDefinition → register; no bundle import, so it is synchronous and
- * cannot execute plugin code. Resilient: an invalid spec, a reserved-kind clash,
- * or a buildDefinition throw skips that provider and records the namespace —
- * never takes down provider resolution for the rest of the app.
+ * Validate + build + register providers contributed by enabled plugins.
+ * Declarative V1 stays DATA → buildDefinition → register. Bundled first-party
+ * V2 becomes DATA → plugin-owned proxy definition → register; the bundle import
+ * is lazy inside the definition methods. Resilient: an invalid spec, a
+ * reserved-kind clash, or a buildDefinition throw skips that provider and
+ * records the namespace — never takes down provider resolution for the rest of
+ * the app.
  */
 export function loadPluginProviders(opts: LoadPluginProvidersOptions): LoadPluginProvidersResult {
   const refs = opts.refs ?? listProviderPlugins();
@@ -137,7 +159,8 @@ export function loadPluginProviders(opts: LoadPluginProvidersOptions): LoadPlugi
         continue;
       }
       try {
-        opts.register(opts.buildDefinition(spec));
+        const useAdapter = blessed && ref.runtime?.kinds.includes(spec.kind);
+        opts.register(useAdapter ? buildProviderPluginDefinition(spec, ref.runtime!) : opts.buildDefinition(spec));
         kinds.push(spec.kind);
       } catch (err) {
         opts.onError?.(ref.namespace, err);

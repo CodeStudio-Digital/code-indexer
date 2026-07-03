@@ -11,6 +11,24 @@ import { podman, ok, fail, details, optString, optBool } from './lib.js';
 
 const CONTAINERFILES = ['Containerfile', 'Dockerfile'];
 const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'];
+const PODMAN_PROJECT = {
+  whenFiles: [
+    'Containerfile',
+    'Dockerfile',
+    'compose.yaml',
+    'compose.yml',
+    'docker-compose.yml',
+    'docker-compose.yaml',
+    'package.json',
+    'requirements.txt',
+    'pyproject.toml',
+    'go.mod',
+    'index.html',
+  ],
+};
+const PODMAN_RUNNABLE_PROJECT = {
+  whenFiles: ['Containerfile', 'Dockerfile'],
+};
 
 interface PodmanDetect {
   containerfile: string | null;
@@ -66,6 +84,7 @@ export const projectTools = [
       'Detect Podman/Docker containerization in the current project (Dockerfile, Containerfile, compose) and exposed ports',
     riskLevel: 'read',
     mutates: false,
+    activation: PODMAN_PROJECT,
     parameters: { type: 'object', properties: {} },
     handler: async (_a, ctx: PluginToolContext) => {
       const d = await detect(ctx);
@@ -84,6 +103,7 @@ export const projectTools = [
       'Build the project image from its Dockerfile/Containerfile and run it with the project bind-mounted at /app',
     riskLevel: 'execute',
     mutates: true,
+    activation: PODMAN_RUNNABLE_PROJECT,
     parameters: {
       type: 'object',
       properties: {

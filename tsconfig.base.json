@@ -47,6 +47,8 @@
       "@mcp/worker-pool/*": ["packages/worker-pool/src/*"],
       "@mcp/provider-sdk": ["packages/provider-sdk/src/index.ts"],
       "@mcp/provider-sdk/*": ["packages/provider-sdk/src/*"],
+      "@mcp/provider-runtime": ["packages/provider-runtime/src/index.ts"],
+      "@mcp/provider-runtime/*": ["packages/provider-runtime/src/*"],
       "@mcp/provider-engine": ["packages/provider-engine/src/index.ts"],
       "@mcp/provider-engine/*": ["packages/provider-engine/src/*"],
       "@mcp/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],

@@ -25,6 +25,8 @@ import { SnapshotReviewPipeline } from '@mcp/services/services/snapshot-review-p
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import { reviewSessionSnapshots } from '@mcp/services/services/review-session-snapshots.js';
 import { formatFindingsForAgent } from '@mcp/services/services/snapshot-review-format.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -63,14 +65,22 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       'apply the fixes with edit_file/multi_edit. Findings are also saved to the Snapshots panel.\n\n' +
       'WHEN TO USE: right before you tell the user a non-trivial change is done; after a ' +
       'multi-file edit; after a security-sensitive fix.\n' +
+      'Optionally pass `focus` — a short note on what you changed and where to look — ' +
+      'to sharpen the review.\n' +
       "DON'T: call on every turn or for read-only/trivial work — it costs a model call. " +
       'For a heavier independent second opinion on an arbitrary diff, use request_review instead.',
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        focus: {
+          type: 'string',
+          description:
+            'Optional. 1-3 sentences on what you changed and where the reviewer should pay extra attention.',
+        },
+      },
       additionalProperties: false,
     },
-    handler: async (): Promise<ToolResult> => {
+    handler: async (args): Promise<ToolResult> => {
       const snapshotStore = new SessionFileSnapshotStore(deps.dbHandle);
       const reviewStore = new SessionFileReviewStore(deps.dbHandle);
       const snapshotService = new SessionSnapshotService(snapshotStore, (kind, sessionId, projectId) => {
@@ -88,11 +98,23 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       );
       const pipeline = new SnapshotReviewPipeline(resolver);
 
+      const focus =
+        typeof args.focus === 'string' && args.focus.trim() ? args.focus.trim() : undefined;
+      // Session intent (title + original request + task list) is best-effort
+      // context — a store hiccup must not block the review itself.
+      let intent: string | null = null;
+      try {
+        intent = buildSessionIntent(new SessionStore(deps.dbHandle), deps.sessionId);
+      } catch {
+        /* review runs without intent */
+      }
+
       let outcome;
       try {
         outcome = await reviewSessionSnapshots(
           { snapshotStore, snapshotService, pipeline, reviewStore },
           deps.sessionId,
+          { focus, intent },
         );
       } catch (e) {
         return err(`self_review failed: ${e instanceof Error ? e.message : String(e)}`);

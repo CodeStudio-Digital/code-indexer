@@ -29,7 +29,7 @@ const REGISTRY_ORDER = [
 ];
 
 describe('registry cutover parity', () => {
-  it('BUILTIN_SPECS is the expected kinds in the exact former BUILTIN_DEFINITIONS order', () => {
+  it('BUILTIN_SPECS is the expected kinds in stable registry order', () => {
     expect(BUILTIN_SPECS.map((s) => s.kind)).toEqual(REGISTRY_ORDER);
   });
 

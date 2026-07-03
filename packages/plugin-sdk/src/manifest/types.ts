@@ -10,6 +10,11 @@ import type {
   toolWindowDeclSchema,
   commandDeclSchema,
   themeDeclSchema,
+  editorActionDeclSchema,
+  statusBarItemDeclSchema,
+  runConfigurationDeclSchema,
+  projectModuleDeclSchema,
+  providerRuntimeDeclSchema,
 } from './app-json.schema.js';
 import type {
   marketplaceManifestSchema,
@@ -24,6 +29,11 @@ export type PluginToolDecl = z.infer<typeof pluginToolDeclSchema>;
 export type ToolWindowDecl = z.infer<typeof toolWindowDeclSchema>;
 export type CommandDecl = z.infer<typeof commandDeclSchema>;
 export type ThemeDecl = z.infer<typeof themeDeclSchema>;
+export type EditorActionDecl = z.infer<typeof editorActionDeclSchema>;
+export type StatusBarItemDecl = z.infer<typeof statusBarItemDeclSchema>;
+export type RunConfigurationDecl = z.infer<typeof runConfigurationDeclSchema>;
+export type ProjectModuleDecl = z.infer<typeof projectModuleDeclSchema>;
+export type ProviderRuntimeDecl = z.infer<typeof providerRuntimeDeclSchema>;
 export type MarketplaceManifest = z.infer<typeof marketplaceManifestSchema>;
 export type MarketplacePluginEntry = z.infer<typeof marketplacePluginEntrySchema>;
 export type PluginSource = z.infer<typeof pluginSourceSchema>;

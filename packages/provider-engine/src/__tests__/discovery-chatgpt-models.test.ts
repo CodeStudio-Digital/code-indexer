@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 
-// Both the admin helper and the engine builder import `resolveChatGPTCreds`
-// from the SAME specifier, so a single module mock drives both code paths
-// identically — the fetch branch runs because we return apiKey + accountId.
 vi.mock('@mcp/services/providers/shared/oauth.js', () => ({
   resolveChatGPTCreds: vi.fn(async () => ({
     apiKey: 'tok-abc',
@@ -11,7 +8,6 @@ vi.mock('@mcp/services/providers/shared/oauth.js', () => ({
   })),
 }));
 
-import { discoverChatgpt } from '@apps/http-api/admin/model-discovery/chatgpt.js';
 import { discoverChatgptModels } from '../discovery/chatgpt-models.js';
 import { chatgptSpec } from '../specs/chatgpt.js';
 
@@ -81,15 +77,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('chatgpt-models discovery equivalence: engine(spec, cfg, etag) == admin discoverChatgpt(cfg, etag)', () => {
-  it('200 with models + etag header → identical DiscoveryResult', async () => {
-    mockFetch200(API_RESPONSE, '"v7"');
-    const a = await discoverChatgpt(CFG, null);
-
+describe('chatgpt-models discovery', () => {
+  it('200 with models + etag header returns DiscoveryResult', async () => {
     mockFetch200(API_RESPONSE, '"v7"');
     const b = await discoverChatgptModels(chatgptSpec, CFG, null);
 
-    expect(b).toEqual(a);
     expect(b.notModified).toBe(false);
     expect(b.etag).toBe('"v7"');
     expect(b.models).toHaveLength(2);
@@ -114,25 +106,17 @@ describe('chatgpt-models discovery equivalence: engine(spec, cfg, etag) == admin
     });
   });
 
-  it('304 Not Modified → notModified:true + previousEtag passthrough (identical)', async () => {
-    mockFetch304();
-    const a = await discoverChatgpt(CFG, '"prev"');
-
+  it('304 Not Modified returns notModified:true + previousEtag passthrough', async () => {
     mockFetch304();
     const b = await discoverChatgptModels(chatgptSpec, CFG, '"prev"');
 
-    expect(b).toEqual(a);
     expect(b).toEqual({ models: [], etag: '"prev"', notModified: true });
   });
 
-  it('!ok (HTTP 500) → seed fallback (identical)', async () => {
-    mockFetch500();
-    const a = await discoverChatgpt(CFG, null);
-
+  it('!ok (HTTP 500) falls back to seed models', async () => {
     mockFetch500();
     const b = await discoverChatgptModels(chatgptSpec, CFG, null);
 
-    expect(b).toEqual(a);
     expect(b.notModified).toBe(false);
     expect(b.etag).toBeNull();
     expect(b.models.length).toBeGreaterThan(0);

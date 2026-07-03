@@ -52,9 +52,36 @@ export const REVIEW_ALLOWLIST = new Set<string>([
   'get_diagnostics',
 ]);
 
-const REVIEW_SYSTEM_PROMPT = `You are a CODE REVIEWER subagent. The orchestrator finished an implementation and is asking you for an independent review BEFORE the change ships.
+/**
+ * Review target — mirrors Codex's `review_request.rs` (UncommittedChanges /
+ * BaseBranch / Commit). Changes only the framing paragraph so the reviewer
+ * calibrates scope; the output contract is identical across targets.
+ */
+export type ReviewTarget = 'uncommitted' | 'base' | 'commit';
+
+function targetFraming(target: ReviewTarget): string {
+  switch (target) {
+    case 'base':
+      return 'You are reviewing the FULL diff of this branch against its base (merge-base) — the whole feature, not a single edit. Weigh cross-file coherence and whether the feature is complete and consistent, alongside line-level bugs.';
+    case 'commit':
+      return "You are reviewing a SINGLE COMMIT. Judge the change against the commit's stated intent: flag anything the message implies but the diff omits, and anything the diff does beyond what the message claims.";
+    case 'uncommitted':
+    default:
+      return 'You are reviewing UNCOMMITTED working-tree changes (not yet committed). Focus on whether this change is correct and safe to commit as-is.';
+  }
+}
+
+/**
+ * Build the reviewer system prompt for a given target. Kept a function (not a
+ * const) so the target-specific framing can be spliced in; the job/constraints/
+ * output-format sections are shared.
+ */
+export function reviewSystemPrompt(target: ReviewTarget = 'uncommitted'): string {
+  return `You are a CODE REVIEWER subagent. The orchestrator finished an implementation and is asking you for an independent review BEFORE the change ships.
 
 You have read-only access to the project. You CANNOT see the implementer's conversation, plan, or reasoning — you have ONLY the diff and the test outcome. That is intentional. You bring fresh eyes; do not invent context.
+
+${targetFraming(target)}
 
 # Your job
 
@@ -80,11 +107,12 @@ Your LAST assistant message MUST contain a JSON block in this EXACT format:
 
 \`\`\`
 <review>{"findings": [
-  {"severity": "critical|high|medium|low", "file": "path/to/file.ts", "line": 42, "issue": "<≤200 chars>", "suggested_fix": "<≤200 chars>"}
+  {"severity": "critical|high|medium|low", "code_location": {"file": "path/to/file.ts", "line_range": {"start": 42, "end": 48}}, "issue": "<≤200 chars>", "suggested_fix": "<≤200 chars>"}
 ]}</review>
 \`\`\`
 
-If no real issues are found, return \`{"findings": []}\` and nothing else. The orchestrator parses this; missing/malformed blocks are treated as a failed review.`;
+Use project-root-relative paths. For a single-line finding set \`start\` == \`end\`. If no real issues are found, return \`{"findings": []}\` and nothing else. The orchestrator parses this; missing/malformed blocks are treated as a failed review.`;
+}
 
 export interface ReviewInput {
   /** The user-facing intent / spec the implementer was supposed to satisfy. */
@@ -95,14 +123,26 @@ export interface ReviewInput {
   testSummary?: string | null;
   /** Optional list of operator constraints (security, perf, no-deps-added, etc.). */
   constraints?: string[];
+  /** What the diff represents — calibrates the reviewer's framing. Default 'uncommitted'. */
+  target?: ReviewTarget;
+}
+
+/** Structured code location (Codex parity): file + line range. */
+export interface CodeLocation {
+  file: string;
+  line_range?: { start: number; end: number };
 }
 
 export interface ReviewFinding {
   severity: 'critical' | 'high' | 'medium' | 'low';
+  /** Retained for existing consumers; mirrors code_location.file. */
   file: string;
+  /** Retained for existing consumers; mirrors code_location.line_range.start. */
   line?: number;
   issue: string;
   suggested_fix?: string;
+  /** Structured location (start/end line). Always populated when a file is known. */
+  code_location?: CodeLocation;
 }
 
 export interface ReviewResult {
@@ -146,7 +186,37 @@ ${diff}
 Review the diff per the rules in your system prompt and emit your final \`<review>\` JSON block.`;
 }
 
-function parseReviewBlock(text: string): { findings: ReviewFinding[] } | null {
+/**
+ * Extract a code location from a raw finding, accepting the new structured
+ * `code_location` object OR the legacy flat `file`/`line` fields. Always yields
+ * a populated `{ file, line?, code_location }` triple so both old consumers
+ * (file/line) and new ones (code_location) work.
+ */
+function extractLocation(f: Record<string, unknown>): { file: string; line?: number; code_location?: CodeLocation } {
+  const cl = f.code_location;
+  if (cl && typeof cl === 'object') {
+    const clo = cl as Record<string, unknown>;
+    const file = typeof clo.file === 'string' ? clo.file : 'unknown';
+    // Accept nested {line_range:{start,end}} or flat {start_line,end_line}.
+    const lr = clo.line_range && typeof clo.line_range === 'object' ? (clo.line_range as Record<string, unknown>) : null;
+    const start = typeof lr?.start === 'number' ? lr.start
+      : typeof clo.start_line === 'number' ? clo.start_line : undefined;
+    const end = typeof lr?.end === 'number' ? lr.end
+      : typeof clo.end_line === 'number' ? clo.end_line : start;
+    const code_location: CodeLocation = { file };
+    if (start != null) code_location.line_range = { start, end: end ?? start };
+    return { file, line: start, code_location };
+  }
+  // Legacy flat shape.
+  const file = typeof f.file === 'string' ? f.file : 'unknown';
+  const line = typeof f.line === 'number' ? f.line : undefined;
+  const code_location: CodeLocation = { file };
+  if (line != null) code_location.line_range = { start: line, end: line };
+  return { file, line, code_location };
+}
+
+/** Exported for tests. Parses the reviewer's `<review>` JSON block. */
+export function parseReviewBlock(text: string): { findings: ReviewFinding[] } | null {
   // Locate the <review>...</review> block. Tolerant of stray whitespace.
   const m = /<review>([\s\S]*?)<\/review>/i.exec(text);
   if (!m) return null;
@@ -156,14 +226,18 @@ function parseReviewBlock(text: string): { findings: ReviewFinding[] } | null {
     if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)) {
       const findings = ((parsed as { findings: unknown[] }).findings as unknown[])
         .filter((f): f is Record<string, unknown> => f != null && typeof f === 'object')
-        .map((f): ReviewFinding => ({
-          severity: ((['critical', 'high', 'medium', 'low'] as const).find((s) => s === f.severity) ??
-            'medium') as ReviewFinding['severity'],
-          file: typeof f.file === 'string' ? f.file : 'unknown',
-          line: typeof f.line === 'number' ? f.line : undefined,
-          issue: typeof f.issue === 'string' ? f.issue : '(no issue text)',
-          suggested_fix: typeof f.suggested_fix === 'string' ? f.suggested_fix : undefined,
-        }));
+        .map((f): ReviewFinding => {
+          const loc = extractLocation(f);
+          return {
+            severity: ((['critical', 'high', 'medium', 'low'] as const).find((s) => s === f.severity) ??
+              'medium') as ReviewFinding['severity'],
+            file: loc.file,
+            line: loc.line,
+            issue: typeof f.issue === 'string' ? f.issue : '(no issue text)',
+            suggested_fix: typeof f.suggested_fix === 'string' ? f.suggested_fix : undefined,
+            code_location: loc.code_location,
+          };
+        });
       return { findings };
     }
   } catch {
@@ -173,6 +247,7 @@ function parseReviewBlock(text: string): { findings: ReviewFinding[] } | null {
 }
 
 export async function runReviewSubagent(parent: SubagentParent, input: ReviewInput): Promise<ReviewResult> {
+  const systemPrompt = reviewSystemPrompt(input.target ?? 'uncommitted');
   const initialMessages: AgentMessage[] = [
     { role: 'user', content: [{ type: 'text', text: buildInitialUserMessage(input) }] },
   ];
@@ -185,8 +260,8 @@ export async function runReviewSubagent(parent: SubagentParent, input: ReviewInp
         session_id: parent.sessionId,
         kind: 'subagent_prompt',
         source_label: 'subagent:review',
-        content: REVIEW_SYSTEM_PROMPT,
-        meta: { spec_chars: input.spec.length, diff_chars: input.diff.length },
+        content: systemPrompt,
+        meta: { spec_chars: input.spec.length, diff_chars: input.diff.length, target: input.target ?? 'uncommitted' },
       });
     } catch {
       /* best-effort */
@@ -194,7 +269,7 @@ export async function runReviewSubagent(parent: SubagentParent, input: ReviewInp
   }
 
   const result = await runSubagent(parent, {
-    systemPrompt: REVIEW_SYSTEM_PROMPT,
+    systemPrompt,
     allowlist: REVIEW_ALLOWLIST,
     initialMessages,
     maxTurns: Number(process.env.CODER_REVIEW_MAX_TURNS ?? 15),

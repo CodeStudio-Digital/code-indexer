@@ -44,4 +44,32 @@ describe('buildMessages (snapshot-review prompt)', () => {
     const system = buildMessages('d').find((m) => m.role === 'system')!.content;
     expect(system.toLowerCase()).toContain('json');
   });
+
+  it('is byte-identical with and without an empty context', () => {
+    const plain = buildMessages('diff-text');
+    expect(buildMessages('diff-text', undefined)).toEqual(plain);
+    expect(buildMessages('diff-text', null)).toEqual(plain);
+    expect(buildMessages('diff-text', '   ')).toEqual(plain);
+    expect(plain.find((m) => m.role === 'user')!.content).not.toContain('Context (read-only');
+  });
+
+  it('prepends the context block between the rules and the diffs', () => {
+    const user = buildMessages('DIFF-MARKER', '## Task context\nfix the bug').find(
+      (m) => m.role === 'user',
+    )!.content;
+    const iCtx = user.indexOf('## Task context');
+    const iDiffs = user.indexOf('Diffs:');
+    const iDiff = user.indexOf('DIFF-MARKER');
+    expect(iCtx).toBeGreaterThanOrEqual(0);
+    expect(iCtx).toBeLessThan(iDiffs);
+    expect(iDiffs).toBeLessThan(iDiff);
+    // The preface pins the context as advisory, untrusted data.
+    expect(user).toContain('untrusted data');
+  });
+
+  it('tells the reviewer (system) to never flag context-only lines', () => {
+    const system = buildMessages('d').find((m) => m.role === 'system')!.content;
+    expect(system).toContain('Context section');
+    expect(system.toLowerCase()).toContain('untrusted');
+  });
 });

@@ -97,7 +97,12 @@
 // memorySection, recall step 0 in plan.txt, recall-first reword in
 // explore.txt + spec.txt, toolCap memory line, remember/recall description
 // tweaks. Static prefix changed → invalidates stale fingerprints.
-export const SYSTEM_PROMPT_VERSION = '20260702.4';
+// 2026-07-02.5 bump — Codex-parity Onda 1: new static `# Permissions & sandbox`
+// block (concrete writable root + tool-approval mode) and `# Project
+// instructions (AGENTS.md)` block (hierarchical AGENTS.md, finally read back).
+// Both above the dynamic boundary → static prefix changed → invalidate stale
+// fingerprints.
+export const SYSTEM_PROMPT_VERSION = '20260702.5';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

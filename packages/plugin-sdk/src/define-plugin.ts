@@ -3,6 +3,10 @@ import type {
   ContributedToolWindow,
   ContributedCommand,
   ContributedTheme,
+  ContributedEditorAction,
+  ContributedStatusBarItem,
+  ContributedRunConfiguration,
+  ContributedProjectModule,
   PluginModule,
 } from './contributions/types.js';
 import type { PluginPermissions } from './contributions/capabilities.js';
@@ -13,8 +17,12 @@ export interface DefinePluginSpec {
   toolWindows?: ContributedToolWindow[];
   commands?: ContributedCommand[];
   themes?: ContributedTheme[];
+  editorActions?: ContributedEditorAction[];
+  statusBarItems?: ContributedStatusBarItem[];
+  runConfigurations?: ContributedRunConfiguration[];
+  modules?: ContributedProjectModule[];
   permissions?: PluginPermissions;
-  /** LLM providers this plugin contributes, each a declarative `ProviderSpec` (DATA). */
+  /** LLM provider metadata this plugin contributes. */
   providers?: ProviderSpec[];
 }
 
@@ -29,6 +37,10 @@ export function definePlugin(spec: DefinePluginSpec): PluginModule {
     toolWindows: spec.toolWindows ?? [],
     commands: spec.commands ?? [],
     themes: spec.themes ?? [],
+    editorActions: spec.editorActions ?? [],
+    statusBarItems: spec.statusBarItems ?? [],
+    runConfigurations: spec.runConfigurations ?? [],
+    modules: spec.modules ?? [],
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
     ...(spec.providers && spec.providers.length ? { providers: spec.providers } : {}),
   };

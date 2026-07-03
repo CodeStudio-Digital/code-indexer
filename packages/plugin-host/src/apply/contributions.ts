@@ -5,13 +5,14 @@ export interface PluginContributions {
   toolWindows: NonNullable<AppManifest['toolWindows']>;
   commands: NonNullable<AppManifest['commands']>;
   themes: NonNullable<AppManifest['themes']>;
+  editorActions: NonNullable<AppManifest['editorActions']>;
+  statusBarItems: NonNullable<AppManifest['statusBarItems']>;
+  runConfigurations: NonNullable<AppManifest['runConfigurations']>;
+  modules: NonNullable<AppManifest['modules']>;
+  providerRuntime: NonNullable<AppManifest['providerRuntime']> | null;
   worker: string | null;
   permissions: NonNullable<AppManifest['permissions']> | null;
-  /**
-   * Declarative LLM-provider contributions — each a full `ProviderSpec` (DATA,
-   * no functions). The provider-host loader validates each and turns it into a
-   * runtime definition via `buildProviderDefinition` — NO bundle is imported.
-   */
+  /** LLM-provider metadata. V2 executable ownership is described by providerRuntime. */
   providers: NonNullable<AppManifest['providers']>;
 }
 
@@ -27,6 +28,11 @@ export function buildContributions(app: AppManifest | null): PluginContributions
     toolWindows: app.toolWindows ?? [],
     commands: app.commands ?? [],
     themes: app.themes ?? [],
+    editorActions: app.editorActions ?? [],
+    statusBarItems: app.statusBarItems ?? [],
+    runConfigurations: app.runConfigurations ?? [],
+    modules: app.modules ?? [],
+    providerRuntime: app.providerRuntime ?? null,
     worker: app.worker ?? null,
     permissions: app.permissions ?? null,
     providers: app.providers ?? [],

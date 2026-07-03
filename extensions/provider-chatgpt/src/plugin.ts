@@ -1,10 +1,23 @@
-/**
- * ChatGPT / Codex (OAuth) as a DECLARATIVE, BUNDLED first-party provider plugin.
- * Re-exports the canonical engine spec (single source of truth). First-party +
- * bundled → may carry host capabilities (auth.hooks 'chatgpt', codex wire,
- * chatgpt-models discovery). See provider-cloudflare for the full note.
- */
 import { definePlugin } from '@mcp/plugin-sdk/define.js';
-import { chatgptSpec } from '@mcp/provider-engine/specs/chatgpt.js';
+import { defineProviderAdapterFromSpec } from '@mcp/provider-runtime/plugin-adapter.js';
+import { discoverChatGPTModels } from './discovery.js';
+import {
+  logoutChatGPTAuth,
+  pollChatGPTAuth,
+  resolveChatGPTCredentials,
+  startChatGPTAuth,
+} from './auth.js';
+import { chatgptSpec } from './spec.js';
+
+export const providerAdapter = defineProviderAdapterFromSpec(chatgptSpec, {
+  authHandlers: {
+    start: () => startChatGPTAuth(),
+    poll: pollChatGPTAuth,
+    refresh: (ctx) => resolveChatGPTCredentials(ctx),
+    logout: logoutChatGPTAuth,
+  },
+  resolveCredentials: resolveChatGPTCredentials,
+  discoverModels: discoverChatGPTModels,
+});
 
 export default definePlugin({ providers: [chatgptSpec] });

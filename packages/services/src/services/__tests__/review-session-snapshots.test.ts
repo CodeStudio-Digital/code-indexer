@@ -177,6 +177,47 @@ describe('reviewSessionSnapshots', () => {
     expect(rs.completed.at(-1)?.patch.status).toBe('error');
   });
 
+  it('builds contextText from focus + intent options', async () => {
+    let captured: { contextText?: string | null } | null = null;
+    const pipeline = pipelineReturning(
+      { ok: true, findings: [], raw: '{"findings":[]}' },
+      (input) => (captured = input as { contextText?: string | null }),
+    );
+    const out = await reviewSessionSnapshots(
+      {
+        snapshotStore: snapshotStoreWith([BASELINE_ID]),
+        snapshotService: snapshotServiceWith(fakeDiff()),
+        pipeline,
+      },
+      42,
+      { focus: 'watch the null handling', intent: 'Session: fix crash on empty list' },
+    );
+    expect(out.ok).toBe(true);
+    expect(captured!.contextText).toContain('## Task context');
+    expect(captured!.contextText).toContain('fix crash on empty list');
+    expect(captured!.contextText).toContain('## Author focus');
+    expect(captured!.contextText).toContain('watch the null handling');
+  });
+
+  it('passes a null contextText when no options and no useful symbols', async () => {
+    let captured: { contextText?: string | null } | null = null;
+    const pipeline = pipelineReturning(
+      { ok: true, findings: [], raw: '{"findings":[]}' },
+      (input) => (captured = input as { contextText?: string | null }),
+    );
+    // fakeDiff's one-line file is fully covered by the hunk window, so the
+    // symbol context is empty → legacy prompt (contextText null).
+    await reviewSessionSnapshots(
+      {
+        snapshotStore: snapshotStoreWith([BASELINE_ID]),
+        snapshotService: snapshotServiceWith(fakeDiff()),
+        pipeline,
+      },
+      42,
+    );
+    expect(captured!.contextText).toBeNull();
+  });
+
   it('works without a reviewStore (no persistence)', async () => {
     const pipeline = pipelineReturning({ ok: true, findings: [FINDING], raw: '' });
     const out = await reviewSessionSnapshots(

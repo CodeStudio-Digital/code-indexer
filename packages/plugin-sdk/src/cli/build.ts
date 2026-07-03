@@ -39,11 +39,17 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
 
   const mod = (await import(`${pathToFileURL(bundle).href}?t=${Date.now()}`)) as {
     default?: PluginModule;
+    providerAdapter?: { sdkVersion?: number; kind?: string };
+    providerAdapters?: Array<{ sdkVersion?: number; kind?: string }>;
   };
   const pm = mod.default;
   if (!pm || !Array.isArray(pm.tools)) {
     throw new Error('plugin entry must `export default definePlugin(...)`');
   }
+  const providerAdapters = [
+    ...(mod.providerAdapter ? [mod.providerAdapter] : []),
+    ...(Array.isArray(mod.providerAdapters) ? mod.providerAdapters : []),
+  ].filter((a): a is { sdkVersion: 2; kind: string } => a?.sdkVersion === 2 && typeof a.kind === 'string' && a.kind.length > 0);
 
   const app = {
     worker: './dist/plugin.js',
@@ -53,14 +59,27 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
       parameters: t.parameters,
       ...(t.riskLevel ? { riskLevel: t.riskLevel } : {}),
       ...(t.mutates !== undefined ? { mutates: t.mutates } : {}),
+      ...(t.activation ? { activation: t.activation } : {}),
     })),
     toolWindows: pm.toolWindows ?? [],
     commands: pm.commands ?? [],
     themes: pm.themes ?? [],
+    editorActions: pm.editorActions ?? [],
+    statusBarItems: pm.statusBarItems ?? [],
+    runConfigurations: pm.runConfigurations ?? [],
+    modules: pm.modules ?? [],
+    ...(providerAdapters.length
+      ? {
+          providerRuntime: {
+            protocol: 'provider-adapter-v2',
+            entry: './dist/plugin.js',
+            kinds: providerAdapters.map((a) => a.kind),
+          },
+        }
+      : {}),
     ...(pm.permissions ? { permissions: pm.permissions } : {}),
-    // Providers are pure-data ProviderSpecs — written verbatim. The host turns
-    // each into a runtime definition via buildProviderDefinition; no plugin code
-    // is ever imported for a provider.
+    // Providers remain metadata ProviderSpecs; executable ownership is recorded
+    // above as providerRuntime when the bundle exports adapter(s).
     ...(pm.providers && pm.providers.length ? { providers: pm.providers } : {}),
   };
   const appJson = join(root, '.app.json');

@@ -11,6 +11,11 @@ import {
 import { SessionSnapshotService, type FileDiff } from '@mcp/services/services/session-snapshots.js';
 import { SnapshotReviewPipeline } from '@mcp/services/services/snapshot-review-pipeline.js';
 import { filterReviewableDiffs } from '@mcp/services/services/snapshot-review-ignore.js';
+import {
+  buildEnclosingSymbolContext,
+  formatReviewContext,
+} from '@mcp/services/services/snapshot-review-context.js';
+import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 
 type Scope = 'coder' | 'company';
 
@@ -263,11 +268,26 @@ export function mountSnapshotReviewRoutes(
         message: 'No pending snapshot diff hunks to review.',
       });
     }
+    // Reviewer context: enclosing symbols always; session intent only for
+    // coder scope (a company review aggregates N coder sessions — no single
+    // intent applies).
+    let intent: string | null = null;
+    if (scope === 'coder') {
+      try {
+        intent = buildSessionIntent(deps.sessionStore, sessionId);
+      } catch {
+        /* best-effort */
+      }
+    }
     const result = await pipeline.review({
       sessionKind: scope,
       sessionId,
       resolveContext: scope === 'coder' ? { sessionId } : { companySessionId: sessionId },
       diffs,
+      contextText: formatReviewContext({
+        intent,
+        symbols: buildEnclosingSymbolContext(diffs),
+      }),
     });
     if (!result.ok) {
       reviewStore.completeRun(run.id, {

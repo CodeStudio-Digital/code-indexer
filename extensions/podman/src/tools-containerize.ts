@@ -17,6 +17,9 @@ import { ok, fail, optString, optNumber, optBool } from './lib.js';
 
 const STACKS: ContainerStack[] = ['node', 'python', 'go', 'static'];
 const DEFAULT_PORT: Record<ContainerStack, number> = { node: 3000, python: 8000, go: 8080, static: 8080 };
+const CONTAINERIZABLE_PROJECT = {
+  whenFiles: ['package.json', 'requirements.txt', 'pyproject.toml', 'go.mod', 'index.html'],
+};
 
 async function exists(ctx: PluginToolContext, path: string): Promise<boolean> {
   return ctx.fs ? ctx.fs.exists(path) : false;
@@ -48,6 +51,7 @@ export const containerizeTools = [
       'Generate a secure multi-stage Containerfile + .dockerignore for a project that has none (auto-detects node/python/go/static)',
     riskLevel: 'write',
     mutates: true,
+    activation: CONTAINERIZABLE_PROJECT,
     parameters: {
       type: 'object',
       properties: {

@@ -10,6 +10,7 @@ import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
 import type { PluginToolDecl } from '@mcp/plugin-sdk';
 import { pluginDir } from './paths.js';
 import type { EnabledPlugin } from './plugin-tool-bridge.js';
+import { isActivated } from './activation.js';
 
 export interface PluginBundleRef {
   namespace: string;
@@ -23,7 +24,7 @@ export interface EnabledPluginRuntime {
   bundles: PluginBundleRef[];
 }
 
-export function listEnabledPluginRuntime(): EnabledPluginRuntime {
+export function listEnabledPluginRuntime(opts?: { projectRoot?: string | null }): EnabledPluginRuntime {
   const { dbPath } = loadConfig();
   const store = new InstalledPluginStore(dbPath);
   const toolPlugins: EnabledPlugin[] = [];
@@ -34,7 +35,9 @@ export function listEnabledPluginRuntime(): EnabledPluginRuntime {
         tools?: PluginToolDecl[];
         worker?: string | null;
       };
-      const tools = Array.isArray(contrib.tools) ? contrib.tools : [];
+      const tools = Array.isArray(contrib.tools)
+        ? contrib.tools.filter((t) => isActivated(t.activation, opts?.projectRoot ?? null))
+        : [];
       if (tools.length > 0) toolPlugins.push({ namespace: p.namespace, tools });
       if (contrib.worker) {
         bundles.push({ namespace: p.namespace, file: join(pluginDir(p.namespace), contrib.worker) });

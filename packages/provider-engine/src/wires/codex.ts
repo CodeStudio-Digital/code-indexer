@@ -12,10 +12,9 @@ const DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
 /**
  * Codex wire (chatgpt) — the OpenAI Responses API (stateful), NOT chat/completions.
- * Lift of `services/.../definitions/chatgpt.ts`: per-instance reasoning capability
- * + apply_patch tool type read live from `provider_models` (via getStore + the
- * provider row id in `opts.providerId`, falling back to none), plus the env-gated
- * server-managed image_generation tool.
+ * Per-instance reasoning capability + apply_patch tool type read live from
+ * `provider_models` (via getStore + the provider row id in `opts.providerId`,
+ * falling back to none), plus the env-gated server-managed image_generation tool.
  */
 export function buildCodex(spec: ProviderSpec): WireParts {
   return {

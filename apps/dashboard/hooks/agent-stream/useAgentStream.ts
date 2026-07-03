@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { IdeContextInput } from '@mcp/api-bus';
 import { openStream } from './openStream.js';
 import type {
   AgentAttachment,
@@ -38,6 +39,20 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
   // empty deps) can read the current value without going stale.
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+
+  // Abort every stream this instance opened when the host unmounts. Without
+  // this, a remount leaves the old instance's streams alive as zombies that
+  // keep feeding the module-level worker-log store. The RUN is unaffected —
+  // the server bus decouples run from client; the next mount's auto-reattach
+  // reconnects. openStream's finally is guarded by `abortMap.get(sid) === ctrl`,
+  // so after clear() a superseded teardown never clobbers live state.
+  useEffect(() => {
+    const map = abortMap.current;
+    return () => {
+      for (const ctrl of map.values()) ctrl.abort();
+      map.clear();
+    };
+  }, []);
 
   const updateSession = useCallback((sid: number, patch: SessionPatch) => {
     touchedRef.current.set(sid, Date.now());
@@ -104,6 +119,12 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
          */
         selectedSkillIds?: string[];
         /**
+         * Structured IDE context (active file / selections / open tabs) captured
+         * at send time. Forwarded to runCoder and rendered as an `<ide_context>`
+         * block on this turn's user message.
+         */
+        ideContext?: IdeContextInput;
+        /**
          * True when this is the FIRST message of a fresh session — the backend
          * runs the blocking task-preflight before streaming. Drives the
          * "Analyzing the task…" indicator during that wait.
@@ -140,6 +161,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
               extras?.selectedSkillIds && extras.selectedSkillIds.length > 0
                 ? extras.selectedSkillIds
                 : undefined,
+            ide_context: extras?.ideContext,
           },
         },
         onMessageComplete,

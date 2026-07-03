@@ -1,10 +1,23 @@
-/**
- * Google / Gemini (OAuth) as a DECLARATIVE, BUNDLED first-party provider plugin.
- * Re-exports the canonical engine spec (single source of truth). First-party +
- * bundled → may carry host capabilities (auth.hooks 'google-oauth', geminiOAuth
- * wire flag, sdk:google-oauth discovery). See provider-cloudflare for the note.
- */
 import { definePlugin } from '@mcp/plugin-sdk/define.js';
-import { googleOAuthSpec } from '@mcp/provider-engine/specs/google-oauth.js';
+import { defineProviderAdapterFromSpec } from '@mcp/provider-runtime/plugin-adapter.js';
+import {
+  logoutGoogleOAuth,
+  pollGoogleOAuth,
+  resolveGoogleOAuthCredentials,
+  startGoogleOAuth,
+} from './auth.js';
+import { discoverGoogleOAuthModels } from './discovery.js';
+import { googleOAuthSpec } from './spec.js';
+
+export const providerAdapter = defineProviderAdapterFromSpec(googleOAuthSpec, {
+  authHandlers: {
+    start: () => startGoogleOAuth(),
+    poll: pollGoogleOAuth,
+    refresh: (ctx) => resolveGoogleOAuthCredentials(ctx),
+    logout: logoutGoogleOAuth,
+  },
+  resolveCredentials: resolveGoogleOAuthCredentials,
+  discoverModels: discoverGoogleOAuthModels,
+});
 
 export default definePlugin({ providers: [googleOAuthSpec] });

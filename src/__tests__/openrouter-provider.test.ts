@@ -40,8 +40,12 @@ vi.mock('@mcp/indexer/indexer/providers/openai.js', () => ({
   }),
 }));
 
-import { openrouter } from '@mcp/services/providers/definitions/openrouter.js';
 import type { ResolvedCreds } from '@mcp/services/providers/types.js';
+import { buildProviderDefinition } from '@mcp/provider-engine/build-definition.js';
+import { discoverOpenrouterModels } from '@mcp/provider-engine/discovery/openrouter-models.js';
+import { openrouterSpec } from '@mcp/provider-engine/specs/openai-compat.js';
+
+const openrouter = buildProviderDefinition(openrouterSpec);
 
 beforeEach(() => {
   openAIChatCalls.length = 0;
@@ -171,10 +175,7 @@ describe('discoverOpenrouter', () => {
     const orig = globalThis.fetch;
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
-      const { discoverOpenrouter } = await import(
-        '@apps/http-api/admin/model-discovery/openrouter.js'
-      );
-      const models = await discoverOpenrouter(baseCfg);
+      const models = await discoverOpenrouterModels(openrouterSpec, baseCfg);
       expect(calls[0].url).toBe('https://openrouter.ai/api/v1/models?output_modalities=text');
       expect((calls[0].init?.headers as Record<string, string>)?.Authorization).toBe(
         'Bearer or-test',
@@ -203,10 +204,7 @@ describe('discoverOpenrouter', () => {
     const orig = globalThis.fetch;
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
-      const { discoverOpenrouter } = await import(
-        '@apps/http-api/admin/model-discovery/openrouter.js'
-      );
-      await expect(discoverOpenrouter(baseCfg)).rejects.toThrow(/HTTP 403/);
+      await expect(discoverOpenrouterModels(openrouterSpec, baseCfg)).rejects.toThrow(/HTTP 403/);
     } finally {
       globalThis.fetch = orig;
     }

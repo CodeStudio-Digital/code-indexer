@@ -5,11 +5,6 @@ import type {
   UpsertModelInput,
 } from '@mcp/store/provider-store.js';
 
-// Both the admin helper and the engine builder import the SAME service
-// symbols (resolveKimiCodeCreds + the kimi-code oauth module), so mocking each
-// module once makes both call sites share the identical fakes. Equivalence then
-// reduces to: do both wire the same args into the same fns and apply the same
-// fallback/seed/throw semantics?
 const SEED: UpsertModelInput[] = [
   { model_id: 'kimi-k2.6', name: 'Kimi K2.6', context_window: 256_000, source: 'seed' },
 ];
@@ -31,8 +26,6 @@ vi.mock('@mcp/services/services/oauth/kimi-code.js', () => ({
   refreshIfExpired: (...a: unknown[]) => refreshIfExpired(...a),
 }));
 
-// Imported AFTER vi.mock (hoisted) so both pick up the fakes.
-import { discoverKimiCode } from '@apps/http-api/admin/model-discovery/kimi-code.js';
 import { discoverKimiCodeModels } from '../discovery/kimi-code-models.js';
 import { kimiCodeSpec } from '../specs/kimi.js';
 
@@ -59,7 +52,7 @@ beforeEach(() => {
   kimiCodeSeedUpsertModels.mockReturnValue(SEED);
 });
 
-describe('kimi-code-models discovery equivalence: engine(spec, cfg, store) == admin discoverKimiCode(store, cfg)', () => {
+describe('kimi-code-models discovery', () => {
   it('normal models — maps live list (no seed)', async () => {
     const LIVE = [{ id: 'kimi-k2.6' }];
     const MAPPED: UpsertModelInput[] = [
@@ -68,10 +61,8 @@ describe('kimi-code-models discovery equivalence: engine(spec, cfg, store) == ad
     fetchKimiCodeModels.mockResolvedValue(LIVE);
     mapKimiCodeModels.mockReturnValue(MAPPED);
 
-    const a = await discoverKimiCode(STORE, CFG);
     const b = await discoverKimiCodeModels(kimiCodeSpec, CFG, STORE);
 
-    expect(b).toEqual(a);
     expect(b).toEqual(MAPPED);
   });
 
@@ -79,10 +70,8 @@ describe('kimi-code-models discovery equivalence: engine(spec, cfg, store) == ad
     fetchKimiCodeModels.mockResolvedValue([]);
     mapKimiCodeModels.mockReturnValue([]);
 
-    const a = await discoverKimiCode(STORE, CFG);
     const b = await discoverKimiCodeModels(kimiCodeSpec, CFG, STORE);
 
-    expect(b).toEqual(a);
     expect(b).toEqual(SEED);
   });
 
@@ -103,31 +92,24 @@ describe('kimi-code-models discovery equivalence: engine(spec, cfg, store) == ad
     };
 
     wire();
-    const a = await discoverKimiCode(STORE, CFG);
-    wire();
     const b = await discoverKimiCodeModels(kimiCodeSpec, CFG, STORE);
 
-    expect(b).toEqual(a);
     expect(b).toEqual(MAPPED);
   });
 
   it('non-401 fetch error → outer catch → seed', async () => {
     fetchKimiCodeModels.mockRejectedValue(new Error('HTTP 500 boom'));
 
-    const a = await discoverKimiCode(STORE, CFG);
     const b = await discoverKimiCodeModels(kimiCodeSpec, CFG, STORE);
 
-    expect(b).toEqual(a);
     expect(b).toEqual(SEED);
   });
 
   it('resolveKimiCodeCreds rejects → outer catch → seed', async () => {
     resolveKimiCodeCreds.mockRejectedValue(new Error('no Kimi Code access token stored'));
 
-    const a = await discoverKimiCode(STORE, CFG);
     const b = await discoverKimiCodeModels(kimiCodeSpec, CFG, STORE);
 
-    expect(b).toEqual(a);
     expect(b).toEqual(SEED);
   });
 });

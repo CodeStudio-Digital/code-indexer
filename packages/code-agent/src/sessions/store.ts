@@ -180,6 +180,7 @@ export class SessionStore {
   loadSessionWithMessages(id: number): SessionWithMessages | null { return messages.loadWithMessages(this.db, id); }
   getMessageCount(sessionId: number): number { return messages.getCount(this.db, sessionId); }
   loadSessionMessagesTail(id: number, tail: number): SessionWithMessages | null { return messages.loadTail(this.db, id, tail); }
+  getFirstUserMessageText(sessionId: number): string | null { return messages.getFirstUserText(this.db, sessionId); }
   loadMessagesBefore(sessionId: number, beforeId: number, limit: number, includeArchived = false): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
     return messages.loadBefore(this.db, sessionId, beforeId, limit, includeArchived);
   }

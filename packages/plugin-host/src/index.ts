@@ -30,6 +30,11 @@ export type {
   LoadPluginProvidersOptions,
   LoadPluginProvidersResult,
 } from './provider-loader.js';
+export {
+  ProviderPluginMethodNotImplementedError,
+  isProviderPluginMethodNotImplementedError,
+} from './provider-adapter-definition.js';
+export type { ProviderAdapterRuntimeRef } from './provider-adapter-definition.js';
 export { readPluginAsset } from './assets.js';
 export { isActivated } from './activation.js';
 export type { ActivationRule } from './activation.js';

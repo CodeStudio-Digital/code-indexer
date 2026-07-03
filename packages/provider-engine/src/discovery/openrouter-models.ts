@@ -1,16 +1,13 @@
 /**
  * OpenRouter live model discovery (rich catalog).
  *
- * Lifted verbatim from `apps/http-api/admin/model-discovery/openrouter.ts` so
- * the declarative spec path produces an IDENTICAL `UpsertModelInput[]`. The
- * OpenRouter catalog is richer than the basic OpenAI `/models` shape: it
+ * The OpenRouter catalog is richer than the basic OpenAI `/models` shape: it
  * exposes context window, modalities, top-provider output limits and the set
  * of supported OpenAI-compatible parameters.
  *
  * `spec` is unused beyond the signature except for `spec.discovery.modelsUrl`,
  * which overrides the derived endpoint when set. The base URL otherwise comes
- * from `cfg.base_url` (default `https://openrouter.ai/api/v1`), exactly as the
- * admin discoverX derives it.
+ * from `cfg.base_url` (default `https://openrouter.ai/api/v1`).
  */
 import type { ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import type { ProviderSpec } from '@mcp/provider-sdk';

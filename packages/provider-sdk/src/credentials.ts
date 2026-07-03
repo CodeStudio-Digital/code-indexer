@@ -37,3 +37,51 @@ export interface ProviderConfigLike {
   api_key?: string | null;
   extra?: Record<string, unknown> | null;
 }
+
+export interface ProviderStoredSecretLike {
+  extra?: Record<string, unknown> | null;
+}
+
+export interface ProviderSecretReaderLike {
+  get(): Promise<ProviderStoredSecretLike | null>;
+}
+
+/**
+ * Generic API-key resolver for provider plugins. The host still owns encrypted
+ * persistence; the plugin owns how its config row maps to runtime credentials.
+ */
+export function resolveApiKeyConfigCredentials(
+  config: ProviderConfigLike,
+  defaultBaseURL?: string,
+): ResolvedCreds {
+  return {
+    apiKey: config.api_key ?? undefined,
+    baseURL: config.base_url ?? defaultBaseURL,
+    extra: config.extra ?? undefined,
+  };
+}
+
+/**
+ * Generic AWS/SigV4 resolver for provider plugins. Reads the provider-owned
+ * secret blob through the SDK credential store and falls back to config.extra
+ * for region so SDK clients can still use the default AWS credential chain.
+ */
+export async function resolveAwsConfigCredentials(
+  config: ProviderConfigLike,
+  credentials: ProviderSecretReaderLike,
+): Promise<ResolvedCreds> {
+  const aws: NonNullable<ResolvedCreds['aws']> = {};
+  const tokens = await credentials.get();
+  const extra = tokens?.extra ?? {};
+
+  aws.accessKeyId = readString(extra.accessKeyId);
+  aws.secretAccessKey = readString(extra.secretAccessKey);
+  aws.sessionToken = readString(extra.sessionToken);
+  aws.region = readString(extra.region) ?? readString(config.extra?.aws_region);
+
+  return { aws };
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}

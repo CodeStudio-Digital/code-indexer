@@ -88,7 +88,9 @@ function mountInvoke(channel: string, fn: AnyFn) {
     try {
       // Slow-call instrumentation: calls >50ms aggregate per channel in
       // the perf monitor (Admin → Performance → Chamadas lentas).
-      const result = await timeCall(channel, () => fn(input as never, createContext()));
+      const result = await timeCall(channel, () =>
+        fn(input as never, createContext({ clientInfo: { sourceType: 'electron', origin: channel } })),
+      );
       return { ok: true, value: result };
     } catch (err) {
       return { ok: false, error: serializeError(err) };
@@ -103,13 +105,16 @@ function mountStream(channel: string, fn: AnyFn) {
     // Hand port1 to the renderer; renderer's preload is listening for
     // the same `stream-port:<requestId>` event name.
     event.sender.postMessage(`stream-port:${requestId}`, null, [port1]);
-    void pumpStream(port2, fn, payload);
+    void pumpStream(port2, fn, payload, channel);
   });
 }
 
-async function pumpStream(port: Electron.MessagePortMain, fn: AnyFn, payload: unknown) {
+async function pumpStream(port: Electron.MessagePortMain, fn: AnyFn, payload: unknown, channel: string) {
   try {
-    const iterable = fn(payload as never, createContext()) as AsyncIterable<unknown>;
+    const iterable = fn(
+      payload as never,
+      createContext({ clientInfo: { sourceType: 'electron', origin: channel } }),
+    ) as AsyncIterable<unknown>;
     port.start();
     for await (const value of iterable) {
       port.postMessage({ type: 'value', value });

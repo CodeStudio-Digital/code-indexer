@@ -40,6 +40,13 @@ export interface RunCoderOptions {
   userMessage: string;
   /** Optional attachments (images, documents) for the user message */
   attachments?: CoderAttachment[];
+  /**
+   * Structured IDE context (active file, selections, open tabs) captured at
+   * send time. Rendered into an `<ide_context>` block prepended to this turn's
+   * user message so the agent sees the editing focus. Structural type to keep
+   * code-agent decoupled from the dashboard editor store.
+   */
+  ideContext?: import('@mcp/code-agent/core/ide-context.js').IdeContext;
   /** Optional max turns (default 50) */
   maxTurns?: number;
   /** Abort signal */

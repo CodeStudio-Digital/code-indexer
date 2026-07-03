@@ -1,10 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ProviderConfig, ProviderStore } from '@mcp/store/provider-store.js';
 
-// Both the admin `discoverBedrock` and the engine `discoverBedrockModels`
-// dynamic-import '@aws-sdk/client-bedrock', so one module mock intercepts both.
-// `BedrockClient.send` ignores the command and returns the representative
-// `modelSummaries` list; `ListFoundationModelsCommand` is a no-op marker.
+// `discoverBedrockModels` dynamic-imports '@aws-sdk/client-bedrock'. The module
+// mock keeps the optional SDK boundary deterministic.
 const MODEL_SUMMARIES = [
   // Kept: ON_DEMAND + TEXT output.
   {
@@ -47,7 +45,6 @@ vi.mock('@aws-sdk/client-bedrock', () => ({
 }));
 
 import { BedrockClient } from '@aws-sdk/client-bedrock';
-import { discoverBedrock } from '@apps/http-api/admin/model-discovery/bedrock.js';
 import { discoverBedrockModels } from '../discovery/bedrock-models.js';
 import { bedrockSpec } from '../specs/bedrock.js';
 
@@ -65,13 +62,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('bedrock-models discovery equivalence: engine(spec, cfg, store) == admin discoverBedrock(store, cfg)', () => {
-  it('returns identical UpsertModelInput[]', async () => {
-    const a = await discoverBedrock(STORE, CFG);
+describe('bedrock-models discovery', () => {
+  it('maps Bedrock model summaries into UpsertModelInput[]', async () => {
     const b = await discoverBedrockModels(bedrockSpec, CFG, STORE);
-    expect(b).toEqual(a);
-    // Pin the lifted shape: both filters applied, name trimmed, and the
-    // capability-registry context window resolved per modelId.
     expect(b).toEqual([
       {
         model_id: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
@@ -88,11 +81,10 @@ describe('bedrock-models discovery equivalence: engine(spec, cfg, store) == admi
     ]);
   });
 
-  it('both THROW when the SDK send rejects — never silently wipe the catalog', async () => {
+  it('throws when the SDK send rejects — never silently wipes the catalog', async () => {
     vi.mocked(BedrockClient).mockImplementation(
       () => ({ send: async () => { throw new Error('AWS down'); } }) as unknown as BedrockClient,
     );
-    await expect(discoverBedrock(STORE, CFG)).rejects.toThrow();
     await expect(discoverBedrockModels(bedrockSpec, CFG, STORE)).rejects.toThrow();
   });
 });

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { kimiCodeOAuthRouter } from '@apps/http-api/admin/oauth-kimi-code.routes.js';
-import { discoverKimiCode } from '@apps/http-api/admin/model-discovery/kimi-code.js';
+import { discoverKimiCodeModels } from '@mcp/provider-engine/discovery/kimi-code-models.js';
+import { kimiCodeSpec } from '@mcp/provider-engine/specs/kimi.js';
 import { __setStoreForTests } from '@mcp/services/providers/shared/store.js';
 import {
   __setKimiCodeFetchForTests,
@@ -229,13 +230,13 @@ describe('Kimi Code model discovery and refresh', () => {
       return jsonResponse({}, 500);
     });
 
-    const models = await discoverKimiCode(store, store.getProvider('kimi-code')!);
+    const models = await discoverKimiCodeModels(kimiCodeSpec, store.getProvider('kimi-code')!, store);
     expect(models).toHaveLength(1);
     expect(models[0].description).toContain('always_thinking');
     expect(models[0].input_modalities).toEqual(['text', 'image', 'video']);
 
     __setKimiCodeFetchForTests(async () => jsonResponse({ error: 'down' }, 502));
-    const fallback = await discoverKimiCode(store, store.getProvider('kimi-code')!);
+    const fallback = await discoverKimiCodeModels(kimiCodeSpec, store.getProvider('kimi-code')!, store);
     expect(fallback.map((m) => m.model_id)).toContain('kimi-k2.6');
   });
 
@@ -261,7 +262,7 @@ describe('Kimi Code model discovery and refresh', () => {
       return jsonResponse({}, 500);
     });
 
-    const models = await discoverKimiCode(store, store.getProvider('kimi-code')!);
+    const models = await discoverKimiCodeModels(kimiCodeSpec, store.getProvider('kimi-code')!, store);
     expect(models[0].model_id).toBe('kimi-k2.6');
     expect(headersSeen).toEqual(['Bearer old-access', 'Bearer fresh-access']);
     expect(store.getProvider('kimi-code')?.api_key).toBe('fresh-access');

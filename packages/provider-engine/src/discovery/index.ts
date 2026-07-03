@@ -21,10 +21,8 @@ export interface DiscoveryResult {
 }
 
 /**
- * Live model discovery, driven by `spec.discovery.from`. Replaces the hardcoded
- * `switch (cfg.kind)` in `apps/http-api/admin/model-discovery/index.ts`. Each
- * format builder returns the identical rich result the corresponding admin
- * `discoverX` produced (proven by the discovery equivalence tests).
+ * Live model discovery, driven by `spec.discovery.from`. Each format builder
+ * owns the provider-specific catalog mapping for its discovery protocol.
  *
  * `store` is required by the OAuth/sdk formats (they refresh tokens). `previousEtag`
  * is threaded into chatgpt-models only — it is the sole ETag/304 producer and so

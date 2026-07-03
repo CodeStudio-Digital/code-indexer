@@ -34,7 +34,11 @@ vi.mock('@mcp/indexer/indexer/providers/openai.js', () => ({
 }));
 
 import type { ResolvedCreds } from '@mcp/services/providers/types.js';
-import { cloudflare } from '@mcp/services/providers/definitions/cloudflare.js';
+import { buildProviderDefinition } from '@mcp/provider-engine/build-definition.js';
+import { discoverCloudflareModels } from '@mcp/provider-engine/discovery/cloudflare-models.js';
+import { cloudflareSpec } from '@mcp/provider-engine/specs/openai-compat.js';
+
+const cloudflare = buildProviderDefinition(cloudflareSpec);
 
 beforeEach(() => {
   openAIChatCalls.length = 0;
@@ -154,10 +158,7 @@ describe('discoverCloudflare', () => {
     const orig = globalThis.fetch;
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
-      const { discoverCloudflare } = await import(
-        '@apps/http-api/admin/model-discovery/cloudflare.js'
-      );
-      const models = await discoverCloudflare(baseCfg);
+      const models = await discoverCloudflareModels(cloudflareSpec, baseCfg);
       expect(calls[0].url).toBe(
         'https://api.cloudflare.com/client/v4/accounts/acct-disco/ai/models/search?per_page=200',
       );
@@ -176,11 +177,8 @@ describe('discoverCloudflare', () => {
   });
 
   it('throws when account_id is missing on the cfg', async () => {
-    const { discoverCloudflare } = await import(
-      '@apps/http-api/admin/model-discovery/cloudflare.js'
-    );
     const cfg = { ...baseCfg, extra: {} };
-    await expect(discoverCloudflare(cfg)).rejects.toThrow(/account[_ ]id/i);
+    await expect(discoverCloudflareModels(cloudflareSpec, cfg)).rejects.toThrow(/account[_ ]id/i);
   });
 });
 

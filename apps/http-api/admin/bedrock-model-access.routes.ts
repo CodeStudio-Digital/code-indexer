@@ -12,7 +12,7 @@ import {
   checkModelAccess,
   requestModelAccess,
   type UseCaseFormData,
-} from './model-discovery/bedrock.js';
+} from './bedrock-model-access.js';
 
 export function bedrockModelAccessRouter(store: ProviderStore): Hono {
   const app = new Hono();

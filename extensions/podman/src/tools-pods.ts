@@ -30,6 +30,9 @@ import {
 } from './lib.js';
 
 const renderPod = (p: PodSummary) => `- ${p.name} · ${p.status} · ${p.containers} container(s)`;
+const COMPOSE_PROJECT = {
+  whenFiles: ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'],
+};
 
 export const podTools = [
   contributeTool({
@@ -88,6 +91,7 @@ export const podTools = [
     description: 'Run podman compose up/down/ps for the project (optional compose file)',
     riskLevel: 'execute',
     mutates: true,
+    activation: COMPOSE_PROJECT,
     parameters: {
       type: 'object',
       properties: {

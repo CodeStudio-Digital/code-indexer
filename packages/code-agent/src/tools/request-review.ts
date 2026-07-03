@@ -72,6 +72,13 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
             'Optional list of constraints the operator wanted enforced (security review, no new ' +
             'deps, performance-sensitive, etc.).',
         },
+        target: {
+          type: 'string',
+          enum: ['uncommitted', 'base', 'commit'],
+          description:
+            'What the diff represents, so the reviewer calibrates scope: `uncommitted` (default — ' +
+            'working-tree changes), `base` (whole branch vs its merge-base), or `commit` (a single commit).',
+        },
       },
       required: ['spec', 'diff'],
       additionalProperties: false,
@@ -86,8 +93,12 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
         ? (args.constraints as unknown[]).filter((s): s is string => typeof s === 'string')
         : undefined;
       const testSummary = typeof args.test_summary === 'string' ? args.test_summary : null;
+      const target =
+        args.target === 'base' || args.target === 'commit' || args.target === 'uncommitted'
+          ? args.target
+          : undefined;
 
-      const input: ReviewInput = { spec, diff, testSummary, constraints };
+      const input: ReviewInput = { spec, diff, testSummary, constraints, target };
 
       const parent: SubagentParent = {
         provider: deps.reviewerProvider ?? deps.provider,
@@ -137,7 +148,14 @@ function formatReviewResult(findings: ReviewFinding[], parsed: boolean, raw: str
   }
   const lines = [`Reviewer returned ${findings.length} finding(s):`];
   for (const f of findings) {
-    const loc = f.line ? `${f.file}:${f.line}` : f.file;
+    const range = f.code_location?.line_range;
+    const loc = range
+      ? range.start === range.end
+        ? `${f.file}:${range.start}`
+        : `${f.file}:${range.start}-${range.end}`
+      : f.line
+        ? `${f.file}:${f.line}`
+        : f.file;
     lines.push(`- [${f.severity}] ${loc} — ${f.issue}`);
     if (f.suggested_fix) lines.push(`  fix: ${f.suggested_fix}`);
   }

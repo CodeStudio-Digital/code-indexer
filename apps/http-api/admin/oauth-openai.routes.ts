@@ -8,13 +8,16 @@
  */
 import { Hono } from 'hono';
 import type { ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
-import {
-  startOAuthFlow as startOpenAIFlow,
-  pollFlow as pollOpenAIFlow,
-  CHATGPT_CODEX_BASE_URL,
-  CHATGPT_SEED_MODELS,
-} from '@mcp/services/services/oauth/openai.js';
 import { discoverModels } from './model-discovery/index.js';
+import {
+  providerAuthContext,
+  providerAuthHandlers,
+  syntheticProviderConfig,
+} from './provider-auth-runtime.js';
+
+const CHATGPT_CODEX_BASE_URL =
+  process.env.CHATGPT_CODEX_BASE_URL ?? 'https://chatgpt.com/backend-api/codex';
+const CHATGPT_SEED_MODEL_IDS = ['gpt-5.3-codex', 'gpt-5-codex', 'gpt-4o'];
 
 export function openaiOAuthRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -25,7 +28,15 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
    */
   app.post('/oauth/openai/start', async (c) => {
     try {
-      const flow = await startOpenAIFlow();
+      const handlers = providerAuthHandlers('chatgpt');
+      const cfg = syntheticProviderConfig({
+        id: 'openai-chatgpt',
+        kind: 'chatgpt',
+        base_url: CHATGPT_CODEX_BASE_URL,
+      });
+      const flow = handlers?.start
+        ? await handlers.start(providerAuthContext(store, cfg))
+        : await legacyOpenAI().then((m) => m.startOAuthFlow());
       return c.json(flow);
     } catch (e) {
       const msg = (e as Error).message;
@@ -51,12 +62,25 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
     const providerId = body.provider_id ?? 'openai-chatgpt';
 
     try {
-      const result = await pollOpenAIFlow(body.state);
+      const handlers = providerAuthHandlers('chatgpt');
+      const cfg = store.getProvider(providerId) ?? syntheticProviderConfig({
+        id: providerId,
+        kind: 'chatgpt',
+        base_url: CHATGPT_CODEX_BASE_URL,
+      });
+      const result = handlers?.poll
+        ? await handlers.poll(providerAuthContext(store, cfg), { state: body.state })
+        : await legacyOpenAI().then((m) => m.pollFlow(body.state));
       if (result.status !== 'authorized') {
-        return c.json(result);
+        return c.json(normalizePollResult(result));
       }
 
       const baseURL = CHATGPT_CODEX_BASE_URL;
+      const accessToken = readString(result, 'access_token');
+      const expiresAt = readNumber(result, 'expires_at');
+      if (!accessToken || !expiresAt) {
+        return c.json({ status: 'error', error: 'ChatGPT auth did not return usable credentials' }, 502);
+      }
 
       if (!store.getProvider(providerId)) {
         store.upsertProvider({
@@ -64,7 +88,7 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
           name: 'ChatGPT (Codex)',
           kind: 'chatgpt',
           base_url: baseURL,
-          api_key: result.access_token,
+          api_key: accessToken,
           auth_mode: 'oauth',
           enabled: true,
           use_for_coder: true,
@@ -77,18 +101,18 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
         const existing = store.getProvider(providerId)!;
         store.upsertProvider({
           ...existing,
-          api_key: result.access_token,
+          api_key: accessToken,
           base_url: baseURL,
         });
       }
 
       store.setOAuth({
         provider_id: providerId,
-        access_token: result.access_token,
-        refresh_token: result.refresh_token,
-        expires_at: result.expires_at,
+        access_token: accessToken,
+        refresh_token: readNullableString(result, 'refresh_token'),
+        expires_at: expiresAt,
         scope: 'openid profile email offline_access',
-        extra: { id_token: result.id_token },
+        extra: { id_token: readNullableString(result, 'id_token') },
       });
 
       // Try live discovery first. discoverChatgpt already falls back to
@@ -106,9 +130,9 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
         models = [];
       }
       if (models.length === 0) {
-        models = CHATGPT_SEED_MODELS.map((m) => ({
-          model_id: m.model_id,
-          name: m.name,
+        models = CHATGPT_SEED_MODEL_IDS.map((model) => ({
+          model_id: model,
+          name: model,
           source: 'live' as const,
         }));
       }
@@ -118,7 +142,7 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
       return c.json({
         status: 'authorized',
         provider_id: providerId,
-        expires_at: result.expires_at,
+        expires_at: expiresAt,
         model_count: models.length,
       });
     } catch (e) {
@@ -127,4 +151,30 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
   });
 
   return app;
+}
+
+async function legacyOpenAI() {
+  return import('@mcp/services/services/oauth/openai.js');
+}
+
+function normalizePollResult(result: { status: string; message?: string; error?: string }) {
+  return result.message && !result.error ? { ...result, error: result.message } : result;
+}
+
+function readString(source: unknown, key: string): string | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function readNullableString(source: unknown, key: string): string | null {
+  if (!source || typeof source !== 'object') return null;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readNumber(source: unknown, key: string): number | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

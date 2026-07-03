@@ -1,0 +1,15 @@
+{
+  "name": "@mcp/provider-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/code-agent": "workspace:*",
+    "@mcp/indexer": "workspace:*"
+  }
+}

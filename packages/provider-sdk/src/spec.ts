@@ -2,8 +2,8 @@
  * `ProviderSpec` — the DECLARATIVE provider authoring surface.
  *
  * Pure data, JSON-serializable, ZERO functions. Authored identically by
- * built-ins and by plugins (a plugin puts it in its `.app.json`, importing only
- * `@mcp/plugin-sdk`). The host's `@mcp/provider-engine` turns a spec into a
+ * built-ins and by plugins (a plugin keeps it next to its adapter, importing only
+ * the provider SDK/runtime). The runtime turns a spec into a
  * runtime `ProviderDefinition` (adapter + live model discovery + connectivity
  * test) keyed by `wire`. This is the single mechanism — no per-provider adapter
  * code anywhere.
@@ -43,7 +43,7 @@ export interface TemplateVar {
 /**
  * Per-wire declarative knobs. Each captures a "B-class" rule (account-id
  * templating, ::mode routing, attribution headers, thinking mode) or a
- * "C-class" flag (claudeCode/geminiOAuth/responsesApi) as DATA the engine
+ * "C-class" flag (claudeCode/geminiOAuth/responsesApi) as DATA the runtime
  * interprets — so no per-provider code is needed.
  */
 export interface WireOpts {

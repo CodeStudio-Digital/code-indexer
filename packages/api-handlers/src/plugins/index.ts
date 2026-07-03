@@ -76,6 +76,48 @@ function toSource(s: PluginInstallSource): PluginSource {
   }
 }
 
+type ActivationRule = import('@mcp/plugin-host').ActivationRule;
+type Activatable = { activation?: ActivationRule };
+
+function filterActivated<T extends Activatable>(items: T[] | undefined, root: string | null): T[] | undefined {
+  return items?.filter((item) => isActivated(item.activation, root));
+}
+
+function filterActiveContributionShape(
+  contributions: Record<string, unknown> | null,
+  root: string | null,
+): Record<string, unknown> | null {
+  if (!contributions) return null;
+  const next = { ...contributions } as Record<string, unknown> & {
+    tools?: Activatable[];
+    toolWindows?: Activatable[];
+    editorActions?: Activatable[];
+    statusBarItems?: Activatable[];
+    runConfigurations?: Activatable[];
+    modules?: Array<Activatable & {
+      toolWindows?: Activatable[];
+      editorActions?: Activatable[];
+      statusBarItems?: Activatable[];
+      runConfigurations?: Activatable[];
+    }>;
+  };
+  next.tools = filterActivated(next.tools, root);
+  next.toolWindows = filterActivated(next.toolWindows, root);
+  next.editorActions = filterActivated(next.editorActions, root);
+  next.statusBarItems = filterActivated(next.statusBarItems, root);
+  next.runConfigurations = filterActivated(next.runConfigurations, root);
+  next.modules = next.modules
+    ?.filter((m) => isActivated(m.activation, root))
+    .map((m) => ({
+      ...m,
+      toolWindows: filterActivated(m.toolWindows, root),
+      editorActions: filterActivated(m.editorActions, root),
+      statusBarItems: filterActivated(m.statusBarItems, root),
+      runConfigurations: filterActivated(m.runConfigurations, root),
+    }));
+  return next;
+}
+
 export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
   const storage = new PluginStorageStore(loadConfig().dbPath);
   return {
@@ -87,12 +129,7 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
       const root = projectId != null ? (deps.db.getProject(projectId)?.root_path ?? null) : null;
       return listInstalledPlugins().map((p) => {
         const info = toInfo(p);
-        const contrib = info.contributions as
-          | { toolWindows?: Array<{ activation?: import('@mcp/plugin-host').ActivationRule }> }
-          | null;
-        if (contrib?.toolWindows?.length) {
-          contrib.toolWindows = contrib.toolWindows.filter((w) => isActivated(w.activation, root));
-        }
+        info.contributions = filterActiveContributionShape(info.contributions, root);
         return info;
       });
     },

@@ -11,6 +11,8 @@
 export { parseModelWithMode } from './wire-helpers/model-mode.js';
 export type { ParsedModelMode } from './wire-helpers/model-mode.js';
 export { buildProviderDefinition } from './build-definition.js';
+export { defineProviderAdapterFromSpec } from './plugin-adapter.js';
+export type { ProviderAdapterFromSpecOptions } from './plugin-adapter.js';
 export { discoverModels } from './discovery/index.js';
 export type { DiscoveryResult } from './discovery/index.js';
 export { BUILTIN_SPECS, getSpecByKind } from './specs/index.js';

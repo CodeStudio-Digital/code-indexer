@@ -33,6 +33,24 @@ export interface ActiveContextInputs {
 const DEFAULT_MAX_CHARS = 4000;
 
 /**
+ * State-transition guidance for an active goal, adapted from Codex's
+ * `goals/continuation.md` + `goals/budget_limit.md` into a single compact line
+ * (our `<active-context>` ships every turn, so a full page would tax every
+ * turn). Only when `in_progress`: reinforce continuation fidelity — keep the
+ * whole objective, don't declare completion early — with the soft-budget
+ * wrap-up folded in. 'complete' goals need no guidance (the note says it all).
+ */
+function goalGuidanceLine(goal: GoalSnapshot): string | null {
+  if (goal.status !== 'in_progress') return null;
+  let line =
+    'goal_guidance: keep the FULL objective intact — do not redefine success as a smaller or easier subset, and ending a turn does not require shrinking it. Mark complete only when the requested end state is true and verified (never just because the session is long).';
+  if (goal.budgetTokens && goal.budgetTokens > 0) {
+    line += ` Soft token budget ~${goal.budgetTokens}: as you approach it, wrap up (summarize progress + next step) instead of starting new substantive work.`;
+  }
+  return line;
+}
+
+/**
  * Render the <active-context> block. Returns null if there is nothing
  * worth saying (no goal, no todos, no active task) — callers should skip
  * injection in that case to keep the prompt lean.
@@ -53,52 +71,46 @@ export function buildActiveContextBlock(input: ActiveContextInputs): string | nu
   const hasContent = !!goal || todos.length > 0 || !!activeTask;
   if (!hasContent) return null;
 
-  const lines: string[] = ['<active-context>'];
+  // Header = everything except the todo body. Built as its own array so the
+  // truncation path can measure/keep it without fragile positional indexing
+  // (goal guidance can insert a line between goal and active_task).
+  const headerLines: string[] = ['<active-context>'];
 
   if (goal) {
     const note = goal.completionNote ? ` — ${goal.completionNote}` : '';
-    lines.push(`goal: ${goal.text} (status=${goal.status}${note})`);
+    headerLines.push(`goal: ${goal.text} (status=${goal.status}${note})`);
+    const guidance = goalGuidanceLine(goal);
+    if (guidance) headerLines.push(guidance);
   }
 
   if (activeTask) {
     const files = activeTask.files.length
       ? ` — files: [${activeTask.files.join(', ')}]`
       : '';
-    lines.push(`active_task: ${activeTask.id} "${activeTask.title}"${files}`);
+    headerLines.push(`active_task: ${activeTask.id} "${activeTask.title}"${files}`);
   }
 
-  if (todos.length > 0) {
-    lines.push('todos:');
-    for (const t of todos) {
-      const label = t.status === 'in_progress' ? t.activeForm : t.content;
-      const idTag = t.id ? `(id=${t.id}) ` : '';
-      lines.push(`  - [${t.status}] ${idTag}${label}`);
-    }
-  }
+  const todoItemLines = todos.map((t) => {
+    const label = t.status === 'in_progress' ? t.activeForm : t.content;
+    const idTag = t.id ? `(id=${t.id}) ` : '';
+    return `  - [${t.status}] ${idTag}${label}`;
+  });
 
-  lines.push('</active-context>');
-  let block = lines.join('\n');
+  const bodyLines = todoItemLines.length > 0 ? ['todos:', ...todoItemLines] : [];
+  let block = [...headerLines, ...bodyLines, '</active-context>'].join('\n');
 
   if (block.length > cap) {
-    // Truncate todo body, keep header/goal/active_task lines intact.
-    const headerLines: string[] = ['<active-context>'];
-    if (goal) headerLines.push(lines[1]);
-    if (activeTask) headerLines.push(goal ? lines[2] : lines[1]);
+    // Truncate todo body, keep header (open + goal + guidance + active_task) intact.
     const headerSize = headerLines.join('\n').length;
     const budget = cap - headerSize - '\n</active-context>'.length - '\ntodos:'.length;
-    const todoLines = todos.map((t) => {
-      const label = t.status === 'in_progress' ? t.activeForm : t.content;
-      const idTag = t.id ? `(id=${t.id}) ` : '';
-      return `  - [${t.status}] ${idTag}${label}`;
-    });
     const kept: string[] = [];
     let used = 0;
-    for (const line of todoLines) {
+    for (const line of todoItemLines) {
       if (used + line.length + 1 > budget) break;
       kept.push(line);
       used += line.length + 1;
     }
-    const dropped = todoLines.length - kept.length;
+    const dropped = todoItemLines.length - kept.length;
     if (dropped > 0) kept.push(`  ... ${dropped} more truncated`);
     block = [...headerLines, 'todos:', ...kept, '</active-context>'].join('\n');
   }

@@ -7,6 +7,9 @@ capabilities to the agent and the workspace. A plugin can contribute:
 - **MCP servers** — external tool providers (stdio / HTTP), registered via `.mcp.json`.
 - **Skills** — prompt-based capabilities (`SKILL.md`) + slash commands.
 - **IDE UI** — sandboxed tool windows (iframes), command-palette commands, activity-rail icons, themes.
+- **Editor/project modules** — editor actions, status-bar items, run configurations, and detected
+  project modules/facets that activate only for matching projects.
+- **LLM providers** — provider metadata plus optional executable V2 adapters owned by the plugin.
 
 Plugins install by **namespace** (the `plugin.json` `name`) from a local folder, a GitHub repo, or
 the hosted **Market**. Everything a plugin adds is tracked under its namespace, so uninstall is clean.
@@ -92,7 +95,101 @@ contributions snapshot lives in `installed_plugins`).
 | `contributeToolWindow` | Sandboxed iframe + rail icon | `entry` = an HTML file in the bundle; `side` = `left`/`right`/`bottom`. `right` also surfaces in the chat session's right rail and the Company sidebar. Optional `icon` from a small lucide allowlist (`cloud`, `database`, `box`, `container`, `globe`, `server`, `terminal`, `zap`, `hard-drive`, `key-round`, `package`; fallback: puzzle). Omit `activation` to surface everywhere (account-level plugins, e.g. Cloudflare/Podman). |
 | `contributeCommand` | Command Palette (`Ctrl+Shift+P`) | — |
 | `contributeTheme` | "Apply theme: X" in the palette | Overrides shadcn CSS vars; toggles `.dark`. |
+| `contributeProjectModule` | Project/module facet | Declares IntelliJ-style project modules activated by files/deps, with nested actions/status/run configs. |
+| `contributeEditorAction` | Editor/Search Everywhere command | Can call a contributed tool through `runsTool`; active only when its activation rule matches. |
+| `contributeStatusBarItem` | IDE status bar | Lightweight project/module indicator; optional click-through to `runsTool`. |
+| `contributeRunConfiguration` | Project run config | Declarative command/args/kind metadata for project and module runners. |
+| `contributeProvider` | LLM provider metadata | Declares the provider shape for Admin/seed/pricing. Bundled first-party providers can also export `providerAdapter` for V2 owned runtime. |
 | `.mcp.json` / `skills/` | Agent MCP servers / skills | Registered on install (Claude Code convention). |
+
+Project/module contributions use the same declarative `activation` rules as tool windows. The host
+evaluates them without running plugin code, so a plugin can behave like several small IDE modules:
+
+```ts
+export default definePlugin({
+  modules: [
+    contributeProjectModule({
+      id: 'cloudflare-worker',
+      title: 'Cloudflare Worker',
+      activation: {
+        whenFiles: ['wrangler.toml', 'wrangler.jsonc'],
+        whenPackageDep: ['wrangler', '@opennextjs/cloudflare'],
+      },
+      tools: ['cf_detect', 'cf_deploy'],
+      editorActions: [
+        contributeEditorAction({
+          id: 'cf-deploy-project',
+          label: 'Cloudflare: Deploy Project',
+          runsTool: 'cf_deploy',
+          scope: 'project',
+        }),
+      ],
+      statusBarItems: [
+        contributeStatusBarItem({ id: 'cf-project', label: 'Cloudflare', alignment: 'right' }),
+      ],
+      runConfigurations: [
+        contributeRunConfiguration({
+          id: 'cf-dev',
+          title: 'Cloudflare Dev',
+          command: 'npx',
+          args: ['wrangler', 'dev'],
+        }),
+      ],
+    }),
+  ],
+});
+```
+
+### Provider plugins
+
+Provider plugins have two layers:
+
+- `providers: [ProviderSpec]` is still pure metadata. It drives Admin, model defaults, pricing,
+  visual identity, config fields and initial validation.
+- `export const providerAdapter = defineProviderAdapter(...)` or
+  `defineProviderAdapterFromSpec(...)` is executable V2 runtime. The host registers a normal
+  `ProviderDefinition`, but credential resolution, OAuth refresh, model discovery, test connection
+  and client creation dispatch into the plugin bundle.
+
+The host still owns encrypted token persistence and the registry lifecycle; the plugin owns the
+provider-specific decisions.
+
+```ts
+import { definePlugin, contributeProvider } from '@mcp/plugin-sdk/define.js';
+import { defineProviderAdapterFromSpec } from '@mcp/provider-engine/plugin-adapter.js';
+import { myProviderSpec } from './spec.js';
+
+export const providerAdapter = defineProviderAdapterFromSpec(myProviderSpec, {
+  async resolveCredentials({ config, credentials }) {
+    const stored = await credentials.get();
+    return {
+      apiKey: stored?.access_token ?? config.api_key ?? undefined,
+      baseURL: config.base_url ?? myProviderSpec.defaultBaseURL,
+      extra: config.extra ?? undefined,
+    };
+  },
+});
+
+export default definePlugin({
+  providers: [contributeProvider(myProviderSpec)],
+});
+```
+
+When the CLI sees `providerAdapter`/`providerAdapters`, it writes:
+
+```json
+{
+  "providerRuntime": {
+    "protocol": "provider-adapter-v2",
+    "entry": "./dist/plugin.js",
+    "kinds": ["my-provider"]
+  }
+}
+```
+
+For security, executable provider adapters are currently activated only for bundled first-party
+plugins. Third-party provider plugins continue through the declarative V1 path until signed runtime
+permissions are promoted.
 
 ## How it works
 

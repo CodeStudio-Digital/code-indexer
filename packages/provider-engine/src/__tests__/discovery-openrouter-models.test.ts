@@ -1,14 +1,3 @@
-/**
- * Equivalence: the declarative OpenRouter discovery (engine) produces an
- * IDENTICAL `UpsertModelInput[]` to the hand-written admin discoverX.
- *
- * The sample API response is copied verbatim from
- * `src/__tests__/openrouter-provider.test.ts` (the `discoverOpenrouter` test)
- * so the rich field mapping — context_length / architecture modalities /
- * top_provider limits / supported_parameters → can_reason /
- * supported_reasoning_levels / visibility / the text-output filter — is proven
- * identical on both paths.
- */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 import { discoverOpenrouterModels } from '../discovery/openrouter-models.js';
@@ -72,22 +61,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('openrouter-models discovery equivalence: engine(spec) == admin discoverX', () => {
-  it('maps the rich catalog identically to the admin discoverOpenrouter', async () => {
+describe('openrouter-models discovery', () => {
+  it('maps the rich catalog and filters image-only models', async () => {
     globalThis.fetch = vi.fn(async () => sampleResponse()) as unknown as typeof fetch;
-    const { discoverOpenrouter } = await import(
-      '@apps/http-api/admin/model-discovery/openrouter.js'
-    );
 
-    const a = await discoverOpenrouter(baseCfg);
     const b = await discoverOpenrouterModels(openrouterSpec, baseCfg);
 
-    // Field-by-field rich-metadata parity is proven by structural equality.
-    expect(b).toEqual(a);
-
-    // Sanity: the text-output filter dropped the image-only model, and the
-    // surviving row carries the full rich payload.
-    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
     expect(b[0]).toMatchObject({
       model_id: 'anthropic/claude-sonnet-4.5',
       name: 'Claude Sonnet 4.5',
@@ -105,17 +85,7 @@ describe('openrouter-models discovery equivalence: engine(spec) == admin discove
     });
   });
 
-  it('calls the same OpenRouter endpoint with the same Authorization header', async () => {
-    const adminCalls: Array<{ url: string; init?: RequestInit }> = [];
-    globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
-      adminCalls.push({ url: String(url), init });
-      return sampleResponse();
-    }) as unknown as typeof fetch;
-    const { discoverOpenrouter } = await import(
-      '@apps/http-api/admin/model-discovery/openrouter.js'
-    );
-    await discoverOpenrouter(baseCfg);
-
+  it('calls the OpenRouter endpoint with the Authorization header', async () => {
     const engineCalls: Array<{ url: string; init?: RequestInit }> = [];
     globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
       engineCalls.push({ url: String(url), init });
@@ -124,23 +94,15 @@ describe('openrouter-models discovery equivalence: engine(spec) == admin discove
     await discoverOpenrouterModels(openrouterSpec, baseCfg);
 
     expect(engineCalls[0].url).toBe('https://openrouter.ai/api/v1/models?output_modalities=text');
-    expect(engineCalls[0].url).toBe(adminCalls[0].url);
     expect((engineCalls[0].init?.headers as Record<string, string>)?.Authorization).toBe(
       'Bearer or-test',
     );
-    expect((engineCalls[0].init?.headers as Record<string, string>)?.Authorization).toBe(
-      (adminCalls[0].init?.headers as Record<string, string>)?.Authorization,
-    );
   });
 
-  it('throws the same error on non-2xx (both paths)', async () => {
+  it('throws on non-2xx', async () => {
     globalThis.fetch = vi.fn(
       async () => new Response('forbidden', { status: 403 }),
     ) as unknown as typeof fetch;
-    const { discoverOpenrouter } = await import(
-      '@apps/http-api/admin/model-discovery/openrouter.js'
-    );
-    await expect(discoverOpenrouter(baseCfg)).rejects.toThrow(/HTTP 403/);
     await expect(discoverOpenrouterModels(openrouterSpec, baseCfg)).rejects.toThrow(/HTTP 403/);
   });
 });

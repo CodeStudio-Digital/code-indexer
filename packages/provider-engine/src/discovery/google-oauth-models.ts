@@ -1,11 +1,6 @@
 /**
  * Live model discovery for the `sdk:google-oauth` format.
  *
- * Lifted verbatim from the hand-written admin helper
- * `apps/http-api/admin/model-discovery/google-oauth.ts` (`discoverGoogleOAuth`).
- * The behaviour is identical — the equivalence test asserts deep equality of
- * the returned `UpsertModelInput[]`.
- *
  * Google Gemini model discovery via OAuth Bearer token (instead of API key):
  * the token is refreshed through `refreshIfExpired(store, cfg.id)` (falling back
  * to the stale `api_key` token on failure), then `/v1beta/models` is fetched and

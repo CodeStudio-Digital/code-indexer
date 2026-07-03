@@ -1,12 +1,9 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
 
 /**
- * Declarative spec for the AWS Bedrock built-in. Metadata mirrors the
- * hand-written `services/.../definitions/bedrock.ts` exactly (the equivalence
- * test asserts it). credKind='aws' — creds come from `creds.aws` (access key /
- * secret / session token / region). No `defaultModel`, `capabilities`, or
- * `defaultBaseURL` on the definition, so they are OMITTED here (the equivalence
- * test compares undefined vs undefined).
+ * Declarative spec for the AWS Bedrock built-in. credKind='aws' — creds come
+ * from `creds.aws` (access key / secret / session token / region). No
+ * `defaultModel`, `capabilities`, or `defaultBaseURL` are declared.
  */
 export const bedrockSpec: ProviderSpec = {
   kind: 'bedrock',

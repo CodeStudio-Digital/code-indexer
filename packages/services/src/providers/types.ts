@@ -19,6 +19,8 @@ export type {
   CreateCoderOpts,
   ProviderVisual,
   ProviderDefinition,
+  ProviderCredentials,
+  StoredOAuth,
 } from '@mcp/provider-sdk';
 
 export { defineProvider, PROVIDER_SDK_VERSION } from '@mcp/provider-sdk';

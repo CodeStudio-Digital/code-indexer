@@ -1,17 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 
-import { discoverOpenai } from '@apps/http-api/admin/model-discovery/openai.js';
-import { discoverMoonshot } from '@apps/http-api/admin/model-discovery/moonshot.js';
 import { discoverOpenAIModels } from '../discovery/openai-models.js';
 import { openaiSpec, zaiSpec, fuguSpec } from '../specs/openai-compat.js';
 import { moonshotSpec } from '../specs/moonshot.js';
 
 /**
- * Equivalence: the spec-driven `discoverOpenAIModels` must return the exact
- * `UpsertModelInput[]` the hand-written admin `discoverOpenai`/`discoverMoonshot`
- * produce for the same API response + cfg. The ZAI case has no admin counterpart
- * (new capability) so it only asserts shape + the spec's modelsUrl is hit.
+ * OpenAI-compatible discovery covers base-url derived catalogs, prefix filters,
+ * ZAI mode duplication and metadata gap-fill from spec.models.
  */
 
 const realFetch = globalThis.fetch;
@@ -53,7 +49,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe('discoverOpenAIModels equivalence with admin discoverX', () => {
+describe('discoverOpenAIModels', () => {
   // A representative OpenAI /models response: a couple of known ids (have a
   // registry context window) plus an unknown one (context_window -> null).
   const OPENAI_RESPONSE = {
@@ -64,32 +60,22 @@ describe('discoverOpenAIModels equivalence with admin discoverX', () => {
     ],
   };
 
-  it('(a) openai: plain list matches admin discoverOpenai', async () => {
+  it('(a) openai: plain list maps ids from /models', async () => {
     const cfg = baseCfg({ base_url: 'https://api.openai.com/v1', api_key: 'k' });
-
-    stubFetch(OPENAI_RESPONSE);
-    const a = await discoverOpenai(cfg);
 
     stubFetch(OPENAI_RESPONSE);
     const b = await discoverOpenAIModels(openaiSpec, cfg);
 
-    expect(b).toEqual(a);
+    expect(b.map((m) => m.model_id)).toEqual(['gpt-4o-mini', 'gpt-4o', 'text-embedding-3-small']);
+    expect(b.every((m) => m.source === 'live')).toBe(true);
   });
 
-  it('(a) openai: zai_has_coding_mode duplication matches admin discoverOpenai', async () => {
-    // Admin discoverOpenai duplicates per-model when extra.zai_has_coding_mode
-    // is set; our builder only does so when the SPEC also declares
-    // supportsModes. openaiSpec has no supportsModes, so to compare the
-    // duplication path we drive the builder with a spec that opts in while
-    // keeping every other openai field identical.
+  it('(a) openai: supportsModes + zai_has_coding_mode duplicates normal/coding rows', async () => {
     const cfg = baseCfg({
       base_url: 'https://api.openai.com/v1',
       api_key: 'k',
       extra: { zai_has_coding_mode: true },
     });
-
-    stubFetch(OPENAI_RESPONSE);
-    const a = await discoverOpenai(cfg);
 
     const specWithModes = {
       ...openaiSpec,
@@ -98,13 +84,11 @@ describe('discoverOpenAIModels equivalence with admin discoverX', () => {
     stubFetch(OPENAI_RESPONSE);
     const b = await discoverOpenAIModels(specWithModes, cfg);
 
-    expect(b).toEqual(a);
-    // Sanity: every base model became a normal+coding pair.
-    expect(b.length).toBe(a.length);
     expect(b.length).toBe(OPENAI_RESPONSE.data.length * 2);
+    expect(b.map((m) => m.mode)).toEqual(['normal', 'coding', 'normal', 'coding', 'normal', 'coding']);
   });
 
-  it('(b) moonshot: filterPrefixes drops non kimi-/moonshot- ids, matches admin discoverMoonshot', async () => {
+  it('(b) moonshot: filterPrefixes drops non kimi-/moonshot- ids', async () => {
     const MOONSHOT_RESPONSE = {
       data: [
         { id: 'kimi-k2-0711-preview' },
@@ -120,13 +104,8 @@ describe('discoverOpenAIModels equivalence with admin discoverX', () => {
     });
 
     stubFetch(MOONSHOT_RESPONSE);
-    const a = await discoverMoonshot(cfg);
-
-    stubFetch(MOONSHOT_RESPONSE);
     const b = await discoverOpenAIModels(moonshotSpec, cfg);
 
-    expect(b).toEqual(a);
-    // Sanity: only the two allowed ids survived.
     expect(b.map((m) => m.model_id)).toEqual(['kimi-k2-0711-preview', 'moonshot-v1-128k']);
   });
 

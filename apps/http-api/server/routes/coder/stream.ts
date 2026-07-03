@@ -3,6 +3,7 @@ import { runCoder } from '@mcp/code-agent/index.js';
 import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
+import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
@@ -84,6 +85,8 @@ interface SendMessageBody {
    * call `get_skill_content` first.
    */
   selected_skill_ids?: string[];
+  /** Structured IDE context (active file / selections / open tabs) for this send. */
+  ide_context?: IdeContext;
   /**
    * Apêndice 4 Fase 2 — when true, the runner resumes from history
    * instead of pushing a new user turn. Used by the dashboard after an
@@ -101,6 +104,12 @@ interface SendMessageBody {
  * exceeds this we'd rather fail fast than block the request handler.
  */
 const RUNNER_READY_TIMEOUT_MS = 5_000;
+
+function projectRootForSession(deps: ServerDeps, sessionId: number): string | null {
+  const session = deps.sessionStore.getSession(sessionId);
+  if (session?.project_id == null) return null;
+  return deps.db.getProject(session.project_id)?.root_path ?? null;
+}
 
 interface ContinueBody {
   plan_mode?: boolean;
@@ -283,7 +292,7 @@ export function mountCoderStreamRoutes(
       last_event_id: lastEventId,
       buffer_size: bus.buffer.length,
     });
-    return pumpBusToSSE(c, bus, { since: lastEventId, heartbeat: false });
+    return pumpBusToSSE(c, bus, { since: lastEventId });
   });
 
   /**
@@ -499,6 +508,7 @@ export function mountCoderStreamRoutes(
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),
           selectedSkillIds,
+          ideContext: body.ide_context,
           preflight,
           ...deps.buildAgentDecisionRuntimeOptions(),
           // Apêndice 4 Fase 2 — when the dashboard is resuming via the
@@ -602,7 +612,6 @@ export function mountCoderStreamRoutes(
     if (decision.kind === 'attach') {
       return pumpBusToSSE(c, decision.bus, {
         since: decision.tailFrom,
-        heartbeat: false,
       });
     }
 
@@ -610,7 +619,7 @@ export function mountCoderStreamRoutes(
     // kicked off `runCoder()` inside the worker — the route just
     // pumps the mirrored bus to SSE and returns.
     if (coderWorkerEnabled()) {
-      return pumpBusToSSE(c, decision.bus, { heartbeat: false });
+      return pumpBusToSSE(c, decision.bus);
     }
     // Legacy in-process fresh run: fire runCoder fire-and-forget. The
     // HTTP response only subscribes to the bus — if the client
@@ -620,7 +629,9 @@ export function mountCoderStreamRoutes(
     void (async () => {
       let pluginHost: PluginWorkerHost | null = null;
       try {
-        const { toolPlugins, bundles } = listEnabledPluginRuntime();
+        const { toolPlugins, bundles } = listEnabledPluginRuntime({
+          projectRoot: projectRootForSession(deps, id),
+        });
         let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
         if (toolPlugins.length > 0) {
           const host = new PluginWorkerHost({ bundles, hostInvoke: getPluginHostInvoke() });
@@ -644,6 +655,7 @@ export function mountCoderStreamRoutes(
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),
           selectedSkillIds,
+          ideContext: body.ide_context,
           preflight,
           pluginTools,
           signal: bus.ctrl.signal,
@@ -702,7 +714,7 @@ export function mountCoderStreamRoutes(
       }
     })();
 
-    return pumpBusToSSE(c, bus, { heartbeat: false });
+    return pumpBusToSSE(c, bus);
   });
 
   /**
@@ -753,7 +765,9 @@ export function mountCoderStreamRoutes(
     void (async () => {
       let pluginHost: PluginWorkerHost | null = null;
       try {
-        const { toolPlugins, bundles } = listEnabledPluginRuntime();
+        const { toolPlugins, bundles } = listEnabledPluginRuntime({
+          projectRoot: projectRootForSession(deps, id),
+        });
         let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
         if (toolPlugins.length > 0) {
           const host = new PluginWorkerHost({ bundles, hostInvoke: getPluginHostInvoke() });
@@ -820,6 +834,6 @@ export function mountCoderStreamRoutes(
       }
     })();
 
-    return pumpBusToSSE(c, bus, { heartbeat: false });
+    return pumpBusToSSE(c, bus);
   });
 }

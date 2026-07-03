@@ -4,7 +4,6 @@ import type { ProviderSpec } from '@mcp/provider-sdk';
  * Moonshot AI (api-key) — same wire as kimi-code (KimiCodeChatProvider), only
  * auth shape + base URL differ. The thinking mode is read from a DIFFERENT
  * extra key (`kimi_code_thinking_mode`) than kimi-code's (`thinkingMode`).
- * Mirrors `services/.../definitions/moonshot.ts` exactly.
  */
 export const moonshotSpec: ProviderSpec = {
   kind: 'moonshot',

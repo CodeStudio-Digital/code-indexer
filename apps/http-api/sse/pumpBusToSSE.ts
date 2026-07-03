@@ -29,7 +29,8 @@ export function pumpBusToSSE(
   bus: CoderRunBus,
   opts: PumpBusToSSEOptions = {},
 ) {
-  const since = Number.isFinite(opts.since ?? NaN) ? (opts.since as number) : -1;
+  const rawSince = Number.isFinite(opts.since ?? NaN) ? (opts.since as number) : -1;
+  const since = effectiveSince(rawSince, bus.nextSeq);
   const heartbeat = opts.heartbeat ?? true;
   return streamSSE(c, async (stream) => {
     const ac = new AbortController();
@@ -41,12 +42,21 @@ export function pumpBusToSSE(
     // is respected. A write failure means the client disconnected; abort
     // immediately so waitEnded resolves and stream.close() doesn't hang.
     let drainChain = Promise.resolve();
-    const enqueueWrite = (msg: { id: string; event: string; data: string }) => {
+    const enqueueWrite = (msg: { id?: string; event: string; data: string }) => {
       drainChain = drainChain.then(() => {
         if (ac.signal.aborted) return;
         return stream.writeSSE(msg).catch(() => { ac.abort(); });
       });
     };
+
+    // Transport-level preamble: tells the client which bus instance this
+    // connection serves, so it can pair (busId, seq) for dedup across
+    // replays/zombie streams. Enqueued BEFORE subscribe so it precedes the
+    // replay in the drain chain. Deliberately has NO `id` — a non-numeric or
+    // reused id would corrupt the client's Last-Event-ID cursor. Never
+    // publish()ed: it must not enter the buffer, consume a seq, or reach the
+    // JSONL sink.
+    enqueueWrite({ event: 'bus_info', data: JSON.stringify({ bus_id: bus.busId }) });
 
     const unsubscribe = subscribe(
       bus,
@@ -69,6 +79,16 @@ export function pumpBusToSSE(
       opts.onDone?.();
     }
   });
+}
+
+/**
+ * Clamp a replay cursor against the bus it will be applied to. A cursor at or
+ * beyond `nextSeq` cannot have come from this bus (seq restarts at 0 per bus)
+ * — it is a stale Last-Event-ID from a previous run's bus, so fall back to a
+ * full replay instead of silently skipping everything.
+ */
+export function effectiveSince(since: number, nextSeq: number): number {
+  return since >= nextSeq ? -1 : since;
 }
 
 /** Parse the standard `Last-Event-ID` header (returns -1 when absent/invalid). */

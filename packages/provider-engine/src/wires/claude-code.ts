@@ -20,7 +20,7 @@ const CLAUDE_CODE_VALID_EFFORTS: readonly ClaudeCodeEffort[] = ['low', 'medium',
 /**
  * Read the per-model `default_reasoning_level` set in the admin UI. Returns
  * `undefined` (not `null`) on miss so the resolver falls back to the env var
- * then the model-family default. Best-effort. Verbatim from definitions/claude-code.ts.
+ * then the model-family default. Best-effort.
  */
 function readClaudeCodeEffortForModel(
   providerId: string | undefined,
@@ -76,8 +76,7 @@ function claudeCodeAccountInfo(creds: { extra?: Record<string, unknown> }): Clau
  * Claude Code branch of the `anthropic` wire (`wireOpts.claudeCode`). Routes the
  * resolved OAuth creds (Bearer claude.ai inference OR managed console api-key)
  * through `resolveClaudeCodeModel` — the adaptive model/effort/thinking resolver
- * — with the per-request `resolveModel` hook the agent calls each turn. Verbatim
- * lift of `definitions/claude-code.ts`.
+ * — with the per-request `resolveModel` hook the agent calls each turn.
  */
 export function buildClaudeCode(_spec: ProviderSpec): WireParts {
   return {

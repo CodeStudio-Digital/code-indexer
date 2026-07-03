@@ -9,6 +9,10 @@ import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { parseToolOutputCapLevel, levelFromLegacyBoolean } from '@mcp/code-agent/core/runner/output-caps.js';
 import { PermissionGate, normalizeToolPermissionMode } from '@mcp/code-agent/core/permission-gate.js';
+import { loadAgentsMd } from '@mcp/code-agent/core/agents-md.js';
+import { formatIdeContext } from '@mcp/code-agent/core/ide-context.js';
+import { buildConfigLock, diffConfigLock, getConfigLock, setConfigLock } from '@mcp/code-agent/sessions/store/session-config.js';
+import { recordSessionEvent } from '@mcp/code-agent/sessions/store/events-recorder.js';
 import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/durable-compaction.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction/threshold.js';
@@ -1381,6 +1385,60 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // stay in sync.
   const agentLoopV2EnvFlag = process.env.CODER_AGENT_LOOP_V2 !== '0';
 
+  // Effective tool-approval mode (mig 131), resolved once here so the system
+  // prompt's `# Permissions & sandbox` block and the runner's PermissionGate
+  // (below) can't diverge. Company runs force 'unrestricted' (no board approval
+  // UI yet); single sessions read the column (NULL → 'auto').
+  const resolvedPermissionMode = opts.toolPermissionMode
+    ?? (opts.companyContext ? 'unrestricted' : normalizeToolPermissionMode(session.tool_permission_mode));
+
+  // Hierarchical AGENTS.md instructions for this project (root→cwd). Read-only,
+  // budget-capped, safe on missing/malformed files. Our /init generates the
+  // file; this finally reads it back into the prompt.
+  const agentsMd = loadAgentsMd(project.root_path, effectiveCwd);
+
+  // Config lock (mig 194): capture the resolved config on first run; on resume
+  // diff against the stored lock and surface drift. Advisory only (dev-first) —
+  // wrapped so a lock failure can never block a run.
+  try {
+    const rawDb = store.getDb();
+    const currentLock = buildConfigLock({
+      provider: session.provider,
+      model: session.model,
+      permissionMode: resolvedPermissionMode,
+      reasoningEffort: session.reasoning_effort_override,
+      planDepth: session.plan_depth_override,
+      responseLanguage: session.response_language_override,
+      outputStyle: session.output_style_override,
+      temperature: session.temperature_override,
+      toolOutputCapLevel: session.tool_output_cap_level,
+      nowMs: Date.now(),
+    });
+    const storedLock = getConfigLock(rawDb, session.id);
+    if (!storedLock) {
+      setConfigLock(rawDb, session.id, currentLock);
+      recordSessionEvent(rawDb, {
+        session_id: session.id,
+        kind: 'config_captured',
+        to_state: `${session.provider}/${session.model}`,
+        actor: 'system',
+      });
+    } else {
+      const drift = diffConfigLock(storedLock, currentLock);
+      if (drift.length > 0) {
+        console.warn(`[coder] session ${session.id} config drift on resume: ${drift.join('; ')}`);
+        recordSessionEvent(rawDb, {
+          session_id: session.id,
+          kind: 'config_drift',
+          reason: drift.join('; '),
+          actor: 'resume',
+        });
+      }
+    }
+  } catch (e) {
+    console.warn(`[coder] config-lock check failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
     projectRoot: project.root_path,
@@ -1442,6 +1500,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         : getModelMaxTools(session.model),
       approxCatalog: registry.list().length,
     },
+    // Effective permission/sandbox policy surfaced to the model: the real
+    // writable root (sandbox workdir or project root) + the approval mode.
+    // Cache-stable axis above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
+    permissions: {
+      writableRoots: [effectiveCwd],
+      approvalMode: resolvedPermissionMode,
+    },
+    // AGENTS.md project instructions (loaded above). '' when none → block omitted.
+    agentsMd,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
@@ -2059,14 +2126,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     toolOutputCapLevel:
       parseToolOutputCapLevel(session.tool_output_cap_level) ??
       levelFromLegacyBoolean(session.unrestricted_tool_output),
-    // Tool permission mode (migration 131). Company runs force 'unrestricted'
-    // in V1 — the company board has no approval UI yet, so a paused
-    // subordinate would hang invisibly. Single sessions read the column
-    // (NULL → 'auto'). Explicit opt wins (tests / future company V2).
-    toolPermissionMode: opts.toolPermissionMode
-      ?? (opts.companyContext
-        ? 'unrestricted'
-        : normalizeToolPermissionMode(session.tool_permission_mode)),
+    // Tool permission mode (migration 131) — resolved once at the system-prompt
+    // call site so the prompt's permissions block and this gate agree.
+    toolPermissionMode: resolvedPermissionMode,
     // A1 — per-session tunables (push caps, turn budget). Undefined →
     // runner uses envTunables() = bit-identical to pre-A1 constants.
     tunables: opts.tunables,
@@ -2181,7 +2243,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   });
 
   if (!opts.resume) {
-    const userBlocks = attachmentsToBlocks(opts.userMessage, opts.attachments);
+    // Prepend the send-time IDE context (active file / selections / open tabs)
+    // as a structured <ide_context> block so the agent sees the editing focus.
+    // Only on a fresh send — it's a snapshot, not re-injected every turn.
+    const ideBlock = formatIdeContext(opts.ideContext);
+    const messageText = ideBlock ? `${ideBlock}\n\n${opts.userMessage}` : opts.userMessage;
+    const userBlocks = attachmentsToBlocks(messageText, opts.attachments);
     const pickExtras =
       opts.selectedSkillIds && opts.selectedSkillIds.length > 0
         ? { selectedSkillIds: opts.selectedSkillIds }

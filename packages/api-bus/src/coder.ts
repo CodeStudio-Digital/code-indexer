@@ -84,6 +84,17 @@ export interface CoderAttachment {
   mediaType?: string;
 }
 
+/**
+ * Structured IDE context captured at send time (active file, selections, open
+ * tabs). Field names match `@mcp/code-agent`'s `IdeContext` so the handler can
+ * forward it verbatim to `runCoder({ ideContext })`.
+ */
+export interface IdeContextInput {
+  activeFile?: string;
+  selections?: Array<{ path: string; startLine: number; endLine: number; text?: string }>;
+  openTabs?: string[];
+}
+
 export interface SendMessageInput {
   sessionId: number;
   content: string;
@@ -96,6 +107,8 @@ export interface SendMessageInput {
   thinking?: boolean;
   interject?: boolean;
   selected_skill_ids?: string[];
+  /** Structured IDE context (active file / selections / open tabs) for this send. */
+  ide_context?: IdeContextInput;
   /** Resume from history (last message must be a tool result). */
   resume?: boolean;
 }

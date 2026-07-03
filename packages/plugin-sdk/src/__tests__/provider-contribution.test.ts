@@ -37,7 +37,7 @@ describe('declarative providers contribution point', () => {
     expect(() => appManifestSchema.parse({ providers: [{ ...acmeSpec, credKind: 'magic' }] })).toThrow();
   });
 
-  it('definePlugin + contributeProvider carry a ProviderSpec (pure DATA, no functions)', () => {
+  it('definePlugin + contributeProvider carry ProviderSpec metadata', () => {
     const acme = contributeProvider(defineProviderSpec(acmeSpec));
     const mod = definePlugin({ providers: [acme] });
     expect(mod.providers).toHaveLength(1);

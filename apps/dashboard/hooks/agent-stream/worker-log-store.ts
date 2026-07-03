@@ -36,6 +36,24 @@ const pending = new Map<number, WorkerLogEntry[]>();
 // Monotonic touch counter for LRU eviction of idle slots.
 let touchSeq = 0;
 const touched = new Map<number, number>();
+
+// --- Per-sid seq dedup (module-level, survives remounts) -------------------
+// The SSE layer can legitimately re-deliver events the panel already has:
+// reconnect replays (`subscribe(since)` re-sends the buffer tail), full
+// replays after a remount (reattach with since=-1), and zombie streams from
+// unmounted hook instances. Bus seq restarts at 0 per run, so a bare seq
+// high-water mark would drop a new run's events — the mark is paired with
+// the bus id announced by the server's `bus_info` preamble and reset when
+// the bus changes.
+const dedup = new Map<number, { busKey: string | null; hwm: number }>();
+
+/** Record which bus is serving `sid`. Returns true when it changed (hwm reset). */
+export function noteWorkerLogBus(sid: number, busKey: string): boolean {
+  const d = dedup.get(sid);
+  if (d && d.busKey === busKey) return false;
+  dedup.set(sid, { busKey, hwm: -1 });
+  return true;
+}
 let rafHandle: number | null = null;
 let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
@@ -67,6 +85,7 @@ function evictIdle(slots: Map<number, readonly WorkerLogEntry[]>): void {
   for (const sid of byAge.slice(0, slots.size - MAX_SESSIONS)) {
     slots.delete(sid);
     touched.delete(sid);
+    dedup.delete(sid);
   }
 }
 
@@ -83,8 +102,21 @@ function schedule(): void {
   }, 120);
 }
 
-/** Append one event for a session. Coalesced — safe to call 50+/s. */
-export function pushWorkerLog(sid: number, entry: WorkerLogEntry): void {
+/** Append one event for a session. Coalesced — safe to call 50+/s.
+ *  `seq` is the SSE event id (bus seq); duplicates at or below the current
+ *  high-water mark for the sid's bus are dropped. Entries without a seq are
+ *  always accepted. */
+export function pushWorkerLog(sid: number, entry: WorkerLogEntry, seq?: number): void {
+  if (seq !== undefined) {
+    const d = dedup.get(sid);
+    if (d) {
+      if (seq <= d.hwm) return;
+      d.hwm = seq;
+    } else {
+      // Stream without a bus_info preamble (defensive) — still monotonic.
+      dedup.set(sid, { busKey: null, hwm: seq });
+    }
+  }
   let buf = pending.get(sid);
   if (!buf) {
     buf = [];
@@ -95,8 +127,24 @@ export function pushWorkerLog(sid: number, entry: WorkerLogEntry): void {
   schedule();
 }
 
+/** Test-only: reset all module-level writer state and committed slots. */
+export function __resetWorkerLogForTests(): void {
+  pending.clear();
+  touched.clear();
+  dedup.clear();
+  touchSeq = 0;
+  if (rafHandle !== null) { cancelAnimationFrame(rafHandle); rafHandle = null; }
+  if (timeoutHandle !== null) { clearTimeout(timeoutHandle); timeoutHandle = null; }
+  useWorkerLogStore.getState()._set(new Map());
+}
+
 /** Subscribe to one session's entries. Only re-renders this subscriber when
  *  that session's array changes (coalesced ~1/frame). */
 export function useWorkerLog(sid: number | null): readonly WorkerLogEntry[] {
   return useWorkerLogStore((s) => (sid == null ? EMPTY : s.slots.get(sid) ?? EMPTY));
+}
+
+/** Non-reactive snapshot of one session's committed entries (tests/debug). */
+export function peekWorkerLog(sid: number): readonly WorkerLogEntry[] {
+  return useWorkerLogStore.getState().slots.get(sid) ?? EMPTY;
 }

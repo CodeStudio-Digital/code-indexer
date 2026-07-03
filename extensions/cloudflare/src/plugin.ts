@@ -5,8 +5,27 @@
  * account. The management UI (right-rail webview) drives the tools through
  * window.mcp.invokeTool.
  */
-import { definePlugin, contributeToolWindow } from '@mcp/plugin-sdk/define.js';
+import {
+  definePlugin,
+  contributeToolWindow,
+  contributeProjectModule,
+  contributeEditorAction,
+  contributeStatusBarItem,
+  contributeRunConfiguration,
+} from '@mcp/plugin-sdk/define.js';
 import { allTools } from './all-tools.js';
+
+const cloudflareProject = {
+  whenFiles: [
+    'wrangler.toml',
+    'wrangler.jsonc',
+    'wrangler.json',
+    'open-next.config.ts',
+    'open-next.config.js',
+    'open-next.config.mjs',
+  ],
+  whenPackageDep: ['wrangler', '@cloudflare/workers-types', '@opennextjs/cloudflare'],
+};
 
 export default definePlugin({
   permissions: {
@@ -29,6 +48,61 @@ export default definePlugin({
     storage: true,
   },
   tools: allTools,
+  modules: [
+    contributeProjectModule({
+      id: 'cloudflare-worker',
+      title: 'Cloudflare Worker',
+      description: 'Wrangler/OpenNext project module with deploy, build and preview actions.',
+      icon: 'cloud',
+      activation: cloudflareProject,
+      tools: ['cf_detect', 'cf_deploy', 'cf_build', 'cf_preview'],
+      editorActions: [
+        contributeEditorAction({
+          id: 'cf-detect-project',
+          label: 'Cloudflare: Detect Project',
+          category: 'Cloudflare',
+          runsTool: 'cf_detect',
+          scope: 'project',
+        }),
+        contributeEditorAction({
+          id: 'cf-deploy-project',
+          label: 'Cloudflare: Deploy Project',
+          category: 'Cloudflare',
+          runsTool: 'cf_deploy',
+          scope: 'project',
+        }),
+      ],
+      statusBarItems: [
+        contributeStatusBarItem({
+          id: 'cf-project',
+          label: 'Cloudflare',
+          tooltip: 'Cloudflare project detected',
+          alignment: 'right',
+          priority: 40,
+          runsTool: 'cf_detect',
+          scope: 'project',
+        }),
+      ],
+      runConfigurations: [
+        contributeRunConfiguration({
+          id: 'cf-deploy',
+          title: 'Cloudflare Deploy',
+          kind: 'cloudflare',
+          command: 'npx',
+          args: ['wrangler', 'deploy'],
+          scope: 'project',
+        }),
+        contributeRunConfiguration({
+          id: 'cf-dev',
+          title: 'Cloudflare Dev',
+          kind: 'cloudflare',
+          command: 'npx',
+          args: ['wrangler', 'dev'],
+          scope: 'project',
+        }),
+      ],
+    }),
+  ],
   toolWindows: [
     contributeToolWindow({
       id: 'cf-manage',

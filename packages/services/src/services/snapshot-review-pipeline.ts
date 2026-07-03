@@ -14,6 +14,7 @@ import {
 } from '../quality/binding-chat.js';
 import { callChatWithFailover } from '../quality/binding-failover.js';
 import type { FileDiff } from './session-snapshots.js';
+import { MAX_CONTEXT_CHARS } from './snapshot-review-context.js';
 import { buildMessages } from './snapshot-review-prompt.js';
 import { filterReviewableDiffs } from './snapshot-review-ignore.js';
 
@@ -46,6 +47,9 @@ export interface SnapshotReviewInput {
   sessionId: number;
   resolveContext: ResolveContext;
   diffs: FileDiff[];
+  /** Optional pre-rendered context block (snapshot-review-context.ts),
+   *  prepended before the diffs in the reviewer prompt. Capped defensively. */
+  contextText?: string | null;
 }
 
 const PIPELINE_NAME = 'snapshot_review';
@@ -181,7 +185,10 @@ export class SnapshotReviewPipeline {
 
       const rendered = renderDiffs(filterReviewableDiffs(input.diffs));
       pendingHunks = rendered.pendingHunks;
-      const messages = buildMessages(rendered.text);
+      const messages = buildMessages(
+        rendered.text,
+        input.contextText ? truncate(input.contextText, MAX_CONTEXT_CHARS) : undefined,
+      );
       const failover = await callChatWithFailover(
         chain,
         (b) =>

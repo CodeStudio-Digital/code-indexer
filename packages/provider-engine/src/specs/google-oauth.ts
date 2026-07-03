@@ -3,8 +3,7 @@ import type { ProviderSpec } from '@mcp/provider-sdk';
 /**
  * Google Gemini via OAuth — same native adapter as the api-key `gemini`, but the
  * resolved token routes through the CloudCode backend (accessToken/refreshToken/
- * projectId). Mirrors `services/.../definitions/google-oauth.ts`. The OAuth flow
- * + live discovery land in the OAuth-engine phase.
+ * projectId). The OAuth flow + live discovery are provider-specific.
  */
 export const googleOAuthSpec: ProviderSpec = {
   kind: 'google-oauth',

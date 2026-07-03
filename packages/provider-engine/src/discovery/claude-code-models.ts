@@ -1,11 +1,6 @@
 /**
  * Live model discovery for the `sdk:claude-code` format.
  *
- * Lifted verbatim from the hand-written admin helper
- * `apps/http-api/admin/model-discovery/claude-code.ts` (`discoverClaudeCode`).
- * The behaviour is identical — the equivalence test asserts deep equality of
- * the returned `UpsertModelInput[]`.
- *
  * Claude Code mirrors Anthropic `/v1/models`, but credentials may be Claude.ai
  * OAuth bearer auth instead of `x-api-key`. The discovery is *seed-driven*: the
  * `CLAUDE_CODE_SEED_MODELS` are always emitted (resolved through
@@ -21,7 +16,7 @@ import type {
   UpsertModelInput,
 } from '@mcp/store/provider-store.js';
 import type { ProviderSpec } from '@mcp/provider-sdk';
-import { CLAUDE_CODE_SEED_MODELS } from '@mcp/services/providers/definitions/claude-code.js';
+import { CLAUDE_CODE_SEED_MODELS } from '../specs/claude-code.js';
 import { resolveClaudeCodeCreds } from '@mcp/services/providers/shared/oauth.js';
 import {
   fetchClaudeCodeModels,

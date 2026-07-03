@@ -525,10 +525,10 @@ export function createApp() {
   // Start background model refresh (populates context_window in DB from APIs).
   startProviderRefreshScheduler(deps.providerStore);
 
-  // Register LLM providers contributed DECLARATIVELY by enabled plugins. A
-  // plugin ships only a ProviderSpec (DATA) in its .app.json — NO plugin JS runs
-  // in-process. Same reconcile the plugins handler runs after every install/
-  // enable/disable, so the set stays live without a restart. NOTE: the
+  // Register LLM providers contributed by enabled plugins. V1 providers ship
+  // only ProviderSpec DATA; bundled V2 providers also expose a plugin-owned
+  // adapter that loads lazily on use. Same reconcile the plugins handler runs
+  // after every install/enable/disable, so the set stays live without a restart. NOTE: the
   // provider-resolving workers (coder/company) run the same reconcile at their
   // boot (see the worker entries) so the agent can resolve plugin providers too.
   try {

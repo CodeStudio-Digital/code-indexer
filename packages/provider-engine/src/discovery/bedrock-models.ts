@@ -1,16 +1,10 @@
 /**
  * Live model discovery for the `sdk:bedrock` format.
  *
- * Lifted verbatim from the hand-written admin helper
- * `apps/http-api/admin/model-discovery/bedrock.ts` (`discoverBedrock`). Only the
- * model-discovery path is lifted — the sibling `checkModelAccess` /
- * `requestModelAccess` control-plane helpers stay in the admin file.
- *
- * Behaviour is identical: the same dynamic `import('@aws-sdk/client-bedrock')`,
- * the same `ListFoundationModelsCommand({ byOutputModality: 'TEXT' })`, the same
- * region/credential resolution, the same ON_DEMAND / TEXT filters, the same map
- * to `UpsertModelInput[]`, and the same fallback/throw semantics. The equivalence
- * test asserts deep equality of the returned `UpsertModelInput[]`.
+ * Uses dynamic `import('@aws-sdk/client-bedrock')`,
+ * `ListFoundationModelsCommand({ byOutputModality: 'TEXT' })`, provider-row
+ * region/credential resolution, ON_DEMAND/TEXT filters, and maps the result to
+ * `UpsertModelInput[]`.
  *
  * Bedrock takes no parameters from `spec.discovery` (region + creds come from the
  * provider row / OAuth extra / env), so `spec` is unused beyond the signature.

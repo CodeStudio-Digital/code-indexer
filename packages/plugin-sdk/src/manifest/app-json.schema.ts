@@ -17,6 +17,7 @@ export const pluginToolDeclSchema = z.object({
   parameters: z.record(z.unknown()).default({}),
   riskLevel: z.enum(['read', 'write', 'execute', 'admin']).optional(),
   mutates: z.boolean().optional(),
+  activation: z.lazy(() => activationRuleSchema).optional(),
 });
 
 export const activationRuleSchema = z
@@ -40,6 +41,7 @@ export const commandDeclSchema = z.object({
   label: z.string().min(1),
   category: z.string().optional(),
   shortcut: z.string().optional(),
+  runsTool: z.string().min(1).optional(),
 });
 
 export const themeDeclSchema = z.object({
@@ -48,6 +50,66 @@ export const themeDeclSchema = z.object({
   appearance: z.enum(['dark', 'light']),
   tokens: z.record(z.string()),
 });
+
+const contributionScopeSchema = z.enum(['application', 'editor', 'project', 'module']);
+
+export const editorActionDeclSchema = z.object({
+  id: contribId,
+  label: z.string().min(1),
+  category: z.string().optional(),
+  icon: z.string().optional(),
+  shortcut: z.string().optional(),
+  runsTool: z.string().min(1).optional(),
+  scope: contributionScopeSchema.extract(['editor', 'project', 'module']).optional(),
+  activation: activationRuleSchema.optional(),
+});
+
+export const statusBarItemDeclSchema = z.object({
+  id: contribId,
+  label: z.string().min(1),
+  tooltip: z.string().optional(),
+  icon: z.string().optional(),
+  alignment: z.enum(['left', 'right']).optional(),
+  priority: z.number().optional(),
+  runsTool: z.string().min(1).optional(),
+  scope: contributionScopeSchema.extract(['application', 'project', 'module']).optional(),
+  activation: activationRuleSchema.optional(),
+});
+
+export const runConfigurationDeclSchema = z.object({
+  id: contribId,
+  title: z.string().min(1),
+  description: z.string().optional(),
+  icon: z.string().optional(),
+  kind: z.string().optional(),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  cwd: relPath.optional(),
+  env: z.record(z.string()).optional(),
+  scope: contributionScopeSchema.extract(['project', 'module']).optional(),
+  activation: activationRuleSchema.optional(),
+});
+
+export const projectModuleDeclSchema = z.object({
+  id: contribId,
+  title: z.string().min(1),
+  description: z.string().optional(),
+  icon: z.string().optional(),
+  activation: activationRuleSchema,
+  tools: z.array(z.string().min(1)).optional(),
+  toolWindows: z.array(toolWindowDeclSchema).optional(),
+  editorActions: z.array(editorActionDeclSchema).optional(),
+  statusBarItems: z.array(statusBarItemDeclSchema).optional(),
+  runConfigurations: z.array(runConfigurationDeclSchema).optional(),
+});
+
+export const providerRuntimeDeclSchema = z
+  .object({
+    protocol: z.literal('provider-adapter-v2'),
+    entry: relPath.optional(),
+    kinds: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
 
 // A plugin-contributed provider is a full declarative ProviderSpec — validated
 // by `thirdPartyProviderSpecSchema` (from @mcp/provider-sdk) where `providers` is
@@ -81,6 +143,11 @@ function buildAppManifestSchema(providers: z.ZodTypeAny) {
     toolWindows: z.array(toolWindowDeclSchema).optional(),
     commands: z.array(commandDeclSchema).optional(),
     themes: z.array(themeDeclSchema).optional(),
+    editorActions: z.array(editorActionDeclSchema).optional(),
+    statusBarItems: z.array(statusBarItemDeclSchema).optional(),
+    runConfigurations: z.array(runConfigurationDeclSchema).optional(),
+    modules: z.array(projectModuleDeclSchema).optional(),
+    providerRuntime: providerRuntimeDeclSchema.optional(),
     permissions: permissionsSchema.optional(),
     // A plugin contributes a provider as a full declarative ProviderSpec (DATA).
     providers: z.array(providers).optional(),

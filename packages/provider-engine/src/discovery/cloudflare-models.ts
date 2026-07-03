@@ -1,13 +1,10 @@
 /**
  * Cloudflare Workers AI catalog discovery (engine-side, spec-driven).
  *
- * Lifted from `apps/http-api/admin/model-discovery/cloudflare.ts` — the output
- * is byte-for-byte identical (the equivalence test asserts deepEqual). The
- * only thing read from the spec is `discovery.accountIdFrom` (a TemplateVar):
+ * The only thing read from the spec is `discovery.accountIdFrom` (a TemplateVar):
  * its sources are tried in order — `{from:'extra',key}` reads `cfg.extra[key]`,
  * `{from:'env',key}` reads `process.env[key]`. The account-search URL, Bearer
- * auth, task filtering and context_window parsing are hardcoded the same way
- * the admin discoverX does.
+ * auth, task filtering and context_window parsing are provider-specific here.
  */
 import type { ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { getRegistryContextWindow } from '@mcp/code-agent/providers/capabilities.js';
@@ -32,7 +29,6 @@ const SUPPORTED_TASKS: ReadonlySet<string> = new Set([
   'Text Embeddings',
 ]);
 
-/** Matches the admin discoverX's hand-written fallback message verbatim. */
 const DEFAULT_ACCOUNT_ID_ERROR =
   'Cloudflare provider requires an Account ID. Set extra.account_id on ' +
   'the provider row, or export CLOUDFLARE_ACCOUNT_ID.';

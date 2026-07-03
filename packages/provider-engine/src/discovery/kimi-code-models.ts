@@ -1,12 +1,6 @@
 /**
  * Live model discovery for the `sdk:kimi-code` format.
  *
- * Lifted verbatim from the hand-written admin helper
- * `apps/http-api/admin/model-discovery/kimi-code.ts` (`discoverKimiCode`).
- * The behaviour is identical — the equivalence test asserts deep equality of
- * the returned `UpsertModelInput[]` across the normal / empty→seed / error→seed
- * branches.
- *
  * The Kimi Code format derives everything from the OAuth-resolved credentials
  * (`resolveKimiCodeCreds`) plus the provider row; `spec.discovery` carries no
  * parameters, so `spec` is unused beyond the signature. The `store` is required

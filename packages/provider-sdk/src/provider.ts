@@ -9,10 +9,12 @@
 import type { ChatProvider } from './adapter.js';
 import type { LLMProvider } from './indexer.js';
 import type { CredKind, ResolvedCreds, ProviderConfigLike } from './credentials.js';
-import type { AuthDescriptor, ProviderAuthHandlers } from './auth.js';
+import type { AuthDescriptor, ProviderAuthHandlers, ProviderCredentials } from './auth.js';
 
-/** Current major version of the provider contract (see README §versioning). */
+/** Current major version of the metadata/provider-definition contract. */
 export const PROVIDER_SDK_VERSION = 1 as const;
+/** Current major version of the executable provider-adapter plugin contract. */
+export const PROVIDER_ADAPTER_SDK_VERSION = 2 as const;
 
 // ─── Metadata ────────────────────────────────────────────────────
 export interface PricingEntry {
@@ -94,6 +96,77 @@ export interface ProviderTestContext {
 }
 
 /**
+ * Provider-owned live model metadata. This is intentionally structural (rather
+ * than importing @mcp/store) so the SDK stays a leaf package while remaining
+ * assignable to the store's UpsertModelInput shape in the host.
+ */
+export interface ProviderDiscoveredModel {
+  model_id: string;
+  mode?: string;
+  name: string;
+  context_window?: number | null;
+  context_window_overridden?: boolean;
+  default_max_tokens?: number | null;
+  can_reason?: boolean;
+  supports_attachments?: boolean;
+  enabled?: boolean;
+  default_enabled?: boolean;
+  source?: string;
+  display_name?: string | null;
+  description?: string | null;
+  default_reasoning_level?: string | null;
+  supported_reasoning_levels?: string[] | null;
+  apply_patch_tool_type?: string | null;
+  available_in_plans?: string[] | null;
+  minimal_client_version?: string | null;
+  visibility?: string | null;
+  supported_in_api?: boolean | null;
+  input_modalities?: string[] | null;
+  max_tools?: number | null;
+}
+
+export interface ProviderDiscoveryResult {
+  models: ProviderDiscoveredModel[];
+  /** Catalog ETag returned by the provider, or null when unavailable. */
+  etag?: string | null;
+  /** True when upstream returned 304 and existing stored rows should remain. */
+  notModified?: boolean;
+}
+
+/** Persisted model metadata the host may pass to runtime builders. */
+export interface ProviderRuntimeModelMetadata {
+  model_id: string;
+  default_reasoning_level?: string | null;
+  supported_reasoning_levels?: string[] | null;
+  apply_patch_tool_type?: string | null;
+}
+
+export interface ProviderDiscoverModelsContext {
+  /** The stored provider instance being refreshed. */
+  config: ProviderConfigLike;
+  /** Credentials already resolved through the provider-owned resolver. */
+  creds: ResolvedCreds;
+  /** Previous persisted catalog ETag, when the provider supports it. */
+  previousEtag?: string | null;
+  /** Network primitive. The host may wrap this later for proxy/telemetry policy. */
+  fetch: typeof fetch;
+  /** Best-effort diagnostic logger; callers must not log secrets. */
+  log(message: string): void;
+}
+
+/** Context handed to an executable provider adapter when it owns credential resolution. */
+export interface ProviderResolveCredentialsContext {
+  /** The stored provider instance being resolved. */
+  config: ProviderConfigLike;
+  /** Per-provider OAuth/token store, backed by the host. */
+  credentials: ProviderCredentials;
+  /** Network primitive. The host may wrap this later for proxy/telemetry policy. */
+  fetch: typeof fetch;
+  /** Best-effort diagnostic logger; callers must not log secrets. */
+  log(message: string): void;
+}
+
+/**
  * Extra options for coder construction that don't belong on credentials.
  * Kept as an interface so new fields are additive without breaking definitions.
  */
@@ -109,6 +182,11 @@ export interface CreateCoderOpts {
    * metadata (reasoning levels, apply_patch_tool_type, etc.).
    */
   providerId?: string;
+  /**
+   * Persisted per-model metadata for this provider instance. Passed by the
+   * host so reusable provider runtimes do not need direct store access.
+   */
+  providerModels?: readonly ProviderRuntimeModelMetadata[];
 }
 
 // ─── Definition ──────────────────────────────────────────────────
@@ -165,8 +243,22 @@ export interface ProviderDefinition {
    * any per-kind core code.
    */
   authHandlers?: ProviderAuthHandlers;
+  /**
+   * Provider-owned credential resolution. When present, the core resolver calls
+   * this before any legacy per-kind switch. This is the V2 seam that lets a
+   * provider plugin own API keys, OAuth refresh, token exchange metadata and
+   * AWS credential shaping while the host still owns encrypted persistence.
+   */
+  resolveCredentials?(ctx: ProviderResolveCredentialsContext): Promise<ResolvedCreds>;
   /** Optional dynamic model listing via the provider's API. */
   fetchModels?(creds: ResolvedCreds): Promise<string[]>;
+  /**
+   * Provider-owned rich model discovery. When present, the admin refresh path
+   * calls this before the legacy provider-engine dispatcher, letting plugin
+   * providers own catalog shape, ETags, visibility, reasoning metadata and
+   * any OAuth/sdk quirks in their own bundle.
+   */
+  discoverModels?(ctx: ProviderDiscoverModelsContext): Promise<ProviderDiscoveryResult>;
   /**
    * Optional connectivity check for the admin "Test" badge. Receives creds
    * already resolved (OAuth refreshed) by the registry; throws on failure

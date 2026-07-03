@@ -20,6 +20,10 @@ export const PLUGIN_TS = `import {
   contributeToolWindow,
   contributeCommand,
   contributeTheme,
+  contributeProjectModule,
+  contributeEditorAction,
+  contributeStatusBarItem,
+  contributeRunConfiguration,
 } from '@mcp/plugin-sdk/define';
 
 export default definePlugin({
@@ -34,6 +38,44 @@ export default definePlugin({
       },
       mutates: false,
       handler: async (args) => ({ content: String(args.text ?? '') }),
+    }),
+  ],
+  modules: [
+    contributeProjectModule({
+      id: 'node-project',
+      title: 'Node Project',
+      description: 'Example project module activated by package.json.',
+      activation: { whenFiles: ['package.json'] },
+      tools: ['echo'],
+      editorActions: [
+        contributeEditorAction({
+          id: 'hello-echo-editor',
+          label: 'Hello: Echo From Editor',
+          category: 'Hello',
+          runsTool: 'echo',
+          scope: 'project',
+        }),
+      ],
+      statusBarItems: [
+        contributeStatusBarItem({
+          id: 'hello-status',
+          label: 'Hello',
+          tooltip: 'Hello plugin project module',
+          alignment: 'right',
+          runsTool: 'echo',
+          scope: 'project',
+        }),
+      ],
+      runConfigurations: [
+        contributeRunConfiguration({
+          id: 'npm-test',
+          title: 'npm test',
+          kind: 'node',
+          command: 'npm',
+          args: ['test'],
+          scope: 'project',
+        }),
+      ],
     }),
   ],
   toolWindows: [

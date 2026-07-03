@@ -14,8 +14,8 @@ export class OpenAIProvider implements LLMProvider {
    * unset OR pass the cheap variant of their own family — never gpt-4o-mini
    * which would fail against a different endpoint.
    *
-   * The OpenAI provider definition (`src/core/providers/definitions/openai.ts`)
-   * passes `gpt-4o-mini` explicitly so users who pick gpt-4o for `model` still
+   * The OpenAI provider spec passes `gpt-4o-mini` explicitly so users who pick
+   * gpt-4o for `model` still
    * get cheap summaries by default.
    */
   readonly summaryModel?: string;

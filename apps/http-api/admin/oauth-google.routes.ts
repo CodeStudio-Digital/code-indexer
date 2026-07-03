@@ -8,14 +8,26 @@
  */
 import { Hono } from 'hono';
 import type { ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
-import {
-  startOAuthFlow as startGoogleFlow,
-  pollFlow as pollGoogleFlow,
-  GOOGLE_SEED_MODELS,
-} from '@mcp/services/services/oauth/google.js';
 import { createAuthClient, setupCloudCode, retrieveUserQuota } from '@mcp/services/services/cloudcode.js';
 import { refreshIfExpired } from '@mcp/services/services/oauth/google.js';
 import { discoverModels } from './model-discovery/index.js';
+import {
+  providerAuthContext,
+  providerAuthHandlers,
+  syntheticProviderConfig,
+} from './provider-auth-runtime.js';
+
+const GOOGLE_SEED_MODEL_IDS = [
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-3-pro-preview',
+  'gemini-3.1-pro-preview',
+  'gemini-3.1-pro-preview-customtools',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite-preview',
+];
 
 export function googleOAuthRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -26,7 +38,11 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
    */
   app.post('/oauth/google/start', async (c) => {
     try {
-      const flow = await startGoogleFlow();
+      const handlers = providerAuthHandlers('google-oauth');
+      const cfg = syntheticProviderConfig({ id: 'google-oauth', kind: 'google-oauth' });
+      const flow = handlers?.start
+        ? await handlers.start(providerAuthContext(store, cfg))
+        : await legacyGoogle().then((m) => m.startOAuthFlow());
       return c.json(flow);
     } catch (e) {
       const msg = (e as Error).message;
@@ -51,9 +67,21 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
     const providerId = body.provider_id ?? 'google-oauth';
 
     try {
-      const result = await pollGoogleFlow(body.state);
+      const handlers = providerAuthHandlers('google-oauth');
+      const cfg = store.getProvider(providerId) ?? syntheticProviderConfig({
+        id: providerId,
+        kind: 'google-oauth',
+      });
+      const result = handlers?.poll
+        ? await handlers.poll(providerAuthContext(store, cfg), { state: body.state })
+        : await legacyGoogle().then((m) => m.pollFlow(body.state));
       if (result.status !== 'authorized') {
-        return c.json(result);
+        return c.json(normalizePollResult(result));
+      }
+      const accessToken = readString(result, 'access_token');
+      const expiresAt = readNumber(result, 'expires_at');
+      if (!accessToken || !expiresAt) {
+        return c.json({ status: 'error', error: 'Google auth did not return usable credentials' }, 502);
       }
 
       // Upsert the provider row: api_key mirrors the access token so existing
@@ -64,7 +92,7 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
           name: 'Google (OAuth)',
           kind: 'google-oauth',
           base_url: '',
-          api_key: result.access_token,
+          api_key: accessToken,
           auth_mode: 'oauth',
           enabled: true,
           use_for_coder: true,
@@ -75,26 +103,28 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
         const existing = store.getProvider(providerId)!;
         store.upsertProvider({
           ...existing,
-          api_key: result.access_token,
+          api_key: accessToken,
         });
       }
 
       // Call CloudCode to discover the user's project ID (same as gemini-cli).
-      let projectId = '';
-      try {
-        const authClient = createAuthClient(result.access_token, result.refresh_token);
-        const setup = await setupCloudCode(authClient);
-        projectId = setup.projectId;
-      } catch (e) {
-        console.warn(`[google-oauth] CloudCode setup failed: ${(e as Error).message}`);
+      let projectId = readString(result, 'project_id') ?? '';
+      if (!projectId) {
+        try {
+          const authClient = createAuthClient(accessToken, readNullableString(result, 'refresh_token'));
+          const setup = await setupCloudCode(authClient);
+          projectId = setup.projectId;
+        } catch (e) {
+          console.warn(`[google-oauth] CloudCode setup failed: ${(e as Error).message}`);
+        }
       }
 
       store.setOAuth({
         provider_id: providerId,
-        access_token: result.access_token,
-        refresh_token: result.refresh_token,
-        expires_at: result.expires_at,
-        scope: result.scope,
+        access_token: accessToken,
+        refresh_token: readNullableString(result, 'refresh_token'),
+        expires_at: expiresAt,
+        scope: readString(result, 'scope') ?? null,
         extra: { projectId },
       });
 
@@ -104,9 +134,9 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
         models = (await discoverModels(store, store.getProvider(providerId)!)).models;
       } catch { /* ignore */ }
       if (models.length === 0) {
-        models = GOOGLE_SEED_MODELS.map((m) => ({
-          model_id: m.model_id,
-          name: m.name,
+        models = GOOGLE_SEED_MODEL_IDS.map((model) => ({
+          model_id: model,
+          name: model,
           source: 'live' as const,
         }));
       }
@@ -115,7 +145,7 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
       return c.json({
         status: 'authorized',
         provider_id: providerId,
-        expires_at: result.expires_at,
+        expires_at: expiresAt,
         model_count: models.length,
       });
     } catch (e) {
@@ -155,4 +185,30 @@ export function googleOAuthRouter(store: ProviderStore): Hono {
   });
 
   return app;
+}
+
+async function legacyGoogle() {
+  return import('@mcp/services/services/oauth/google.js');
+}
+
+function normalizePollResult(result: { status: string; message?: string; error?: string }) {
+  return result.message && !result.error ? { ...result, error: result.message } : result;
+}
+
+function readString(source: unknown, key: string): string | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function readNullableString(source: unknown, key: string): string | null {
+  if (!source || typeof source !== 'object') return null;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readNumber(source: unknown, key: string): number | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

@@ -2,13 +2,13 @@
  * Reconcile the provider registry with the declarative provider plugins that
  * are currently installed + enabled. The composition root (this app) is the one
  * place where the plugin loader (@mcp/plugin-host), the engine (@mcp/provider-
- * engine) and the registry (@mcp/services) all converge without a cycle — the
- * loader stays engine/registry-agnostic via injection.
+ * engine) and the registry (@mcp/services) all converge without a cycle. V2
+ * provider plugins register proxy definitions whose methods lazy-import the
+ * plugin-owned adapter.
  *
  * Idempotent + complete: re-seeds the built-ins (so disabling a plugin that
- * overrode one restores it), overlays the enabled plugins' specs (DATA → engine
- * → registry, NO bundle), then drops any plugin-only kind that is no longer
- * enabled. Called at boot AND after every install/enable/disable/uninstall, so a
+ * overrode one restores it), overlays the enabled plugins' specs/adapters, then
+ * drops any plugin-only kind that is no longer enabled. Called at boot AND after every install/enable/disable/uninstall, so a
  * plugin provider appears or disappears live — no restart, no flags.
  */
 import { loadPluginProviders, isFirstPartyBundled } from '@mcp/plugin-host';
@@ -27,9 +27,8 @@ export function syncPluginProviders(): void {
 
   // Overlay providers contributed by currently-enabled plugins.
   //  - A first-party BUNDLED plugin (provider-*, shipped in the app) may own a
-  //    built-in kind and declare host capabilities (validated with the full
-  //    schema, exempt from reservedKinds) — that's how the relocated providers
-  //    take over their kind.
+  //    built-in kind, declare host capabilities, and expose an executable V2
+  //    adapter for provider-specific auth/refresh/request behavior.
   //  - Any OTHER (third-party) plugin is held to the third-party schema and may
   //    NOT shadow a built-in kind.
   const res = loadPluginProviders({

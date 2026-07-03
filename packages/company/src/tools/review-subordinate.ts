@@ -24,6 +24,8 @@ import { SnapshotReviewPipeline } from '@mcp/services/services/snapshot-review-p
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import { reviewSessionSnapshots } from '@mcp/services/services/review-session-snapshots.js';
 import { formatFindingsForAgent } from '@mcp/services/services/snapshot-review-format.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -98,11 +100,21 @@ export function buildReviewSubordinateTool(
       );
       const pipeline = new SnapshotReviewPipeline(resolver);
 
+      // The subordinate's first user message IS the task the master forwarded
+      // to it — that plus its task list gives the reviewer the change's intent.
+      let intent: string | null = null;
+      try {
+        intent = buildSessionIntent(new SessionStore(deps.dbHandle), coderSessionId);
+      } catch {
+        /* review runs without intent */
+      }
+
       let outcome;
       try {
         outcome = await reviewSessionSnapshots(
           { snapshotStore, snapshotService, pipeline, reviewStore },
           coderSessionId,
+          { intent },
         );
       } catch (e) {
         return err(`review_subordinate_work failed: ${e instanceof Error ? e.message : String(e)}`);

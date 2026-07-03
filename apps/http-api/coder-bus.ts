@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 
 /**
@@ -28,6 +29,12 @@ export type BusSubscriber = (ev: BufferedEvent) => void;
 export interface CoderRunBus {
   ctrl: AbortController;
   runner?: CoderRunner;
+  /**
+   * Unique id of this bus instance. The bus is recreated per run and `seq`
+   * restarts at 0 with it, so seq alone cannot deduplicate across runs —
+   * clients pair this id with seq (see the `bus_info` SSE preamble).
+   */
+  busId: string;
   buffer: BufferedEvent[];
   nextSeq: number;
   subscribers: Set<BusSubscriber>;
@@ -63,6 +70,7 @@ export function createBus(ctrl: AbortController): CoderRunBus {
   runnerReady.catch(() => { /* intentional */ });
   return {
     ctrl,
+    busId: randomUUID(),
     buffer: [],
     nextSeq: 0,
     subscribers: new Set(),

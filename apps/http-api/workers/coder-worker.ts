@@ -32,6 +32,7 @@
 // worker_thread. Relative paths resolve identically under tsx, tsc and
 // raw node.
 import { parentPort, workerData } from 'node:worker_threads';
+import { dirname, join } from 'node:path';
 import { installLlmDispatcher } from '../install-llm-dispatcher.js';
 import {
   MessageBridge,
@@ -102,6 +103,13 @@ import { buildWorkerMemoryShims } from './memory-shims.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
+import { PluginWorkerHost } from '../sse/PluginWorkerHost.js';
+import { buildPluginTools, type EnabledPlugin } from '../../../packages/plugin-host/src/plugin-tool-bridge.js';
+import { buildHostInvoke, type HostInvoke } from '../../../packages/plugin-host/src/host-invoke.js';
+import { isActivated } from '../../../packages/plugin-host/src/activation.js';
+import type { PluginPermissions } from '../../../packages/plugin-sdk/src/contributions/capabilities.js';
+import { InstalledPluginStore } from '../../../packages/store/src/installed-plugin-store.js';
+import { PluginStorageStore } from '../../../packages/store/src/plugin-storage-store.js';
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { installWorkerQualityWiring } from './quality-wiring.js';
 
@@ -116,6 +124,67 @@ if (!port) throw new Error('coder-worker.ts: not running inside a worker_thread'
 const { sessionId, dbPath } = workerData as CoderWorkerData;
 
 const dbConn = openWorkerDb({ dbPath });
+
+function workerProjectRoot(): string | null {
+  try {
+    const row = dbConn.handle
+      .prepare(
+        `SELECT p.root_path AS root
+           FROM coder_sessions s
+           JOIN projects p ON p.id = s.project_id
+          WHERE s.id = ?`,
+      )
+      .get(sessionId) as { root?: string } | undefined;
+    return row?.root ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function listWorkerEnabledPluginRuntime(projectRoot: string | null): {
+  toolPlugins: EnabledPlugin[];
+  bundles: { namespace: string; file: string }[];
+} {
+  const store = new InstalledPluginStore(dbPath);
+  const toolPlugins: EnabledPlugin[] = [];
+  const bundles: { namespace: string; file: string }[] = [];
+  try {
+    for (const p of store.list({ enabled: true })) {
+      const contrib = (p.contributions ?? {}) as {
+        tools?: Array<{ activation?: import('../../../packages/plugin-host/src/activation.js').ActivationRule } & EnabledPlugin['tools'][number]>;
+        worker?: string | null;
+      };
+      const tools = Array.isArray(contrib.tools)
+        ? contrib.tools.filter((t) => isActivated(t.activation, projectRoot))
+        : [];
+      if (tools.length > 0) toolPlugins.push({ namespace: p.namespace, tools });
+      if (contrib.worker) {
+        bundles.push({
+          namespace: p.namespace,
+          file: join(dirname(dbPath), 'plugins', p.namespace, contrib.worker),
+        });
+      }
+    }
+  } finally {
+    store.close();
+  }
+  return { toolPlugins, bundles };
+}
+
+let workerPluginHostInvoke: HostInvoke | null = null;
+function getWorkerPluginHostInvoke(): HostInvoke {
+  if (workerPluginHostInvoke) return workerPluginHostInvoke;
+  const installed = new InstalledPluginStore(dbPath);
+  const storage = new PluginStorageStore(dbPath);
+  workerPluginHostInvoke = buildHostInvoke({
+    resolveGrants: (ns) => {
+      const p = installed.get(ns);
+      return (p?.permissions_granted as PluginPermissions | null) ?? null;
+    },
+    storage,
+  });
+  return workerPluginHostInvoke;
+}
 
 // Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
 hydrateWorkerCapabilities(dbConn.handle, `coder-worker ${sessionId}`);
@@ -616,6 +685,8 @@ interface RunFreshPayload {
   describeImages?: boolean;
   previewAvailable?: boolean;
   selectedSkillIds?: string[];
+  /** Structured IDE context (active file / selections / open tabs) for this send. */
+  ideContext?: import('@mcp/code-agent/core/ide-context.js').IdeContext;
   /** Task-preflight seed — forwarded verbatim to `runCoder({ preflight })`. */
   preflight?: import('@mcp/code-agent/index.js').PreflightSeed;
   /** Default-off Agent Decision Engine runtime flags forwarded to runCoder. */
@@ -645,7 +716,19 @@ bridge.handle('runFresh', async (payload) => {
       : Date.now(),
   );
   activeRun = run;
+  let pluginHost: PluginWorkerHost | null = null;
   try {
+    const { toolPlugins, bundles } = listWorkerEnabledPluginRuntime(workerProjectRoot());
+    let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
+    if (toolPlugins.length > 0) {
+      pluginHost = new PluginWorkerHost({
+        bundles,
+        hostInvoke: getWorkerPluginHostInvoke(),
+      });
+      pluginTools = buildPluginTools(toolPlugins, (ns, name, args, ctx) =>
+        pluginHost!.invokeTool(ns, name, args, ctx),
+      );
+    }
     const result = await runCoder({
       session: { id: sessionId },
       // Put the project's PHP/Python (not Node) on PATH for the agent's shell tools.
@@ -662,7 +745,9 @@ bridge.handle('runFresh', async (payload) => {
       describeImages: opts.describeImages,
       previewAvailable: opts.previewAvailable,
       selectedSkillIds: opts.selectedSkillIds,
+      ideContext: opts.ideContext,
       preflight: opts.preflight,
+      pluginTools,
       agentDecisionTelemetryEnabled: opts.agentDecisionTelemetryEnabled,
       agentDecisionGuidanceEnabled: opts.agentDecisionGuidanceEnabled,
       agentDecisionSoftGuardrail: opts.agentDecisionSoftGuardrail,
@@ -710,6 +795,7 @@ bridge.handle('runFresh', async (payload) => {
         markEnded(run.bus, 'error', { message });
       })
       .finally(() => {
+        void pluginHost?.dispose();
         // The main side mirrors the bus and owns linger/replay. Worker-local
         // state can now be cleared so a later `runFresh` reuses this worker.
         run.runner = null;
@@ -720,6 +806,7 @@ bridge.handle('runFresh', async (payload) => {
 
     return { ok: true, session: result.session, indexStatus: result.indexStatus };
   } catch (err) {
+    void pluginHost?.dispose();
     const message = err instanceof Error ? err.message : String(err);
     publish(run.bus, 'error', { message });
     markEnded(run.bus, 'error', { message });

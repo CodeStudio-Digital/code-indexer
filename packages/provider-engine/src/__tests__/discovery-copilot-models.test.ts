@@ -4,16 +4,12 @@ import type {
   ProviderStore,
 } from '@mcp/store/provider-store.js';
 
-import { discoverCopilot } from '@apps/http-api/admin/model-discovery/copilot.js';
 import { discoverCopilotModels } from '../discovery/copilot-models.js';
 import { copilotSpec } from '../specs/copilot.js';
 
-// `discoverCopilot(store, cfg)` reads `cfg.api_key` + `cfg.id`; the OAuth helpers
-// (`refreshIfExpired`/`getStoredCopilotOpts`/`resolveCopilotApiBase`) only touch
-// `store.getOAuth`. We mock the network at `globalThis.fetch` (shared boundary)
-// and supply a fake store whose token is non-expired, so `refreshIfExpired`
-// returns the stored access_token WITHOUT any exchange — keeping both builders
-// on the pure, deterministic path.
+// The OAuth helpers only touch `store.getOAuth`. We mock the network at
+// `globalThis.fetch` and supply a fake store whose token is non-expired, so
+// `refreshIfExpired` returns the stored access_token without any exchange.
 const CFG = { id: 'copilot', api_key: 'mirror-key', base_url: null } as unknown as ProviderConfig;
 
 // Non-expired token (expires well beyond the 60s freshness window) so
@@ -67,16 +63,11 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe('sdk:copilot discovery equivalence: engine(spec, cfg, store) == admin discoverCopilot(store, cfg)', () => {
-  it('returns identical UpsertModelInput[]', async () => {
-    mockFetchOk(API_RESPONSE);
-    const a = await discoverCopilot(fakeStore(), CFG);
-
+describe('sdk:copilot discovery', () => {
+  it('maps Copilot /models into UpsertModelInput[]', async () => {
     mockFetchOk(API_RESPONSE);
     const b = await discoverCopilotModels(copilotSpec, CFG, fakeStore());
 
-    expect(b).toEqual(a);
-    // Pin the lifted shape so a future drift in either builder is caught.
     expect(b).toEqual([
       {
         model_id: 'gpt-4o',
@@ -95,10 +86,7 @@ describe('sdk:copilot discovery equivalence: engine(spec, cfg, store) == admin d
     expect(b[1].name).toBe('mystery-model');
   });
 
-  it('both THROW on a non-ok /models response (no seed/empty fallback)', async () => {
-    mockFetchErr(503, 'upstream down');
-    await expect(discoverCopilot(fakeStore(), CFG)).rejects.toThrow(/Copilot \/models HTTP 503/);
-
+  it('throws on a non-ok /models response (no seed/empty fallback)', async () => {
     mockFetchErr(503, 'upstream down');
     await expect(
       discoverCopilotModels(copilotSpec, CFG, fakeStore()),

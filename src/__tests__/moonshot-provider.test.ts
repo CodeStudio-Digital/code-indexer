@@ -39,8 +39,12 @@ vi.mock('@mcp/indexer/indexer/providers/kimi-code.js', () => ({
   }),
 }));
 
-import { moonshot } from '@mcp/services/providers/definitions/moonshot.js';
 import type { ResolvedCreds } from '@mcp/services/providers/types.js';
+import { buildProviderDefinition } from '@mcp/provider-engine/build-definition.js';
+import { discoverOpenAIModels } from '@mcp/provider-engine/discovery/openai-models.js';
+import { moonshotSpec } from '@mcp/provider-engine/specs/moonshot.js';
+
+const moonshot = buildProviderDefinition(moonshotSpec);
 
 beforeEach(() => {
   chatCalls.length = 0;
@@ -151,10 +155,7 @@ describe('discoverMoonshot', () => {
     const orig = globalThis.fetch;
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
-      const { discoverMoonshot } = await import(
-        '@apps/http-api/admin/model-discovery/moonshot.js'
-      );
-      const models = await discoverMoonshot(baseCfg);
+      const models = await discoverOpenAIModels(moonshotSpec, baseCfg);
       expect(calls[0].url).toBe('https://api.moonshot.ai/v1/models');
       expect((calls[0].init?.headers as Record<string, string>)?.Authorization).toBe(
         'Bearer sk-test',
@@ -179,10 +180,7 @@ describe('discoverMoonshot', () => {
     const orig = globalThis.fetch;
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
-      const { discoverMoonshot } = await import(
-        '@apps/http-api/admin/model-discovery/moonshot.js'
-      );
-      await discoverMoonshot({ ...baseCfg, base_url: 'https://api.moonshot.cn/v1/' });
+      await discoverOpenAIModels(moonshotSpec, { ...baseCfg, base_url: 'https://api.moonshot.cn/v1/' });
       expect(calls[0].url).toBe('https://api.moonshot.cn/v1/models');
     } finally {
       globalThis.fetch = orig;
@@ -194,10 +192,7 @@ describe('discoverMoonshot', () => {
     const orig = globalThis.fetch;
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
-      const { discoverMoonshot } = await import(
-        '@apps/http-api/admin/model-discovery/moonshot.js'
-      );
-      await expect(discoverMoonshot(baseCfg)).rejects.toThrow(/HTTP 403/);
+      await expect(discoverOpenAIModels(moonshotSpec, baseCfg)).rejects.toThrow(/HTTP 403/);
     } finally {
       globalThis.fetch = orig;
     }

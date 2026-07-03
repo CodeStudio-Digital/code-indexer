@@ -1,16 +1,10 @@
 /**
  * Live model-discovery for the `gemini-models` format.
  *
- * Declarative lift of the hand-written admin discoverer at
- * `apps/http-api/admin/model-discovery/gemini.ts`. The output
- * (`UpsertModelInput[]`) is asserted byte-for-byte identical by
- * `__tests__/discovery-gemini-models.test.ts`.
- *
- * The admin function hardcodes the Google generativelanguage endpoint and
- * passes the api key as a `?key=` query param (no auth header). We reproduce
- * that exactly; only the optional `modelsUrl` override is read from
- * `spec.discovery` (the rest of the descriptor — filterPrefixes / supportsModes
- * / accountIdFrom — does not apply to this format).
+ * Uses the Google generativelanguage endpoint and passes the api key as a
+ * `?key=` query param (no auth header). Only the optional `modelsUrl` override
+ * is read from `spec.discovery` (the rest of the descriptor — filterPrefixes /
+ * supportsModes / accountIdFrom — does not apply to this format).
  */
 import type { ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import type { ProviderSpec } from '@mcp/provider-sdk';

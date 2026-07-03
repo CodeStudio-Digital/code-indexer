@@ -1,11 +1,10 @@
 /**
  * Live model discovery dispatcher.
  *
- * Spec-driven: resolves the provider's `ProviderSpec` by kind and delegates to
- * `@mcp/provider-engine`'s `discoverModels`, which implements every format
- * (HTTP `/models`, the ChatGPT/Codex ETag path, and the OAuth/sdk fetchers). The
- * per-kind `discoverX` sibling modules are now the equivalence-test reference for
- * the engine builders and are removed in the cleanup phase.
+ * Plugin-first: when the registered provider definition exposes executable
+ * discovery, delegate to the plugin adapter. Otherwise fall back to the legacy
+ * spec-driven `@mcp/provider-engine` dispatcher, which keeps existing providers
+ * working while they migrate ownership into their own bundles.
  *
  * A kind is routed iff its spec declares a real `discovery` (anything but
  * `static`). That auto-covers every built-in with live discovery (incl. zai /
@@ -18,8 +17,14 @@
  */
 import type { ProviderStore, ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { getSpecByKind, discoverModels as engineDiscoverModels } from '@mcp/provider-engine';
-import { listProviderPlugins, isFirstPartyBundled } from '@mcp/plugin-host';
+import {
+  listProviderPlugins,
+  isFirstPartyBundled,
+  isProviderPluginMethodNotImplementedError,
+} from '@mcp/plugin-host';
 import { thirdPartyProviderSpecSchema, providerSpecSchema, type ProviderSpec } from '@mcp/provider-sdk';
+import { getDefinition } from '@mcp/services/providers/registry.js';
+import { resolveCreds } from '@mcp/services/providers/shared/resolver.js';
 
 export interface DiscoveryResult {
   models: UpsertModelInput[];
@@ -58,11 +63,41 @@ function resolveProviderSpec(kind: string): ProviderSpec | undefined {
   return getSpecByKind(kind);
 }
 
+async function discoverViaProviderDefinition(
+  cfg: ProviderConfig,
+  previousEtag?: string | null,
+): Promise<DiscoveryResult | null> {
+  const def = getDefinition(cfg.kind);
+  if (!def?.discoverModels) return null;
+
+  try {
+    const creds = await resolveCreds(def, cfg);
+    const result = await def.discoverModels({
+      config: cfg,
+      creds,
+      previousEtag: previousEtag ?? null,
+      fetch,
+      log: (message) => console.warn(`[provider:${cfg.kind}] ${message}`),
+    });
+    return {
+      models: result.models as UpsertModelInput[],
+      etag: result.etag ?? null,
+      notModified: result.notModified ?? false,
+    };
+  } catch (err) {
+    if (isProviderPluginMethodNotImplementedError(err)) return null;
+    throw err;
+  }
+}
+
 export async function discoverModels(
   store: ProviderStore,
   cfg: ProviderConfig,
   previousEtag?: string | null,
 ): Promise<DiscoveryResult> {
+  const pluginResult = await discoverViaProviderDefinition(cfg, previousEtag);
+  if (pluginResult) return pluginResult;
+
   const spec = resolveProviderSpec(cfg.kind);
   if (spec?.discovery && spec.discovery.from !== 'static') {
     return engineDiscoverModels(spec, cfg, store, previousEtag ?? null);

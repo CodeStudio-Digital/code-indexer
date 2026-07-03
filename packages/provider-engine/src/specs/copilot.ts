@@ -3,9 +3,8 @@ import type { ProviderSpec } from '@mcp/provider-sdk';
 /**
  * GitHub Copilot — OpenAI-compatible wire, OAuth credentials. The 25-min token,
  * base URL (instance/enterprise), and editor headers are produced upstream by
- * `resolveCopilotCreds` (the OAuth refresh path lands in the OAuth-engine phase);
- * here the wire just builds the adapter from the resolved creds, exactly like
- * `services/.../definitions/copilot.ts`.
+ * `resolveCopilotCreds`; here the wire just builds the adapter from the
+ * resolved creds.
  */
 export const copilotSpec: ProviderSpec = {
   kind: 'copilot',

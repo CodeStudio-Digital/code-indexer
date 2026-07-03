@@ -24,6 +24,7 @@ import type {
   SnapshotReviewFinding,
   SnapshotReviewPipeline,
 } from './snapshot-review-pipeline.js';
+import { buildEnclosingSymbolContext, formatReviewContext } from './snapshot-review-context.js';
 import { filterReviewableDiffs } from './snapshot-review-ignore.js';
 
 export interface ReviewSessionDeps {
@@ -42,6 +43,14 @@ export interface ReviewSessionOutcome {
   modelId?: string;
   errorCode?: string;
   error?: string;
+}
+
+export interface ReviewSessionOptions {
+  /** Author note (1-3 sentences) from the `self_review` tool's `focus` param. */
+  focus?: string | null;
+  /** Session intent (title + original request + task list), built by the
+   *  entrypoint — services cannot read coder session messages itself. */
+  intent?: string | null;
 }
 
 const DIFF_CONTEXT = 3;
@@ -114,6 +123,7 @@ function persistComments(
 export async function reviewSessionSnapshots(
   deps: ReviewSessionDeps,
   coderSessionId: number,
+  opts: ReviewSessionOptions = {},
 ): Promise<ReviewSessionOutcome> {
   const { snapshotStore, snapshotService, pipeline, reviewStore } = deps;
   const baselineIds = snapshotStore.listActiveBaselineIds('coder', coderSessionId);
@@ -138,6 +148,11 @@ export async function reviewSessionSnapshots(
     sessionId: coderSessionId,
     resolveContext: { sessionId: coderSessionId },
     diffs,
+    contextText: formatReviewContext({
+      focus: opts.focus,
+      intent: opts.intent,
+      symbols: buildEnclosingSymbolContext(diffs),
+    }),
   });
 
   if (!result.ok) {

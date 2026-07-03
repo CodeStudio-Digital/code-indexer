@@ -57,6 +57,11 @@ export interface ContributedTool {
   parameters: Record<string, unknown>;
   riskLevel?: 'read' | 'write' | 'execute' | 'admin';
   mutates?: boolean;
+  /**
+   * Optional project/module activation. When present, the host only exposes the
+   * tool to an agent run whose project root matches the rule.
+   */
+  activation?: ActivationRule;
   handler: PluginToolHandler;
 }
 
@@ -105,19 +110,82 @@ export interface ContributedTheme {
   tokens: Record<string, string>;
 }
 
+export type PluginContributionScope = 'application' | 'editor' | 'project' | 'module';
+
+export interface ContributedEditorAction {
+  id: string;
+  label: string;
+  category?: string;
+  icon?: string;
+  shortcut?: string;
+  /**
+   * Invoke a contributed tool by name. The host binds project/module context at
+   * runtime, so actions stay declarative.
+   */
+  runsTool?: string;
+  scope?: Extract<PluginContributionScope, 'editor' | 'project' | 'module'>;
+  activation?: ActivationRule;
+}
+
+export interface ContributedStatusBarItem {
+  id: string;
+  label: string;
+  tooltip?: string;
+  icon?: string;
+  alignment?: 'left' | 'right';
+  priority?: number;
+  runsTool?: string;
+  scope?: Extract<PluginContributionScope, 'application' | 'project' | 'module'>;
+  activation?: ActivationRule;
+}
+
+export interface ContributedRunConfiguration {
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+  kind?: string;
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  scope?: Extract<PluginContributionScope, 'project' | 'module'>;
+  activation?: ActivationRule;
+}
+
+/**
+ * A project module/facet in the IntelliJ sense: a detected slice of a project
+ * with its own actions, run configs and UI. Tool handlers still live in the
+ * plugin worker; this shape only declares where the host should surface them.
+ */
+export interface ContributedProjectModule {
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+  activation: ActivationRule;
+  tools?: string[];
+  toolWindows?: ContributedToolWindow[];
+  editorActions?: ContributedEditorAction[];
+  statusBarItems?: ContributedStatusBarItem[];
+  runConfigurations?: ContributedRunConfiguration[];
+}
+
 export interface PluginModule {
   tools: ContributedTool[];
   toolWindows: ContributedToolWindow[];
   commands: ContributedCommand[];
   themes: ContributedTheme[];
+  editorActions: ContributedEditorAction[];
+  statusBarItems: ContributedStatusBarItem[];
+  runConfigurations: ContributedRunConfiguration[];
+  modules: ContributedProjectModule[];
   /** Capabilities the plugin requires (fs/exec/storage). Extracted to .app.json. */
   permissions?: PluginPermissions;
   /**
-   * LLM providers contributed by this plugin — each a declarative
-   * `@mcp/provider-sdk` ProviderSpec (pure DATA, no functions). The CLI `build`
-   * step writes the spec verbatim into `.app.json`; the host turns it into a
-   * runtime definition via `buildProviderDefinition` — NO plugin code runs
-   * in-process. A new wire/auth is a first-party engine change, never plugin data.
+   * LLM provider metadata contributed by this plugin. Executable V2 ownership is
+   * declared separately by exporting `providerAdapter`/`providerAdapters` from
+   * the plugin bundle; the CLI records that as `.app.json.providerRuntime`.
    */
   providers?: ProviderSpec[];
 }

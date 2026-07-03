@@ -20,6 +20,7 @@ import { describeShell } from '@mcp/code-agent/core/shell-info.js';
 import { runSystemPromptHook } from '@mcp/code-agent/core/hooks.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { WorkspaceContext } from './workspace.js';
+import { permissionsSection, type PromptPermissions } from './permissions-prompt.js';
 
 /**
  * Cache-stratification marker. Everything BEFORE this line is intended to be
@@ -232,6 +233,22 @@ export interface PromptContext {
    * context (not a user picker), so it is session-fixed → cache-stable.
    */
   unsupervised?: boolean;
+  /**
+   * Effective permission/sandbox policy — writable root(s) + the session's
+   * tool-approval mode. When set, a `# Permissions & sandbox` block renders the
+   * concrete writable root and approval mode so the model's behaviour aligns
+   * with what the runtime gate enforces (Codex's `permissions_instructions`).
+   * Session-fixed → cache-stable, above the dynamic boundary. Resolved at the
+   * call site from projectRoot/sandbox workdir + `tool_permission_mode`.
+   */
+  permissions?: PromptPermissions;
+  /**
+   * Hierarchical AGENTS.md instructions (project root → cwd, concatenated) for
+   * this project, loaded by `loadAgentsMd`. When non-empty, rendered as a
+   * `# Project instructions (AGENTS.md)` block. Session-fixed content →
+   * cache-stable; changes only when the file changes.
+   */
+  agentsMd?: string;
 }
 
 /**
@@ -423,6 +440,11 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
     ctx.unsupervised && ctx.outputStyle === 'learning' ? 'proactive' : ctx.outputStyle;
   const outputStyleBlock = outputStyleSection(effectiveStyle);
   const autonomousBlock = autonomousSection(ctx.unsupervised);
+  // Permissions/sandbox policy + AGENTS.md project instructions. Both
+  // session-fixed → cache-stable, above the boundary. Collapse to '' when not
+  // supplied so prompts that omit them stay byte-identical to before.
+  const permissionsBlock = permissionsSection(ctx.permissions);
+  const agentsMdBlock = agentsMdSection(ctx.agentsMd);
 
   // ─── DYNAMIC SUFFIX ────────────────────────────────────────────────
   // Everything below the boundary marker can vary across sessions of the
@@ -468,7 +490,23 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${autonomousBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${permissionsBlock}${agentsMdBlock}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${autonomousBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+}
+
+/**
+ * `# Project instructions (AGENTS.md)` block. Renders the hierarchical
+ * AGENTS.md text (loaded by `loadAgentsMd`) as project-scoped user guidance,
+ * clearly marked as project-supplied so the model weighs it as instructions
+ * from the repo — not as system rules it must never override. '' when empty.
+ */
+function agentsMdSection(agentsMd?: string): string {
+  const trimmed = (agentsMd ?? '').trim();
+  if (!trimmed) return '';
+  return `
+
+# Project instructions (AGENTS.md)
+The following instructions come from this project's AGENTS.md file(s). Treat them as authoritative project conventions; follow them unless they conflict with a direct user request.
+${trimmed}`;
 }
 
 /**

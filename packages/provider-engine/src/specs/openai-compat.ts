@@ -1,9 +1,8 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
 
 /**
- * Declarative specs for the OpenAI-compatible built-ins. Metadata mirrors the
- * hand-written `services/.../definitions/*.ts` exactly (the equivalence test
- * asserts it); the per-instance logic becomes `wireOpts` data.
+ * Declarative specs for the OpenAI-compatible built-ins. Provider-specific
+ * per-instance logic is represented as `wireOpts` data.
  */
 
 export const openaiSpec: ProviderSpec = {

@@ -1,17 +1,14 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
 
 /**
- * Declarative spec for the Anthropic (Claude) built-in. Metadata mirrors the
- * hand-written `services/.../definitions/anthropic.ts` exactly (the equivalence
- * test asserts it); the per-instance constants become `wireOpts` data:
+ * Declarative spec for the Anthropic (Claude) built-in. Provider-specific
+ * runtime constants live in `wireOpts` data:
  *   - `defaultThinking` — static extended-thinking config the coder passes to
  *     the adapter (consumed when `req.thinking === true`).
  *   - `summaryModelDefault` — the cheap default model for summary-only indexing
  *     (overridable via `extra.summary_model` on the provider row).
  *
- * No `defaultBaseURL` — the Anthropic adapter defaults the base URL internally,
- * so the definition omits it and so must the spec (the equivalence test compares
- * `undefined === undefined`).
+ * No `defaultBaseURL` — the Anthropic adapter defaults the base URL internally.
  */
 export const anthropicSpec: ProviderSpec = {
   kind: 'anthropic',

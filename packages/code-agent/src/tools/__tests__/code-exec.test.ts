@@ -406,3 +406,118 @@ describe('code_exec nested-failure try/catch hint (telemetry: create_file killed
     expect(res.content).toContain('read_file-ok');
   });
 });
+
+describe('code_exec tier-agnostic discovery (list_tools / tool_schema)', () => {
+  /** A tool whose NAME resolves to the navigate tier (hidden from a bootstrap toolset). */
+  const navTool = () => noopTool('mcp__find_references'); // getToolTier → 'navigate'
+
+  it('list_tools() enumerates the full callable catalog incl. a non-bootstrap-tier tool', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    registry.register(navTool());
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `return JSON.stringify(list_tools());` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('"name":"mcp__find_references"');
+    // The whole point: a navigate-tier tool shows up with its real tier even
+    // though nothing about the agent's active tier is consulted here.
+    expect(res.content).toContain('"tier":"navigate"');
+    expect(res.content).toContain('"name":"read_file"');
+  });
+
+  it('calls a non-bootstrap-tier tool WITHOUT expand_toolset', async () => {
+    const registry = new ToolRegistry();
+    registry.register(navTool());
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `const r = await tools.mcp__find_references({ symbol: 'x' }); return r;` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('mcp__find_references-ok');
+  });
+
+  it('tool_schema(name) returns a callable tool\'s full JSON schema', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('edit_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `return JSON.stringify(tool_schema('edit_file'));` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('"name":"edit_file"');
+    expect(res.content).toContain('"schema"');
+    expect(res.content).toContain('"type":"object"');
+  });
+
+  it('tool_schema steers a sandbox-excluded control tool to a direct call', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    registry.register(noopTool('task_complete')); // registered but isSafeTool=false
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `try { tool_schema('task_complete'); } catch (e) { return String(e); } return 'no throw';` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('NOT callable inside code_exec');
+  });
+
+  it('tool_schema suggests the closest name on a typo', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `try { tool_schema('read_fil'); } catch (e) { return String(e); } return 'no throw';` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('unknown tool "read_fil"');
+    expect(res.content).toContain('did you mean "read_file"');
+  });
+});
+
+describe('code_exec tier-agnostic exposure still obeys per-call policy', () => {
+  /** Minimal fake runner that puts the policy context into unapproved plan mode. */
+  function planModeCtx(): ToolContext {
+    return {
+      ...makeCtx(),
+      runner: {
+        opts: { planMode: true },
+        isPlanApproved: () => false,
+        currentTaskScopeId: () => null,
+        currentTaskScopeFiles: () => null,
+      } as unknown as ToolContext['runner'],
+    };
+  }
+
+  it('blocks a mutating tool in unapproved plan mode (escape hatch is NOT policy-free)', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('edit_file')); // mutates:true + scopeAware via builtin
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `await tools.edit_file({ path: 'a.ts', old_string: 'x', new_string: 'y' }); return 'unreachable';` },
+      planModeCtx(),
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('blocked');
+    expect(res.content).toContain('plan mode');
+    expect(res.content).not.toContain('unreachable');
+  });
+});

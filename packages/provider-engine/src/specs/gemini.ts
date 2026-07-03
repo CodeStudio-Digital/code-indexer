@@ -1,10 +1,8 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
 
 /**
- * Declarative spec for the native Gemini built-in (api-key). Metadata mirrors
- * the hand-written `services/.../definitions/gemini.ts` exactly (the
- * equivalence test asserts it). The OAuth variant (google-oauth) is a later
- * phase and is NOT represented here.
+ * Declarative spec for the native Gemini built-in (api-key). The OAuth variant
+ * (google-oauth) is represented by its own spec.
  */
 export const geminiSpec: ProviderSpec = {
   kind: 'gemini',

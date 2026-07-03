@@ -1,11 +1,6 @@
 /**
  * Live model discovery for the `chatgpt-models` format (Codex backend, ETag).
  *
- * Lifted verbatim from the hand-written admin helper
- * `apps/http-api/admin/model-discovery/chatgpt.ts` (`discoverChatgpt`). The
- * behaviour is identical — the equivalence test asserts deep equality of the
- * returned `DiscoveryResult` across the 200 / 304 / fallback branches.
- *
  * This is the sole ETag/304 producer, so it returns a full `DiscoveryResult`
  * (not a bare `UpsertModelInput[]`) and takes `previousEtag` directly. The
  * Codex backend exposes `/models` to OAuth tokens with ETag-based revalidation
