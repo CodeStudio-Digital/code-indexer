@@ -22,6 +22,8 @@ import {
   Moon,
   Orbit,
   Palette,
+  Pin,
+  PinOff,
   Search,
   Settings,
   Sun,
@@ -45,48 +47,16 @@ import { WindowControls } from './components/WindowControls.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { ProjectSwitcher } from './components/ProjectSwitcher.js';
 import { buildCommandActions } from './components/command-actions.js';
+import { PinnedTabsBar } from './components/pinned-tabs/PinnedTabsBar.js';
+import { parseView, type ActiveView } from './lib/route-view.js';
+import { usePinnedTabs } from './state/pinned-tabs.js';
+import { useActiveSurface } from './state/active-surface.js';
+import { describeCurrentPin } from './state/pinned-tabs-describe.js';
 import { useWindowChrome } from './hooks/useWindowChrome.js';
 import { initRunningTasks } from './state/running-tasks.js';
 import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
-
-interface ActiveView {
-  page: 'home' | 'project' | 'agents' | 'global' | 'admin' | 'design-systems' | 'sprites' | 'telemetry' | 'docs' | 'other';
-  projectId: number | null;
-  sessionId: number | null;
-}
-
-function parsePathname(pathname: string, search: string): ActiveView {
-  if (pathname === '/' || pathname === '') {
-    return { page: 'home', projectId: null, sessionId: null };
-  }
-  if (pathname.startsWith('/projects/')) {
-    const parts = pathname.split('/');
-    const id = Number(parts[2]);
-    const params = new URLSearchParams(search);
-    const sessionIdRaw = params.get('session');
-    return {
-      page: 'project',
-      projectId: Number.isFinite(id) ? id : null,
-      sessionId: sessionIdRaw ? Number(sessionIdRaw) : null,
-    };
-  }
-  if (pathname === '/agents' || pathname.startsWith('/company/sessions/')) {
-    return { page: 'agents', projectId: null, sessionId: null };
-  }
-  if (pathname.startsWith('/global')) {
-    const params = new URLSearchParams(search);
-    const sessionIdRaw = params.get('session');
-    return { page: 'global', projectId: null, sessionId: sessionIdRaw ? Number(sessionIdRaw) : null };
-  }
-  if (pathname.startsWith('/admin')) return { page: 'admin', projectId: null, sessionId: null };
-  if (pathname.startsWith('/design-systems')) return { page: 'design-systems', projectId: null, sessionId: null };
-  if (pathname.startsWith('/sprites')) return { page: 'sprites', projectId: null, sessionId: null };
-  if (pathname.startsWith('/telemetry')) return { page: 'telemetry', projectId: null, sessionId: null };
-  if (pathname.startsWith('/docs')) return { page: 'docs', projectId: null, sessionId: null };
-  return { page: 'other', projectId: null, sessionId: null };
-}
 
 interface NavItem {
   id: ActiveView['page'];
@@ -144,7 +114,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const { platform, isFocused } = useWindowChrome();
   const view = useMemo(
-    () => parsePathname(location.pathname, location.search),
+    () => parseView(location.pathname, location.search),
     [location.pathname, location.search],
   );
   const [dark, setDark] = useState<boolean>(() => {
@@ -189,6 +159,29 @@ export function AppShell() {
   const { data: recentData } = useApi<
     Array<{ id: number; title: string; project_id: number; project_name: string }>
   >('/coder/sessions/recent?limit=10');
+
+  // Pinned tabs: the header button pins/unpins the CURRENT view. `currentPin`
+  // is null on pages with no pinnable target (button hidden). Rail capture
+  // reads the live active tab from active-surface (not the URL — see that store).
+  const activeProjectTab = useActiveSurface((s) => s.projectTab);
+  const togglePin = usePinnedTabs((s) => s.togglePin);
+  const currentPin = useMemo(
+    () =>
+      describeCurrentPin({
+        view,
+        pathname: location.pathname,
+        search: location.search,
+        activeProjectTab,
+        names: {
+          projectName,
+          sessionTitle: recentData?.find((s) => s.id === view.sessionId)?.title ?? null,
+        },
+      }),
+    [view, location.pathname, location.search, activeProjectTab, projectName, recentData],
+  );
+  const currentPinned = usePinnedTabs((s) =>
+    currentPin ? s.pins.some((p) => p.id === currentPin.id) : false,
+  );
 
   // NOTE: ProjectView (the unified project IDE at /projects/:id) lives
   // INSIDE AppShell now — chrome stays visible so the user can jump to
@@ -295,6 +288,22 @@ export function AppShell() {
               {shortcut}
             </kbd>
           </button>
+          {currentPin && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => togglePin(currentPin)}
+                  aria-label={t(currentPinned ? 'pins:unpinCurrent' : 'pins:pinCurrent')}
+                  className="h-7 w-7"
+                >
+                  {currentPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t(currentPinned ? 'pins:unpinCurrent' : 'pins:pinCurrent')}</TooltipContent>
+            </Tooltip>
+          )}
           <RunningTasksDropdown />
           <RecentSessionsDropdown
             activeSessionId={view.sessionId}
@@ -322,6 +331,8 @@ export function AppShell() {
         </div>
       </header>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={commandActions} />
+      {/* Global pinned tabs — persists across the whole app; hidden when empty. */}
+      <PinnedTabsBar />
       {/* Container padding by route. Pages that own their full-bleed
           surface (agents zones, design-systems gallery, project analytics)
           opt out and manage their own margins. Everything else (home grid,

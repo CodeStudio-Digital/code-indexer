@@ -16,11 +16,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronLeft, ChevronRight, ExternalLink, FolderGit2, Search } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, ExternalLink, FolderGit2, Pin, Search } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover.js';
 import type { ContextMenuItem } from './ui/context-menu.js';
 import { buildProjectContextMenuItems } from '../features/project/list/projectContextMenu.js';
 import { loadRecentProjects } from '../state/recent-projects.js';
+import { hasPin, usePinnedTabs } from '../state/pinned-tabs.js';
+import { buildProjectPin } from '../state/pinned-tabs-describe.js';
+import { projectPinId } from '../state/pinned-tabs-types.js';
 import { useApi } from '../hooks/useApi.js';
 import { cn } from '../lib/utils.js';
 
@@ -179,6 +182,13 @@ export function ProjectSwitcher({
         onSelect: () => focusWindow(p.id),
       });
     }
+    items.push({
+      id: 'pin-project',
+      separatorBefore: true,
+      label: hasPin(projectPinId(p.id)) ? t('pins:unpin') : t('pins:pin'),
+      icon: Pin,
+      onSelect: () => usePinnedTabs.getState().togglePin(buildProjectPin({ projectId: p.id, name: p.name })),
+    });
     return items;
   };
 

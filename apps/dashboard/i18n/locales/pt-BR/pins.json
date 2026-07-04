@@ -1,0 +1,9 @@
+{
+  "pin": "Fixar",
+  "unpin": "Desafixar",
+  "pinCurrent": "Fixar esta visão",
+  "unpinCurrent": "Desafixar esta visão",
+  "barAria": "Abas fixadas",
+  "closeAria": "Desafixar {{label}}",
+  "sessionFallback": "Sessão {{id}}"
+}

@@ -14,6 +14,7 @@ import {
   MessageSquareCode,
   MoreHorizontal,
   Pencil,
+  Pin,
   Plus,
   Square,
   Star,
@@ -35,6 +36,7 @@ import {
 import { ScrollArea } from '../../components/ui/scroll-area.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
+import { usePinnedTabs } from '../../state/pinned-tabs.js';
 import { providerAccent, workspaceColor, type AccentColor } from './constants.js';
 import type {
   CoderSession,
@@ -58,6 +60,10 @@ interface SessionSidebarProps {
   onDeleteAll: () => Promise<void> | void;
   onArchive: (id: number, archived: boolean) => Promise<void> | void;
   onFavorite: (id: number, favorite: boolean) => Promise<void> | void;
+  /** Toggle a Pinned Tab for this session (optional — enables the Pin menu item). */
+  onTogglePin?: (id: number) => void;
+  /** Deterministic pin id for a session id — lets a row reflect pinned state. */
+  sessionPinId?: (id: number) => string;
   onBatchArchive: (ids: number[], archived: boolean) => Promise<void> | void;
   onMoveToGroup: (id: number, groupId: number | null) => Promise<void> | void;
   onBatchMoveToGroup: (ids: number[], groupId: number | null) => Promise<void> | void;
@@ -102,6 +108,8 @@ export const SessionSidebar = memo(function SessionSidebar({
   onDeleteAll,
   onArchive,
   onFavorite,
+  onTogglePin,
+  sessionPinId,
   onBatchArchive,
   onMoveToGroup,
   onBatchMoveToGroup,
@@ -520,6 +528,8 @@ export const SessionSidebar = memo(function SessionSidebar({
                       onDuplicate={onDuplicate}
                       onArchive={onArchive}
                       onFavorite={onFavorite}
+                      onTogglePin={onTogglePin}
+                      sessionPinId={sessionPinId}
                       isArchivedView={isArchivedView}
                       groups={rowGroups}
                       onMoveToGroup={onMoveToGroup}
@@ -561,6 +571,8 @@ const SessionRow = memo(function SessionRow({
   onDuplicate,
   onArchive,
   onFavorite,
+  onTogglePin,
+  sessionPinId,
   isArchivedView,
   groups,
   onMoveToGroup,
@@ -580,6 +592,8 @@ const SessionRow = memo(function SessionRow({
   onDuplicate: (id: number) => Promise<void> | void;
   onArchive: (id: number, archived: boolean) => Promise<void> | void;
   onFavorite: (id: number, favorite: boolean) => Promise<void> | void;
+  onTogglePin?: (id: number) => void;
+  sessionPinId?: (id: number) => string;
   isArchivedView: boolean;
   groups: CoderSessionGroup[];
   onMoveToGroup: (id: number, groupId: number | null) => Promise<void> | void;
@@ -590,6 +604,8 @@ const SessionRow = memo(function SessionRow({
   accent?: AccentColor;
 }) {
   const { t } = useTranslation(['chat', 'common']);
+  const pinId = sessionPinId?.(s.id);
+  const pinned = usePinnedTabs((st) => (pinId ? st.pins.some((p) => p.id === pinId) : false));
   const tokens = s.total_input_tokens + s.total_output_tokens;
   const handleClick = () => {
     if (selectMode) onToggle(s.id);
@@ -717,6 +733,12 @@ const SessionRow = memo(function SessionRow({
                 />
                 {s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
               </DropdownMenuItem>
+              {onTogglePin && (
+                <DropdownMenuItem onClick={() => onTogglePin(s.id)}>
+                  <Pin className="h-3.5 w-3.5" />
+                  {pinned ? t('pins:unpin') : t('pins:pin')}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={() => onArchive(s.id, !isArchivedView)}>
                 {isArchivedView ? (
                   <>

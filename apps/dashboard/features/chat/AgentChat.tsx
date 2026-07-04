@@ -41,6 +41,9 @@ import { useUnreadNotificationCount } from './notifications/session-notification
 // — only Snapshots stays as a true Dialog because its diff viewer needs
 // the full viewport width.
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
+import { usePinnedTabs } from '../../state/pinned-tabs.js';
+import { buildSessionPin } from '../../state/pinned-tabs-describe.js';
+import { sessionPinId as makeSessionPinId } from '../../state/pinned-tabs-types.js';
 import { GlobalNewSessionDialog } from './global/GlobalNewSessionDialog.js';
 import { ManageGlobalProjectsDialog } from './global/ManageGlobalProjectsDialog.js';
 import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
@@ -984,6 +987,24 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   }, [refetchSessions]);
 
+  // Pin/unpin a session as a global tab. Scope + projectId come from this
+  // chat's mode; the title is looked up from the current list.
+  const handleTogglePin = useCallback((id: number) => {
+    const s = sessions?.find((x) => x.id === id);
+    usePinnedTabs.getState().togglePin(
+      buildSessionPin({
+        scope: isGlobal ? 'global' : 'project',
+        sessionId: id,
+        projectId: isGlobal ? undefined : projectId,
+        title: s?.title ?? null,
+      }),
+    );
+  }, [sessions, isGlobal, projectId]);
+  const sessionPinIdFor = useCallback(
+    (id: number) => makeSessionPinId(isGlobal ? 'global' : 'project', id),
+    [isGlobal],
+  );
+
   const handleRenameSession = useCallback((id: number, currentTitle: string) => {
     setRenameSessionTarget({ id, title: currentTitle });
     setRenameSessionTitle(currentTitle);
@@ -1392,6 +1413,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           onDeleteAll={handleDeleteAll}
           onArchive={handleArchive}
           onFavorite={handleFavorite}
+          onTogglePin={handleTogglePin}
+          sessionPinId={sessionPinIdFor}
           onBatchArchive={handleBatchArchive}
           onMoveToGroup={handleMoveToGroup}
           onBatchMoveToGroup={handleBatchMoveToGroup}

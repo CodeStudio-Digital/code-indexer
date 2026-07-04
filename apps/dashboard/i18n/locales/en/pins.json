@@ -1,0 +1,9 @@
+{
+  "pin": "Pin",
+  "unpin": "Unpin",
+  "pinCurrent": "Pin this view",
+  "unpinCurrent": "Unpin this view",
+  "barAria": "Pinned tabs",
+  "closeAria": "Unpin {{label}}",
+  "sessionFallback": "Session {{id}}"
+}

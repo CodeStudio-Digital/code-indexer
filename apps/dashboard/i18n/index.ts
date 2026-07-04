@@ -20,6 +20,7 @@ import apiClientPtBR from './locales/pt-BR/apiClient.json';
 import sshPtBR from './locales/pt-BR/ssh.json';
 import dbClientPtBR from './locales/pt-BR/dbClient.json';
 import spriteStudioPtBR from './locales/pt-BR/spriteStudio.json';
+import pinsPtBR from './locales/pt-BR/pins.json';
 
 import commonEn from './locales/en/common.json';
 import adminEn from './locales/en/admin.json';
@@ -39,6 +40,7 @@ import apiClientEn from './locales/en/apiClient.json';
 import sshEn from './locales/en/ssh.json';
 import dbClientEn from './locales/en/dbClient.json';
 import spriteStudioEn from './locales/en/spriteStudio.json';
+import pinsEn from './locales/en/pins.json';
 
 i18n
   .use(LanguageDetector)
@@ -64,6 +66,7 @@ i18n
         ssh: sshPtBR,
         dbClient: dbClientPtBR,
         spriteStudio: spriteStudioPtBR,
+        pins: pinsPtBR,
       },
       en: {
         common: commonEn,
@@ -84,6 +87,7 @@ i18n
         ssh: sshEn,
         dbClient: dbClientEn,
         spriteStudio: spriteStudioEn,
+        pins: pinsEn,
       },
     },
     fallbackLng: 'pt-BR',

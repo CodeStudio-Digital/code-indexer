@@ -7,11 +7,15 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Settings2, TerminalSquare } from 'lucide-react';
+import { Pin, Settings2, TerminalSquare } from 'lucide-react';
 import type { Project } from '@mcp/shared/types.js';
 import { apiCall } from '../../lib/api-client.js';
 import { RailButton, RailContainer, RailSeparator } from '../../components/chrome/index.js';
+import type { ContextMenuItem } from '../../components/ui/context-menu.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
+import { hasPin, usePinnedTabs } from '../../state/pinned-tabs.js';
+import { buildRailPin } from '../../state/pinned-tabs-describe.js';
+import { railPinId } from '../../state/pinned-tabs-types.js';
 import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
 import { TABS, type ProjectTabId, type TabDef } from './tabs-config.js';
@@ -33,6 +37,19 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
   const [project, setProject] = useState<Project | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // Right-click a rail → Pin/Unpin that rail (project + section) as a tab.
+  const railItems = (tabDef: TabDef): ContextMenuItem[] => [
+    {
+      id: 'pin-rail',
+      label: hasPin(railPinId(projectId, tabDef.id)) ? t('pins:unpin') : t('pins:pin'),
+      icon: Pin,
+      onSelect: () =>
+        usePinnedTabs.getState().togglePin(
+          buildRailPin({ projectId, tabId: tabDef.id, label: tabDef.label, projectName: project?.name }),
+        ),
+    },
+  ];
+
   useEffect(() => {
     let alive = true;
     void apiCall<Project>('projects.get', { id: projectId })
@@ -51,6 +68,7 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
           label={tabDef.label}
           active={activeTab === tabDef.id}
           onClick={() => onSelect(tabDef.id)}
+          contextItems={railItems(tabDef)}
         />
       ))}
       {extraCoreTabs.map((tabDef) => (
@@ -60,6 +78,7 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
           label={tabDef.label}
           active={activeTab === tabDef.id}
           onClick={() => onSelect(tabDef.id)}
+          contextItems={railItems(tabDef)}
         />
       ))}
       <RailSeparator />
@@ -70,6 +89,7 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
           label={tabDef.label}
           active={activeTab === tabDef.id}
           onClick={() => onSelect(tabDef.id)}
+          contextItems={railItems(tabDef)}
         />
       ))}
       {pluginTabs.length > 0 && <RailSeparator />}
@@ -80,6 +100,7 @@ export function ProjectRail({ projectId, activeTab, onSelect, layout, pluginTabs
           label={tabDef.label}
           active={activeTab === tabDef.id}
           onClick={() => onSelect(tabDef.id)}
+          contextItems={railItems(tabDef)}
         />
       ))}
       <div className="mt-auto pb-1 flex flex-col items-center gap-0.5">

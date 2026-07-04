@@ -62,6 +62,7 @@ import { useTranslation } from 'react-i18next';
 import { useFileTreeStore } from '../../state/file-tree.js';
 import { apiCall as apiCallFs } from '../../lib/api-client.js';
 import { markRouteEvent, setRouteTab } from '../../lib/perf/route-startup-metrics.js';
+import { useActiveSurface } from '../../state/active-surface.js';
 import { installKeymapDispatcher } from '../../keymap/dispatcher.js';
 import { registerProjectCommands } from './project-commands.js';
 import { registerEditorCommands } from '../workspace/editor/editor-commands.js';
@@ -190,7 +191,15 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
 
   useEffect(() => {
     setRouteTab(tab, projectId);
+    // Publish the live rail tab so the global Pinned Tabs Bar can capture a
+    // rail pin for the view you're on + highlight the active rail chip. The
+    // tab is local state and never reaches the URL, so this is the only signal.
+    useActiveSurface.getState().setProjectTab({ projectId, tab });
   }, [projectId, tab]);
+
+  // Clear the active-surface signal when leaving the project view so off-project
+  // pages don't read a stale rail tab.
+  useEffect(() => () => useActiveSurface.getState().setProjectTab(null), []);
 
   // Recent-session deep link forces the chat tab so the user sees the
   // session they clicked on (matches ProjectDetail's old behaviour).
