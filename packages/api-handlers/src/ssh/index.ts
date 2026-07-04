@@ -22,6 +22,7 @@ import { TunnelManager } from './ssh-tunnels.js';
 import { SftpManager } from './ssh-sftp.js';
 import { generateSshKey } from './ssh-keys.js';
 import { readSshConfig } from './ssh-config-parser.js';
+import { sshExec } from './ssh-exec.js';
 
 let _manager: SshConnectionManager | null = null;
 /** Process-wide pooled SSH connection manager (lazy so the data dir resolves at first use). */
@@ -91,6 +92,10 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
       const ipty = adaptChannelToIPty(channel, { cols, rows, onClose: releaseOnce });
       const { id, entry } = sharedPtyManager.registerExternalPty(ipty);
       return { terminalId: id, pid: entry.pty.pid };
+    },
+
+    async execCommand({ spec, command, timeoutMs, maxBytes }) {
+      return sshExec(manager, spec, command, { timeoutMs, maxBytes });
     },
 
     async testConnection({ spec }) {

@@ -13,6 +13,7 @@ import type { ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store
 import { getRegistryContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import type { ProviderSpec } from '@mcp/provider-sdk';
 import { requestFetchHeaders } from '../wire-helpers/request.js';
+import { isOpenAIImageModelId, IMAGE_MODEL_MODE } from './image-model-ids.js';
 
 export async function discoverOpenAIModels(
   spec: ProviderSpec,
@@ -46,6 +47,9 @@ export async function discoverOpenAIModels(
       name: m.id!,
       context_window: getRegistryContextWindow(m.id!),
       source: 'live' as const,
+      // Family-based tagging (gpt-image-*, dall-e-*) so image models surface
+      // in the image-role pickers instead of masquerading as chat models.
+      ...(isOpenAIImageModelId(m.id!) ? { mode: IMAGE_MODEL_MODE } : {}),
     }));
 
   const filterPrefixes = spec.discovery?.filterPrefixes;

@@ -1,0 +1,66 @@
+/**
+ * Tool strategy contracts. Tools are plain objects the engine drives from its
+ * pointer entry points — no React, no DOM events, just image/screen coords
+ * plus modifiers. All pixel access goes through the ToolContext.
+ */
+import type { EditorDocument } from '../engine/document.js';
+import type { History } from '../engine/history.js';
+import type { SelectionMask } from '../engine/selection-mask.js';
+import type { Viewport } from '../engine/viewport.js';
+
+export type ToolId =
+  | 'pointer'
+  | 'brush'
+  | 'eraser'
+  | 'fill'
+  | 'select-rect'
+  | 'select-wand'
+  | 'eyedropper'
+  | 'move';
+
+export interface ToolPointerEvent {
+  /** Image-space coordinates (fractional — tools floor as needed). */
+  imageX: number;
+  imageY: number;
+  screenX: number;
+  screenY: number;
+  shift: boolean;
+  alt: boolean;
+  /** PointerEvent.buttons bitmask (1 = primary held). */
+  buttons: number;
+}
+
+export interface ToolOptions {
+  /** Brush stamp size in pixels (1–32). */
+  size: number;
+  /** 0 = hard pixels; >0 = radial-falloff alpha blend. */
+  softness: number;
+  /** Flood/wand tolerance (0–255). */
+  tolerance: number;
+  /** Wand/fill contiguity toggle. */
+  contiguous: boolean;
+  /** Brush stamp shape. Default 'square' (pixel-art first). */
+  shape?: 'square' | 'round';
+}
+
+export interface ToolContext {
+  doc: EditorDocument;
+  selection: SelectionMask;
+  history: History;
+  viewport: Viewport;
+  options: ToolOptions;
+  colors: { fg: string; bg: string };
+  /** Request a repaint (sets the engine's dirty flag — never renders inline). */
+  invalidate(): void;
+  /** Report a sampled color (eyedropper) — the engine routes it to fg. */
+  pickColor(hex: string): void;
+}
+
+export interface Tool {
+  id: ToolId;
+  /** CSS cursor while this tool is active. */
+  cursor: string;
+  onDown(e: ToolPointerEvent, ctx: ToolContext): void;
+  onMove(e: ToolPointerEvent, ctx: ToolContext): void;
+  onUp(e: ToolPointerEvent, ctx: ToolContext): void;
+}

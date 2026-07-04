@@ -17,7 +17,7 @@ export const openaiSpec: ProviderSpec = {
     'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10.0 },
     'gpt-4-turbo': { inputPer1M: 10.0, outputPer1M: 30.0 },
   },
-  capabilities: { supportsVision: true },
+  capabilities: { supportsVision: true, supportsImageGen: true },
   wire: 'openai-compat',
   wireOpts: { summaryModelDefault: 'gpt-4o-mini' },
   discovery: { from: 'openai-models' },

@@ -165,6 +165,8 @@ export function createProvider(name?: string, model?: string): LLMProvider {
   return def.createIndexer(creds, model);
 }
 
+export { createImagesProvider } from './images-factory.js';
+
 export {
   getDefinition,
   listDefinitions,

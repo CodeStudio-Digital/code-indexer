@@ -188,6 +188,20 @@ export async function openStream(
     ? opts.url
     : `${apiBaseUrl()}${opts.url}`;
 
+  // Stamp a stable idempotency key on POST bodies. ReconnectingSSEClient
+  // reuses this same object across backoff retries, so the key is identical on
+  // every retry — the server dedupes a re-POST into a bus replay instead of
+  // re-running the send's side effects (duplicate user message / run). GET
+  // (/attach) is naturally idempotent and left untouched.
+  if (opts.method === 'POST') {
+    const b = (opts.body ??= {});
+    if (typeof b.client_msg_id !== 'string') {
+      b.client_msg_id =
+        globalThis.crypto?.randomUUID?.() ??
+        `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+  }
+
   const client = new ReconnectingSSEClient({
     url: absoluteUrl,
     method: opts.method,

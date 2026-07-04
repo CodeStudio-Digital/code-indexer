@@ -143,6 +143,7 @@ const capabilitiesSchema = z
     zaiCodingMode: z.boolean().optional(),
     supportsThinking: z.boolean().optional(),
     supportsVision: z.boolean().optional(),
+    supportsImageGen: z.boolean().optional(),
   })
   .strict();
 

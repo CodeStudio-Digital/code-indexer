@@ -1,0 +1,135 @@
+/**
+ * Per-frame re-roll: regenerate just the selected frame without redoing the
+ * whole animation. Reuses the generic generate→pick flow — kicks off a small
+ * n=4 job conditioned on the frame's own version (identity reference), shows
+ * the candidates, and on pick repoints THAT frame at the promoted version via
+ * the session bridge (replaceFrameAt). The heavy job/SSE work lives in the
+ * content child so it only runs while the popover is open.
+ */
+import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Loader2 } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
+import { pickCandidate } from '../api.js';
+import { useSpriteJobs } from '../jobs/useSpriteJobs.js';
+import { useAnimateSession } from './animate-session-store.js';
+
+const TERMINAL = new Set(['done', 'failed', 'cancelled']);
+
+export function FrameRerollPopover({
+  projectId,
+  assetId,
+  versionId,
+  prompt,
+  refresh,
+  children,
+}: {
+  projectId: number;
+  assetId: number;
+  versionId: number;
+  prompt: string | null;
+  refresh: () => void;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent className="w-64 p-2" onClick={(e) => e.stopPropagation()}>
+        {open && (
+          <RerollContent
+            projectId={projectId}
+            assetId={assetId}
+            versionId={versionId}
+            prompt={prompt}
+            refresh={refresh}
+            onClose={() => setOpen(false)}
+          />
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function RerollContent({
+  projectId, assetId, versionId, prompt, refresh, onClose,
+}: {
+  projectId: number;
+  assetId: number;
+  versionId: number;
+  prompt: string | null;
+  refresh: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation('spriteStudio');
+  const { jobs, start } = useSpriteJobs(projectId);
+  const [jobId, setJobId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void start({
+      kind: 'generation', assetId, prompt: prompt || t('animate.rerollPrompt'),
+      n: 4, referenceIds: [versionId], rawPrompt: true,
+    }).then(setJobId).catch((e) => setError((e as Error).message));
+  }, [start, assetId, prompt, versionId, t]);
+
+  const state = jobId != null ? jobs.get(jobId) : undefined;
+  const candidates = state?.candidates ?? [];
+  const running = jobId == null || (state != null && !TERMINAL.has(state.status));
+
+  const pick = async (candidateIndex: number) => {
+    if (jobId == null || picking) return;
+    setPicking(true);
+    try {
+      const version = await pickCandidate(projectId, assetId, jobId, candidateIndex);
+      const s = useAnimateSession.getState();
+      if (s.replaceFrameAt != null && s.selectedFrameIndex != null) {
+        s.replaceFrameAt(s.selectedFrameIndex, version.id);
+      }
+      refresh();
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {t('animate.reroll')}
+      </div>
+      {error ? (
+        <div className="rounded border border-red-500/30 bg-red-500/10 px-1.5 py-1 text-[10px] text-red-400">{error}</div>
+      ) : candidates.length === 0 ? (
+        <div className="flex items-center justify-center gap-1 py-4 text-[10px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {t(`animate.jobStatus.${state?.status ?? 'queued'}`, { defaultValue: t('animate.generating') })}
+          {state?.pct ? ` · ${state.pct}%` : ''}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-1.5">
+          {candidates.map((c) => (
+            <button
+              key={c.index}
+              type="button"
+              disabled={picking}
+              onClick={() => void pick(c.index)}
+              className="relative aspect-square overflow-hidden rounded border border-border bg-muted/40 hover:border-primary disabled:opacity-50"
+            >
+              <img src={c.thumbUrl} alt={`#${c.index}`} className="h-full w-full object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
+            </button>
+          ))}
+        </div>
+      )}
+      {running && candidates.length > 0 && (
+        <div className="mt-1 text-center text-[9px] text-muted-foreground">{t('animate.rerollMore')}</div>
+      )}
+    </div>
+  );
+}

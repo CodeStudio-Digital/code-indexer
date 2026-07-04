@@ -110,6 +110,26 @@
     "editSaveFailed": "Falha ao enviar para o servidor",
     "editHint": "Ctrl/⌘S salva no servidor"
   },
+  "files": {
+    "toRemote": "Enviar para o servidor →",
+    "toLocal": "← Baixar aqui",
+    "zip": "Compactar (zip)",
+    "unzip": "Extrair aqui",
+    "zipNamePh": "arquivo",
+    "zipDone": "Criado {{name}}",
+    "extractDone": "Extraído {{name}}",
+    "zipFailed": "Falha na operação de arquivo: {{reason}}",
+    "unknownArchive": "Não sei como extrair {{name}}",
+    "zipMissing": "O servidor não tem zip/unzip/tar disponível",
+    "tooManyFiles": "Arquivos demais para transferir de uma vez",
+    "nSelected": "{{count}} itens",
+    "collisionTitle": "O item já existe",
+    "collisionBody": "\"{{name}}\" já existe no destino.",
+    "overwrite": "Sobrescrever",
+    "skip": "Pular",
+    "keepBoth": "Manter os dois",
+    "applyToAll": "Aplicar a todos os conflitos"
+  },
   "snippets": {
     "title": "Snippets",
     "new": "Novo snippet",
@@ -123,8 +143,19 @@
     "save": "Salvar",
     "update": "Atualizar",
     "multilineHint": "Cada linha roda como um comando separado (executa como um script de shell).",
+    "secretHint": "Use ${secret:NOME} para injetar um segredo salvo (ex.: token do git) — resolvido na hora de rodar.",
     "selectHost": "Selecione um host",
     "runError": "Não foi possível rodar o snippet: {{reason}}"
+  },
+  "secrets": {
+    "title": "Segredos",
+    "new": "Novo segredo",
+    "namePlaceholder": "gh_token",
+    "valuePlaceholder": "Valor do segredo (ex.: um PAT do git)",
+    "valueKeep": "Deixe em branco para manter o valor atual",
+    "descPlaceholder": "Descrição (opcional)",
+    "save": "Salvar",
+    "insert": "Inserir segredo"
   },
   "tunnels": {
     "title": "Encaminhamento de portas",

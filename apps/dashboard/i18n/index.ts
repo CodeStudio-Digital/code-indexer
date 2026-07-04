@@ -19,6 +19,7 @@ import cloudPtBR from './locales/pt-BR/cloud.json';
 import apiClientPtBR from './locales/pt-BR/apiClient.json';
 import sshPtBR from './locales/pt-BR/ssh.json';
 import dbClientPtBR from './locales/pt-BR/dbClient.json';
+import spriteStudioPtBR from './locales/pt-BR/spriteStudio.json';
 
 import commonEn from './locales/en/common.json';
 import adminEn from './locales/en/admin.json';
@@ -37,6 +38,7 @@ import cloudEn from './locales/en/cloud.json';
 import apiClientEn from './locales/en/apiClient.json';
 import sshEn from './locales/en/ssh.json';
 import dbClientEn from './locales/en/dbClient.json';
+import spriteStudioEn from './locales/en/spriteStudio.json';
 
 i18n
   .use(LanguageDetector)
@@ -61,6 +63,7 @@ i18n
         apiClient: apiClientPtBR,
         ssh: sshPtBR,
         dbClient: dbClientPtBR,
+        spriteStudio: spriteStudioPtBR,
       },
       en: {
         common: commonEn,
@@ -80,6 +83,7 @@ i18n
         apiClient: apiClientEn,
         ssh: sshEn,
         dbClient: dbClientEn,
+        spriteStudio: spriteStudioEn,
       },
     },
     fallbackLng: 'pt-BR',

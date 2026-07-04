@@ -28,6 +28,7 @@ import { useSshSessions, type SshShell } from './ssh-sessions.js';
 import {
   connectWithTrust,
   runSnippetWithTrust,
+  resolveSnippetCommand,
   resolveSpecFromHost,
   listHosts,
   listIdentities,
@@ -41,7 +42,7 @@ import { HostEditDialog } from './HostEditDialog.js';
 import { HostKeyTrustPrompt } from './HostKeyTrustPrompt.js';
 import { TunnelsPanel } from './tunnels/TunnelsPanel.js';
 import { SnippetsPanel } from './snippets/SnippetsPanel.js';
-import { SftpBrowser } from './sftp/SftpBrowser.js';
+import { DualPaneFiles } from './files/DualPaneFiles.js';
 import { CloudVaultDialog } from './vault/CloudVaultDialog.js';
 import type { SshHost, SshIdentity, SshSnippet } from './types.js';
 
@@ -176,7 +177,8 @@ export function SshPanel({ projectId }: SshPanelProps) {
       setError(null);
       try {
         const spec = await resolveSpecFromHost(h, hosts, identities);
-        const res = await runSnippetWithTrust(spec, snippet.command, requestTrust);
+        const command = await resolveSnippetCommand(projectId, snippet.command);
+        const res = await runSnippetWithTrust(spec, command, requestTrust);
         add(projectId, { terminalId: res.terminalId, hostId: spec.hostId, label: `▷ ${snippet.name}`, kind: 'snippet' });
         setView('terminals');
       } catch (e) {
@@ -429,7 +431,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
         </div>
 
         {view === 'files' ? (
-          <SftpBrowser projectId={projectId} hosts={hosts} identities={identities} onNeedTrust={requestTrust} />
+          <DualPaneFiles projectId={projectId} hosts={hosts} identities={identities} onNeedTrust={requestTrust} />
         ) : view === 'tunnels' ? (
           <TunnelsPanel hosts={hosts} identities={identities} />
         ) : view === 'snippets' ? (

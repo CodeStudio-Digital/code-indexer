@@ -70,7 +70,7 @@ export class AgentMemoryRetriever {
     const q = queryText.trim();
     const minChars = this.opts.minQueryChars ?? 4;
     if (q.length < minChars) {
-      this.opts.log?.('skip_short_query', { length: q.length, min: minChars });
+      this.opts.log?.('skip_short_query', { length: q.length, min: minChars, scope, projectId });
       return [];
     }
     const topK = this.opts.topK ?? 3;
@@ -78,7 +78,7 @@ export class AgentMemoryRetriever {
 
     const hits = await this.service.search(scope, projectId, q, fetchK, type);
     if (hits.length === 0) {
-      this.opts.log?.('zero_hits', { query: q.slice(0, 80) });
+      this.opts.log?.('zero_hits', { query: q.slice(0, 80), scope, projectId });
       return [];
     }
 
@@ -120,7 +120,7 @@ export class AgentMemoryRetriever {
     const k = Math.max(1, Math.min(12, Math.floor(limit)));
     const hits = await this.service.search(scope, projectId, q, Math.max(k * 3, 15), type);
     if (hits.length === 0) {
-      this.opts.log?.('zero_hits', { query: q.slice(0, 80), recall: true });
+      this.opts.log?.('zero_hits', { query: q.slice(0, 80), recall: true, scope, projectId });
       return [];
     }
     const top = this.scoreHits(hits).slice(0, k);

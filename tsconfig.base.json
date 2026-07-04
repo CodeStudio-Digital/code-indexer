@@ -27,6 +27,8 @@
       "@mcp/indexer/*": ["packages/indexer/src/*"],
       "@mcp/design-system": ["packages/design-system/src/index.ts"],
       "@mcp/design-system/*": ["packages/design-system/src/*"],
+      "@mcp/sprite-studio": ["packages/sprite-studio/src/index.ts"],
+      "@mcp/sprite-studio/*": ["packages/sprite-studio/src/*"],
       "@mcp/code-agent": ["packages/code-agent/src/index.ts"],
       "@mcp/code-agent/*": ["packages/code-agent/src/*"],
       "@mcp/docs-agent": ["packages/docs-agent/src/index.ts"],

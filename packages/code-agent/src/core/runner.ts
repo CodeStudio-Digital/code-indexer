@@ -1922,6 +1922,7 @@ export class CoderRunner extends EventEmitter {
           this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
         buildQualityFeedbackSuffix: () => this.buildQualityFeedbackSuffix(),
         getRelevantProjectMemory: this.opts.getRelevantProjectMemory,
+        synthesizeMemoryQuery: this.opts.synthesizeMemoryQuery,
         getSessionStateData: this.opts.getSessionStateData,
         // A1 — independent goal-completion verifier (host-built; undefined when off).
         verifyGoalCompletion: this.opts.verifyGoalCompletion,

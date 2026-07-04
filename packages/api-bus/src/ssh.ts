@@ -174,6 +174,28 @@ export interface SshApi {
 
   /** Read + parse the user's `~/.ssh/config` for one-click host import. [] if absent. */
   importSshConfig(input: Record<string, never>, ctx: ApiContext): Promise<SshConfigHost[]>;
+
+  /**
+   * Run a one-shot command and WAIT for it to finish, returning captured
+   * stdout/stderr + exit code (non-PTY `exec`). Unlike `runSnippet` (which
+   * streams into a terminal), this is for SCRIPTED ops like remote zip/tar
+   * where the caller needs the result. Output is capped at `maxBytes`
+   * (default 1 MB → `truncated`); the command is killed after `timeoutMs`
+   * (default 60s → `ssh_exec_timeout`).
+   */
+  execCommand(
+    input: { spec: SshConnectSpec; command: string; timeoutMs?: number; maxBytes?: number },
+    ctx: ApiContext,
+  ): Promise<SshExecResult>;
+}
+
+export interface SshExecResult {
+  /** Process exit code, or null if the channel closed without one (e.g. killed). */
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  /** True if stdout or stderr hit the byte cap and was truncated. */
+  truncated: boolean;
 }
 
 export interface SshConfigHost {

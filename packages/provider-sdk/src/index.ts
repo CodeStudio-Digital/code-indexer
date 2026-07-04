@@ -12,6 +12,7 @@ export * from './indexer.js';
 export * from './credentials.js';
 export * from './auth.js';
 export * from './provider.js';
+export * from './images.js';
 export * from './spec.js';
 export * from './runtime-adapter.js';
 export * from './stream-resilience.js';

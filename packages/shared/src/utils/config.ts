@@ -44,6 +44,12 @@ export interface FeatureFlags {
    * Default ON. Set `DESIGN_SYSTEM_ENABLED=false` to fully disable.
    */
   designSystemEnabled: boolean;
+  /**
+   * Master switch for the Sprite Studio module (/sprites surface,
+   * /api/sprite-studio routes, and the sprite_* tool group registered in
+   * the coder). Default ON. Set `SPRITE_STUDIO_ENABLED=false` to disable.
+   */
+  spriteStudioEnabled: boolean;
 }
 
 export interface IndexerConfig {
@@ -171,6 +177,7 @@ const DEFAULT_CONFIG: IndexerConfig = {
   indexProfile: 'balanced',
   features: {
     designSystemEnabled: true,
+    spriteStudioEnabled: true,
   },
   dashboard: {
     port: 7333,
@@ -202,6 +209,9 @@ function applyEnvOverrides(config: IndexerConfig): void {
   // Feature flags
   if (process.env.DESIGN_SYSTEM_ENABLED !== undefined) {
     config.features.designSystemEnabled = process.env.DESIGN_SYSTEM_ENABLED !== 'false';
+  }
+  if (process.env.SPRITE_STUDIO_ENABLED !== undefined) {
+    config.features.spriteStudioEnabled = process.env.SPRITE_STUDIO_ENABLED !== 'false';
   }
 
   if (process.env.MCP_INDEX_DB) {

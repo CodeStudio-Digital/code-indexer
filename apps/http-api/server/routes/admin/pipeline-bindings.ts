@@ -54,7 +54,7 @@ function isValidScope(s: unknown): s is BindingScopeType {
 }
 
 const VALID_CAPABILITIES: CapabilityKind[] = [
-  'text_llm', 'embeddings', 'reranking', 'vision', 'voice', 'autocomplete',
+  'text_llm', 'embeddings', 'reranking', 'vision', 'voice', 'autocomplete', 'image_gen',
 ];
 
 function isValidCapability(s: unknown): s is CapabilityKind {

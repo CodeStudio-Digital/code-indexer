@@ -1,4 +1,4 @@
-import { resolve as resolvePath } from 'node:path';
+import { resolve as resolvePath, join as joinPath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { getDbWriter, isDbWriterEnabled, type DbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
@@ -71,6 +71,7 @@ import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
 import { buildQaTools } from '@mcp/company/tools/qa/index.js';
 import { buildDesignSystemStudioTools, buildDesignSystemConsumerTools } from '@mcp/company/tools/design-system/index.js';
+import { buildSpriteStudioTools } from '@mcp/code-agent/tools/sprite-studio/index.js';
 import { buildSubordinateTools } from '@mcp/company/tools/subordinate-tools.js';
 import { buildSharedDriveTools } from '@mcp/company/tools/shared-drive-tools.js';
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -505,6 +506,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const dsConsumer = !opts.companyContext && !dsWorkspace ? parseDsConsumer(project.builder_json) : null;
   if (dsConsumer && config.features.designSystemEnabled) {
     registry.registerAll(buildDesignSystemConsumerTools(dsConsumer));
+  }
+  // Sprite Studio — single sessions on a project that has a `.sprite-studio/`
+  // directory get the sprite_* tools (get_project/list_assets/generate/
+  // process/export) bound to the project. Same posture as DS Studio: outside
+  // company context, gated by the feature flag + the on-disk marker. The tools
+  // reach the real work through `getGlobalSpriteStudioHost()` (main impl +
+  // worker bridge shim).
+  if (
+    !opts.companyContext &&
+    config.features.spriteStudioEnabled &&
+    existsSync(joinPath(project.root_path, '.sprite-studio'))
+  ) {
+    registry.registerAll(buildSpriteStudioTools(project.id));
   }
   // Cross-agent comm tools (list_agents / wait_agents / send_message /
   // send_input / followup_task) were registered here UNCONDITIONALLY, so they
@@ -2004,6 +2018,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             );
             return interleaveLabeled(perProject);
           }
+        : undefined,
+    // Mem C — LLM memory-query synthesizer for meta/continuation messages.
+    // Wired only when the host provided one AND memory is enabled; the
+    // Executing node calls it fail-open and falls back to its walk-back
+    // heuristic when it returns null (or isn't wired at all).
+    synthesizeMemoryQuery:
+      opts.memoryQuerySynthesizer && anyMemoryEnabled
+        ? (tail) => opts.memoryQuerySynthesizer!(tail)
         : undefined,
     // Session State Block data — non-company sessions only. The runner
     // renders goal/plan/todos/notes/files/recall into a `<session-state>`

@@ -4,15 +4,16 @@
  * with the host-key trust flow and switches to the Terminals view).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Play, Pencil, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Play, Pencil, Trash2, Loader2, KeyRound } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../../components/ui/select.js';
-import { listSnippets, createSnippet, patchSnippet, deleteSnippet } from '../api.js';
-import type { SshHost, SshSnippet } from '../types.js';
+import { listSnippets, createSnippet, patchSnippet, deleteSnippet, listSecrets } from '../api.js';
+import { SecretsManager } from './SecretsManager.js';
+import type { SshHost, SshSnippet, SshSecret } from '../types.js';
 
 interface SnippetsPanelProps {
   projectId: number;
@@ -31,12 +32,35 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
   const [busy, setBusy] = useState(false);
+  const [secrets, setSecrets] = useState<SshSecret[]>([]);
+  const [showSecrets, setShowSecrets] = useState(false);
+  const commandRef = useRef<HTMLTextAreaElement>(null);
 
   const reload = useCallback(() => {
     void listSnippets(projectId).then(setSnippets).catch(() => undefined);
   }, [projectId]);
 
+  const reloadSecrets = useCallback(() => {
+    void listSecrets(projectId).then(setSecrets).catch(() => undefined);
+  }, [projectId]);
+
   useEffect(() => reload(), [reload]);
+  useEffect(() => reloadSecrets(), [reloadSecrets]);
+
+  /** Insert `${secret:NAME}` at the caret (or append) in the command editor. */
+  const insertSecret = useCallback((secretName: string) => {
+    const ref = `\${secret:${secretName}}`;
+    const ta = commandRef.current;
+    const start = ta?.selectionStart ?? command.length;
+    const end = ta?.selectionEnd ?? command.length;
+    setCommand((c) => c.slice(0, start) + ref + c.slice(end));
+    requestAnimationFrame(() => {
+      if (!ta) return;
+      ta.focus();
+      const pos = start + ref.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }, [command]);
 
   const resetForm = useCallback(() => {
     setEditingId(null);
@@ -93,19 +117,46 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
         </div>
         <button
           type="button"
+          onClick={() => setShowSecrets((v) => !v)}
+          title={t('secrets.title')}
+          className={`ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs hover:bg-muted ${showSecrets ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+        >
+          <KeyRound className="h-3 w-3" />
+          {t('secrets.title')}
+        </button>
+        <button
+          type="button"
           onClick={() => (showForm && editingId == null ? resetForm() : openNew())}
-          className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
         >
           <Plus className="h-3 w-3" />
           {t('snippets.new')}
         </button>
       </div>
 
+      {showSecrets && <SecretsManager projectId={projectId} secrets={secrets} onChange={reloadSecrets} />}
+
       {showForm && (
         <div className="border-b p-2 grid gap-2 bg-card/30">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('snippets.namePlaceholder')} className="h-8" />
-          <Textarea value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('snippets.commandPlaceholder')} rows={3} className="font-mono text-xs" />
-          <p className="text-[10px] text-muted-foreground">{t('snippets.multilineHint')}</p>
+          <Textarea ref={commandRef} value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('snippets.commandPlaceholder')} rows={3} className="font-mono text-xs" />
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] text-muted-foreground flex-1">{t('snippets.multilineHint')}</p>
+            {secrets.length > 0 && (
+              <Select value="" onValueChange={insertSecret}>
+                <SelectTrigger className="h-6 w-auto gap-1 text-[10px]">
+                  <KeyRound className="h-3 w-3" />
+                  {t('secrets.insert')}
+                </SelectTrigger>
+                <SelectContent>
+                  {secrets.map((s) => (
+                    <SelectItem key={s.id} value={s.name} className="font-mono text-xs">{`\${secret:${s.name}}`}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <p className="text-[10px] text-muted-foreground">{t('snippets.secretHint')}</p>
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="ghost" onClick={resetForm} disabled={busy}>
               {t('dialog.cancel')}

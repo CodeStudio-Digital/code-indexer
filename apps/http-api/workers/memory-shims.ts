@@ -68,6 +68,9 @@ export interface WorkerMemoryShims {
       taskText: string,
     ): Promise<ReadonlyArray<ShimRetrievedMemory>>;
   };
+  memoryQuerySynthesizer: (
+    tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
+  ) => Promise<string | null>;
   runEndMemory: {
     extractAndPersist(
       projectId: number,
@@ -120,6 +123,15 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
           return [];
         }
       },
+    },
+    memoryQuerySynthesizer: async (tail) => {
+      try {
+        // LLM synthesis runs main-side (8s budget there); 10s is the stuck-RPC
+        // backstop. Any failure → null so the runner uses its walk-back heuristic.
+        return await bridge.request<string | null>('memoryQuerySynth', { tail }, { timeoutMs: 10_000 });
+      } catch {
+        return null;
+      }
     },
     runEndMemory: {
       extractAndPersist: async (projectId, projectName, input) => {

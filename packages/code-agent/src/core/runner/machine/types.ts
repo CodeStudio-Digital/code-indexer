@@ -303,7 +303,10 @@ export interface RunContext {
      * synchronous dynamic injector can include it. Reset each turn.
      */
     pendingMemory?: ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>;
-    /** Task text the pending memory was retrieved for (throttle key). */
+    /** Throttle key for proactive recall: the STABLE pre-synthesis task text
+     *  (raw message, or the walk-back for a meta/continuation message) — NOT
+     *  the LLM-synthesized query, which is non-deterministic and would defeat
+     *  the throttle. */
     lastMemoryQuery?: string;
     /**
      * Correction-nudge throttle (assembly/correction-nudge.ts): at most once
@@ -491,6 +494,15 @@ export interface BridgeCallbacks {
     taskText: string,
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
+  /**
+   * Mem C — optional LLM query synthesizer for meta/continuation messages.
+   * The Executing node calls it (fail-open) BEFORE `getRelevantProjectMemory`
+   * to turn a task-less message into a real search query; null → the node uses
+   * its walk-back heuristic. Unset = heuristic only.
+   */
+  synthesizeMemoryQuery?: (
+    tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
+  ) => Promise<string | null>;
   /**
    * Session State Block data (replaces the old per-field Session Drive
    * injection) — synchronous read of the session's persisted state: goal,

@@ -21,6 +21,9 @@ export const chatgptSpec: ProviderSpec = {
     'gpt-5-codex': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10.0 },
   },
+  // Standalone images/generations|edits on the Codex backend (subscription-
+  // billed) — the sprite-studio image role can bind gpt-image-* here.
+  capabilities: { supportsImageGen: true },
   wire: 'codex',
   discovery: { from: 'chatgpt-models' },
   test: { from: 'codex-health' },

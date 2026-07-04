@@ -126,6 +126,30 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  /** Zip files/folders into a project-relative `.zip`. Body: `{ paths, out }`. */
+  app.post('/api/projects/:id/archive', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const body = await c.req.json<{ paths: string[]; out: string }>();
+      if (!body.paths?.length || !body.out) return c.json({ error: 'paths + out required' }, 400);
+      return c.json(await h.archive({ projectId, paths: body.paths, out: body.out }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  /** Extract a project-relative zip into `dest`. Body: `{ zip, dest }`. */
+  app.post('/api/projects/:id/extract', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const body = await c.req.json<{ zip: string; dest: string }>();
+      if (!body.zip || !body.dest) return c.json({ error: 'zip + dest required' }, 400);
+      return c.json(await h.extract({ projectId, zip: body.zip, dest: body.dest }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   // ── Local History (mig 160) ──────────────────────────────────────
   // Registradas ANTES do wildcard `/files/*` abaixo (mesmo cuidado de ordenação).
   app.get('/api/projects/:id/file/history', async (c) => {

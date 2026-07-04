@@ -56,6 +56,21 @@ export interface SshSnippet {
   updated_at: string;
 }
 
+/**
+ * Named secret referenced from a snippet as `${secret:name}` (migration 197).
+ * `enc_value` is OS-keychain ciphertext (device-bound) — decrypted just-in-time
+ * at snippet run; the manager UI never decrypts it for display (write-only).
+ */
+export interface SshSecret {
+  id: number;
+  project_id: number;
+  name: string;
+  enc_value: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** What the host editor collects; secrets are plaintext here and encrypted before save. */
 export interface HostFormValues {
   label: string;

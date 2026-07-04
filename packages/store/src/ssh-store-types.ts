@@ -77,6 +77,28 @@ export interface CreateSshSnippetInput {
 }
 export type SshSnippetPatch = Partial<Omit<CreateSshSnippetInput, 'project_id'>>;
 
+/**
+ * Named secret referenced from a snippet as `${secret:name}` (migration 197).
+ * `enc_value` is OS-keychain ciphertext produced by the renderer — the store
+ * never sees plaintext, same as host `enc_password`.
+ */
+export interface SshSecret {
+  id: number;
+  project_id: number;
+  name: string;
+  enc_value: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+export interface CreateSshSecretInput {
+  project_id: number;
+  name: string;
+  enc_value: string;
+  description?: string | null;
+}
+export type SshSecretPatch = Partial<Omit<CreateSshSecretInput, 'project_id'>>;
+
 export interface CreateSshHostInput {
   project_id: number;
   label: string;

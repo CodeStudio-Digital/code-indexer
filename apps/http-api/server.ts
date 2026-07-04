@@ -110,6 +110,7 @@ import {
 } from '@mcp/company/services/SandboxService.js';
 import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
 import { mountDesignSystemRoutes } from './server/routes/design-system/index.js';
+import { mountSpriteStudioRoutes } from './server/routes/sprite-studio/index.js';
 import { mountConfigRoutes } from './server/routes/config.js';
 import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
@@ -120,6 +121,8 @@ import { setGlobalDocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
 import { buildDocSearchBackend, buildDocsHintProvider } from './server/docs/search-backend.js';
 import { setGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import { createVisionDescriber } from './server/vision-describer-impl.js';
+import { setGlobalSpriteStudioHost } from '@mcp/code-agent/tools/sprite-studio/index.js';
+import { createSpriteStudioHostImpl } from './server/sprite-studio-host-impl.js';
 import {
   DocsResearchBridge,
   setGlobalDocsResearcher,
@@ -875,6 +878,12 @@ export function createApp() {
   if (deps.config.features.designSystemEnabled) {
     mountDesignSystemRoutes(app, deps);
   }
+  // Sprite Studio routes (projects / assets / generation jobs / SSE). Gated
+  // by SPRITE_STUDIO_ENABLED — when off the routes are unmounted and the
+  // /sprites menu entry is hidden.
+  if (deps.config.features.spriteStudioEnabled) {
+    mountSpriteStudioRoutes(app, deps);
+  }
   mountWorkspaceRoutes(app, deps);
   // Self-hosted draw.io editor webapp — served at /drawio/* (mcp://app/drawio
   // in Electron). Static assets, no auth; the embedded editor for the diagram
@@ -931,6 +940,15 @@ export function createApp() {
   const visionDescriber = createVisionDescriber({ resolver: deps.pipelineProviderResolver });
   setGlobalVisionDescriber(visionDescriber);
 
+  // Sprite Studio host — the `sprite_*` agent tools reach it via the process
+  // singleton (in-process coders) or the `spriteStudioHost` MessageBridge shim
+  // (worker coders, wired into setCoderWorkerDocDeps below). Gated by the flag
+  // so a build without the feature never wires it.
+  const spriteStudioHost = deps.config.features.spriteStudioEnabled
+    ? createSpriteStudioHostImpl(deps)
+    : null;
+  setGlobalSpriteStudioHost(spriteStudioHost);
+
   // Mem C across workers: memoryRetriever + runEndMemory are the SAME
   // canonical instances stream.ts passes on the in-process path — workers
   // reach them via the memoryRetrieve/memoryExtract/memoryIsConfigured RPC
@@ -940,7 +958,12 @@ export function createApp() {
     docSearch: docSearchBackend,
     docsResearch: docsResearchBridge,
     vision: visionDescriber,
+    // Sprite Studio host — worker coders reach it via the `spriteStudioHost.*`
+    // RPC (shim in coder-worker.ts). Only the coder pool needs it: the sprite
+    // tools register outside company context (mirroring DS Studio).
+    spriteStudioHost,
     memoryRetriever: deps.memoryRetriever,
+    memoryQuerySynthesizer: deps.memoryQuerySynthesizer,
     runEndMemory: deps.runEndMemory,
     projectMemory: deps.projectMemory,
   });

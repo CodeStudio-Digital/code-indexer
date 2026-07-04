@@ -116,6 +116,9 @@ importers:
       dotenv:
         specifier: ^17.4.0
         version: 17.4.2
+      gifenc:
+        specifier: ^1.0.3
+        version: 1.0.3
       glob:
         specifier: ^11.0.1
         version: 11.1.0
@@ -137,6 +140,12 @@ importers:
       ignore:
         specifier: ^7.0.4
         version: 7.0.5
+      image-q:
+        specifier: ^4.0.0
+        version: 4.0.0
+      jpeg-js:
+        specifier: ^0.4.4
+        version: 0.4.4
       lucide-react:
         specifier: ^1.7.0
         version: 1.8.0(react@19.2.5)
@@ -164,6 +173,9 @@ importers:
       pg:
         specifier: ^8.13.1
         version: 8.20.0
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       postcss:
         specifier: ^8.5.3
         version: 8.5.10
@@ -387,9 +399,6 @@ importers:
       '@mcp/company-contracts':
         specifier: workspace:*
         version: link:../company-contracts
-      '@mcp/db-drivers':
-        specifier: workspace:*
-        version: link:../db-drivers
       '@mcp/design-system':
         specifier: workspace:*
         version: link:../design-system
@@ -506,6 +515,18 @@ importers:
         specifier: workspace:*
         version: link:../store
 
+  packages/provider-runtime:
+    dependencies:
+      '@mcp/code-agent':
+        specifier: workspace:*
+        version: link:../code-agent
+      '@mcp/indexer':
+        specifier: workspace:*
+        version: link:../indexer
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
+
   packages/provider-sdk:
     dependencies:
       '@mcp/shared':
@@ -564,6 +585,28 @@ importers:
         version: 7.29.7
 
   packages/shared: {}
+
+  packages/sprite-studio:
+    dependencies:
+      '@mcp/store':
+        specifier: workspace:*
+        version: link:../store
+      gifenc:
+        specifier: ^1.0.3
+        version: 1.0.3
+      image-q:
+        specifier: ^4.0.0
+        version: 4.0.0
+      jpeg-js:
+        specifier: ^0.4.4
+        version: 0.4.4
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+    devDependencies:
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
 
   packages/store:
     dependencies:
@@ -3148,6 +3191,9 @@ packages:
   '@types/node-fetch@2.6.13':
     resolution: {integrity: sha512-QGpRVpzSaUs30JBSGPjOg4Uveu384erbHBoT1zeONvyCfwQxIkUshLAOqN/k9EjGviPRmWTTe6aH2qySWKTVSw==}
 
+  '@types/node@16.9.1':
+    resolution: {integrity: sha512-QpLcX9ZSsq3YYUUnD3nFDY8H7wctAhQj/TFKL8Ya8v5fMm3CFXxo8zStsLAl780ltoYoo1WvKUVGBQK+1ifr7g==}
+
   '@types/node@18.19.130':
     resolution: {integrity: sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg==}
 
@@ -3159,6 +3205,9 @@ packages:
 
   '@types/pg@8.20.0':
     resolution: {integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==}
+
+  '@types/pngjs@6.0.5':
+    resolution: {integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==}
 
   '@types/react-dom@19.2.3':
     resolution: {integrity: sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==}
@@ -4483,6 +4532,9 @@ packages:
   get-tsconfig@4.14.0:
     resolution: {integrity: sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA==}
 
+  gifenc@1.0.3:
+    resolution: {integrity: sha512-xdr6AdrfGBcfzncONUOlXMBuc5wJDtOueE3c5rdG0oNgtINLD+f2iFZltrBRZYzACRbKr+mSVU/x98zv2u3jmw==}
+
   gitdiff-parser@0.3.1:
     resolution: {integrity: sha512-YQJnY8aew65id8okGxKCksH3efDCJ9HzV7M9rsvd65habf39Pkh4cgYJ27AaoDMqo1X98pgNJhNMrm/kpV7UVQ==}
 
@@ -4728,6 +4780,9 @@ packages:
     resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
 
+  image-q@4.0.0:
+    resolution: {integrity: sha512-PfJGVgIfKQJuq3s0tTDOKtztksibuUEbJQIYT3by6wctQo+Rdlh7ef4evJ5NCdxY4CfMbvFkocEwbl4BF8RlJw==}
+
   imurmurhash@0.1.4:
     resolution: {integrity: sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA==}
     engines: {node: '>=0.8.19'}
@@ -4903,6 +4958,9 @@ packages:
 
   jose@6.2.2:
     resolution: {integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==}
+
+  jpeg-js@0.4.4:
+    resolution: {integrity: sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==}
 
   js-md4@0.3.2:
     resolution: {integrity: sha512-/GDnfQYsltsjRswQhN9fhv3EMw2sCpUdrdxyWDOUK7eyD++r3gRhzgiQgc/x4MAv2i1iuQ4lxO5mvqM3vj4bwA==}
@@ -5792,6 +5850,10 @@ packages:
   plist@3.1.1:
     resolution: {integrity: sha512-ZIfcLJC+7E7FBFnDxm9MPmt7D+DidyQ26lewieO75AdhA2ayMtsJSES0iWzqJQbcVRSrTufQoy0DR94xHue0oA==}
     engines: {node: '>=10.4.0'}
+
+  pngjs@7.0.0:
+    resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
+    engines: {node: '>=14.19.0'}
 
   postcss-selector-parser@6.0.10:
     resolution: {integrity: sha512-IQ7TZdoaqbT+LCpShg46jnZVlhWD2w6iQYAcYXfHARZ7X1t/UGhhceQDs5X0cGqKvYlHNOuv7Oa1xmb0oQuA3w==}
@@ -10097,6 +10159,8 @@ snapshots:
       '@types/node': 22.19.17
       form-data: 4.0.5
 
+  '@types/node@16.9.1': {}
+
   '@types/node@18.19.130':
     dependencies:
       undici-types: 5.26.5
@@ -10114,6 +10178,10 @@ snapshots:
       '@types/node': 22.19.17
       pg-protocol: 1.13.0
       pg-types: 2.2.0
+
+  '@types/pngjs@6.0.5':
+    dependencies:
+      '@types/node': 22.19.17
 
   '@types/react-dom@19.2.3(@types/react@19.2.14)':
     dependencies:
@@ -11739,6 +11807,8 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
+  gifenc@1.0.3: {}
+
   gitdiff-parser@0.3.1: {}
 
   github-from-package@0.0.0: {}
@@ -12119,6 +12189,10 @@ snapshots:
 
   ignore@7.0.5: {}
 
+  image-q@4.0.0:
+    dependencies:
+      '@types/node': 16.9.1
+
   imurmurhash@0.1.4: {}
 
   indent-string@4.0.0: {}
@@ -12242,6 +12316,8 @@ snapshots:
   jiti@2.6.1: {}
 
   jose@6.2.2: {}
+
+  jpeg-js@0.4.4: {}
 
   js-md4@0.3.2: {}
 
@@ -13344,6 +13420,8 @@ snapshots:
       '@xmldom/xmldom': 0.9.10
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
+
+  pngjs@7.0.0: {}
 
   postcss-selector-parser@6.0.10:
     dependencies:

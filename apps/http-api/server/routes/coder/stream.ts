@@ -24,6 +24,7 @@ import {
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
 import { parseIdParam, notFound } from '../_helpers.js';
+import { normalizeDedupeKey, syntheticDoneSSE } from '../recent-message-keys.js';
 import { withSessionLock } from './sessionLock.js';
 import { normalizeAttachmentsForModel, pdfHandledNatively } from '@mcp/services/services/docs/attachment-extract.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
@@ -95,6 +96,13 @@ interface SendMessageBody {
    * the previous worker is gone). `content` may be empty in this mode.
    */
   resume?: boolean;
+  /**
+   * Client-generated idempotency key (UUID). Stable across the
+   * `ReconnectingSSEClient` retries of a single send, so a retry that
+   * re-POSTs the body is deduped into a bus replay instead of re-running
+   * the append/push/spawn side effects. Absent → current behaviour.
+   */
+  client_msg_id?: string;
 }
 
 /**
@@ -118,6 +126,8 @@ interface ContinueBody {
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** Force the vision fallback (image → text) on a resumed run. */
   describe_images?: boolean;
+  /** Idempotency key — see `SendMessageBody.client_msg_id`. */
+  client_msg_id?: string;
 }
 
 export function mountCoderStreamRoutes(
@@ -126,7 +136,7 @@ export function mountCoderStreamRoutes(
   runtime: CoderRuntime,
 ): void {
   const { sessionStore, providerStore } = deps;
-  const { activeRuns, BUS_LINGER_MS, wireRunnerToBus } = runtime;
+  const { activeRuns, BUS_LINGER_MS, wireRunnerToBus, recentMessageKeys } = runtime;
 
   /**
    * Whether the session's active model can consume images. Uses the provider's
@@ -369,6 +379,7 @@ export function mountCoderStreamRoutes(
     // /answer-via-worker fallback, where the tool_result is already in
     // history and there's no new user message to attach.
     if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
+    const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Log the route hit. The bus may not exist yet (fresh session) —
     // emitWorkerLog no-ops in that case, but if a worker is still alive
     // (attach branch) the dashboard sees the incoming POST live.
@@ -444,7 +455,7 @@ export function mountCoderStreamRoutes(
     //   (b) create a brand new bus + runCoder and tail that.
     // The lock is released as soon as the synchronous setup completes — the
     // SSE stream itself is not held under the lock.
-    const decision = await withSessionLock(id, async (): Promise<
+    const decide = async (): Promise<
       | { kind: 'attach'; bus: ReturnType<typeof createBus>; tailFrom: number }
       | { kind: 'fresh'; bus: ReturnType<typeof createBus> }
       | { kind: 'reject'; status: 409; body: { error: string; code: string } }
@@ -604,10 +615,55 @@ export function mountCoderStreamRoutes(
         activeRuns.set(id, newBus);
         return newBus;
       }
+    };
+
+    const decision = await withSessionLock(id, async (): Promise<
+      | Awaited<ReturnType<typeof decide>>
+      | { kind: 'replay'; bus: ReturnType<typeof createBus>; since: number }
+      | { kind: 'gone' }
+    > => {
+      // Idempotency: a `ReconnectingSSEClient` retry re-POSTs this body. If the
+      // same client_msg_id was seen and the original run's bus is still
+      // reachable, replay it (a bus already ended is always safe to replay; a
+      // live bus must be the currently-registered one, else waitEnded would
+      // hang) instead of re-running the append/push/spawn side effects. Runs
+      // BEFORE the isWaitingForInput check so a retry never triggers a spurious
+      // 409 interrupt handshake.
+      if (dedupeKey) {
+        const hit = recentMessageKeys.lookup(id, dedupeKey);
+        if (hit) {
+          emitWorkerLog(hit.bus, 'info', 'route', 'POST /messages deduped (retry replay)', {
+            client_msg_id: dedupeKey,
+            bus_gone: !hit.bus,
+          });
+          return hit.bus && (hit.bus.ended || hit.bus === activeRuns.get(id))
+            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
+            : { kind: 'gone' };
+        }
+      }
+      const d = await decide();
+      // Record AFTER a successful decision, still inside the lock so a racing
+      // retry observes it. If `decide()` threw (e.g. a worker RPC failed after
+      // appendMessage) the key is intentionally NOT recorded, so the retry
+      // reprocesses rather than replaying a run that never took hold — the
+      // narrow cost being a possible duplicate append in that rare window.
+      if (dedupeKey && (d.kind === 'attach' || d.kind === 'fresh')) {
+        recentMessageKeys.record(id, dedupeKey, d.bus, d.kind === 'attach' ? d.tailFrom : -1);
+      }
+      return d;
     });
 
     if (decision.kind === 'reject') {
       return c.json(decision.body, decision.status);
+    }
+    if (decision.kind === 'replay') {
+      return pumpBusToSSE(c, decision.bus, { since: decision.since });
+    }
+    if (decision.kind === 'gone') {
+      // The retry's original run finished and its bus was evicted. Emit a
+      // synthetic terminal so the client resolves cleanly and refetches the
+      // persisted history (which already holds the run's output).
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
     }
     if (decision.kind === 'attach') {
       return pumpBusToSSE(c, decision.bus, {
@@ -662,6 +718,8 @@ export function mountCoderStreamRoutes(
           mcpBearerResolver: deps.mcpBearerResolver,
           // Mem C — proactive project-memory injection (in-process path).
           memoryRetriever: deps.memoryRetriever,
+          // Smart recall query for meta/continuation messages (in-process path).
+          memoryQuerySynthesizer: deps.memoryQuerySynthesizer,
           // Mem C write-back — distill durable memory at run-end (in-process path).
           runEndMemory: deps.runEndMemory,
           // Direct agent ports — save_note scope 'project' + recall_memory.
@@ -739,6 +797,7 @@ export function mountCoderStreamRoutes(
     if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);
     }
+    const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Pre-spawn log: bus is about to be created below. We can't emit
     // here because no bus exists yet — but the route-entry hit will
     // appear via the fresh bus's `run_started` event seq=0.
@@ -746,13 +805,54 @@ export function mountCoderStreamRoutes(
     // Take the lock so a /continue racing with a /messages can't both spin
     // up runCoder for the same session. We hold it only across the
     // synchronous setup; the SSE pump runs outside the lock.
-    const bus = await withSessionLock(id, async () => {
+    const decision = await withSessionLock(id, async (): Promise<
+      | { kind: 'replay'; bus: ReturnType<typeof createBus>; since: number }
+      | { kind: 'gone' }
+      | { kind: 'attach'; bus: ReturnType<typeof createBus>; tailFrom: number }
+      | { kind: 'fresh'; bus: ReturnType<typeof createBus> }
+    > => {
+      // Idempotency: a retry re-POSTs this body. Replay the original bus
+      // instead of spinning a second runCoder (see /messages + recent-message-keys.ts).
+      if (dedupeKey) {
+        const hit = recentMessageKeys.lookup(id, dedupeKey);
+        if (hit) {
+          return hit.bus && (hit.bus.ended || hit.bus === activeRuns.get(id))
+            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
+            : { kind: 'gone' };
+        }
+      }
+      // Hardening: a live run already owns this session (double-submit, a
+      // retry without a key, or a /continue racing an in-flight run). Never
+      // start a second concurrent runCoder over the same session DB — tail
+      // the live bus instead. Previously this path unconditionally created a
+      // fresh bus and overwrote activeRuns, orphaning the running runner.
+      const live = activeRuns.get(id);
+      if (live && !live.ended) {
+        if (dedupeKey) recentMessageKeys.record(id, dedupeKey, live, live.nextSeq - 1);
+        return { kind: 'attach', bus: live, tailFrom: live.nextSeq - 1 };
+      }
       const ctrl = new AbortController();
       const newBus = createBus(ctrl);
       installRuntimeEventLog(newBus, 'coder', id);
       activeRuns.set(id, newBus);
-      return newBus;
+      if (dedupeKey) recentMessageKeys.record(id, dedupeKey, newBus, -1);
+      return { kind: 'fresh', bus: newBus };
     });
+
+    if (decision.kind === 'replay') {
+      return pumpBusToSSE(c, decision.bus, { since: decision.since });
+    }
+    if (decision.kind === 'gone') {
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
+    }
+    if (decision.kind === 'attach') {
+      emitWorkerLog(decision.bus, 'warn', 'route', 'POST /continue attached to live run', {
+        client_msg_id: dedupeKey ?? null,
+      });
+      return pumpBusToSSE(c, decision.bus, { since: decision.tailFrom });
+    }
+
+    const bus = decision.bus;
     // Log the route hit on the fresh bus — the dashboard will see the
     // POST /continue entry seq=0 with the resume context.
     emitWorkerLog(bus, 'info', 'route', 'POST /continue', {
@@ -793,6 +893,8 @@ export function mountCoderStreamRoutes(
           mcpBearerResolver: deps.mcpBearerResolver,
           // Mem C — proactive project-memory injection (in-process path).
           memoryRetriever: deps.memoryRetriever,
+          // Smart recall query for meta/continuation messages (in-process path).
+          memoryQuerySynthesizer: deps.memoryQuerySynthesizer,
           // Mem C write-back — distill durable memory at run-end (in-process path).
           runEndMemory: deps.runEndMemory,
           // Direct agent ports — save_note scope 'project' + recall_memory.

@@ -18,6 +18,7 @@ import {
   ChevronsUpDown,
   Clock,
   Home,
+  ImagePlay,
   Moon,
   Orbit,
   Palette,
@@ -51,7 +52,7 @@ import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 
 interface ActiveView {
-  page: 'home' | 'project' | 'agents' | 'global' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
+  page: 'home' | 'project' | 'agents' | 'global' | 'admin' | 'design-systems' | 'sprites' | 'telemetry' | 'docs' | 'other';
   projectId: number | null;
   sessionId: number | null;
 }
@@ -81,6 +82,7 @@ function parsePathname(pathname: string, search: string): ActiveView {
   }
   if (pathname.startsWith('/admin')) return { page: 'admin', projectId: null, sessionId: null };
   if (pathname.startsWith('/design-systems')) return { page: 'design-systems', projectId: null, sessionId: null };
+  if (pathname.startsWith('/sprites')) return { page: 'sprites', projectId: null, sessionId: null };
   if (pathname.startsWith('/telemetry')) return { page: 'telemetry', projectId: null, sessionId: null };
   if (pathname.startsWith('/docs')) return { page: 'docs', projectId: null, sessionId: null };
   return { page: 'other', projectId: null, sessionId: null };
@@ -206,6 +208,13 @@ export function AppShell() {
       icon: Palette,
       href: '/design-systems',
       show: features.designSystemEnabled,
+    },
+    {
+      id: 'sprites',
+      label: t('nav.sprites'),
+      icon: ImagePlay,
+      href: '/sprites',
+      show: features.spriteStudioEnabled,
     },
     { id: 'telemetry', label: t('nav.telemetry'), icon: Activity, href: '/telemetry' },
     { id: 'docs', label: t('nav.docs'), icon: BookOpen, href: '/docs' },
@@ -333,6 +342,7 @@ export function AppShell() {
           view.page === 'agents' ||
           view.page === 'global' ||
           view.page === 'design-systems' ||
+          view.page === 'sprites' ||
           // Settings (/admin), Docs (/docs) and Telemetry (/telemetry) own
           // their own padding + a fixed-height, independently-scrolling body
           // under a compact top band (IDE-style), so they opt out of the

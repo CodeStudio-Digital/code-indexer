@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   createBrowserRouter,
   Navigate,
@@ -32,6 +32,12 @@ import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } 
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
 import { PopoutRoot } from './features/popout/PopoutRoot.js';
+
+// Sprite Studio is a heavy standalone surface (virtualized library now,
+// canvas engine later) — lazy so it never weighs on the other routes.
+const SpriteStudioView = lazy(() =>
+  import('./features/sprite-studio/SpriteStudioView.js').then((m) => ({ default: m.SpriteStudioView })),
+);
 
 // ─── Route components ────────────────────────────────────────
 
@@ -239,6 +245,16 @@ function DesignSystemsRoute() {
   return <DesignSystemsTab />;
 }
 
+function SpritesRoute() {
+  const features = useFeatures();
+  if (!features.spriteStudioEnabled) return <Navigate to="/" replace />;
+  return (
+    <Suspense fallback={null}>
+      <SpriteStudioView />
+    </Suspense>
+  );
+}
+
 // ─── Router setup ────────────────────────────────────────────
 
 // Janelas popout (openInNewWindow) carregam, em produção, `index.html` com
@@ -277,6 +293,7 @@ const router = createBrowserRouter([
       { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <AgentsTab /> },
       { path: 'admin', element: <Admin /> },
       { path: 'design-systems', element: <DesignSystemsRoute /> },
+      { path: 'sprites', element: <SpritesRoute /> },
       { path: 'telemetry', element: <TelemetryDashboard /> },
       { path: 'docs', element: <DocsPage /> },
       { path: '*', element: <Navigate to="/" replace /> },

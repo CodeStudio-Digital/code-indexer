@@ -110,6 +110,26 @@
     "editSaveFailed": "Upload to server failed",
     "editHint": "Ctrl/⌘S saves to the server"
   },
+  "files": {
+    "toRemote": "Send to server →",
+    "toLocal": "← Download here",
+    "zip": "Compress (zip)",
+    "unzip": "Extract here",
+    "zipNamePh": "archive",
+    "zipDone": "Created {{name}}",
+    "extractDone": "Extracted {{name}}",
+    "zipFailed": "Archive operation failed: {{reason}}",
+    "unknownArchive": "Don't know how to extract {{name}}",
+    "zipMissing": "The server has no zip/unzip/tar available",
+    "tooManyFiles": "Too many files to transfer at once",
+    "nSelected": "{{count}} items",
+    "collisionTitle": "Item already exists",
+    "collisionBody": "\"{{name}}\" already exists at the destination.",
+    "overwrite": "Overwrite",
+    "skip": "Skip",
+    "keepBoth": "Keep both",
+    "applyToAll": "Apply to all conflicts"
+  },
   "snippets": {
     "title": "Snippets",
     "new": "New snippet",
@@ -123,8 +143,19 @@
     "save": "Save",
     "update": "Update",
     "multilineHint": "Each line runs as a separate command (it's run as a shell script).",
+    "secretHint": "Use ${secret:NAME} to inject a stored secret (e.g. a git token) — resolved right before running.",
     "selectHost": "Select a host",
     "runError": "Could not run snippet: {{reason}}"
+  },
+  "secrets": {
+    "title": "Secrets",
+    "new": "New secret",
+    "namePlaceholder": "gh_token",
+    "valuePlaceholder": "Secret value (e.g. a git PAT)",
+    "valueKeep": "Leave blank to keep the current value",
+    "descPlaceholder": "Description (optional)",
+    "save": "Save",
+    "insert": "Insert secret"
   },
   "tunnels": {
     "title": "Port forwarding",

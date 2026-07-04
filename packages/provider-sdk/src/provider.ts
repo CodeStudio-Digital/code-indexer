@@ -8,6 +8,7 @@
  */
 import type { ChatProvider } from './adapter.js';
 import type { LLMProvider } from './indexer.js';
+import type { ImageGenClient } from './images.js';
 import type { CredKind, ResolvedCreds, ProviderConfigLike } from './credentials.js';
 import type { AuthDescriptor, ProviderAuthHandlers, ProviderCredentials } from './auth.js';
 
@@ -26,6 +27,8 @@ export interface ProviderCapabilities {
   zaiCodingMode?: boolean;
   supportsThinking?: boolean;
   supportsVision?: boolean;
+  /** Provider exposes image-generation models (rows with mode 'image'). */
+  supportsImageGen?: boolean;
 }
 
 export interface DiscoveredModel {
@@ -272,6 +275,12 @@ export interface ProviderDefinition {
   createIndexerAsync?(creds: ResolvedCreds, model?: string): Promise<LLMProvider>;
   /** Build a coder (streaming) client for this shape. */
   createCoder?(creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts): ChatProvider;
+  /**
+   * Build an image-generation client for this shape. Present only when the
+   * shape supports it (`capabilities.supportsImageGen`); the engine derives it
+   * per-wire like createCoder/createIndexer.
+   */
+  createImages?(creds: ResolvedCreds, model?: string): ImageGenClient;
 }
 
 export function defineProvider(def: ProviderDefinition): ProviderDefinition {

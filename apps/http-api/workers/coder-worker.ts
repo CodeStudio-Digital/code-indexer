@@ -68,6 +68,10 @@ import {
   type VisionDescribeRequest,
 } from '../../../packages/code-agent/src/core/vision-describer.js';
 import {
+  setGlobalSpriteStudioHost,
+  type ISpriteStudioHost,
+} from '../../../packages/code-agent/src/tools/sprite-studio/index.js';
+import {
   setGlobalDocsResearcher,
   installDocsDeepResearch,
   type DocsResearchBridge,
@@ -317,6 +321,28 @@ const visionShim: IVisionDescriber = {
     bridge.request<string>('visionDescribe', req, { timeoutMs: 60_000 }),
 };
 setGlobalVisionDescriber(visionShim);
+
+// ─── Sprite Studio host shim: route the sprite_* tools to the main process ──
+// The real host (sprite stores + `.sprite-studio/` repo writes + the generation
+// job runner) lives in the main process. Each method forwards { method, args }
+// over the single `spriteStudioHost` channel. 190s covers a slow image model +
+// post-process for `generate` (the tool's own timeout is 180s).
+function callSpriteHost<K extends keyof ISpriteStudioHost>(
+  method: K,
+  ...args: Parameters<ISpriteStudioHost[K]>
+): ReturnType<ISpriteStudioHost[K]> {
+  return bridge.request('spriteStudioHost', { method, args }, { timeoutMs: 190_000 }) as ReturnType<
+    ISpriteStudioHost[K]
+  >;
+}
+const spriteHostShim: ISpriteStudioHost = {
+  getProject: (projectId) => callSpriteHost('getProject', projectId),
+  listAssets: (projectId, filter) => callSpriteHost('listAssets', projectId, filter),
+  generate: (input) => callSpriteHost('generate', input),
+  process: (input) => callSpriteHost('process', input),
+  export: (input) => callSpriteHost('export', input),
+};
+setGlobalSpriteStudioHost(spriteHostShim);
 
 // ─── Project-memory shim: route to the main process via RPC ──────────
 // The canonical MemoryRetriever + RunEndMemory (embeddings, hybrid dedup,
@@ -759,6 +785,7 @@ bridge.handle('runFresh', async (payload) => {
       // proactive per-turn memory injection + run-end distillation + direct
       // agent ports, RPC'd to the main-process instances via the shims above.
       memoryRetriever: memoryShims.memoryRetriever,
+      memoryQuerySynthesizer: memoryShims.memoryQuerySynthesizer,
       runEndMemory: memoryShims.runEndMemory,
       projectMemory: memoryShims.projectMemory,
       onSnapshotRecorded: (info) => publish(run.bus, 'session_snapshot_changed', info),

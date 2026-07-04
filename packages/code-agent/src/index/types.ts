@@ -65,6 +65,17 @@ export interface RunCoderOptions {
     ): Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
   };
   /**
+   * Mem C — optional LLM query synthesizer. When the latest user message is a
+   * meta/continuation ("continue", "reanalise tudo que fez"), the runner passes
+   * the recent conversation tail here to get a real search query for memory
+   * recall. Returns null when unconfigured → the runner uses its pure walk-back
+   * heuristic. Structural type (mirrors `memoryRetriever`) to avoid a
+   * code-agent → services dependency.
+   */
+  memoryQuerySynthesizer?: (
+    tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
+  ) => Promise<string | null>;
+  /**
    * Durable-memory write-back — host callback that distills durable project
    * memory (decisions/conventions/architecture + `gotcha` failure lessons +
    * promoted session notes) and persists it, off the hot path. Structural to

@@ -8,6 +8,7 @@
  */
 import type { ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import type { ProviderSpec } from '@mcp/provider-sdk';
+import { isGeminiImageModelId, IMAGE_MODEL_MODE } from './image-model-ids.js';
 
 type GeminiModel = {
   name: string;
@@ -30,11 +31,17 @@ export async function discoverGeminiModels(
   const data = (await r.json()) as { models: GeminiModel[] };
   return data.models
     .filter((m) => m.supportedGenerationMethods?.includes('generateContent') ?? true)
-    .map((m) => ({
-      model_id: m.name.replace(/^models\//, ''),
-      name: m.displayName ?? m.name,
-      context_window: m.inputTokenLimit ?? null,
-      default_max_tokens: m.outputTokenLimit ?? null,
-      source: 'live' as const,
-    }));
+    .map((m) => {
+      const id = m.name.replace(/^models\//, '');
+      return {
+        model_id: id,
+        name: m.displayName ?? m.name,
+        context_window: m.inputTokenLimit ?? null,
+        default_max_tokens: m.outputTokenLimit ?? null,
+        source: 'live' as const,
+        // Family-based tagging (gemini-*-image*, imagen-*, nano banana) so
+        // image models surface in the image-role pickers.
+        ...(isGeminiImageModelId(id) ? { mode: IMAGE_MODEL_MODE } : {}),
+      };
+    });
 }

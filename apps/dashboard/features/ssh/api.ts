@@ -14,10 +14,11 @@ import type {
   SshTunnelInput,
   SshGeneratedKey,
   SshConfigHost,
+  SshExecResult,
   SftpEntry,
   SftpProgress,
 } from '@mcp/api-bus';
-import type { SshHost, SshIdentity, SshSnippet, SshAuthMethod } from './types.js';
+import type { SshHost, SshIdentity, SshSnippet, SshSecret, SshAuthMethod } from './types.js';
 
 export function openShell(spec: SshConnectSpec, cols: number, rows: number): Promise<SshOpenShellResult> {
   return apiCall<SshOpenShellResult>('ssh.openShell', { spec, cols, rows });
@@ -60,6 +61,13 @@ export const generateKey = (input: { type?: 'ed25519' | 'rsa'; bits?: number; co
 export const importSshConfig = () => apiCall<SshConfigHost[]>('ssh.importSshConfig', {});
 export const sftpWriteFile = (spec: SshConnectSpec, remotePath: string, content: string) =>
   apiCall<{ size: number }>('ssh.sftpWriteFile', { spec, remotePath, content });
+
+/** Run a command on the host and wait for the result (non-PTY). Used for remote zip/tar. */
+export const execCommand = (
+  spec: SshConnectSpec,
+  command: string,
+  opts?: { timeoutMs?: number; maxBytes?: number },
+) => apiCall<SshExecResult>('ssh.execCommand', { spec, command, ...opts });
 
 /** Open the connection's SFTP root (resolves `.` to the user's home), TOFU-aware. */
 export const sftpListWithTrust = (spec: SshConnectSpec, path: string, onNeedTrust: NeedTrust) =>
@@ -163,6 +171,56 @@ export const deleteSnippet = (p: number, sid: number) =>
 
 export const runSnippet = (spec: SshConnectSpec, command: string) =>
   apiCall<SshOpenShellResult>('ssh.runSnippet', { spec, command, cols: 80, rows: 24 });
+
+// ─── Named secrets referenced from snippets as ${secret:NAME} (migration 197) ─
+
+/** Matches `${secret:NAME}` — namespaced so it never collides with shell `${HOME}`. */
+export const SECRET_REF = /\$\{secret:([A-Za-z0-9_.-]+)\}/g;
+
+export const listSecrets = (p: number) =>
+  req<{ secrets: SshSecret[] }>(`${root(p)}/secrets`).then((r) => r.secrets);
+
+/** Encrypt the value with the OS keychain BEFORE it leaves the renderer. */
+export const createSecret = async (p: number, name: string, value: string, description?: string) =>
+  req<SshSecret>(`${root(p)}/secrets`, j('POST', { name, enc_value: await encryptSecret(value), description }));
+
+/** `value === undefined` leaves the stored secret untouched (rename/desc-only edit). */
+export const patchSecret = async (
+  p: number,
+  secId: number,
+  patch: { name?: string; value?: string; description?: string | null },
+) => {
+  const body: Record<string, unknown> = {};
+  if (patch.name !== undefined) body.name = patch.name;
+  if (patch.description !== undefined) body.description = patch.description;
+  if (patch.value !== undefined) body.enc_value = await encryptSecret(patch.value);
+  return req<SshSecret>(`${root(p)}/secrets/${secId}`, j('PATCH', body));
+};
+
+export const deleteSecret = (p: number, secId: number) =>
+  req<{ ok: true }>(`${root(p)}/secrets/${secId}`, { method: 'DELETE' });
+
+/**
+ * Substitute every `${secret:NAME}` in a snippet command with its decrypted
+ * value, just before running. Decryption uses the OS keychain in-process; the
+ * resolved plaintext never touches disk. Throws (listing the missing names) if
+ * any referenced secret is not defined — we never silently substitute empty,
+ * which would run e.g. `git pull https://@github…`. A command with no
+ * placeholder is returned untouched (no lookup, zero cost).
+ */
+export async function resolveSnippetCommand(projectId: number, command: string): Promise<string> {
+  const names = [...command.matchAll(SECRET_REF)].map((m) => m[1]);
+  if (names.length === 0) return command;
+
+  const byName = new Map(( await listSecrets(projectId)).map((s) => [s.name, s]));
+  const missing = [...new Set(names)].filter((n) => !byName.has(n));
+  if (missing.length) throw new Error(`Segredo(s) não definido(s): ${missing.join(', ')}`);
+
+  // Decrypt each referenced secret once, then substitute all occurrences.
+  const values = new Map<string, string>();
+  for (const n of new Set(names)) values.set(n, await decryptSecret(byName.get(n)!.enc_value));
+  return command.replace(SECRET_REF, (_full, name: string) => values.get(name) ?? _full);
+}
 
 // ─── Secret shim (OS keychain via the Electron preload) ──────────────────
 

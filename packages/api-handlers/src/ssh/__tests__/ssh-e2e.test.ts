@@ -14,6 +14,7 @@ import { Server, utils } from 'ssh2';
 import { ApiError, type SshConnectSpec, type SshHostKeyInfo } from '@mcp/api-bus';
 import { SshConnectionManager } from '../ssh-connection-manager.js';
 import { KnownHostsStore } from '../known-hosts.js';
+import { sshExec } from '../ssh-exec.js';
 
 const USER = 'tester';
 const PASS = 'pw';
@@ -153,6 +154,18 @@ describe('SSH connection manager — in-process sshd E2E', () => {
       });
     });
     expect(greeting).toContain('ready');
+    manager.release('h1');
+  });
+
+  it('execCommand captures stdout + exit code and releases its ref (non-PTY)', async () => {
+    manager.trust(await offeredKey());
+    const res = await sshExec(manager, spec(), 'echo hi');
+    expect(res.stdout).toContain('ran:echo hi');
+    expect(res.code).toBe(0);
+    expect(res.truncated).toBe(false);
+    // sshExec released the ref in its finally, so a fresh acquire re-dials cleanly.
+    const c = await manager.acquire(spec());
+    expect(c).toBeTruthy();
     manager.release('h1');
   });
 });

@@ -33,8 +33,10 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     const bridge = makeFakeBridge();
     const retrieve = vi.fn().mockResolvedValue([MEMORY_ITEM]);
     const extractAndPersist = vi.fn().mockResolvedValue(undefined);
+    const memoryQuerySynthesizer = vi.fn().mockResolvedValue('oauth refresh flow');
     const deps: WorkerMemoryDeps = {
       memoryRetriever: { retrieve } as unknown as WorkerMemoryDeps['memoryRetriever'],
+      memoryQuerySynthesizer,
       runEndMemory: {
         extractAndPersist,
         isConfigured: vi.fn().mockResolvedValue(true),
@@ -45,6 +47,10 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
 
     await expect(shims.memoryRetriever.retrieve(1, 'proj', 'fix the auth bug')).resolves.toEqual([MEMORY_ITEM]);
     expect(retrieve).toHaveBeenCalledWith(1, 'proj', 'fix the auth bug');
+
+    const tail = [{ role: 'user' as const, text: 'continue' }];
+    await expect(shims.memoryQuerySynthesizer(tail)).resolves.toBe('oauth refresh flow');
+    expect(memoryQuerySynthesizer).toHaveBeenCalledWith(tail);
 
     await shims.runEndMemory.extractAndPersist(1, 'proj', { summary: 's', succeeded: true });
     expect(extractAndPersist).toHaveBeenCalledWith(1, 'proj', { summary: 's', succeeded: true });
@@ -58,6 +64,7 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     const shims = buildWorkerMemoryShims(bridge as unknown as MessageBridge);
 
     await expect(shims.memoryRetriever.retrieve(1, 'proj', 'long enough query')).resolves.toEqual([]);
+    await expect(shims.memoryQuerySynthesizer([{ role: 'user', text: 'continue' }])).resolves.toBeNull();
     await expect(shims.runEndMemory.extractAndPersist(1, 'proj', {})).resolves.toBeUndefined();
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(false);
   });
@@ -67,6 +74,7 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     const shims = buildWorkerMemoryShims(bridge as unknown as MessageBridge);
 
     await expect(shims.memoryRetriever.retrieve(1, 'proj', 'long enough query')).resolves.toEqual([]);
+    await expect(shims.memoryQuerySynthesizer([{ role: 'user', text: 'continue' }])).resolves.toBeNull();
     await expect(shims.runEndMemory.extractAndPersist(1, 'proj', {})).resolves.toBeUndefined();
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(false);
   });

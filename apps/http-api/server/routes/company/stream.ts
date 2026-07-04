@@ -12,6 +12,7 @@ import {
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { withSessionLock } from '../coder/sessionLock.js';
+import { RecentMessageKeys, normalizeDedupeKey, syntheticDoneSSE } from '../recent-message-keys.js';
 import {
   getRuntimeEventLog,
   runtimeEventsToJsonl,
@@ -54,6 +55,12 @@ interface StartBody {
   attachments?: AttachmentBody[];
   /** Enable extended thinking (deep reasoning) for the master's first turn. */
   thinking?: boolean;
+  /**
+   * Client-generated idempotency key. Stable across `ReconnectingSSEClient`
+   * retries, so a retry re-POST is deduped into a metaBus replay instead of
+   * hitting the "Already running" 409 (or re-sending to the master on /resume).
+   */
+  client_msg_id?: string;
 }
 
 const MAX_ATTACHMENTS = 4;
@@ -108,6 +115,9 @@ interface PlanResponseBody {
 
 export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore, db, providerStore } = deps;
+  // Idempotency store for the streaming POSTs (/start, /resume). Per-mount so
+  // route tests get a fresh, isolated instance. See recent-message-keys.ts.
+  const recentMessageKeys = new RecentMessageKeys<CompanyOrchestrator['metaBus']>();
 
   // Attachment-extraction options derived from the MASTER's model (the company
   // UI has no per-message toggles): extract embedded images only when the
@@ -176,6 +186,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // Capture into a local const so TS narrowing survives the async closure below.
     const userMessage = body.user_message;
     const maxTurnsRequested = body.max_turns;
+    const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     const attachments = await normalizeAttachmentsForModel(
       attachmentsCheck.value,
       masterAttachmentOpts(id),
@@ -190,7 +201,20 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           bus: CompanyOrchestrator['metaBus'];
         }
       | { kind: 'reject'; status: 404 | 409 | 500; body: { error: string } }
+      | { kind: 'replay'; bus: CompanyOrchestrator['metaBus']; since: number }
+      | { kind: 'gone' }
     > => {
+      // Idempotency: a `ReconnectingSSEClient` retry re-POSTs /start. Replay
+      // the master's metaBus instead of returning the "Already running" 409
+      // that the guard below would otherwise produce.
+      if (dedupeKey) {
+        const hit = recentMessageKeys.lookup(id, dedupeKey);
+        if (hit) {
+          return hit.bus && (hit.bus.ended || hit.bus === getCompanyOrchestrator(id)?.metaBus)
+            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
+            : { kind: 'gone' };
+        }
+      }
       const cur = companyStore.getCompanySession(id);
       if (!cur) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
       if (cur.status === 'running' || hasCompanyOrchestrator(id)) {
@@ -256,11 +280,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
       // Persist the user message so it survives page reload
       companyStore.setLastUserMessage(id, userMessage);
+      if (dedupeKey) recentMessageKeys.record(id, dedupeKey, busForPump, -1);
       return { kind: 'success', orchestrator, bus: busForPump };
     });
 
     if (decision.kind === 'reject') {
       return c.json(decision.body, decision.status);
+    }
+    if (decision.kind === 'replay') {
+      return pumpBusToSSE(c, decision.bus, { since: decision.since });
+    }
+    if (decision.kind === 'gone') {
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
     }
 
     return pumpBusToSSE(c, decision.bus, {
@@ -292,11 +323,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/resume', async (c) => {
     const id = parseIdParam(c);
-    const body = await parseJsonBody<{ message: string; attachments?: AttachmentBody[]; thinking?: boolean }>(c);
+    const body = await parseJsonBody<{ message: string; attachments?: AttachmentBody[]; thinking?: boolean; client_msg_id?: string }>(c);
     const attachmentsCheck = validateAttachments(body.attachments);
     if (!attachmentsCheck.ok) {
       return c.json({ error: attachmentsCheck.error }, 400);
     }
+    const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     const attachments = await normalizeAttachmentsForModel(
       attachmentsCheck.value,
       masterAttachmentOpts(id),
@@ -309,10 +341,25 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       | { kind: 'attach'; orchestrator: CompanyOrchestrator; since: number; bus: CompanyOrchestrator['metaBus'] }
       | { kind: 'fresh'; orchestrator: CompanyOrchestrator; bus: CompanyOrchestrator['metaBus'] }
       | { kind: 'reject'; status: 400 | 404 | 500; body: { error: string } }
+      | { kind: 'replay'; bus: CompanyOrchestrator['metaBus']; since: number }
+      | { kind: 'gone' }
     > => {
+      // Idempotency: a retry re-POSTs /resume. Replay the metaBus instead of
+      // calling `sendMessageToMaster` again (duplicate message to the master)
+      // or cold-starting a second orchestrator. MUST run before the attach
+      // branch's send below.
+      if (dedupeKey) {
+        const hit = recentMessageKeys.lookup(id, dedupeKey);
+        if (hit) {
+          return hit.bus && (hit.bus.ended || hit.bus === getCompanyOrchestrator(id)?.metaBus)
+            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
+            : { kind: 'gone' };
+        }
+      }
       const existing = getCompanyOrchestrator(id);
       if (existing) {
         if (body.message) existing.sendMessageToMaster(body.message, { attachments, thinking: body.thinking });
+        if (dedupeKey) recentMessageKeys.record(id, dedupeKey, existing.metaBus, parseLastEventId(c));
         return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c), bus: existing.metaBus };
       }
 
@@ -418,11 +465,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         }
       }
 
+      if (dedupeKey) recentMessageKeys.record(id, dedupeKey, result.bus, -1);
       return { kind: 'fresh', orchestrator: result.orchestrator, bus: result.bus };
     });
 
     if (decision.kind === 'reject') {
       return c.json(decision.body, decision.status);
+    }
+    if (decision.kind === 'replay') {
+      return pumpBusToSSE(c, decision.bus, { since: decision.since });
+    }
+    if (decision.kind === 'gone') {
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
     }
     if (decision.kind === 'attach') {
       return pumpBusToSSE(c, decision.bus, {

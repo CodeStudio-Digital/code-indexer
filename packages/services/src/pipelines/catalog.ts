@@ -26,7 +26,10 @@ export type BindingRole =
   | 'transcription'
   | 'distiller'
   | 'preflight'
-  | 'autocomplete';
+  | 'autocomplete'
+  | 'image_gen'
+  | 'prompt_expander'
+  | 'query_writer';
 
 /**
  * Coarse, layperson-facing capability bucket a binding role belongs to.
@@ -39,7 +42,8 @@ export type CapabilityKind =
   | 'reranking'
   | 'vision'
   | 'voice'
-  | 'autocomplete';
+  | 'autocomplete'
+  | 'image_gen';
 
 /**
  * Role → capability bucket. The `satisfies Record<BindingRole, …>` makes
@@ -61,6 +65,9 @@ const ROLE_CAPABILITY = {
   distiller: 'text_llm',
   preflight: 'text_llm',
   autocomplete: 'autocomplete',
+  image_gen: 'image_gen',
+  prompt_expander: 'text_llm',
+  query_writer: 'text_llm',
 } satisfies Record<BindingRole, CapabilityKind>;
 
 export function capabilityKindForRole(role: BindingRole): CapabilityKind {
@@ -373,6 +380,21 @@ const CATALOG_SEED: CatalogSeed[] = [
     },
     introducedInPhase: 'cc-gap-D1',
   },
+  {
+    pipelineName: 'memory_query',
+    bindingRole: 'query_writer',
+    description:
+      'Memory-recall query writer: a cheap LLM pass that turns a meta/continuation message ' +
+      '("continue", "reanalise tudo que fez") plus the recent conversation into ONE short search ' +
+      'query describing the task in progress, so proactive memory recall stops missing on task-less ' +
+      'turns. Optional — unset falls back to a pure walk-back heuristic (last substantive message).',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0, max_tokens: 100 },
+    },
+    introducedInPhase: 'memory-query',
+  },
 
   // ─── Goal completion verifier (Claude-Code stop-condition pattern) ───────
   // An INDEPENDENT read-only second agent that confirms the ORIGINAL goal was
@@ -481,6 +503,55 @@ const CATALOG_SEED: CatalogSeed[] = [
       },
     },
     introducedInPhase: 'editor-autocomplete',
+  },
+
+  // ─── Sprite Studio (2D sprite generation) ────────────────────────────────
+  // Powers the Sprite Studio surface (/sprites) and the sprite_* agent tools.
+  // The image_gen binding picks WHICH image model generates/edits sprites —
+  // image models are the provider rows discovered with mode='image' (families:
+  // gpt-image-*, dall-e-*, gemini *-image / nano banana). Never pin a version
+  // here: bind the best image model your provider currently discovers.
+  {
+    pipelineName: 'sprite-studio',
+    bindingRole: 'image_gen',
+    description:
+      'Image model that generates and edits sprites (txt2img + reference-conditioned edits). ' +
+      'Pick a model row with mode=image — e.g. the newest gpt-image-* on OpenAI (native transparency + mask inpaint) ' +
+      'or the newest Gemini image / nano banana model (best cheap character consistency). ' +
+      'Add more bindings as failover links; the job runner skips links that lack a required capability ' +
+      '(e.g. edit-with-references). Config knobs: size, quality, n.',
+    recommendedDefault: {
+      providerKind: 'openai',
+      modelHint: 'newest gpt-image-* discovered (mode=image)',
+      config: { size: '1024x1024', quality: 'medium' },
+    },
+    introducedInPhase: 'sprite-studio',
+  },
+  {
+    pipelineName: 'sprite-studio',
+    bindingRole: 'prompt_expander',
+    description:
+      'Cheap text LLM that fuses the user intent + the sprite project style profile (palette, perspective, ' +
+      'outline, proportions) into the final image prompt. Unset = deterministic template fallback (intent + style suffix).',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0.2, max_tokens: 500 },
+    },
+    introducedInPhase: 'sprite-studio',
+  },
+  {
+    pipelineName: 'sprite-studio',
+    bindingRole: 'vision',
+    description:
+      'Vision model for character-consistency audits ("same character? list differences") against the asset\'s ' +
+      'anchor reference. Unset = falls back to the code-agent vision binding.',
+    recommendedDefault: {
+      providerKind: 'openai',
+      modelHint: 'gpt-4o-mini',
+      config: { temperature: 0, max_tokens: 800 },
+    },
+    introducedInPhase: 'sprite-studio',
   },
 ];
 

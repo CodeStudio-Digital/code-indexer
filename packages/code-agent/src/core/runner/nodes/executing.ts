@@ -54,6 +54,11 @@ import {
 } from '../assembly/session-state.js';
 import { resolveInjectionPolicy } from '../assembly/injection-policy.js';
 import { applySelfReviewDecline, computeSelfReviewNudge } from './executing-self-review.js';
+import {
+  latestUserTaskText,
+  planMemoryRecall,
+  buildConversationTail,
+} from '../memory-query.js';
 import { maybePlanNudge, maybeGoalVerifyNudge } from './executing-plan-gate.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
@@ -91,30 +96,6 @@ function availableTools(ctx: RunContext): Array<{ name: string; description: str
 function firstLine(desc: string): string {
   const line = (desc ?? '').split('\n', 1)[0].trim();
   return line.length > 80 ? `${line.slice(0, 77)}...` : line;
-}
-
-/** Latest user-message text — the "current task" signal for memory retrieval. */
-function latestUserTaskText(messages: RunContext['messages']): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { role?: string; content?: unknown };
-    if (m.role !== 'user') continue;
-    const c = m.content;
-    if (typeof c === 'string') return c.trim();
-    if (Array.isArray(c)) {
-      return c
-        .map((b) =>
-          typeof b === 'string'
-            ? b
-            : b && typeof b === 'object' && 'text' in b
-              ? String((b as { text?: unknown }).text ?? '')
-              : '',
-        )
-        .join(' ')
-        .trim();
-    }
-    return '';
-  }
-  return '';
 }
 
 export class ExecutingNode implements BehaviorNode {
@@ -161,11 +142,32 @@ export class ExecutingNode implements BehaviorNode {
         memoryTaskText ?? '',
       );
     if (!ignoreMemory && ctx.bridge?.getRelevantProjectMemory) {
-      const taskText = memoryTaskText;
-      if (taskText && (ctx.turn === 1 || taskText !== ctx.injectionState.lastMemoryQuery)) {
+      // Derive the recall query + throttle verdict (pure). A normal message IS
+      // the query; a META / continuation ("continue", "Reanalise tudo que fez,
+      // se não deixou passar nada!") carries no task semantics, so the raw text
+      // yields `zero_hits` — `planMemoryRecall` walks back to the last
+      // substantive message and throttles on that STABLE `candidate`.
+      const { candidate, meta, shouldRetrieve } = planMemoryRecall(
+        memoryTaskText,
+        ctx.messages,
+        ctx.injectionState.lastMemoryQuery,
+        ctx.turn,
+      );
+      if (shouldRetrieve) {
+        // Only for a meta message do we spend the (paid, on-critical-path) LLM
+        // synthesizer to sharpen the walk-back query; fail-open to the candidate.
+        let memoryQuery = candidate;
+        if (meta && ctx.bridge.synthesizeMemoryQuery) {
+          try {
+            const synthesized = await ctx.bridge.synthesizeMemoryQuery(buildConversationTail(ctx.messages));
+            if (synthesized) memoryQuery = synthesized;
+          } catch (e) {
+            dbg('memory query synthesis failed', (e as Error).message);
+          }
+        }
         try {
-          ctx.injectionState.pendingMemory = await ctx.bridge.getRelevantProjectMemory(taskText, ctx.turn);
-          ctx.injectionState.lastMemoryQuery = taskText;
+          ctx.injectionState.pendingMemory = await ctx.bridge.getRelevantProjectMemory(memoryQuery, ctx.turn);
+          ctx.injectionState.lastMemoryQuery = candidate; // STABLE throttle key
         } catch (e) {
           dbg('memory retrieval failed', (e as Error).message);
         }

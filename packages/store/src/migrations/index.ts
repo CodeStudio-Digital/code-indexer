@@ -208,6 +208,8 @@ import { companySessionEnvScope192 } from './192_company_session_env_scope.js';
 import { projectIndexIgnorePatterns193 } from './193_project_index_ignore_patterns.js';
 import { sessionConfigLock194 } from './194_session_config_lock.js';
 import { sessionEvents195 } from './195_session_events.js';
+import { spriteStudio196 } from './196_sprite_studio.js';
+import { sshSecrets197 } from './197_ssh_secrets.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -432,6 +434,8 @@ export const MIGRATIONS: Migration[] = [
   projectIndexIgnorePatterns193,
   sessionConfigLock194,
   sessionEvents195,
+  spriteStudio196,
+  sshSecrets197,
 ];
 
 /**

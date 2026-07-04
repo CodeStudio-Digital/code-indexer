@@ -15,12 +15,15 @@ import type {
   SshHost,
   SshIdentity,
   SshSnippet,
+  SshSecret,
   CreateSshHostInput,
   CreateSshIdentityInput,
   CreateSshSnippetInput,
+  CreateSshSecretInput,
   SshHostPatch,
   SshIdentityPatch,
   SshSnippetPatch,
+  SshSecretPatch,
 } from './ssh-store-types.js';
 
 const require = createRequire(import.meta.url);
@@ -161,6 +164,34 @@ export class SshStore {
     this.db.prepare('DELETE FROM ssh_snippets WHERE id = ?').run(id);
   }
 
+  // ─── Secrets ─────────────────────────────────────────────────────────
+  // Named `${secret:name}` values referenced from snippets. `enc_value` is
+  // keychain ciphertext (renderer-encrypted); the store persists it verbatim.
+  listSecrets(projectId: number): SshSecret[] {
+    return this.db
+      .prepare('SELECT * FROM ssh_secrets WHERE project_id = ? ORDER BY name')
+      .all(projectId) as SshSecret[];
+  }
+
+  getSecret(id: number): SshSecret | null {
+    return (this.db.prepare('SELECT * FROM ssh_secrets WHERE id = ?').get(id) as SshSecret | undefined) ?? null;
+  }
+
+  createSecret(input: CreateSshSecretInput): SshSecret {
+    const info = this.db
+      .prepare('INSERT INTO ssh_secrets (project_id, name, enc_value, description) VALUES (?, ?, ?, ?)')
+      .run(input.project_id, input.name, input.enc_value, input.description ?? null);
+    return this.getSecret(Number(info.lastInsertRowid))!;
+  }
+
+  updateSecret(id: number, patch: SshSecretPatch): void {
+    this.applyPatch('ssh_secrets', id, { ...patch });
+  }
+
+  deleteSecret(id: number): void {
+    this.db.prepare('DELETE FROM ssh_secrets WHERE id = ?').run(id);
+  }
+
   /**
    * Build + run an UPDATE from a partial column map, always bumping updated_at.
    *
@@ -198,6 +229,7 @@ const WRITABLE_COLUMNS: Record<string, ReadonlySet<string>> = {
     'name', 'username', 'auth_kind', 'enc_password', 'enc_private_key', 'enc_passphrase', 'public_key', 'key_type',
   ]),
   ssh_snippets: new Set(['name', 'command']),
+  ssh_secrets: new Set(['name', 'enc_value', 'description']),
 };
 
 /** SQLite can't bind booleans/objects — coerce to its supported primitives. */

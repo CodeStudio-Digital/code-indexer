@@ -221,6 +221,15 @@ export interface RunnerOptions {
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
   /**
+   * Mem C — optional LLM synthesizer that rewrites a meta/continuation message
+   * into a real memory-recall query from the conversation tail. Returns null
+   * when unconfigured → the Executing node falls back to the walk-back
+   * heuristic. Unset entirely = heuristic only (no LLM synthesis).
+   */
+  synthesizeMemoryQuery?: (
+    tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
+  ) => Promise<string | null>;
+  /**
    * True when this session has active (un-kept/un-reverted) file snapshots
    * worth a self-review. Consulted each turn by the dynamic-injection node to
    * decide whether to surface the `self_review` reminder — gated by the

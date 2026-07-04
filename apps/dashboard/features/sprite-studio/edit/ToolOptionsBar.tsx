@@ -1,0 +1,155 @@
+/**
+ * Top contextual options bar for the active tool. Controls are bound to
+ * editor-store.toolOptions and fg/bg colors; each change writes the store (so
+ * React reflects it) AND pushes straight into the engine (setToolOptions /
+ * setColors) so tools read the new value on the next gesture without a render.
+ * The recent-colors row only writes the store — the EditModeView store→engine
+ * bridge forwards it to painting.
+ */
+import { memo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ArrowLeftRight } from 'lucide-react';
+import { cn } from '../../../lib/utils.js';
+import type { EditorEngine } from '../engine/EditorEngine.js';
+import { useSpriteEditorStore } from '../store/editor-store.js';
+import type { ToolOptions } from '../tools/tool-types.js';
+
+export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
+  const { t } = useTranslation('spriteStudio');
+  const activeTool = useSpriteEditorStore((s) => s.activeTool);
+  const options = useSpriteEditorStore((s) => s.toolOptions);
+  const setToolOptions = useSpriteEditorStore((s) => s.setToolOptions);
+  const fgColor = useSpriteEditorStore((s) => s.fgColor);
+  const bgColor = useSpriteEditorStore((s) => s.bgColor);
+  const recentColors = useSpriteEditorStore((s) => s.recentColors);
+  const setFgColor = useSpriteEditorStore((s) => s.setFgColor);
+  const setBgColor = useSpriteEditorStore((s) => s.setBgColor);
+  const swapColors = useSpriteEditorStore((s) => s.swapColors);
+
+  const patch = (p: Partial<ToolOptions>) => {
+    setToolOptions(p);
+    engine.setToolOptions(p);
+  };
+
+  const isBrush = activeTool === 'brush' || activeTool === 'eraser';
+  const isWand = activeTool === 'select-wand' || activeTool === 'fill';
+
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-3 border-b bg-muted/10 px-2 text-[11px]">
+      {isBrush && (
+        <>
+          <Range
+            label={t('options.size')} min={1} max={32} value={options.size}
+            onChange={(v) => patch({ size: v })} suffix="px"
+          />
+          <Range
+            label={t('options.softness')} min={0} max={100} value={options.softness}
+            onChange={(v) => patch({ softness: v })} suffix="%"
+          />
+          <Toggle
+            label={t('options.round')} active={options.shape === 'round'}
+            onClick={() => patch({ shape: options.shape === 'round' ? 'square' : 'round' })}
+          />
+        </>
+      )}
+      {isWand && (
+        <>
+          <Range
+            label={t('options.tolerance')} min={0} max={255} value={options.tolerance}
+            onChange={(v) => patch({ tolerance: v })}
+          />
+          <Toggle
+            label={t('options.contiguous')} active={options.contiguous}
+            onClick={() => patch({ contiguous: !options.contiguous })}
+          />
+        </>
+      )}
+      {!isBrush && !isWand && (
+        <span className="text-muted-foreground">{t('options.none')}</span>
+      )}
+
+      <div className="ml-auto flex items-center gap-1">
+        <Swatch label={t('options.foreground')} color={fgColor} onChange={(v) => { setFgColor(v); engine.setColors({ fg: v }); }} />
+        <button
+          type="button" onClick={swapColors} title={t('options.swapColors')} aria-label={t('options.swapColors')}
+          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <ArrowLeftRight className="h-3 w-3" />
+        </button>
+        <Swatch label={t('options.background')} color={bgColor} onChange={(v) => { setBgColor(v); engine.setColors({ bg: v }); }} />
+        {recentColors.length > 0 && (
+          <>
+            <span className="mx-0.5 h-4 w-px bg-border" />
+            <RecentSwatches colors={recentColors} onPick={setFgColor} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** MRU foreground picks. Click writes the store only — the EditModeView
+ *  store→engine bridge pushes it to the engine. Memoized: the row skips the
+ *  frequent re-renders of the bar (tool/option churn) when colors are stable. */
+const RecentSwatches = memo(function RecentSwatches({
+  colors, onPick,
+}: {
+  colors: string[]; onPick: (hex: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5">
+      {colors.map((hex) => (
+        <button
+          key={hex} type="button" onClick={() => onPick(hex)} title={hex}
+          className="h-4 w-4 rounded-sm border border-border transition-transform hover:scale-110"
+          style={{ backgroundColor: hex }}
+        />
+      ))}
+    </div>
+  );
+});
+
+function Range({
+  label, min, max, value, onChange, suffix,
+}: {
+  label: string; min: number; max: number; value: number;
+  onChange: (v: number) => void; suffix?: string;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-muted-foreground">
+      <span>{label}</span>
+      <input
+        type="range" min={min} max={max} value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-1 w-24 cursor-pointer accent-primary"
+      />
+      <span className="w-8 tabular-nums text-foreground">{`${value}${suffix ?? ''}`}</span>
+    </label>
+  );
+}
+
+function Toggle({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button" onClick={onClick} aria-pressed={active}
+      className={cn(
+        'rounded px-1.5 py-0.5 transition-colors',
+        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Swatch({ label, color, onChange }: { label: string; color: string; onChange: (hex: string) => void }) {
+  return (
+    <label className="relative h-5 w-5 cursor-pointer rounded border border-border" title={label} style={{ backgroundColor: color }}>
+      <input
+        type="color" value={color} onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+      />
+    </label>
+  );
+}

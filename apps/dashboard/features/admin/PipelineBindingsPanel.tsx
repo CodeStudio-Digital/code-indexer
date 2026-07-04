@@ -151,6 +151,7 @@ const PIPELINE_LABELS: Record<string, string> = {
   docs_research: 'Pesquisa em documentação',
   memory_extraction: 'Extração de memória',
   memory_recall: 'Filtro de memórias',
+  memory_query: 'Query de recall de memórias',
   goal_verification: 'Verificação de conclusão',
   'code-agent': 'Chat e multimodal',
   editor: 'Editor',
@@ -172,6 +173,7 @@ const ROLE_LABELS: Record<string, string> = {
   planner: 'Planejamento',
   summarizer: 'Resumo',
   rewriter: 'Reescrita de consulta',
+  query_writer: 'Escritor de query',
 };
 
 function pipelineLabel(entry: PipelineCatalogEntry): string {

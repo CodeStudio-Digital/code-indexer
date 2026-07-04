@@ -14,6 +14,7 @@
 
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import AdmZip from 'adm-zip';
 import { ApiError, type FilesApi, type FileTreeNode } from '@mcp/api-bus';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
@@ -194,6 +195,58 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       ]);
       dirCache.invalidate(projectId, rel);
       return { ok: true as const };
+    },
+
+    async archive({ projectId, paths, out }) {
+      const project = requireProject(projectId);
+      if (!paths?.length) throw new ApiError('bad_request', 400, 'no paths to archive');
+      const zip = new AdmZip();
+      for (const rel of paths) {
+        const abs = resolveSafe(project.root_path, rel);
+        const stat = await fs.stat(abs).catch(() => null);
+        if (!stat) throw new ApiError('not_found', 404, `not found: ${rel}`);
+        // A folder goes under a top-level entry named after it; a file goes at the root.
+        if (stat.isDirectory()) zip.addLocalFolder(abs, path.basename(abs));
+        else zip.addLocalFile(abs);
+      }
+      const outAbs = resolveSafe(project.root_path, out);
+      await fs.mkdir(path.dirname(outAbs), { recursive: true });
+      zip.writeZip(outAbs);
+      // A new file on disk → mark it for (re)indexing, same as `write`.
+      deps.projectIndexService.markDirty(projectId, [{ path: out.replace(/\\/g, '/'), kind: 'upsert' }]);
+      dirCache.invalidate(projectId, out);
+      return { ok: true as const, path: out };
+    },
+
+    async extract({ projectId, zip: zipRel, dest }) {
+      const project = requireProject(projectId);
+      const zipAbs = resolveSafe(project.root_path, zipRel);
+      const destAbs = resolveSafe(project.root_path, dest);
+      await fs.mkdir(destAbs, { recursive: true });
+      let archive: AdmZip;
+      try {
+        archive = new AdmZip(zipAbs);
+      } catch {
+        throw new ApiError('bad_archive', 400, 'not a readable zip archive');
+      }
+      const MAX_BYTES = 500 * 1024 * 1024;
+      let files = 0;
+      let bytes = 0;
+      for (const entry of archive.getEntries()) {
+        if (entry.isDirectory) continue;
+        // resolveSafe rejects any entry that would escape the project root
+        // (traversal / absolute paths) → throws path_escape.
+        const target = resolveSafe(project.root_path, path.posix.join(dest, entry.entryName.replace(/\\/g, '/')));
+        const data = entry.getData();
+        bytes += data.length;
+        if (bytes > MAX_BYTES) throw new ApiError('archive_too_large', 413, 'extracted content exceeds 500 MB');
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, data);
+        files += 1;
+      }
+      deps.projectIndexService.publishFsEvents(projectId, [{ path: dest.replace(/\\/g, '/'), kind: 'upsert', isDir: true }]);
+      dirCache.invalidate(projectId, dest);
+      return { ok: true as const, files, bytes };
     },
 
     async tree({ projectId, maxDepth = 6, root = '.' }) {

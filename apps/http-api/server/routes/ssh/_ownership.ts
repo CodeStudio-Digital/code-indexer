@@ -1,5 +1,5 @@
 import type { SshStore } from '@mcp/store/ssh-store.js';
-import type { SshHost, SshIdentity, SshSnippet } from '@mcp/store/ssh-store-types.js';
+import type { SshHost, SshIdentity, SshSnippet, SshSecret } from '@mcp/store/ssh-store-types.js';
 
 /**
  * Cross-project ownership guards for the SSH routes.
@@ -25,4 +25,9 @@ export function identityInProject(store: SshStore, projectId: number, iid: numbe
 export function snippetInProject(store: SshStore, projectId: number, sid: number): SshSnippet | null {
   const sn = store.getSnippet(sid);
   return sn && sn.project_id === projectId ? sn : null;
+}
+
+export function secretInProject(store: SshStore, projectId: number, secId: number): SshSecret | null {
+  const s = store.getSecret(secId);
+  return s && s.project_id === projectId ? s : null;
 }

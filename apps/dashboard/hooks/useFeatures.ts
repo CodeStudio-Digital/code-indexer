@@ -16,10 +16,12 @@ import { useEffect, useState } from 'react';
 
 export interface FeatureFlags {
   designSystemEnabled: boolean;
+  spriteStudioEnabled: boolean;
 }
 
 const DEFAULTS: FeatureFlags = {
   designSystemEnabled: true,
+  spriteStudioEnabled: true,
 };
 
 let cached: FeatureFlags | null = null;
@@ -29,11 +31,13 @@ async function fetchFlags(): Promise<FeatureFlags> {
   if (cached) return cached;
   if (inflight) return inflight;
   inflight = fetch('/api/config/features')
-    .then((r) => (r.ok ? (r.json() as Promise<FeatureFlags>) : DEFAULTS))
+    .then((r) => (r.ok ? (r.json() as Promise<Partial<FeatureFlags>>) : DEFAULTS))
     .catch(() => DEFAULTS)
     .then((flags) => {
-      cached = flags;
-      return flags;
+      // Merge over DEFAULTS so a flag the server doesn't know about yet
+      // (older backend) keeps its safe "on" default instead of vanishing.
+      cached = { ...DEFAULTS, ...flags };
+      return cached;
     });
   return inflight;
 }

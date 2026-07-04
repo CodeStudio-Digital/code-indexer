@@ -35,6 +35,7 @@ export default defineConfig({
       ...pkgAliases('@mcp/provider-engine', 'provider-engine'),
       ...pkgAliases('@mcp/indexer', 'indexer'),
       ...pkgAliases('@mcp/design-system', 'design-system'),
+      ...pkgAliases('@mcp/sprite-studio', 'sprite-studio'),
       ...pkgAliases('@mcp/code-agent', 'code-agent'),
       ...pkgAliases('@mcp/company', 'company'),
       ...pkgAliases('@mcp/company-contracts', 'company-contracts'),

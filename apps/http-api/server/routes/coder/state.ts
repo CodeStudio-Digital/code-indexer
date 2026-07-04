@@ -7,6 +7,7 @@ import {
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
 import { CoderPipelineRegistry } from './pipelines-state.js';
+import { RecentMessageKeys } from '../recent-message-keys.js';
 
 /**
  * Runtime state shared by every coder route file. Holds the in-flight
@@ -36,12 +37,19 @@ export interface CoderRuntime {
     toolUseId: string,
   ): { toolUseId: string; name: string } | null;
   coderPipelineRegistry: CoderPipelineRegistry;
+  /**
+   * Idempotency store for streaming POSTs (/messages, /continue). A retry that
+   * re-sends the same `client_msg_id` is answered by replaying the original
+   * run's bus instead of re-running its side effects. See `recent-message-keys.ts`.
+   */
+  recentMessageKeys: RecentMessageKeys;
 }
 
 export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
   const localRuns = new Map<number, CoderRunBus>();
   const BUS_LINGER_MS = 30_000;
   const coderPipelineRegistry = new CoderPipelineRegistry();
+  const recentMessageKeys = new RecentMessageKeys();
 
   // `activeRuns` is presented to consumers as a `Map<number, CoderRunBus>`
   // — but its `.get()` / `.has()` fall through to the worker pool when
@@ -190,5 +198,6 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     findPendingInteraction,
     findDanglingToolUse,
     coderPipelineRegistry,
+    recentMessageKeys,
   };
 }

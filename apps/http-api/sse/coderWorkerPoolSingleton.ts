@@ -123,7 +123,9 @@ export function setCoderWorkerDocDeps(
     docSearch?: CoderWorkerDocDeps['docSearch'];
     docsResearch?: CoderWorkerDocDeps['docsResearch'];
     vision?: CoderWorkerDocDeps['vision'];
+    spriteStudioHost?: CoderWorkerDocDeps['spriteStudioHost'];
     memoryRetriever?: CoderWorkerDocDeps['memoryRetriever'];
+    memoryQuerySynthesizer?: CoderWorkerDocDeps['memoryQuerySynthesizer'];
     runEndMemory?: CoderWorkerDocDeps['runEndMemory'];
     projectMemory?: CoderWorkerDocDeps['projectMemory'];
   },
@@ -131,7 +133,9 @@ export function setCoderWorkerDocDeps(
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
   if (deps.vision !== undefined) docDeps.vision = deps.vision;
+  if (deps.spriteStudioHost !== undefined) docDeps.spriteStudioHost = deps.spriteStudioHost;
   if (deps.memoryRetriever !== undefined) docDeps.memoryRetriever = deps.memoryRetriever;
+  if (deps.memoryQuerySynthesizer !== undefined) docDeps.memoryQuerySynthesizer = deps.memoryQuerySynthesizer;
   if (deps.runEndMemory !== undefined) docDeps.runEndMemory = deps.runEndMemory;
   if (deps.projectMemory !== undefined) docDeps.projectMemory = deps.projectMemory;
 }

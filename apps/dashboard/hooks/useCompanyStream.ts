@@ -403,7 +403,7 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
     async (opts: {
       url: string;
       method: 'GET' | 'POST';
-      body?: unknown;
+      body?: Record<string, unknown>;
       onReconnect?: (attempt: number) => void | Promise<void>;
       suppressError?: (err: Error) => boolean;
     }): Promise<void> => {
@@ -412,6 +412,19 @@ export function useCompanyStream(companySessionId: number | null, notificationCo
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       receivedDoneRef.current = false;
+
+      // Stamp a stable idempotency key on POST bodies (same object reused
+      // across ReconnectingSSEClient retries → stable key). The server dedupes
+      // a re-POST of /start or /resume into a metaBus replay instead of a
+      // spurious "Already running" 409 or a duplicate message to the master.
+      if (opts.method === 'POST') {
+        const b = (opts.body ??= {});
+        if (typeof b.client_msg_id !== 'string') {
+          b.client_msg_id =
+            globalThis.crypto?.randomUUID?.() ??
+            `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        }
+      }
 
       const client = new ReconnectingSSEClient({
         url: opts.url,

@@ -11,6 +11,7 @@ import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js
 import { AgentMemoryRetriever } from '@mcp/services/memory/agent-memory-retriever.js';
 import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory/agent-memory-writer.js';
 import { LlmRecallFilter } from '@mcp/services/memory/recall-filter.js';
+import { LlmMemoryQuerySynthesizer, type ConversationTail } from '@mcp/services/memory/query-synthesizer.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
 import { DiffService } from '@mcp/services/services/differ.js';
@@ -38,6 +39,10 @@ import { DesignSystemStore } from '@mcp/store/design-system-store.js';
 import { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { SshStore } from '@mcp/store/ssh-store.js';
 import { DbClientStore } from '@mcp/store/db-client-store.js';
+import { SpriteProjectsStore } from '@mcp/store/sprite-studio/sprite-projects-store.js';
+import { SpriteAssetsStore } from '@mcp/store/sprite-studio/sprite-assets-store.js';
+import { SpriteAnimationsStore } from '@mcp/store/sprite-studio/sprite-animations-store.js';
+import { SpriteJobsStore } from '@mcp/store/sprite-studio/sprite-jobs-store.js';
 import { sharedDbConnectionManager } from '@mcp/db-drivers';
 import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
 import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
@@ -186,6 +191,12 @@ export interface SearchDeps {
       taskText: string,
     ): Promise<ReadonlyArray<{ id: string; title: string; content: string; importance?: number; staleNote?: string }>>;
   };
+  /** Smart memory-recall query synthesizer — rewrites a meta/continuation
+   *  message into a real search query from the conversation tail. Returns null
+   *  when the `memory_query` binding is unset (runner uses its heuristic). */
+  memoryQuerySynthesizer: (
+    tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
+  ) => Promise<string | null>;
   /** Dedicated Agent Memory service + retriever (migration 181) — used for
    *  user-scope recall, embedding backfill and the consolidation sweeper. */
   agentMemoryService: AgentMemoryService;
@@ -327,6 +338,22 @@ export interface ApiClientDeps {
   /** Embedded database client store (saved connections + history + saved queries). Project-scoped. */
   dbClientStore: DbClientStore;
   dbClientFor: (projectId: number) => DbClientStore;
+}
+
+export interface SpriteStudioDeps {
+  /**
+   * Sprite Studio (migration 196) — CENTRAL-DB stores on purpose: the job
+   * ledger (costs) crosses into admin metering and churn is low. The repo
+   * files under `<root>/.sprite-studio/` are the source of truth; these
+   * stores hold the queryable operational mirror + the job/cost ledger.
+   */
+  spriteProjectsStore: SpriteProjectsStore;
+  /** Assets, immutable versions and reference images of a sprite project. */
+  spriteAssetsStore: SpriteAssetsStore;
+  /** Animations + ordered frame pointers into asset versions (F2). */
+  spriteAnimationsStore: SpriteAnimationsStore;
+  /** Append-only generation-job ledger (status, effective provider/model, cost). */
+  spriteJobsStore: SpriteJobsStore;
 }
 
 export interface PipelineDeps {
@@ -567,6 +594,7 @@ export type ServerDeps = CoreDeps
   & ChromeServiceDeps
   & DesignSystemDeps
   & ApiClientDeps
+  & SpriteStudioDeps
   & PipelineDeps
   & DocCorpusDeps
   & PluginRuntimeDeps;
@@ -815,6 +843,12 @@ export function createDeps(): ServerDeps {
     }
     return s;
   };
+  // Sprite Studio (migration 196) — central DB, same shared handle as the
+  // sibling stores above (jobs/costs feed admin metering; churn is low).
+  const spriteProjectsStore = new SpriteProjectsStore(db.raw());
+  const spriteAssetsStore = new SpriteAssetsStore(db.raw());
+  const spriteAnimationsStore = new SpriteAnimationsStore(db.raw());
+  const spriteJobsStore = new SpriteJobsStore(db.raw());
   const verdaccioStore = new VerdaccioStore(db.raw());
   // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
   // EARLIER (before createSearchBundle) so the V2 search path can emit
@@ -860,6 +894,16 @@ export function createDeps(): ServerDeps {
     });
     agentMemoryRetriever.setRecallFilter((task, items) => recallFilter.filter(task, items));
   }
+  // Smart memory-recall query: when the latest user message is a meta /
+  // continuation ("continue", "reanalise tudo que fez") the runner asks this to
+  // write a real search query from the conversation tail. Optional — an unset
+  // `memory_query` binding returns null and the runner falls back to its pure
+  // walk-back heuristic (no general-default call on the turn's critical path).
+  const memoryQuerySynthesizerImpl = new LlmMemoryQuerySynthesizer({
+    resolver: pipelineProviderResolver,
+  });
+  const memoryQuerySynthesizer = (tail: ConversationTail): Promise<string | null> =>
+    memoryQuerySynthesizerImpl.synthesize(tail);
   // Mem C write-back — distills durable memory (facts + `gotcha` lessons) at
   // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
   // `memory_extraction` binding; when no binding is set it falls back to the
@@ -1360,6 +1404,7 @@ export function createDeps(): ServerDeps {
     vectorStore,
     hybridSearch,
     memoryRetriever,
+    memoryQuerySynthesizer,
     agentMemoryService,
     agentMemoryRetriever,
     runEndMemory,
@@ -1385,6 +1430,10 @@ export function createDeps(): ServerDeps {
     sshStoreFor,
     dbClientStore,
     dbClientFor,
+    spriteProjectsStore,
+    spriteAssetsStore,
+    spriteAnimationsStore,
+    spriteJobsStore,
     verdaccioStore,
     pipelineTelemetryStore,
     pipelineBindingsStore,

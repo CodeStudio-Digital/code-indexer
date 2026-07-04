@@ -99,6 +99,18 @@ export interface FilesApi {
   /** Recursive file tree for the IDE sidebar. */
   tree(input: { projectId: number; maxDepth?: number; root?: string }, ctx: ApiContext): Promise<FileTreeNode>;
 
+  /** Zip project files/folders into `out` (a project-relative `.zip` path). */
+  archive(
+    input: { projectId: number; paths: string[]; out: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true; path: string }>;
+
+  /** Extract a project-relative zip into `dest` (a project-relative directory). */
+  extract(
+    input: { projectId: number; zip: string; dest: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true; files: number; bytes: number }>;
+
   // `projectId` (optional) routes the surrogate-id lookup to that project's DB
   // when per-project DBs are split; absent → central (pre-split behavior).
   symbol(input: { id: number; projectId?: number }, ctx: ApiContext): Promise<unknown>;

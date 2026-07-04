@@ -39,6 +39,7 @@ import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/to
 import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
 import { notifyBuilderRunEnded } from './builder-checkpoint.js';
 import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
+import type { ISpriteStudioHost } from '@mcp/code-agent/tools/sprite-studio/index.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { CompanyRecommendFn } from '@mcp/company/services/scheduler/recommend-shim.js';
 import type { McpExternalPool } from './McpExternalPool.js';
@@ -69,6 +70,8 @@ export interface CoderWorkerDocDeps extends WorkerMemoryDeps {
   docsResearch?: DocsResearchBridge | null;
   /** Main-side vision describer; worker reaches it via `visionDescribe` RPC. */
   vision?: IVisionDescriber | null;
+  /** Main-side Sprite Studio host; worker reaches it via `spriteStudioHost.<method>` RPC. */
+  spriteStudioHost?: ISpriteStudioHost | null;
   /**
    * Main-side role recommender (embedding-backed). The company worker reaches
    * it via the `recommend` RPC so the autonomous CompanyScheduler can resolve
@@ -648,6 +651,23 @@ export class CoderWorkerPool {
       }
       return v.describe(payload as VisionDescribeRequest);
     });
+    // Sprite Studio host — routes the `sprite_*` tools' method calls to the
+    // main-process host (stores + repo writes + job runner). One channel
+    // forwards { method, args } so new host methods need no new RPC name.
+    // Unset (flag off / headless) → the worker shim surfaces the same
+    // SPRITE_STUDIO_NOT_CONFIGURED message the in-process tools use.
+    const offSpriteHost = bridge.handle('spriteStudioHost', async (payload) => {
+      const host = this.opts.docDeps?.spriteStudioHost;
+      if (!host) {
+        throw new Error(
+          'SPRITE_STUDIO_NOT_CONFIGURED: Sprite Studio is not available in this process.',
+        );
+      }
+      const { method, args } = payload as { method: keyof ISpriteStudioHost; args: unknown[] };
+      const fn = host[method] as ((...a: unknown[]) => Promise<unknown>) | undefined;
+      if (typeof fn !== 'function') throw new Error(`Unknown spriteStudioHost method: ${String(method)}`);
+      return fn.apply(host, args);
+    });
     // Project memory (Mem C) — routes retrieve / extract / isConfigured to
     // the canonical MemoryRetriever + RunEndMemory built in server/deps.ts.
     // Without these handlers the worker path silently loses per-turn memory
@@ -762,6 +782,7 @@ export class CoderWorkerPool {
         try { offDocsResearch(); } catch { /* best-effort */ }
         try { offPreviewDevtools(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
+        try { offSpriteHost(); } catch { /* best-effort */ }
         try { offMemory(); } catch { /* best-effort */ }
         try { offSecrets(); } catch { /* best-effort */ }
         try { offLsp(); } catch { /* best-effort */ }

@@ -26,6 +26,11 @@ export interface WorkerMemoryDeps {
       taskText: string,
     ): Promise<ReadonlyArray<{ id: string; title: string; content: string; importance?: number; staleNote?: string }>>;
   } | null;
+  /** Smart memory-recall query synthesizer (meta message → real query). Null
+   *  when unconfigured; the worker shim degrades to null (runner uses heuristic). */
+  memoryQuerySynthesizer?:
+    | ((tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>) => Promise<string | null>)
+    | null;
   runEndMemory?: RunEndMemory | null;
   /** Direct project-memory ports (save_note scope 'project' + recall_memory).
    *  Structural mirror of `RunCoderOptions.projectMemory` (host impl in deps.ts). */
@@ -91,6 +96,13 @@ export function registerWorkerMemoryHandlers(
     return retriever.retrieve(projectId, projectName, taskText);
   });
 
+  const offQuerySynth = bridge.handle('memoryQuerySynth', async (payload) => {
+    const synth = getDeps()?.memoryQuerySynthesizer;
+    if (!synth) return null;
+    const { tail } = payload as { tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }> };
+    return synth(tail);
+  });
+
   const offExtract = bridge.handle('memoryExtract', async (payload) => {
     const runEnd = getDeps()?.runEndMemory;
     if (!runEnd) return undefined;
@@ -145,6 +157,7 @@ export function registerWorkerMemoryHandlers(
 
   return (): void => {
     try { offRetrieve(); } catch { /* best-effort */ }
+    try { offQuerySynth(); } catch { /* best-effort */ }
     try { offExtract(); } catch { /* best-effort */ }
     try { offIsConfigured(); } catch { /* best-effort */ }
     try { offSave(); } catch { /* best-effort */ }
