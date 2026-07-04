@@ -27,6 +27,8 @@ export interface FrameCellProps {
   defaultMs: number;
   /** The frame's version row (provenance title); undefined while loading. */
   version?: AssetVersion;
+  /** Duration input only renders on the Base track (shared time grid). */
+  showDuration?: boolean;
   onSelect: (i: number) => void;
   onDuration: (i: number, ms: number | null) => void;
   onDelete: (i: number) => void;
@@ -44,7 +46,8 @@ const actionCls =
   'rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground';
 
 export const FrameCell = memo(function FrameCell({
-  projectId, assetId, frame, index, selected, defaultMs, version, onSelect, onDuration,
+  projectId, assetId, frame, index, selected, defaultMs, version, showDuration = true,
+  onSelect, onDuration,
   onDelete, onDuplicate, onReplace, onEditVersion, onDragStart, onDropOn, onDropVersion,
 }: FrameCellProps) {
   const { t } = useTranslation('spriteStudio');
@@ -94,7 +97,7 @@ export const FrameCell = memo(function FrameCell({
         title={t('animate.timeline.frameAlt', { n: index + 1 })}
       >
         <img
-          src={versionThumbUrl(projectId, frame.versionId, 64)}
+          src={versionThumbUrl(projectId, frame.versionId, 64, version?.contentHash)}
           alt={t('animate.timeline.frameAlt', { n: index + 1 })}
           loading="lazy"
           className="h-full w-full object-contain"
@@ -145,20 +148,22 @@ export const FrameCell = memo(function FrameCell({
           <Copy className="h-2.5 w-2.5" />
         </button>
       </div>
-      <input
-        type="number"
-        min={20}
-        max={10000}
-        className="h-5 w-full rounded border bg-background px-1 text-center text-[9px] tabular-nums"
-        value={frame.durationMs ?? ''}
-        placeholder={String(defaultMs)}
-        title={t('animate.timeline.durationMs')}
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => {
-          const raw = e.target.value.trim();
-          onDuration(index, raw === '' ? null : Math.max(20, Math.min(10000, Number(raw) || 20)));
-        }}
-      />
+      {showDuration && (
+        <input
+          type="number"
+          min={20}
+          max={10000}
+          className="h-5 w-full rounded border bg-background px-1 text-center text-[9px] tabular-nums"
+          value={frame.durationMs ?? ''}
+          placeholder={String(defaultMs)}
+          title={t('animate.timeline.durationMs')}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => {
+            const raw = e.target.value.trim();
+            onDuration(index, raw === '' ? null : Math.max(20, Math.min(10000, Number(raw) || 20)));
+          }}
+        />
+      )}
     </div>
   );
 });

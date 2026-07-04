@@ -153,8 +153,18 @@ export interface SpriteFrameRow {
   animation_id: number;
   frame_index: number;
   version_id: number;
-  /** Per-frame override; null = 1000/fps of the owning animation. */
+  /** Per-frame override; null = 1000/fps of the owning animation.
+   *  TIMING RULE: only track 0 rows carry durations (shared time grid). */
   duration_ms: number | null;
+  /** Animation layer (0 = Base). Cells compose bottom-up by ascending track. */
+  track: number;
+}
+
+/** Animation-layer metadata (settings_json.tracks; track 0 "Base" implicit). */
+export interface SpriteTrackMeta {
+  id: number;
+  name: string;
+  visible: boolean;
 }
 
 export interface SpriteGenerationJobRow {

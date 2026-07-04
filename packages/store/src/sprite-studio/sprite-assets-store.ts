@@ -156,6 +156,25 @@ export class SpriteAssetsStore {
   }
 
   /**
+   * In-place content overwrite (focused frame edit): the file bytes changed
+   * but the version NUMBER and file path stay — only dims/hash/source move.
+   * The one sanctioned mutation of a version row besides deletion.
+   */
+  updateVersionContent(
+    id: number,
+    input: { width: number; height: number; content_hash: string },
+  ): SpriteAssetVersionRow | null {
+    const result = this.db
+      .prepare(
+        `UPDATE sprite_asset_versions
+            SET width = @width, height = @height, content_hash = @content_hash, source = 'edited'
+          WHERE id = @id`,
+      )
+      .run({ id, width: input.width, height: input.height, content_hash: input.content_hash });
+    return Number(result.changes) > 0 ? this.getVersion(id) : null;
+  }
+
+  /**
    * Curation delete of one version — delegates to the batch path so there is a
    * single delete implementation. Frames referencing it go first (FK cascades
    * don't fire without PRAGMA) and the owning asset's current_version_id falls

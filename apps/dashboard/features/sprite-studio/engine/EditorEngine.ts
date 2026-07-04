@@ -13,11 +13,11 @@ import type { EngineSummary } from './engine-types.js';
 import { History } from './history.js';
 import {
   createBrushGhost, createCheckerboard, createMarchingAnts, createPixelGrid,
-  OverlayRegistry, type OverlayView,
+  createShapePreview, OverlayRegistry, type OverlayView,
 } from './overlays.js';
 import { SelectionMask } from './selection-mask.js';
 import { Viewport } from './viewport.js';
-import type { Tool, ToolContext, ToolOptions, ToolPointerEvent } from '../tools/tool-types.js';
+import type { ShapePreview, Tool, ToolContext, ToolOptions, ToolPointerEvent } from '../tools/tool-types.js';
 
 const SUMMARY_THROTTLE_MS = 100; // ~10Hz max toward the store
 
@@ -56,8 +56,12 @@ export class EditorEngine {
     this.view = {
       viewport: this.viewport, docW: width, docH: height, dpr: 1,
       canvasW: 0, canvasH: 0, selection: this.selection, timeMs: 0, brush: null,
+      shapePreview: null,
     };
-    for (const o of [createCheckerboard(), createPixelGrid(), createMarchingAnts(), createBrushGhost()]) {
+    for (const o of [
+      createCheckerboard(), createPixelGrid(), createMarchingAnts(),
+      createShapePreview(), createBrushGhost(),
+    ]) {
       this.overlays.register(o);
     }
     this.history.onChange = () => this.emitSummary();
@@ -170,8 +174,20 @@ export class EditorEngine {
   /** Brush ghost hover position (image coords) — null hides it. */
   setBrushGhost(pos: { x: number; y: number } | null): void {
     this.view.brush = pos
-      ? { x: pos.x, y: pos.y, size: this.toolOptions.size, shape: this.toolOptions.shape ?? 'square' }
+      ? {
+          x: pos.x, y: pos.y,
+          size: this.toolOptions.size,
+          shape: this.toolOptions.shape ?? 'square',
+          softness: this.toolOptions.softness,
+          mirrorX: this.toolOptions.mirrorX === true,
+        }
       : null;
+    this.invalidate();
+  }
+
+  /** Live shape-drag preview (line/rect/ellipse tools) — null clears it. */
+  setShapePreview(preview: ShapePreview | null): void {
+    this.view.shapePreview = preview;
     this.invalidate();
   }
 
@@ -208,6 +224,7 @@ export class EditorEngine {
         this.colors.fg = hex;
         this.onColorPick?.(hex);
       },
+      setShapePreview: (p) => this.setShapePreview(p),
     };
   }
 

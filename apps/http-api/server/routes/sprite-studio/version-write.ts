@@ -12,7 +12,9 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { appendVersion, readAssetManifest, removeVersion } from '@mcp/sprite-studio/repo/manifest.js';
+import {
+  appendVersion, readAssetManifest, removeVersion, updateVersionEntry,
+} from '@mcp/sprite-studio/repo/manifest.js';
 import { resolveInsideSpriteDir, versionFileName } from '@mcp/sprite-studio/repo/paths.js';
 import { decodePng } from '@mcp/sprite-studio/processing/png.js';
 import type { SpriteAssetVersionRow, SpriteVersionSource } from '@mcp/store/sprite-studio/types.js';
@@ -25,6 +27,33 @@ export interface WriteEditedVersionOpts {
   parentVersionId?: number | null;
   /** Version provenance kind (default 'edited'; sheet import passes 'imported'). */
   source?: SpriteVersionSource;
+}
+
+/**
+ * Overwrite an EXISTING version in place: same version number, same
+ * `v%03d.png` file — new bytes. The focused frame-edit "Salvar Sprite" flow:
+ * every frame pointing at this version updates visually without a new row.
+ * Writes file → manifest entry (hash/createdAt) → DB row (dims/hash/source).
+ */
+export function overwriteVersion(
+  deps: ServerDeps,
+  root: string,
+  asset: { id: number; slug: string },
+  version: { id: number; version: number; file_rel_path: string },
+  png: Buffer,
+): SpriteAssetVersionRow {
+  const store = deps.spriteAssetsStore;
+  const { width, height } = decodePng(png);
+  const hash = crypto.createHash('sha256').update(png).digest('hex');
+  const abs = resolveInsideSpriteDir(root, version.file_rel_path);
+  fs.writeFileSync(abs, png);
+  updateVersionEntry(root, asset.slug, version.version, {
+    hash,
+    createdAt: new Date().toISOString(),
+  });
+  const row = store.updateVersionContent(version.id, { width, height, content_hash: hash });
+  if (!row) throw new Error('version_row_missing');
+  return row;
 }
 
 /**

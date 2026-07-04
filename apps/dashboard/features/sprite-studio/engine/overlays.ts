@@ -6,6 +6,10 @@
  */
 import type { SelectionMask } from './selection-mask.js';
 import type { Viewport } from './viewport.js';
+import type { ShapePreview } from '../tools/tool-types.js';
+import {
+  ellipseOutlinePoints, linePoints, rectOutlinePoints,
+} from '../algorithms/shape-raster.js';
 
 export interface OverlayView {
   viewport: Viewport;
@@ -18,7 +22,15 @@ export interface OverlayView {
   /** ms timestamp from the rAF loop (drives the ants dash offset). */
   timeMs: number;
   /** Hover position (image coords) for the brush ghost, or null. */
-  brush: { x: number; y: number; size: number; shape: 'square' | 'round' } | null;
+  brush: {
+    x: number; y: number; size: number; shape: 'square' | 'round';
+    /** >0 draws the soft radius + hard-core hint. */
+    softness: number;
+    /** Draw the mirrored footprint across the vertical center axis. */
+    mirrorX: boolean;
+  } | null;
+  /** Live shape-drag preview (line/rect/ellipse tools), or null. */
+  shapePreview: ShapePreview | null;
 }
 
 export interface Overlay {
@@ -141,27 +153,89 @@ export function createMarchingAnts(): Overlay {
   };
 }
 
-/** Brush footprint preview at the hover position. */
+/** Brush footprint preview at the hover position (+ soft radius + mirror). */
 export function createBrushGhost(): Overlay {
+  const drawOne = (ctx: CanvasRenderingContext2D, view: OverlayView, ix: number, iy: number): void => {
+    const b = view.brush;
+    if (!b) return;
+    const { viewport } = view;
+    const half = Math.floor((b.size - 1) / 2);
+    const s = viewport.imageToScreen(Math.floor(ix) - half, Math.floor(iy) - half);
+    const px = b.size * viewport.zoom;
+    const soft = b.softness > 0;
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    if (soft || (b.shape === 'round' && b.size > 2)) {
+      // Soft brushes are always circular — show the true footprint radius.
+      ctx.arc(s.x + px / 2, s.y + px / 2, px / 2, 0, Math.PI * 2);
+    } else {
+      ctx.rect(s.x + 0.5, s.y + 0.5, px, px);
+    }
+    ctx.stroke();
+    if (soft && px >= 8) {
+      // Dashed inner circle at the hard-core radius (PS hardness hint).
+      const core = (1 - Math.min(100, b.softness) / 100) * (px / 2);
+      if (core >= 2) {
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+        ctx.beginPath();
+        ctx.arc(s.x + px / 2, s.y + px / 2, core, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  };
   return {
     id: 'brush-ghost',
     order: 30,
     draw(ctx, view) {
       const b = view.brush;
       if (!b) return;
+      drawOne(ctx, view, b.x, b.y);
+      if (b.mirrorX) drawOne(ctx, view, view.docW - 1 - Math.floor(b.x), b.y);
+    },
+  };
+}
+
+/** Live shape-drag preview: outline re-runs the SAME rasterizers as the
+ *  commit (pixel-exact cells scaled by zoom); fill draws the analytic shape
+ *  (interior is solid — approximation invisible, avoids 65k rects/frame). */
+export function createShapePreview(): Overlay {
+  return {
+    id: 'shape-preview',
+    order: 25,
+    draw(ctx, view) {
+      const p = view.shapePreview;
+      if (!p) return;
       const { viewport } = view;
-      const half = Math.floor((b.size - 1) / 2);
-      const s = viewport.imageToScreen(Math.floor(b.x) - half, Math.floor(b.y) - half);
-      const px = b.size * viewport.zoom;
-      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      if (b.shape === 'round' && b.size > 2) {
-        ctx.arc(s.x + px / 2, s.y + px / 2, px / 2, 0, Math.PI * 2);
+      const z = viewport.zoom;
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = p.color;
+      if (p.fill && p.kind !== 'line') {
+        const lo = viewport.imageToScreen(Math.min(p.x0, p.x1), Math.min(p.y0, p.y1));
+        const w = (Math.abs(p.x1 - p.x0) + 1) * z;
+        const h = (Math.abs(p.y1 - p.y0) + 1) * z;
+        ctx.beginPath();
+        if (p.kind === 'ellipse') ctx.ellipse(lo.x + w / 2, lo.y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+        else ctx.rect(lo.x, lo.y, w, h);
+        ctx.fill();
       } else {
-        ctx.rect(s.x + 0.5, s.y + 0.5, px, px);
+        const pts = p.kind === 'line'
+          ? linePoints(p.x0, p.y0, p.x1, p.y1)
+          : p.kind === 'rect'
+            ? rectOutlinePoints(p.x0, p.y0, p.x1, p.y1)
+            : ellipseOutlinePoints(p.x0, p.y0, p.x1, p.y1);
+        const half = Math.floor((p.size - 1) / 2);
+        const cell = Math.max(1, p.size) * z;
+        for (const pt of pts) {
+          const s = viewport.imageToScreen(pt.x - half, pt.y - half);
+          ctx.fillRect(s.x, s.y, cell, cell);
+        }
       }
-      ctx.stroke();
+      ctx.restore();
     },
   };
 }

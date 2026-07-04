@@ -1,12 +1,12 @@
 /**
- * AnimatePanel — the phase-2 animation surface: header (select/create), a
- * frame-pack generate bar (job progress over the project SSE bus), the
- * dedicated PreviewCanvas and the TimelineStrip. Export name + props are the
- * CONTRACT CenterSurface mounts against. The heavy lifting lives in hooks:
- * useFrameDraft (timeline draft + debounced PATCH), useAnimGeneration
- * (generate → adopt), useTimelineShortcuts (frame ops + keyboard).
+ * AnimatePanel — the multi-track animation surface: header (select/create),
+ * frame-pack generate bar, composited PreviewCanvas and the layered
+ * TimelineStrip. Export name + props are the CONTRACT CenterSurface mounts
+ * against. The heavy lifting lives in hooks: useFrameDraft (flat draft +
+ * per-track debounced PATCH), useTimelineOps (column/cell ops + bridge),
+ * useAnimGeneration (generate → adopt, base track), useTimelineShortcuts.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { useSpriteJobs } from '../jobs/useSpriteJobs.js';
@@ -16,10 +16,13 @@ import { AnimHeader } from './AnimHeader.js';
 import { GenerateBar } from './GenerateBar.js';
 import { PreviewCanvas } from './PreviewCanvas.js';
 import { TimelineStrip } from './TimelineStrip.js';
-import { useAnimateSession } from './animate-session-store.js';
-import { useTimelineShortcuts } from './useTimelineShortcuts.js';
-import { useFrameDraft } from './useFrameDraft.js';
+import type { GenerationGroup } from './api-anim-bulk.js';
+import { ResliceSheetDialog } from './frames/ResliceSheetDialog.js';
+import { buildTimelineModel } from './timeline-model.js';
 import { useAnimGeneration } from './useAnimGeneration.js';
+import { useFrameDraft } from './useFrameDraft.js';
+import { useTimelineOps } from './useTimelineOps.js';
+import { useTimelineShortcuts } from './useTimelineShortcuts.js';
 
 export function AnimatePanel({
   projectId,
@@ -28,6 +31,7 @@ export function AnimatePanel({
   // CenterSurface mount contract.
   settings: _settings,
   versionById,
+  generations,
   refreshVersions,
   onSaved,
   onEditVersion,
@@ -37,6 +41,8 @@ export function AnimatePanel({
   settings: StudioSettings | null;
   /** Shared version lookup (lifted useAssetVersions) — provenance titles. */
   versionById: Map<number, AssetVersion>;
+  /** Generation batches — resolves whether the last gen kept its sheet. */
+  generations: GenerationGroup[];
   /** Re-pull the shared version list after adopt/align create new rows. */
   refreshVersions: () => void;
   onSaved: (assetId: number, versionId: number) => void;
@@ -45,30 +51,44 @@ export function AnimatePanel({
 }) {
   const { t } = useTranslation('spriteStudio');
   const { jobs } = useSpriteJobs(projectId);
-  const publishBridge = useAnimateSession((s) => s.publishBridge);
 
   const [animations, setAnimations] = useState<anim.SpriteAnimation[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [frameCount, setFrameCount] = useState(4);
   const [anchorId, setAnchorId] = useState<number | null>(null);
+  const [activeTrack, setActiveTrack] = useState(0);
   const [aligning, setAligning] = useState(false);
   const [direction, setDirection] = useState('');
+  const [resliceOpen, setResliceOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const current = animations.find((a) => a.id === selectedId) ?? null;
+  const lastGenGroup = current?.lastGenJobId != null
+    ? generations.find((g) => g.jobId === current.lastGenJobId) ?? null
+    : null;
+
   const applyServer = useCallback((updated: anim.SpriteAnimation) => {
     setAnimations((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
   }, []);
 
-  const { frames, frameIdx, setFrameIdx, editFrames, resetForAnimation, flushPendingSave } =
+  const { frames, frameIdx, setFrameIdx, applyFlat, resetForAnimation, flushPendingSave } =
     useFrameDraft(current, applyServer, setError);
+  const tracks = useMemo(
+    () => current?.tracks ?? [{ id: 0, name: 'Base', visible: true }],
+    [current?.tracks],
+  );
+  const model = useMemo(
+    () => buildTimelineModel(frames, tracks, current?.fps ?? 8),
+    [frames, tracks, current?.fps],
+  );
+  const ops = useTimelineOps({
+    model, frames, activeTrack, frameIdx, setFrameIdx, applyFlat, hasAnimation: current != null,
+  });
   const { generate, running, adopting, failed, genState } = useAnimGeneration({
     current, assetId: asset.id, jobs, direction, anchorId, frameCount,
     applyServer, onSaved, refreshVersions, onError: setError,
   });
-  const { reverse, copyFrame, pasteFrame } = useTimelineShortcuts(
-    frames, frameIdx, editFrames, setFrameIdx, current != null,
-  );
+  useTimelineShortcuts(ops, frameIdx, model.gridLen, setFrameIdx, current != null);
 
   // Load animations per asset; keep the selection when possible.
   useEffect(() => {
@@ -84,13 +104,13 @@ export function AnimatePanel({
     return () => { alive = false; };
   }, [projectId, asset.id]);
 
-  // Reset the frame draft + hydrate anchor/frameCount on animation switch only
+  // Reset the draft + hydrate anchor/frameCount/track on animation switch only
   // (locally-picked values must survive PATCH echoes from timeline edits).
-  useEffect(() => { resetForAnimation(current?.frames ?? []); }, [selectedId, current?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { resetForAnimation(current?.frames ?? []); setActiveTrack(0); }, [selectedId, current?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setAnchorId(current?.anchorVersionId ?? null); }, [selectedId, current == null]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setFrameCount(current?.frameCount ?? 4); }, [selectedId, current == null]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Registration: flush any pending timeline edit, then re-anchor every frame.
+  // Registration: flush pending edits, then re-anchor every BASE frame.
   const alignAll = useCallback(async (anchorX: anim.AnchorX, anchorY: anim.AnchorY) => {
     if (!current || aligning) return;
     setAligning(true);
@@ -119,26 +139,11 @@ export function AnimatePanel({
     void anim.patchAnimation(current.id, { loopStart, loopEnd }).then(applyServer).catch((e) => setError((e as Error).message));
   }, [current, applyServer]);
 
-  // Bridge: publish the timeline's versionIds + selected frame + the imperative
-  // callbacks the Frames browser / FrameInspector (other rails) call back into.
-  useEffect(() => {
-    publishBridge({
-      frameVersionIds: frames.map((f) => f.versionId),
-      selectedFrameVersionId: frames[frameIdx]?.versionId ?? null,
-      selectedFrameIndex: frames.length > 0 ? frameIdx : null,
-      appendToTimeline: (ids) =>
-        editFrames([...frames, ...ids.map((versionId) => ({ id: -1, frameIndex: 0, versionId, durationMs: null }))]),
-      removeFramesUsing: (ids) => editFrames(frames.filter((f) => !ids.includes(f.versionId))),
-      replaceFrameAt: (i, versionId) => editFrames(frames.map((f, k) => (k === i ? { ...f, versionId } : f))),
-      setTimeline: (ids) => editFrames(ids.map((versionId, i) => ({ id: -1, frameIndex: i, versionId, durationMs: null }))),
-    });
-  }, [frames, frameIdx, editFrames, publishBridge]);
-  useEffect(() => () => {
-    publishBridge({
-      frameVersionIds: [], selectedFrameVersionId: null, selectedFrameIndex: null,
-      appendToTimeline: null, removeFramesUsing: null, replaceFrameAt: null, setTimeline: null,
-    });
-  }, [publishBridge]);
+  // Track CRUD — server responds with the full DTO; draft re-syncs via reset.
+  const trackCall = useCallback((p: Promise<anim.SpriteAnimation>) => {
+    p.then((updated) => { applyServer(updated); resetForAnimation(updated.frames); })
+      .catch((e) => setError((e as Error).message));
+  }, [applyServer, resetForAnimation]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -164,7 +169,7 @@ export function AnimatePanel({
             assetId={asset.id}
             running={running}
             adopting={adopting}
-            hasFrames={frames.length > 0}
+            hasFrames={model.gridLen > 0}
             direction={direction}
             genStatus={genState && !failed && genState.status !== 'done'
               ? { status: genState.status, pct: genState.pct } : null}
@@ -172,10 +177,12 @@ export function AnimatePanel({
             lastGenJobId={current.lastGenJobId}
             versionById={versionById}
             frameCount={frameCount}
+            canReslice={lastGenGroup?.hasSheet === true}
             onDirection={setDirection}
             onAnchorChange={setAnchorId}
             onGenerate={generate}
             onFrameCount={setFrameCount}
+            onReslice={() => setResliceOpen(true)}
           />
           {(error || failed) && (
             <div className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-400">
@@ -185,36 +192,64 @@ export function AnimatePanel({
           <PreviewCanvas
             projectId={projectId}
             frames={frames}
+            tracks={tracks}
             fps={current.fps}
             loopMode={current.loopMode}
             selectedIndex={frameIdx}
             loopStart={current.loopStart}
             loopEnd={current.loopEnd}
+            versionById={versionById}
             onPatch={patchAnim}
-            onScrub={setFrameIdx}
+            onScrub={(i) => setFrameIdx(() => i)}
             onSetLoop={setLoopRange}
           />
           <TimelineStrip
             projectId={projectId}
             assetId={asset.id}
-            frames={frames}
+            model={model}
             fps={current.fps}
+            activeTrack={activeTrack}
             selectedIndex={frameIdx}
             aligning={aligning}
             versionById={versionById}
-            onSelect={setFrameIdx}
-            onEdit={editFrames}
+            onSelect={(track, col) => { setActiveTrack(track); setFrameIdx(() => col); }}
             onAlign={(ax, ay) => void alignAll(ax, ay)}
             onEditVersion={onEditVersion}
-            onReverse={reverse}
-            onCopy={copyFrame}
-            onPaste={pasteFrame}
+            onReverse={ops.reverse}
+            onCopy={ops.copyColumn}
+            onPaste={ops.pasteColumn}
+            onSetCell={ops.setCellAt}
+            onClearCell={ops.clearCellAt}
+            onDuration={ops.setDuration}
+            onColumnDrag={ops.columnDrag}
+            onCellDrag={ops.cellDrag}
+            onDuplicateColumn={ops.duplicateColumnAt}
+            onActivateTrack={setActiveTrack}
+            onAddTrack={() => trackCall(anim.addTrack(current.id))}
+            onRenameTrack={(id, name) => trackCall(anim.patchTrack(current.id, id, { name }))}
+            onToggleVisible={(id, visible) => trackCall(anim.patchTrack(current.id, id, { visible }))}
+            onDeleteTrack={(id) => {
+              if (activeTrack === id) setActiveTrack(0);
+              trackCall(anim.deleteTrack(current.id, id));
+            }}
+            onAppend={ops.appendVersion}
           />
         </div>
       ) : (
         <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
           {t('animate.empty')}
         </div>
+      )}
+      {resliceOpen && lastGenGroup?.jobId != null && (
+        <ResliceSheetDialog
+          open
+          onOpenChange={(v) => { if (!v) setResliceOpen(false); }}
+          projectId={projectId}
+          assetId={asset.id}
+          jobId={lastGenGroup.jobId}
+          defaultGrid={{ cols: Math.max(1, lastGenGroup.frameCount), rows: 1 }}
+          refresh={refreshVersions}
+        />
       )}
     </div>
   );

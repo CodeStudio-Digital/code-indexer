@@ -6,7 +6,7 @@
  * also renders a Unity-style checkerboard preview below the list.
  */
 import { useTranslation } from 'react-i18next';
-import { History, Trash2, Wand2 } from 'lucide-react';
+import { History, Pencil, Trash2, Wand2 } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { versionFileUrl } from '../api.js';
@@ -29,6 +29,7 @@ export function VersionsPanel({
   onSelect,
   onDelete,
   onIterate,
+  onEditInPlace,
   projectId,
 }: {
   versions: AssetVersion[];
@@ -40,6 +41,8 @@ export function VersionsPanel({
   onDelete?: (versionId: number) => void | Promise<void>;
   /** "Iterate from this version": attach it as a generation reference. */
   onIterate?: (versionId: number, label: string) => void;
+  /** Pencil: edit this version IN PLACE (focused session, no new version). */
+  onEditInPlace?: (versionId: number) => void;
   /** IDE project id — absent hides the selected-version preview pane. */
   projectId?: number;
 }) {
@@ -97,6 +100,17 @@ export function VersionsPanel({
                   {v.createdAt ? new Date(v.createdAt).toLocaleDateString() : ''}
                 </span>
               </button>
+              {onEditInPlace && (
+                <button
+                  type="button"
+                  onClick={() => onEditInPlace(v.id)}
+                  title={t('inspector.editInPlace')}
+                  aria-label={t('inspector.editInPlace')}
+                  className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-primary/15 hover:text-primary group-hover:opacity-100"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              )}
               {onIterate && (
                 <button
                   type="button"
@@ -130,8 +144,8 @@ export function VersionsPanel({
             style={CHECKERBOARD}
           >
             <img
-              key={active.id}
-              src={versionFileUrl(projectId, active.id)}
+              key={`${active.id}:${active.contentHash ?? ''}`}
+              src={versionFileUrl(projectId, active.id, active.contentHash)}
               alt={t('inspector.versionPreviewAlt', { v: vLabel(active) })}
               className="h-full w-full object-contain"
               style={{ imageRendering: 'pixelated' }}

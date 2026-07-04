@@ -104,7 +104,7 @@ describe('promoteFrames', () => {
         replaced.push({ animationId, versionIds: frames.map((f) => f.version_id) });
         return frames.map((f, i) => ({
           id: i + 1, animation_id: animationId, frame_index: i,
-          version_id: f.version_id, duration_ms: f.duration_ms ?? null,
+          version_id: f.version_id, duration_ms: f.duration_ms ?? null, track: 0,
         }));
       },
     };

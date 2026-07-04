@@ -76,3 +76,29 @@ export function resolveInsideSpriteDir(projectRoot: string, relPath: string): st
   }
   return resolved;
 }
+
+/**
+ * Generic containment guard: resolve `relPath` against an arbitrary absolute
+ * base dir with the same traversal rules as resolveInsideSpriteDir (no
+ * absolutes, no `..`, no escape). Used by the export writer — adapters emit
+ * relPaths, the user picks the base dir; neither may write outside it.
+ */
+export function resolveInsideDir(baseAbs: string, relPath: string): string {
+  if (typeof relPath !== 'string' || relPath.trim().length === 0) {
+    throw new Error('Path must be a non-empty relative path');
+  }
+  if (path.isAbsolute(relPath) || /^[a-zA-Z]:/.test(relPath) || relPath.startsWith('\\\\')) {
+    throw new Error(`Absolute paths are not allowed: ${relPath}`);
+  }
+  if (relPath.split(/[\\/]+/).includes('..')) {
+    throw new Error(`Path traversal ("..") is not allowed: ${relPath}`);
+  }
+  const base = path.resolve(baseAbs);
+  const resolved = path.resolve(base, relPath);
+  const normBase = normalizeForCompare(base);
+  const normResolved = normalizeForCompare(resolved);
+  if (normResolved !== normBase && !normResolved.startsWith(normBase + path.sep)) {
+    throw new Error(`Path escapes the export dir: ${relPath}`);
+  }
+  return resolved;
+}

@@ -58,6 +58,7 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
   const [group, setGroup] = useState('');
   const [jumpHostId, setJumpHostId] = useState<number | null>(null);
   const [agentForwarding, setAgentForwarding] = useState(false);
+  const [isShared, setIsShared] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -88,6 +89,7 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
       setGroup(initial.group_name ?? '');
       setJumpHostId(initial.jump_host_id);
       setAgentForwarding(!!initial.agent_forwarding);
+      setIsShared(!!initial.is_shared);
     } else {
       setLabel('');
       setHost('');
@@ -97,6 +99,7 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
       setGroup('');
       setJumpHostId(null);
       setAgentForwarding(false);
+      setIsShared(false);
     }
   }, [open, initial]);
 
@@ -161,6 +164,7 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
         group_name: group.trim() || null,
         jump_host_id: jumpHostId,
         agent_forwarding: agentForwarding,
+        is_shared: isShared,
         ...enc,
       };
       if (initial) await patchHost(projectId, initial.id, body);
@@ -201,7 +205,9 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
     }
   }
 
-  const jumpCandidates = hosts.filter((h) => h.id !== initial?.id);
+  // A shared host may only jump through ANOTHER shared host (a project-local jump
+  // wouldn't resolve from other projects); a local host can jump through either.
+  const jumpCandidates = hosts.filter((h) => h.id !== initial?.id && (!isShared || !!h.is_shared));
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!busy) onOpenChange(o); }}>
@@ -318,6 +324,17 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
             <p className="text-[11px] text-amber-500 flex items-start gap-1 -mt-1">
               <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
               {t('dialog.agentForwardingWarning')}
+            </p>
+          )}
+
+          <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{t('dialog.shareAcrossProjects')}</span>
+            <Switch checked={isShared} onCheckedChange={setIsShared} />
+          </label>
+          {isShared && (
+            <p className="text-[11px] text-amber-500 flex items-start gap-1 -mt-1">
+              <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+              {t('dialog.sharedWarning')}
             </p>
           )}
 

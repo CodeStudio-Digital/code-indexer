@@ -12,9 +12,9 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { toGenerationGroupDto } from './mappers.js';
+import { toGenerationGroupDto, toVersionDto } from './mappers.js';
 import { hasJobSheet } from './sheet-artifact.js';
-import { purgeVersionFile } from './version-write.js';
+import { overwriteVersion, purgeVersionFile } from './version-write.js';
 
 const MAX_BULK = 200;
 
@@ -36,6 +36,31 @@ export function mountSpriteVersionCurationRoutes(app: Hono, deps: ServerDeps): v
       return toGenerationGroupDto(g, job, animName, sheet);
     });
     return c.json({ generations });
+  });
+
+  // In-place overwrite (focused frame edit "Salvar Sprite"): same version
+  // number + file, new bytes — frames pointing at it update without a new row.
+  app.put('/api/sprite-studio/projects/:projectId/versions/:versionId/file', async (c) => {
+    const ideProjectId = Number(c.req.param('projectId'));
+    const root = deps.db.getProject(ideProjectId)?.root_path ?? null;
+    const version = store.getVersion(Number(c.req.param('versionId')));
+    const asset = version ? store.get(version.asset_id) : null;
+    if (!root || !version || !asset) return c.json({ error: 'not_found' }, 404);
+    let png: Buffer;
+    try {
+      const form = await c.req.formData();
+      const file = form.get('file');
+      if (!(file instanceof File)) return c.json({ error: 'no_file' }, 400);
+      png = Buffer.from(await file.arrayBuffer());
+    } catch {
+      return c.json({ error: 'invalid_multipart' }, 400);
+    }
+    try {
+      const row = overwriteVersion(deps, root, asset, version, png);
+      return c.json(toVersionDto(ideProjectId, row));
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 400);
+    }
   });
 
   app.post('/api/sprite-studio/projects/:projectId/versions/bulk-delete', async (c) => {

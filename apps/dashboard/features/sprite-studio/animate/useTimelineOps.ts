@@ -1,0 +1,131 @@
+/**
+ * Column/cell operations over the multi-track draft + the cross-rail bridge
+ * publication. Column ops follow D6 (Aseprite semantics): they move/copy the
+ * WHOLE column across every layer; cell ops touch one (track, col). The
+ * column clipboard stores the full vertical stack. Extracted from
+ * AnimatePanel for the LOC ceiling.
+ */
+import { useCallback, useEffect, useRef } from 'react';
+import type { AnimFrame } from './api-anim.js';
+import { useAnimateSession } from './animate-session-store.js';
+import {
+  clearCell, duplicateColumn, moveColumn, removeColumn, reverseColumns, setCell,
+  type TimelineModel,
+} from './timeline-model.js';
+
+export interface TimelineOps {
+  setCellAt: (track: number, col: number, versionId: number) => void;
+  clearCellAt: (track: number, col: number) => void;
+  setDuration: (col: number, ms: number | null) => void;
+  columnDrag: (from: number, to: number) => void;
+  cellDrag: (track: number, from: number, to: number) => void;
+  duplicateColumnAt: (col: number) => void;
+  removeColumnAt: (col: number) => void;
+  reverse: () => void;
+  copyColumn: () => void;
+  pasteColumn: () => void;
+  moveColumnBy: (dir: -1 | 1) => void;
+  appendVersion: (versionId: number) => void;
+}
+
+export function useTimelineOps(args: {
+  model: TimelineModel;
+  frames: AnimFrame[];
+  activeTrack: number;
+  frameIdx: number;
+  setFrameIdx: React.Dispatch<React.SetStateAction<number>>;
+  applyFlat: (next: AnimFrame[]) => void;
+  hasAnimation: boolean;
+}): TimelineOps {
+  const { model, frames, activeTrack, frameIdx, setFrameIdx, applyFlat, hasAnimation } = args;
+  const publishBridge = useAnimateSession((s) => s.publishBridge);
+  const clip = useRef<Array<{ track: number; versionId: number }> | null>(null);
+
+  const ops: TimelineOps = {
+    setCellAt: useCallback((track, col, versionId) => {
+      applyFlat(setCell(frames, track, col, versionId));
+    }, [frames, applyFlat]),
+    clearCellAt: useCallback((track, col) => {
+      applyFlat(clearCell(frames, track, col));
+    }, [frames, applyFlat]),
+    setDuration: useCallback((col, ms) => {
+      applyFlat(frames.map((f) => (f.track === 0 && f.frameIndex === col ? { ...f, durationMs: ms } : f)));
+    }, [frames, applyFlat]),
+    columnDrag: useCallback((from, to) => {
+      applyFlat(moveColumn(frames, from, to));
+      setFrameIdx(() => to);
+    }, [frames, applyFlat, setFrameIdx]),
+    cellDrag: useCallback((track, from, to) => {
+      const cell = frames.find((f) => f.track === track && f.frameIndex === from);
+      if (!cell) return;
+      applyFlat(setCell(clearCell(frames, track, from), track, to, cell.versionId));
+    }, [frames, applyFlat]),
+    duplicateColumnAt: useCallback((col) => {
+      applyFlat(duplicateColumn(frames, col));
+      setFrameIdx(() => col + 1);
+    }, [frames, applyFlat, setFrameIdx]),
+    removeColumnAt: useCallback((col) => {
+      applyFlat(removeColumn(frames, col));
+      setFrameIdx((i) => Math.max(0, Math.min(model.gridLen - 2, i)));
+    }, [frames, applyFlat, model.gridLen, setFrameIdx]),
+    reverse: useCallback(() => {
+      if (model.gridLen > 1) applyFlat(reverseColumns(frames, model.gridLen));
+    }, [frames, model.gridLen, applyFlat]),
+    copyColumn: useCallback(() => {
+      const stack = frames.filter((f) => f.frameIndex === frameIdx);
+      clip.current = stack.map((f) => ({ track: f.track, versionId: f.versionId }));
+    }, [frames, frameIdx]),
+    pasteColumn: useCallback(() => {
+      if (!clip.current || clip.current.length === 0) return;
+      let next = duplicateColumn(frames, frameIdx);
+      // Overwrite the duplicated column with the clipboard's stack.
+      next = next.filter((f) => f.frameIndex !== frameIdx + 1);
+      for (const c of clip.current) next = setCell(next, c.track, frameIdx + 1, c.versionId);
+      applyFlat(next);
+      setFrameIdx(() => frameIdx + 1);
+    }, [frames, frameIdx, applyFlat, setFrameIdx]),
+    moveColumnBy: useCallback((dir) => {
+      const to = frameIdx + dir;
+      if (to < 0 || to >= model.gridLen) return;
+      applyFlat(moveColumn(frames, frameIdx, to));
+      setFrameIdx(() => to);
+    }, [frames, frameIdx, model.gridLen, applyFlat, setFrameIdx]),
+    appendVersion: useCallback((versionId) => {
+      applyFlat(setCell(frames, activeTrack, model.gridLen, versionId));
+      setFrameIdx(() => model.gridLen);
+    }, [frames, activeTrack, model.gridLen, applyFlat, setFrameIdx]),
+  };
+
+  // Bridge: publish the grid + the imperative callbacks the other rails call.
+  useEffect(() => {
+    if (!hasAnimation) return;
+    publishBridge({
+      frameVersionIds: [...new Set(frames.map((f) => f.versionId))],
+      selectedFrameVersionId: model.cellAt(activeTrack, frameIdx)?.versionId ?? null,
+      selectedFrameIndex: model.gridLen > 0 ? frameIdx : null,
+      appendToTimeline: (ids) => {
+        let next = frames;
+        let col = model.gridLen;
+        for (const versionId of ids) next = setCell(next, activeTrack, col++, versionId);
+        applyFlat(next);
+      },
+      removeFramesUsing: (ids) => applyFlat(frames.filter((f) => !ids.includes(f.versionId))),
+      replaceFrameAt: (col, versionId) => applyFlat(setCell(frames, activeTrack, col, versionId)),
+      setTimeline: (ids) => {
+        const rest = frames.filter((f) => f.track !== activeTrack);
+        applyFlat([
+          ...rest,
+          ...ids.map((versionId, i) => ({ id: -1, frameIndex: i, versionId, durationMs: null, track: activeTrack })),
+        ]);
+      },
+    });
+  }, [hasAnimation, frames, model, activeTrack, frameIdx, applyFlat, publishBridge]);
+  useEffect(() => () => {
+    publishBridge({
+      frameVersionIds: [], selectedFrameVersionId: null, selectedFrameIndex: null,
+      appendToTimeline: null, removeFramesUsing: null, replaceFrameAt: null, setTimeline: null,
+    });
+  }, [publishBridge]);
+
+  return ops;
+}

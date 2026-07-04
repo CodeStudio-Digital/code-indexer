@@ -51,13 +51,15 @@ export function VersionGroupHeader({
         {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
         <span className="min-w-0 truncate font-medium">{label}</span>
       </button>
+      {/* Primary batch actions stay ALWAYS visible (hover-only killed
+          discoverability — the user never found the scissors). */}
       {group.hasSheet && (
         <button
           type="button"
           aria-label={t('frames.reslice')}
           title={t('frames.reslice')}
           onClick={() => onReslice(group)}
-          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-primary/15 hover:text-primary group-hover/header:opacity-100"
+          className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-primary/15 hover:text-primary"
         >
           <Scissors className="h-3 w-3" />
         </button>
@@ -68,7 +70,7 @@ export function VersionGroupHeader({
           aria-label={t('frames.restore')}
           title={t('frames.restore')}
           onClick={() => onRestoreGroup(group)}
-          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-primary/15 hover:text-primary group-hover/header:opacity-100"
+          className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-primary/15 hover:text-primary"
         >
           <RotateCcw className="h-3 w-3" />
         </button>

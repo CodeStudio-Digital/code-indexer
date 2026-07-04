@@ -10,8 +10,8 @@
  *   POST  /animations/:id/frames/adopt      promote ALL staged candidates of a
  *         finished job → versions + frame rows (replaces existing frames) and
  *         record settings_json.lastGenJobId
- *   PATCH /animations/:id/frames            replace order/durations
- *   GET   /animations/:id/gif               animated-GIF preview (worker-encoded)
+ *   PATCH /animations/:id/frames            replace one track's cells
+ *   (GIF preview lives in gif.routes.ts; track CRUD in tracks.routes.ts)
  *
  * Generation stays two-step (generate → adopt) so the job runner is untouched:
  * the frontend watches the job over SSE and calls adopt on completion.
@@ -23,11 +23,10 @@ import { buildAnimationIntent } from '@mcp/sprite-studio/jobs/animation-prompt.j
 import type { SpriteGenerationJobParams } from '@mcp/sprite-studio/jobs/generation-request.js';
 import { runGenerationJob } from '@mcp/sprite-studio/jobs/job-runner.js';
 import { promoteFrames } from '@mcp/sprite-studio/jobs/promote-frames.js';
-import { expandPingpong } from '@mcp/sprite-studio/export/gif.js';
 import { resolveInsideSpriteDir } from '@mcp/sprite-studio/repo/paths.js';
 import type { SpriteAnimationRow, SpriteLoopMode } from '@mcp/store/sprite-studio/types.js';
+import { normalizeTracks } from '@mcp/store/sprite-studio/track-settings.js';
 import type { ServerDeps } from '../../deps.js';
-import { getSpriteWorkerClient } from '../../../sse/SpriteWorkerClient.js';
 import {
   clampFps, clampFrames, LOOP_MODES, pickAnchorVersion, resolveAnim, toAnimDto,
 } from './animation-helpers.js';
@@ -193,64 +192,41 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  // Replace ordering/durations (timeline edits). Versions must belong to the
-  // animation's asset — a frame can never point into another asset's history.
+  // Replace ONE track's cells (timeline edits; default = the base track).
+  // Versions must belong to the animation's asset. Track 0 keeps the dense
+  // 0..n-1 rewrite (legacy contract); overlay tracks honor EXPLICIT sparse
+  // frameIndex values (an absent index is an empty cell of the shared grid).
   app.patch('/api/sprite-studio/animations/:id/frames', async (c) => {
     const found = resolveAnim(deps, Number(c.req.param('id')));
     if (!found) return c.json({ error: 'not_found' }, 404);
     const body = (await c.req.json().catch(() => null)) as
-      | { frames?: Array<{ frameIndex?: number; versionId?: number; durationMs?: number | null }> }
+      | { track?: number; frames?: Array<{ frameIndex?: number; versionId?: number; durationMs?: number | null }> }
       | null;
     if (!body?.frames || !Array.isArray(body.frames)) return c.json({ error: 'invalid_body' }, 400);
+    const track = typeof body.track === 'number' ? Math.floor(body.track) : 0;
+    if (!normalizeTracks(found.anim.settings).some((t) => t.id === track)) {
+      return c.json({ error: 'unknown_track' }, 400);
+    }
     const ordered = [...body.frames].sort((a, b) => (a.frameIndex ?? 0) - (b.frameIndex ?? 0));
     const inputs: Array<{ frame_index: number; version_id: number; duration_ms: number | null }> = [];
+    const seen = new Set<number>();
     for (const [i, f] of ordered.entries()) {
       const version = f.versionId != null ? deps.spriteAssetsStore.getVersion(f.versionId) : null;
       if (!version || version.asset_id !== found.asset.id) return c.json({ error: 'invalid_version' }, 400);
-      const ms = typeof f.durationMs === 'number' ? Math.max(20, Math.min(10_000, Math.round(f.durationMs))) : null;
-      inputs.push({ frame_index: i, version_id: version.id, duration_ms: ms });
+      // Durations live on the master line only (shared time grid).
+      const ms = track === 0 && typeof f.durationMs === 'number'
+        ? Math.max(20, Math.min(10_000, Math.round(f.durationMs)))
+        : null;
+      const idx = track === 0
+        ? i
+        : Math.max(0, Math.min(999, Math.floor(f.frameIndex ?? i)));
+      if (seen.has(idx)) return c.json({ error: 'duplicate_frame_index' }, 400);
+      seen.add(idx);
+      inputs.push({ frame_index: idx, version_id: version.id, duration_ms: ms });
     }
-    store.replaceFrames(found.anim.id, inputs);
+    store.replaceTrackFrames(found.anim.id, track, inputs);
     return c.json(dto(store.get(found.anim.id) as SpriteAnimationRow));
   });
 
-  // Animated-GIF preview: frame PNGs → worker gif.encode. Ping-pong is baked
-  // into the sequence (GIF has no native mode); 'once' maps to repeat none.
-  app.get('/api/sprite-studio/animations/:id/gif', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
-    if (!found || !found.root) return c.json({ error: 'not_found' }, 404);
-    const { anim, asset, root } = found;
-    const frames = store.listFrames(anim.id);
-    if (frames.length === 0) return c.json({ error: 'no_frames' }, 404);
-    const defaultMs = Math.round(1000 / Math.max(1, anim.fps));
-    let pngs: string[];
-    try {
-      pngs = frames.map((f) => {
-        const version = deps.spriteAssetsStore.getVersion(f.version_id);
-        if (!version) throw new Error(`missing version ${f.version_id}`);
-        return fs.readFileSync(resolveInsideSpriteDir(root, version.file_rel_path)).toString('base64');
-      });
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 404);
-    }
-    let durations = frames.map((f) => f.duration_ms ?? defaultMs);
-    if (anim.loop_mode === 'pingpong') {
-      pngs = expandPingpong(pngs);
-      durations = expandPingpong(durations);
-    }
-    try {
-      const gifBase64 = await getSpriteWorkerClient().encodeGif(
-        pngs, durations, anim.loop_mode === 'once' ? 'once' : 'loop',
-      );
-      return c.body(new Uint8Array(Buffer.from(gifBase64, 'base64')), {
-        headers: {
-          'content-type': 'image/gif',
-          'content-disposition': `inline; filename="${asset.slug}_${anim.name}.gif"`,
-          'cache-control': 'no-store', // frames/durations change between calls
-        },
-      });
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
-    }
-  });
+  // GIF preview moved to gif.routes.ts (multi-track composite + LOC ceiling).
 }

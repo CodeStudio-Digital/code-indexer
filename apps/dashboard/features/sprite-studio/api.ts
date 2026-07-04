@@ -116,13 +116,36 @@ export const listVersions = (p: number, assetId: number): Promise<AssetVersion[]
   MOCK ? mock.mockListVersions(p, assetId)
     : req<{ versions: AssetVersion[] }>(`${root(p)}/assets/${assetId}/versions`).then((r) => r.versions);
 
-/** URL of a version's full-resolution PNG (usable directly in <img src>). */
-export const versionFileUrl = (p: number, versionId: number): string =>
-  `${apiBaseUrl()}${root(p)}/versions/${versionId}/file`;
+/** URL of a version's full-resolution PNG (usable directly in <img src>).
+ *  `bust` = contentHash (or a prefix): in-place overwrites keep the id but
+ *  change the hash, so passing it defeats the browser/img cache. */
+export const versionFileUrl = (p: number, versionId: number, bust?: string | null): string =>
+  `${apiBaseUrl()}${root(p)}/versions/${versionId}/file${bust ? `?h=${bust.slice(0, 8)}` : ''}`;
 
 /** URL of a version's thumbnail (server-side downscale, default 128px). */
-export const versionThumbUrl = (p: number, versionId: number, s = 128): string =>
-  `${apiBaseUrl()}${root(p)}/versions/${versionId}/thumb?s=${s}`;
+export const versionThumbUrl = (p: number, versionId: number, s = 128, bust?: string | null): string =>
+  `${apiBaseUrl()}${root(p)}/versions/${versionId}/thumb?s=${s}${bust ? `&h=${bust.slice(0, 8)}` : ''}`;
+
+/** Overwrite an existing version IN PLACE (focused frame edit "Salvar
+ *  Sprite") — same version number/file, new bytes; returns the updated DTO. */
+export const overwriteVersion = async (
+  p: number,
+  versionId: number,
+  blob: Blob,
+): Promise<AssetVersion> => {
+  const form = new FormData();
+  form.append('file', blob, 'edited.png');
+  const res = await fetch(`${apiBaseUrl()}${root(p)}/versions/${versionId}/file`, {
+    method: 'PUT',
+    body: form,
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { msg = (await res.json()).error ?? msg; } catch { /* keep status */ }
+    throw new Error(msg);
+  }
+  return res.json() as Promise<AssetVersion>;
+};
 
 /**
  * Save an edited PNG as a new immutable version of an asset (multipart upload).
@@ -203,20 +226,18 @@ export const pickCandidate = (
 export const streamUrl = (p: number): string =>
   `${apiBaseUrl()}${root(p)}/stream`;
 
-// ─── Export (MVP: route may not exist yet — callers catch 404) ──────────
+// ─── Export ─────────────────────────────────────────────────────────────
 export interface ExportRequest {
-  scope: 'asset' | 'category' | 'approved';
+  scope: 'asset' | 'category' | 'approved' | 'animation';
   format: string;
   assetId?: number;
   category?: SpriteCategory;
+  animationIds?: number[];
+  includeAnimations?: boolean;
   destDir?: string;
   options: Record<string, unknown>;
 }
 
-/**
- * Kick off an export. The backend export route is not guaranteed to exist in
- * the MVP — callers catch a 404 and surface an "export coming soon" toast.
- * TODO backend: export route (`POST /projects/:projectId/export`).
- */
-export const exportAssets = (p: number, body: ExportRequest): Promise<{ jobId: number }> =>
-  req<{ jobId: number }>(`${root(p)}/export`, j(body));
+/** Synchronous export — returns the absolute paths written. */
+export const exportAssets = (p: number, body: ExportRequest): Promise<{ files: string[] }> =>
+  req<{ files: string[] }>(`${root(p)}/export`, j(body));

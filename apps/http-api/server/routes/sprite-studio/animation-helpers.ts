@@ -4,6 +4,7 @@
  * 200-LOC ceiling.
  */
 import type { SpriteAnimationRow, SpriteFrameRow } from '@mcp/store/sprite-studio/types.js';
+import { normalizeTracks } from '@mcp/store/sprite-studio/track-settings.js';
 import type { ServerDeps } from '../../deps.js';
 
 /**
@@ -25,13 +26,17 @@ export const clampFps = (n: unknown, fallback: number): number =>
 export function toAnimDto(anim: SpriteAnimationRow, frames: SpriteFrameRow[]): Record<string, unknown> {
   const frameCount = typeof anim.settings.frameCount === 'number' ? anim.settings.frameCount : null;
   const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+  const baseCount = frames.filter((f) => f.track === 0).length;
   return {
     id: anim.id, assetId: anim.asset_id, name: anim.name, fps: anim.fps,
     loopMode: anim.loop_mode, status: anim.status,
-    frameCount: frames.length > 0 ? frames.length : frameCount ?? 4,
+    frameCount: baseCount > 0 ? baseCount : frameCount ?? 4,
     frames: frames.map((f) => ({
       id: f.id, frameIndex: f.frame_index, versionId: f.version_id, durationMs: f.duration_ms,
+      track: f.track,
     })),
+    // Layer metadata — Base/track 0 always present (normalizer injects it).
+    tracks: normalizeTracks(anim.settings),
     // Deep provenance: which version anchored generation + which job the
     // current frames were adopted from (both live in settings_json).
     anchorVersionId: num(anim.settings.anchorVersionId),

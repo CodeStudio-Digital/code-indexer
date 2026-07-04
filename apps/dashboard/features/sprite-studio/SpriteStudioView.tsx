@@ -62,6 +62,9 @@ export function SpriteStudioView() {
   const [engine, setEngine] = useState<EditorEngine | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // Focused edit session: "Editar frame"/pencil opens the editor locked onto
+  // ONE version — primary save OVERWRITES it in place ("Salvar Sprite").
+  const [editSession, setEditSession] = useState<{ versionId: number; origin: 'frame' | 'version' } | null>(null);
 
   // Single lifted version+generation fetch shared by all three animate rails
   // (center provenance, LEFT Frames browser, RIGHT FrameInspector).
@@ -70,7 +73,13 @@ export function SpriteStudioView() {
   // Reset the cross-rail selection/bridge whenever the focused asset changes.
   useEffect(() => {
     useAnimateSession.getState().resetForAsset();
+    setEditSession(null);
   }, [projectId, state.activeAssetId]);
+
+  // Leaving edit mode abandons the focused session (generic editor returns).
+  useEffect(() => {
+    if (state.mode !== 'edit') setEditSession(null);
+  }, [state.mode]);
   // "Iterate from this version" (inspector) → generate mode with the ref queued.
   const [pendingIterate, setPendingIterate] = useState<{ kind: 'version'; versionId: number; label: string } | null>(null);
   const onIterateVersion = (versionId: number, label: string) => {
@@ -84,11 +93,32 @@ export function SpriteStudioView() {
   // After a generation is saved or an edit committed, refresh + focus the asset.
   const onSaved = (assetId: number) => { void c.refreshAssets(); void c.selectAsset(assetId); };
 
-  // Timeline "edit frame": open that exact version in the editor. Saving there
-  // creates a COPY (a new version) — the frame keeps pointing at the old one.
+  // Timeline "edit frame": open that exact version in a FOCUSED session —
+  // the primary save overwrites it in place, so the frame updates visually.
   const onEditVersion = (_assetId: number, versionId: number) => {
     c.selectVersion(versionId);
+    setEditSession({ versionId, origin: 'frame' });
     c.setMode('edit');
+  };
+
+  // Versions-list pencil: same focused session, but returning stays in edit.
+  const onEditVersionInPlace = (versionId: number) => {
+    c.selectVersion(versionId);
+    setEditSession({ versionId, origin: 'version' });
+    c.setMode('edit');
+  };
+
+  // "Salvar Sprite": PUT the canvas over the SAME version file, refresh every
+  // consumer (thumbs bust via contentHash) and hop back where the user came from.
+  const onSaveOverwrite = async (blob: Blob) => {
+    if (projectId == null || !editSession) return;
+    await api.overwriteVersion(projectId, editSession.versionId, blob);
+    av.refresh();
+    await c.refreshAssets();
+    if (state.activeAssetId != null) void c.selectAsset(state.activeAssetId);
+    const origin = editSession.origin;
+    setEditSession(null);
+    if (origin === 'frame') c.setMode('animate');
   };
 
   const onDeleteAsset = async (assetId: number) => {
@@ -199,8 +229,10 @@ export function SpriteStudioView() {
                 activeAsset={c.activeAsset}
                 activeVersion={activeVersion}
                 versionById={av.versionById}
+                generations={av.generations}
                 refreshVersions={av.refresh}
                 onSaved={onSaved}
+                onSaveOverwrite={editSession ? onSaveOverwrite : undefined}
                 onEngineReady={setEngine}
                 iterateRef={pendingIterate}
                 onIterateConsumed={() => setPendingIterate(null)}
@@ -226,6 +258,9 @@ export function SpriteStudioView() {
                 versionById={av.versionById}
                 refreshVersions={av.refresh}
                 onEditVersion={(vid) => onEditVersion(state.activeAssetId ?? 0, vid)}
+                onEditVersionInPlace={onEditVersionInPlace}
+                editSession={editSession}
+                onExitEditSession={() => setEditSession(null)}
               />
             }
           />

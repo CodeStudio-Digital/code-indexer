@@ -41,8 +41,15 @@ export class SshStore {
   // ─── Hosts ───────────────────────────────────────────────────────────
   listHosts(projectId: number): SshHost[] {
     return this.db
-      .prepare('SELECT * FROM ssh_hosts WHERE project_id = ? ORDER BY sort_order, label')
+      .prepare('SELECT * FROM ssh_hosts WHERE project_id = ? AND is_shared = 0 ORDER BY sort_order, label')
       .all(projectId) as SshHost[];
+  }
+
+  /** Hosts shared across ALL projects (is_shared=1). Always read from the central DB. */
+  listSharedHosts(): SshHost[] {
+    return this.db
+      .prepare('SELECT * FROM ssh_hosts WHERE is_shared = 1 ORDER BY sort_order, label')
+      .all() as SshHost[];
   }
 
   getHost(id: number): SshHost | null {
@@ -55,8 +62,8 @@ export class SshStore {
         `INSERT INTO ssh_hosts
            (project_id, label, hostname, port, username, auth_method, identity_id,
             enc_password, enc_private_key, enc_passphrase, jump_host_id, group_name,
-            tags_json, agent_forwarding, keepalive_secs)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            tags_json, agent_forwarding, keepalive_secs, is_shared)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.project_id,
@@ -74,6 +81,7 @@ export class SshStore {
         JSON.stringify(input.tags ?? []),
         input.agent_forwarding ? 1 : 0,
         input.keepalive_secs ?? null,
+        input.is_shared ? 1 : 0,
       );
     return this.getHost(Number(info.lastInsertRowid))!;
   }
@@ -223,7 +231,7 @@ const WRITABLE_COLUMNS: Record<string, ReadonlySet<string>> = {
     'label', 'hostname', 'port', 'username', 'auth_method', 'identity_id',
     'enc_password', 'enc_private_key', 'enc_passphrase', 'jump_host_id', 'group_name',
     'tags_json', 'agent_forwarding', 'keepalive_secs', 'known_host_sha256', 'startup_snippet_id',
-    'last_used_at', 'sort_order',
+    'last_used_at', 'sort_order', 'is_shared',
   ]),
   ssh_identities: new Set([
     'name', 'username', 'auth_kind', 'enc_password', 'enc_private_key', 'enc_passphrase', 'public_key', 'key_type',

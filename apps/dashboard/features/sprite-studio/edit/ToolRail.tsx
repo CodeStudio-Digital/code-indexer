@@ -8,8 +8,8 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Brush, Eraser, MousePointer2, PaintBucket, Pipette, Move,
-  SquareDashedMousePointer, Wand2,
+  Brush, Circle, Eraser, MousePointer2, PaintBucket, Pipette, Move,
+  Slash, Sparkles, Square, SquareDashedMousePointer, Wand2,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { useSpriteEditorStore } from '../store/editor-store.js';
@@ -22,7 +22,11 @@ const RAIL: ReadonlyArray<{ id: ToolId; Icon: IconType; labelKey: string }> = [
   { id: 'pointer', Icon: MousePointer2, labelKey: 'tool.pointer' },
   { id: 'brush', Icon: Brush, labelKey: 'tool.brush' },
   { id: 'eraser', Icon: Eraser, labelKey: 'tool.eraser' },
+  { id: 'magic-eraser', Icon: Sparkles, labelKey: 'tool.magicEraser' },
   { id: 'fill', Icon: PaintBucket, labelKey: 'tool.fill' },
+  { id: 'line', Icon: Slash, labelKey: 'tool.line' },
+  { id: 'shape-rect', Icon: Square, labelKey: 'tool.shapeRect' },
+  { id: 'shape-ellipse', Icon: Circle, labelKey: 'tool.shapeEllipse' },
   { id: 'select-rect', Icon: SquareDashedMousePointer, labelKey: 'tool.selectRect' },
   { id: 'select-wand', Icon: Wand2, labelKey: 'tool.selectWand' },
   { id: 'eyedropper', Icon: Pipette, labelKey: 'tool.eyedropper' },

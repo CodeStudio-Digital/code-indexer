@@ -32,25 +32,46 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
   };
 
   const isBrush = activeTool === 'brush' || activeTool === 'eraser';
-  const isWand = activeTool === 'select-wand' || activeTool === 'fill';
+  const isWand = activeTool === 'select-wand' || activeTool === 'fill' || activeTool === 'magic-eraser';
+  const isShape = activeTool === 'line' || activeTool === 'shape-rect' || activeTool === 'shape-ellipse';
 
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-b bg-muted/10 px-2 text-[11px]">
+      {(isBrush || isShape) && (
+        <Range
+          label={t('options.size')} min={1} max={32} value={options.size}
+          onChange={(v) => patch({ size: v })} suffix="px"
+        />
+      )}
       {isBrush && (
         <>
           <Range
-            label={t('options.size')} min={1} max={32} value={options.size}
-            onChange={(v) => patch({ size: v })} suffix="px"
-          />
-          <Range
             label={t('options.softness')} min={0} max={100} value={options.softness}
             onChange={(v) => patch({ softness: v })} suffix="%"
+          />
+          <Range
+            label={t('options.opacity')} min={1} max={100} value={options.opacity ?? 100}
+            onChange={(v) => patch({ opacity: v })} suffix="%"
           />
           <Toggle
             label={t('options.round')} active={options.shape === 'round'}
             onClick={() => patch({ shape: options.shape === 'round' ? 'square' : 'round' })}
           />
+          <Toggle
+            label={t('options.mirrorX')} active={options.mirrorX === true}
+            onClick={() => patch({ mirrorX: options.mirrorX !== true })}
+          />
+          <Toggle
+            label={t('options.dither')} active={options.dither === true}
+            onClick={() => patch({ dither: options.dither !== true })}
+          />
         </>
+      )}
+      {isShape && activeTool !== 'line' && (
+        <Toggle
+          label={t('options.fill')} active={options.shapeFill === true}
+          onClick={() => patch({ shapeFill: options.shapeFill !== true })}
+        />
       )}
       {isWand && (
         <>
@@ -64,7 +85,7 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
           />
         </>
       )}
-      {!isBrush && !isWand && (
+      {!isBrush && !isWand && !isShape && (
         <span className="text-muted-foreground">{t('options.none')}</span>
       )}
 

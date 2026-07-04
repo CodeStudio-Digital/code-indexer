@@ -7,7 +7,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MousePointerSquareDashed } from 'lucide-react';
+import { MousePointerSquareDashed, Pencil } from 'lucide-react';
 import type { EditorEngine } from '../engine/EditorEngine.js';
 import type { AssetVersion, SpriteAsset, StudioMode, StudioSettings } from '../types.js';
 import { FrameInspector } from '../animate/FrameInspector.js';
@@ -39,6 +39,9 @@ export function InspectorPanel({
   versionById,
   refreshVersions,
   onEditVersion,
+  onEditVersionInPlace,
+  editSession,
+  onExitEditSession,
 }: {
   mode: StudioMode;
   asset: SpriteAsset | null;
@@ -60,6 +63,11 @@ export function InspectorPanel({
   versionById?: Map<number, AssetVersion>;
   refreshVersions?: () => void;
   onEditVersion?: (versionId: number) => void;
+  /** Versions-list pencil → focused in-place edit session. */
+  onEditVersionInPlace?: (versionId: number) => void;
+  /** Active focused edit session (edit mode hides the version machinery). */
+  editSession?: { versionId: number; origin: 'frame' | 'version' } | null;
+  onExitEditSession?: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   // Palette locked in the Palette card feeds the Adjustments quantize op.
@@ -116,6 +124,31 @@ export function InspectorPanel({
     );
   }
 
+  // Focused edit session: the version machinery disappears — the user is
+  // editing ONE sprite; "Salvar Sprite" overwrites it in place.
+  if (mode === 'edit' && editSession) {
+    const v = versions.find((x) => x.id === editSession.versionId);
+    return (
+      <div className="h-full space-y-2 overflow-y-auto p-2">
+        <div className="space-y-2 rounded border p-2">
+          <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <Pencil className="h-3 w-3" />
+            {t('edit.sessionTitle', { v: v ? `v${String(v.version).padStart(3, '0')}` : `#${editSession.versionId}` })}
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('edit.sessionBody')}</p>
+          <button
+            type="button"
+            onClick={onExitEditSession}
+            className="rounded border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {t('edit.sessionExit')}
+          </button>
+        </div>
+        {modeCards}
+      </div>
+    );
+  }
+
   return (
     <div className="h-full space-y-2 overflow-y-auto p-2">
       {modeCards}
@@ -127,6 +160,7 @@ export function InspectorPanel({
         onSelect={onSelectVersion}
         onDelete={onDeleteVersion}
         onIterate={onIterateVersion}
+        onEditInPlace={onEditVersionInPlace}
         projectId={projectId}
       />
     </div>

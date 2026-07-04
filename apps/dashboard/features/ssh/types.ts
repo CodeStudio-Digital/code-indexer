@@ -23,6 +23,8 @@ export interface SshHost {
   group_name: string | null;
   tags_json: string;
   agent_forwarding: number;
+  /** 1 = shared across all projects (lives in the central DB, visible everywhere). */
+  is_shared: number;
   keepalive_secs: number | null;
   known_host_sha256: string | null;
   startup_snippet_id: number | null;

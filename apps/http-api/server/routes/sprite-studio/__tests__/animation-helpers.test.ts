@@ -53,7 +53,7 @@ function animRow(settings: Record<string, unknown>): SpriteAnimationRow {
 }
 
 const frame: SpriteFrameRow = {
-  id: 7, animation_id: 5, frame_index: 0, version_id: 10, duration_ms: 125,
+  id: 7, animation_id: 5, frame_index: 0, version_id: 10, duration_ms: 125, track: 0,
 };
 
 describe('toAnimDto provenance fields', () => {

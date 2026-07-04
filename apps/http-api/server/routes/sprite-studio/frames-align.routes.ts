@@ -45,7 +45,9 @@ export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
     }
     const anchorX = body.anchorX as CanvasAnchorX;
     const anchorY = body.anchorY as CanvasAnchorY;
-    const frames = store.listFrames(anim.id);
+    // Align operates on the BASE track only (replaceFrames below is track-0
+    // scoped by contract — overlay layers keep their own registration).
+    const frames = store.listFrames(anim.id, 0);
     const wanted = Array.isArray(body.frameIndexes) ? new Set(body.frameIndexes) : null;
     const targets = frames.filter((f) => !wanted || wanted.has(f.frame_index));
     if (targets.length === 0) return c.json({ error: 'no_frames' }, 400);

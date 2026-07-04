@@ -52,6 +52,14 @@ export interface SpriteFrameInput {
   duration_ms?: number | null;
 }
 
+/** One cell of a replaceTrackFrames() payload — frame_index is EXPLICIT
+ *  (sparse grids allowed: an absent index is an empty cell). */
+export interface SpriteTrackFrameInput {
+  frame_index: number;
+  version_id: number;
+  duration_ms?: number | null;
+}
+
 export class SpriteAnimationsStore {
   constructor(private db: DB) {}
 
@@ -122,37 +130,70 @@ export class SpriteAnimationsStore {
   }
 
   // ── frames ────────────────────────────────────────────────────────────
-  listFrames(animationId: number): SpriteFrameRow[] {
+  /** All frames (every track) ordered (track, frame_index); or one track's. */
+  listFrames(animationId: number, track?: number): SpriteFrameRow[] {
+    if (track !== undefined) {
+      return this.db
+        .prepare('SELECT * FROM sprite_frames WHERE animation_id = ? AND track = ? ORDER BY frame_index')
+        .all(animationId, track) as SpriteFrameRow[];
+    }
     return this.db
-      .prepare('SELECT * FROM sprite_frames WHERE animation_id = ? ORDER BY frame_index')
+      .prepare('SELECT * FROM sprite_frames WHERE animation_id = ? ORDER BY track, frame_index')
       .all(animationId) as SpriteFrameRow[];
   }
 
   /**
-   * Replace the animation's whole frame list in one transaction (delete +
-   * reinsert). Input order wins: frame_index is rewritten to 0..n-1 so
-   * callers can pass a reordered list without pre-normalizing.
+   * Replace ONE track's cells in a transaction (delete WHERE track +
+   * reinsert). frame_index is EXPLICIT — sparse grids are the point of
+   * multi-track (an absent index = empty cell). Other tracks untouched.
    */
-  replaceFrames(animationId: number, frames: SpriteFrameInput[]): SpriteFrameRow[] {
+  replaceTrackFrames(
+    animationId: number,
+    track: number,
+    frames: SpriteTrackFrameInput[],
+  ): SpriteFrameRow[] {
     const insert = this.db.prepare(
-      `INSERT INTO sprite_frames (animation_id, frame_index, version_id, duration_ms)
-       VALUES (@animation_id, @frame_index, @version_id, @duration_ms)`,
+      `INSERT INTO sprite_frames (animation_id, frame_index, version_id, duration_ms, track)
+       VALUES (@animation_id, @frame_index, @version_id, @duration_ms, @track)`,
     );
     const txn = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM sprite_frames WHERE animation_id = ?').run(animationId);
-      frames.forEach((f, i) => {
+      this.db
+        .prepare('DELETE FROM sprite_frames WHERE animation_id = ? AND track = ?')
+        .run(animationId, track);
+      for (const f of frames) {
         insert.run({
           animation_id: animationId,
-          frame_index: i,
+          frame_index: Math.max(0, Math.floor(f.frame_index)),
           version_id: f.version_id,
           duration_ms: f.duration_ms ?? null,
+          track,
         });
-      });
+      }
       this.db
         .prepare(`UPDATE sprite_animations SET updated_at = datetime('now') WHERE id = ?`)
         .run(animationId);
     });
     txn();
     return this.listFrames(animationId);
+  }
+
+  /**
+   * Replace the BASE track's whole list (legacy contract: generate/adopt/
+   * align). Input order wins — frame_index rewritten to 0..n-1. Overlay
+   * tracks are PRESERVED (regenerating never clears them).
+   */
+  replaceFrames(animationId: number, frames: SpriteFrameInput[]): SpriteFrameRow[] {
+    return this.replaceTrackFrames(
+      animationId,
+      0,
+      frames.map((f, i) => ({ frame_index: i, version_id: f.version_id, duration_ms: f.duration_ms ?? null })),
+    );
+  }
+
+  /** Drop every cell of one track (track deletion; meta is the caller's). */
+  deleteTrackFrames(animationId: number, track: number): void {
+    this.db
+      .prepare('DELETE FROM sprite_frames WHERE animation_id = ? AND track = ?')
+      .run(animationId, track);
   }
 }

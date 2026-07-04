@@ -1,12 +1,10 @@
 /**
  * ExportDialog — the export surface (opened from the toolbar). Choose a scope
- * (active asset / category / all approved), a format from the registry, its
- * options (padding/extrude/scale/trim), and a destination folder (native
- * Electron picker, with a text-field fallback). Export POSTs to the backend;
- * since the export route may not exist yet, a 404 is caught and surfaced as an
- * "export coming soon" toast.
- *
- * TODO backend: export route (`POST /api/sprite-studio/projects/:id/export`).
+ * (active asset / category / all approved), a format from the registry
+ * (engine formats: Unity/Godot/Babylon/Defold/Cocos + Phaser + generic), its
+ * options (padding/extrude/scale/includeAnimations), and a destination folder
+ * (native Electron picker, with a text-field fallback). The backend writes
+ * synchronously and returns the file list.
  *
  * Props (mounted by SpriteStudioView / the orchestrator):
  *   open:        boolean
@@ -81,21 +79,21 @@ export function ExportDialog({
   const doExport = async () => {
     setBusy(true);
     try {
-      await api.exportAssets(projectId, {
+      const { includeAnimations, ...rest } = options;
+      const { files } = await api.exportAssets(projectId, {
         scope,
         format: formatId,
         assetId: scope === 'asset' ? activeAsset?.id : undefined,
         category: scope === 'category' ? activeAsset?.category : undefined,
+        includeAnimations: includeAnimations !== false,
         destDir: destDir || undefined,
-        options,
+        options: rest,
       });
-      toast.success(t('export.started'));
+      toast.success(t('export.done', { n: files.length }));
       onClose();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // Route not built yet → "coming soon"; any other failure → the error.
-      if (/404/.test(msg)) toast.info(t('export.comingSoon'));
-      else toast.error(t('export.failed'), { description: msg });
+      toast.error(t('export.failed'), { description: msg });
     } finally {
       setBusy(false);
     }

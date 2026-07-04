@@ -107,6 +107,8 @@ export function toVersionDto(
     prompt: row.prompt,
     parentVersionId: row.parent_version_id,
     jobId: row.job_id,
+    // Cache-bust handle: in-place overwrites keep the id but change the hash.
+    contentHash: row.content_hash,
     createdAt: row.created_at,
   };
 }

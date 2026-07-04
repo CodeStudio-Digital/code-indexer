@@ -40,6 +40,10 @@ export interface AtlasAnimation {
   frames: string[];
   fps?: number;
   loop?: boolean;
+  /** Per-frame durations in ms, parallel to `frames` (uniform fps when absent). */
+  durationsMs?: number[];
+  /** Playback mode; wins over `loop` when set (`loop` kept for compat). */
+  loopMode?: 'loop' | 'once' | 'pingpong';
 }
 
 export interface ExportMeta {

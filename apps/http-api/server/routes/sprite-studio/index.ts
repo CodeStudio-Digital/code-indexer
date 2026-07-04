@@ -11,8 +11,11 @@ import { mountSpriteVersionCurationRoutes } from './versions-curation.routes.js'
 import { mountSpriteImportSheetRoutes } from './import-sheet.routes.js';
 import { mountSpriteSheetRoutes } from './sheet.routes.js';
 import { mountSpriteAnimationRoutes } from './animations.routes.js';
+import { mountSpriteTrackRoutes } from './tracks.routes.js';
+import { mountSpriteGifRoutes } from './gif.routes.js';
 import { mountSpriteFrameAlignRoutes } from './frames-align.routes.js';
 import { mountSpriteGenerateRoutes } from './generate.routes.js';
+import { mountSpriteExportRoutes } from './export.routes.js';
 import { mountSpriteStreamRoutes } from './stream.routes.js';
 import { mountSpriteModelRoutes } from './models.routes.js';
 import { mountSpriteProjectFileRoutes } from './project-files.routes.js';
@@ -25,8 +28,11 @@ export function mountSpriteStudioRoutes(app: Hono, deps: ServerDeps): void {
   mountSpriteImportSheetRoutes(app, deps);
   mountSpriteSheetRoutes(app, deps);
   mountSpriteAnimationRoutes(app, deps);
+  mountSpriteTrackRoutes(app, deps);
+  mountSpriteGifRoutes(app, deps);
   mountSpriteFrameAlignRoutes(app, deps);
   mountSpriteGenerateRoutes(app, deps);
+  mountSpriteExportRoutes(app, deps);
   mountSpriteStreamRoutes(app, deps);
   mountSpriteModelRoutes(app, deps);
   mountSpriteProjectFileRoutes(app, deps);

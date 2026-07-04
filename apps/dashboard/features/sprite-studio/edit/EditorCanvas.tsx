@@ -11,8 +11,9 @@
  */
 import { useEffect, useRef } from 'react';
 import type { EditorEngine } from '../engine/EditorEngine.js';
-import { spriteEditorActions } from '../store/editor-store.js';
-import { getTool } from '../tools/index.js';
+import { spriteEditorActions, useSpriteEditorStore } from '../store/editor-store.js';
+import { getTool, GHOST_TOOLS, PAINT_TOOLS } from '../tools/index.js';
+import type { Tool } from '../tools/tool-types.js';
 import { clearCursorReadout, setCursorReadout } from './cursor-readout.js';
 
 const READOUT_THROTTLE_MS = 60;
@@ -43,9 +44,15 @@ export function EditorCanvas({ engine }: { engine: EditorEngine }) {
     // ── gesture state (refs only) ──────────────────────────────────────────
     let panning = false;
     let spaceHeld = false;
+    let altHeld = false;
     let lastX = 0;
     let lastY = 0;
     let lastReadout = 0;
+    // The tool a gesture was CAPTURED with. onMove/onUp dispatch to it (never
+    // re-read the store mid-drag — switching tools by keyboard used to orphan
+    // the open stroke). Alt at pointer-down on a paint tool = PS temporary
+    // eyedropper for that gesture.
+    let gestureTool: Tool | null = null;
 
     const toScreen = (e: PointerEvent | WheelEvent) => {
       const b = canvas.getBoundingClientRect();
@@ -84,7 +91,11 @@ export function EditorCanvas({ engine }: { engine: EditorEngine }) {
       }
       if (e.button !== 0) return;
       canvas.setPointerCapture(e.pointerId);
-      engine.handlePointerDown(getTool(spriteEditorActions().activeTool), toEvent(e, s));
+      const active = spriteEditorActions().activeTool;
+      // Alt on a paint tool = temporary eyedropper for THIS gesture (PS habit).
+      // Never on select tools — alt means subtract there.
+      gestureTool = e.altKey && PAINT_TOOLS.has(active) ? getTool('eyedropper') : getTool(active);
+      engine.handlePointerDown(gestureTool, toEvent(e, s));
     };
 
     const onMove = (e: PointerEvent) => {
@@ -96,14 +107,21 @@ export function EditorCanvas({ engine }: { engine: EditorEngine }) {
         return;
       }
       publishReadout(s);
-      engine.setBrushGhost(engine.viewport.screenToImage(s.x, s.y));
-      if (e.buttons & 1) engine.handlePointerMove(getTool(spriteEditorActions().activeTool), toEvent(e, s));
+      // Size ghost only for size-based tools — others get a bare crosshair.
+      engine.setBrushGhost(
+        GHOST_TOOLS.has(spriteEditorActions().activeTool)
+          ? engine.viewport.screenToImage(s.x, s.y)
+          : null,
+      );
+      if ((e.buttons & 1) && gestureTool) engine.handlePointerMove(gestureTool, toEvent(e, s));
     };
 
     const onUp = (e: PointerEvent) => {
       if (panning) { panning = false; return; }
       if (e.button !== 0) return;
-      engine.handlePointerUp(getTool(spriteEditorActions().activeTool), toEvent(e, toScreen(e)));
+      const tool = gestureTool ?? getTool(spriteEditorActions().activeTool);
+      gestureTool = null;
+      engine.handlePointerUp(tool, toEvent(e, toScreen(e)));
     };
 
     const onLeave = () => { engine.setBrushGhost(null); clearCursorReadout(); };
@@ -120,8 +138,26 @@ export function EditorCanvas({ engine }: { engine: EditorEngine }) {
       engine.invalidate();
     };
 
-    const onKeyDown = (e: KeyboardEvent) => { if (e.code === 'Space') spaceHeld = true; };
-    const onKeyUp = (e: KeyboardEvent) => { if (e.code === 'Space') spaceHeld = false; };
+    const applyAltCursor = () => {
+      canvas.style.cursor =
+        altHeld && PAINT_TOOLS.has(spriteEditorActions().activeTool) ? 'copy' : '';
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spaceHeld = true;
+      if (e.key === 'Alt') { altHeld = true; applyAltCursor(); e.preventDefault(); }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spaceHeld = false;
+      if (e.key === 'Alt') { altHeld = false; applyAltCursor(); }
+    };
+
+    // Tool switched by KEYBOARD with the cursor parked inside the canvas:
+    // the stale size-ghost must clear without waiting for a pointermove.
+    const unsubGhost = useSpriteEditorStore.subscribe((s, prevState) => {
+      if (s.activeTool !== prevState.activeTool && !GHOST_TOOLS.has(s.activeTool)) {
+        engine.setBrushGhost(null);
+      }
+    });
 
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointermove', onMove);
@@ -133,6 +169,7 @@ export function EditorCanvas({ engine }: { engine: EditorEngine }) {
 
     return () => {
       ro.disconnect();
+      unsubGhost();
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerup', onUp);

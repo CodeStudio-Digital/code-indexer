@@ -5,17 +5,19 @@
  * unified selection store + the bulk action bar. The selected frame + its index
  * are published by AnimatePanel into the session store.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Dices, Pencil } from 'lucide-react';
+import { Dices, Pencil, Scissors } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { versionFileUrl } from '../api.js';
 import type { AssetVersion } from '../types.js';
 import { useAnimateSession } from './animate-session-store.js';
 import type { GenerationGroup } from './api-anim-bulk.js';
 import { FrameRerollPopover } from './FrameRerollPopover.js';
+import { gridFor } from './version-groups.js';
 import { VersionMiniGrid } from './frames/VersionMiniGrid.js';
 import { SelectionActionBar } from './frames/SelectionActionBar.js';
+import { ResliceSheetDialog } from './frames/ResliceSheetDialog.js';
 import { useSelectionActions } from './frames/useSelectionActions.js';
 
 const CHECKERBOARD: React.CSSProperties = {
@@ -46,13 +48,17 @@ export function FrameInspector({
   const sel = selId != null ? versionById.get(selId) ?? null : null;
 
   // The batch (generation group) the selected frame belongs to.
+  const batchGroup = useMemo(
+    () => (selId != null ? generations.find((x) => x.versionIds.includes(selId)) ?? null : null),
+    [selId, generations],
+  );
   const batch = useMemo(() => {
     if (selId == null) return [] as AssetVersion[];
-    const g = generations.find((x) => x.versionIds.includes(selId));
-    if (!g) return sel ? [sel] : [];
-    return g.versionIds.map((id) => versionById.get(id)).filter((v): v is AssetVersion => v != null);
-  }, [selId, generations, versionById, sel]);
+    if (!batchGroup) return sel ? [sel] : [];
+    return batchGroup.versionIds.map((id) => versionById.get(id)).filter((v): v is AssetVersion => v != null);
+  }, [selId, batchGroup, versionById, sel]);
   const orderedIds = useMemo(() => batch.map((v) => v.id), [batch]);
+  const [resliceOpen, setResliceOpen] = useState(false);
 
   const onThumbClick = (id: number, e: React.MouseEvent) => {
     const s = useAnimateSession.getState();
@@ -75,8 +81,8 @@ export function FrameInspector({
           <div className="space-y-1 rounded border p-2">
             <div className="flex h-40 items-center justify-center overflow-hidden rounded border p-1" style={CHECKERBOARD}>
               <img
-                key={sel.id}
-                src={versionFileUrl(projectId, sel.id)}
+                key={`${sel.id}:${sel.contentHash ?? ''}`}
+                src={versionFileUrl(projectId, sel.id, sel.contentHash)}
                 alt={vLabel(sel)}
                 className="h-full w-full object-contain"
                 style={{ imageRendering: 'pixelated' }}
@@ -102,8 +108,19 @@ export function FrameInspector({
 
         {batch.length > 0 && (
           <div className="rounded border">
-            <div className="border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              {t('frames.thisBatch')}
+            <div className="flex items-center gap-1 border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              <span className="min-w-0 flex-1 truncate">{t('frames.thisBatch')}</span>
+              {batchGroup?.hasSheet && (
+                <button
+                  type="button"
+                  aria-label={t('frames.reslice')}
+                  title={t('frames.reslice')}
+                  onClick={() => setResliceOpen(true)}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-primary/15 hover:text-primary"
+                >
+                  <Scissors className="h-3 w-3" />
+                </button>
+              )}
             </div>
             <VersionMiniGrid
               projectId={projectId}
@@ -113,6 +130,21 @@ export function FrameInspector({
               onThumbClick={onThumbClick}
             />
           </div>
+        )}
+        {resliceOpen && batchGroup?.jobId != null && sel && (
+          <ResliceSheetDialog
+            open
+            onOpenChange={(v) => { if (!v) setResliceOpen(false); }}
+            projectId={projectId}
+            assetId={sel.assetId}
+            jobId={batchGroup.jobId}
+            defaultGrid={
+              batchGroup.animationId != null
+                ? { cols: Math.max(1, batchGroup.frameCount), rows: 1 }
+                : gridFor(batchGroup.frameCount)
+            }
+            refresh={refresh}
+          />
         )}
       </div>
       <SelectionActionBar onAddToTimeline={() => addToTimeline(orderedIds)} onDelete={() => void deleteVersions([...useAnimateSession.getState().selected])} busy={busy} />

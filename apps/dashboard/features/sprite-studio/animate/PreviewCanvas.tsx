@@ -6,13 +6,14 @@
  * frame red-tinted and the next green-tinted at 30% alpha under the current.
  * fps / loop-mode edits are committed by the parent (PATCH animation).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Crosshair, Layers, Pause, Play } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { versionFileUrl } from '../api.js';
-import type { AnimFrame, AnimLoopMode } from './api-anim.js';
+import type { AnimFrame, AnimLoopMode, TrackMeta } from './api-anim.js';
+import { buildTimelineModel } from './timeline-model.js';
 import { PreviewScrubber } from './PreviewScrubber.js';
 
 const CHECKER: React.CSSProperties = {
@@ -34,9 +35,11 @@ function drawTinted(ctx: CanvasRenderingContext2D, img: HTMLImageElement, tint: 
   ctx.drawImage(off, x, y, w, h);
 }
 
-export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex, loopStart, loopEnd, onPatch, onScrub, onSetLoop }: {
+export function PreviewCanvas({ projectId, frames, tracks, fps, loopMode, selectedIndex, loopStart, loopEnd, versionById, onPatch, onScrub, onSetLoop }: {
   projectId: number;
+  /** FLAT frame list (every track); columns composite bottom-up. */
   frames: AnimFrame[];
+  tracks: TrackMeta[];
   fps: number;
   loopMode: AnimLoopMode;
   /** Timeline selection; shown (and held) while paused. */
@@ -44,6 +47,8 @@ export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex,
   /** Loop in/out (frame indices); null = whole clip. Restricts playback. */
   loopStart: number | null;
   loopEnd: number | null;
+  /** Version rows — contentHash busts the preload cache after in-place edits. */
+  versionById?: Map<number, import('../types.js').AssetVersion>;
   onPatch: (patch: { fps?: number; loopMode?: AnimLoopMode }) => void;
   /** Move the timeline selection (scrubber drag). */
   onScrub: (i: number) => void;
@@ -59,22 +64,32 @@ export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex,
   const dirRef = useRef(1); // pingpong bounce direction
   const [playing, setPlaying] = useState(false);
   const [onion, setOnion] = useState(false);
+  const [onionAlpha, setOnionAlpha] = useState(35); // % — sprites often have OPAQUE bgs
   const [guides, setGuides] = useState(false);
   const [, bump] = useState(0); // re-draw trigger for image loads
 
-  // Preload every frame image once; drop entries whose version disappeared.
+  // Column-addressable grid over every track (visibleStack = composite order).
+  const model = useMemo(() => buildTimelineModel(frames, tracks, fps), [frames, tracks, fps]);
+
+  // Preload every frame image; drop entries whose version disappeared and
+  // RELOAD entries whose contentHash changed (in-place "Salvar Sprite" edits
+  // keep the versionId but swap the bytes).
+  const hashesRef = useRef(new Map<number, string | null>());
   useEffect(() => {
     const map = imagesRef.current;
+    const hashes = hashesRef.current;
     const wanted = new Set(frames.map((f) => f.versionId));
-    for (const key of map.keys()) if (!wanted.has(key)) map.delete(key);
+    for (const key of map.keys()) if (!wanted.has(key)) { map.delete(key); hashes.delete(key); }
     for (const f of frames) {
-      if (map.has(f.versionId)) continue;
+      const hash = versionById?.get(f.versionId)?.contentHash ?? null;
+      if (map.has(f.versionId) && hashes.get(f.versionId) === hash) continue;
       const img = new Image();
-      img.src = versionFileUrl(projectId, f.versionId);
+      img.src = versionFileUrl(projectId, f.versionId, hash);
       img.onload = () => bump((v) => v + 1);
       map.set(f.versionId, img);
+      hashes.set(f.versionId, hash);
     }
-  }, [frames, projectId]);
+  }, [frames, projectId, versionById]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -87,25 +102,34 @@ export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex,
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const n = frames.length;
+    const n = model.gridLen;
     if (n === 0) return;
     const idx = Math.max(0, Math.min(n - 1, playheadRef.current));
     if (headRef.current && n > 1) headRef.current.style.left = `${(idx / (n - 1)) * 100}%`;
-    const img = imagesRef.current.get(frames[idx].versionId);
-    if (!img?.complete || img.naturalWidth === 0) return;
-    let scale = Math.min(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
+    // Composite the column's visible layers bottom-up at the SAME rect.
+    const stack = model.visibleStack(idx)
+      .map((f) => imagesRef.current.get(f.versionId))
+      .filter((im): im is HTMLImageElement => !!im?.complete && im.naturalWidth > 0);
+    const ref = stack[0];
+    if (!ref) return; // whole column empty (blank hold) or images still loading
+    let scale = Math.min(canvas.width / ref.naturalWidth, canvas.height / ref.naturalHeight);
     if (scale >= 1) scale = Math.floor(scale); // integer NN upscale
-    const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
+    const w = ref.naturalWidth * scale, h = ref.naturalHeight * scale;
     const x = (canvas.width - w) / 2, y = (canvas.height - h) / 2;
+    for (const im of stack) ctx.drawImage(im, x, y, w, h);
+    // Onion ghosts go ON TOP of the current frame: generated sprites carry an
+    // OPAQUE background, so ghosts drawn underneath were 100% covered (the
+    // "onion skin does nothing" bug). Base track only; alpha user-tunable.
     if (onion && n > 1) {
-      ctx.globalAlpha = 0.3;
-      const prev = imagesRef.current.get(frames[(idx - 1 + n) % n].versionId);
-      const next = imagesRef.current.get(frames[(idx + 1) % n].versionId);
+      ctx.globalAlpha = Math.max(0.1, Math.min(0.7, onionAlpha / 100));
+      const prevF = model.cellAt(0, (idx - 1 + n) % n);
+      const nextF = model.cellAt(0, (idx + 1) % n);
+      const prev = prevF ? imagesRef.current.get(prevF.versionId) : undefined;
+      const next = nextF ? imagesRef.current.get(nextF.versionId) : undefined;
       if (prev?.complete) drawTinted(ctx, prev, '#ef4444', x, y, w, h);
       if (next?.complete) drawTinted(ctx, next, '#22c55e', x, y, w, h);
       ctx.globalAlpha = 1;
     }
-    ctx.drawImage(img, x, y, w, h);
     if (guides) {
       // Registration guides: midlines of the DRAWN frame rect at 25% alpha.
       ctx.globalAlpha = 0.25;
@@ -119,19 +143,19 @@ export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex,
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
-  }, [frames, onion, guides]);
+  }, [model, onion, onionAlpha, guides]);
 
-  // rAF clock: advance the playhead by per-frame duration (override or 1000/fps).
+  // rAF clock: advance the playhead by column duration (track-0 master line).
   useEffect(() => {
-    if (!playing || frames.length === 0) return;
+    if (!playing || model.gridLen === 0) return;
     let raf = 0, last = performance.now(), acc = 0;
     const tick = (now: number) => {
       acc += now - last; last = now;
-      const n = frames.length;
+      const n = model.gridLen;
       // Playback stays inside the loop range [lo, hi] (defaults to whole clip).
       const lo = Math.max(0, Math.min(n - 1, loopStart ?? 0));
       const hi = Math.max(lo, Math.min(n - 1, loopEnd ?? n - 1));
-      const dur = Math.max(20, frames[playheadRef.current]?.durationMs ?? 1000 / Math.max(1, fps));
+      const dur = Math.max(20, model.columnDuration(playheadRef.current));
       while (acc >= dur) {
         acc -= dur;
         if (playheadRef.current < lo || playheadRef.current > hi) playheadRef.current = lo;
@@ -151,33 +175,33 @@ export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex,
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, frames, fps, loopMode, loopStart, loopEnd, draw]);
+  }, [playing, model, fps, loopMode, loopStart, loopEnd, draw]);
 
   const handleScrub = useCallback((i: number) => {
-    playheadRef.current = Math.max(0, Math.min(frames.length - 1, i));
+    playheadRef.current = Math.max(0, Math.min(model.gridLen - 1, i));
     onScrub(i);
     draw();
-  }, [frames.length, onScrub, draw]);
+  }, [model.gridLen, onScrub, draw]);
 
   // Paused → the playhead follows (and holds) the timeline selection.
   useEffect(() => {
     if (playing) return;
-    playheadRef.current = Math.max(0, Math.min(frames.length - 1, selectedIndex));
+    playheadRef.current = Math.max(0, Math.min(model.gridLen - 1, selectedIndex));
     draw();
-  }, [playing, selectedIndex, frames, draw, onion]);
+  }, [playing, selectedIndex, model, draw, onion]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div ref={boxRef} className="relative min-h-0 flex-1 overflow-hidden rounded border" style={CHECKER}>
         <canvas ref={canvasRef} className="absolute inset-0" />
-        {frames.length === 0 && (
+        {model.gridLen === 0 && (
           <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-xs text-muted-foreground">
             {t('animate.noFrames')}
           </div>
         )}
       </div>
       <PreviewScrubber
-        n={frames.length}
+        n={model.gridLen}
         loopStart={loopStart}
         loopEnd={loopEnd}
         currentIndex={selectedIndex}
@@ -186,7 +210,7 @@ export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex,
         onSetLoop={onSetLoop}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" className="h-7 w-7 p-0" disabled={frames.length === 0}
+        <Button size="sm" variant="outline" className="h-7 w-7 p-0" disabled={model.gridLen === 0}
           title={playing ? t('animate.preview.pause') : t('animate.preview.play')}
           onClick={() => setPlaying((p) => !p)}>
           {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
@@ -202,16 +226,27 @@ export function PreviewCanvas({ projectId, frames, fps, loopMode, selectedIndex,
             onChange={(e) => onPatch({ fps: Math.max(1, Math.min(60, Number(e.target.value) || 1)) })} />
         </label>
         <Button size="sm" variant={onion ? 'secondary' : 'outline'} className="h-7 gap-1 px-2 text-[11px]"
-          title={t('animate.preview.onion')} aria-pressed={onion} onClick={() => setOnion((v) => !v)}>
+          title={t('animate.preview.onionHint')} aria-pressed={onion} onClick={() => setOnion((v) => !v)}>
           <Layers className="h-3 w-3" /> {t('animate.preview.onion')}
         </Button>
+        {onion && (
+          <label className="flex items-center gap-1 text-[10px] text-muted-foreground" title={t('animate.preview.onionAlpha')}>
+            <input
+              type="range" min={10} max={70} step={5} value={onionAlpha}
+              onChange={(e) => setOnionAlpha(Number(e.target.value))}
+              className="h-1 w-16 accent-primary"
+              aria-label={t('animate.preview.onionAlpha')}
+            />
+            <span className="tabular-nums">{onionAlpha}%</span>
+          </label>
+        )}
         <Button size="sm" variant={guides ? 'secondary' : 'outline'} className="h-7 gap-1 px-2 text-[11px]"
           title={t('animate.guides')} aria-pressed={guides} onClick={() => setGuides((v) => !v)}>
           <Crosshair className="h-3 w-3" /> {t('animate.guides')}
         </Button>
         <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
-          {frames.length > 0 &&
-            t('animate.preview.frameOf', { i: Math.min(selectedIndex + 1, frames.length), n: frames.length })}
+          {model.gridLen > 0 &&
+            t('animate.preview.frameOf', { i: Math.min(selectedIndex + 1, model.gridLen), n: model.gridLen })}
         </span>
       </div>
     </div>

@@ -4,9 +4,11 @@
  * the app). Tool letters mirror the industry standard; undo/redo drive the
  * engine directly; [ and ] step the brush size (store + engine in sync).
  *
- *   V pointer (pan) · B brush · E eraser · G fill · M move · R select-rect
- *   W wand · I eyedropper
+ *   V pointer (pan) · B brush · E eraser · K magic eraser · G fill · L line
+ *   U shapes (toggles rect↔ellipse) · M move · R select-rect · W wand
+ *   I eyedropper
  *   Ctrl/Cmd+Z undo · Ctrl/Cmd+Shift+Z or Ctrl+Y redo · [ / ] brush size
+ *   Shift+[ / Shift+] softness ±10
  *   Ctrl/Cmd+0 fit to view · Ctrl/Cmd+1 zoom 100% (mirror the toolbar buttons)
  *   Ctrl/Cmd+A select all · Esc / Ctrl/Cmd+D deselect · Delete/Backspace clear
  *   the selected pixels (undoable) · X swap fg/bg colors
@@ -18,8 +20,13 @@ import { spriteEditorActions } from '../store/editor-store.js';
 import type { ToolId } from '../tools/tool-types.js';
 
 const TOOL_KEYS: Record<string, ToolId> = {
-  v: 'pointer', b: 'brush', e: 'eraser', g: 'fill', m: 'move', r: 'select-rect', w: 'select-wand', i: 'eyedropper',
+  v: 'pointer', b: 'brush', e: 'eraser', k: 'magic-eraser', g: 'fill', l: 'line',
+  m: 'move', r: 'select-rect', w: 'select-wand', i: 'eyedropper',
 };
+
+/** Bracket family — with Shift some layouts report `{`/`}` as e.key, so match
+ *  the characters (NEVER e.code: physical positions diverge on ABNT2). */
+const BRACKETS: Record<string, -1 | 1> = { '[': -1, ']': 1, '{': -1, '}': 1 };
 
 /** True when focus is in a text field — shortcuts must yield to typing. */
 function isTypingTarget(el: EventTarget | null): boolean {
@@ -106,17 +113,30 @@ export function useEditorShortcuts(
         deleteSelection(engine);
         return;
       }
-      if (e.key === '[' || e.key === ']') {
+      const bracket = BRACKETS[e.key];
+      if (bracket !== undefined) {
         e.preventDefault();
-        const delta = e.key === ']' ? 1 : -1;
-        const size = Math.max(1, Math.min(32, store.toolOptions.size + delta));
-        store.setToolOptions({ size });
-        engine.setToolOptions({ size });
+        // Shift (or a shifted brace char) steers SOFTNESS; plain = size.
+        if (e.shiftKey || e.key === '{' || e.key === '}') {
+          const softness = Math.max(0, Math.min(100, store.toolOptions.softness + bracket * 10));
+          store.setToolOptions({ softness });
+          engine.setToolOptions({ softness });
+        } else {
+          const size = Math.max(1, Math.min(32, store.toolOptions.size + bracket));
+          store.setToolOptions({ size });
+          engine.setToolOptions({ size });
+        }
         return;
       }
       if (e.key.toLowerCase() === 'x') {
         e.preventDefault();
         store.swapColors(); // the EditModeView bridge pushes the swap to the engine
+        return;
+      }
+      // U = shapes, PS-style: first press picks rect, repeat toggles ellipse.
+      if (e.key.toLowerCase() === 'u') {
+        e.preventDefault();
+        store.setActiveTool(store.activeTool === 'shape-rect' ? 'shape-ellipse' : 'shape-rect');
         return;
       }
 

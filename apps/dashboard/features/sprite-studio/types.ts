@@ -140,6 +140,9 @@ export interface AssetVersion {
   prompt: string | null;
   parentVersionId: number | null;
   jobId: number | null;
+  /** SHA256 of the file — in-place overwrites keep the id, change the hash
+   *  (thumb/file URL cache-bust handle). */
+  contentHash?: string | null;
   createdAt: string;
 }
 

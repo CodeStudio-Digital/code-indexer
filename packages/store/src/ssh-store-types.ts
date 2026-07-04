@@ -40,6 +40,8 @@ export interface SshHost {
   /** JSON array of tag strings. */
   tags_json: string;
   agent_forwarding: number;
+  /** 1 = shared across all projects (stored in the central DB, visible everywhere). */
+  is_shared: number;
   keepalive_secs: number | null;
   known_host_sha256: string | null;
   startup_snippet_id: number | null;
@@ -114,6 +116,7 @@ export interface CreateSshHostInput {
   group_name?: string | null;
   tags?: string[];
   agent_forwarding?: boolean;
+  is_shared?: boolean;
   keepalive_secs?: number | null;
 }
 export type SshHostPatch = Partial<Omit<CreateSshHostInput, 'project_id'>>;

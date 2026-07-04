@@ -12,8 +12,17 @@ export interface AnimFrame {
   id: number;
   frameIndex: number;
   versionId: number;
-  /** Per-frame override; null = 1000/fps of the animation. */
+  /** Per-frame override; null = 1000/fps. Only track 0 carries durations. */
   durationMs: number | null;
+  /** Animation layer (0 = Base); cells compose bottom-up by ascending track. */
+  track: number;
+}
+
+/** Animation-layer metadata (track 0 "Base" always present). */
+export interface TrackMeta {
+  id: number;
+  name: string;
+  visible: boolean;
 }
 
 export interface SpriteAnimation {
@@ -26,6 +35,8 @@ export interface SpriteAnimation {
   /** Target frame count for generation (frames.length once frames exist). */
   frameCount: number;
   frames: AnimFrame[];
+  /** Animation layers, id-ascending (bottom-up compositing order). */
+  tracks: TrackMeta[];
   /** Version that anchored the last generation; null = asset's current. */
   anchorVersionId: number | null;
   /** Job whose candidates were last adopted as frames; null = never. */
@@ -121,12 +132,32 @@ export const alignFrames = (
 ): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/frames/align`, j(anchor));
 
-/** Replace frame ordering/durations (auto-committed by the timeline, debounced). */
+/** Replace ONE track's cells (auto-committed by the timeline, debounced).
+ *  Track 0 = dense reorder (indices rewritten); overlays = sparse explicit. */
 export const saveFrames = (
   animId: number,
   frames: Array<{ frameIndex: number; versionId: number; durationMs?: number | null }>,
+  track = 0,
 ): Promise<SpriteAnimation> =>
-  req<SpriteAnimation>(`${animBase(animId)}/frames`, { method: 'PATCH', body: JSON.stringify({ frames }) });
+  req<SpriteAnimation>(`${animBase(animId)}/frames`, {
+    method: 'PATCH', body: JSON.stringify({ frames, track }),
+  });
+
+// ── Animation layers (tracks) ────────────────────────────────────────────
+export const addTrack = (animId: number, name?: string): Promise<SpriteAnimation> =>
+  req<SpriteAnimation>(`${animBase(animId)}/tracks`, j({ name }));
+
+export const patchTrack = (
+  animId: number,
+  trackId: number,
+  patch: { name?: string; visible?: boolean },
+): Promise<SpriteAnimation> =>
+  req<SpriteAnimation>(`${animBase(animId)}/tracks/${trackId}`, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  });
+
+export const deleteTrack = (animId: number, trackId: number): Promise<SpriteAnimation> =>
+  req<SpriteAnimation>(`${animBase(animId)}/tracks/${trackId}`, { method: 'DELETE' });
 
 /** GIF preview/export URL (served with content-disposition inline). */
 export const gifUrl = (animId: number): string => `${apiBaseUrl()}${animBase(animId)}/gif`;

@@ -12,6 +12,7 @@ import { GeneratePanel, type IterateRef } from './generate/GeneratePanel.js';
 import { EditModeView } from './edit/EditModeView.js';
 import { saveEditedVersion } from './api.js';
 import { startInpaintJob } from './api-enhance.js';
+import type { GenerationGroup } from './animate/api-anim-bulk.js';
 import type { AssetVersion, SpriteAsset, StudioMode, StudioSettings } from './types.js';
 
 // Phase-2 surface (timeline/frames) — lazy so the animation stack never
@@ -27,8 +28,10 @@ export function CenterSurface({
   activeAsset,
   activeVersion,
   versionById,
+  generations,
   refreshVersions,
   onSaved,
+  onSaveOverwrite,
   onEngineReady,
   iterateRef,
   onIterateConsumed,
@@ -41,9 +44,13 @@ export function CenterSurface({
   activeVersion: AssetVersion | null;
   /** Shared version lookup + refresh (lifted useAssetVersions) for animate. */
   versionById: Map<number, AssetVersion>;
+  /** Generation batches of the active asset (re-slice affordance). */
+  generations: GenerationGroup[];
   refreshVersions: () => void;
   /** (assetId, versionId) after a generation is saved OR an edit is committed. */
   onSaved: (assetId: number, versionId: number) => void;
+  /** Focused edit session active → EditModeView primary save = overwrite. */
+  onSaveOverwrite?: (blob: Blob) => void | Promise<void>;
   onEngineReady: (engine: EditorEngine | null) => void;
   /** "Iterate from this" request (version list) routed into the generate panel. */
   iterateRef?: IterateRef | null;
@@ -78,6 +85,7 @@ export function CenterSurface({
         asset={activeAsset}
         activeVersion={activeVersion}
         onEngineReady={onEngineReady}
+        onSaveOverwrite={onSaveOverwrite}
         onSaveEdited={async (blob) => {
           const version = await saveEditedVersion(projectId, activeAsset.id, blob);
           if (version) onSaved(activeAsset.id, version.id);
@@ -104,6 +112,7 @@ export function CenterSurface({
           asset={activeAsset}
           settings={settings}
           versionById={versionById}
+          generations={generations}
           refreshVersions={refreshVersions}
           onSaved={onSaved}
           onEditVersion={onEditVersion ? (vid) => onEditVersion(activeAsset.id, vid) : undefined}

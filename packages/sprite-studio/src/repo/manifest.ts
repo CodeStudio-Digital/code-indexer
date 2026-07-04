@@ -135,6 +135,29 @@ export function appendVersion(
 }
 
 /**
+ * Overwrite one version entry IN PLACE (the focused frame-edit "Salvar
+ * Sprite" flow — the file bytes changed but the version number/file stay).
+ * Only hash/createdAt move; returns the updated manifest or null when the
+ * asset or version entry is unknown.
+ */
+export function updateVersionEntry(
+  projectRoot: string,
+  slug: string,
+  v: number,
+  patch: { hash?: string; createdAt?: string },
+): SpriteAssetManifest | null {
+  const manifest = readAssetManifest(projectRoot, slug);
+  if (!manifest) return null;
+  const idx = manifest.versions.findIndex((entry) => entry.v === v);
+  if (idx < 0) return null;
+  const versions = [...manifest.versions];
+  versions[idx] = { ...versions[idx], ...patch };
+  const updated: SpriteAssetManifest = { ...manifest, versions };
+  writeAssetManifest(projectRoot, slug, updated);
+  return updated;
+}
+
+/**
  * Remove one version entry from an asset manifest (curation delete — the
  * only sanctioned mutation of version history). `currentVersion` falls back
  * to the highest remaining version. Returns the updated manifest, or null

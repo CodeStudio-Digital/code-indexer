@@ -112,6 +112,8 @@ interface VaultHostRecord {
   group_name: string | null;
   tags: string[];
   agent_forwarding: boolean;
+  /** Shared across all projects — syncs so it stays shared on every device. */
+  is_shared: boolean;
   /** Portable references (personal feed only): the referenced identity / jump host as clientDocIds. */
   identity_ref?: string | null;
   jump_host_ref?: string | null;
@@ -218,6 +220,7 @@ async function hostToRecord(
       }
     })(),
     agent_forwarding: !!h.agent_forwarding,
+    is_shared: !!h.is_shared,
     // Personal feed carries portable refs; the team feed (no refs) omits them.
     ...(refs ? hostRefs(h, refs.identityMap, refs.hostMap) : {}),
   };
@@ -239,6 +242,7 @@ async function recordToHostBody(r: VaultHostRecord, ids?: { identity_id: number 
     group_name: r.group_name,
     tags: r.tags,
     agent_forwarding: r.agent_forwarding,
+    is_shared: r.is_shared,
     enc_password: r.password ? await api.encryptSecret(r.password) : null,
     enc_private_key: r.privateKey ? await api.encryptSecret(r.privateKey) : null,
     enc_passphrase: r.passphrase ? await api.encryptSecret(r.passphrase) : null,

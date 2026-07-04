@@ -56,6 +56,7 @@ export function EditModeView({
   asset,
   activeVersion,
   onSaveEdited,
+  onSaveOverwrite,
   onInpaint,
   onEngineReady,
 }: {
@@ -63,6 +64,9 @@ export function EditModeView({
   asset: SpriteAsset;
   activeVersion: AssetVersion | null;
   onSaveEdited: (blob: Blob) => void | Promise<void>;
+  /** Focused edit session: PRIMARY save overwrites the version in place
+   *  ("Salvar Sprite"); the new-version flow becomes the secondary button. */
+  onSaveOverwrite?: (blob: Blob) => void | Promise<void>;
   onInpaint?: (maskBlob: Blob, prompt: string) => void | Promise<void>;
   onEngineReady?: (engine: EditorEngine | null) => void;
 }) {
@@ -158,12 +162,13 @@ export function EditModeView({
 
   useEditorShortcuts(containerRef, engine);
 
-  const save = async () => {
+  const save = async (mode: 'new' | 'overwrite') => {
     if (!engine || saving) return;
     setSaving(true);
     try {
       const blob = await engine.exportPngBlob();
-      await onSaveEdited(blob);
+      if (mode === 'overwrite' && onSaveOverwrite) await onSaveOverwrite(blob);
+      else await onSaveEdited(blob);
     } finally {
       setSaving(false);
     }
@@ -228,13 +233,31 @@ export function EditModeView({
             <AlertTriangle className="h-3.5 w-3.5" /> {t('edit.loadFailed')}
           </span>
         )}
-        <Button
-          size="sm" variant="outline" className="ml-auto h-6 gap-1"
-          disabled={saving} onClick={() => void save()} title={t('edit.save')}
-        >
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-          {t('edit.save')}
-        </Button>
+        {onSaveOverwrite ? (
+          <>
+            <Button
+              size="sm" className="ml-auto h-6 gap-1"
+              disabled={saving} onClick={() => void save('overwrite')} title={t('edit.saveSpriteHint')}
+            >
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {t('edit.saveSprite')}
+            </Button>
+            <Button
+              size="sm" variant="ghost" className="h-6 gap-1 text-[10px] text-muted-foreground"
+              disabled={saving} onClick={() => void save('new')} title={t('edit.saveAsNewHint')}
+            >
+              {t('edit.saveAsNew')}
+            </Button>
+          </>
+        ) : (
+          <Button
+            size="sm" variant="outline" className="ml-auto h-6 gap-1"
+            disabled={saving} onClick={() => void save('new')} title={t('edit.save')}
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            {t('edit.save')}
+          </Button>
+        )}
       </div>
       <ToolOptionsBar engine={engine} />
       <div className="flex min-h-0 flex-1">

@@ -12,11 +12,30 @@ export type ToolId =
   | 'pointer'
   | 'brush'
   | 'eraser'
+  | 'magic-eraser'
   | 'fill'
+  | 'line'
+  | 'shape-rect'
+  | 'shape-ellipse'
   | 'select-rect'
   | 'select-wand'
   | 'eyedropper'
   | 'move';
+
+/** Live shape drag preview, drawn by an overlay (no pixels touched). */
+export interface ShapePreview {
+  kind: 'line' | 'rect' | 'ellipse';
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** Stroke thickness (brush size). */
+  size: number;
+  /** Filled shape (rect/ellipse only). */
+  fill: boolean;
+  /** Foreground color at preview time (hex). */
+  color: string;
+}
 
 export interface ToolPointerEvent {
   /** Image-space coordinates (fractional — tools floor as needed). */
@@ -33,7 +52,7 @@ export interface ToolPointerEvent {
 export interface ToolOptions {
   /** Brush stamp size in pixels (1–32). */
   size: number;
-  /** 0 = hard pixels; >0 = radial-falloff alpha blend. */
+  /** 0 = hard pixels; >0 = PS-style hardness falloff (soft edge). */
   softness: number;
   /** Flood/wand tolerance (0–255). */
   tolerance: number;
@@ -41,6 +60,14 @@ export interface ToolOptions {
   contiguous: boolean;
   /** Brush stamp shape. Default 'square' (pixel-art first). */
   shape?: 'square' | 'round';
+  /** Stroke opacity 1–100 (PS Opacity: per-stroke cap; passes build up). */
+  opacity?: number;
+  /** Filled shapes (rect/ellipse) instead of outlines. */
+  shapeFill?: boolean;
+  /** Mirror strokes across the vertical center axis. */
+  mirrorX?: boolean;
+  /** Checkerboard 50% dither on the hard brush path. */
+  dither?: boolean;
 }
 
 export interface ToolContext {
@@ -54,6 +81,8 @@ export interface ToolContext {
   invalidate(): void;
   /** Report a sampled color (eyedropper) — the engine routes it to fg. */
   pickColor(hex: string): void;
+  /** Publish/clear the live shape-drag preview (optional — tests omit it). */
+  setShapePreview?(preview: ShapePreview | null): void;
 }
 
 export interface Tool {

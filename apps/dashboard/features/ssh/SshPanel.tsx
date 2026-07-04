@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, X, AlertCircle, Server, Pencil, Trash2, Loader2, ChevronRight, TerminalSquare, ArrowRightLeft, Play, FolderOpen, ShieldCheck, RotateCw, Repeat, Search, Import } from 'lucide-react';
+import { Plus, X, AlertCircle, Server, Pencil, Trash2, Loader2, ChevronRight, TerminalSquare, ArrowRightLeft, Play, FolderOpen, ShieldCheck, RotateCw, Repeat, Search, Import, Share2 } from 'lucide-react';
 import type { SshConnectSpec, SshHostKeyInfo } from '@mcp/api-bus';
 import { ExponentialBackoff, sleep } from '@mcp/shared/sse/BackoffStrategy.js';
 import { apiCall, electronApi } from '../../lib/api-client.js';
@@ -55,6 +55,7 @@ interface SshPanelProps {
 
 const EMPTY_SHELLS: readonly SshShell[] = Object.freeze([]);
 const UNGROUPED = ' ungrouped';
+const SHARED = ' shared';
 
 interface TrustRequest {
   info: SshHostKeyInfo;
@@ -190,7 +191,8 @@ export function SshPanel({ projectId }: SshPanelProps) {
 
   const removeHost = useCallback(
     async (h: SshHost) => {
-      if (!window.confirm(t('panel.deleteConfirm', { label: h.label }))) return;
+      const msg = h.is_shared ? t('panel.deleteSharedConfirm', { label: h.label }) : t('panel.deleteConfirm', { label: h.label });
+      if (!window.confirm(msg)) return;
       await deleteHost(projectId, h.id).catch(() => {});
       reload();
     },
@@ -300,15 +302,20 @@ export function SshPanel({ projectId }: SshPanelProps) {
       )
     : hosts;
 
-  // Group hosts by group_name (null → ungrouped, sorted last).
+  // Shared hosts (visible in every project) get a pinned group at the top; the
+  // rest group by group_name (null → ungrouped, sorted last).
+  const sharedHosts = filteredHosts.filter((h) => h.is_shared);
+  const localHosts = filteredHosts.filter((h) => !h.is_shared);
   const groups = new Map<string, SshHost[]>();
-  for (const h of filteredHosts) {
+  for (const h of localHosts) {
     const key = h.group_name?.trim() || UNGROUPED;
     (groups.get(key) ?? groups.set(key, []).get(key)!).push(h);
   }
-  const groupKeys = [...groups.keys()].sort((a, b) =>
-    a === UNGROUPED ? 1 : b === UNGROUPED ? -1 : a.localeCompare(b),
-  );
+  if (sharedHosts.length > 0) groups.set(SHARED, sharedHosts);
+  const localKeys = [...groups.keys()]
+    .filter((k) => k !== SHARED)
+    .sort((a, b) => (a === UNGROUPED ? 1 : b === UNGROUPED ? -1 : a.localeCompare(b)));
+  const groupKeys = sharedHosts.length > 0 ? [SHARED, ...localKeys] : localKeys;
 
   return (
     <div className="h-full flex min-h-0">
@@ -367,8 +374,8 @@ export function SshPanel({ projectId }: SshPanelProps) {
             <div key={gk} className="mb-1">
               {(groupKeys.length > 1 || gk !== UNGROUPED) && (
                 <div className="flex items-center gap-1 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">
-                  <ChevronRight className="h-3 w-3" />
-                  {gk === UNGROUPED ? t('panel.ungrouped') : gk}
+                  {gk === SHARED ? <Share2 className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  {gk === SHARED ? t('panel.shared') : gk === UNGROUPED ? t('panel.ungrouped') : gk}
                 </div>
               )}
               {groups.get(gk)!.map((h) => (

@@ -44,7 +44,7 @@ export function VersionMiniThumb({
       )}
     >
       <img
-        src={versionThumbUrl(projectId, version.id, 96)}
+        src={versionThumbUrl(projectId, version.id, 96, version.contentHash)}
         alt={vLabel(version)}
         className="h-full w-full object-contain"
         style={{ imageRendering: 'pixelated' }}

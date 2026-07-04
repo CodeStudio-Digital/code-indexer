@@ -23,6 +23,10 @@ export const DEFAULT_TOOL_OPTIONS: ToolOptions = {
   tolerance: 0,
   contiguous: true,
   shape: 'square',
+  opacity: 100,
+  shapeFill: false,
+  mirrorX: false,
+  dither: false,
 };
 
 /** MRU cap for the recent-colors row in the options bar. */
