@@ -11,6 +11,7 @@ import type { Hono } from 'hono';
 import { decodeImage } from '@mcp/sprite-studio/processing/decode-image.js';
 import { encodePng } from '@mcp/sprite-studio/processing/png.js';
 import { sliceGrid } from '@mcp/sprite-studio/processing/slice.js';
+import { getSpriteWorkerClient } from '../../../sse/SpriteWorkerClient.js';
 import type { ServerDeps } from '../../deps.js';
 import { toVersionDto } from './mappers.js';
 import { writeEditedVersion } from './version-write.js';
@@ -42,21 +43,39 @@ export function mountSpriteImportSheetRoutes(app: Hono, deps: ServerDeps): void 
     if (cols * rows > MAX_CELLS) return c.json({ error: 'too_many_cells' }, 400);
 
     // Decode (PNG/JPEG sniffed) → row-major cells (left→right, top→bottom).
-    let cells: ReturnType<typeof sliceGrid>;
+    // Off-thread by default: decode + slice + per-cell encode of a large sheet
+    // blocks the Electron main process. Worker unavailable → same compute
+    // in-process (old behavior, proper error messages preserved).
+    let pngs: Buffer[];
+    let cellWidth: number;
+    let cellHeight: number;
     try {
-      cells = sliceGrid(decodeImage(sheet), cols, rows);
+      try {
+        const out = await getSpriteWorkerClient()
+          .sliceGridAdvanced(sheet.toString('base64'), { cols, rows });
+        pngs = out.cells.map((b) => Buffer.from(b, 'base64'));
+        cellWidth = out.cellWidth;
+        cellHeight = out.cellHeight;
+      } catch {
+        const cells = sliceGrid(decodeImage(sheet), cols, rows);
+        pngs = cells.map((cell) => encodePng(cell));
+        cellWidth = cells[0]?.width ?? 0;
+        cellHeight = cells[0]?.height ?? 0;
+      }
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
     }
     try {
-      const versions = cells.map((cell) =>
-        writeEditedVersion(deps, root, asset, encodePng(cell), { setCurrent: false, source: 'imported' }),
+      const versions = pngs.map((png) =>
+        writeEditedVersion(deps, root, asset, png, {
+          setCurrent: false, source: 'imported', dims: { width: cellWidth, height: cellHeight },
+        }),
       );
       return c.json({
         versions: versions.map((v) => toVersionDto(ideProjectId, v)),
         versionIds: versions.map((v) => v.id),
-        cellWidth: cells[0]?.width ?? 0,
-        cellHeight: cells[0]?.height ?? 0,
+        cellWidth,
+        cellHeight,
       });
     } catch (e) {
       const msg = (e as Error).message;

@@ -11,7 +11,9 @@
     "loadFailed": "Não foi possível listar esta pasta",
     "dragSoon": "Arrastar imagens para os slots de referência chega em breve.",
     "bottomPlaceholder": "Console do estúdio — logs de geração e jobs vão aparecer aqui.",
-    "inspector": "Inspetor"
+    "inspector": "Inspetor",
+    "leftRail": "Painéis do estúdio",
+    "rightRail": "Inspetor"
   },
   "header": {
     "noProjects": "Nenhum projeto ainda",
@@ -172,6 +174,9 @@
   },
   "edit": {
     "save": "Salvar versão",
+    "overwrite": "Sobrescrever versão",
+    "overwriteConfirmTitle": "Sobrescrever esta versão?",
+    "overwriteConfirmBody": "Isto regrava a imagem da versão no lugar — todo frame da timeline que a usa é atualizado, e não dá pra desfazer. Use Salvar como nova versão para manter o original.",
     "saveSprite": "Salvar Sprite",
     "saveSpriteHint": "Sobrescreve esta versão no lugar — todo frame que a usa atualiza",
     "saveAsNew": "Salvar como nova versão",
@@ -187,6 +192,13 @@
     "flattenFirst": "Achate para uma única camada antes de redimensionar",
     "fit": "Ajustar à tela",
     "zoom100": "Zoom 100%"
+  },
+  "editor": {
+    "closeTab": "Fechar aba",
+    "unsaved": "Alterações não salvas",
+    "closeTabConfirmTitle": "Fechar sem salvar?",
+    "closeTabConfirmBody": "Este sprite tem edições não salvas. Fechar a aba descarta elas.",
+    "closeTabConfirm": "Fechar e descartar"
   },
   "layers": {
     "add": "Adicionar camada",
@@ -472,7 +484,7 @@
     "reroll": "Regerar",
     "rerollPrompt": "mesmo personagem, um único frame de sprite pixel-art limpo",
     "rerollMore": "Gerando mais…",
-    "inspector": { "noFrame": "Selecione um frame na timeline para inspecioná-lo." },
+    "inspector": { "noFrame": "Selecione um frame na timeline para inspecioná-lo.", "frameTitle": "Frame", "tracksTitle": "Camadas", "trackCount": "{{n}}f", "activateTrack": "Tornar camada ativa" },
     "loop": { "setIn": "Definir início do loop aqui", "setOut": "Definir fim do loop aqui", "clear": "Limpar faixa de loop" },
     "preview": {
       "play": "Reproduzir",
@@ -551,6 +563,7 @@
     },
     "selectGroup": "Selecionar lote",
     "deleteGroup": "Excluir lote",
+    "renameGroup": "Renomear grupo",
     "selectedCount": "{{n}} selecionadas",
     "addSelected": "Adicionar à timeline",
     "deleteSelected": "Excluir",
@@ -575,6 +588,9 @@
     "resliceApply": "Aplicar",
     "reslicing": "Fatiando…",
     "reslicedDone": "Re-fatiado em {{n}} frame(s)",
+    "resliceManualHint": "Arraste um frame para deslocar só o corte dele — pode pegar pixels do vizinho. Duplo-clique para zerar.",
+    "resliceCellHint": "Arraste para deslocar este frame · duplo-clique para zerar",
+    "resliceReset": "Zerar ajustes",
     "offsetX": "Desloc. X",
     "offsetY": "Desloc. Y",
     "marginX": "Margem X",

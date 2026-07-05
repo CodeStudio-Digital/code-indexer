@@ -34,12 +34,13 @@ export function readVersionDragData(dt: DataTransfer): SpriteVersionDragPayload 
     const raw = dt.getData(SPRITE_VERSION_MIME);
     if (!raw) return null;
     const o = JSON.parse(raw) as Partial<SpriteVersionDragPayload>;
-    if (typeof o.versionId !== 'number' || typeof o.assetId !== 'number') return null;
+    if (!Number.isInteger(o.versionId) || !Number.isInteger(o.assetId)) return null;
+    if (!Number.isInteger(o.version) || typeof o.label !== 'string') return null;
     return {
       versionId: o.versionId,
       assetId: o.assetId,
-      version: typeof o.version === 'number' ? o.version : 0,
-      label: typeof o.label === 'string' ? o.label : `#${o.versionId}`,
+      version: o.version,
+      label: o.label,
     };
   } catch {
     return null;

@@ -49,6 +49,8 @@ interface SpriteEditorState {
   docW: number;
   docH: number;
   layerCount: number;
+  /** Unsaved edits since the last load/save (tab dot + close confirm). */
+  dirty: boolean;
 
   animation?: AnimationSlice;
 
@@ -77,6 +79,7 @@ export const useSpriteEditorStore = create<SpriteEditorState>((set) => ({
   docW: 0,
   docH: 0,
   layerCount: 0,
+  dirty: false,
 
   setActiveTool: (tool) => set((s) => (s.activeTool === tool ? s : { activeTool: tool })),
 
@@ -103,7 +106,8 @@ export const useSpriteEditorStore = create<SpriteEditorState>((set) => ({
         s.memBytes === sum.memBytes &&
         s.docW === sum.docW &&
         s.docH === sum.docH &&
-        s.layerCount === sum.layerCount
+        s.layerCount === sum.layerCount &&
+        s.dirty === sum.dirty
       ) {
         return s;
       }
@@ -116,6 +120,7 @@ export const useSpriteEditorStore = create<SpriteEditorState>((set) => ({
         docW: sum.docW,
         docH: sum.docH,
         layerCount: sum.layerCount,
+        dirty: sum.dirty,
       };
     }),
 }));

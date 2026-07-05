@@ -106,20 +106,35 @@ export function createPixelGrid(): Overlay {
     id: 'pixel-grid',
     order: 10,
     draw(ctx, view) {
-      const { viewport, docW, docH } = view;
-      if (viewport.zoom < 8) return;
+      const { viewport, docW, docH, canvasW, canvasH } = view;
+      const z = viewport.zoom;
+      if (z < 8) return;
+      const { panX, panY } = viewport;
+      // Only the grid lines inside the doc∩canvas intersection — at high zoom
+      // the vast majority of lines are off-screen, and this runs at 60fps
+      // whenever the ants overlay keeps the render loop alive. Inline the
+      // imageToScreen math to avoid a {x,y} allocation per line.
+      const x0 = Math.max(0, Math.floor(-panX / z));
+      const x1 = Math.min(docW, Math.ceil((canvasW - panX) / z));
+      const y0 = Math.max(0, Math.floor(-panY / z));
+      const y1 = Math.min(docH, Math.ceil((canvasH - panY) / z));
+      if (x1 < x0 || y1 < y0) return;
+      const sx0 = x0 * z + panX;
+      const sx1 = x1 * z + panX;
+      const sy0 = y0 * z + panY;
+      const sy1 = y1 * z + panY;
       ctx.strokeStyle = 'rgba(128,128,128,0.35)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      for (let x = 0; x <= docW; x++) {
-        const s = viewport.imageToScreen(x, 0);
-        ctx.moveTo(s.x + 0.5, s.y);
-        ctx.lineTo(s.x + 0.5, s.y + docH * viewport.zoom);
+      for (let x = x0; x <= x1; x++) {
+        const sx = x * z + panX + 0.5;
+        ctx.moveTo(sx, sy0);
+        ctx.lineTo(sx, sy1);
       }
-      for (let y = 0; y <= docH; y++) {
-        const s = viewport.imageToScreen(0, y);
-        ctx.moveTo(s.x, s.y + 0.5);
-        ctx.lineTo(s.x + docW * viewport.zoom, s.y + 0.5);
+      for (let y = y0; y <= y1; y++) {
+        const sy = y * z + panY + 0.5;
+        ctx.moveTo(sx0, sy);
+        ctx.lineTo(sx1, sy);
       }
       ctx.stroke();
     },

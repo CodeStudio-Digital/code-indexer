@@ -33,6 +33,24 @@ export interface JobState {
 }
 
 const PENDING: JobState = { status: 'queued', pct: 0, candidates: [] };
+const TERMINAL = new Set<SpriteJobStatus>(['done', 'failed', 'cancelled']);
+
+export function isTerminalJobStatus(status: SpriteJobStatus): boolean {
+  return TERMINAL.has(status);
+}
+
+export function mergeRestoredJobState(existing: JobState | undefined, restored: JobState): JobState {
+  if (!existing) return restored;
+  const existingTerminal = isTerminalJobStatus(existing.status);
+  const restoredTerminal = isTerminalJobStatus(restored.status);
+  if (existingTerminal) return existing;
+  const candidates = existing.candidates.length > restored.candidates.length
+    ? existing.candidates
+    : restored.candidates;
+  if (restoredTerminal) return { ...existing, ...restored, candidates };
+  if (restored.candidates.length <= existing.candidates.length) return existing;
+  return { ...restored, ...existing, pct: Math.max(existing.pct, restored.pct), candidates };
+}
 
 export interface UseSpriteJobs {
   /** Snapshot map of jobId → live state (recomputed each version bump). */
@@ -151,8 +169,16 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
   }, [projectId, bump]);
 
   const cancel = useCallback(async (jobId: number): Promise<void> => {
-    try { await api.cancelJob(jobId); } catch { /* already gone */ }
-    upsert(jobId, { status: 'cancelled' });
+    try {
+      await api.cancelJob(jobId);
+      upsert(jobId, { status: 'cancelled', error: undefined });
+    } catch (e) {
+      if (e instanceof api.ApiError && (e.status === 404 || e.status === 410)) {
+        upsert(jobId, { status: 'cancelled', error: undefined });
+        return;
+      }
+      upsert(jobId, { error: e instanceof Error ? e.message : String(e) });
+    }
   }, [upsert]);
 
   const get = useCallback((jobId: number) => ref.current.get(jobId), []);
@@ -161,8 +187,16 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
     let data: Awaited<ReturnType<typeof api.getJob>>;
     try {
       data = await api.getJob(jobId);
-    } catch {
-      return null; // job pruned / server restarted with a fresh DB
+    } catch (e) {
+      if (e instanceof api.ApiError && (e.status === 404 || e.status === 410)) {
+        return null; // job pruned / server restarted with a fresh DB
+      }
+      const existing = ref.current.get(jobId);
+      if (existing) return existing;
+      const state: JobState = { ...PENDING, error: e instanceof Error ? e.message : String(e) };
+      ref.current.set(jobId, state);
+      bump();
+      return state;
     }
     const candidates: JobCandidate[] = data.candidates.map((c) => ({
       index: c.index,
@@ -170,7 +204,7 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
       thumbUrl: api.candidateThumbUrl(jobId, c.index),
     }));
     const status = data.job.status as SpriteJobStatus;
-    const terminal = status === 'done' || status === 'failed' || status === 'cancelled';
+    const terminal = TERMINAL.has(status);
     const state: JobState = {
       status,
       pct: terminal ? 100 : 0,
@@ -180,8 +214,9 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
     };
     // Live SSE events may already have written fresher state — never regress.
     const existing = ref.current.get(jobId);
-    if (!existing || existing.candidates.length <= candidates.length) {
-      ref.current.set(jobId, existing ? { ...existing, ...state } : state);
+    const merged = mergeRestoredJobState(existing, state);
+    if (merged !== existing) {
+      ref.current.set(jobId, merged);
       bump();
     }
     return ref.current.get(jobId) ?? state;

@@ -10,11 +10,14 @@
  *        curation-delete many versions at once (repo files + DB rows), and
  *        report which animations lost frame pointers so the UI can warn.
  */
+import fs from 'node:fs';
 import type { Hono } from 'hono';
+import { removeVersions } from '@mcp/sprite-studio/repo/manifest.js';
+import { resolveInsideSpriteDir } from '@mcp/sprite-studio/repo/paths.js';
 import type { ServerDeps } from '../../deps.js';
 import { toGenerationGroupDto, toVersionDto } from './mappers.js';
 import { hasJobSheet } from './sheet-artifact.js';
-import { overwriteVersion, purgeVersionFile } from './version-write.js';
+import { overwriteVersion } from './version-write.js';
 
 const MAX_BULK = 200;
 
@@ -73,11 +76,36 @@ export function mountSpriteVersionCurationRoutes(app: Hono, deps: ServerDeps): v
       : [];
     if (ids.length === 0) return c.json({ error: 'invalid_body' }, 400);
 
-    // Purge repo files (best-effort) for the known versions BEFORE the atomic
-    // DB delete — the DB rows still exist, so deleteVersions still finds them.
+    // Purge repo files + manifest entries (best-effort) BEFORE the atomic DB
+    // delete — the DB rows still exist, so deleteVersions still finds them.
+    // Files unlink per version, but each asset's manifest is rewritten ONCE
+    // (removeVersions) — the per-version rewrite was O(n²) sync IO on main.
+    const byAsset = new Map<number, { slug: string | null; vs: number[] }>();
     for (const id of ids) {
       const v = store.getVersion(id);
-      if (v) purgeVersionFile(root, store.get(v.asset_id), v);
+      if (!v) continue;
+      try {
+        fs.rmSync(resolveInsideSpriteDir(root, v.file_rel_path), { force: true });
+      } catch {
+        /* best effort — repo is the mirror, DB is authoritative here */
+      }
+      let entry = byAsset.get(v.asset_id);
+      if (!entry) {
+        entry = { slug: store.get(v.asset_id)?.slug ?? null, vs: [] };
+        byAsset.set(v.asset_id, entry);
+      }
+      entry.vs.push(v.version);
+    }
+    for (const { slug, vs } of byAsset.values()) {
+      if (!slug) continue;
+      try {
+        removeVersions(root, slug, vs);
+      } catch {
+        // Best effort — a corrupt asset.json or a locked rename (Windows AV)
+        // must not 500 AFTER the files were already unlinked, leaving DB rows
+        // pointing at nothing. The DB delete below is authoritative; resync
+        // reconciles a stale manifest.
+      }
     }
     const res = store.deleteVersions(ids);
     const affectedAnimations = Object.entries(res.framesByAnimation).map(([animId, removedFrames]) => ({

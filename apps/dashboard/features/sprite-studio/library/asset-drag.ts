@@ -31,7 +31,9 @@ export function readAssetDragData(dt: DataTransfer): SpriteAssetDragPayload | nu
     const raw = dt.getData(SPRITE_ASSET_MIME);
     if (!raw) return null;
     const o = JSON.parse(raw) as Partial<SpriteAssetDragPayload>;
-    if (typeof o.assetId !== 'number' || typeof o.slug !== 'string') return null;
+    if (!Number.isInteger(o.assetId) || typeof o.slug !== 'string') return null;
+    if (o.versionId != null && !Number.isInteger(o.versionId)) return null;
+    if (o.thumbUrl != null && typeof o.thumbUrl !== 'string') return null;
     return { assetId: o.assetId, slug: o.slug, versionId: o.versionId ?? null, thumbUrl: o.thumbUrl ?? null };
   } catch {
     return null;

@@ -10,7 +10,7 @@ import { Compositor } from './compositor.js';
 import { EditorDocument } from './document.js';
 import { imageDataFromSource, pngBlobFromImageData } from './engine-io.js';
 import type { EngineSummary } from './engine-types.js';
-import { History } from './history.js';
+import { History, type Command } from './history.js';
 import {
   createBrushGhost, createCheckerboard, createMarchingAnts, createPixelGrid,
   createShapePreview, OverlayRegistry, type OverlayView,
@@ -49,6 +49,11 @@ export class EditorEngine {
    * unsaved edits, instead of trusting "layers exist" forever).
    */
   loadedVersionId: number | null = null;
+  /** The undo-stack top command at the last save/load. isDirty compares the
+   *  CURRENT top against it by identity — undo-then-repaint and history
+   *  eviction (which trims the bottom) can't fool it the way stack length did.
+   *  null = the clean point is the empty stack (fresh load). */
+  private savedCommand: Command | null = null;
 
   constructor(width: number, height: number) {
     this.doc = new EditorDocument(width, height);
@@ -173,6 +178,9 @@ export class EditorEngine {
 
   /** Brush ghost hover position (image coords) — null hides it. */
   setBrushGhost(pos: { x: number; y: number } | null): void {
+    // Non-ghost tools call this with null on EVERY pointermove; when the ghost
+    // is already hidden there is nothing to repaint — skip the invalidate.
+    if (pos === null && this.view.brush === null) return;
     this.view.brush = pos
       ? {
           x: pos.x, y: pos.y,
@@ -285,8 +293,30 @@ export class EditorEngine {
     this.history.clear();
     this.selection.clear();
     this.loadedVersionId = versionId;
+    this.savedCommand = null;
     this.fitToView();
     this.invalidate();
+  }
+
+  /** The current top-of-undo command — snapshot at SAVE-CLICK time and pass
+   *  back to markSaved(), so strokes painted during an in-flight async save
+   *  aren't wrongly marked saved. */
+  get historyMark(): Command | null {
+    return this.history.top;
+  }
+
+  /** Unsaved edits since the last load/save (drives the tab dot + the
+   *  close-without-saving confirm — canUndo alone would nag after a save). */
+  get isDirty(): boolean {
+    return this.history.top !== this.savedCommand;
+  }
+
+  /** Called after a successful save — the given (or current) top command is
+   *  the clean mark; undoing past it or a NEW stroke re-dirties, and the undo
+   *  stack survives. Pass the click-time mark so mid-save strokes stay dirty. */
+  markSaved(mark?: Command | null): void {
+    this.savedCommand = mark !== undefined ? mark : this.history.top;
+    this.emitSummary();
   }
 
   /**
@@ -329,6 +359,7 @@ export class EditorEngine {
       docW: this.doc.width,
       docH: this.doc.height,
       layerCount: this.doc.layers.length,
+      dirty: this.isDirty,
     };
   }
 

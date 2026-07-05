@@ -34,12 +34,15 @@ export interface SpriteStudioUiState {
   panelsCollapsed: { left: boolean; right: boolean; bottom: boolean };
   /** Active left-rail tab id ('library' | 'files' | future panel ids). */
   leftTab: string;
+  /** Custom display names for generation groups, keyed by group key (job:NN|manual). */
+  groupLabels: Record<string, string>;
 }
 
 const DEFAULTS: SpriteStudioUiState = {
   collapsedGroups: [], collapsedFrameGroups: [], lastMode: null, lastGenJob: null,
   composerDraft: null, gridEnabled: true,
   panelsCollapsed: { left: false, right: false, bottom: false }, leftTab: 'library',
+  groupLabels: {},
 };
 
 const MODES: readonly string[] = ['generate', 'edit', 'export', 'animate'];
@@ -87,6 +90,12 @@ export function loadSpriteStudioUi(projectId: number): SpriteStudioUiState | nul
         bottom: o.panelsCollapsed?.bottom === true,
       },
       leftTab: typeof o.leftTab === 'string' && o.leftTab.length > 0 ? o.leftTab : 'library',
+      groupLabels: o.groupLabels && typeof o.groupLabels === 'object'
+        ? Object.fromEntries(
+            Object.entries(o.groupLabels as Record<string, unknown>)
+              .filter((e): e is [string, string] => typeof e[1] === 'string'),
+          )
+        : {},
     };
   } catch {
     return null;

@@ -5,11 +5,12 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Trash2 } from 'lucide-react';
+import { Info, Trash2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { CATEGORY_GROUPS, type SpriteAsset, type SpriteAssetStatus, type SpriteCategory } from '../types.js';
+import { InspectorSection } from './InspectorSection.js';
 
 const STATUSES: SpriteAssetStatus[] = ['draft', 'approved', 'archived', 'missing'];
 
@@ -49,10 +50,7 @@ export function AssetMetaCard({
   };
 
   return (
-    <div className="space-y-2 rounded border p-2">
-      <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        {t('inspector.meta')}
-      </div>
+    <InspectorSection id="assetMeta" icon={Info} title={t('inspector.meta')}>
       <label className="flex flex-col gap-1 text-xs">
         <span className="text-muted-foreground">{t('inspector.name')}</span>
         <Input value={name} onChange={(e) => setName(e.target.value)} onBlur={commitName} onKeyDown={onEnterBlur} className="h-7 text-xs" />
@@ -107,6 +105,6 @@ export function AssetMetaCard({
           </Button>
         )}
       </div>
-    </div>
+    </InspectorSection>
   );
 }

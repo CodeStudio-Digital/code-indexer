@@ -80,6 +80,14 @@ export class History {
     return this.undoStack.length;
   }
 
+  /** The command currently on top of the undo stack (null when empty). Its
+   *  IDENTITY is a stable "saved point" marker for dirty tracking: undo/redo
+   *  move it, a new stroke replaces it, and eviction only trims the BOTTOM —
+   *  unlike stack length, which repeats across different document states. */
+  get top(): Command | null {
+    return this.undoStack.length > 0 ? this.undoStack[this.undoStack.length - 1] : null;
+  }
+
   get totalBytes(): number {
     let sum = 0;
     for (const c of this.undoStack) sum += c.bytes;

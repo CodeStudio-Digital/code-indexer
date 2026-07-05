@@ -10,6 +10,7 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeftRight } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
+import { RangeInput } from '../../../components/ui/range-input.js';
 import type { EditorEngine } from '../engine/EditorEngine.js';
 import { useSpriteEditorStore } from '../store/editor-store.js';
 import type { ToolOptions } from '../tools/tool-types.js';
@@ -137,15 +138,10 @@ function Range({
   onChange: (v: number) => void; suffix?: string;
 }) {
   return (
-    <label className="flex items-center gap-1.5 text-muted-foreground">
-      <span>{label}</span>
-      <input
-        type="range" min={min} max={max} value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="h-1 w-24 cursor-pointer accent-primary"
-      />
-      <span className="w-8 tabular-nums text-foreground">{`${value}${suffix ?? ''}`}</span>
-    </label>
+    <RangeInput
+      label={label} min={min} max={max} value={value} onChange={onChange} suffix={suffix}
+      className="text-muted-foreground"
+    />
   );
 }
 

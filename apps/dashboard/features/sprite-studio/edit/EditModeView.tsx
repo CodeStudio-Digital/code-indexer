@@ -19,13 +19,16 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Loader2, Maximize, Redo2, RotateCcw, Save, Undo2 } from 'lucide-react';
+import { AlertTriangle, FilePlus2, Loader2, Maximize, Redo2, RotateCcw, Save, Undo2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
+import { HoverLabelButton } from '../../../components/ui/hover-label-button.js';
+import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { versionFileUrl } from '../api.js';
 import { EditorEngine } from '../engine/EditorEngine.js';
-import { engineKey, getOrCreateEngine } from '../engine/engine-registry.js';
+import { engineKey, getOrCreateEngine, peekEngine } from '../engine/engine-registry.js';
 import { loadSpriteStudioUi, saveSpriteStudioUi } from '../sprite-studio-ui-state.js';
 import { spriteEditorActions, useSpriteEditorStore } from '../store/editor-store.js';
+import type { ToolOptions } from '../tools/tool-types.js';
 import type { AssetVersion, SpriteAsset } from '../types.js';
 import { AiEditBar } from './AiEditBar.js';
 import { CanvasStatusBar } from './CanvasStatusBar.js';
@@ -57,6 +60,7 @@ export function EditModeView({
   activeVersion,
   onSaveEdited,
   onSaveOverwrite,
+  overwritePrimary = false,
   onInpaint,
   onEngineReady,
 }: {
@@ -64,9 +68,13 @@ export function EditModeView({
   asset: SpriteAsset;
   activeVersion: AssetVersion | null;
   onSaveEdited: (blob: Blob) => void | Promise<void>;
-  /** Focused edit session: PRIMARY save overwrites the version in place
-   *  ("Salvar Sprite"); the new-version flow becomes the secondary button. */
+  /** Overwrite the loaded version's file in place. Present whenever there's a
+   *  version to save over. */
   onSaveOverwrite?: (blob: Blob) => void | Promise<void>;
+  /** Focused edit session → overwrite is the primary save (no confirm). In the
+   *  normal editor it's a muted secondary and prompts before mutating (it can
+   *  rewrite a version shared by several timeline frames). */
+  overwritePrimary?: boolean;
   onInpaint?: (maskBlob: Blob, prompt: string) => void | Promise<void>;
   onEngineReady?: (engine: EditorEngine | null) => void;
 }) {
@@ -87,11 +95,24 @@ export function EditModeView({
   // (the "reload version" button, which discards edits by design).
   useEffect(() => {
     let alive = true;
-    const key = engineKey(projectId, asset.id);
+    let attached: EditorEngine | null = null;
     const versionId = activeVersion?.id ?? null;
+    // One engine per IMAGE (version) — editor tabs are per-image, so two
+    // frames of the same asset are independent docs with independent undo.
+    const key = engineKey(projectId, asset.id, versionId);
+    // Cross-asset selection still loading its versions: activeVersion is
+    // transiently null while the asset HAS a current version — creating a
+    // blank 'new' engine here would flash an empty doc and leak it. BUT if a
+    // blank engine with real content already exists (a dirty new-asset doc),
+    // attach it instead of hiding it forever behind the spinner.
+    if (versionId == null && asset.currentVersionId != null && (peekEngine(key)?.doc.layers.length ?? 0) === 0) {
+      setEngine(null);
+      onEngineReady?.(null);
+      return;
+    }
     (async () => {
       const img = versionId != null
-        ? await loadImage(versionFileUrl(projectId, versionId)).catch(() => null)
+        ? await loadImage(versionFileUrl(projectId, versionId, activeVersion?.contentHash)).catch(() => null)
         : null;
       if (!alive) return;
       const w = img?.naturalWidth || asset.width;
@@ -125,23 +146,35 @@ export function EditModeView({
       const grid = loadSpriteStudioUi(projectId)?.gridEnabled ?? true;
       e.overlays.setEnabled('pixel-grid', grid);
       setGridOn(grid);
+      attached = e;
       setEngine(e);
       onEngineReady?.(e);
     })();
     return () => {
       alive = false;
       onEngineReady?.(null);
-      // Detach happens inside EditorCanvas; just drop the summary bridge.
+      // Drop THIS engine's listeners into the shared store — otherwise every
+      // previously-attached (per-version) engine keeps writing summaries into
+      // the store, and a stale engine's mutation clobbers the active tab's.
+      if (attached) {
+        attached.setSummaryListener(null);
+        attached.setColorPickListener(null);
+      }
     };
-  }, [projectId, asset.id, asset.width, asset.height, activeVersion?.id, onEngineReady]);
+  }, [projectId, asset.id, asset.width, asset.height, asset.currentVersionId, activeVersion?.id, onEngineReady]);
 
-  // SINGLE store→engine color bridge: any color set anywhere (palette swatch,
-  // options-bar picker, X-swap, eyedropper writing back) reaches the engine.
-  // Callsites no longer need to remember to call engine.setColors themselves.
+  // SINGLE store→engine bridge for colors AND tool options: any change made
+  // anywhere reaches the engine, and — crucially — a (re)attached engine is
+  // SEEDED from the store. The store survives closing/reopening the editor,
+  // but a fresh engine starts at its own defaults: without this seed the bar
+  // showed the persisted tolerance while the tool acted as if it were zero
+  // until the user dragged a slider (which forced the first sync).
   useEffect(() => {
     if (!engine) return;
-    const apply = (s: { fgColor: string; bgColor: string }) =>
+    const apply = (s: { fgColor: string; bgColor: string; toolOptions: ToolOptions }) => {
       engine.setColors({ fg: s.fgColor, bg: s.bgColor });
+      engine.setToolOptions(s.toolOptions);
+    };
     apply(useSpriteEditorStore.getState());
     return useSpriteEditorStore.subscribe((s) => apply(s));
   }, [engine]);
@@ -152,7 +185,7 @@ export function EditModeView({
     const versionId = activeVersion?.id;
     if (!engine || versionId == null) return;
     try {
-      const img = await loadImage(versionFileUrl(projectId, versionId));
+      const img = await loadImage(versionFileUrl(projectId, versionId, activeVersion?.contentHash));
       engine.loadFromImage(img, versionId);
       setLoadFailed(false);
     } catch {
@@ -164,11 +197,31 @@ export function EditModeView({
 
   const save = async (mode: 'new' | 'overwrite') => {
     if (!engine || saving) return;
+    // Overwrite is destructive (rewrites the version file in place, affecting
+    // every timeline frame that references it) and not version-undoable — so
+    // outside a focused session, confirm before doing it.
+    if (mode === 'overwrite' && !overwritePrimary) {
+      const ok = await confirm({
+        title: t('edit.overwriteConfirmTitle'),
+        description: t('edit.overwriteConfirmBody'),
+        confirmLabel: t('edit.overwrite'),
+        tone: 'destructive',
+      });
+      if (!ok) return;
+    }
     setSaving(true);
+    // Snapshot the clean point at CLICK time: the canvas stays interactive
+    // during the async upload, so strokes painted meanwhile must stay dirty.
+    const mark = engine.historyMark;
     try {
       const blob = await engine.exportPngBlob();
       if (mode === 'overwrite' && onSaveOverwrite) await onSaveOverwrite(blob);
       else await onSaveEdited(blob);
+      // Clean the doc at the CLICK-time mark: the dot clears and closing stops
+      // nagging, while the undo stack survives. For save-as-new this also lets
+      // onSaved retire the old-version tab (its content lives in the new
+      // version now); strokes painted mid-save keep a newer top → stay dirty.
+      engine.markSaved(mark);
     } finally {
       setSaving(false);
     }
@@ -220,43 +273,42 @@ export function EditModeView({
           1:1
         </Button>
         {activeVersion != null && (
-          <Button
-            size="sm" variant="ghost" className="h-6 gap-1"
+          <HoverLabelButton
+            icon={RotateCcw}
+            label={t('edit.reloadVersion')}
+            className="h-6"
             onClick={() => void reloadVersion()}
-            title={t('edit.reloadVersionHint')}
-          >
-            <RotateCcw className="h-3.5 w-3.5" /> {t('edit.reloadVersion')}
-          </Button>
+          />
         )}
         {loadFailed && (
           <span className="flex items-center gap-1 text-[11px] text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5" /> {t('edit.loadFailed')}
           </span>
         )}
+        {/* Save affordances — icon + hover-label (git-style). Overwrite is
+            available whenever there's a version to save over; "save as new"
+            always appends. */}
         {onSaveOverwrite ? (
-          <>
-            <Button
-              size="sm" className="ml-auto h-6 gap-1"
-              disabled={saving} onClick={() => void save('overwrite')} title={t('edit.saveSpriteHint')}
-            >
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-              {t('edit.saveSprite')}
-            </Button>
-            <Button
-              size="sm" variant="ghost" className="h-6 gap-1 text-[10px] text-muted-foreground"
-              disabled={saving} onClick={() => void save('new')} title={t('edit.saveAsNewHint')}
-            >
-              {t('edit.saveAsNew')}
-            </Button>
-          </>
+          // In a focused session overwrite is the primary action; in the normal
+          // editor "save as new" is the safe primary and overwrite is a muted
+          // (confirmed) secondary.
+          <div className="ml-auto flex items-center gap-1">
+            <HoverLabelButton
+              icon={Save} label={t('edit.overwrite')}
+              tone={overwritePrimary ? 'primary' : 'default'} className="h-6"
+              busy={saving} onClick={() => void save('overwrite')}
+            />
+            <HoverLabelButton
+              icon={FilePlus2} label={t('edit.saveAsNew')}
+              tone={overwritePrimary ? 'default' : 'primary'} className="h-6"
+              busy={saving} onClick={() => void save('new')}
+            />
+          </div>
         ) : (
-          <Button
-            size="sm" variant="outline" className="ml-auto h-6 gap-1"
-            disabled={saving} onClick={() => void save('new')} title={t('edit.save')}
-          >
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-            {t('edit.save')}
-          </Button>
+          <HoverLabelButton
+            icon={Save} label={t('edit.save')} tone="primary" className="ml-auto h-6"
+            busy={saving} onClick={() => void save('new')}
+          />
         )}
       </div>
       <ToolOptionsBar engine={engine} />

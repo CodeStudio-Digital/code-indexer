@@ -20,6 +20,7 @@ import { mountSpriteStreamRoutes } from './stream.routes.js';
 import { mountSpriteModelRoutes } from './models.routes.js';
 import { mountSpriteProjectFileRoutes } from './project-files.routes.js';
 import { startSpriteBusSweep } from './bus-registry.js';
+import { sweepOrphanSpriteScratch } from './job-deps.js';
 
 export function mountSpriteStudioRoutes(app: Hono, deps: ServerDeps): void {
   mountSpriteProjectRoutes(app, deps);
@@ -37,4 +38,5 @@ export function mountSpriteStudioRoutes(app: Hono, deps: ServerDeps): void {
   mountSpriteModelRoutes(app, deps);
   mountSpriteProjectFileRoutes(app, deps);
   startSpriteBusSweep();
+  sweepOrphanSpriteScratch(deps);
 }

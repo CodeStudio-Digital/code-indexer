@@ -4,6 +4,7 @@
  * Direct fetch against `apiBaseUrl()` (same pattern as api.ts / api-anim.ts).
  */
 import { apiBaseUrl } from '../../../lib/api-client.js';
+import { dedupeInflight } from '../../../lib/api-cache.js';
 
 /** A generation batch (versions sharing a job_id) for a browser group header. */
 export interface GenerationGroup {
@@ -29,6 +30,9 @@ export interface ResliceGrid {
   offsetY?: number;
   marginX?: number;
   marginY?: number;
+  /** Per-cell manual nudge in source px (row-major) — lets a frame steal a
+   *  neighbour's pixels when the uniform grid clips it. */
+  offsets?: Array<{ dx: number; dy: number }>;
 }
 
 export interface BulkDeleteResult {
@@ -58,10 +62,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Versions of an asset grouped by generation batch (Frames-browser headers). */
+/** Versions of an asset grouped by generation batch (Frames-browser headers).
+ *  In-flight dedupe: refresh chains from several rails can fire this GET for
+ *  the same asset concurrently — share one request. */
 export const listGenerations = (p: number, assetId: number): Promise<GenerationGroup[]> =>
-  req<{ generations: GenerationGroup[] }>(`${projectBase(p)}/assets/${assetId}/generations`)
-    .then((r) => r.generations);
+  dedupeInflight(`sprite:generations:${p}:${assetId}`, () =>
+    req<{ generations: GenerationGroup[] }>(`${projectBase(p)}/assets/${assetId}/generations`)
+      .then((r) => r.generations));
 
 /** Curation-delete many versions at once; reports which animations lost frames. */
 export const bulkDeleteVersions = (p: number, versionIds: number[]): Promise<BulkDeleteResult> =>

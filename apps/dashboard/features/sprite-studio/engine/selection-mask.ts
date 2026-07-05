@@ -14,6 +14,11 @@ export class SelectionMask {
   private mask: Uint8Array | null = null;
   private antsPath: Path2D | null = null;
   private antsDirty = true;
+  /** Cached isEmpty() result — isEmpty is called PER PAINTED PIXEL by the
+   *  brush/fill clip test and once per rAF tick, so the O(w*h) scan must not
+   *  rerun. Invalidated by markChanged() (the single funnel of every mutator);
+   *  external code only ever reads `.data`, so the cache cannot go stale. */
+  private emptyCache: boolean | null = null;
   onChange: (() => void) | null = null;
 
   constructor(width: number, height: number) {
@@ -44,8 +49,13 @@ export class SelectionMask {
 
   isEmpty(): boolean {
     if (!this.mask) return true;
-    for (let i = 0; i < this.mask.length; i++) if (this.mask[i]) return false;
-    return true;
+    if (this.emptyCache == null) {
+      this.emptyCache = true;
+      for (let i = 0; i < this.mask.length; i++) {
+        if (this.mask[i]) { this.emptyCache = false; break; }
+      }
+    }
+    return this.emptyCache;
   }
 
   /** Clip test for tools: with no active selection everything is paintable. */
@@ -150,6 +160,7 @@ export class SelectionMask {
   private markChanged(): void {
     this.antsDirty = true;
     this.antsPath = null;
+    this.emptyCache = null;
     this.onChange?.();
   }
 }

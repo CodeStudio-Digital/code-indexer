@@ -12,6 +12,7 @@ import type { Hono } from 'hono';
 import { decodeImage } from '@mcp/sprite-studio/processing/decode-image.js';
 import { encodePng } from '@mcp/sprite-studio/processing/png.js';
 import { sliceGridAdvanced } from '@mcp/sprite-studio/processing/slice.js';
+import { getSpriteWorkerClient } from '../../../sse/SpriteWorkerClient.js';
 import type { ServerDeps } from '../../deps.js';
 import { toVersionDto } from './mappers.js';
 import { sheetAbsPath } from './sheet-artifact.js';
@@ -43,7 +44,11 @@ export function mountSpriteSheetRoutes(app: Hono, deps: ServerDeps): void {
     const asset = deps.spriteAssetsStore.get(Number(c.req.param('assetId')));
     if (!root || !asset) return c.json({ error: 'not_found' }, 404);
     const body = (await c.req.json().catch(() => null)) as
-      | { jobId?: number; cols?: number; rows?: number; offsetX?: number; offsetY?: number; marginX?: number; marginY?: number }
+      | {
+          jobId?: number; cols?: number; rows?: number;
+          offsetX?: number; offsetY?: number; marginX?: number; marginY?: number;
+          offsets?: Array<{ dx?: number; dy?: number } | null> | null;
+        }
       | null;
     if (!body?.jobId) return c.json({ error: 'invalid_body' }, 400);
     const job = deps.spriteJobsStore.get(body.jobId);
@@ -58,26 +63,53 @@ export function mountSpriteSheetRoutes(app: Hono, deps: ServerDeps): void {
     const cols = clampDim(Number(body.cols) || 1);
     const rows = clampDim(Number(body.rows) || 1);
     if (cols * rows > MAX_CELLS) return c.json({ error: 'too_many_cells' }, 400);
+    // Per-cell manual nudges (row-major); bounded to the grid, sanitised to ints.
+    const offsets = Array.isArray(body.offsets)
+      ? body.offsets.slice(0, cols * rows).map((o) => ({
+          dx: Number.isFinite(Number(o?.dx)) ? Math.trunc(Number(o?.dx)) : 0,
+          dy: Number.isFinite(Number(o?.dy)) ? Math.trunc(Number(o?.dy)) : 0,
+        }))
+      : undefined;
 
-    let cells: ReturnType<typeof sliceGridAdvanced>;
+    const opts = {
+      cols, rows,
+      offsetX: clampPx(body.offsetX), offsetY: clampPx(body.offsetY),
+      marginX: clampPx(body.marginX), marginY: clampPx(body.marginY),
+      offsets,
+    };
+    let pngs: Buffer[];
+    let cellWidth: number;
+    let cellHeight: number;
     try {
-      cells = sliceGridAdvanced(decodeImage(sheet), {
-        cols, rows,
-        offsetX: clampPx(body.offsetX), offsetY: clampPx(body.offsetY),
-        marginX: clampPx(body.marginX), marginY: clampPx(body.marginY),
-      });
+      try {
+        // Off-thread: decode + slice + per-cell encode of a large sheet blocks
+        // the Electron main process for hundreds of ms.
+        const out = await getSpriteWorkerClient().sliceGridAdvanced(sheet.toString('base64'), opts);
+        pngs = out.cells.map((b) => Buffer.from(b, 'base64'));
+        cellWidth = out.cellWidth;
+        cellHeight = out.cellHeight;
+      } catch {
+        // Worker unavailable/crashed → same compute in-process (old behavior,
+        // and re-throws genuine slice errors with their proper message).
+        const cells = sliceGridAdvanced(decodeImage(sheet), opts);
+        pngs = cells.map((cell) => encodePng(cell));
+        cellWidth = cells[0]?.width ?? 0;
+        cellHeight = cells[0]?.height ?? 0;
+      }
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
     }
     try {
-      const versions = cells.map((cell) =>
-        writeEditedVersion(deps, root, asset, encodePng(cell), { setCurrent: false, source: 'imported' }),
+      const versions = pngs.map((png) =>
+        writeEditedVersion(deps, root, asset, png, {
+          setCurrent: false, source: 'imported', dims: { width: cellWidth, height: cellHeight },
+        }),
       );
       return c.json({
         versions: versions.map((v) => toVersionDto(Number(c.req.param('projectId')), v)),
         versionIds: versions.map((v) => v.id),
-        cellWidth: cells[0]?.width ?? 0,
-        cellHeight: cells[0]?.height ?? 0,
+        cellWidth,
+        cellHeight,
       });
     } catch (e) {
       const msg = (e as Error).message;

@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JobState } from '../jobs/useSpriteJobs.js';
 import * as anim from './api-anim.js';
 
-const ACTIVE = new Set(['queued', 'prompting', 'generating', 'postprocess', 'saving']);
+const ACTIVE = new Set(['queued', 'prompting', 'generating', 'post-processing', 'checking', 'saving']);
 
 export function useAnimGeneration({
   current, assetId, jobs, direction, anchorId, frameCount,

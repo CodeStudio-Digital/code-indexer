@@ -7,13 +7,15 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Scissors } from 'lucide-react';
+import { RotateCcw, Scissors } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../../components/ui/dialog.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Input } from '../../../../components/ui/input.js';
 import { toast } from '../../../../components/ui/prompt-dialog.js';
 import { useAnimateSession } from '../animate-session-store.js';
 import { jobSheetUrl, resliceSheet } from '../api-anim-bulk.js';
+import { ResliceOverlay } from './ResliceOverlay.js';
+import type { Nudge } from './reslice-geometry.js';
 
 export function ResliceSheetDialog({
   open,
@@ -42,32 +44,46 @@ export function ResliceSheetDialog({
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-cell manual nudges (source px, row-major) + the selected cell.
+  const [offsets, setOffsets] = useState<Nudge[]>([]);
+  const [selected, setSelected] = useState<number | null>(null);
+
+  const clearOffsets = () => { setOffsets([]); setSelected(null); };
 
   useEffect(() => {
     if (!open) return;
     setCols(defaultGrid.cols); setRows(defaultGrid.rows);
     setOffsetX(0); setOffsetY(0); setMarginX(0); setMarginY(0); setError(null);
+    setOffsets([]); setSelected(null);
   }, [open, defaultGrid.cols, defaultGrid.rows]);
 
-  // Usable region as % of the natural sheet (for the overlay), from px offsets.
   const w = nat?.w ?? 1;
   const h = nat?.h ?? 1;
-  const left = (offsetX / w) * 100;
-  const right = ((w - marginX) / w) * 100;
-  const top = (offsetY / h) * 100;
-  const bottom = ((h - marginY) / h) * 100;
-  const usableW = Math.max(0, right - left);
-  const usableH = Math.max(0, bottom - top);
+  const hasOffsets = offsets.some((o) => o && (o.dx !== 0 || o.dy !== 0));
 
-  const num = (setter: (n: number) => void, max: number) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const num = (setter: (n: number) => void, max: number) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setter(Math.max(0, Math.min(max, Number(e.target.value) || 0)));
+    clearOffsets();
+  };
+  // Changing the cell COUNT invalidates the per-cell nudges → reset them.
+  const numGrid = (setter: (n: number) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setter(Math.max(1, Math.min(16, Number(e.target.value) || 1)));
+    clearOffsets();
+  };
 
   const run = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      const { versionIds } = await resliceSheet(projectId, assetId, jobId, { cols, rows, offsetX, offsetY, marginX, marginY });
+      const packed = hasOffsets
+        ? Array.from({ length: cols * rows }, (_, i) => ({
+            dx: Math.round(offsets[i]?.dx ?? 0), dy: Math.round(offsets[i]?.dy ?? 0),
+          }))
+        : undefined;
+      const { versionIds } = await resliceSheet(projectId, assetId, jobId, {
+        cols, rows, offsetX, offsetY, marginX, marginY, offsets: packed,
+      });
       if (versionIds.length === 0) throw new Error(t('frames.importEmpty'));
       const setTimeline = useAnimateSession.getState().setTimeline;
       if (!setTimeline) { toast.error(t('frames.needAnimation')); return; }
@@ -90,29 +106,22 @@ export function ResliceSheetDialog({
             <Scissors className="h-4 w-4" /> {t('frames.resliceTitle')}
           </DialogTitle>
         </DialogHeader>
-        <div className="relative overflow-hidden rounded border bg-muted/30" style={{ maxHeight: 260 }}>
-          <img
-            src={jobSheetUrl(projectId, jobId)}
-            alt={t('frames.resliceTitle')}
-            className="max-h-[260px] w-full object-contain"
-            style={{ imageRendering: 'pixelated' }}
-            onLoad={(e) => setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-          />
-          <div className="pointer-events-none absolute inset-0">
-            {/* usable region */}
-            <div className="absolute border border-primary/70" style={{ left: `${left}%`, top: `${top}%`, width: `${usableW}%`, height: `${usableH}%` }} />
-            {/* cell lines */}
-            {Array.from({ length: cols - 1 }).map((_, i) => (
-              <span key={`c${i}`} className="absolute w-px bg-primary/50" style={{ left: `${left + (usableW * (i + 1)) / cols}%`, top: `${top}%`, height: `${usableH}%` }} />
-            ))}
-            {Array.from({ length: rows - 1 }).map((_, i) => (
-              <span key={`r${i}`} className="absolute h-px bg-primary/50" style={{ top: `${top + (usableH * (i + 1)) / rows}%`, left: `${left}%`, width: `${usableW}%` }} />
-            ))}
-          </div>
-        </div>
+        <ResliceOverlay
+          src={jobSheetUrl(projectId, jobId)}
+          alt={t('frames.resliceTitle')}
+          nat={nat}
+          onNat={setNat}
+          cols={cols} rows={rows}
+          offsetX={offsetX} offsetY={offsetY} marginX={marginX} marginY={marginY}
+          offsets={offsets}
+          onOffsetsChange={setOffsets}
+          selected={selected}
+          onSelect={setSelected}
+        />
+        <p className="text-[10px] text-muted-foreground">{t('frames.resliceManualHint')}</p>
         <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
-          <Field label={t('frames.importCols')} value={cols} onChange={num(setCols, 16)} min={1} />
-          <Field label={t('frames.importRows')} value={rows} onChange={num(setRows, 16)} min={1} />
+          <Field label={t('frames.importCols')} value={cols} onChange={numGrid(setCols)} min={1} />
+          <Field label={t('frames.importRows')} value={rows} onChange={numGrid(setRows)} min={1} />
           <div />
           <Field label={t('frames.offsetX')} value={offsetX} onChange={num(setOffsetX, w)} min={0} />
           <Field label={t('frames.offsetY')} value={offsetY} onChange={num(setOffsetY, h)} min={0} />
@@ -122,7 +131,17 @@ export function ResliceSheetDialog({
         </div>
         {error && <div className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-400">{error}</div>}
         <div className="flex items-center justify-between gap-2 pt-1">
-          <span className="text-[10px] text-muted-foreground">{nat ? `${nat.w}×${nat.h}px` : ''}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted-foreground">{nat ? `${nat.w}×${nat.h}px` : ''}</span>
+            {hasOffsets && (
+              <Button
+                variant="ghost" size="sm" className="h-6 gap-1 px-1.5 text-[11px]"
+                onClick={clearOffsets}
+              >
+                <RotateCcw className="h-3 w-3" /> {t('frames.resliceReset')}
+              </Button>
+            )}
+          </div>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>{t('newAsset.cancel')}</Button>
             <Button size="sm" disabled={busy} onClick={() => void run()}>

@@ -9,6 +9,7 @@
  */
 import { useTranslation } from 'react-i18next';
 import { SlidersHorizontal } from 'lucide-react';
+import { InspectorSection } from './InspectorSection.js';
 
 export interface GenParamsSummary {
   seed: number | null;
@@ -28,11 +29,12 @@ function Row({ label, value }: { label: string; value: string }) {
 export function GenParamsCard({ params }: { params: GenParamsSummary | null }) {
   const { t } = useTranslation('spriteStudio');
   return (
-    <div className="space-y-1.5 rounded border p-2">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        <SlidersHorizontal className="h-3.5 w-3.5" />
-        {t('generate.params.title')}
-      </div>
+    <InspectorSection
+      id="genParams"
+      icon={SlidersHorizontal}
+      title={t('generate.params.title')}
+      bodyClassName="space-y-1.5"
+    >
       {params ? (
         <>
           <Row
@@ -48,6 +50,6 @@ export function GenParamsCard({ params }: { params: GenParamsSummary | null }) {
       ) : (
         <div className="text-[11px] text-muted-foreground">{t('generate.params.empty')}</div>
       )}
-    </div>
+    </InspectorSection>
   );
 }

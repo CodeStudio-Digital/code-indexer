@@ -131,24 +131,27 @@ export function mountSpriteAssetRoutes(app: Hono, deps: ServerDeps): void {
 
   // Version bytes — full PNG.
   app.get('/api/sprite-studio/projects/:projectId/versions/:versionId/file', (c) => {
-    const png = readVersionPng(deps, c);
-    if (!png) return c.json({ error: 'not_found' }, 404);
-    return pngResponse(c, png);
+    const hit = readVersionFile(deps, c);
+    if (!hit) return c.json({ error: 'not_found' }, 404);
+    return pngResponse(c, hit.png, hit.contentHash);
   });
 
   // Version thumbnail — box-downscaled off-thread by the sprite worker.
   app.get('/api/sprite-studio/projects/:projectId/versions/:versionId/thumb', async (c) => {
-    const png = readVersionPng(deps, c);
-    if (!png) return c.json({ error: 'not_found' }, 404);
+    const hit = readVersionFile(deps, c);
+    if (!hit) return c.json({ error: 'not_found' }, 404);
     const s = Math.max(16, Math.min(512, Number(c.req.query('s')) || 128));
     try {
       const worker = getSpriteWorkerClient();
-      const out = await worker.processPipeline(png.toString('base64'), [
+      const out = await worker.processPipeline(hit.png.toString('base64'), [
         { op: 'resize', mode: 'box', width: s, height: s },
       ]);
-      return pngResponse(c, Buffer.from(out.pngBase64, 'base64'));
+      return pngResponse(c, Buffer.from(out.pngBase64, 'base64'), hit.contentHash);
     } catch {
-      return pngResponse(c, png); // worker unavailable → serve full-res
+      // Worker unavailable → serve full-res as a stopgap. NEVER with immutable
+      // caching (contentHash omitted): the wrong representation must expire so
+      // the real thumb self-heals once the worker is back.
+      return pngResponse(c, hit.png, null);
     }
   });
 }
@@ -163,7 +166,10 @@ function versionSize(
   return v?.width && v.height ? { width: v.width, height: v.height } : fallback;
 }
 
-function readVersionPng(deps: ServerDeps, c: { req: { param(k: string): string } }): Buffer | null {
+function readVersionFile(
+  deps: ServerDeps,
+  c: { req: { param(k: string): string } },
+): { png: Buffer; contentHash: string | null } | null {
   const ideProjectId = Number(c.req.param('projectId'));
   const versionId = Number(c.req.param('versionId'));
   const root = deps.db.getProject(ideProjectId)?.root_path;
@@ -171,14 +177,41 @@ function readVersionPng(deps: ServerDeps, c: { req: { param(k: string): string }
   if (!root || !version) return null;
   try {
     const abs = resolveInsideSpriteDir(root, version.file_rel_path);
-    return fs.readFileSync(abs);
+    return { png: fs.readFileSync(abs), contentHash: version.content_hash ?? null };
   } catch {
     return null;
   }
 }
 
-function pngResponse(c: { body(b: BodyInit, init?: ResponseInit): Response }, png: Buffer): Response {
+function pngResponse(
+  c: {
+    req: { query(k: string): string | undefined; header(k: string): string | undefined };
+    body(b: BodyInit, init?: ResponseInit): Response;
+  },
+  png: Buffer,
+  /** The version's CURRENT content hash — pass null to force short-lived
+   *  caching (e.g. the thumb route's full-res fallback, which must expire). */
+  contentHash?: string | null,
+): Response {
+  // Content-addressed requests (?h=<hash prefix>, appended by the frontend's
+  // versionFileUrl/versionThumbUrl) may cache long-term — the URL changes
+  // whenever the bytes do. But ONLY when the client's hash matches the
+  // version's CURRENT content hash: an in-place overwrite ("Salvar Sprite")
+  // changes the hash under the same versionId, and a stale-h request must get
+  // the short-lived response so old windows converge instead of 304-freezing.
+  const bust = c.req.query('h');
+  const valid = !!bust && !!contentHash && contentHash.startsWith(bust);
+  if (!valid) {
+    return c.body(new Uint8Array(png), {
+      headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=60' },
+    });
+  }
+  const etag = `"${bust}"`;
+  const cacheControl = 'private, max-age=31536000, immutable';
+  if (c.req.header('if-none-match') === etag) {
+    return new Response(null, { status: 304, headers: { etag, 'cache-control': cacheControl } });
+  }
   return c.body(new Uint8Array(png), {
-    headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=60' },
+    headers: { 'content-type': 'image/png', 'cache-control': cacheControl, etag },
   });
 }

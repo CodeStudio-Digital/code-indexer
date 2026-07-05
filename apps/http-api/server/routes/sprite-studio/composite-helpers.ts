@@ -38,10 +38,20 @@ export function resolveCompositeColumns(deps: ServerDeps, ctx: AnimContext): Com
   const gridLen = Math.max(...frames.map((f) => f.frame_index)) + 1;
   const defaultMs = Math.round(1000 / Math.max(1, anim.fps));
 
+  // Per-request decode memo: animations repeat versionIds across columns, and
+  // read+inflate per cell is the expensive part (this runs on the Electron
+  // MAIN process). Callers may mutate the returned buffer downstream, so cache
+  // the pristine decode and hand out a fresh copy per call (memcpy ≪ decode).
+  const decoded = new Map<number, RgbaImage>();
   const decodeCell = (versionId: number): RgbaImage => {
-    const version = deps.spriteAssetsStore.getVersion(versionId);
-    if (!version) throw new Error(`missing version ${versionId}`);
-    return decodeImage(fs.readFileSync(resolveInsideSpriteDir(root, version.file_rel_path)));
+    let img = decoded.get(versionId);
+    if (!img) {
+      const version = deps.spriteAssetsStore.getVersion(versionId);
+      if (!version) throw new Error(`missing version ${versionId}`);
+      img = decodeImage(fs.readFileSync(resolveInsideSpriteDir(root, version.file_rel_path)));
+      decoded.set(versionId, img);
+    }
+    return { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height };
   };
 
   const columns: CompositeColumn[] = [];

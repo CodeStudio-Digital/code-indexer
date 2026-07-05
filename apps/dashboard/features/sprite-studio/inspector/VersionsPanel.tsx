@@ -1,26 +1,21 @@
 /**
- * Inspector card: the active asset's version history. Clicking a row selects
- * it as the active version; the trash affordance (hover) curation-deletes a
- * version after confirmation — repo file + manifest entry + mirror row go
- * together on the backend. When a projectId is provided, the selected version
- * also renders a Unity-style checkerboard preview below the list.
+ * Inspector card: the active asset's version history. A VIRTUALIZED, bounded
+ * scroll list (assets accumulate 100+ versions) with a mini thumbnail per row;
+ * the selected-version preview is PINNED below the list as a fixed footer, so it
+ * stays visible no matter how far the list is scrolled. Rows select / drag onto
+ * the timeline; hover affordances edit-in-place / iterate / curation-delete.
  */
+import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { History, Pencil, Trash2, Wand2 } from 'lucide-react';
-import { cn } from '../../../lib/utils.js';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { History } from 'lucide-react';
 import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { versionFileUrl } from '../api.js';
 import type { AssetVersion } from '../types.js';
-import { setVersionDragData } from '../version-drag.js';
+import { InspectorSection } from './InspectorSection.js';
+import { CHECKERBOARD, VersionRow, vLabel } from './VersionRow.js';
 
-/** Pure-CSS transparent checkerboard (same trick as VariantCard). */
-const CHECKERBOARD: React.CSSProperties = {
-  backgroundImage:
-    'conic-gradient(rgba(128,128,128,0.18) 0 25%, transparent 0 50%, rgba(128,128,128,0.18) 0 75%, transparent 0)',
-  backgroundSize: '16px 16px',
-};
-
-const vLabel = (v: AssetVersion): string => `v${String(v.version).padStart(3, '0')}`;
+const ROW_H = 38;
 
 export function VersionsPanel({
   versions,
@@ -43,11 +38,21 @@ export function VersionsPanel({
   onIterate?: (versionId: number, label: string) => void;
   /** Pencil: edit this version IN PLACE (focused session, no new version). */
   onEditInPlace?: (versionId: number) => void;
-  /** IDE project id — absent hides the selected-version preview pane. */
+  /** IDE project id — absent hides thumbnails + the pinned preview pane. */
   projectId?: number;
 }) {
   const { t } = useTranslation('spriteStudio');
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Newest first (matches the old reversed render order).
+  const ordered = useMemo(() => [...versions].reverse(), [versions]);
   const active = activeVersionId != null ? versions.find((v) => v.id === activeVersionId) : undefined;
+
+  const virtualizer = useVirtualizer({
+    count: ordered.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_H,
+    overscan: 8,
+  });
 
   const askDelete = async (v: AssetVersion) => {
     const ok = await confirm({
@@ -60,108 +65,68 @@ export function VersionsPanel({
   };
 
   return (
-    <div className="space-y-1 rounded border p-2">
-      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        <History className="h-3 w-3" /> {t('inspector.versions')}
-      </div>
-      {versions.length === 0 ? (
-        <div className="py-2 text-xs text-muted-foreground">{t('inspector.noVersions')}</div>
+    <InspectorSection
+      id="versions"
+      icon={History}
+      title={t('inspector.versions')}
+      flushBody
+      actions={<span className="px-1 text-[10px] tabular-nums text-muted-foreground">{versions.length}</span>}
+    >
+      {ordered.length === 0 ? (
+        <div className="px-2 py-2 text-xs text-muted-foreground">{t('inspector.noVersions')}</div>
       ) : (
-        <div className="space-y-px">
-          {[...versions].reverse().map((v) => (
-            <div
-              key={v.id}
-              // Rows drag onto the animation timeline (replace a frame / append).
-              draggable
-              onDragStart={(e) => setVersionDragData(e.dataTransfer, {
-                versionId: v.id, assetId: v.assetId, version: v.version, label: vLabel(v),
+        <>
+          {/* Only the LIST scrolls — bounded height keeps the preview in view. */}
+          <div ref={scrollRef} className="max-h-[240px] overflow-y-auto px-1">
+            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualizer.getVirtualItems().map((vi) => {
+                const v = ordered[vi.index];
+                return (
+                  <div
+                    key={vi.key}
+                    className="absolute left-0 w-full py-px"
+                    style={{ top: 0, transform: `translateY(${vi.start}px)`, height: vi.size }}
+                  >
+                    <VersionRow
+                      v={v}
+                      projectId={projectId}
+                      isActive={v.id === activeVersionId}
+                      isCurrent={v.id === currentVersionId}
+                      onSelect={onSelect}
+                      onDelete={onDelete ? (x) => void askDelete(x) : undefined}
+                      onIterate={onIterate}
+                      onEditInPlace={onEditInPlace}
+                    />
+                  </div>
+                );
               })}
-              title={t('inspector.dragVersionHint')}
-              className={cn(
-                'group flex w-full cursor-grab items-center gap-2 rounded px-1.5 py-1 text-left text-[11px] transition-colors active:cursor-grabbing',
-                v.id === activeVersionId
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <button type="button" onClick={() => onSelect(v.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                <span className="font-mono font-medium">{vLabel(v)}</span>
-                <span className="min-w-0 flex-1 truncate">
-                  {t(`source.${v.source}`)}
-                  {' · '}
-                  {`${v.width}x${v.height}`}
-                </span>
-                {v.id === currentVersionId && (
-                  <span className="rounded bg-primary/15 px-1 py-px text-[9px] font-medium text-primary">
-                    {t('inspector.currentBadge')}
-                  </span>
-                )}
-                <span className="shrink-0 text-[10px] opacity-70">
-                  {v.createdAt ? new Date(v.createdAt).toLocaleDateString() : ''}
-                </span>
-              </button>
-              {onEditInPlace && (
-                <button
-                  type="button"
-                  onClick={() => onEditInPlace(v.id)}
-                  title={t('inspector.editInPlace')}
-                  aria-label={t('inspector.editInPlace')}
-                  className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-primary/15 hover:text-primary group-hover:opacity-100"
-                >
-                  <Pencil className="h-3 w-3" />
-                </button>
-              )}
-              {onIterate && (
-                <button
-                  type="button"
-                  onClick={() => onIterate(v.id, vLabel(v))}
-                  title={t('inspector.iterateVersion')}
-                  aria-label={t('inspector.iterateVersion')}
-                  className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-primary/15 hover:text-primary group-hover:opacity-100"
-                >
-                  <Wand2 className="h-3 w-3" />
-                </button>
-              )}
-              {onDelete && (
-                <button
-                  type="button"
-                  onClick={() => void askDelete(v)}
-                  title={t('inspector.deleteVersion')}
-                  aria-label={t('inspector.deleteVersion')}
-                  className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-red-500/15 hover:text-red-400 group-hover:opacity-100"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              )}
             </div>
-          ))}
-        </div>
-      )}
-      {projectId != null && active && (
-        <div className="space-y-1 pt-1">
-          <div
-            className="flex h-40 items-center justify-center overflow-hidden rounded border p-1"
-            style={CHECKERBOARD}
-          >
-            <img
-              key={`${active.id}:${active.contentHash ?? ''}`}
-              src={versionFileUrl(projectId, active.id, active.contentHash)}
-              alt={t('inspector.versionPreviewAlt', { v: vLabel(active) })}
-              className="h-full w-full object-contain"
-              style={{ imageRendering: 'pixelated' }}
-              draggable={false}
-            />
           </div>
-          <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-            <span className="min-w-0 truncate font-mono">
-              {`${vLabel(active)} · ${active.width}×${active.height} · ${t(`source.${active.source}`)}`}
-            </span>
-            <span className="shrink-0">
-              {active.createdAt ? new Date(active.createdAt).toLocaleDateString() : ''}
-            </span>
-          </div>
-        </div>
+          {/* Pinned preview footer — fixed below the list, always visible. */}
+          {projectId != null && active && (
+            <div className="border-t border-border/60 px-2 pt-2">
+              <div className="flex h-40 items-center justify-center overflow-hidden rounded border p-1" style={CHECKERBOARD}>
+                <img
+                  key={`${active.id}:${active.contentHash ?? ''}`}
+                  src={versionFileUrl(projectId, active.id, active.contentHash)}
+                  alt={t('inspector.versionPreviewAlt', { v: vLabel(active) })}
+                  className="h-full w-full object-contain"
+                  style={{ imageRendering: 'pixelated' }}
+                  draggable={false}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-1 text-[10px] text-muted-foreground">
+                <span className="min-w-0 truncate font-mono">
+                  {`${vLabel(active)} · ${active.width}×${active.height} · ${t(`source.${active.source}`)}`}
+                </span>
+                <span className="shrink-0">
+                  {active.createdAt ? new Date(active.createdAt).toLocaleDateString() : ''}
+                </span>
+              </div>
+            </div>
+          )}
+        </>
       )}
-    </div>
+    </InspectorSection>
   );
 }

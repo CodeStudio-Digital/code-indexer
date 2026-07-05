@@ -11,7 +11,9 @@
     "loadFailed": "Could not list this folder",
     "dragSoon": "Dragging images into reference slots is coming soon.",
     "bottomPlaceholder": "Studio console — generation and job logs will land here.",
-    "inspector": "Inspector"
+    "inspector": "Inspector",
+    "leftRail": "Studio panels",
+    "rightRail": "Inspector"
   },
   "header": {
     "noProjects": "No projects yet",
@@ -172,6 +174,9 @@
   },
   "edit": {
     "save": "Save version",
+    "overwrite": "Overwrite version",
+    "overwriteConfirmTitle": "Overwrite this version?",
+    "overwriteConfirmBody": "This rewrites the version's image in place — every timeline frame using it updates, and it can't be undone. Use Save as new version to keep the original.",
     "saveSprite": "Save Sprite",
     "saveSpriteHint": "Overwrite this version in place — every frame using it updates",
     "saveAsNew": "Save as new version",
@@ -187,6 +192,13 @@
     "flattenFirst": "Flatten to a single layer before resizing",
     "fit": "Fit to view",
     "zoom100": "Zoom 100%"
+  },
+  "editor": {
+    "closeTab": "Close tab",
+    "unsaved": "Unsaved changes",
+    "closeTabConfirmTitle": "Close without saving?",
+    "closeTabConfirmBody": "This sprite has unsaved edits. Closing the tab discards them.",
+    "closeTabConfirm": "Close & discard"
   },
   "layers": {
     "add": "Add layer",
@@ -472,7 +484,7 @@
     "reroll": "Re-roll",
     "rerollPrompt": "same character, single clean pixel-art sprite frame",
     "rerollMore": "Generating more…",
-    "inspector": { "noFrame": "Select a frame in the timeline to inspect it." },
+    "inspector": { "noFrame": "Select a frame in the timeline to inspect it.", "frameTitle": "Frame", "tracksTitle": "Layers", "trackCount": "{{n}}f", "activateTrack": "Make active track" },
     "loop": { "setIn": "Set loop start here", "setOut": "Set loop end here", "clear": "Clear loop range" },
     "preview": {
       "play": "Play",
@@ -551,6 +563,7 @@
     },
     "selectGroup": "Select batch",
     "deleteGroup": "Delete batch",
+    "renameGroup": "Rename group",
     "selectedCount": "{{n}} selected",
     "addSelected": "Add to timeline",
     "deleteSelected": "Delete",
@@ -575,6 +588,9 @@
     "resliceApply": "Apply",
     "reslicing": "Slicing…",
     "reslicedDone": "Re-sliced into {{n}} frame(s)",
+    "resliceManualHint": "Drag a frame to nudge just its crop — it can borrow a neighbour's pixels. Double-click to reset.",
+    "resliceCellHint": "Drag to nudge this frame · double-click to reset",
+    "resliceReset": "Reset nudges",
     "offsetX": "Offset X",
     "offsetY": "Offset Y",
     "marginX": "Margin X",

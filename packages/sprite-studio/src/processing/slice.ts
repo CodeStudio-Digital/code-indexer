@@ -51,6 +51,13 @@ export interface SliceOpts {
   /** Right/bottom pixels trimmed off the usable area. */
   marginX?: number;
   marginY?: number;
+  /**
+   * Per-cell nudge in SOURCE pixels (row-major, index = ry*cols+cx). Slides an
+   * individual cell's crop window over the sheet — so one frame can capture
+   * pixels a neighbour would otherwise own (overlap is fine). Missing/short
+   * entries mean no nudge; the final read is clamped to stay in bounds.
+   */
+  offsets?: Array<{ dx: number; dy: number } | null | undefined>;
 }
 
 /**
@@ -71,12 +78,16 @@ export function sliceGridAdvanced(img: RgbaImage, o: SliceOpts): RgbaImage[] {
   if (cellW < 1 || cellH < 1) {
     throw new Error(`sliceGridAdvanced: usable area ${usableW}x${usableH} too small for ${cols}x${rows}`);
   }
+  const maxX = Math.max(0, img.width - cellW);
+  const maxY = Math.max(0, img.height - cellH);
   const cells: RgbaImage[] = [];
   for (let ry = 0; ry < rows; ry++) {
     for (let cx = 0; cx < cols; cx++) {
       const rgba = new Uint8Array(cellW * cellH * 4);
-      const srcX = ox + cx * cellW;
-      const srcY = oy + ry * cellH;
+      const nudge = o.offsets?.[ry * cols + cx];
+      // Per-cell nudge, then clamp the crop window inside the sheet.
+      const srcX = Math.max(0, Math.min(maxX, ox + cx * cellW + Math.round(nudge?.dx ?? 0)));
+      const srcY = Math.max(0, Math.min(maxY, oy + ry * cellH + Math.round(nudge?.dy ?? 0)));
       for (let y = 0; y < cellH; y++) {
         const srcOff = ((srcY + y) * img.width + srcX) * 4;
         rgba.set(img.rgba.subarray(srcOff, srcOff + cellW * 4), y * cellW * 4);

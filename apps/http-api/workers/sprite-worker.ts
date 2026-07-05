@@ -30,7 +30,7 @@ import { encodeGif } from '../../../packages/sprite-studio/src/export/gif.js';
 import { encodePng } from '../../../packages/sprite-studio/src/processing/png.js';
 import { decodeImage, stripDataUriPrefix } from '../../../packages/sprite-studio/src/processing/decode-image.js';
 import { runPipeline } from '../../../packages/sprite-studio/src/processing/ops.js';
-import { sliceGrid } from '../../../packages/sprite-studio/src/processing/slice.js';
+import { sliceGrid, sliceGridAdvanced, type SliceOpts } from '../../../packages/sprite-studio/src/processing/slice.js';
 import type { SpriteOp } from '../../../packages/sprite-studio/src/processing/types.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 
@@ -86,6 +86,23 @@ bridge.handle('image.slice', async (payload) => {
   const img = decodeImage(Buffer.from(stripDataUriPrefix(pngBase64), 'base64'));
   const cells = sliceGrid(img, cols, rows);
   return { cells: cells.map((c) => encodePng(c).toString('base64')) };
+});
+
+// Custom re-slice (offset/margin + per-cell nudges) — same compute as
+// image.slice, but with the full SliceOpts. Keeps the sheet decode + per-cell
+// PNG encode off the main process (a large sheet blocks it for hundreds of ms).
+bridge.handle('image.sliceAdvanced', async (payload) => {
+  const { pngBase64, opts } = payload as { pngBase64: string; opts: SliceOpts };
+  if (typeof pngBase64 !== 'string' || pngBase64.length === 0) {
+    throw new Error('image.sliceAdvanced: pngBase64 is required');
+  }
+  const img = decodeImage(Buffer.from(stripDataUriPrefix(pngBase64), 'base64'));
+  const cells = sliceGridAdvanced(img, opts);
+  return {
+    cells: cells.map((c) => encodePng(c).toString('base64')),
+    cellWidth: cells[0]?.width ?? 0,
+    cellHeight: cells[0]?.height ?? 0,
+  };
 });
 
 // Encode animation frames (PNG each) into one animated GIF (F2 preview).

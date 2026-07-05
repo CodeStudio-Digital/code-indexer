@@ -8,11 +8,13 @@
  */
 import { memo, useReducer } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronUp, Combine, Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Combine, Eye, EyeOff, Layers, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
+import { RangeInput } from '../../../components/ui/range-input.js';
 import type { EditorEngine } from '../engine/EditorEngine.js';
 import type { Layer } from '../engine/engine-types.js';
 import { useSpriteEditorStore } from '../store/editor-store.js';
+import { InspectorSection } from '../inspector/InspectorSection.js';
 
 export function LayerList({ engine }: { engine: EditorEngine }) {
   const { t } = useTranslation('spriteStudio');
@@ -37,30 +39,38 @@ export function LayerList({ engine }: { engine: EditorEngine }) {
     engine.history.pushSnapshot(before, doc.snapshot(), 'Flatten');
   });
 
+  const actions = (
+    <>
+      <button
+        type="button"
+        disabled={doc.layers.length < 2}
+        onClick={flatten}
+        title={t('layers.flatten')}
+        aria-label={t('layers.flatten')}
+        className="flex h-5 w-5 items-center justify-center rounded hover:bg-muted hover:text-foreground disabled:opacity-30"
+      >
+        <Combine className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        onClick={() => act(() => doc.addLayer())}
+        title={t('layers.add')}
+        aria-label={t('layers.add')}
+        className="flex h-5 w-5 items-center justify-center rounded hover:bg-muted hover:text-foreground"
+      >
+        <Plus className="h-3 w-3" />
+      </button>
+    </>
+  );
+
   return (
-    <div className="space-y-1 rounded border p-2">
-      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        <span className="flex-1">{t('layers.title')}</span>
-        <button
-          type="button"
-          disabled={doc.layers.length < 2}
-          onClick={flatten}
-          title={t('layers.flatten')}
-          aria-label={t('layers.flatten')}
-          className="flex h-5 w-5 items-center justify-center rounded hover:bg-muted hover:text-foreground disabled:opacity-30"
-        >
-          <Combine className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          onClick={() => act(() => doc.addLayer())}
-          title={t('layers.add')}
-          aria-label={t('layers.add')}
-          className="flex h-5 w-5 items-center justify-center rounded hover:bg-muted hover:text-foreground"
-        >
-          <Plus className="h-3 w-3" />
-        </button>
-      </div>
+    <InspectorSection
+      id="layers"
+      icon={Layers}
+      title={t('layers.title')}
+      actions={actions}
+      bodyClassName="space-y-1"
+    >
       {ordered.length === 0 ? (
         <div className="py-2 text-xs text-muted-foreground">{t('layers.empty')}</div>
       ) : (
@@ -83,7 +93,7 @@ export function LayerList({ engine }: { engine: EditorEngine }) {
           ))}
         </div>
       )}
-    </div>
+    </InspectorSection>
   );
 }
 
@@ -114,13 +124,14 @@ const LayerRow = memo(function LayerRow({
         {layer.visible ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
       </button>
       <span className="min-w-0 flex-1 truncate">{layer.name}</span>
-      <input
-        type="range" min={0} max={100} value={Math.round(layer.opacity * 100)}
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => onOpacity(Number(e.target.value) / 100)}
-        title={t('layers.opacity')} aria-label={t('layers.opacity')}
-        className="h-1 w-12 cursor-pointer accent-primary"
-      />
+      <span onClick={(e) => e.stopPropagation()} title={t('layers.opacity')}>
+        <RangeInput
+          min={0} max={100} value={Math.round(layer.opacity * 100)}
+          onChange={(v) => onOpacity(v / 100)}
+          sliderClassName="w-12" numberClassName="w-7 h-4 text-[10px]" className="gap-1"
+          aria-label={t('layers.opacity')}
+        />
+      </span>
       <button
         type="button" disabled={!canMoveUp} onClick={(e) => { e.stopPropagation(); onUp(); }}
         title={t('layers.moveUp')} aria-label={t('layers.moveUp')}

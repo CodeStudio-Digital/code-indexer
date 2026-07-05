@@ -17,6 +17,7 @@ import {
   CANVAS_PRESETS,
   type OutlineStyle, type PaletteMode, type Perspective, type StudioSettings,
 } from '../types.js';
+import { InspectorSection } from './InspectorSection.js';
 
 const PALETTE_MODES: PaletteMode[] = ['free', 'maxColors', 'fixed'];
 const PERSPECTIVES: Perspective[] = ['side', 'top-down', 'three-quarter', 'isometric'];
@@ -60,12 +61,7 @@ export function StyleSettingsCard({
   };
 
   return (
-    <div className="space-y-2 rounded border p-2">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        <Palette className="h-3.5 w-3.5" />
-        {t('styleSettings.title')}
-      </div>
-
+    <InspectorSection id="style" icon={Palette} title={t('styleSettings.title')}>
       <Field label={t('styleSettings.styleKeywords')}>
         <Input
           value={keywords}
@@ -155,6 +151,6 @@ export function StyleSettingsCard({
           className="h-7 text-xs"
         />
       </Field>
-    </div>
+    </InspectorSection>
   );
 }

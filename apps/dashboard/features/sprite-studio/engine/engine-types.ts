@@ -62,6 +62,8 @@ export interface EngineSummary {
   docH: number;
   /** Lets the layer list re-read doc.layers after undo/redo of layer ops. */
   layerCount: number;
+  /** Unsaved edits since the last load/save (tab dot + close confirm). */
+  dirty: boolean;
 }
 
 export interface EngineEvents {

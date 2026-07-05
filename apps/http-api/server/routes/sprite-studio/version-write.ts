@@ -27,6 +27,9 @@ export interface WriteEditedVersionOpts {
   parentVersionId?: number | null;
   /** Version provenance kind (default 'edited'; sheet import passes 'imported'). */
   source?: SpriteVersionSource;
+  /** Known PNG dimensions — skips the pngjs decode-for-dims on the main
+   *  process (batch slice/align paths already know every cell's size). */
+  dims?: { width: number; height: number };
 }
 
 /**
@@ -87,7 +90,7 @@ export function writeEditedVersion(
   const manifest = readAssetManifest(root, asset.slug);
   if (!manifest) throw new Error('no_manifest');
   const source = opts.source ?? 'edited';
-  const { width, height } = decodePng(png);
+  const { width, height } = opts.dims ?? decodePng(png);
   const hash = crypto.createHash('sha256').update(png).digest('hex');
   const v = store.nextVersionNumber(asset.id);
   const fileName = versionFileName(v);

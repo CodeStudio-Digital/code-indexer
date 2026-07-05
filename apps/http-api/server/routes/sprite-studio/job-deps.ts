@@ -5,6 +5,7 @@
  * (off-thread processing), the scratch dir and the repo root. Keeping this glue
  * here — not in the package — is what lets the package stay unit-testable.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { createImagesProvider, createCoderProvider } from '@mcp/services/providers/factory.js';
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
@@ -18,6 +19,35 @@ import { emitSpriteEvent } from './bus-registry.js';
 /** Scratch root (OUTSIDE any repo): `<dataDir>/sprite-studio/tmp/<jobId>`. */
 export function spriteScratchDir(jobId: number): string {
   return path.join(mcpDataDir(), 'sprite-studio', 'tmp', String(jobId));
+}
+
+/**
+ * One-shot ORPHAN sweep of the scratch root: per-job dirs (staged candidates +
+ * the original sheet.png) were never deleted anywhere, so disk grew unbounded.
+ * A dir is removed only when its jobId no longer exists in the jobs store —
+ * live jobs keep their candidates (the rehydration/pick flow reads them).
+ * Called once at route-mount (server start); async + best-effort.
+ */
+export function sweepOrphanSpriteScratch(deps: ServerDeps): void {
+  const base = path.join(mcpDataDir(), 'sprite-studio', 'tmp');
+  setImmediate(() => {
+    let names: string[];
+    try {
+      names = fs.readdirSync(base);
+    } catch {
+      return; // no scratch root yet
+    }
+    for (const name of names) {
+      const jobId = Number(name);
+      if (!Number.isInteger(jobId) || jobId <= 0) continue;
+      try {
+        if (deps.spriteJobsStore.get(jobId)) continue;
+        fs.rmSync(path.join(base, name), { recursive: true, force: true });
+      } catch {
+        /* best effort — retried on the next server start */
+      }
+    }
+  });
 }
 
 /** Resolve the IDE project root path for a sprite project id (for autoSave/promote). */

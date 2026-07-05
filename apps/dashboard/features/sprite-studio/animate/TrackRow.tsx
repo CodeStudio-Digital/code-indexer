@@ -6,10 +6,12 @@
  * WHOLE column; overlay drag moves that single cell. Hidden tracks render
  * at half opacity.
  */
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { cn } from '../../../lib/utils.js';
 import type { AssetVersion } from '../types.js';
+import type { SpriteVersionDragPayload } from '../version-drag.js';
 import { hasVersionDragData, readVersionDragData } from '../version-drag.js';
 import type { AnimFrame, TrackMeta } from './api-anim.js';
 import { FrameCell } from './FrameCell.js';
@@ -43,23 +45,44 @@ export interface TrackRowProps {
 export function TrackRow(p: TrackRowProps) {
   const { t } = useTranslation('spriteStudio');
   const isBase = p.track.id === 0;
+  const trackId = p.track.id;
+  const { onSelect, onClearCell, onSetCell, onColumnDrag, onCellDrag, dragFrom, assetId } = p;
+
+  // Per-cell handlers are useCallback'd so FrameCell's memo actually skips:
+  // fresh inline closures re-rendered EVERY cell of every track on each panel
+  // render (scrub pointermove, SSE job bumps during a generation). dragFrom is
+  // a ref, read at call time — safe as a dep.
 
   // A FRAME drag landed on column `col` of this row (D6 semantics).
-  const onFrameDrop = (col: number) => {
-    const from = p.dragFrom.current;
-    p.dragFrom.current = null;
+  const onFrameDrop = useCallback((col: number) => {
+    const from = dragFrom.current;
+    dragFrom.current = null;
     if (!from) return;
-    if (from.track === 0 && p.track.id === 0) p.onColumnDrag(from.col, col);
-    else if (from.track === p.track.id) p.onCellDrag(p.track.id, from.col, col);
-  };
+    if (from.track === 0 && trackId === 0) onColumnDrag(from.col, col);
+    else if (from.track === trackId) onCellDrag(trackId, from.col, col);
+  }, [dragFrom, trackId, onColumnDrag, onCellDrag]);
+
+  const onCellSelect = useCallback((i: number) => onSelect(trackId, i), [onSelect, trackId]);
+  const onCellDelete = useCallback((i: number) => onClearCell(trackId, i), [onClearCell, trackId]);
+  const onCellReplace = useCallback(
+    (i: number, versionId: number) => onSetCell(trackId, i, versionId),
+    [onSetCell, trackId],
+  );
+  const onCellDragStart = useCallback((i: number) => {
+    dragFrom.current = { track: trackId, col: i };
+  }, [dragFrom, trackId]);
+  const onCellDropVersion = useCallback((i: number, payload: SpriteVersionDragPayload) => {
+    if (payload.assetId !== assetId) { toast.error(t('animate.timeline.dropWrongAsset')); return; }
+    onSetCell(trackId, i, payload.versionId);
+  }, [assetId, onSetCell, trackId, t]);
 
   // Empty-placeholder drop: real DOM event — version payload OR frame move.
   const onEmptyDrop = (col: number, e: React.DragEvent) => {
     e.preventDefault();
     const payload = readVersionDragData(e.dataTransfer);
     if (payload) {
-      if (payload.assetId !== p.assetId) { toast.error(t('animate.timeline.dropWrongAsset')); return; }
-      p.onSetCell(p.track.id, col, payload.versionId);
+      if (payload.assetId !== assetId) { toast.error(t('animate.timeline.dropWrongAsset')); return; }
+      onSetCell(trackId, col, payload.versionId);
       return;
     }
     onFrameDrop(col);
@@ -87,18 +110,15 @@ export function TrackRow(p: TrackRowProps) {
             defaultMs={Math.round(1000 / Math.max(1, p.fps))}
             version={p.versionById.get(cell.versionId)}
             showDuration={isBase}
-            onSelect={(i) => p.onSelect(p.track.id, i)}
+            onSelect={onCellSelect}
             onDuration={p.onDuration}
-            onDelete={(i) => p.onClearCell(p.track.id, i)}
+            onDelete={onCellDelete}
             onDuplicate={p.onDuplicateColumn}
-            onReplace={(i, versionId) => p.onSetCell(p.track.id, i, versionId)}
+            onReplace={onCellReplace}
             onEditVersion={p.onEditVersion}
-            onDragStart={(i) => { p.dragFrom.current = { track: p.track.id, col: i }; }}
+            onDragStart={onCellDragStart}
             onDropOn={onFrameDrop}
-            onDropVersion={(i, payload) => {
-              if (payload.assetId !== p.assetId) { toast.error(t('animate.timeline.dropWrongAsset')); return; }
-              if (i != null) p.onSetCell(p.track.id, i, payload.versionId);
-            }}
+            onDropVersion={onCellDropVersion}
           />
         ) : (
           <VersionPickerPopover

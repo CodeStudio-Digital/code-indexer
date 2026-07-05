@@ -70,7 +70,8 @@ export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
         ];
         const out = await worker.processPipeline(png.toString('base64'), ops);
         const row = writeEditedVersion(deps, root, asset, Buffer.from(out.pngBase64, 'base64'), {
-          setCurrent: false, parentVersionId: version.id,
+          // Worker reports the output dims — skip the decode-for-dims on main.
+          setCurrent: false, parentVersionId: version.id, dims: { width: out.width, height: out.height },
         });
         alignedVersionByFrame.set(frame.id, row.id);
       }

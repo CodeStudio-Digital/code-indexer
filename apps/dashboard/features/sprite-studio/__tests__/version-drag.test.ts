@@ -51,9 +51,9 @@ describe('version-drag payload', () => {
     expect(readVersionDragData(wrongTypes)).toBeNull();
   });
 
-  it('defaults version/label when a partial payload arrives', () => {
+  it('rejects partial payloads instead of guessing version/label', () => {
     const dt = fakeDataTransfer();
     dt.setData(SPRITE_VERSION_MIME, JSON.stringify({ versionId: 15, assetId: 3 }));
-    expect(readVersionDragData(dt)).toEqual({ versionId: 15, assetId: 3, version: 0, label: '#15' });
+    expect(readVersionDragData(dt)).toBeNull();
   });
 });

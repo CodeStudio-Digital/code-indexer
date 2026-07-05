@@ -53,6 +53,9 @@ export function FramesBrowserPanel({
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(loadSpriteStudioUi(projectId)?.collapsedFrameGroups ?? []),
   );
+  const [groupLabels, setGroupLabels] = useState<Record<string, string>>(
+    () => loadSpriteStudioUi(projectId)?.groupLabels ?? {},
+  );
   const seededRef = useRef(false);
 
   const versionById = useMemo(() => new Map(versions.map((v) => [v.id, v] as const)), [versions]);
@@ -102,6 +105,16 @@ export function FramesBrowserPanel({
   const toggleCollapse = useCallback((key: string) => {
     persistCollapsed(new Set(collapsed.has(key) ? [...collapsed].filter((k) => k !== key) : [...collapsed, key]));
   }, [collapsed, persistCollapsed]);
+
+  const renameGroup = useCallback((g: FrameGroupView, name: string) => {
+    setGroupLabels((prev) => {
+      const next = { ...prev };
+      if (name) next[g.key] = name;
+      else delete next[g.key];
+      saveSpriteStudioUi(projectId, { groupLabels: next });
+      return next;
+    });
+  }, [projectId]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -156,11 +169,13 @@ export function FramesBrowserPanel({
                     <VersionGroupHeader
                       group={row.group}
                       collapsed={collapsed.has(row.group.key)}
+                      customLabel={groupLabels[row.group.key]}
                       onToggleCollapse={toggleCollapse}
                       onGroupSelect={(ids, on) => useAnimateSession.getState().setGroup(ids, on)}
                       onGroupDelete={deleteGroup}
                       onRestoreGroup={(g) => restoreTimeline(g.versions.map((v) => v.id))}
                       onReslice={setReslice}
+                      onRename={renameGroup}
                     />
                   ) : (
                     <VersionMiniGrid

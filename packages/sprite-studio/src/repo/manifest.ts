@@ -182,6 +182,35 @@ export function removeVersion(
 }
 
 /**
+ * Remove MANY version entries in one read→write (bulk curation delete). Same
+ * final state as calling removeVersion once per v — `currentVersion` falls
+ * back to the highest remaining version when the current one is deleted —
+ * but the manifest is read/parsed/written ONCE instead of once per version
+ * (the per-version loop was O(n²) sync IO on the Electron main process).
+ */
+export function removeVersions(
+  projectRoot: string,
+  slug: string,
+  vs: number[],
+): SpriteAssetManifest | null {
+  const manifest = readAssetManifest(projectRoot, slug);
+  if (!manifest) return null;
+  const doomed = new Set(vs);
+  const versions = manifest.versions.filter((entry) => !doomed.has(entry.v));
+  const latest = versions.reduce((max, entry) => Math.max(max, entry.v), 0);
+  const updated: SpriteAssetManifest = {
+    ...manifest,
+    versions,
+    currentVersion:
+      manifest.currentVersion != null && doomed.has(manifest.currentVersion)
+        ? (latest || undefined)
+        : manifest.currentVersion,
+  };
+  writeAssetManifest(projectRoot, slug, updated);
+  return updated;
+}
+
+/**
  * Initialize `.sprite-studio/` (project.json + assets/ + refs/) for a repo.
  * Idempotent: returns the existing manifest untouched when already present.
  */

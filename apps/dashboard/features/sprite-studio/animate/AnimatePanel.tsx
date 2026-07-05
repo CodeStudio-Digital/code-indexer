@@ -17,7 +17,7 @@ import { GenerateBar } from './GenerateBar.js';
 import { PreviewCanvas } from './PreviewCanvas.js';
 import { TimelineStrip } from './TimelineStrip.js';
 import type { GenerationGroup } from './api-anim-bulk.js';
-import { ResliceSheetDialog } from './frames/ResliceSheetDialog.js';
+import { useAnimateSession, type AnimContext } from './animate-session-store.js';
 import { buildTimelineModel } from './timeline-model.js';
 import { useAnimGeneration } from './useAnimGeneration.js';
 import { useFrameDraft } from './useFrameDraft.js';
@@ -59,7 +59,6 @@ export function AnimatePanel({
   const [activeTrack, setActiveTrack] = useState(0);
   const [aligning, setAligning] = useState(false);
   const [direction, setDirection] = useState('');
-  const [resliceOpen, setResliceOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const current = animations.find((a) => a.id === selectedId) ?? null;
@@ -145,6 +144,71 @@ export function AnimatePanel({
       .catch((e) => setError((e as Error).message));
   }, [applyServer, resetForAnimation]);
 
+  const toggleTrackVisible = useCallback((id: number, visible: boolean) => {
+    if (!current) return;
+    trackCall(anim.patchTrack(current.id, id, { visible }));
+  }, [current, trackCall]);
+
+  // Publish the track + loaded-animation context to the RIGHT-rail inspector
+  // (which lives in a separate panel) so it can show layer separation + a
+  // re-slice that targets the loaded animation.
+  const inspectorTracks = useMemo(
+    () => (current
+      ? tracks.map((tr) => ({
+          id: tr.id, name: tr.name, visible: tr.visible,
+          count: model.trackCells(tr.id).filter(Boolean).length,
+        }))
+      : []),
+    [current, tracks, model],
+  );
+  const animContext = useMemo<AnimContext | null>(
+    () => (current ? {
+      assetId: asset.id,
+      name: current.name,
+      jobId: lastGenGroup?.jobId ?? null,
+      frameCount: lastGenGroup?.frameCount ?? current.frameCount ?? Math.max(1, model.gridLen),
+      hasSheet: lastGenGroup?.hasSheet === true,
+    } : null),
+    [current, asset.id, lastGenGroup, model.gridLen],
+  );
+  useEffect(() => {
+    // Content-guard: inspectorTracks/animContext are memoized on `model`/
+    // `current` IDENTITY, which churns on every frames edit — writing equal
+    // content into the store would re-render every bridge subscriber for
+    // nothing. Publish only the fields whose CONTENT actually changed.
+    const s = useAnimateSession.getState();
+    const patch: Parameters<typeof s.publishBridge>[0] = {};
+    const sameTracks = s.inspectorTracks.length === inspectorTracks.length
+      && s.inspectorTracks.every((tr, i) => {
+        const n = inspectorTracks[i];
+        return tr.id === n.id && tr.name === n.name && tr.visible === n.visible && tr.count === n.count;
+      });
+    if (!sameTracks) patch.inspectorTracks = inspectorTracks;
+    if (s.activeTrack !== activeTrack) patch.activeTrack = activeTrack;
+    const a = s.animContext;
+    const b = animContext;
+    const sameCtx = a === b || (!!a && !!b && a.assetId === b.assetId && a.name === b.name
+      && a.jobId === b.jobId && a.frameCount === b.frameCount && a.hasSheet === b.hasSheet);
+    if (!sameCtx) patch.animContext = animContext;
+    if (s.onActivateTrack !== setActiveTrack) patch.onActivateTrack = setActiveTrack;
+    if (s.onToggleTrackVisible !== toggleTrackVisible) patch.onToggleTrackVisible = toggleTrackVisible;
+    if (Object.keys(patch).length > 0) s.publishBridge(patch);
+  }, [inspectorTracks, activeTrack, animContext, toggleTrackVisible]);
+  // Unmount: drop the published callbacks/context so the module-level store
+  // doesn't retain closures over an unmounted panel.
+  useEffect(() => () => {
+    useAnimateSession.getState().publishBridge({
+      inspectorTracks: [], animContext: null, onActivateTrack: null, onToggleTrackVisible: null,
+    });
+  }, []);
+
+  // Stable cell-select callback — the inline version changed identity every
+  // render, defeating FrameCell's memo through TrackRow.
+  const onSelectCell = useCallback((track: number, col: number) => {
+    setActiveTrack(track);
+    setFrameIdx(() => col);
+  }, [setFrameIdx]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <AnimHeader
@@ -177,12 +241,10 @@ export function AnimatePanel({
             lastGenJobId={current.lastGenJobId}
             versionById={versionById}
             frameCount={frameCount}
-            canReslice={lastGenGroup?.hasSheet === true}
             onDirection={setDirection}
             onAnchorChange={setAnchorId}
             onGenerate={generate}
             onFrameCount={setFrameCount}
-            onReslice={() => setResliceOpen(true)}
           />
           {(error || failed) && (
             <div className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-400">
@@ -212,7 +274,7 @@ export function AnimatePanel({
             selectedIndex={frameIdx}
             aligning={aligning}
             versionById={versionById}
-            onSelect={(track, col) => { setActiveTrack(track); setFrameIdx(() => col); }}
+            onSelect={onSelectCell}
             onAlign={(ax, ay) => void alignAll(ax, ay)}
             onEditVersion={onEditVersion}
             onReverse={ops.reverse}
@@ -239,17 +301,6 @@ export function AnimatePanel({
         <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
           {t('animate.empty')}
         </div>
-      )}
-      {resliceOpen && lastGenGroup?.jobId != null && (
-        <ResliceSheetDialog
-          open
-          onOpenChange={(v) => { if (!v) setResliceOpen(false); }}
-          projectId={projectId}
-          assetId={asset.id}
-          jobId={lastGenGroup.jobId}
-          defaultGrid={{ cols: Math.max(1, lastGenGroup.frameCount), rows: 1 }}
-          refresh={refreshVersions}
-        />
       )}
     </div>
   );

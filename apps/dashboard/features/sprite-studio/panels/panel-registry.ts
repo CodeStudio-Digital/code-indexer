@@ -3,11 +3,11 @@
  *
  * CONTRACT (consumed by the orchestrator in SpriteStudioView):
  * - Every dockable panel declares { id, side, icon, titleKey, render }.
- * - `titleKey` is a key in the `spriteStudio` i18n namespace (LeftTabs and
- *   PanelChrome titles are translated by the consumer).
- * - `render(ctx)` returns the panel BODY only — chrome (PanelChrome /
- *   LeftTabs) is applied by the orchestrator, which also persists collapse
- *   state + the active left tab in sprite-studio-ui-state.
+ * - `titleKey` is a key in the `spriteStudio` i18n namespace (the left rail
+ *   button + PanelChrome title are translated by the consumer).
+ * - `render(ctx)` returns the panel BODY only — chrome (the shared RailButton
+ *   left rail + PanelChrome) is applied by the orchestrator, which also
+ *   persists collapse state + the active left tab in sprite-studio-ui-state.
  * - EXCEPTION: the `library` entry renders null — LibraryPanel needs the
  *   full useSpriteStudio controller (assets, filters, selection, create),
  *   which is far richer than StudioPanelCtx, so the orchestrator keeps

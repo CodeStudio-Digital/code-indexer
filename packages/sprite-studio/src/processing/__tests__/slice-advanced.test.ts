@@ -25,4 +25,25 @@ describe('sliceGridAdvanced', () => {
   it('throws when the usable area is too small for the grid', () => {
     expect(() => sliceGridAdvanced(img(4, 4), { cols: 5, rows: 1 })).toThrow();
   });
+
+  // A 20×1 sheet whose red channel encodes the x coordinate, so we can read
+  // back WHICH source column each cell started at.
+  const xRamp = (w: number): RgbaImage => {
+    const rgba = new Uint8Array(w * 4);
+    for (let x = 0; x < w; x++) rgba[x * 4] = x;
+    return { rgba, width: w, height: 1 };
+  };
+
+  it('nudges an individual cell crop by its per-cell offset (row-major)', () => {
+    // cols=2 → cellW=10. Nudge cell 0 right by 5px; cell 1 stays put.
+    const cells = sliceGridAdvanced(xRamp(20), { cols: 2, rows: 1, offsets: [{ dx: 5, dy: 0 }] });
+    expect(cells[0].rgba[0]).toBe(5); // cell 0 now starts at source x=5
+    expect(cells[1].rgba[0]).toBe(10); // cell 1 unchanged at x=10
+  });
+
+  it('clamps a per-cell nudge so the crop stays inside the sheet', () => {
+    // cellW=10 → maxX=10; a huge nudge clamps the window to x=10.
+    const cells = sliceGridAdvanced(xRamp(20), { cols: 2, rows: 1, offsets: [{ dx: 999, dy: 0 }] });
+    expect(cells[0].rgba[0]).toBe(10);
+  });
 });

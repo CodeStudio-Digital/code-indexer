@@ -40,6 +40,7 @@ export function InspectorPanel({
   refreshVersions,
   onEditVersion,
   onEditVersionInPlace,
+  onEnhanceApplied,
   editSession,
   onExitEditSession,
 }: {
@@ -65,6 +66,8 @@ export function InspectorPanel({
   onEditVersion?: (versionId: number) => void;
   /** Versions-list pencil → focused in-place edit session. */
   onEditVersionInPlace?: (versionId: number) => void;
+  /** AI-enhance "Aplicar" committed a new version → refresh + focus it. */
+  onEnhanceApplied?: (versionId: number) => void;
   /** Active focused edit session (edit mode hides the version machinery). */
   editSession?: { versionId: number; origin: 'frame' | 'version' } | null;
   onExitEditSession?: () => void;
@@ -108,13 +111,13 @@ export function InspectorPanel({
         {engine && <LayerList engine={engine} />}
         <PaletteCard engine={engine} onPaletteChange={setLockedPalette} />
         <AdjustmentsCard engine={engine} palette={lockedPalette ?? undefined} />
-        <EnhanceCard projectId={projectId} asset={asset} activeVersionId={activeVersionId} />
+        <EnhanceCard projectId={projectId} asset={asset} activeVersionId={activeVersionId} onApplied={onEnhanceApplied} />
       </>
     ) : null;
 
   if (!asset) {
     return (
-      <div className="h-full space-y-2 overflow-y-auto p-2">
+      <div className="h-full overflow-y-auto">
         {modeCards}
         <div className="flex flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground">
           <MousePointerSquareDashed className="h-5 w-5 opacity-50" />
@@ -129,8 +132,8 @@ export function InspectorPanel({
   if (mode === 'edit' && editSession) {
     const v = versions.find((x) => x.id === editSession.versionId);
     return (
-      <div className="h-full space-y-2 overflow-y-auto p-2">
-        <div className="space-y-2 rounded border p-2">
+      <div className="h-full overflow-y-auto">
+        <div className="space-y-2 border-b border-border/60 px-2 py-2">
           <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             <Pencil className="h-3 w-3" />
             {t('edit.sessionTitle', { v: v ? `v${String(v.version).padStart(3, '0')}` : `#${editSession.versionId}` })}
@@ -150,7 +153,7 @@ export function InspectorPanel({
   }
 
   return (
-    <div className="h-full space-y-2 overflow-y-auto p-2">
+    <div className="h-full overflow-y-auto">
       {modeCards}
       <AssetMetaCard asset={asset} onPatch={onPatchAsset} onDelete={onDeleteAsset} />
       <VersionsPanel

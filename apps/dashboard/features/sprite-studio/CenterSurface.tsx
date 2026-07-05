@@ -10,6 +10,8 @@ import { Brush, Film, ImageOff, Loader2 } from 'lucide-react';
 import type { EditorEngine } from './engine/EditorEngine.js';
 import { GeneratePanel, type IterateRef } from './generate/GeneratePanel.js';
 import { EditModeView } from './edit/EditModeView.js';
+import { EditorTabBar } from './edit/EditorTabBar.js';
+import { editorTabKey, type EditorTab } from './edit/editor-tabs.js';
 import { saveEditedVersion } from './api.js';
 import { startInpaintJob } from './api-enhance.js';
 import type { GenerationGroup } from './animate/api-anim-bulk.js';
@@ -32,10 +34,13 @@ export function CenterSurface({
   refreshVersions,
   onSaved,
   onSaveOverwrite,
+  overwritePrimary,
   onEngineReady,
   iterateRef,
   onIterateConsumed,
   onEditVersion,
+  onFocusTab,
+  onCloseTab,
 }: {
   mode: StudioMode;
   projectId: number;
@@ -49,14 +54,22 @@ export function CenterSurface({
   refreshVersions: () => void;
   /** (assetId, versionId) after a generation is saved OR an edit is committed. */
   onSaved: (assetId: number, versionId: number) => void;
-  /** Focused edit session active → EditModeView primary save = overwrite. */
+  /** Overwrite-in-place handler — present whenever there's a version to save
+   *  over (focused session OR the normal editor). */
   onSaveOverwrite?: (blob: Blob) => void | Promise<void>;
+  /** True only in a focused edit session — makes overwrite the primary save
+   *  (and skips the confirm). In the normal editor, "save as new" is primary
+   *  and overwrite prompts for confirmation (it mutates a shared version). */
+  overwritePrimary?: boolean;
   onEngineReady: (engine: EditorEngine | null) => void;
   /** "Iterate from this" request (version list) routed into the generate panel. */
   iterateRef?: IterateRef | null;
   onIterateConsumed?: () => void;
   /** Timeline "edit frame": select that version + jump to edit mode. */
   onEditVersion?: (assetId: number, versionId: number) => void;
+  /** Multi-tab editor: focus / close an open image tab. */
+  onFocusTab?: (tab: EditorTab) => void;
+  onCloseTab?: (tab: EditorTab) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
 
@@ -74,30 +87,40 @@ export function CenterSurface({
   }
 
   if (mode === 'edit') {
-    if (!activeAsset) {
-      return (
-        <EmptyState icon={Brush} title={t('edit.noAssetTitle')} body={t('edit.noAssetBody')} />
-      );
-    }
     return (
-      <EditModeView
-        projectId={projectId}
-        asset={activeAsset}
-        activeVersion={activeVersion}
-        onEngineReady={onEngineReady}
-        onSaveOverwrite={onSaveOverwrite}
-        onSaveEdited={async (blob) => {
-          const version = await saveEditedVersion(projectId, activeAsset.id, blob);
-          if (version) onSaved(activeAsset.id, version.id);
-        }}
-        onInpaint={
-          activeVersion
-            ? async (mask, prompt) => {
-                await startInpaintJob(projectId, activeAsset.id, activeVersion.id, mask, prompt);
+      <div className="flex h-full min-h-0 flex-col">
+        <EditorTabBar
+          projectId={projectId}
+          activeKey={activeAsset ? editorTabKey(activeAsset.id, activeVersion?.id ?? null) : null}
+          onFocus={(tab) => onFocusTab?.(tab)}
+          onClose={(tab) => onCloseTab?.(tab)}
+        />
+        {!activeAsset ? (
+          <EmptyState icon={Brush} title={t('edit.noAssetTitle')} body={t('edit.noAssetBody')} />
+        ) : (
+          <div className="min-h-0 flex-1">
+            <EditModeView
+              projectId={projectId}
+              asset={activeAsset}
+              activeVersion={activeVersion}
+              onEngineReady={onEngineReady}
+              onSaveOverwrite={onSaveOverwrite}
+              overwritePrimary={overwritePrimary}
+              onSaveEdited={async (blob) => {
+                const version = await saveEditedVersion(projectId, activeAsset.id, blob);
+                if (version) onSaved(activeAsset.id, version.id);
+              }}
+              onInpaint={
+                activeVersion
+                  ? async (mask, prompt) => {
+                      await startInpaintJob(projectId, activeAsset.id, activeVersion.id, mask, prompt);
+                    }
+                  : undefined
               }
-            : undefined
-        }
-      />
+            />
+          </div>
+        )}
+      </div>
     );
   }
 

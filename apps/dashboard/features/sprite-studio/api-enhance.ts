@@ -11,7 +11,7 @@
  * module listeners — AiEditBar subscribes to learn the jobId of inpaints it
  * triggered — besides being returned to the direct caller (EnhanceCard).
  */
-import { apiBaseUrl } from '../../lib/api-client.js';
+import { startJob } from './api.js';
 
 export type EnhanceJobKind = 'inpaint' | 'enhance';
 
@@ -50,23 +50,6 @@ export async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(bin);
 }
 
-async function postGenerate(
-  projectId: number,
-  body: Record<string, unknown>,
-): Promise<{ jobId: number }> {
-  const res = await fetch(`${apiBaseUrl()}/api/sprite-studio/projects/${projectId}/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* keep status */ }
-    throw new Error(msg);
-  }
-  return (await res.json()) as { jobId: number };
-}
-
 /**
  * Kick an inpaint job for a version region (mask: white = repaint).
  * `rawPrompt:true` — the user's instruction ("swap the sword for an axe")
@@ -81,7 +64,7 @@ export async function startInpaintJob(
   prompt: string,
 ): Promise<EnhanceJobRef> {
   const maskBase64 = await blobToBase64(maskBlob);
-  const { jobId } = await postGenerate(projectId, {
+  const { jobId } = await startJob(projectId, {
     kind: 'inpaint', prompt, n: 2, assetId, versionId, maskBase64, rawPrompt: true,
   });
   const ref: EnhanceJobRef = { jobId, projectId, assetId, versionId, kind: 'inpaint' };
@@ -97,7 +80,7 @@ export async function startEnhanceJob(
   prompt: string,
   n = 2,
 ): Promise<EnhanceJobRef> {
-  const { jobId } = await postGenerate(projectId, {
+  const { jobId } = await startJob(projectId, {
     kind: 'enhance', prompt, n, assetId, versionId, rawPrompt: true,
   });
   const ref: EnhanceJobRef = { jobId, projectId, assetId, versionId, kind: 'enhance' };

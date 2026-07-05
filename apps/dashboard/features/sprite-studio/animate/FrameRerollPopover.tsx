@@ -32,8 +32,16 @@ export function FrameRerollPopover({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState<{ index: number; track: number; versionId: number } | null>(null);
+  const onOpenChange = (next: boolean) => {
+    if (next) {
+      const s = useAnimateSession.getState();
+      setTarget(s.selectedFrameIndex == null ? null : { index: s.selectedFrameIndex, track: s.activeTrack, versionId });
+    }
+    setOpen(next);
+  };
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
       <PopoverContent className="w-64 p-2" onClick={(e) => e.stopPropagation()}>
         {open && (
@@ -43,6 +51,7 @@ export function FrameRerollPopover({
             versionId={versionId}
             prompt={prompt}
             refresh={refresh}
+            target={target}
             onClose={() => setOpen(false)}
           />
         )}
@@ -52,13 +61,14 @@ export function FrameRerollPopover({
 }
 
 function RerollContent({
-  projectId, assetId, versionId, prompt, refresh, onClose,
+  projectId, assetId, versionId, prompt, refresh, target, onClose,
 }: {
   projectId: number;
   assetId: number;
   versionId: number;
   prompt: string | null;
   refresh: () => void;
+  target: { index: number; track: number; versionId: number } | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');
@@ -71,11 +81,12 @@ function RerollContent({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    const sourceVersionId = target?.versionId ?? versionId;
     void start({
       kind: 'generation', assetId, prompt: prompt || t('animate.rerollPrompt'),
-      n: 4, referenceIds: [versionId], rawPrompt: true,
+      n: 4, referenceIds: [sourceVersionId], rawPrompt: true,
     }).then(setJobId).catch((e) => setError((e as Error).message));
-  }, [start, assetId, prompt, versionId, t]);
+  }, [start, assetId, prompt, target?.versionId, versionId, t]);
 
   const state = jobId != null ? jobs.get(jobId) : undefined;
   const candidates = state?.candidates ?? [];
@@ -87,8 +98,8 @@ function RerollContent({
     try {
       const version = await pickCandidate(projectId, assetId, jobId, candidateIndex);
       const s = useAnimateSession.getState();
-      if (s.replaceFrameAt != null && s.selectedFrameIndex != null) {
-        s.replaceFrameAt(s.selectedFrameIndex, version.id);
+      if (s.replaceFrameAt != null && target != null) {
+        s.replaceFrameAt(target.index, version.id, target.track, target.versionId);
       }
       refresh();
       onClose();

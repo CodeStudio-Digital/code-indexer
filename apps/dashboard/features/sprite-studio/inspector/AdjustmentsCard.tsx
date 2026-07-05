@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { Button } from '../../../components/ui/button.js';
+import { RangeInput } from '../../../components/ui/range-input.js';
 import type { EditorEngine } from '../engine/EditorEngine.js';
 import { chromaKeyRemove, removeBackground } from '../algorithms/bg-remove.js';
 import { addOutline } from '../algorithms/outline.js';
@@ -30,6 +31,7 @@ import { thresholdAlpha } from '../algorithms/alpha-cleanup.js';
 import { nearestNeighborScale } from '../algorithms/scale.js';
 import { flipHorizontal, flipVertical, rotate90 } from '../algorithms/transform.js';
 import { applyRasterOp } from './apply-op.js';
+import { InspectorSection } from './InspectorSection.js';
 
 const DITHERS: DitherMode[] = ['none', 'floyd-steinberg', 'bayer4', 'bayer8'];
 
@@ -55,11 +57,7 @@ export function AdjustmentsCard({ engine, palette }: { engine: EditorEngine | nu
   const disabled = !engine;
 
   return (
-    <div className="space-y-2 rounded border p-2">
-      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        <SlidersHorizontal className="h-3 w-3" /> {t('adjust.title')}
-      </div>
-
+    <InspectorSection id="adjust" icon={SlidersHorizontal} title={t('adjust.title')}>
       {/* Quantize */}
       <div className="flex items-center gap-1">
         <select
@@ -135,7 +133,7 @@ export function AdjustmentsCard({ engine, palette }: { engine: EditorEngine | nu
         <OpButton icon={RotateCw} label={t('adjust.rotate90')} disabled={disabled}
           onClick={() => run('Rotate 90°', rotate90)} />
       </div>
-    </div>
+    </InspectorSection>
   );
 }
 
@@ -158,10 +156,9 @@ function OpButton({
 
 function Range({ label, min, max, value, onChange }: { label: string; min: number; max: number; value: number; onChange: (v: number) => void }) {
   return (
-    <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-      <span className="w-16 shrink-0">{label}</span>
-      <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} className="h-1 flex-1 cursor-pointer accent-primary" />
-      <span className="w-6 shrink-0 tabular-nums text-foreground">{value}</span>
-    </label>
+    <RangeInput
+      label={label} min={min} max={max} value={value} onChange={onChange}
+      className="text-[11px] text-muted-foreground" labelClassName="w-16" sliderClassName="flex-1"
+    />
   );
 }

@@ -37,8 +37,20 @@ export interface InpaintJobParams {
   assetId: number;
   versionId: number;
   prompt: string;
-  /** Upload id of the mask PNG (white = repaint region). */
-  maskUploadId: string;
+  /** Raw PNG mask bytes as base64 (white = repaint region). */
+  maskBase64: string;
+  rawPrompt?: boolean;
+  seed?: number | null;
+  n: number;
+}
+
+export interface EnhanceJobParams {
+  kind: 'enhance';
+  assetId: number;
+  versionId: number;
+  prompt: string;
+  rawPrompt?: boolean;
+  seed?: number | null;
   n: number;
 }
 
@@ -60,6 +72,7 @@ export interface ExportJobParams {
 export type SpriteJobParams =
   | GenerationJobParams
   | InpaintJobParams
+  | EnhanceJobParams
   | ProcessJobParams
   | ExportJobParams;
 

@@ -28,6 +28,7 @@ import { startEnhanceJob, type EnhanceJobRef } from '../api-enhance.js';
 import { useSpriteJobs } from '../jobs/useSpriteJobs.js';
 import { EnhanceResultsStrip } from '../edit/EnhanceResultsStrip.js';
 import type { SpriteAsset } from '../types.js';
+import { InspectorSection } from './InspectorSection.js';
 
 const VARIANT_CHOICES = [1, 2, 3, 4];
 
@@ -74,11 +75,7 @@ export function EnhanceCard({
   };
 
   return (
-    <div className="space-y-2 rounded border p-2">
-      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        <Wand2 className="h-3 w-3" /> {t('enhance.title')}
-      </div>
-
+    <InspectorSection id="enhance" icon={Wand2} title={t('enhance.title')}>
       <Input
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
@@ -126,6 +123,6 @@ export function EnhanceCard({
           />
         </div>
       )}
-    </div>
+    </InspectorSection>
   );
 }

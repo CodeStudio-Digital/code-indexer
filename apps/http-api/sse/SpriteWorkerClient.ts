@@ -14,6 +14,7 @@
  */
 import { WorkerHost } from '@mcp/orchestrator-host';
 import type { SpriteOp } from '@mcp/sprite-studio';
+import type { SliceOpts } from '@mcp/sprite-studio/processing/slice.js';
 import { registerShutdownTask } from '../server/shutdown-tasks.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
 
@@ -85,6 +86,27 @@ export class SpriteWorkerClient {
         { timeoutMs: REQUEST_TIMEOUT_MS },
       )) as { cells: string[] };
       return out.cells;
+    } finally {
+      this.inflight--;
+      this.scheduleIdleEvict();
+    }
+  }
+
+  /** Custom re-slice (offset/margin + per-cell nudges) off the main thread. */
+  async sliceGridAdvanced(
+    pngBase64: string,
+    opts: SliceOpts,
+  ): Promise<{ cells: string[]; cellWidth: number; cellHeight: number }> {
+    const host = await this.ensureHost();
+    const bridge = host.requireBridge();
+    this.inflight++;
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+    try {
+      return (await bridge.request(
+        'image.sliceAdvanced',
+        { pngBase64, opts },
+        { timeoutMs: REQUEST_TIMEOUT_MS },
+      )) as { cells: string[]; cellWidth: number; cellHeight: number };
     } finally {
       this.inflight--;
       this.scheduleIdleEvict();

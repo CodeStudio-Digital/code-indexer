@@ -20,6 +20,7 @@ import { cn } from '../../../lib/utils.js';
 import type { EditorEngine } from '../engine/EditorEngine.js';
 import { extractPalette } from '../algorithms/palette-extract.js';
 import { spriteEditorActions } from '../store/editor-store.js';
+import { InspectorSection } from './InspectorSection.js';
 
 const MAX_COLORS = 24;
 
@@ -54,29 +55,30 @@ export function PaletteCard({
 
   const pick = (hex: string) => spriteEditorActions().setFgColor(hex);
 
-  return (
-    <div className="space-y-2 rounded border p-2">
-      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        <Palette className="h-3 w-3" /> {t('palette.title')}
-        <button
-          type="button" onClick={extract} disabled={!engine || locked}
-          title={t('palette.refresh')} aria-label={t('palette.refresh')}
-          className="ml-auto flex h-5 w-5 items-center justify-center rounded hover:bg-muted hover:text-foreground disabled:opacity-40"
-        >
-          <RefreshCw className="h-3 w-3" />
-        </button>
-        <button
-          type="button" onClick={toggleLock} disabled={swatches.length === 0}
-          title={locked ? t('palette.unlock') : t('palette.lock')} aria-label={locked ? t('palette.unlock') : t('palette.lock')}
-          className={cn(
-            'flex h-5 w-5 items-center justify-center rounded disabled:opacity-40',
-            locked ? 'text-primary' : 'hover:bg-muted hover:text-foreground',
-          )}
-        >
-          {locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
-        </button>
-      </div>
+  const actions = (
+    <>
+      <button
+        type="button" onClick={extract} disabled={!engine || locked}
+        title={t('palette.refresh')} aria-label={t('palette.refresh')}
+        className="flex h-5 w-5 items-center justify-center rounded hover:bg-muted hover:text-foreground disabled:opacity-40"
+      >
+        <RefreshCw className="h-3 w-3" />
+      </button>
+      <button
+        type="button" onClick={toggleLock} disabled={swatches.length === 0}
+        title={locked ? t('palette.unlock') : t('palette.lock')} aria-label={locked ? t('palette.unlock') : t('palette.lock')}
+        className={cn(
+          'flex h-5 w-5 items-center justify-center rounded disabled:opacity-40',
+          locked ? 'text-primary' : 'hover:bg-muted hover:text-foreground',
+        )}
+      >
+        {locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+      </button>
+    </>
+  );
 
+  return (
+    <InspectorSection id="palette" icon={Palette} title={t('palette.title')} actions={actions}>
       {swatches.length === 0 ? (
         <div className="py-1 text-[11px] text-muted-foreground">{t('palette.empty')}</div>
       ) : (
@@ -94,6 +96,6 @@ export function PaletteCard({
           ))}
         </div>
       )}
-    </div>
+    </InspectorSection>
   );
 }

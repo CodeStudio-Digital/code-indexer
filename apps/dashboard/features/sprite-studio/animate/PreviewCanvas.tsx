@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { Crosshair, Layers, Pause, Play } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
+import { RangeInput } from '../../../components/ui/range-input.js';
 import { versionFileUrl } from '../api.js';
 import type { AnimFrame, AnimLoopMode, TrackMeta } from './api-anim.js';
 import { buildTimelineModel } from './timeline-model.js';
@@ -22,16 +23,34 @@ const CHECKER: React.CSSProperties = {
 };
 const LOOP_MODES: AnimLoopMode[] = ['loop', 'once', 'pingpong'];
 
+/** Tinted-ghost cache keyed by the IMAGE ELEMENT — draw() runs per rAF tick
+ *  during playback, and building a full-res canvas per ghost per tick was
+ *  ~120-288 canvas allocations/second. Keying on the element makes staleness
+ *  impossible: the preload effect swaps in a NEW Image whenever a version's
+ *  contentHash changes, so the old entry (and its tints) just get GC'd. */
+const tintCache = new WeakMap<HTMLImageElement, Map<string, HTMLCanvasElement>>();
+const TINT_CACHE_LIMIT = 4;
+
 function drawTinted(ctx: CanvasRenderingContext2D, img: HTMLImageElement, tint: string,
   x: number, y: number, w: number, h: number): void {
-  const off = document.createElement('canvas');
-  off.width = img.naturalWidth; off.height = img.naturalHeight;
-  const octx = off.getContext('2d')!;
-  octx.drawImage(img, 0, 0);
-  octx.globalCompositeOperation = 'source-atop';
-  octx.fillStyle = tint;
-  octx.globalAlpha = 0.6; // tint, don't silhouette — keep some pixel detail
-  octx.fillRect(0, 0, off.width, off.height);
+  let byTint = tintCache.get(img);
+  if (!byTint) { byTint = new Map(); tintCache.set(img, byTint); }
+  let off = byTint.get(tint);
+  if (!off) {
+    if (byTint.size >= TINT_CACHE_LIMIT) {
+      const first = byTint.keys().next().value as string | undefined;
+      if (first) byTint.delete(first);
+    }
+    off = document.createElement('canvas');
+    off.width = img.naturalWidth; off.height = img.naturalHeight;
+    const octx = off.getContext('2d')!;
+    octx.drawImage(img, 0, 0);
+    octx.globalCompositeOperation = 'source-atop';
+    octx.fillStyle = tint;
+    octx.globalAlpha = 0.6; // tint, don't silhouette — keep some pixel detail
+    octx.fillRect(0, 0, off.width, off.height);
+    byTint.set(tint, off);
+  }
   ctx.drawImage(off, x, y, w, h);
 }
 
@@ -66,7 +85,9 @@ export function PreviewCanvas({ projectId, frames, tracks, fps, loopMode, select
   const [onion, setOnion] = useState(false);
   const [onionAlpha, setOnionAlpha] = useState(35); // % — sprites often have OPAQUE bgs
   const [guides, setGuides] = useState(false);
-  const [, bump] = useState(0); // re-draw trigger for image loads
+  // Image loads redraw through this ref (kept current below) — the old dummy
+  // state bump re-rendered the component but never actually called draw().
+  const drawRef = useRef<() => void>(() => {});
 
   // Column-addressable grid over every track (visibleStack = composite order).
   const model = useMemo(() => buildTimelineModel(frames, tracks, fps), [frames, tracks, fps]);
@@ -75,20 +96,46 @@ export function PreviewCanvas({ projectId, frames, tracks, fps, loopMode, select
   // RELOAD entries whose contentHash changed (in-place "Salvar Sprite" edits
   // keep the versionId but swap the bytes).
   const hashesRef = useRef(new Map<number, string | null>());
+  const loadGenRef = useRef(0);
   useEffect(() => {
+    const gen = loadGenRef.current + 1;
+    loadGenRef.current = gen;
     const map = imagesRef.current;
     const hashes = hashesRef.current;
     const wanted = new Set(frames.map((f) => f.versionId));
-    for (const key of map.keys()) if (!wanted.has(key)) { map.delete(key); hashes.delete(key); }
+    for (const key of map.keys()) {
+      if (!wanted.has(key)) {
+        const old = map.get(key);
+        if (old) old.onload = null;
+        map.delete(key);
+        hashes.delete(key);
+      }
+    }
     for (const f of frames) {
       const hash = versionById?.get(f.versionId)?.contentHash ?? null;
-      if (map.has(f.versionId) && hashes.get(f.versionId) === hash) continue;
+      const current = map.get(f.versionId);
+      if (current && hashes.get(f.versionId) === hash) {
+        current.onload = () => {
+          if (loadGenRef.current !== gen) return;
+          if (imagesRef.current.get(f.versionId) !== current) return;
+          drawRef.current();
+        };
+        continue;
+      }
+      if (current) current.onload = null;
       const img = new Image();
+      img.onload = () => {
+        if (loadGenRef.current !== gen) return;
+        if (imagesRef.current.get(f.versionId) !== img) return;
+        drawRef.current();
+      };
       img.src = versionFileUrl(projectId, f.versionId, hash);
-      img.onload = () => bump((v) => v + 1);
       map.set(f.versionId, img);
       hashes.set(f.versionId, hash);
     }
+    return () => {
+      if (loadGenRef.current === gen) loadGenRef.current += 1;
+    };
   }, [frames, projectId, versionById]);
 
   const draw = useCallback(() => {
@@ -144,6 +191,7 @@ export function PreviewCanvas({ projectId, frames, tracks, fps, loopMode, select
       ctx.globalAlpha = 1;
     }
   }, [model, onion, onionAlpha, guides]);
+  useEffect(() => { drawRef.current = draw; }, [draw]);
 
   // rAF clock: advance the playhead by column duration (track-0 master line).
   useEffect(() => {
@@ -230,15 +278,11 @@ export function PreviewCanvas({ projectId, frames, tracks, fps, loopMode, select
           <Layers className="h-3 w-3" /> {t('animate.preview.onion')}
         </Button>
         {onion && (
-          <label className="flex items-center gap-1 text-[10px] text-muted-foreground" title={t('animate.preview.onionAlpha')}>
-            <input
-              type="range" min={10} max={70} step={5} value={onionAlpha}
-              onChange={(e) => setOnionAlpha(Number(e.target.value))}
-              className="h-1 w-16 accent-primary"
-              aria-label={t('animate.preview.onionAlpha')}
-            />
-            <span className="tabular-nums">{onionAlpha}%</span>
-          </label>
+          <RangeInput
+            min={10} max={70} step={5} value={onionAlpha} onChange={setOnionAlpha}
+            suffix="%" sliderClassName="w-16" className="text-[10px] text-muted-foreground"
+            aria-label={t('animate.preview.onionAlpha')}
+          />
         )}
         <Button size="sm" variant={guides ? 'secondary' : 'outline'} className="h-7 gap-1 px-2 text-[11px]"
           title={t('animate.guides')} aria-pressed={guides} onClick={() => setGuides((v) => !v)}>

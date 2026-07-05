@@ -28,6 +28,30 @@ export interface TimelineOps {
   appendVersion: (versionId: number) => void;
 }
 
+/** Replace/restore a batch as a clean base timeline. Overlay cells are dropped
+ *  deliberately: their old columns were aligned to the previous base sequence. */
+export function replaceWithBaseTimeline(versionIds: number[]): AnimFrame[] {
+  return versionIds.map((versionId, i) => ({
+    id: -1,
+    frameIndex: i,
+    versionId,
+    durationMs: null,
+    track: 0,
+  }));
+}
+
+export function replaceFrameIfCurrent(
+  frames: AnimFrame[],
+  track: number,
+  col: number,
+  versionId: number,
+  expectedVersionId?: number,
+): AnimFrame[] {
+  const current = frames.find((f) => f.track === track && f.frameIndex === col)?.versionId ?? null;
+  if (expectedVersionId != null && current !== expectedVersionId) return frames;
+  return setCell(frames, track, col, versionId);
+}
+
 export function useTimelineOps(args: {
   model: TimelineModel;
   frames: AnimFrame[];
@@ -40,6 +64,16 @@ export function useTimelineOps(args: {
   const { model, frames, activeTrack, frameIdx, setFrameIdx, applyFlat, hasAnimation } = args;
   const publishBridge = useAnimateSession((s) => s.publishBridge);
   const clip = useRef<Array<{ track: number; versionId: number }> | null>(null);
+
+  useEffect(() => {
+    if (!hasAnimation) return;
+    if (model.gridLen <= 0) {
+      if (frameIdx !== 0) setFrameIdx(0);
+      return;
+    }
+    const clamped = Math.max(0, Math.min(model.gridLen - 1, frameIdx));
+    if (clamped !== frameIdx) setFrameIdx(clamped);
+  }, [hasAnimation, model.gridLen, frameIdx, setFrameIdx]);
 
   const ops: TimelineOps = {
     setCellAt: useCallback((track, col, versionId) => {
@@ -99,10 +133,11 @@ export function useTimelineOps(args: {
   // Bridge: publish the grid + the imperative callbacks the other rails call.
   useEffect(() => {
     if (!hasAnimation) return;
+    const selectedFrameIndex = frameIdx >= 0 && frameIdx < model.gridLen ? frameIdx : null;
     publishBridge({
       frameVersionIds: [...new Set(frames.map((f) => f.versionId))],
-      selectedFrameVersionId: model.cellAt(activeTrack, frameIdx)?.versionId ?? null,
-      selectedFrameIndex: model.gridLen > 0 ? frameIdx : null,
+      selectedFrameVersionId: selectedFrameIndex == null ? null : model.cellAt(activeTrack, selectedFrameIndex)?.versionId ?? null,
+      selectedFrameIndex,
       appendToTimeline: (ids) => {
         let next = frames;
         let col = model.gridLen;
@@ -110,16 +145,25 @@ export function useTimelineOps(args: {
         applyFlat(next);
       },
       removeFramesUsing: (ids) => applyFlat(frames.filter((f) => !ids.includes(f.versionId))),
-      replaceFrameAt: (col, versionId) => applyFlat(setCell(frames, activeTrack, col, versionId)),
+      replaceFrameAt: (col, versionId, track = activeTrack, expectedVersionId) => {
+        if (col < 0 || col >= model.gridLen) return;
+        const next = replaceFrameIfCurrent(frames, track, col, versionId, expectedVersionId);
+        if (next !== frames) applyFlat(next);
+      },
       setTimeline: (ids) => {
-        const rest = frames.filter((f) => f.track !== activeTrack);
-        applyFlat([
-          ...rest,
-          ...ids.map((versionId, i) => ({ id: -1, frameIndex: i, versionId, durationMs: null, track: activeTrack })),
-        ]);
+        const next = replaceWithBaseTimeline(ids);
+        useAnimateSession.getState().onActivateTrack?.(0);
+        applyFlat(next);
+        setFrameIdx(() => 0);
+        publishBridge({
+          frameVersionIds: [...new Set(ids)],
+          selectedFrameIndex: ids.length > 0 ? 0 : null,
+          selectedFrameVersionId: ids[0] ?? null,
+          activeTrack: 0,
+        });
       },
     });
-  }, [hasAnimation, frames, model, activeTrack, frameIdx, applyFlat, publishBridge]);
+  }, [hasAnimation, frames, model, activeTrack, frameIdx, applyFlat, setFrameIdx, publishBridge]);
   useEffect(() => () => {
     publishBridge({
       frameVersionIds: [], selectedFrameVersionId: null, selectedFrameIndex: null,

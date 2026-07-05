@@ -11,6 +11,7 @@
  * before the backend lands. Default OFF.
  */
 import { apiBaseUrl } from '../../lib/api-client.js';
+import { dedupeInflight } from '../../lib/api-cache.js';
 import type {
   AssetVersion, GetProjectResult, SpriteAsset, SpriteCategory,
   SpriteProjectInfo, StudioSettings,
@@ -21,18 +22,35 @@ import * as mock from './api-mock.js';
 /** Flip to true to develop the UI against the in-memory fake backend. */
 const MOCK = false;
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+async function errorFromResponse(res: Response): Promise<ApiError> {
+  let msg = `HTTP ${res.status}`;
+  try { msg = (await res.json()).error ?? msg; } catch { /* keep status */ }
+  return new ApiError(msg, res.status);
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBaseUrl()}${path}`, {
     headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
     ...init,
   });
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { msg = (await res.json()).error ?? msg; } catch { /* keep status */ }
-    throw new Error(msg);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
   const ct = res.headers.get('content-type') ?? '';
   return (ct.includes('application/json') ? await res.json() : await res.text()) as T;
+}
+
+async function reqForm<T>(path: string, init: RequestInit): Promise<T> {
+  const res = await fetch(`${apiBaseUrl()}${path}`, init);
+  if (!res.ok) throw await errorFromResponse(res);
+  const ct = res.headers.get('content-type') ?? '';
+  if (!ct.includes('application/json')) throw new Error(`Expected JSON response, got ${ct || 'empty body'}`);
+  return (await res.json()) as T;
 }
 
 const root = (projectId: number) => `/api/sprite-studio/projects/${projectId}`;
@@ -114,7 +132,11 @@ export const deleteVersion = (p: number, versionId: number): Promise<void> =>
 // ─── Versions ───────────────────────────────────────────────────────────
 export const listVersions = (p: number, assetId: number): Promise<AssetVersion[]> =>
   MOCK ? mock.mockListVersions(p, assetId)
-    : req<{ versions: AssetVersion[] }>(`${root(p)}/assets/${assetId}/versions`).then((r) => r.versions);
+    // In-flight dedupe (no TTL cache): the controller's selectAsset and the
+    // lifted useAssetVersions both issue this GET for the same asset on every
+    // selection/refresh — share one request instead of two identical ones.
+    : dedupeInflight(`sprite:versions:${p}:${assetId}`, () =>
+        req<{ versions: AssetVersion[] }>(`${root(p)}/assets/${assetId}/versions`).then((r) => r.versions));
 
 /** URL of a version's full-resolution PNG (usable directly in <img src>).
  *  `bust` = contentHash (or a prefix): in-place overwrites keep the id but
@@ -135,16 +157,10 @@ export const overwriteVersion = async (
 ): Promise<AssetVersion> => {
   const form = new FormData();
   form.append('file', blob, 'edited.png');
-  const res = await fetch(`${apiBaseUrl()}${root(p)}/versions/${versionId}/file`, {
+  return reqForm<AssetVersion>(`${root(p)}/versions/${versionId}/file`, {
     method: 'PUT',
     body: form,
   });
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { msg = (await res.json()).error ?? msg; } catch { /* keep status */ }
-    throw new Error(msg);
-  }
-  return res.json() as Promise<AssetVersion>;
 };
 
 /**
@@ -161,16 +177,10 @@ export const saveEditedVersion = async (
   const form = new FormData();
   form.append('file', blob, 'edited.png');
   form.append('source', 'edited');
-  const res = await fetch(`${apiBaseUrl()}${root(p)}/assets/${assetId}/versions`, {
+  return reqForm<AssetVersion>(`${root(p)}/assets/${assetId}/versions`, {
     method: 'POST',
     body: form,
   });
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { msg = (await res.json()).error ?? msg; } catch { /* keep status */ }
-    throw new Error(msg);
-  }
-  return res.json() as Promise<AssetVersion>;
 };
 
 // ─── Jobs ───────────────────────────────────────────────────────────────
