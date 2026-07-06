@@ -78,6 +78,36 @@ describe('magic eraser', () => {
     expect(at(doc, 4, 4)[3]).toBe(0);
   });
 
+  it('cleans a near-background fringe pixel without eating the subject', () => {
+    const tool = createFillTool('magic-eraser');
+    const { ctx, doc } = makeCtx();
+    ctx.options.edgeCleanup = 1;
+    set(doc, 0, 0, [30, 30, 30, 255]);
+    set(doc, 1, 0, [30, 30, 30, 255]);
+    set(doc, 2, 0, [37, 37, 37, 255]); // anti-aliased background fringe
+    set(doc, 3, 0, [220, 150, 80, 255]); // subject body
+
+    tool.onDown(ev(0, 0), ctx);
+
+    expect(at(doc, 0, 0)[3]).toBe(0);
+    expect(at(doc, 2, 0)[3]).toBe(0);
+    expect(at(doc, 3, 0)[3]).toBe(255);
+  });
+
+  it('edge cleanup can be disabled for exact legacy flood behavior', () => {
+    const tool = createFillTool('magic-eraser');
+    const { ctx, doc } = makeCtx();
+    ctx.options.edgeCleanup = 0;
+    set(doc, 0, 0, [30, 30, 30, 255]);
+    set(doc, 1, 0, [30, 30, 30, 255]);
+    set(doc, 2, 0, [37, 37, 37, 255]);
+
+    tool.onDown(ev(0, 0), ctx);
+
+    expect(at(doc, 0, 0)[3]).toBe(0);
+    expect(at(doc, 2, 0)[3]).toBe(255);
+  });
+
   it('selection clips the erase and it is one undoable command', () => {
     const tool = createFillTool('magic-eraser');
     const { ctx, doc, history } = makeCtx();
@@ -87,6 +117,38 @@ describe('magic eraser', () => {
     expect(at(doc, 1, 0)[3]).toBe(0);
     expect(at(doc, 2, 0)[3]).toBe(255); // outside selection
     expect(history.length).toBe(1);
+  });
+
+  it('selection also clips edge-cleanup fringe pixels', () => {
+    const tool = createFillTool('magic-eraser');
+    const { ctx, doc } = makeCtx();
+    ctx.options.edgeCleanup = 1;
+    ctx.selection.setRect({ x: 0, y: 0, w: 2, h: 1 }, 'replace');
+    set(doc, 0, 0, [30, 30, 30, 255]);
+    set(doc, 1, 0, [30, 30, 30, 255]);
+    set(doc, 2, 0, [37, 37, 37, 255]); // would clean if not clipped
+
+    tool.onDown(ev(0, 0), ctx);
+
+    expect(at(doc, 1, 0)[3]).toBe(0);
+    expect(at(doc, 2, 0)[3]).toBe(255);
+  });
+
+  it('undo captures cleanup pixels that cross a tile boundary', () => {
+    const tool = createFillTool('magic-eraser');
+    const { ctx, doc, history } = makeCtx(66, 1);
+    ctx.options.edgeCleanup = 1;
+    set(doc, 62, 0, [30, 30, 30, 255]);
+    set(doc, 63, 0, [30, 30, 30, 255]);
+    set(doc, 64, 0, [37, 37, 37, 255]); // cleanup crosses into tile 1
+    set(doc, 65, 0, [220, 150, 80, 255]);
+
+    tool.onDown(ev(62, 0), ctx);
+
+    const cmd = history.undo();
+    expect(cmd?.kind).toBe('tiles');
+    if (cmd?.kind !== 'tiles') throw new Error('expected tiles command');
+    expect(cmd.before.map((t) => t.tx).sort()).toEqual([0, 1]);
   });
 
   it('fill kind still paints fg (regression)', () => {

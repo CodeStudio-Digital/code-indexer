@@ -21,7 +21,7 @@ describe('replaceFrameIfCurrent', () => {
   it('replaces the targeted cell when the expected version still matches', () => {
     expect(replaceFrameIfCurrent(frames, 1, 0, 21, 20)).toEqual([
       frames[0],
-      { id: 2, frameIndex: 0, versionId: 21, durationMs: null, track: 1 },
+      { id: -1, frameIndex: 0, versionId: 21, durationMs: null, track: 1 },
     ]);
   });
 

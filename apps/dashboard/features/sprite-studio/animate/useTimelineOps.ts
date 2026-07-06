@@ -168,6 +168,8 @@ export function useTimelineOps(args: {
     publishBridge({
       frameVersionIds: [], selectedFrameVersionId: null, selectedFrameIndex: null,
       appendToTimeline: null, removeFramesUsing: null, replaceFrameAt: null, setTimeline: null,
+      inspectorTracks: [], activeTrack: 0, animContext: null,
+      onActivateTrack: null, onToggleTrackVisible: null,
     });
   }, [publishBridge]);
 

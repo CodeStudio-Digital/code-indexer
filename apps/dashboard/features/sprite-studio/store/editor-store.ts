@@ -22,6 +22,7 @@ export const DEFAULT_TOOL_OPTIONS: ToolOptions = {
   softness: 0,
   tolerance: 0,
   contiguous: true,
+  edgeCleanup: 1,
   shape: 'square',
   opacity: 100,
   shapeFill: false,

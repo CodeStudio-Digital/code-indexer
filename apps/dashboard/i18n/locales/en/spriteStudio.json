@@ -150,6 +150,7 @@
     "background": "Background color",
     "contiguous": "Contiguous",
     "dither": "Dither",
+    "edgeCleanup": "Edge cleanup",
     "fill": "Fill",
     "foreground": "Foreground color",
     "gridToggle": "Pixel grid (shown at zoom ≥ 8)",
@@ -484,6 +485,7 @@
     "reroll": "Re-roll",
     "rerollPrompt": "same character, single clean pixel-art sprite frame",
     "rerollMore": "Generating more…",
+    "rerollTargetChanged": "Frame changed — reopen re-roll.",
     "inspector": { "noFrame": "Select a frame in the timeline to inspect it.", "frameTitle": "Frame", "tracksTitle": "Layers", "trackCount": "{{n}}f", "activateTrack": "Make active track" },
     "loop": { "setIn": "Set loop start here", "setOut": "Set loop end here", "clear": "Clear loop range" },
     "preview": {

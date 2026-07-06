@@ -46,4 +46,18 @@ describe('mergeRestoredJobState', () => {
       candidates: [candidate(0), candidate(1)],
     });
   });
+
+  it('keeps restored metadata when live non-terminal state has no fresher value', () => {
+    const existing: JobState = { status: 'generating', pct: 65, note: 'live', candidates: [candidate(0)] };
+    const restored: JobState = { status: 'generating', pct: 20, candidates: [candidate(0)], versionId: 77, error: 'retrying' };
+
+    expect(mergeRestoredJobState(existing, restored)).toEqual({
+      status: 'generating',
+      pct: 65,
+      note: 'live',
+      candidates: [candidate(0)],
+      versionId: 77,
+      error: 'retrying',
+    });
+  });
 });

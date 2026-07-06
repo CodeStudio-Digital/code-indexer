@@ -150,6 +150,7 @@
     "background": "Cor de fundo",
     "contiguous": "Contíguo",
     "dither": "Dither",
+    "edgeCleanup": "Limpar borda",
     "fill": "Preencher",
     "foreground": "Cor de frente",
     "gridToggle": "Grade de pixels (visível em zoom ≥ 8)",
@@ -484,6 +485,7 @@
     "reroll": "Regerar",
     "rerollPrompt": "mesmo personagem, um único frame de sprite pixel-art limpo",
     "rerollMore": "Gerando mais…",
+    "rerollTargetChanged": "O frame mudou — reabra a regeração.",
     "inspector": { "noFrame": "Selecione um frame na timeline para inspecioná-lo.", "frameTitle": "Frame", "tracksTitle": "Camadas", "trackCount": "{{n}}f", "activateTrack": "Tornar camada ativa" },
     "loop": { "setIn": "Definir início do loop aqui", "setOut": "Definir fim do loop aqui", "clear": "Limpar faixa de loop" },
     "preview": {

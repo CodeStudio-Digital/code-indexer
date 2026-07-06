@@ -58,6 +58,8 @@ export interface ToolOptions {
   tolerance: number;
   /** Wand/fill contiguity toggle. */
   contiguous: boolean;
+  /** Magic eraser edge cleanup radius in pixels (0 = exact flood only). */
+  edgeCleanup?: number;
   /** Brush stamp shape. Default 'square' (pixel-art first). */
   shape?: 'square' | 'round';
   /** Stroke opacity 1–100 (PS Opacity: per-stroke cap; passes build up). */

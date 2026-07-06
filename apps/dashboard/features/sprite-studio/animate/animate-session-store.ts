@@ -154,6 +154,8 @@ export const useAnimateSession = create<AnimateSessionState>((set) => ({
     set({
       selected: new Set(), anchorId: null, frameVersionIds: [],
       selectedFrameVersionId: null, selectedFrameIndex: null,
+      appendToTimeline: null, removeFramesUsing: null, replaceFrameAt: null, setTimeline: null,
       inspectorTracks: [], activeTrack: 0, animContext: null,
+      onActivateTrack: null, onToggleTrackVisible: null,
     }),
 }));

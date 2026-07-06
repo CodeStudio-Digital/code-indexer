@@ -6,6 +6,7 @@
  * mask, committed as ONE tiles command.
  */
 import { floodFillMask } from '../algorithms/flood-fill.js';
+import { cleanupMagicEraserMask } from '../algorithms/magic-eraser-cleanup.js';
 import { hexToRgba } from '../algorithms/image-data.js';
 import { tilesForRect } from '../engine/tile-diff.js';
 import type { Tool, ToolContext, ToolPointerEvent } from './tool-types.js';
@@ -21,21 +22,34 @@ function floodAt(e: ToolPointerEvent, ctx: ToolContext, kind: FloodKind): void {
   if (x < 0 || y < 0 || x >= img.width || y >= img.height) return;
   if (!ctx.selection.isEmpty() && !ctx.selection.contains(x, y)) return;
 
-  const mask = floodFillMask(img, x, y, {
+  let mask = floodFillMask(img, x, y, {
     tolerance: ctx.options.tolerance,
     contiguous: ctx.options.contiguous,
   });
+  const hasSelection = !ctx.selection.isEmpty();
+  const canErase = hasSelection ? (px: number, py: number) => ctx.selection.contains(px, py) : undefined;
 
-  // Bounding box of the flooded area (after selection clip) for dirty marking.
+  for (let py = 0; py < img.height; py++) {
+    for (let px = 0; px < img.width; px++) {
+      const p = py * img.width + px;
+      if (mask[p] && hasSelection && !ctx.selection.contains(px, py)) mask[p] = 0;
+    }
+  }
+
+  if (kind === 'magic-eraser') {
+    mask = cleanupMagicEraserMask(img, mask, {
+      tolerance: ctx.options.tolerance,
+      radius: ctx.options.edgeCleanup ?? 1,
+      canErase,
+    });
+  }
+
+  // Bounding box of the final area (after selection clip + edge cleanup) for dirty marking.
   let minX = img.width, minY = img.height, maxX = -1, maxY = -1;
   for (let py = 0; py < img.height; py++) {
     for (let px = 0; px < img.width; px++) {
       const p = py * img.width + px;
       if (!mask[p]) continue;
-      if (!ctx.selection.isEmpty() && !ctx.selection.contains(px, py)) {
-        mask[p] = 0;
-        continue;
-      }
       if (px < minX) minX = px;
       if (px > maxX) maxX = px;
       if (py < minY) minY = py;

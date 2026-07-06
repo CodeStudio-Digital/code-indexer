@@ -48,8 +48,14 @@ export function mergeRestoredJobState(existing: JobState | undefined, restored: 
     ? existing.candidates
     : restored.candidates;
   if (restoredTerminal) return { ...existing, ...restored, candidates };
-  if (restored.candidates.length <= existing.candidates.length) return existing;
-  return { ...restored, ...existing, pct: Math.max(existing.pct, restored.pct), candidates };
+  return {
+    ...restored,
+    ...existing,
+    pct: Math.max(existing.pct, restored.pct),
+    candidates,
+    versionId: existing.versionId ?? restored.versionId,
+    error: existing.error ?? restored.error,
+  };
 }
 
 export interface UseSpriteJobs {

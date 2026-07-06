@@ -91,16 +91,30 @@ function RerollContent({
   const state = jobId != null ? jobs.get(jobId) : undefined;
   const candidates = state?.candidates ?? [];
   const running = jobId == null || (state != null && !TERMINAL.has(state.status));
+  const targetChangedMessage = t('animate.rerollTargetChanged', { defaultValue: 'Frame changed — reopen re-roll.' });
+  const targetMatches = (s: ReturnType<typeof useAnimateSession.getState>) => target != null
+    && s.selectedFrameIndex === target.index
+    && s.activeTrack === target.track
+    && s.selectedFrameVersionId === target.versionId;
 
   const pick = async (candidateIndex: number) => {
-    if (jobId == null || picking) return;
+    if (jobId == null || picking || target == null) return;
+    const stableTarget = target;
+    const before = useAnimateSession.getState();
+    if (!targetMatches(before) || before.replaceFrameAt == null) {
+      setError(targetChangedMessage);
+      return;
+    }
     setPicking(true);
     try {
       const version = await pickCandidate(projectId, assetId, jobId, candidateIndex);
       const s = useAnimateSession.getState();
-      if (s.replaceFrameAt != null && target != null) {
-        s.replaceFrameAt(target.index, version.id, target.track, target.versionId);
+      if (!targetMatches(s) || s.replaceFrameAt == null) {
+        refresh();
+        setError(targetChangedMessage);
+        return;
       }
+      s.replaceFrameAt(stableTarget.index, version.id, stableTarget.track, stableTarget.versionId);
       refresh();
       onClose();
     } catch (e) {

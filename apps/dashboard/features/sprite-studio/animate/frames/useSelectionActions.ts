@@ -36,12 +36,13 @@ export function useSelectionActions(projectId: number, refresh: () => void): {
     try {
       const res = await bulkDeleteVersions(projectId, ids);
       const deletedInUse = inUse.filter((id) => res.deleted.includes(id));
-      if (deletedInUse.length > 0) s.removeFramesUsing?.(deletedInUse);
+      const afterDelete = useAnimateSession.getState();
+      if (deletedInUse.length > 0) afterDelete.removeFramesUsing?.(deletedInUse);
       const shortened = res.affectedAnimations.filter((a) => a.removedFrames > 0);
       toast.success(shortened.length > 0
         ? t('frames.deletePartial', { n: res.deleted.length, anim: shortened.map((a) => a.name).join(', ') })
         : t('frames.deleteDone', { n: res.deleted.length }));
-      s.clearSelection();
+      afterDelete.clearSelection();
       refresh();
     } catch (e) {
       toast.error((e as Error).message);

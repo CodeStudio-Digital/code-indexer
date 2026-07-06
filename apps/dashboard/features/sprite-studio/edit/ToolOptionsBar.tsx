@@ -33,7 +33,8 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
   };
 
   const isBrush = activeTool === 'brush' || activeTool === 'eraser';
-  const isWand = activeTool === 'select-wand' || activeTool === 'fill' || activeTool === 'magic-eraser';
+  const isMagicEraser = activeTool === 'magic-eraser';
+  const isWand = activeTool === 'select-wand' || activeTool === 'fill' || isMagicEraser;
   const isShape = activeTool === 'line' || activeTool === 'shape-rect' || activeTool === 'shape-ellipse';
 
   return (
@@ -84,6 +85,12 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
             label={t('options.contiguous')} active={options.contiguous}
             onClick={() => patch({ contiguous: !options.contiguous })}
           />
+          {isMagicEraser && (
+            <Range
+              label={t('options.edgeCleanup')} min={0} max={3} value={options.edgeCleanup ?? 0}
+              onChange={(v) => patch({ edgeCleanup: v })} suffix="px"
+            />
+          )}
         </>
       )}
       {!isBrush && !isWand && !isShape && (

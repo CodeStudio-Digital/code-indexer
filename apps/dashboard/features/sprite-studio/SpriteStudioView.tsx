@@ -239,18 +239,18 @@ export function SpriteStudioView() {
   // version currently loaded in the editor (so overwrite works outside a session
   // too). Only a focused *frame* session hops back to the timeline afterwards.
   const onSaveOverwrite = async (blob: Blob) => {
-    const targetId = editSession?.versionId ?? activeVersion?.id ?? null;
+    const session = editSession;
+    const targetId = session?.versionId ?? activeVersion?.id ?? null;
     const assetId = state.activeAssetId;
     if (projectId == null || targetId == null || assetId == null) return;
     const seq = ++focusSeqRef.current;
     await api.overwriteVersion(projectId, targetId, blob);
+    setEditSession((current) => (current === session ? null : current));
     av.refresh();
     await c.refreshAssets();
     await c.selectAsset(assetId);
     if (focusSeqRef.current !== seq) return;
-    const origin = editSession?.origin ?? null;
-    setEditSession(null);
-    if (origin === 'frame') c.setMode('animate');
+    if (session?.origin === 'frame') c.setMode('animate');
     // Stay on the OVERWRITTEN image: selectAsset re-focused the asset's
     // current version, which yanked the canvas to a different image when a
     // non-current version was overwritten in the generic editor.
