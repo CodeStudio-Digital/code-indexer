@@ -14,6 +14,7 @@ import { mountSpriteAnimationRoutes } from './animations.routes.js';
 import { mountSpriteTrackRoutes } from './tracks.routes.js';
 import { mountSpriteGifRoutes } from './gif.routes.js';
 import { mountSpriteFrameAlignRoutes } from './frames-align.routes.js';
+import { mountSpriteFrameRepositionRoutes } from './frames-reposition.routes.js';
 import { mountSpriteGenerateRoutes } from './generate.routes.js';
 import { mountSpriteExportRoutes } from './export.routes.js';
 import { mountSpriteStreamRoutes } from './stream.routes.js';
@@ -32,6 +33,7 @@ export function mountSpriteStudioRoutes(app: Hono, deps: ServerDeps): void {
   mountSpriteTrackRoutes(app, deps);
   mountSpriteGifRoutes(app, deps);
   mountSpriteFrameAlignRoutes(app, deps);
+  mountSpriteFrameRepositionRoutes(app, deps);
   mountSpriteGenerateRoutes(app, deps);
   mountSpriteExportRoutes(app, deps);
   mountSpriteStreamRoutes(app, deps);

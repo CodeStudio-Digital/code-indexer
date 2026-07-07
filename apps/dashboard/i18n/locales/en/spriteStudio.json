@@ -526,6 +526,16 @@
       "bottomLeft": "Bottom left",
       "bottomRight": "Bottom right"
     },
+    "reposition": {
+      "button": "Reposition",
+      "hint": "Drag the character on the frame canvas; saving bakes a new version without resizing",
+      "save": "Save position",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "done": "Frame position saved",
+      "offset": "Δx {{x}} · Δy {{y}}",
+      "noCurrentFrame": "Select a base-layer frame to reposition."
+    },
     "timeline": {
       "title": "Timeline",
       "autoSaved": "Order and durations save automatically",

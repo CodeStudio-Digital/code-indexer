@@ -526,6 +526,16 @@
       "bottomLeft": "Esquerda-inferior",
       "bottomRight": "Direita-inferior"
     },
+    "reposition": {
+      "button": "Reposicionar",
+      "hint": "Arraste o personagem no canvas do frame; salvar cria uma nova versão sem redimensionar",
+      "save": "Salvar posição",
+      "saving": "Salvando…",
+      "cancel": "Cancelar",
+      "done": "Posição do frame salva",
+      "offset": "Δx {{x}} · Δy {{y}}",
+      "noCurrentFrame": "Selecione um frame da camada base para reposicionar."
+    },
     "timeline": {
       "title": "Timeline",
       "autoSaved": "Ordem e durações salvam automaticamente",

@@ -34,4 +34,5 @@ export * from './processing/slice.js';
 export * from './processing/outline.js';
 export * from './processing/alpha-cleanup.js';
 export * from './processing/auto-crop.js';
+export * from './processing/reposition.js';
 export * from './processing/ops.js';

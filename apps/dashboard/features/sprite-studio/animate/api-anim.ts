@@ -134,6 +134,14 @@ export const alignFrames = (
 ): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/frames/align`, j(input));
 
+/** Manual registration: move one frame's subject inside its existing canvas and
+ * bake the result as a new version, then repoint that timeline cell. */
+export const repositionFrame = (
+  animId: number,
+  input: { frameIndex: number; dx: number; dy: number; track?: number },
+): Promise<SpriteAnimation> =>
+  req<SpriteAnimation>(`${animBase(animId)}/frames/reposition`, j(input));
+
 /** Replace ONE track's cells (auto-committed by the timeline, debounced).
  *  Track 0 = dense reorder (indices rewritten); overlays = sparse explicit. */
 export const saveFrames = (

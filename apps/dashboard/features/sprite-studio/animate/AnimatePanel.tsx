@@ -58,6 +58,7 @@ export function AnimatePanel({
   const [anchorId, setAnchorId] = useState<number | null>(null);
   const [activeTrack, setActiveTrack] = useState(0);
   const [aligning, setAligning] = useState(false);
+  const [repositioning, setRepositioning] = useState(false);
   const [direction, setDirection] = useState('');
   const [error, setError] = useState<string | null>(null);
   const selectedIdRef = useRef<number | null>(null);
@@ -150,6 +151,32 @@ export function AnimatePanel({
       setAligning(false);
     }
   }, [current, aligning, model, frameIdx, flushPendingSave, applyServer, refreshVersions, onSaved, asset.id, t]);
+
+  const repositionFrame = useCallback(async (dx: number, dy: number) => {
+    if (!current || repositioning) return;
+    const animationId = current.id;
+    const targetIndex = Math.max(0, Math.min(model.gridLen - 1, frameIdx));
+    if (!model.cellAt(0, targetIndex)) {
+      setError(t('animate.reposition.noCurrentFrame'));
+      return;
+    }
+    setRepositioning(true);
+    setError(null);
+    try {
+      await flushPendingSave();
+      const updated = await anim.repositionFrame(animationId, { frameIndex: targetIndex, dx, dy });
+      if (selectedIdRef.current !== animationId || assetIdRef.current !== asset.id) return;
+      applyServer(updated);
+      refreshVersions();
+      const savedFrame = updated.frames.find((f) => f.track === 0 && f.frameIndex === targetIndex);
+      onSaved(asset.id, savedFrame?.versionId ?? 0);
+      toast.success(t('animate.reposition.done'));
+    } catch (e) {
+      if (selectedIdRef.current === animationId && assetIdRef.current === asset.id) setError((e as Error).message);
+    } finally {
+      setRepositioning(false);
+    }
+  }, [current, repositioning, model, frameIdx, flushPendingSave, applyServer, refreshVersions, onSaved, asset.id, t]);
 
   const patchAnim = useCallback((patch: { fps?: number; loopMode?: anim.AnimLoopMode }) => {
     if (!current) return;
@@ -284,9 +311,11 @@ export function AnimatePanel({
             loopStart={current.loopStart}
             loopEnd={current.loopEnd}
             versionById={versionById}
+            repositioning={repositioning}
             onPatch={patchAnim}
             onScrub={(i) => setFrameIdx(() => i)}
             onSetLoop={setLoopRange}
+            onRepositionFrame={repositionFrame}
           />
           <TimelineStrip
             projectId={projectId}
