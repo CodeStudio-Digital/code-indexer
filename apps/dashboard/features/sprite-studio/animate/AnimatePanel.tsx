@@ -6,7 +6,7 @@
  * per-track debounced PATCH), useTimelineOps (column/cell ops + bridge),
  * useAnimGeneration (generate → adopt, base track), useTimelineShortcuts.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { useSpriteJobs } from '../jobs/useSpriteJobs.js';
@@ -60,6 +60,8 @@ export function AnimatePanel({
   const [aligning, setAligning] = useState(false);
   const [direction, setDirection] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const selectedIdRef = useRef<number | null>(null);
+  const assetIdRef = useRef(asset.id);
 
   const current = animations.find((a) => a.id === selectedId) ?? null;
   const lastGenGroup = current?.lastGenJobId != null
@@ -89,6 +91,9 @@ export function AnimatePanel({
   });
   useTimelineShortcuts(ops, frameIdx, model.gridLen, setFrameIdx, current != null);
 
+  useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
+  useEffect(() => { assetIdRef.current = asset.id; }, [asset.id]);
+
   // Load animations per asset; keep the selection when possible.
   useEffect(() => {
     let alive = true;
@@ -109,24 +114,42 @@ export function AnimatePanel({
   useEffect(() => { setAnchorId(current?.anchorVersionId ?? null); }, [selectedId, current == null]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setFrameCount(current?.frameCount ?? 4); }, [selectedId, current == null]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Registration: flush pending edits, then re-anchor every BASE frame.
-  const alignAll = useCallback(async (anchorX: anim.AnchorX, anchorY: anim.AnchorY) => {
+  // Registration: flush pending edits, then bake newly aligned BASE-frame versions.
+  const alignFrames = useCallback(async (
+    anchorX: anim.AnchorX,
+    anchorY: anim.AnchorY,
+    scope: anim.AlignScope,
+  ) => {
     if (!current || aligning) return;
+    const animationId = current.id;
+    const targetIndex = scope === 'current' ? Math.max(0, Math.min(model.gridLen - 1, frameIdx)) : null;
+    if (targetIndex != null && !model.cellAt(0, targetIndex)) {
+      setError(t('animate.align.noCurrentFrame'));
+      return;
+    }
     setAligning(true);
     setError(null);
     try {
       await flushPendingSave();
-      const updated = await anim.alignFrames(current.id, { anchorX, anchorY });
+      const updated = await anim.alignFrames(animationId, {
+        anchorX,
+        anchorY,
+        ...(targetIndex != null ? { frameIndexes: [targetIndex] } : {}),
+      });
+      if (selectedIdRef.current !== animationId || assetIdRef.current !== asset.id) return;
       applyServer(updated);
-      onSaved(asset.id, updated.frames[0]?.versionId ?? 0);
       refreshVersions();
-      toast.success(t('animate.align.done'));
+      const savedFrame = targetIndex != null
+        ? updated.frames.find((f) => f.track === 0 && f.frameIndex === targetIndex)
+        : updated.frames.find((f) => f.track === 0);
+      onSaved(asset.id, savedFrame?.versionId ?? 0);
+      toast.success(t(targetIndex != null ? 'animate.align.doneCurrent' : 'animate.align.doneAll'));
     } catch (e) {
-      setError((e as Error).message);
+      if (selectedIdRef.current === animationId && assetIdRef.current === asset.id) setError((e as Error).message);
     } finally {
       setAligning(false);
     }
-  }, [current, aligning, flushPendingSave, applyServer, onSaved, refreshVersions, asset.id, t]);
+  }, [current, aligning, model, frameIdx, flushPendingSave, applyServer, refreshVersions, onSaved, asset.id, t]);
 
   const patchAnim = useCallback((patch: { fps?: number; loopMode?: anim.AnimLoopMode }) => {
     if (!current) return;
@@ -275,7 +298,7 @@ export function AnimatePanel({
             aligning={aligning}
             versionById={versionById}
             onSelect={onSelectCell}
-            onAlign={(ax, ay) => void alignAll(ax, ay)}
+            onAlign={(ax, ay, scope) => void alignFrames(ax, ay, scope)}
             onEditVersion={onEditVersion}
             onReverse={ops.reverse}
             onCopy={ops.copyColumn}

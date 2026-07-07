@@ -121,16 +121,18 @@ export const adoptFrames = (animId: number, jobId: number): Promise<SpriteAnimat
 
 export type AnchorX = 'left' | 'center' | 'right';
 export type AnchorY = 'top' | 'middle' | 'bottom';
+export type AlignScope = 'all' | 'current';
 
 /**
- * Registration tool: auto-crop every frame and re-anchor the content on its
- * own canvas (new 'edited' versions; the asset's current pointer stays put).
+ * Registration tool: auto-crop targeted base-track frames and re-anchor the
+ * content on each frame's own canvas (new 'edited' versions; the asset's
+ * current pointer stays put). Omitting frameIndexes aligns every base frame.
  */
 export const alignFrames = (
   animId: number,
-  anchor: { anchorX: AnchorX; anchorY: AnchorY },
+  input: { anchorX: AnchorX; anchorY: AnchorY; frameIndexes?: number[] },
 ): Promise<SpriteAnimation> =>
-  req<SpriteAnimation>(`${animBase(animId)}/frames/align`, j(anchor));
+  req<SpriteAnimation>(`${animBase(animId)}/frames/align`, j(input));
 
 /** Replace ONE track's cells (auto-committed by the timeline, debounced).
  *  Track 0 = dense reorder (indices rewritten); overlays = sparse explicit. */

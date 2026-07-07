@@ -29,7 +29,19 @@ const ANCHOR_Y: ReadonlySet<string> = new Set(['top', 'middle', 'bottom']);
 interface AlignBody {
   anchorX?: string;
   anchorY?: string;
-  frameIndexes?: number[];
+  frameIndexes?: unknown;
+}
+
+export function normalizeFrameIndexes(raw: unknown): Set<number> | null {
+  if (raw === undefined) return null;
+  if (!Array.isArray(raw)) throw new Error('invalid_frame_indexes');
+  const out = new Set<number>();
+  for (const value of raw) {
+    if (!Number.isInteger(value) || value < 0) throw new Error('invalid_frame_indexes');
+    out.add(value);
+  }
+  if (out.size === 0) throw new Error('no_frames');
+  return out;
 }
 
 export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
@@ -45,10 +57,16 @@ export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
     }
     const anchorX = body.anchorX as CanvasAnchorX;
     const anchorY = body.anchorY as CanvasAnchorY;
+    let wanted: Set<number> | null;
+    try {
+      wanted = normalizeFrameIndexes(body.frameIndexes);
+    } catch (e) {
+      const msg = (e as Error).message;
+      return c.json({ error: msg }, 400);
+    }
     // Align operates on the BASE track only (replaceFrames below is track-0
     // scoped by contract — overlay layers keep their own registration).
     const frames = store.listFrames(anim.id, 0);
-    const wanted = Array.isArray(body.frameIndexes) ? new Set(body.frameIndexes) : null;
     const targets = frames.filter((f) => !wanted || wanted.has(f.frame_index));
     if (targets.length === 0) return c.json({ error: 'no_frames' }, 400);
 

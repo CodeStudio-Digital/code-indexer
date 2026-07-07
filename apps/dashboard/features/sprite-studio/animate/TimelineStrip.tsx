@@ -11,10 +11,10 @@ import { useTranslation } from 'react-i18next';
 import { AlignVerticalJustifyEnd, ClipboardPaste, Copy, FlipHorizontal2, Layers, Loader2, Plus } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '../../../components/ui/dropdown-menu.js';
 import type { AssetVersion } from '../types.js';
-import type { AnchorX, AnchorY, TrackMeta } from './api-anim.js';
+import type { AlignScope, AnchorX, AnchorY, TrackMeta } from './api-anim.js';
 import type { TimelineModel } from './timeline-model.js';
 import { TrackRow } from './TrackRow.js';
 import { VersionPickerPopover } from './VersionPickerPopover.js';
@@ -42,7 +42,7 @@ export function TimelineStrip({
   aligning: boolean;
   versionById: Map<number, AssetVersion>;
   onSelect: (track: number, col: number) => void;
-  onAlign: (anchorX: AnchorX, anchorY: AnchorY) => void;
+  onAlign: (anchorX: AnchorX, anchorY: AnchorY, scope: AlignScope) => void;
   onEditVersion?: (versionId: number) => void;
   onReverse?: () => void;
   onCopy?: () => void;
@@ -64,6 +64,7 @@ export function TimelineStrip({
   const { t } = useTranslation('spriteStudio');
   const dragFrom = useRef<{ track: number; col: number } | null>(null);
   const hasFrames = model.gridLen > 0;
+  const hasCurrentBaseFrame = model.cellAt(0, selectedIndex) != null;
   // Top row = highest layer (AE-style); Base renders at the bottom.
   const rows: TrackMeta[] = [...model.tracks].sort((a, b) => b.id - a.id);
 
@@ -84,12 +85,34 @@ export function TimelineStrip({
                 {aligning ? t('animate.align.aligning') : t('animate.align.button')}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="start" className="min-w-56">
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide">
+                {t('animate.align.allFrames')}
+              </DropdownMenuLabel>
               {ALIGN_PRESETS.map((p) => (
-                <DropdownMenuItem key={p.key} className="text-xs" onClick={() => onAlign(p.anchorX, p.anchorY)}>
+                <DropdownMenuItem key={`all-${p.key}`} className="text-xs" onClick={() => onAlign(p.anchorX, p.anchorY, 'all')}>
                   {t(`animate.align.${p.key}`)}
                 </DropdownMenuItem>
               ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide">
+                {t('animate.align.currentFrame', { n: selectedIndex + 1 })}
+              </DropdownMenuLabel>
+              {ALIGN_PRESETS.map((p) => (
+                <DropdownMenuItem
+                  key={`current-${p.key}`}
+                  className="text-xs"
+                  disabled={!hasCurrentBaseFrame}
+                  onClick={() => onAlign(p.anchorX, p.anchorY, 'current')}
+                >
+                  {t(`animate.align.${p.key}`)}
+                </DropdownMenuItem>
+              ))}
+              {!hasCurrentBaseFrame && (
+                <div className="px-2 py-1 text-[10px] text-muted-foreground">
+                  {t('animate.align.noCurrentFrameHint')}
+                </div>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
