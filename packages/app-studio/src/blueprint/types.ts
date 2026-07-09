@@ -19,7 +19,7 @@ export interface BlueprintPosition {
 /** Payload de cada nó — o que os componentes de nó renderizam. */
 export type BlueprintNodeData =
   | { kind: 'screen'; screenId: string; label: string; purpose: string; primary: boolean; protected: boolean }
-  | { kind: 'entity'; entityName: string; label: string; fields: Array<{ name: string; label: string; type: AppFieldType; references?: string }> }
+  | { kind: 'entity'; entityName: string; label: string; fields: Array<{ name: string; label: string; type: AppFieldType; required?: boolean; references?: string }> }
   | { kind: 'feature'; featureId: string; label: string; description: string }
   | { kind: 'auth'; enabled: boolean; methods: string[] }
   | { kind: 'behavior'; behaviorId: string; screenId: string; trigger: AppBehaviorTrigger; label: string; actions: AppBehaviorAction[] };

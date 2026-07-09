@@ -13,7 +13,7 @@ import { apiCall } from '../../../lib/api-client.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 import { useWorkspaceLayout } from '../../../state/workspace-layout.js';
-import { sftpReadFile, type NeedTrust } from '../api.js';
+import { findHostByKey, sftpReadFile, sshHostKey, type NeedTrust } from '../api.js';
 import { createLocalAdapter } from './local-adapter.js';
 import { createPaneSelection } from './pane-selection.js';
 import { useRemoteHost } from './use-remote-host.js';
@@ -50,7 +50,7 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
   const localAdapter = useMemo(() => (rootPath != null ? createLocalAdapter(projectId, rootPath) : null), [projectId, rootPath]);
   const { spec, adapter: remoteAdapter, error: remoteError, connecting } = useRemoteHost(hostId, hosts, identities, onNeedTrust);
   // Shared column config across both panes so the layout stays symmetric.
-  const { visibility: columns, toggle: onToggleColumn } = useColumnConfig();
+  const { visibility: columns, widths: columnWidths, toggle: onToggleColumn, setWidth: onColumnWidthChange } = useColumnConfig();
   const { transfers, transferItems, cancel } = useTransfers(spec);
 
   const [localCwd, setLocalCwd] = useState('');
@@ -77,7 +77,7 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
       if (!spec) return;
       try {
         const { content } = await sftpReadFile(spec, item.path);
-        const host = hosts.find((h) => String(h.id) === hostId);
+        const host = findHostByKey(hosts, hostId);
         useWorkspaceStore.getState().openSftpFile({
           kind: 'sftp',
           projectId,
@@ -136,7 +136,7 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
             </SelectTrigger>
             <SelectContent>
               {hosts.map((h) => (
-                <SelectItem key={h.id} value={String(h.id)}>
+                <SelectItem key={sshHostKey(h)} value={sshHostKey(h)}>
                   {h.label}
                 </SelectItem>
               ))}
@@ -162,7 +162,9 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
               onZip={localZip}
               onExtract={localExtract}
               columns={columns}
+              columnWidths={columnWidths}
               onToggleColumn={onToggleColumn}
+              onColumnWidthChange={onColumnWidthChange}
             />
           ) : (
             <div className="grid place-items-center h-full text-xs text-muted-foreground">
@@ -185,7 +187,9 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
               onZip={remoteZip}
               onExtract={remoteExtract}
               columns={columns}
+              columnWidths={columnWidths}
               onToggleColumn={onToggleColumn}
+              onColumnWidthChange={onColumnWidthChange}
             />
           ) : (
             <div className="grid place-items-center h-full text-xs text-muted-foreground">{t('sftp.selectHost')}</div>

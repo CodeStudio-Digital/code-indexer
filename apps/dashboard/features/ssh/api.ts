@@ -18,7 +18,7 @@ import type {
   SftpEntry,
   SftpProgress,
 } from '@mcp/api-bus';
-import type { SshHost, SshIdentity, SshSnippet, SshSecret, SshAuthMethod } from './types.js';
+import type { SshHost, SshIdentity, SshSnippet, SshSecret, SshAuthMethod, SshHostStorageScope } from './types.js';
 
 export function openShell(spec: SshConnectSpec, cols: number, rows: number): Promise<SshOpenShellResult> {
   return apiCall<SshOpenShellResult>('ssh.openShell', { spec, cols, rows });
@@ -142,14 +142,40 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 const root = (projectId: number) => `/api/projects/${projectId}/ssh`;
 const j = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
 
+type SshHostRouteRef = number | Pick<SshHost, 'id' | 'is_shared' | 'storage_scope'>;
+
+export function sshHostScope(host: Pick<SshHost, 'is_shared' | 'storage_scope'>): SshHostStorageScope {
+  return host.storage_scope ?? (host.is_shared ? 'shared' : 'project');
+}
+
+export function sshHostKey(host: Pick<SshHost, 'id' | 'is_shared' | 'storage_scope'>): string {
+  return `${sshHostScope(host)}:${host.id}`;
+}
+
+export function findHostByKey(hosts: SshHost[], key: string): SshHost | undefined {
+  return hosts.find((h) => sshHostKey(h) === key);
+}
+
+function hostRefId(ref: SshHostRouteRef): number {
+  return typeof ref === 'number' ? ref : ref.id;
+}
+
+function hostRefScope(ref: SshHostRouteRef): SshHostStorageScope | undefined {
+  return typeof ref === 'number' ? undefined : sshHostScope(ref);
+}
+
+function scopeQuery(scope?: SshHostStorageScope): string {
+  return scope ? `?scope=${encodeURIComponent(scope)}` : '';
+}
+
 export const listHosts = (p: number) =>
   req<{ hosts: SshHost[] }>(`${root(p)}/hosts`).then((r) => r.hosts);
 export const createHost = (p: number, body: Record<string, unknown>) =>
   req<SshHost>(`${root(p)}/hosts`, j('POST', body));
-export const patchHost = (p: number, hid: number, patch: Record<string, unknown>) =>
-  req<SshHost>(`${root(p)}/hosts/${hid}`, j('PATCH', patch));
-export const deleteHost = (p: number, hid: number) =>
-  req<{ ok: true }>(`${root(p)}/hosts/${hid}`, { method: 'DELETE' });
+export const patchHost = (p: number, host: SshHostRouteRef, patch: Record<string, unknown>, scope?: SshHostStorageScope) =>
+  req<SshHost>(`${root(p)}/hosts/${hostRefId(host)}${scopeQuery(scope ?? hostRefScope(host))}`, j('PATCH', patch));
+export const deleteHost = (p: number, host: SshHostRouteRef, scope?: SshHostStorageScope) =>
+  req<{ ok: true }>(`${root(p)}/hosts/${hostRefId(host)}${scopeQuery(scope ?? hostRefScope(host))}`, { method: 'DELETE' });
 
 export const listIdentities = (p: number) =>
   req<{ identities: SshIdentity[] }>(`${root(p)}/identities`).then((r) => r.identities);
@@ -276,7 +302,7 @@ async function resolveAuth(
 async function jumpSpec(host: SshHost, identities: SshIdentity[]): Promise<SshConnectSpec> {
   const identity = host.identity_id != null ? identities.find((i) => i.id === host.identity_id) ?? null : null;
   return {
-    hostId: `saved:${host.id}:jump`,
+    hostId: `saved:${sshHostKey(host)}:jump`,
     host: host.hostname,
     port: host.port,
     username: host.username,
@@ -311,7 +337,7 @@ export async function resolveSpecFromHost(
   const jump = await Promise.all(farthestFirst.reverse().map((jh) => jumpSpec(jh, identities)));
 
   return {
-    hostId: `saved:${host.id}`,
+    hostId: `saved:${sshHostKey(host)}`,
     host: host.hostname,
     port: host.port,
     username: host.username,

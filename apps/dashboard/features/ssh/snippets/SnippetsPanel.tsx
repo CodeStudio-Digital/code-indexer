@@ -11,7 +11,7 @@ import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../../components/ui/select.js';
-import { listSnippets, createSnippet, patchSnippet, deleteSnippet, listSecrets } from '../api.js';
+import { findHostByKey, listSnippets, createSnippet, patchSnippet, deleteSnippet, listSecrets, sshHostKey } from '../api.js';
 import { SecretsManager } from './SecretsManager.js';
 import type { SshHost, SshSnippet, SshSecret } from '../types.js';
 
@@ -99,7 +99,7 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
     }
   }
 
-  const host = hosts.find((h) => String(h.id) === hostId);
+  const host = findHostByKey(hosts, hostId);
 
   return (
     <div className="h-full flex flex-col min-h-0">
@@ -110,7 +110,7 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
             <SelectTrigger className="h-6 text-xs"><SelectValue placeholder={t('snippets.selectHost')} /></SelectTrigger>
             <SelectContent>
               {hosts.map((h) => (
-                <SelectItem key={h.id} value={String(h.id)}>{h.label}</SelectItem>
+                <SelectItem key={sshHostKey(h)} value={sshHostKey(h)}>{h.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>

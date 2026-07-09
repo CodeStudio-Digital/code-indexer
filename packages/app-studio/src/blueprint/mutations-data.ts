@@ -3,17 +3,17 @@
  * mutations.ts pelo cap de LOC). Mesmo contrato: cirúrgico, cascades
  * reportados em `cascaded`.
  */
-import type { AppBehaviorAction, AppBehaviorTrigger, AppFieldType, AppSpec } from '../spec/types.js';
+import type { AppBehaviorAction, AppBehaviorTrigger, AppFieldType, AppSpec, AppSpecField } from '../spec/types.js';
 import { kebab, snake, titleize } from '../spec/names.js';
 
 export type BlueprintDataMutation =
   | { op: 'add-entity'; label: string }
   | { op: 'update-entity'; entity: string; patch: { label?: string } }
   | { op: 'remove-entity'; entity: string }
-  | { op: 'add-field'; entity: string; label: string; type?: AppFieldType }
-  | { op: 'update-field'; entity: string; field: string; patch: { label?: string; type?: AppFieldType; required?: boolean } }
+  | { op: 'add-field'; entity: string; label: string; name?: string; type?: AppFieldType; required?: boolean; references?: string }
+  | { op: 'update-field'; entity: string; field: string; patch: { name?: string; label?: string; type?: AppFieldType; required?: boolean; references?: string | null } }
   | { op: 'remove-field'; entity: string; field: string }
-  | { op: 'set-field-reference'; entity: string; target: string }
+  | { op: 'set-field-reference'; entity: string; target: string; field?: string; label?: string }
   | { op: 'add-behavior'; screen_id: string; trigger: AppBehaviorTrigger; trigger_label: string; action: AppBehaviorAction }
   | { op: 'update-behavior'; behavior_id: string; patch: { trigger?: AppBehaviorTrigger; trigger_label?: string } }
   | { op: 'remove-behavior'; behavior_id: string }
@@ -99,23 +99,43 @@ export function applyDataMutation(spec: AppSpec, m: BlueprintDataMutation, casca
       break;
     case 'add-field': {
       const entity = entityOf(spec, m.entity);
+      if (m.references) entityOf(spec, m.references);
       const taken = new Set(entity.fields.map((f) => f.name));
-      entity.fields.push({
-        name: uniqueName(snake(m.label) || 'campo', taken, '_'),
+      const field: AppSpecField = {
+        name: uniqueName(snake(m.name ?? m.label) || 'campo', taken, '_'),
         label: m.label,
-        type: m.type ?? 'text',
-      });
+        type: m.references ? 'integer' : (m.type ?? 'text'),
+      };
+      if (m.required) field.required = true;
+      if (m.references) field.references = m.references;
+      entity.fields.push(field);
       break;
     }
     case 'update-field': {
       const entity = entityOf(spec, m.entity);
       const field = entity.fields.find((f) => f.name === m.field);
       if (!field) throw new Error(`Unknown field '${m.entity}.${m.field}'.`);
+      if (m.patch.name !== undefined) {
+        const name = snake(m.patch.name);
+        if (!name) throw new Error(`Field name cannot be empty.`);
+        const taken = new Set(entity.fields.filter((f) => f !== field).map((f) => f.name));
+        field.name = uniqueName(name, taken, '_');
+      }
       if (m.patch.label !== undefined) field.label = m.patch.label;
       if (m.patch.type !== undefined) field.type = m.patch.type;
       if (m.patch.required !== undefined) {
         if (m.patch.required) field.required = true;
         else delete field.required;
+      }
+      if (m.patch.references !== undefined) {
+        const target = m.patch.references?.trim();
+        if (target) {
+          entityOf(spec, target);
+          field.references = target;
+          field.type = 'integer';
+        } else {
+          delete field.references;
+        }
       }
       break;
     }
@@ -132,13 +152,13 @@ export function applyDataMutation(spec: AppSpec, m: BlueprintDataMutation, casca
     case 'set-field-reference': {
       const entity = entityOf(spec, m.entity);
       const target = entityOf(spec, m.target); // valida o alvo
-      const fkName = `${m.target}_id`;
+      const fkName = snake(m.field ?? `${m.target}_id`) || `${m.target}_id`;
       const existing = entity.fields.find((f) => f.name === fkName);
       if (existing) {
         existing.references = m.target;
         existing.type = 'integer';
       } else {
-        entity.fields.push({ name: fkName, label: titleize(fkName), type: 'integer', references: m.target });
+        entity.fields.push({ name: fkName, label: m.label?.trim() || titleize(fkName), type: 'integer', references: m.target });
         cascaded.push(`campo '${fkName}' criado em '${entity.label}' ligando a '${target.label}'`);
       }
       break;

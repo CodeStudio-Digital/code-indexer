@@ -1,7 +1,13 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
-import { sharedOrOwnedHost } from './_ownership.js';
+import {
+  resolveSharedOrOwnedHost,
+  sharedOrOwnedHost,
+  withHostStorageScope,
+  type ResolvedSshHost,
+  type SshHostStorageScope,
+} from './_ownership.js';
 import type { CreateSshHostInput, SshHostPatch, SshHost } from '@mcp/store/ssh-store-types.js';
 
 type SshHostRoutePatch = SshHostPatch & Partial<Pick<SshHost, 'known_host_sha256' | 'startup_snippet_id' | 'last_used_at' | 'sort_order'>>;
@@ -29,16 +35,21 @@ export function mountSshHostRoutes(app: Hono, deps: ServerDeps): void {
   app.get(`${base}/hosts`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
     // Shared hosts (central) first, then this project's own hosts.
-    const hosts = [...deps.sshStore.listSharedHosts(), ...deps.sshStoreFor(projectId).listHosts(projectId)];
+    const hosts = [
+      ...deps.sshStore.listSharedHosts().map((h) => withHostStorageScope(h, 'shared')),
+      ...deps.sshStoreFor(projectId).listHosts(projectId).map((h) => withHostStorageScope(h, 'project')),
+    ];
     return c.json({ hosts });
   });
 
   app.get(`${base}/hosts/:hid`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
     const hid = parseIdParam(c, 'hid');
-    const found = sharedOrOwnedHost(deps, projectId, hid);
+    const found = resolveHostForRoute(deps, projectId, hid, readScope(c.req.query('scope')));
+    if (found === 'invalid-scope') return c.json({ error: 'scope must be shared or project' }, 400);
+    if (found === 'ambiguous') return c.json({ error: 'ambiguous SSH host id; pass scope=shared or scope=project' }, 409);
     if (!found) return notFound(c, `Host ${hid} not found`);
-    return c.json(found.host);
+    return c.json(withHostStorageScope(found.host, found.storage_scope));
   });
 
   app.post(`${base}/hosts`, async (c) => {
@@ -53,8 +64,7 @@ export function mountSshHostRoutes(app: Hono, deps: ServerDeps): void {
     }
     // Shared hosts go in the CENTRAL DB so every project (even split ones) sees them.
     const store = shared ? deps.sshStore : deps.sshStoreFor(projectId);
-    return c.json(
-      store.createHost({
+    const created = store.createHost({
         project_id: projectId,
         label: body.label.trim(),
         hostname: body.hostname.trim(),
@@ -71,14 +81,16 @@ export function mountSshHostRoutes(app: Hono, deps: ServerDeps): void {
         agent_forwarding: body.agent_forwarding,
         is_shared: shared,
         keepalive_secs: body.keepalive_secs,
-      }),
-    );
+    });
+    return c.json(withHostStorageScope(created, shared ? 'shared' : 'project'));
   });
 
   app.patch(`${base}/hosts/:hid`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');
     const hid = parseIdParam(c, 'hid');
-    const found = sharedOrOwnedHost(deps, projectId, hid);
+    const found = resolveHostForRoute(deps, projectId, hid, readScope(c.req.query('scope')));
+    if (found === 'invalid-scope') return c.json({ error: 'scope must be shared or project' }, 400);
+    if (found === 'ambiguous') return c.json({ error: 'ambiguous SSH host id; pass scope=shared or scope=project' }, 409);
     if (!found) return notFound(c, `Host ${hid} not found`);
     const patch = await parseJsonBody<SshHostRoutePatch>(c);
     const wasShared = !!found.host.is_shared;
@@ -128,21 +140,41 @@ export function mountSshHostRoutes(app: Hono, deps: ServerDeps): void {
         try { destStore.deleteHost(hid); } catch { /* preserve original error */ }
         throw err;
       }
-      return c.json(destStore.getHost(hid) ?? inserted);
+      return c.json(withHostStorageScope(destStore.getHost(hid) ?? inserted, willBeShared ? 'shared' : 'project'));
     }
 
     found.store.updateHost(hid, patch);
-    return c.json(found.store.getHost(hid));
+    const updated = found.store.getHost(hid);
+    return c.json(updated ? withHostStorageScope(updated, found.storage_scope) : updated);
   });
 
   app.delete(`${base}/hosts/:hid`, (c) => {
     const projectId = parseIdParam(c, 'projectId');
     const hid = parseIdParam(c, 'hid');
-    const found = sharedOrOwnedHost(deps, projectId, hid);
+    const found = resolveHostForRoute(deps, projectId, hid, readScope(c.req.query('scope')));
+    if (found === 'invalid-scope') return c.json({ error: 'scope must be shared or project' }, 400);
+    if (found === 'ambiguous') return c.json({ error: 'ambiguous SSH host id; pass scope=shared or scope=project' }, 409);
     if (!found) return notFound(c, `Host ${hid} not found`);
     found.store.deleteHost(hid);
     return c.json({ ok: true });
   });
+}
+
+function readScope(raw: string | undefined): SshHostStorageScope | 'invalid-scope' | undefined {
+  if (raw == null || raw === '') return undefined;
+  return raw === 'shared' || raw === 'project' ? raw : 'invalid-scope';
+}
+
+function resolveHostForRoute(
+  deps: Pick<ServerDeps, 'sshStore' | 'sshStoreFor'>,
+  projectId: number,
+  hid: number,
+  scope: SshHostStorageScope | 'invalid-scope' | undefined,
+): ResolvedSshHost | null | 'ambiguous' | 'invalid-scope' {
+  if (scope === 'invalid-scope') return 'invalid-scope';
+  const found = resolveSharedOrOwnedHost(deps, projectId, hid, scope);
+  if (found && 'ambiguous' in found) return 'ambiguous';
+  return found;
 }
 
 function applyHostPatchForRelocation(host: SshHost, patch: Partial<SshHostRoutePatch>, willBeShared: boolean): SshHost {

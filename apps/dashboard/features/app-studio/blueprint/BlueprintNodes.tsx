@@ -82,7 +82,12 @@ export function BlueprintNode({ data, selected }: Props) {
           <ul className="mt-1 space-y-0.5">
             {data.fields.slice(0, 4).map((f) => (
               <li key={f.name} className="truncate text-[10px] text-muted-foreground">
-                {f.label} <span className="text-muted-foreground/50">· {f.type}</span>
+                {f.label}
+                <span className="text-muted-foreground/50">
+                  {' · '}
+                  {f.references ? `FK -> ${f.references}` : f.type}
+                  {f.required ? ' · req.' : ''}
+                </span>
               </li>
             ))}
             {data.fields.length > 4 && (

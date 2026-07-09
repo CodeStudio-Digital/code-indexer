@@ -87,8 +87,10 @@ describe('applySpecMutation — invariante: spec válida permanece válida', () 
     { op: 'add-entity', label: 'Produtos' },
     { op: 'remove-entity', entity: 'clientes' },
     { op: 'add-field', entity: 'pedidos', label: 'Observação' },
+    { op: 'update-field', entity: 'pedidos', field: 'total', patch: { name: 'valor_total', label: 'Valor total', required: true } },
     { op: 'remove-field', entity: 'pedidos', field: 'total' },
     { op: 'set-field-reference', entity: 'clientes', target: 'pedidos' },
+    { op: 'update-field', entity: 'pedidos', field: 'clientes_id', patch: { references: null } },
     { op: 'add-behavior', screen_id: 'painel', trigger: 'click', trigger_label: 'ao clicar em novo', action: { kind: 'notify', message: 'ok' } },
     { op: 'remove-behavior', behavior_id: 'salvar-pedido' },
     { op: 'remove-behavior-action', behavior_id: 'salvar-pedido', index: 0 },
@@ -135,6 +137,49 @@ describe('applySpecMutation — invariante: spec válida permanece válida', () 
     const fk = clientes.fields.find((f) => f.name === 'pedidos_id')!;
     expect(fk).toMatchObject({ type: 'integer', references: 'pedidos' });
     expect(cascaded.join()).toContain('pedidos_id');
+  });
+
+  it('set-field-reference can create a manually named FK field', () => {
+    const { spec: next } = applySpecMutation(richSpec(), {
+      op: 'set-field-reference',
+      entity: 'pedidos',
+      target: 'clientes',
+      field: 'cliente_principal_id',
+      label: 'Cliente principal',
+    });
+    const pedidos = next.database.entities.find((e) => e.name === 'pedidos')!;
+    expect(pedidos.fields.find((f) => f.name === 'cliente_principal_id')).toMatchObject({
+      label: 'Cliente principal',
+      type: 'integer',
+      references: 'clientes',
+    });
+    expect(validateAppSpec(next)).toEqual([]);
+  });
+
+  it('set-field-reference can convert an existing field into a FK', () => {
+    const { spec: next } = applySpecMutation(richSpec(), {
+      op: 'set-field-reference',
+      entity: 'clientes',
+      target: 'pedidos',
+      field: 'id',
+    });
+    const clientes = next.database.entities.find((e) => e.name === 'clientes')!;
+    expect(clientes.fields.find((f) => f.name === 'id')).toMatchObject({ type: 'integer', references: 'pedidos' });
+    expect(validateAppSpec(next)).toEqual([]);
+  });
+
+  it('update-field clears FK references without deleting the field', () => {
+    const { spec: next } = applySpecMutation(richSpec(), {
+      op: 'update-field',
+      entity: 'pedidos',
+      field: 'clientes_id',
+      patch: { references: null },
+    });
+    const pedidos = next.database.entities.find((e) => e.name === 'pedidos')!;
+    const field = pedidos.fields.find((f) => f.name === 'clientes_id')!;
+    expect(field.references).toBeUndefined();
+    expect(field.type).toBe('integer');
+    expect(validateAppSpec(next)).toEqual([]);
   });
 
   it('throws on unknown refs', () => {

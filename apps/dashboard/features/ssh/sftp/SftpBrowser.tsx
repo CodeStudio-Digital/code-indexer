@@ -28,6 +28,8 @@ import {
   pickLocalFiles,
   pickSavePath,
   type NeedTrust,
+  findHostByKey,
+  sshHostKey,
 } from '../api.js';
 import type { SshConnectSpec } from '@mcp/api-bus';
 import type { SshHost, SshIdentity } from '../types.js';
@@ -112,7 +114,7 @@ export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpB
     setEntries([]);
     setCwd('/');
     if (!hostId) return;
-    const host = hosts.find((h) => String(h.id) === hostId);
+    const host = findHostByKey(hosts, hostId);
     if (!host) return;
     let cancelled = false;
     void (async () => {
@@ -204,7 +206,7 @@ export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpB
       setBusyPath(entry.path);
       try {
         const { content } = await sftpReadFile(s, entry.path);
-        const host = hosts.find((h) => String(h.id) === hostId);
+        const host = findHostByKey(hosts, hostId);
         useWorkspaceStore.getState().openSftpFile({
           kind: 'sftp',
           projectId,
@@ -311,7 +313,7 @@ export function SftpBrowser({ projectId, hosts, identities, onNeedTrust }: SftpB
             <SelectTrigger className="h-6 text-xs"><SelectValue placeholder={t('sftp.selectHost')} /></SelectTrigger>
             <SelectContent>
               {hosts.map((h) => (
-                <SelectItem key={h.id} value={String(h.id)}>{h.label}</SelectItem>
+                <SelectItem key={sshHostKey(h)} value={sshHostKey(h)}>{h.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>

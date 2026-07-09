@@ -36,6 +36,7 @@ import {
   createHost,
   patchHost,
   importSshConfig,
+  sshHostKey,
   type HostKeyDecision,
 } from './api.js';
 import { HostEditDialog } from './HostEditDialog.js';
@@ -82,7 +83,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
   const [dialog, setDialog] = useState<{ open: boolean; editing: SshHost | null }>({ open: false, editing: null });
   const [vaultOpen, setVaultOpen] = useState(false);
   const [trust, setTrust] = useState<TrustRequest | null>(null);
-  const [connecting, setConnecting] = useState<number | null>(null);
+  const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<SshView>('terminals');
   const [hostQuery, setHostQuery] = useState('');
@@ -133,7 +134,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
       for (const e of entries) {
         const id = aliasToId.get(e.alias);
         const jumpId = e.proxyJump ? aliasToId.get(e.proxyJump) : undefined;
-        if (id != null && jumpId != null) await patchHost(projectId, id, { jump_host_id: jumpId });
+        if (id != null && jumpId != null) await patchHost(projectId, id, { jump_host_id: jumpId }, 'project');
       }
       reload();
     } catch (e) {
@@ -160,7 +161,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
   const connectHost = useCallback(
     async (h: SshHost) => {
       setError(null);
-      setConnecting(h.id);
+      setConnecting(sshHostKey(h));
       try {
         const spec = await resolveSpecFromHost(h, hosts, identities);
         await openSpec(spec, h.label);
@@ -193,7 +194,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
     async (h: SshHost) => {
       const msg = h.is_shared ? t('panel.deleteSharedConfirm', { label: h.label }) : t('panel.deleteConfirm', { label: h.label });
       if (!window.confirm(msg)) return;
-      await deleteHost(projectId, h.id).catch(() => {});
+      await deleteHost(projectId, h).catch(() => {});
       reload();
     },
     [projectId, reload, t],
@@ -218,7 +219,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
   // Drafts (unsaved quick-connects) can't redial — there's no persisted spec.
   const reconnectShell = useCallback(
     async (shell: SshShell): Promise<boolean> => {
-      const h = hosts.find((x) => `saved:${x.id}` === shell.hostId);
+      const h = hosts.find((x) => `saved:${sshHostKey(x)}` === shell.hostId);
       if (!h) return false;
       setShellState(projectId, shell.terminalId, 'reconnecting');
       try {
@@ -269,7 +270,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
         return;
       }
       setShellState(projectId, shell.terminalId, 'dropped');
-      if (autoReconnect && hosts.some((x) => `saved:${x.id}` === shell.hostId)) void autoReconnectLoop(shell.terminalId);
+      if (autoReconnect && hosts.some((x) => `saved:${sshHostKey(x)}` === shell.hostId)) void autoReconnectLoop(shell.terminalId);
     },
     [projectId, markExited, setShellState, autoReconnect, hosts, autoReconnectLoop],
   );
@@ -380,12 +381,12 @@ export function SshPanel({ projectId }: SshPanelProps) {
               )}
               {groups.get(gk)!.map((h) => (
                 <div
-                  key={h.id}
+                  key={sshHostKey(h)}
                   className="group flex items-center gap-1.5 px-2 py-1 mx-1 rounded text-xs cursor-pointer hover:bg-muted"
                   onClick={() => void connectHost(h)}
                   title={`${h.username}@${h.hostname}:${h.port}`}
                 >
-                  {connecting === h.id ? (
+                  {connecting === sshHostKey(h) ? (
                     <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
                   ) : (
                     <Server className="h-3 w-3 shrink-0 text-muted-foreground" />

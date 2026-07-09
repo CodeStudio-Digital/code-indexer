@@ -14,7 +14,7 @@ import { FilePaneRow } from './FilePaneRow.js';
 import { hasPanePayload, readPanePayload, setPanePayload } from './pane-dnd.js';
 import { usePaneActions } from './use-pane-actions.js';
 import { usePaneMenu } from './use-pane-menu.js';
-import { COLUMNS, type ColumnId, type ColumnVisibility } from './column-config.js';
+import { COLUMNS, type ColumnId, type ColumnVisibility, type ColumnWidths } from './column-config.js';
 import type { FsAdapter, FsItem } from './fs-adapter.js';
 import type { PaneSelectionStore } from './pane-selection.js';
 
@@ -34,11 +34,28 @@ interface FilePaneProps {
   onExtract: (cwd: string, name: string) => Promise<boolean> | void;
   /** Which metadata columns are visible (shared by both panes). */
   columns: ColumnVisibility;
+  columnWidths: ColumnWidths;
   onToggleColumn: (id: ColumnId) => void;
+  onColumnWidthChange: (id: ColumnId, width: number) => void;
 }
 
 export function FilePane(props: FilePaneProps) {
-  const { adapter, useSel, otherKind, otherCwd, refreshKey, onCwdChange, onTransfer, onOpenFile, onZip, onExtract, columns, onToggleColumn } = props;
+  const {
+    adapter,
+    useSel,
+    otherKind,
+    otherCwd,
+    refreshKey,
+    onCwdChange,
+    onTransfer,
+    onOpenFile,
+    onZip,
+    onExtract,
+    columns,
+    columnWidths,
+    onToggleColumn,
+    onColumnWidthChange,
+  } = props;
   const { t } = useTranslation('ssh');
   const [cwd, setCwd] = useState<string | null>(null);
   const [entries, setEntries] = useState<FsItem[]>([]);
@@ -101,6 +118,31 @@ export function FilePane(props: FilePaneProps) {
 
   const actions = usePaneActions({ adapter, useSel, cwd, refresh: list, otherKind, otherCwd, onTransfer, onZip, onExtract, t });
   const menu = usePaneMenu({ adapter, useSel, selectedItems, actions, onOpenFile, refresh: () => cwd != null && void list(cwd), t });
+  const crumbs = useMemo(() => (cwd == null ? [] : pathCrumbs(adapter.kind, cwd)), [adapter.kind, cwd]);
+  const startColumnResize = useCallback(
+    (e: MouseEvent, id: ColumnId) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startWidth = columnWidths[id];
+      const oldCursor = document.body.style.cursor;
+      const oldUserSelect = document.body.style.userSelect;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      const onMove = (ev: globalThis.MouseEvent): void => {
+        onColumnWidthChange(id, startWidth - (ev.clientX - startX));
+      };
+      const onUp = (): void => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = oldCursor;
+        document.body.style.userSelect = oldUserSelect;
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [columnWidths, onColumnWidthChange],
+  );
 
   const onRowClick = useCallback(
     (e: MouseEvent, item: FsItem) => {
@@ -156,7 +198,28 @@ export function FilePane(props: FilePaneProps) {
         <button type="button" aria-label={transferLabel} title={transferLabel} className={iconBtn} onClick={() => actions.doTransfer(selectedItems())}>
           <TransferIcon className="h-3.5 w-3.5" />
         </button>
-        <span className="ml-1 truncate font-mono text-[10px] text-muted-foreground flex-1" title={cwd ?? ''}>{cwd || '/'}</span>
+        <nav className="ml-1 flex min-w-0 flex-1 items-center overflow-hidden font-mono text-[10px] text-muted-foreground" title={cwd ?? ''}>
+          {crumbs.map((crumb, i) => {
+            const current = cwd === crumb.path;
+            return (
+              <span key={`${crumb.path}:${i}`} className="flex min-w-0 items-center">
+                {i > 1 && <span className="px-0.5 text-muted-foreground/60">/</span>}
+                <button
+                  type="button"
+                  disabled={current || loading}
+                  onClick={() => void list(crumb.path)}
+                  className={cn(
+                    'min-w-0 max-w-[120px] truncate rounded px-1 py-0.5 text-left hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:text-foreground',
+                    current && 'font-medium',
+                  )}
+                  title={crumb.path || '/'}
+                >
+                  {crumb.label}
+                </button>
+              </span>
+            );
+          })}
+        </nav>
         {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
         <Popover>
           <PopoverTrigger asChild>
@@ -192,10 +255,29 @@ export function FilePane(props: FilePaneProps) {
           FilePaneRow so header and cells stay in lockstep. */}
       <div className="flex items-center gap-2 px-3 h-6 shrink-0 border-b bg-muted/40 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
         <span className="w-3.5 shrink-0" />
-        <span className="flex-1 truncate">{t('sftp.columns.name')}</span>
-        {columns.size && <span className="shrink-0 w-16 text-right">{t('sftp.columns.size')}</span>}
-        {columns.modified && <span className="shrink-0 w-28 text-right">{t('sftp.columns.modified')}</span>}
-        {columns.permissions && <span className="shrink-0 w-24 text-right">{t('sftp.columns.permissions')}</span>}
+        <span className="min-w-0 flex-1 truncate whitespace-nowrap" title={t('sftp.columns.name')}>{t('sftp.columns.name')}</span>
+        {COLUMNS.map((col) => {
+          if (!columns[col.id]) return null;
+          const label = t(`sftp.columns.${col.labelKey}`);
+          return (
+            <span
+              key={col.id}
+              className="group/col relative shrink-0 text-right"
+              style={{ width: columnWidths[col.id] }}
+              title={label}
+            >
+              <span className="block truncate whitespace-nowrap px-1">{label}</span>
+              <span
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={label}
+                title={label}
+                onMouseDown={(e) => startColumnResize(e, col.id)}
+                className="absolute -left-1 top-0 h-full w-2 cursor-col-resize rounded-sm hover:bg-primary/30 group-hover/col:bg-border"
+              />
+            </span>
+          );
+        })}
       </div>
 
       <div
@@ -220,6 +302,7 @@ export function FilePane(props: FilePaneProps) {
             useSel={useSel}
             busy={actions.busyPath === e.path}
             columns={columns}
+            columnWidths={columnWidths}
             onClick={onRowClick}
             onOpen={onOpen}
             onContext={menu.onRowContext}
@@ -231,4 +314,27 @@ export function FilePane(props: FilePaneProps) {
       {menu.Menu}
     </div>
   );
+}
+
+function pathCrumbs(kind: FsAdapter['kind'], cwd: string): Array<{ label: string; path: string }> {
+  if (kind === 'local') {
+    const parts = cwd.split('/').filter(Boolean);
+    const crumbs = [{ label: '/', path: '' }];
+    let path = '';
+    for (const part of parts) {
+      path = path ? `${path}/${part}` : part;
+      crumbs.push({ label: part, path });
+    }
+    return crumbs;
+  }
+
+  const normalized = cwd.startsWith('/') ? cwd : `/${cwd}`;
+  const parts = normalized.split('/').filter(Boolean);
+  const crumbs = [{ label: '/', path: '/' }];
+  let path = '';
+  for (const part of parts) {
+    path = `${path}/${part}`;
+    crumbs.push({ label: part, path });
+  }
+  return crumbs;
 }

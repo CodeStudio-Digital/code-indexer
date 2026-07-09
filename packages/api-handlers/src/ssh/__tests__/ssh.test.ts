@@ -8,6 +8,8 @@ import { createHash } from 'node:crypto';
 import { KnownHostsStore } from '../known-hosts.js';
 import { adaptChannelToIPty } from '../ssh-pty-adapter.js';
 import { generateSshKey } from '../ssh-keys.js';
+import { TunnelManager } from '../ssh-tunnels.js';
+import type { SshConnectionManager } from '../ssh-connection-manager.js';
 
 describe('KnownHostsStore (TOFU)', () => {
   let dir: string;
@@ -126,5 +128,43 @@ describe('generateSshKey', () => {
     const k = generateSshKey({ type: 'rsa', bits: 1024 }); // below floor → bumped to 4096
     expect(k.keyType).toBe('ssh-rsa');
     expect(k.publicKey.startsWith('ssh-rsa ')).toBe(true);
+  });
+});
+
+describe('TunnelManager validation', () => {
+  const spec = {
+    hostId: 'saved:project:1',
+    host: 'example.com',
+    port: 22,
+    username: 'root',
+    auth: { method: 'agent' as const },
+  };
+
+  function fakeManager(): SshConnectionManager {
+    return { acquire: vi.fn(), release: vi.fn() } as unknown as SshConnectionManager;
+  }
+
+  it('rejects invalid bind ports before acquiring an SSH connection', async () => {
+    const manager = fakeManager();
+    const tunnels = new TunnelManager(manager);
+
+    await expect(tunnels.start({ spec, kind: 'dynamic', bindPort: 0 })).rejects.toMatchObject({ code: 'ssh_tunnel_bad_port' });
+    expect(manager.acquire).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing local-forward destination before acquiring an SSH connection', async () => {
+    const manager = fakeManager();
+    const tunnels = new TunnelManager(manager);
+
+    await expect(tunnels.start({ spec, kind: 'local', bindPort: 18081, destHost: 'localhost' })).rejects.toMatchObject({ code: 'ssh_tunnel_bad_dest' });
+    expect(manager.acquire).not.toHaveBeenCalled();
+  });
+
+  it('keeps tunnel listeners loopback-only', async () => {
+    const manager = fakeManager();
+    const tunnels = new TunnelManager(manager);
+
+    await expect(tunnels.start({ spec, kind: 'dynamic', bindHost: '0.0.0.0', bindPort: 1080 })).rejects.toMatchObject({ code: 'ssh_tunnel_bind_forbidden' });
+    expect(manager.acquire).not.toHaveBeenCalled();
   });
 });

@@ -25,7 +25,7 @@ import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Switch } from '../../components/ui/switch.js';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../components/ui/select.js';
-import { createHost, patchHost, encryptSecret, testConnection, generateKey } from './api.js';
+import { createHost, patchHost, encryptSecret, testConnection, generateKey, sshHostKey } from './api.js';
 import type { SshAuthMethod, SshHost } from './types.js';
 
 export interface HostEditDialogProps {
@@ -167,7 +167,7 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
         is_shared: isShared,
         ...enc,
       };
-      if (initial) await patchHost(projectId, initial.id, body);
+      if (initial) await patchHost(projectId, initial, body);
       else await createHost(projectId, body);
       onSaved();
       onOpenChange(false);
@@ -207,7 +207,14 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
 
   // A shared host may only jump through ANOTHER shared host (a project-local jump
   // wouldn't resolve from other projects); a local host can jump through either.
-  const jumpCandidates = hosts.filter((h) => h.id !== initial?.id && (!isShared || !!h.is_shared));
+  const initialKey = initial ? sshHostKey(initial) : null;
+  const jumpCandidates = hosts.filter((h) => sshHostKey(h) !== initialKey && (!isShared || !!h.is_shared));
+  const jumpValue = jumpHostId == null
+    ? NO_JUMP
+    : sshHostKey(jumpCandidates.find((h) => h.id === jumpHostId) ?? {
+        id: jumpHostId,
+        is_shared: isShared ? 1 : 0,
+      });
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!busy) onOpenChange(o); }}>
@@ -303,14 +310,14 @@ export function HostEditDialog({ projectId, open, onOpenChange, initial, hosts, 
           <div className={FIELD}>
             <label className={LABEL}>{t('dialog.jumpHost')}</label>
             <Select
-              value={jumpHostId != null ? String(jumpHostId) : NO_JUMP}
-              onValueChange={(v) => setJumpHostId(v === NO_JUMP ? null : Number(v))}
+              value={jumpValue}
+              onValueChange={(v) => setJumpHostId(v === NO_JUMP ? null : Number(v.split(':')[1]))}
             >
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_JUMP}>{t('dialog.jumpNone')}</SelectItem>
                 {jumpCandidates.map((h) => (
-                  <SelectItem key={h.id} value={String(h.id)}>{h.label}</SelectItem>
+                  <SelectItem key={sshHostKey(h)} value={sshHostKey(h)}>{h.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

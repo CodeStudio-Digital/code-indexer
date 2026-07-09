@@ -111,6 +111,7 @@ export function specToGraph(spec: AppSpec, layout?: BlueprintLayout | null): Blu
           name: f.name,
           label: f.label,
           type: f.type,
+          ...(f.required ? { required: true } : {}),
           ...(f.references ? { references: f.references } : {}),
         })),
       },

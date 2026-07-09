@@ -62,8 +62,9 @@ function edgeRemovalMutation(edge: BlueprintEdge): BlueprintMutation | null {
   switch (edge.kind) {
     case 'feature-screen': return { op: 'disconnect-feature-screen', feature_id: parts[2], screen_id: parts[3] };
     case 'auth-screen': return { op: 'unprotect-screen', screen_id: parts[2] };
+    case 'entity-ref': return { op: 'update-field', entity: parts[2], field: parts[3], patch: { references: null } };
     case 'behavior-target': return { op: 'remove-behavior-action', behavior_id: parts[2], index: Number(parts[4]) };
-    default: return null; // entity-ref/screen-behavior: remova pelo painel do nó
+    default: return null; // screen-behavior: remova pelo painel do nó
   }
 }
 

@@ -90,10 +90,17 @@ describe('ssh host routes — is_shared toggle relocates the row between stores'
     return ((await r.json()) as { hosts: SshHost[] }).hosts;
   }
 
-  async function patchHost(hid: number, patch: Record<string, unknown>): Promise<SshHost> {
-    const r = await h.app.request(`/api/projects/${PID}/ssh/hosts/${hid}`, j('PATCH', patch));
+  async function patchHost(hid: number, patch: Record<string, unknown>, scope?: 'shared' | 'project'): Promise<SshHost> {
+    const qs = scope ? `?scope=${scope}` : '';
+    const r = await h.app.request(`/api/projects/${PID}/ssh/hosts/${hid}${qs}`, j('PATCH', patch));
     expect(r.status).toBe(200);
     return (await r.json()) as SshHost;
+  }
+
+  async function deleteHost(hid: number, scope?: 'shared' | 'project'): Promise<void> {
+    const qs = scope ? `?scope=${scope}` : '';
+    const r = await h.app.request(`/api/projects/${PID}/ssh/hosts/${hid}${qs}`, { method: 'DELETE' });
+    expect(r.status).toBe(200);
   }
 
   it('local → shared: PATCH {is_shared:true} moves the row into the central store', async () => {
@@ -194,6 +201,37 @@ describe('ssh host routes — is_shared toggle relocates the row between stores'
     expect(patched.tags_json).toBe(JSON.stringify(['prod', 'bastion']));
     expect(h.central.getHost(created.id)?.tags_json).toBe(JSON.stringify(['prod', 'bastion']));
     expect(h.project.listHosts(PID)).toEqual([]);
+  });
+
+  it('uses storage scope to avoid PATCH/DELETE hitting the wrong host when ids collide', async () => {
+    const shared = h.central.createHost({
+      project_id: PID, label: 'shared-collision', hostname: 'shared.example',
+      port: 22, username: 'root', auth_method: 'agent', is_shared: true,
+    });
+    const local = await createLocal('local-collision');
+    expect(local.id).toBe(shared.id); // independent DBs can reuse the same numeric id
+
+    const listed = (await listHosts()) as Array<SshHost & { storage_scope?: string }>;
+    expect(listed.map((x) => `${x.storage_scope}:${x.id}:${x.label}`)).toEqual([
+      `shared:${shared.id}:shared-collision`,
+      `project:${local.id}:local-collision`,
+    ]);
+
+    const ambiguous = await h.app.request(`/api/projects/${PID}/ssh/hosts/${local.id}`, j('PATCH', { label: 'wrong' }));
+    expect(ambiguous.status).toBe(409);
+    expect(h.central.getHost(shared.id)?.label).toBe('shared-collision');
+    expect(h.project.getHost(local.id)?.label).toBe('local-collision');
+
+    await patchHost(local.id, { label: 'local-renamed' }, 'project');
+    expect(h.project.getHost(local.id)?.label).toBe('local-renamed');
+    expect(h.central.getHost(shared.id)?.label).toBe('shared-collision');
+
+    await deleteHost(local.id, 'project');
+    expect(h.project.getHost(local.id)).toBeNull();
+    expect(h.central.getHost(shared.id)?.label).toBe('shared-collision');
+
+    await deleteHost(shared.id, 'shared');
+    expect(h.central.getHost(shared.id)).toBeNull();
   });
 });
 

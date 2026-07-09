@@ -38,12 +38,10 @@ export class TunnelManager {
 
   async start(input: SshTunnelInput): Promise<SshTunnel> {
     const bindHost = input.bindHost ?? '127.0.0.1';
+    validateTunnelInput(input, bindHost);
     // Default to loopback-only (OpenSSH GatewayPorts semantics). A non-loopback
     // bind turns a local proxy/forward into a network-reachable pivot, so refuse
     // it unless a future explicit opt-in is added.
-    if (!isLoopback(bindHost)) {
-      throw new ApiError('ssh_tunnel_bind_forbidden', 400, `non-loopback bind '${bindHost}' is not allowed`);
-    }
     const client = await this.manager.acquire(input.spec); // throws host-key / connect errors
     const meta: SshTunnel = {
       id: randomUUID(),
@@ -99,9 +97,6 @@ export class TunnelManager {
   }
 
   private startLocal(client: Client, input: SshTunnelInput, meta: SshTunnel): Promise<ActiveTunnel> {
-    if (!input.destHost || input.destPort == null) {
-      return Promise.reject(new ApiError('ssh_tunnel_bad_dest', 400, 'local forward needs destHost + destPort'));
-    }
     const server = net.createServer((socket) => {
       client.forwardOut(
         socket.remoteAddress ?? '127.0.0.1',
@@ -144,9 +139,6 @@ export class TunnelManager {
   }
 
   private startRemote(client: Client, input: SshTunnelInput, meta: SshTunnel): Promise<ActiveTunnel> {
-    if (!input.destHost || input.destPort == null) {
-      return Promise.reject(new ApiError('ssh_tunnel_bad_dest', 400, 'remote forward needs destHost + destPort'));
-    }
     return new Promise<ActiveTunnel>((resolve, reject) => {
       client.forwardIn(meta.bindHost, meta.bindPort, (err) => {
         if (err) {
@@ -178,6 +170,30 @@ export class TunnelManager {
     const server = net.createServer((socket) => handleSocks5(socket, client, meta));
     return this.listen(server, meta, input.spec.hostId);
   }
+}
+
+function validateTunnelInput(input: SshTunnelInput, bindHost: string): void {
+  if (!isLoopback(bindHost)) {
+    throw new ApiError('ssh_tunnel_bind_forbidden', 400, `non-loopback bind '${bindHost}' is not allowed`);
+  }
+  if (!isPort(input.bindPort)) {
+    throw new ApiError('ssh_tunnel_bad_port', 400, 'bindPort must be between 1 and 65535');
+  }
+  if (input.kind !== 'local' && input.kind !== 'remote' && input.kind !== 'dynamic') {
+    throw new ApiError('ssh_tunnel_bad_kind', 400, 'tunnel kind must be local, remote or dynamic');
+  }
+  if (input.kind !== 'dynamic') {
+    if (!input.destHost?.trim()) {
+      throw new ApiError('ssh_tunnel_bad_dest', 400, `${input.kind} forward needs destHost`);
+    }
+    if (!isPort(input.destPort)) {
+      throw new ApiError('ssh_tunnel_bad_dest', 400, `${input.kind} forward needs destPort between 1 and 65535`);
+    }
+  }
+}
+
+function isPort(port: unknown): port is number {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65_535;
 }
 
 /** Loopback bind addresses (the only ones allowed without an explicit gateway opt-in). */

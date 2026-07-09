@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { SshConnectSpec } from '@mcp/api-bus';
-import { resolveSpecFromHost, sftpClose, sftpListWithTrust, type NeedTrust } from '../api.js';
+import { findHostByKey, resolveSpecFromHost, sftpClose, sftpListWithTrust, type NeedTrust } from '../api.js';
 import type { SshHost, SshIdentity } from '../types.js';
 import { createRemoteAdapter } from './remote-adapter.js';
 import type { FsAdapter } from './fs-adapter.js';
@@ -24,7 +24,7 @@ export function useRemoteHost(hostId: string, hosts: SshHost[], identities: SshI
     setSpec(null);
     setAdapter(null);
     setError(null);
-    const host = hosts.find((h) => String(h.id) === hostId);
+    const host = findHostByKey(hosts, hostId);
     if (!hostId || !host) return;
     let cancelled = false;
     setConnecting(true);

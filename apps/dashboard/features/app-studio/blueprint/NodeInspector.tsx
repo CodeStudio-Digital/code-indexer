@@ -126,7 +126,7 @@ export function NodeInspector(props: InspectorProps) {
   const { data, onMutate, onClose } = props;
   const removal = removalOf(data);
   return (
-    <div className="flex h-full min-h-0 w-64 shrink-0 flex-col border-l bg-card">
+    <div className="flex h-full min-h-0 w-80 shrink-0 flex-col border-l bg-card">
       <div className="flex items-center justify-between border-b px-3 py-2">
         <span className="text-xs font-semibold">{t(`blueprint.kind.${data.kind}`)}</span>
         <button onClick={onClose} className="text-xs text-muted-foreground hover:text-foreground">✕</button>

@@ -6,9 +6,12 @@
 
 export type SshAuthMethod = 'password' | 'privateKey' | 'agent' | 'identity';
 export type SshIdentityAuthKind = 'password' | 'privateKey' | 'agent';
+export type SshHostStorageScope = 'shared' | 'project';
 
 export interface SshHost {
   id: number;
+  /** Route-only discriminator: numeric ids can collide between the central and project DBs. */
+  storage_scope?: SshHostStorageScope;
   project_id: number;
   label: string;
   hostname: string;
