@@ -33,6 +33,7 @@ import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
+import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
@@ -80,6 +81,7 @@ const CODE_EXEC_DESC =
   '  - `tools.<name>(args)` OR `<name>(args)` — both work. Calls ANY registered tool, INCLUDING tools that are NOT in your current visible toolset / tier: code_exec runs against the full tool catalog, so you never need `expand_toolset` to reach a tool from in here (the per-call plan-mode / task-scope policy still applies to each call). The bare-global alias exists for every tool whose name does not collide with a JS builtin (read_file, edit_file, mcp__grep_code, etc). Returns the tool\'s text content (string). Throws on tool error.\n' +
   '  - `list_tools()` → `[{name, tier, params, description}]` for EVERY callable tool (incl. ones hidden from your visible toolset). `tool_schema(name)` → that tool\'s full JSON Schema. Use these (or `find_tools({query})`) to discover the exact name + args of a tool you cannot see, then call it directly here.\n' +
   '  - `log(...)` — appends to the captured output. JSON-friendly.\n' +
+  '  - `stash.set(key, value)` / `stash.get(key)` / `stash.keys()` / `stash.delete(key)` — key-value store that PERSISTS across code_exec calls for the whole session (~2 MB, JSON values). Carry file content or intermediate results into a later script through the stash instead of printing them or re-reading files.\n' +
   '  - `JSON`, `Math`, `String`, `Number`, `Boolean`, `Array`, `Object`, `Promise`, `Set`, `Map` are available.\n' +
   '  - The snippet runs as an async IIFE; use top-level `await` and `return` the result.\n' +
   '  - NO Node runtime: `require`/`import`/`process`/`fs`/`path`/`Buffer` are NOT available (this is a node:vm sandbox, not Node). For file I/O call the registered `write_file`/`create_file` tools; for shell, `exec_command`.\n' +
@@ -105,7 +107,8 @@ const CODE_EXEC_DESC =
   "USE: when an exploration would otherwise need 3+ sequential tool calls with simple logic between them.\n" +
   "USE: when a refactor touches many files in the same way — one script beats N edit_file rounds.\n" +
   "DON'T: write large programs here — this is batched orchestration, not implementation. For complex logic, call tools directly across multiple turns.\n" +
-  "DON'T: try to bypass plan-mode by calling mutating tools from inside code_exec — the policy applies the same way as direct calls.";
+  "DON'T: try to bypass plan-mode by calling mutating tools from inside code_exec — the policy applies the same way as direct calls.\n" +
+  "DON'T: echo whole files — everything you log()/return lands verbatim in your context and is re-sent every turn. Return extracted facts and short summaries; keep bulk content in variables or `stash`.";
 
 /**
  * Tools that can be exposed inside a code_exec script. Mutating tools are
@@ -405,7 +408,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const RESERVED_GLOBALS = new Set([
         'JSON', 'Math', 'Number', 'String', 'Boolean', 'Array', 'Object',
         'Promise', 'Set', 'Map', 'Date', 'RegExp', 'Error', 'console', 'log',
-        'tools', 'list_tools', 'tool_schema',
+        'tools', 'list_tools', 'tool_schema', 'stash',
       ]);
       // Shadow-safe bare-global aliases. Without this, the agent's natural
       // `await edit_file(...)` throws ReferenceError; with this, both
@@ -459,6 +462,9 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         tools: wrapToolsBinding(toolsProxy, exposedNames),
         list_tools: listTools,
         tool_schema: toolSchema,
+        // Session-persistent stash (P1a pivot): ctx-provided in real sessions;
+        // ephemeral per-call fallback keeps the API present in tests/subagents.
+        stash: buildStashSandboxApi(ctx.codeExecStash ?? createCodeExecStash()),
         log: appendLog,
         console: { log: appendLog, warn: appendLog, error: appendLog },
         JSON,
@@ -538,7 +544,13 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       }
       const out = lines.join('\n');
       if (out.length > effectiveMaxOutput) {
-        return ok(out.slice(0, effectiveMaxOutput) + `\n${truncationMarker(`output exceeded ${effectiveMaxOutput} bytes`)}`);
+        // Recovery steers AWAY from the re-read/re-print loop (telemetry:
+        // 34% of code_exec outputs truncated → model re-read the files and
+        // printed them again). The durable fix is the stash, not a retry.
+        return ok(out.slice(0, effectiveMaxOutput) + `\n${truncationMarker(
+          `output exceeded ${effectiveMaxOutput} bytes`,
+          'do NOT re-run to re-print — stash bulk content (stash.set) and return only extracted facts',
+        )}`);
       }
       return ok(out);
     },

@@ -36,6 +36,20 @@ export interface CodeExecHintContext {
  * append it verbatim.
  */
 export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext): string {
+  // Parse-time "Unexpected identifier 'x'" — telemetry's #2 authoring error
+  // (19 cases): an unquoted path/word pasted into JS, e.g.
+  // `read_file({ path: import/corporate-ui/x.html })`. V8 reports the second
+  // bareword as an unexpected identifier.
+  const unexpectedIdent = /SyntaxError: Unexpected identifier '([^']+)'/.exec(msg)
+    ?? /Unexpected identifier '([^']+)'/.exec(msg);
+  if (unexpectedIdent) {
+    return (
+      `\n\nHint: \`${unexpectedIdent[1]}\` appears where JS expects an operator — usually an ` +
+      `UNQUOTED string (file path, glob, shell fragment) pasted into the script. Wrap it in ` +
+      `quotes: \`{ path: "dir/sub/file.ext" }\`. Paths with slashes/dots are never valid bare JS.`
+    );
+  }
+
   // import()/import statements — V8's messages for a vm context without a
   // module loader. Telemetry: "A dynamic import callback was not specified".
   if (msg.includes('dynamic import callback') || msg.includes('Cannot use import statement')) {

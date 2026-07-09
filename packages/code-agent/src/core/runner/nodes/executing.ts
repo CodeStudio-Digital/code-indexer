@@ -365,6 +365,14 @@ export class ExecutingNode implements BehaviorNode {
       ctx.injectionState.recentCompactionAt = null;
     }
 
+    // P5a — lock the description format on the run's FIRST build so a later
+    // tier promotion never rewrites existing descriptions (cache contract:
+    // tool shaping must be static or constant-per-run, never per-turn).
+    ctx.terseDescriptionsLock ??= (
+      ctx.activeTiers !== null &&
+      !ctx.activeTiers.has('navigate') &&
+      !ctx.activeTiers.has('admin')
+    );
     const toolsBuilt = buildTools({
       registry: ctx.opts.registry,
       globalDisabledTools: ctx.opts.globalDisabledTools,
@@ -373,6 +381,7 @@ export class ExecutingNode implements BehaviorNode {
       activeTiers: ctx.activeTiers,
       pinnedTools: ctx.pinnedTools,
       sessionToolCap: ctx.opts.sessionToolCap,
+      terseDescriptionsLock: ctx.terseDescriptionsLock,
       toolContext: ctx.opts.toolContext,
       provider: ctx.opts.provider,
     });

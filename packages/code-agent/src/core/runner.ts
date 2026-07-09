@@ -46,6 +46,12 @@ import {
   isPlanModeWorkflowTool,
   type PolicyContext,
 } from '@mcp/code-agent/core/policy.js';
+import {
+  ReadCoverageLedger,
+  readCoverageEnabled,
+  parseServedRange,
+  buildCoveragePointer,
+} from '@mcp/code-agent/core/runner/guards/read-coverage.js';
 import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.js';
 import { repairToolPairing } from '@mcp/code-agent/core/transcript-repair.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
@@ -519,6 +525,15 @@ export class CoderRunner extends EventEmitter {
    * a unified diff against the prior content.
    */
   private recentWrites: Map<string, number> = new Map();
+
+  /**
+   * P1b — union of line ranges actually SERVED per path (top-level reads
+   * only). Powers the coverage pointer in `enforcePreReadForBridge`:
+   * overlapping-but-not-identical ranges evade the exact-slice dedup key,
+   * so a request fully covered by prior reads gets a pointer instead of
+   * re-fetched content. Cleared per path on mutation.
+   */
+  private readCoverage = new ReadCoverageLedger();
 
   /**
    * Session-drive "guide files" signal — the files this session edited, most
@@ -2327,6 +2342,58 @@ export class CoderRunner extends EventEmitter {
       prior.pop();
       return refusal;
     }
+
+    // P1b — coverage pointer for overlapping-but-not-identical ranges. The
+    // exact-slice guard above never sees these (different args → different
+    // readKey); telemetry showed 46% of repeated reads request a range fully
+    // covered by earlier reads. Ranged requests only (symbol/no-range reads
+    // carry no line math), read tools only (skeletons aren't line content),
+    // and every claim is validated: current mtime must match every covering
+    // segment's, and every covering tool_result must still be visible in
+    // context (honesty rule — never point at compacted-away content).
+    if (
+      readCoverageEnabled() &&
+      (toolName === 'read_file' || toolName === 'mcp__read_file') &&
+      typeof inp?.start_line === 'number' &&
+      typeof inp?.end_line === 'number' &&
+      inp.end_line >= inp.start_line
+    ) {
+      let nowMtimeMs: number | undefined;
+      try {
+        nowMtimeMs = fsStatSync(pathResolve(this.opts.toolContext.cwd, path)).mtimeMs;
+      } catch {
+        /* stat failed → cannot validate staleness → allow the read */
+      }
+      if (nowMtimeMs !== undefined) {
+        const covering = this.readCoverage.coveringSegments(
+          path,
+          inp.start_line,
+          inp.end_line,
+          { requireMtimeMs: nowMtimeMs },
+        );
+        if (
+          covering !== null &&
+          covering.every((s) => {
+            const r = findToolResultByUseId(s.useId, this.messages);
+            return !!r && !r.isElided;
+          })
+        ) {
+          this.setTransition('pre-read-coverage-pointer');
+          // Pointer, not content — keep the exact-slice ledger honest.
+          prior.pop();
+          return {
+            content: buildCoveragePointer({
+              toolName,
+              path,
+              start: inp.start_line,
+              end: inp.end_line,
+              segments: covering,
+            }),
+            isError: false,
+          };
+        }
+      }
+    }
     return null;
   }
 
@@ -2406,16 +2473,32 @@ export class CoderRunner extends EventEmitter {
       if (path) {
         const readKey = `${args.name}|${buildReadDedupKey(path, args.input)}`;
         const list = this.recentReadKeys.get(readKey);
+        let servedMtimeMs: number | undefined;
+        try {
+          servedMtimeMs = fsStatSync(pathResolve(this.opts.toolContext.cwd, path)).mtimeMs;
+        } catch {
+          /* file may not exist */
+        }
         if (list && list.length > 0) {
           const tail = list[list.length - 1];
           if (tail.useId === args.toolUseId) {
             tail.contentHash = createHash('sha1').update(args.rawContent).digest('hex');
-            try {
-              tail.mtimeMs = fsStatSync(pathResolve(this.opts.toolContext.cwd, path)).mtimeMs;
-            } catch {
-              /* file may not exist */
-            }
+            tail.mtimeMs = servedMtimeMs;
           }
+        }
+        // P1b — record the range actually SERVED (parsed from the result
+        // header, not the requested args: auto-full/clamping can serve more
+        // or less than asked). Diff/pointer results parse to null — only
+        // real line content accrues coverage.
+        const served = parseServedRange(args.rawContent);
+        if (served) {
+          this.readCoverage.noteServed(path, {
+            start: served.start,
+            end: served.end,
+            turn: args.turn,
+            useId: args.toolUseId,
+            mtimeMs: servedMtimeMs,
+          });
         }
       }
 
@@ -2446,11 +2529,16 @@ export class CoderRunner extends EventEmitter {
           typeof args.input._raw === 'string' ? args.input._raw :
           '';
         for (const m of raw.matchAll(/\*\*\* (?:Update|Add|Delete) File:\s*(.+)$/gm)) {
-          this.recentWrites.set(m[1].trim(), args.turn);
+          const p = m[1].trim();
+          this.recentWrites.set(p, args.turn);
+          this.readCoverage.noteMutation(p);
         }
       } else {
         const path = getStringField(args.input, 'path', 'file_path');
-        if (path) this.recentWrites.set(path, args.turn);
+        if (path) {
+          this.recentWrites.set(path, args.turn);
+          this.readCoverage.noteMutation(path);
+        }
       }
     }
 

@@ -120,6 +120,7 @@ import { buildProjectMemoryTools } from '@mcp/code-agent/tools/project-memory-to
 import { buildAutoCapture } from '@mcp/code-agent/sessions/auto-capture.js';
 import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
+import { createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
 import { waitAgentsTools } from '@mcp/code-agent/tools/wait-agents.js';
 import { sendMessageTools } from '@mcp/code-agent/tools/send-message.js';
@@ -960,6 +961,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     overlayByRoot: secondaryOverlays.size > 0 ? secondaryOverlays : undefined,
     overlay,
     toolOutputStore,
+    // Session-persistent stash for code_exec scripts (P1a pivot) — one per
+    // session so content carried in `stash` survives across script calls.
+    codeExecStash: createCodeExecStash(),
     toolOutputCapLevel:
       parseToolOutputCapLevel(session.tool_output_cap_level) ??
       levelFromLegacyBoolean(session.unrestricted_tool_output),
@@ -1730,6 +1734,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // Preflight pins — already validated against the catalog by the host
       // service; pins traverse the tier filter and survive the tool cap.
       ...(preflightSeed?.pinTools ?? []),
+      // P4 — native read_file is navigate-tier (mcp__read_file owns the
+      // bootstrap read surface). Without the bridge there is NO read tool on
+      // turn 1, so seed the disk fallback as a pin. Constant-per-session
+      // (bridge availability is known at setup) → cache-prefix safe.
+      ...(!mcpBridgeOk ? ['read_file'] : []),
     ]),
   ];
   if (stickyToolset && initialPinnedTools.length > 0) {

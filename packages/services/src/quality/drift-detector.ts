@@ -80,13 +80,17 @@ export class DriftDetector {
     // "Baseline + recent" = everything since baselineSinceIso.
     // "Recent" = everything since recentSinceIso.
     // Baseline alone = (baseline + recent) - recent.
+    // Mig 202 — infra failures (system_error=1) ficam fora do PSI: um binding
+    // flaky por um dia dispararia "significant_drift" sem mudança no agente.
     const totalDist = this.cfg.store.verdictDistribution({
       classifierName,
       since: baselineSinceIso,
+      excludeSystemErrors: true,
     });
     const recentDist = this.cfg.store.verdictDistribution({
       classifierName,
       since: recentSinceIso,
+      excludeSystemErrors: true,
     });
     const total = toCountsMap(totalDist, classifierName);
     const recent = toCountsMap(recentDist, classifierName);

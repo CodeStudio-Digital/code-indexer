@@ -102,6 +102,9 @@ export class QualityClassifierPipeline {
           message_id: output.messageId ?? null,
           classifier_name: v.classifierName,
           verdict: v.verdict,
+          // Mig 202 — persiste a separação infra-vs-conteúdo que a telemetria
+          // já fazia em memória; sem isso todo leitor do DB via 'error' misto.
+          system_error: v.systemError === true,
           confidence: v.confidence ?? null,
           reason: v.reason ?? null,
           provider_id: v.providerId ?? null,

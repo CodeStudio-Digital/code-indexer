@@ -16,6 +16,12 @@ export interface QualityClassificationRow {
   message_id: string | null;
   classifier_name: string;
   verdict: QualityVerdict;
+  /**
+   * 1 = infra do classifier falhou (sem binding, timeout, unparseable,
+   * rate-limit) — o verdict 'error' NÃO é um julgamento do agente. 0 = o
+   * verdict é julgamento real de conteúdo. Mig 202.
+   */
+  system_error: 0 | 1;
   confidence: number | null;
   reason: string | null;
   provider_id: string | null;
@@ -33,6 +39,8 @@ export interface QualityClassificationInsert {
   message_id?: string | null;
   classifier_name: string;
   verdict: QualityVerdict;
+  /** True quando a falha é do SISTEMA classifier, não julgamento (mig 202). */
+  system_error?: boolean;
   confidence?: number | null;
   reason?: string | null;
   provider_id?: string | null;
@@ -50,11 +58,11 @@ export class QualityClassificationStore {
       .prepare(
         `INSERT INTO quality_classifications (
            session_id, company_session_id, agent_run_id, message_id,
-           classifier_name, verdict, confidence, reason,
+           classifier_name, verdict, system_error, confidence, reason,
            provider_id, model_id, latency_ms, cost_usd, raw_response_json
          ) VALUES (
            @session_id, @company_session_id, @agent_run_id, @message_id,
-           @classifier_name, @verdict, @confidence, @reason,
+           @classifier_name, @verdict, @system_error, @confidence, @reason,
            @provider_id, @model_id, @latency_ms, @cost_usd, @raw_response_json
          )`,
       )
@@ -65,6 +73,7 @@ export class QualityClassificationStore {
         message_id: row.message_id ?? null,
         classifier_name: row.classifier_name,
         verdict: row.verdict,
+        system_error: row.system_error ? 1 : 0,
         confidence: row.confidence ?? null,
         reason: row.reason ?? null,
         provider_id: row.provider_id ?? null,
@@ -181,7 +190,7 @@ export class QualityClassificationStore {
       .all(params) as QualityClassificationRow[];
   }
 
-  verdictDistribution(opts: { classifierName?: string; since?: string } = {}): Array<{
+  verdictDistribution(opts: { classifierName?: string; since?: string; excludeSystemErrors?: boolean } = {}): Array<{
     classifier_name: string;
     verdict: QualityVerdict;
     count: number;
@@ -190,6 +199,9 @@ export class QualityClassificationStore {
     const params: Record<string, unknown> = {};
     if (opts.classifierName) { where.push('classifier_name = @classifierName'); params.classifierName = opts.classifierName; }
     if (opts.since) { where.push('created_at >= @since'); params.since = opts.since; }
+    // Mig 202 — sem esse filtro a distribuição mistura flakiness de infra
+    // (~90% dos 'error' históricos) com julgamento de conteúdo.
+    if (opts.excludeSystemErrors) { where.push('system_error = 0'); }
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
     return this.db
       .prepare(
@@ -199,6 +211,20 @@ export class QualityClassificationStore {
          ORDER BY classifier_name, verdict`,
       )
       .all(params) as Array<{ classifier_name: string; verdict: QualityVerdict; count: number }>;
+  }
+
+  /**
+   * Contagem de falhas de INFRA do classifier (system_error=1) — saúde do
+   * binding, exibida separada da distribuição de conteúdo (mig 202).
+   */
+  countSystemErrors(opts: { since?: string } = {}): number {
+    const where: string[] = ['system_error = 1'];
+    const params: Record<string, unknown> = {};
+    if (opts.since) { where.push('created_at >= @since'); params.since = opts.since; }
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM quality_classifications WHERE ${where.join(' AND ')}`)
+      .get(params) as { n: number };
+    return row.n;
   }
 
   pruneOlderThan(cutoff: string): number {

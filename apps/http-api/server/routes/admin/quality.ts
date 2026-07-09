@@ -59,8 +59,16 @@ export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
     } else {
       // No "list all" yet; just return distribution + a thin slice via
       // listByClassifier for the first known classifier.
-      const dist = qualityClassificationStore.verdictDistribution({ since: since ?? undefined });
-      return c.json({ rows: [], distribution: dist });
+      // Mig 202: infra failures ficam FORA da distribuição de conteúdo por
+      // default (eram ~90% dos 'error' e mascaravam o julgamento real);
+      // `include_system_errors=1` devolve o cru.
+      const includeSys = c.req.query('include_system_errors') === '1';
+      const dist = qualityClassificationStore.verdictDistribution({
+        since: since ?? undefined,
+        excludeSystemErrors: !includeSys,
+      });
+      const systemErrors = qualityClassificationStore.countSystemErrors({ since: since ?? undefined });
+      return c.json({ rows: [], distribution: dist, systemErrors });
     }
     return c.json({ rows });
   });
@@ -68,11 +76,14 @@ export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/admin/quality/distribution', (c) => {
     const classifier = c.req.query('classifier_name') ?? undefined;
     const since = c.req.query('since') ?? undefined;
+    const includeSys = c.req.query('include_system_errors') === '1';
     return c.json({
       distribution: qualityClassificationStore.verdictDistribution({
         classifierName: classifier,
         since,
+        excludeSystemErrors: !includeSys,
       }),
+      systemErrors: qualityClassificationStore.countSystemErrors({ since }),
     });
   });
 

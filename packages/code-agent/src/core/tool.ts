@@ -240,6 +240,15 @@ export interface ToolContext {
    * `CODER_NESTED_GUARDS_DISABLE=1`. See runner/guards/nested-observer.ts.
    */
   nestedToolObserver?: NestedToolObserver;
+  /**
+   * Session-persistent key-value store exposed to code_exec scripts as the
+   * `stash` global. Survives across code_exec calls (the node:vm sandbox
+   * does not), so scripts carry file content/intermediate results forward
+   * instead of echoing them into history or re-reading files. One instance
+   * per session (index.ts); absent in tests → code_exec falls back to an
+   * ephemeral per-call store. See tools/code-exec-stash.ts.
+   */
+  codeExecStash?: import('@mcp/code-agent/tools/code-exec-stash.js').CodeExecStash;
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
   /**

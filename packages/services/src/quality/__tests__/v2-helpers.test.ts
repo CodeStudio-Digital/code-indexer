@@ -27,6 +27,7 @@ function row(partial: Partial<QualityClassificationRow>): QualityClassificationR
     message_id: 'turn-1',
     classifier_name: 'off_topic',
     verdict: 'ok',
+    system_error: 0,
     confidence: 0.9,
     reason: null,
     provider_id: null,

@@ -69,6 +69,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     totalUsage: zeroUsage(),
     activeTiers: ensureBootstrap(args.initialTiers),
     pinnedTools: args.initialPins ?? new Set<string>(),
+    terseDescriptionsLock: null,
     recovery: new Map(),
     dupCalls: new Map(),
     loopRefusals: new Map(),

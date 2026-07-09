@@ -445,21 +445,20 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       await Promise.resolve(refetchSession());
       await Promise.resolve(refetchSessions());
       if (!cancelled) {
-        clearCurrentTurn();
         window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [doneReason, selectedId, refetchSession, refetchSessions, clearCurrentTurn]);
+  }, [doneReason, selectedId, refetchSession, refetchSessions]);
 
-  const persistedMessageCount = sessionData?.messages.length ?? 0;
   useEffect(() => {
-    if ((!streaming && currentTurn && persistedMessageCount > 0) || liveTurnDuplicatedInHistory) {
+    if (liveTurnDuplicatedInHistory) {
       clearCurrentTurn();
     }
-  }, [persistedMessageCount, streaming, currentTurn, clearCurrentTurn, liveTurnDuplicatedInHistory]);
+  }, [clearCurrentTurn, liveTurnDuplicatedInHistory]);
+  const persistedMessageCount = sessionData?.messages.length ?? 0;
 
   // Bump the SessionStateSidebar refresh key whenever a turn ends — that's
   // the cheapest place to catch goal / tasks state mutations without

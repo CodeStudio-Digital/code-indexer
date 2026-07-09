@@ -147,8 +147,13 @@ export type CoderProfile = 'bootstrap' | 'navigate' | 'full';
  * regression tests should be able to inspect directly.
  */
 export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
-  // Native — minimal read/interaction set
-  'read_file',
+  // Native — minimal read/interaction set.
+  // P4 (jul/2026): native `read_file` demoted to NAVIGATE. It shipped on
+  // turn 1 ALONGSIDE `mcp__read_file` (superset, indexer-aware) — two read
+  // surfaces for the same job on the most expensive turn. The native one is
+  // the disk fallback: pin-by-name still executes it instantly when the
+  // model asks for it (bridge-down prompt names it explicitly), and
+  // sessions without the MCP bridge get it seeded as an initial pin.
   'list_directory',
   'ask_user',
   'submit_plan',
@@ -286,6 +291,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
 /** Tier 1 — navigate + edit. Promoted via expand_toolset('navigate'). */
 export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   // Native — write/edit + local exploration
+  // P4: native read_file lives here (disk fallback; mcp__read_file is the
+  // bootstrap read surface). Pin-by-name reaches it from bootstrap.
+  'read_file',
   'write_file',
   'edit_file',
   'multi_edit',

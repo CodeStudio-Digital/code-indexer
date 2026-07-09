@@ -29,6 +29,7 @@ export type TransitionKind =
   | 'pre-read-allowed-elided'
   | 'pre-read-allowed-mutation'
   | 'pre-read-auto-downgraded'
+  | 'pre-read-coverage-pointer'
   | 'pre-read-force-reread'
   | 'stop-guard-nudge'
   | 'tool-timeout';

@@ -1,24 +1,23 @@
 /**
- * App Studio — a tela do app guiado para leigos: chat (a "pessoa do lado")
- * | painel de conteúdo (Guia / Seu app / Seus dados / Publicar) | rail
- * rotulado. Clone estrutural do DsStudioView, preservando o invariante:
- * o Panel do chat é SEMPRE o primeiro filho do mesmo PanelGroup (o
- * AgentChat nunca desmonta ao trocar de aba).
+ * App Studio — workbench guiado para leigos: rail de ferramentas à esquerda,
+ * palco principal no centro (Preview / Mapa / Dados / Publicar) e conversa
+ * compacta à direita. A conversa deixa de ser a superfície dominante; ela é
+ * a "pessoa do lado" enquanto o usuário constrói no palco.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { ArrowLeft, Loader2, Wrench } from 'lucide-react';
+import { ArrowLeft, ListChecks, Loader2, MessageSquare, Play, Rocket, Wrench } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { confirm } from '../../components/ui/prompt-dialog.js';
-import AgentChat from '../chat/index.js';
 import type { AppStageId, AppStudioSessionDetail } from './app-studio-api.js';
 import { useAppStudioSession } from './useAppStudioSession.js';
 import { AppStudioRail, AppStudioTabContent, type AppStudioTab } from './AppStudioRail.js';
 import { AppPreviewPanel } from './preview/AppPreviewPanel.js';
-import { GuideBar } from './GuideBar.js';
-import { startAppStage } from './stage-prompts.js';
+import { isPromptableStage, startAppStage } from './stage-prompts.js';
+import { AppStudioChatRail } from './AppStudioChatRail.js';
 
 const TAB_STORAGE_KEY = 'mcp.app-studio.tab';
 const ADVANCED_SEEN_KEY = 'mcp.app-studio.advanced-seen';
@@ -85,6 +84,7 @@ export function AppStudioView({
   const navigate = useNavigate();
   const { detail, error, refresh } = useAppStudioSession(sessionId);
   const [activeTab, setActiveTab] = usePersistedTab();
+  const [chatCollapsed, setChatCollapsed] = useState(false);
   const lastAutoSwitched = useRef<AppStageId | null>(null);
 
   // Auto-switch de aba quando a ETAPA corrente muda (one-shot por etapa —
@@ -159,10 +159,51 @@ export function AppStudioView({
 
   const { session, project, builder_port: builderPort } = detail;
   const chip = statusChip(detail, t as never);
+  const studioTab = activeTab ?? 'preview';
+  const pipeline = detail.pipeline;
+  const currentStage = pipeline?.stages.find((s) => s.id === pipeline.current_stage) ?? null;
+  const currentStageIndex = currentStage && pipeline
+    ? pipeline.stages.findIndex((s) => s.id === currentStage.id)
+    : -1;
+  const stageAction = currentStage && project
+    ? currentStage.status === 'review'
+      ? {
+          icon: ListChecks,
+          label: t('pipeline.reviewCta'),
+          onClick: () => setActiveTab('guide'),
+          variant: 'outline' as const,
+        }
+      : currentStage.status === 'pending' || currentStage.status === 'active'
+        ? {
+            icon: currentStage.id === 'launch' ? Rocket : Play,
+            label: currentStage.id === 'launch'
+              ? t('tabs.publish')
+              : currentStage.status === 'pending'
+                ? t('pipeline.start')
+                : t('pipeline.resend'),
+            onClick: () => {
+              if (currentStage.id === 'launch' || !isPromptableStage(currentStage.id)) {
+                openPublish();
+                return;
+              }
+              void startAppStage(t, {
+                sessionId: session.id,
+                projectId: project.id,
+                stage: currentStage.id,
+                extra: currentStage.id === 'discovery' ? discoveryExtra : null,
+              }).then(() => void refresh());
+            },
+            variant: 'default' as const,
+          }
+        : null
+    : null;
+  const stageTooltip = stageAction && currentStage && pipeline
+    ? `${stageAction.label} · ${t('pipeline.stageOf', { n: currentStageIndex + 1, total: pipeline.stages.length })} · ${t(`stages.${currentStage.id}.name`)}`
+    : '';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b px-3">
+      <header className="flex h-11 shrink-0 items-center gap-3 border-b bg-background px-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="mr-1 h-4 w-4" /> {t('backToApps')}
         </Button>
@@ -171,61 +212,91 @@ export function AppStudioView({
           <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] ${chip.cls}`}>{chip.label}</span>
         </div>
         {error && <span className="truncate text-xs text-red-600">{error}</span>}
+        {stageAction && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={stageAction.variant}
+                size="icon"
+                className="h-8 w-8"
+                onClick={stageAction.onClick}
+                aria-label={stageTooltip}
+              >
+                <stageAction.icon className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{stageTooltip}</TooltipContent>
+          </Tooltip>
+        )}
         <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => void openAdvanced()}>
           <Wrench className="mr-1 h-3.5 w-3.5" /> {t('advanced.label')}
         </Button>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <PanelGroup direction="horizontal" autoSaveId="mcp-app-studio-horiz" className="min-h-0 flex-1">
-          <Panel id="app-chat" order={1} defaultSize={activeTab ? 45 : 100} minSize={26}>
-            <div className="flex h-full min-h-0 flex-col">
-              <GuideBar
-                detail={detail}
-                discoveryExtra={discoveryExtra}
-                onOpenGuide={() => setActiveTab('guide')}
-                onOpenPublish={openPublish}
-                onChanged={() => void refresh()}
-              />
-              <div className="min-h-0 flex-1">
-                {/* Picker de agente VISÍVEL (pedido do usuário): a sessão nasce
-                    'builder' e o composer hidrata/mostra isso — mas se algo
-                    rebaixar o modo (bug antigo: primeiro envio mandava
-                    'explore'), o usuário consegue voltar pra Builder aqui em
-                    vez de ficar preso num agente read-only. */}
-                <AgentChat
-                  projectId={project.id}
-                  projectName={project.name}
-                  initialSessionId={initialCoderSessionId}
-                  selectionPrefixSessionId={project.id}
-                />
-              </div>
-            </div>
-          </Panel>
-          {activeTab && (
-            <>
-              <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
-              <Panel id="app-content" order={2} defaultSize={55} minSize={24}>
-                {activeTab === 'preview' ? (
-                  <AppPreviewPanel projectId={project.id} builderPort={builderPort} onHide={() => setActiveTab(null)} />
+      <div className="flex min-h-0 flex-1 bg-background">
+        <AppStudioRail
+          active={studioTab}
+          detail={detail}
+          onSelect={(tab) => setActiveTab(tab)}
+        />
+        <PanelGroup direction="horizontal" autoSaveId="mcp-app-studio-stage-chat" className="min-h-0 flex-1">
+          <Panel id="app-stage" order={1} defaultSize={chatCollapsed ? 100 : 72} minSize={48}>
+            <main className="flex h-full min-h-0 flex-col">
+              <div className="min-h-0 flex-1 overflow-hidden">
+                {studioTab === 'preview' ? (
+                  <AppPreviewPanel
+                    projectId={project.id}
+                    builderPort={builderPort}
+                    onHide={() => setActiveTab(detail.spec ? 'blueprint' : 'guide')}
+                  />
                 ) : (
                   <AppStudioTabContent
-                    tab={activeTab}
+                    tab={studioTab}
                     detail={detail}
                     discoveryExtra={discoveryExtra}
                     onChanged={() => void refresh()}
                     onOpenPublish={openPublish}
                   />
                 )}
+              </div>
+            </main>
+          </Panel>
+          {!chatCollapsed && (
+            <>
+              <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
+              <Panel id="app-chat-rail" order={2} defaultSize={28} minSize={20} maxSize={42} className="min-w-[320px]">
+                <AppStudioChatRail
+                  projectId={project.id}
+                  projectName={project.name}
+                  initialSessionId={initialCoderSessionId}
+                  onCollapse={() => setChatCollapsed(true)}
+                />
               </Panel>
             </>
           )}
         </PanelGroup>
-        <AppStudioRail
-          active={activeTab}
-          detail={detail}
-          onSelect={(tab) => setActiveTab(activeTab === tab ? null : tab)}
-        />
+        {chatCollapsed && (
+          <nav
+            className="flex w-11 shrink-0 flex-col items-center gap-0.5 border-l bg-card/45 py-1.5"
+            aria-label={t('chatRail.open', { defaultValue: 'Abrir chat' })}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setChatCollapsed(false)}
+                  className="relative grid h-8 w-8 place-items-center rounded-md bg-accent text-accent-foreground shadow-sm transition-colors hover:bg-accent/90"
+                  aria-label={t('chatRail.open', { defaultValue: 'Abrir chat' })}
+                  aria-current="page"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  <span aria-hidden className="absolute -right-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">{t('chatRail.open', { defaultValue: 'Abrir chat' })}</TooltipContent>
+            </Tooltip>
+          </nav>
+        )}
       </div>
     </div>
   );

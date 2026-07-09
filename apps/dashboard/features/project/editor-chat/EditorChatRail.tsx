@@ -7,9 +7,10 @@
  */
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, ChevronRight, FilePlus2, FileText, Loader2, Plus } from 'lucide-react';
+import { ArrowLeft, ChevronRight, FilePlus2, FileText, FolderPlus, Loader2, Plus } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { TooltipProvider } from '../../../components/ui/tooltip.js';
+import { confirm, prompt } from '../../../components/ui/prompt-dialog.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 import { editorChatContextActions, useEditorChatContext } from '../../../state/editor-chat-context.js';
 import { MessageList } from '../../chat/messages/MessageList.js';
@@ -26,7 +27,7 @@ interface Props {
 }
 
 export function EditorChatRail({ projectId, projectName, onClose }: Props) {
-  const { t } = useTranslation('workspace');
+  const { t } = useTranslation(['workspace', 'chat', 'common']);
   const s = useEditorChatSession(projectId);
   const { fileRefs } = useEditorChatContext(projectId);
   const removeFileRef = (p: string) => editorChatContextActions().removeFileRef(projectId, p);
@@ -40,6 +41,39 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
   const addableName = addablePath ? addablePath.split('/').pop() ?? addablePath : null;
   const alreadyAdded = addablePath != null && fileRefs.includes(addablePath);
 
+  const createGroup = async () => {
+    const name = await prompt({
+      title: t('chat:newGroup'),
+      description: t('chat:newGroupDescription'),
+      placeholder: t('chat:groupNamePlaceholder'),
+      confirmLabel: t('common:actions.create', { defaultValue: 'Criar' }),
+    });
+    if (!name) return;
+    await s.createGroup(name);
+  };
+
+  const renameSession = async (id: number, currentTitle: string) => {
+    const title = await prompt({
+      title: t('chat:renameSession'),
+      placeholder: t('chat:sessionNamePlaceholder'),
+      defaultValue: currentTitle,
+      confirmLabel: t('chat:sidebar.rename'),
+    });
+    if (!title || title.trim() === currentTitle.trim()) return;
+    await s.renameSession(id, title);
+  };
+
+  const deleteSession = async (id: number) => {
+    const ok = await confirm({
+      title: t('chat:deleteSession'),
+      description: t('chat:deleteSessionDescription'),
+      confirmLabel: t('common:actions.delete', { defaultValue: 'Excluir' }),
+      tone: 'destructive',
+    });
+    if (!ok) return;
+    await s.deleteSession(id);
+  };
+
   if (s.selectedId == null) {
     return (
       <div className="h-full flex flex-col bg-card/20 min-h-0">
@@ -47,21 +81,44 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
           title={t('chat.title')}
           onClose={onClose}
           action={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5 text-muted-foreground hover:text-foreground"
-              onClick={() => void s.createSession()}
-              disabled={s.creating}
-              aria-label={t('chat.new')}
-              title={t('chat.new')}
-            >
-              {s.creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 text-muted-foreground hover:text-foreground"
+                onClick={() => void createGroup()}
+                aria-label={t('chat:sidebar.newGroup')}
+                title={t('chat:sidebar.newGroup')}
+              >
+                <FolderPlus className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 text-muted-foreground hover:text-foreground"
+                onClick={() => void s.createSession()}
+                disabled={s.creating}
+                aria-label={t('chat.new')}
+                title={t('chat.new')}
+              >
+                {s.creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+              </Button>
+            </>
           }
         />
         <div className="flex-1 min-h-0">
-          <SessionPickerDropdown projectName={projectName} sessions={s.sessions} onPick={s.setSelectedId} />
+          <SessionPickerDropdown
+            projectName={projectName}
+            sessions={s.sessions}
+            groups={s.groups}
+            onPick={s.setSelectedId}
+            onFavorite={s.favoriteSession}
+            onArchive={(id) => s.archiveSession(id, true)}
+            onDelete={(id) => void deleteSession(id)}
+            onRename={(id, title) => void renameSession(id, title)}
+            onDuplicate={s.duplicateSession}
+            onMoveToGroup={s.moveSessionToGroup}
+          />
         </div>
       </div>
     );

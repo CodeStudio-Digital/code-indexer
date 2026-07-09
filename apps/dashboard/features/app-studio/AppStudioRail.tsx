@@ -1,8 +1,7 @@
 /**
- * Rail vertical do App Studio — MESMO padrão de sistema do DsStudioRail
- * (ícones w-8 + tooltip + pill de ativo na borda), com as 4 abas do modo
- * leigo: Guia | Seu app | Seus dados | Publicar. "Seus dados" fica
- * desabilitado até a etapa database sair de pending.
+ * Rail vertical do App Studio — ferramentas de palco à esquerda. Preview e
+ * Mapa ficam no topo porque são as duas superfícies que um usuário leigo
+ * entende primeiro: ver o app e ver a especificação em blocos.
  */
 import { useTranslation } from 'react-i18next';
 import { Database, Globe, ListChecks, Monitor, Workflow, type LucideIcon } from 'lucide-react';
@@ -16,10 +15,10 @@ import { BlueprintPanel } from './blueprint/BlueprintPanel.js';
 
 export type AppStudioTab = 'guide' | 'blueprint' | 'preview' | 'data' | 'publish';
 
-const TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string }> = [
-  { id: 'guide', icon: ListChecks, labelKey: 'tabs.guide' },
-  { id: 'blueprint', icon: Workflow, labelKey: 'tabs.blueprint' },
+const TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string; separated?: boolean }> = [
   { id: 'preview', icon: Monitor, labelKey: 'tabs.preview' },
+  { id: 'blueprint', icon: Workflow, labelKey: 'tabs.blueprint' },
+  { id: 'guide', icon: ListChecks, labelKey: 'tabs.guide', separated: true },
   { id: 'data', icon: Database, labelKey: 'tabs.data' },
   { id: 'publish', icon: Globe, labelKey: 'tabs.publish' },
 ];
@@ -37,10 +36,10 @@ export function AppStudioRail({
   const { t } = useTranslation('appStudio');
   return (
     <nav
-      className="flex w-10 shrink-0 flex-col items-center gap-0.5 border-l bg-card/40 py-1"
+      className="flex w-11 shrink-0 flex-col items-center gap-0.5 border-r bg-card/45 py-1.5"
       aria-label={t('tabs.guide')}
     >
-      {TABS.map(({ id, icon: Icon, labelKey }) => {
+      {TABS.map(({ id, icon: Icon, labelKey, separated }) => {
         const isActive = active === id;
         const disabled =
           (id === 'data' && !dataTabUnlocked(detail)) ||
@@ -50,30 +49,32 @@ export function AppStudioRail({
           : disabled && id === 'blueprint' ? t('blueprint.locked')
           : t(labelKey);
         return (
-          <Tooltip key={id}>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => onSelect(id)}
-                aria-label={label}
-                aria-current={isActive ? 'page' : undefined}
-                className={cn(
-                  'relative grid h-8 w-8 place-items-center rounded-md transition-colors',
-                  isActive
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                  disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {isActive && (
-                  <span aria-hidden className="absolute -right-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="left">{label}</TooltipContent>
-          </Tooltip>
+          <div key={id} className={cn('flex flex-col items-center', separated && 'mt-2 border-t pt-2')}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onSelect(id)}
+                  aria-label={label}
+                  aria-current={isActive ? 'page' : undefined}
+                  className={cn(
+                    'relative grid h-8 w-8 place-items-center rounded-md transition-colors',
+                    isActive
+                      ? 'bg-accent text-accent-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {isActive && (
+                    <span aria-hidden className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">{label}</TooltipContent>
+            </Tooltip>
+          </div>
         );
       })}
     </nav>

@@ -107,6 +107,39 @@ describe('clearAll', () => {
   });
 });
 
+describe('system_error (mig 202)', () => {
+  let h: Handle;
+  beforeEach(() => { h = setup(); });
+  afterEach(() => teardown(h));
+
+  it('persists the flag and defaults to 0', () => {
+    h.store.insert({ session_id: 1, classifier_name: 'code_quality', verdict: 'error', system_error: true });
+    h.store.insert({ session_id: 1, classifier_name: 'code_quality', verdict: 'error' });
+    const rows = h.store.findRecentBySession(1);
+    expect(rows.map((r) => r.system_error).sort()).toEqual([0, 1]);
+  });
+
+  it('verdictDistribution excludes infra failures on demand', () => {
+    h.store.insert({ classifier_name: 'tool_misuse', verdict: 'error', system_error: true });
+    h.store.insert({ classifier_name: 'tool_misuse', verdict: 'error' }); // content judgment
+    h.store.insert({ classifier_name: 'tool_misuse', verdict: 'ok' });
+
+    const raw = h.store.verdictDistribution({ classifierName: 'tool_misuse' });
+    expect(raw.find((d) => d.verdict === 'error')?.count).toBe(2);
+
+    const clean = h.store.verdictDistribution({ classifierName: 'tool_misuse', excludeSystemErrors: true });
+    expect(clean.find((d) => d.verdict === 'error')?.count).toBe(1);
+    expect(clean.find((d) => d.verdict === 'ok')?.count).toBe(1);
+  });
+
+  it('countSystemErrors counts only infra failures', () => {
+    h.store.insert({ classifier_name: 'policy', verdict: 'error', system_error: true });
+    h.store.insert({ classifier_name: 'policy', verdict: 'error', system_error: true });
+    h.store.insert({ classifier_name: 'policy', verdict: 'error' });
+    expect(h.store.countSystemErrors()).toBe(2);
+  });
+});
+
 describe('findRecentByAgentRunIds', () => {
   let h: Handle;
   beforeEach(() => { h = setup(); });

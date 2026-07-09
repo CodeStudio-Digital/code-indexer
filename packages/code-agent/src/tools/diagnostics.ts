@@ -18,6 +18,9 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
  *   .py                → ruff check (if installed) else python -m py_compile
  *   .go                → go vet ./...
  *   .rs                → cargo check (slow — only on request)
+ *   .php               → php -l (syntax lint; telemetry jul/2026 showed PHP
+ *                        sessions had NO diagnostics path — lsp_diagnostics
+ *                        is TS-only and this fell through to 'unknown')
  *
  * Results are cached in-memory by (abs path + mtime) so repeated calls in
  * the same session don't re-run the compiler.
@@ -26,7 +29,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 // Cache keyed by `${absPath}:${mtimeMs}`. Cleared per process.
 const cache = new Map<string, string>();
 
-type Language = 'ts' | 'py' | 'go' | 'rs' | 'unknown';
+type Language = 'ts' | 'py' | 'go' | 'rs' | 'php' | 'unknown';
 
 function detectLanguage(file: string): Language {
   const ext = extname(file).toLowerCase();
@@ -34,6 +37,7 @@ function detectLanguage(file: string): Language {
   if (ext === '.py') return 'py';
   if (ext === '.go') return 'go';
   if (ext === '.rs') return 'rs';
+  if (ext === '.php') return 'php';
   return 'unknown';
 }
 
@@ -99,6 +103,18 @@ function runChecker(lang: Language, absPath: string, cwd: string): string {
       if (r.status === 0) return out || 'OK: cargo check passed.';
       return out || 'cargo check failed (no output)';
     }
+    case 'php': {
+      // Syntax lint via the CLI every PHP install ships. Not a type checker
+      // (that would be intelephense/phpstan) but catches parse errors — the
+      // dominant "did my edit break the file?" failure class.
+      const r = spawnSync('php', ['-l', absPath], { cwd, encoding: 'utf-8', timeout: 30_000 });
+      if (r.error) {
+        return 'php CLI not found on PATH — cannot lint. Install PHP or run `php -l` inside your runtime (e.g. via run_command in WSL/container).';
+      }
+      const out = [r.stdout, r.stderr].filter(Boolean).join('\n').trim();
+      if (r.status === 0) return out.includes('No syntax errors') ? `OK: ${out}` : out || 'OK: php -l passed.';
+      return out || 'php -l failed (no output)';
+    }
     case 'unknown':
       return 'No diagnostics checker configured for this file extension.';
   }
@@ -107,8 +123,8 @@ function runChecker(lang: Language, absPath: string, cwd: string): string {
 export const getDiagnostics: CoderTool = {
   name: 'get_diagnostics',
   description:
-    'Run the language-native type/lint checker for a file and return errors/warnings.\n' +
-    "USE: after editing a .ts/.tsx/.js/.py/.go/.rs file to catch type errors and obvious bugs BEFORE running tests. Much faster than full test suites.\n" +
+    'Run the language-native type/lint checker for a file (TS/JS, Python, Go, Rust, PHP) and return errors/warnings.\n' +
+    "USE: after editing a .ts/.tsx/.js/.py/.go/.rs/.php file to catch type errors and obvious bugs BEFORE running tests. Much faster than full test suites.\n" +
     "USE: to verify a refactor didn't leave dangling references.\n" +
     "DON'T: use as a substitute for tests — this only catches type/syntax/lint issues, not behaviour.\n" +
     "DON'T: call before editing — the output reflects on-disk state, not your pending changes.\n" +

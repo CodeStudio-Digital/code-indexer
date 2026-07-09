@@ -47,6 +47,14 @@ export interface BuildToolsArgs {
    * to the MODEL cap — a seeded session on a large model keeps full text.
    */
   sessionToolCap?: number;
+  /**
+   * P5a — run-constant description format decided at the run's first build
+   * (see RunContext.terseDescriptionsLock). When set, overrides the live
+   * per-turn `bootstrapOnly` computation so a mid-run tier promotion never
+   * rewrites existing descriptions terse→full (whole-prefix cache bust).
+   * Undefined preserves the live computation (subagents/tests).
+   */
+  terseDescriptionsLock?: boolean;
   toolContext: ToolContext;
   provider: ChatProvider;
 }
@@ -185,9 +193,14 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // the most expensive turn (no cache warmth yet) and the agent only needs
   // to know WHICH tool routes WHERE — full USE/DON'T text becomes useful
   // only after promotion to navigate/admin.
-  const bootstrapOnly = !!args.activeTiers
+  // P5a: when the caller passes the run-constant lock, honor it — the live
+  // computation flips terse→full on the first promotion and rewrites every
+  // surviving description (measured: whole tools-prefix re-cache).
+  const bootstrapOnly = args.terseDescriptionsLock ?? (
+    !!args.activeTiers
     && !args.activeTiers.has('navigate')
-    && !args.activeTiers.has('admin');
+    && !args.activeTiers.has('admin')
+  );
   // Compact-catalog models (cap ≤ 64 — GLM flash class) get terse
   // descriptions in EVERY tier state: serialized bytes compete with real
   // context on a small model, and full text is recoverable via find_tools.

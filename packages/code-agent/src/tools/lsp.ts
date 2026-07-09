@@ -214,11 +214,11 @@ const lspHover: CoderTool = {
 const lspDiagnostics: CoderTool = {
   name: 'lsp_diagnostics',
   description:
-    'Get TypeScript syntactic + semantic diagnostics for a single file via the in-process language service.\n' +
+    'TypeScript/JavaScript ONLY — syntactic + semantic diagnostics for a single .ts/.tsx/.js/.jsx file (for PHP/Python/Go/Rust call get_diagnostics instead).\n' +
     "USE: after editing a .ts/.tsx/.js/.jsx file to catch type errors, unused symbols, and syntax mistakes. Much faster than running the full `tsc --noEmit` project-wide.\n" +
     "USE: before running tests — type errors surface here first and cheaper.\n" +
     "DON'T: expect runtime-behaviour errors. This only catches what TypeScript's checker catches.\n" +
-    "DON'T: use on non-TS/JS files — call get_diagnostics (Phase 1) for Python/Go/Rust instead.\n" +
+    "DON'T: use on non-TS/JS files — call get_diagnostics for every other language (telemetry: 19 wasted calls on PHP files).\n" +
     'Returns a list of `file:line:col [severity] CODE: message` entries, or "No diagnostics" when clean.',
   source: 'native',
   parameters: {

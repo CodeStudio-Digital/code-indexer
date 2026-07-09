@@ -88,6 +88,16 @@ export interface RunContext {
    */
   pinnedTools: Set<string>;
   /**
+   * P5a — description format decided ONCE at the run's first buildTools and
+   * locked for the whole run. Historically `bootstrapOnly` was recomputed
+   * per turn, so the FIRST tier promotion rewrote EVERY surviving tool's
+   * description terse→full — a whole-prefix cache bust on top of the
+   * membership change (~67k chars re-cached). Constant-per-run keeps
+   * existing tool bytes stable; promotions only APPEND new tools. Full
+   * text stays reachable via find_tools/tool_schema. Null = undecided.
+   */
+  terseDescriptionsLock: boolean | null;
+  /**
    * Per-recovery-kind circuit breaker counters. Each kind has its own cap
    * resolved by `recoveryCap()`; the orchestrator aborts when a kind goes
    * over.

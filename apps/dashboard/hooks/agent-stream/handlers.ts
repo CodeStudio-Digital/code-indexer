@@ -718,21 +718,18 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           },
         }));
       }
-      // Reset live buffer BEFORE notifying the caller. If the refetchSession()
-      // triggered by onMessageComplete resolves before React applies the
-      // currentTurn clear, sessionData would briefly contain the just-persisted
-      // turn while currentTurn still shows the same blocks — causing a visible
-      // "duplicated layout" during the stream.
+      // Commit the final live buffer before notifying the caller, then clear
+      // only the local buffer for the next assistant turn. Keeping currentTurn
+      // rendered until the refetch proves it exists in history avoids a blank
+      // gap where the final answer disappears at the SSE boundary.
+      flushNow();
       blocks.length = 0;
       toolIndex.clear();
-      // Cancel any pending rAF flush and commit the cleared state synchronously
-      // so the UI transition is atomic with onMessageComplete. Bump the tasks
-      // tick too: the turn just persisted may have approved the list (or run a
-      // task), so the persisted TaskListReview card must refetch the row to pick
-      // up `approved`/runtime status instead of waiting for the whole run to end.
-      flushNow();
+      // Bump the tasks tick too: the turn just persisted may have approved the
+      // list (or run a task), so the persisted TaskListReview card must refetch
+      // the row to pick up `approved`/runtime status instead of waiting for the
+      // whole run to end.
       updateSession(sid, (cur) => ({
-        currentTurn: { blocks: [] },
         tasksRefreshTick: cur.tasksRefreshTick + 1,
       }));
       onMessageComplete?.();
@@ -744,7 +741,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // event — so the hook has to pull both fields from this payload or the
       // UI stays silent.
       const d = data as { reason?: string; error?: string };
-      flushNow();
+      if (blocks.length > 0) flushNow();
       // Run ended → the pool closes the agent's preview window, so restore the
       // in-project iframe.
       dispatchAgentPreview(sid, false);

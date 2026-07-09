@@ -579,6 +579,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               autoSuggestText={debouncedInput}
               agent={props.agent}
               setAgent={props.setAgent}
+              hideAgentPicker={props.hideAgentPicker}
               provider={props.provider}
               model={props.model}
               setModel={props.setModel}

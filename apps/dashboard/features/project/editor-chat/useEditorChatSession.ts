@@ -13,13 +13,13 @@
  * (same project_id).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiPatch, apiPost, useApi } from '../../../hooks/useApi.js';
+import { apiDelete, apiPatch, apiPost, useApi } from '../../../hooks/useApi.js';
 import { useAgentStream, type AgentAttachment } from '../../../hooks/useAgentStream.js';
 import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
 import { PROVIDERS } from '../../chat/constants.js';
-import type { CoderSession, MessagePage, PromptHandlers, SessionData } from '../../chat/types.js';
+import type { CoderSession, CoderSessionGroup, MessagePage, PromptHandlers, SessionData } from '../../chat/types.js';
 import {
   editorChatContextActions,
   formatSelections,
@@ -30,21 +30,47 @@ import {
 import { readActiveSelection } from '../../workspace/editor/chat-actions.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
 import type { NotificationSourceContext } from '../../notifications/index.js';
+import {
+  consumePendingAttachments,
+  consumeSelectionPrefix,
+  onStudioSend,
+  usePublishAgentBusy,
+} from '../../builder/studio/studio-context-store.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram' | 'builder';
 
-export function useEditorChatSession(projectId: number) {
+interface EditorChatSessionOptions {
+  initialSessionId?: number;
+  agentLock?: AgentId;
+  includeEditorContext?: boolean;
+  selectionPrefixSessionId?: number;
+  newSessionTitle?: string;
+}
+
+const VALID_AGENT_IDS = new Set<AgentId>(['explore', 'plan', 'build', 'admin', 'spec', 'api', 'diagram', 'builder']);
+
+export function useEditorChatSession(projectId: number, options: EditorChatSessionOptions = {}) {
+  const {
+    initialSessionId,
+    agentLock,
+    includeEditorContext = true,
+    selectionPrefixSessionId,
+    newSessionTitle = 'Nova sessão',
+  } = options;
   const { selections } = useEditorChatContext(projectId);
 
   const { data: sessions, refetch: refetchSessions } = useApi<CoderSession[]>(
     `/coder/sessions?project_id=${projectId}&archived=0`,
   );
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { data: groups, refetch: refetchGroups } = useApi<CoderSessionGroup[]>(
+    `/coder/groups?project_id=${projectId}`,
+  );
+  const [selectedId, setSelectedId] = useState<number | null>(() => initialSessionId ?? null);
   const [creating, setCreating] = useState(false);
 
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
-  const [agent, setAgent] = useState<AgentId>('explore');
+  const [agent, setAgent] = useState<AgentId>(() => agentLock ?? 'explore');
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
@@ -70,14 +96,33 @@ export function useEditorChatSession(projectId: number) {
 
   const stream = useAgentStream(selectedId, notificationContext);
   const {
-    streaming, currentTurn, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn,
+    streaming, currentTurn, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick,
     answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider,
   } = stream;
+  usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
   const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, liveTurnDuplicatedInHistory, persistedToolUseIds } =
-    useAgentChatState({ selectedId, doneReason, sessionData: sessionData ?? null, currentTurn, provider, model, setProvider, setModel });
+    useAgentChatState({
+      selectedId,
+      doneReason,
+      tasksRefreshTick,
+      sessionData: sessionData ?? null,
+      currentTurn,
+      provider,
+      model,
+      setProvider,
+      setModel,
+    });
 
   const settings = useEditorSessionSettings(selectedId, sessionData ?? null);
+
+  useEffect(() => {
+    if (initialSessionId) setSelectedId(initialSessionId);
+  }, [initialSessionId]);
+
+  useEffect(() => {
+    if (agentLock) setAgent(agentLock);
+  }, [agentLock]);
 
   // Auto-reattach to an in-flight run (same probe AgentChat uses).
   useEffect(() => {
@@ -107,7 +152,8 @@ export function useEditorChatSession(projectId: number) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // End-of-run: refetch the persisted session, then drop the live turn.
+  // End-of-run: refetch the persisted session. The live turn stays visible
+  // until liveTurnDuplicatedInHistory proves that the refetch contains it.
   useEffect(() => {
     if (!doneReason || !selectedId) return;
     let cancelled = false;
@@ -115,23 +161,26 @@ export function useEditorChatSession(projectId: number) {
       await Promise.resolve(refetchSession());
       await Promise.resolve(refetchSessions());
       if (!cancelled) {
-        clearCurrentTurn();
         window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
       }
     })();
     return () => { cancelled = true; };
-  }, [doneReason, selectedId, refetchSession, refetchSessions, clearCurrentTurn]);
+  }, [doneReason, selectedId, refetchSession, refetchSessions]);
 
   // Agent/mode hydration — reflect the session's real mode on (re)open and on
   // session switch. Keyed on session id so an end-of-run refetch doesn't
-  // clobber a manual mid-session pick. 'builder' isn't selectable here.
+  // clobber a manual mid-session pick. Guided rails can lock the agent.
   useEffect(() => {
+    if (agentLock) {
+      setAgent(agentLock);
+      return;
+    }
     const a = (sessionData?.session as { agent?: string | null } | undefined)?.agent;
-    if (a && (a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' || a === 'spec' || a === 'api')) {
-      setAgent(a);
+    if (a && VALID_AGENT_IDS.has(a as AgentId)) {
+      setAgent(a as AgentId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionData?.session?.id]);
+  }, [sessionData?.session?.id, agentLock]);
 
   // Hydrate the persisted model-settings overrides from the session row so the
   // settings dialog opens reflecting the OPEN session instead of blank defaults
@@ -152,24 +201,29 @@ export function useEditorChatSession(projectId: number) {
 
   // Persist a manual dropdown pick immediately (applies to the next run).
   const handleAgentChange = useCallback((next: AgentId) => {
+    if (agentLock) {
+      setAgent(agentLock);
+      if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: agentLock }).catch(() => {});
+      return;
+    }
     setAgent(next);
     if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
-  }, [selectedId]);
+  }, [agentLock, selectedId]);
 
   // Avoid double-rendering the live turn once it lands in the DB.
-  const persistedMessageCount = sessionData?.messages.length ?? 0;
   useEffect(() => {
-    if ((!streaming && currentTurn && persistedMessageCount > 0) || liveTurnDuplicatedInHistory) clearCurrentTurn();
-  }, [persistedMessageCount, streaming, currentTurn, clearCurrentTurn, liveTurnDuplicatedInHistory]);
+    if (liveTurnDuplicatedInHistory) clearCurrentTurn();
+  }, [clearCurrentTurn, liveTurnDuplicatedInHistory]);
 
   const createSession = useCallback(async (): Promise<number | null> => {
     setCreating(true);
     try {
       const created = await apiPost<CoderSession>('/coder/sessions', {
         project_id: projectId,
-        title: 'Nova sessão',
+        title: newSessionTitle,
         provider,
         model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
+        agent: agentLock ?? undefined,
       });
       pendingAutoTitle.current.add(created.id);
       refetchSessions();
@@ -179,7 +233,60 @@ export function useEditorChatSession(projectId: number) {
     } finally {
       setCreating(false);
     }
-  }, [projectId, provider, model, refetchSessions]);
+  }, [projectId, newSessionTitle, provider, model, agentLock, refetchSessions]);
+
+  const archiveSession = useCallback(async (id: number, archived = true) => {
+    await apiPatch(`/coder/sessions/${id}/archive`, { archived });
+    if (selectedId === id) setSelectedId(null);
+    refetchSessions();
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  }, [selectedId, refetchSessions]);
+
+  const deleteSession = useCallback(async (id: number) => {
+    await apiDelete(`/coder/sessions/${id}`);
+    if (selectedId === id) setSelectedId(null);
+    refetchSessions();
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  }, [selectedId, refetchSessions]);
+
+  const favoriteSession = useCallback(async (id: number, favorite: boolean) => {
+    await apiPatch(`/coder/sessions/${id}/favorite`, { favorite });
+    refetchSessions();
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  }, [refetchSessions]);
+
+  const renameSession = useCallback(async (id: number, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    await apiPatch(`/coder/sessions/${id}/title`, { title: trimmed });
+    refetchSessions();
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  }, [refetchSessions]);
+
+  const duplicateSession = useCallback(async (id: number) => {
+    const res = await apiPost<{ session: CoderSession }>(`/coder/sessions/${id}/duplicate`, {});
+    refetchSessions();
+    setSelectedId(res.session.id);
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+    return res.session.id;
+  }, [refetchSessions]);
+
+  const moveSessionToGroup = useCallback(async (id: number, groupId: number | null) => {
+    await apiPatch(`/coder/sessions/${id}/group`, { group_id: groupId });
+    refetchSessions();
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  }, [refetchSessions]);
+
+  const createGroup = useCallback(async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    await apiPost<CoderSessionGroup>('/coder/groups', {
+      project_id: projectId,
+      name: trimmed,
+    });
+    refetchGroups();
+    refetchSessions();
+  }, [projectId, refetchGroups, refetchSessions]);
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
@@ -189,23 +296,30 @@ export function useEditorChatSession(projectId: number) {
     // (Ctrl/Cmd+I) plus the current live editor selection (deduped) — then
     // clear ALL staged context (file refs are already inlined by the
     // Composer as <file_refs>; clear() also drops the live selection).
-    const st = editorChatContextActions();
-    // Read the live selection FRESH from the editor (no debounce) so a snippet
-    // highlighted right before Send still rides along; dedupe against pinned.
-    const raw = readActiveSelection();
-    const live = raw && raw.projectId === projectId
-      ? {
-          id: selectionId(raw.path, raw.startLine, raw.endLine),
-          path: raw.path,
-          startLine: raw.startLine,
-          endLine: raw.endLine,
-          text: raw.text.slice(0, MAX_SELECTION_CHARS),
-        }
-      : null;
-    const allSels = live && !selections.some((x) => x.id === live.id) ? [...selections, live] : selections;
-    const prefix = formatSelections(allSels);
+    let editorPrefix = '';
+    if (includeEditorContext) {
+      const st = editorChatContextActions();
+      // Read the live selection FRESH from the editor (no debounce) so a snippet
+      // highlighted right before Send still rides along; dedupe against pinned.
+      const raw = readActiveSelection();
+      const live = raw && raw.projectId === projectId
+        ? {
+            id: selectionId(raw.path, raw.startLine, raw.endLine),
+            path: raw.path,
+            startLine: raw.startLine,
+            endLine: raw.endLine,
+            text: raw.text.slice(0, MAX_SELECTION_CHARS),
+          }
+        : null;
+      const allSels = live && !selections.some((x) => x.id === live.id) ? [...selections, live] : selections;
+      editorPrefix = formatSelections(allSels);
+      st.clear(projectId);
+    }
+    const studioPrefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
+    const shots = selectionPrefixSessionId ? consumePendingAttachments(selectionPrefixSessionId) : [];
+    const prefix = [editorPrefix, studioPrefix].filter(Boolean).join('\n');
     const outgoing = prefix ? `${prefix}\n\n${text}` : text;
-    st.clear(projectId);
+    const allAtts = shots.length ? [...atts, ...shots] : atts;
     await sendMessage(outgoing, async () => {
       refetchSession();
       if (shouldAutoTitle) {
@@ -213,8 +327,8 @@ export function useEditorChatSession(projectId: number) {
           .then(() => { refetchSessions(); window.dispatchEvent(new CustomEvent('coder:sessions-changed')); })
           .catch((err) => console.warn('[editor-chat] generate-title failed:', err));
       }
-    }, { attachments: atts, agent, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds });
-  }, [selectedId, selections, projectId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, settings.describeImages]);
+    }, { attachments: allAtts, agent: agentLock ?? agent, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds });
+  }, [selectedId, includeEditorContext, selectionPrefixSessionId, selections, projectId, sendMessage, refetchSession, refetchSessions, agentLock, agent, maxTurns, thinking, settings.describeImages]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Live run → POST /inject (no new stream; the open SSE renders the injected
@@ -230,24 +344,35 @@ export function useEditorChatSession(projectId: number) {
       if (r?.injected) { refetchSession(); return; }
     } catch { /* fall through to a fresh streamed send */ }
     await sendMessage(text, async () => { refetchSession(); }, {
-      agent, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds: skillIds, interject,
+      agent: agentLock ?? agent, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds: skillIds, interject,
     });
-  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, settings.describeImages]);
+  }, [selectedId, sendMessage, refetchSession, agentLock, agent, maxTurns, thinking, settings.describeImages]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
   const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
     if (!selectedId) return;
     // Mirror handleSend's staged-context prefixing (selected-code), then clear.
-    const st = editorChatContextActions();
-    const raw = readActiveSelection();
-    const live = raw && raw.projectId === projectId
-      ? { id: selectionId(raw.path, raw.startLine, raw.endLine), path: raw.path, startLine: raw.startLine, endLine: raw.endLine, text: raw.text.slice(0, MAX_SELECTION_CHARS) }
-      : null;
-    const allSels = live && !selections.some((x) => x.id === live.id) ? [...selections, live] : selections;
-    const prefix = formatSelections(allSels);
-    st.clear(projectId);
+    let editorPrefix = '';
+    if (includeEditorContext) {
+      const st = editorChatContextActions();
+      const raw = readActiveSelection();
+      const live = raw && raw.projectId === projectId
+        ? { id: selectionId(raw.path, raw.startLine, raw.endLine), path: raw.path, startLine: raw.startLine, endLine: raw.endLine, text: raw.text.slice(0, MAX_SELECTION_CHARS) }
+        : null;
+      const allSels = live && !selections.some((x) => x.id === live.id) ? [...selections, live] : selections;
+      editorPrefix = formatSelections(allSels);
+      st.clear(projectId);
+    }
+    const studioPrefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
+    if (selectionPrefixSessionId) consumePendingAttachments(selectionPrefixSessionId);
+    const prefix = [editorPrefix, studioPrefix].filter(Boolean).join('\n');
     queue.enqueue(prefix ? `${prefix}\n\n${text}` : text, mode, skillIds);
-  }, [selectedId, selections, projectId, queue]);
+  }, [selectedId, includeEditorContext, selectionPrefixSessionId, selections, projectId, queue]);
   useEffect(() => { queue.clear(); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (selectionPrefixSessionId == null) return undefined;
+    return onStudioSend(selectionPrefixSessionId, (text) => { void handleSend(text, []); });
+  }, [selectionPrefixSessionId, handleSend]);
 
   const onSwitchProvider = useCallback(async (newProvider: string, newModel: string) => {
     setProvider(newProvider);
@@ -303,7 +428,9 @@ export function useEditorChatSession(projectId: number) {
   }), [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval]);
 
   return {
-    sessions: sessions ?? null, refetchSessions, selectedId, setSelectedId, createSession, creating,
+    sessions: sessions ?? null, groups: groups ?? null, refetchSessions, selectedId, setSelectedId,
+    createSession, creating, archiveSession, deleteSession, favoriteSession, renameSession, duplicateSession,
+    moveSessionToGroup, createGroup,
     sessionData: sessionData ?? null, streaming, currentTurn, doneReason, error,
     liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     queue, handleQueue,
