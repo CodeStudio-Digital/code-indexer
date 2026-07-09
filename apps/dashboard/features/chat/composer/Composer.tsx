@@ -28,7 +28,7 @@ interface SlashCommand {
   context_mode: string;
 }
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram' | 'builder';
 
 // Visual cue: tints the composer's left border by the active mode so the
 // user sees-at-a-glance which agent is loaded. The functional gates
@@ -40,6 +40,8 @@ const BORDER_TINT: Record<AgentId, string> = {
   admin: 'border-l-rose-500',
   spec: 'border-l-amber-500',
   api: 'border-l-cyan-500',
+  diagram: 'border-l-violet-500',
+  builder: 'border-l-fuchsia-500',
 };
 
 export interface ComposerHandle {
@@ -145,6 +147,8 @@ interface ComposerProps {
   selectedPipelineId?: number | null;
   setSelectedPipelineId?: (v: number | null) => void;
   onRunPipeline?: (pipelineId: number, initialInput: string) => Promise<void> | void;
+  /** Hide the agent picker (guided surfaces like App Studio lock the agent). */
+  hideAgentPicker?: boolean;
   /**
    * Message-queue wiring. When `queueable`, the composer stays usable while the
    * agent streams: composing + the split button enqueue a follow-up via
@@ -667,6 +671,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             autoSuggestText={debouncedInput}
             agent={props.agent}
             setAgent={props.setAgent}
+            hideAgentPicker={props.hideAgentPicker}
             onSend={handleSend}
             onAbort={props.onAbort}
             streaming={streaming}

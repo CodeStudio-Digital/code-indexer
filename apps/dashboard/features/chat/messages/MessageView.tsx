@@ -646,6 +646,7 @@ export function renderAssistantBlock(
       header?: string;
       options?: Array<{ label: string; value: string }>;
       allow_freeform?: boolean;
+      multi_select?: boolean;
     };
     if (!result) {
       return (
@@ -657,6 +658,7 @@ export function renderAssistantBlock(
             header: inp.header,
             options: inp.options,
             allowFreeform: Boolean(inp.allow_freeform),
+            multiSelect: Boolean(inp.multi_select),
           }}
           onAnswer={handlers.onAnswer}
         />
@@ -680,6 +682,7 @@ export function renderAssistantBlock(
             header: inp.header,
             options: inp.options,
             allowFreeform: Boolean(inp.allow_freeform),
+            multiSelect: Boolean(inp.multi_select),
             resolved: answer,
           }}
           onAnswer={noopAnswer}

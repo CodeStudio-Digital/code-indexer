@@ -36,6 +36,12 @@ export { createProjectsHandlers } from './projects/index.js';
 export { runScaffoldStream } from './projects/scaffold.js';
 export { runDsStudioScaffoldStream } from './design-system/studio-scaffold.js';
 export type { DsStudioCreateInput, DsStudioStreamEvent } from './design-system/studio-scaffold.js';
+export { runAppStudioScaffoldStream } from './app-studio/studio-scaffold.js';
+export type { AppStudioCreateInput, AppStudioStreamEvent } from './app-studio/studio-scaffold.js';
+export { runWranglerLoginStream, runWranglerWhoami } from './app-studio/login-stream.js';
+export type { AppCfLoginEvent, CfWhoami } from './app-studio/login-stream.js';
+export { runAppLaunchStream } from './app-studio/launch-stream.js';
+export type { AppLaunchEvent } from './app-studio/launch-stream.js';
 export { reinstrumentBuilder, type ReinstrumentResult } from './projects/reinstrument.js';
 export { visualEdit, type VisualEditBody, type VisualEditOkResult } from './projects/visual-edit.js';
 export {

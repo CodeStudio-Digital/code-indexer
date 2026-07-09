@@ -18,6 +18,7 @@ export type TransitionKind =
   | 'provider-400-retry'
   | 'provider-401-refresh'
   | 'provider-transient-retry'
+  | 'provider-thinking-timeout'
   | 'provider-fallback'
   | 'doom-loop-strict'
   | 'doom-loop-fuzzy'

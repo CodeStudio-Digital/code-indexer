@@ -53,7 +53,7 @@ export class RecoveringNode implements BehaviorNode {
           contextHint: `status=${lastEvent.status}${lastEvent.message ? ` message=${lastEvent.message}` : ''}`,
         });
         ctx.stopReason = 'compact_exhausted';
-        ctx.transition = classifyTransition(lastEvent.status);
+        ctx.transition = classifyTransition(lastEvent.status, lastEvent.code);
         ctx.error = new Error(
           `Context overflow persisted after ${cap} compaction round-trips: ` +
             (lastEvent.message ?? `status ${lastEvent.status}`),
@@ -65,14 +65,14 @@ export class RecoveringNode implements BehaviorNode {
 
     if (!lastEvent.retryable) {
       ctx.stopReason = 'error';
-      ctx.transition = classifyTransition(lastEvent.status);
+      ctx.transition = classifyTransition(lastEvent.status, lastEvent.code);
       ctx.error = new Error(
         lastEvent.message ?? `Provider returned non-retryable status ${lastEvent.status}`,
       );
       return events.aborted();
     }
 
-    const kind = classifyKind(lastEvent.status);
+    const kind = classifyKind(lastEvent.status, lastEvent.code);
     const attempts = bumpRecovery(ctx, kind);
     const cap = recoveryCap(kind);
 
@@ -84,7 +84,7 @@ export class RecoveringNode implements BehaviorNode {
         contextHint: `status=${lastEvent.status}${lastEvent.message ? ` message=${lastEvent.message}` : ''}`,
       });
       ctx.stopReason = 'recovery_capped';
-      ctx.transition = classifyTransition(lastEvent.status);
+      ctx.transition = classifyTransition(lastEvent.status, lastEvent.code);
       ctx.error = new Error(
         `Recovery cap exceeded (kind=${kind} ${attempts}/${cap}): ` +
           (lastEvent.message ?? `status ${lastEvent.status}`),
@@ -101,12 +101,16 @@ export class RecoveringNode implements BehaviorNode {
   }
 }
 
-/** Map an HTTP-ish status to the recovery kind whose counter we bump. */
-function classifyKind(status: number): RecoveryKind {
+/** Map an HTTP-ish status (+ optional error code) to the recovery kind whose counter we bump. */
+function classifyKind(status: number, code?: string): RecoveryKind {
   if (status === 401) return 'provider-401-refresh';
   if (status === 400) return 'provider-400-retry';
-  // Sentinel 0 = status-less error (connection/mid-stream/parse). Low-cap path.
-  if (status === 0) return 'provider-unknown-retry';
+  if (status === 0) {
+    // Our thinking-only watchdog gets its own budget-doubling bucket; every
+    // other status-less error (connection/mid-stream/parse) stays low-cap.
+    if (code === 'THINKING_TIMEOUT') return 'provider-thinking-timeout';
+    return 'provider-unknown-retry';
+  }
   return 'provider-transient-retry';
 }
 
@@ -117,8 +121,9 @@ function classifyKind(status: number): RecoveryKind {
  * accepts the full `TransitionKind` (which includes doom-loop / pre-read /
  * stop-guard reasons that don't drive circuit breakers).
  */
-function classifyTransition(status: number): import('../types.js').TransitionKind {
+function classifyTransition(status: number, code?: string): import('../types.js').TransitionKind {
   if (status === 401) return 'provider-401-refresh';
   if (status === 400) return 'provider-400-retry';
+  if (status === 0 && code === 'THINKING_TIMEOUT') return 'provider-thinking-timeout';
   return 'provider-transient-retry';
 }

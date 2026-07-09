@@ -8,13 +8,13 @@
  * threshold and provider-error paths are exercised by the threshold /
  * recovering tests respectively; here we focus on the integration glue.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { AgentMessage, ChatDelta, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolContext, CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ExecutingNode } from '../executing.js';
-import { consumeStream } from '../executing-stream.js';
+import { consumeStream, thinkingOnlyBudgetMs } from '../executing-stream.js';
 import { makeTestContext } from './test-helpers.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 
@@ -672,5 +672,37 @@ describe('ExecutingNode', () => {
 
     const event = await new ExecutingNode().execute(ctx, null);
     expect(event.kind).toBe('TokenThresholdHit'); // routes (eventually aborts), never sends
+  });
+});
+
+describe('thinkingOnlyBudgetMs', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('returns the base budget for the first attempt at default effort', () => {
+    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(240_000);
+    expect(thinkingOnlyBudgetMs('medium', 0)).toBe(240_000);
+  });
+
+  it('scales the base by reasoning effort (high 1.5x, xhigh 2x)', () => {
+    expect(thinkingOnlyBudgetMs('high', 0)).toBe(360_000);
+    expect(thinkingOnlyBudgetMs('xhigh', 0)).toBe(480_000);
+  });
+
+  it('doubles per prior attempt so a retry gets strictly more time', () => {
+    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(240_000);
+    expect(thinkingOnlyBudgetMs(undefined, 1)).toBe(480_000);
+    expect(thinkingOnlyBudgetMs(undefined, 2)).toBe(960_000);
+  });
+
+  it('bounds the attempt multiplier at 4x so a degenerate loop stays bounded', () => {
+    // attempts beyond 2 do not keep doubling.
+    expect(thinkingOnlyBudgetMs(undefined, 3)).toBe(960_000);
+    expect(thinkingOnlyBudgetMs(undefined, 10)).toBe(960_000);
+  });
+
+  it('resolves the base from CODER_STREAM_THINKING_ONLY_TIMEOUT_MS at call time', () => {
+    vi.stubEnv('CODER_STREAM_THINKING_ONLY_TIMEOUT_MS', '60000');
+    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(60_000);
+    expect(thinkingOnlyBudgetMs('high', 1)).toBe(180_000); // 60k * 1.5 * 2
   });
 });

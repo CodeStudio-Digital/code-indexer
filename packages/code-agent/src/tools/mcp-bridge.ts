@@ -98,7 +98,7 @@ export function stripInjectedProjectName(schema: JsonSchema): JsonSchema {
   delete publicProps.project_name;
 
   const publicSchema: Record<string, unknown> = {
-    ...(schema as Record<string, unknown>),
+    ...(schema as unknown as Record<string, unknown>),
     properties: publicProps,
   };
 
@@ -112,7 +112,7 @@ export function stripInjectedProjectName(schema: JsonSchema): JsonSchema {
     }
   }
 
-  return publicSchema as JsonSchema;
+  return publicSchema as unknown as JsonSchema;
 }
 
 /**

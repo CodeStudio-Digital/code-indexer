@@ -172,6 +172,45 @@ describe('RecoveringNode', () => {
     });
   });
 
+  it('routes a THINKING_TIMEOUT (status 0 + code) to its own provider-thinking-timeout bucket', async () => {
+    const { ctx } = makeTestContext();
+    const event = await new RecoveringNode().execute(ctx, {
+      kind: 'ProviderError',
+      retryable: true,
+      status: 0,
+      code: 'THINKING_TIMEOUT',
+      message: 'provider thinking-only stream exceeded 240000ms',
+    });
+    expect(event.kind).toBe('TurnSucceeded');
+    expect(ctx.recovery.get('provider-thinking-timeout')).toBe(1);
+    // Must NOT share the connection-drop bucket (that would cap prematurely).
+    expect(ctx.recovery.has('provider-unknown-retry')).toBe(false);
+  });
+
+  it('caps provider-thinking-timeout and attributes the transition on abort', async () => {
+    vi.stubEnv('CODER_RECOVERY_THINKING_MAX', '1');
+    const { ctx, recordedEvents } = makeTestContext();
+    const err = {
+      kind: 'ProviderError' as const,
+      retryable: true,
+      status: 0,
+      code: 'THINKING_TIMEOUT',
+      message: 'provider thinking-only stream exceeded 240000ms',
+    };
+
+    // 1/1 → retry.
+    expect((await new RecoveringNode().execute(ctx, err)).kind).toBe('TurnSucceeded');
+    // 2/1 → exceeded → Aborted, with the dedicated kind in message + transition.
+    const second = await new RecoveringNode().execute(ctx, err);
+    expect(second.kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('recovery_capped');
+    expect(ctx.transition).toBe('provider-thinking-timeout');
+    expect(ctx.error?.message).toContain('kind=provider-thinking-timeout');
+
+    const aborted = recordedEvents.find((r) => r.event === 'recovery_aborted');
+    expect(aborted!.args[0]).toMatchObject({ kind: 'provider-thinking-timeout', attempts: 2, cap: 1 });
+  });
+
   it('routes an overflow 400 (retryable:false) to Compacting instead of aborting', async () => {
     const { ctx } = makeTestContext();
     const event = await new RecoveringNode().execute(ctx, {

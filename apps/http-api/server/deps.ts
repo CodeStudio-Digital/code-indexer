@@ -36,6 +36,7 @@ import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
 import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.js';
 import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
 import { DesignSystemStore } from '@mcp/store/design-system-store.js';
+import { AppStudioStore } from '@mcp/store/app-studio-store.js';
 import { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { SshStore } from '@mcp/store/ssh-store.js';
 import { DbClientStore } from '@mcp/store/db-client-store.js';
@@ -310,6 +311,12 @@ export interface DesignSystemDeps {
    * by the DS tools registered on subordinate runners.
    */
   designSystemStore: DesignSystemStore;
+  /**
+   * CRUD store for App Studio sessions and recorded features (migration
+   * 200). Read by the /api/app-studio routes and by the app_* tools
+   * registered on runners of `kind:'app'` workspaces.
+   */
+  appStudioStore: AppStudioStore;
   /**
    * Singleton config for the embedded Verdaccio registry (migration 049).
    * The runtime `VerdaccioService` operates on this store.
@@ -806,6 +813,7 @@ export function createDeps(): ServerDeps {
   const qaTestResultStore = new QaTestResultStore(db.raw());
   const chromeServiceStore = new ChromeServiceStore(db.raw());
   const designSystemStore = new DesignSystemStore(db.raw());
+  const appStudioStore = new AppStudioStore(db.raw());
   const apiClientStore = new ApiClientStore(db.raw());
   // R1 — per-project feature stores. Flag-off (`useProjectDb` false) hands back
   // the central instance so behaviour is byte-identical to today; flag-on builds
@@ -1424,6 +1432,7 @@ export function createDeps(): ServerDeps {
     qaTestResultStore,
     chromeServiceStore,
     designSystemStore,
+    appStudioStore,
     apiClientStore,
     apiClientFor,
     sshStore,

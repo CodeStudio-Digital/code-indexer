@@ -35,6 +35,13 @@ export interface AgentChatProps {
    * workspace chat.
    */
   selectionPrefixSessionId?: number;
+  /**
+   * Hide the agent picker in the composer. Used by guided surfaces (App
+   * Studio) where the session is locked to a single agent and exposing the
+   * generic explore/plan/build switcher only confuses a layperson (and
+   * switching away would break the guided flow).
+   */
+  hideAgentPicker?: boolean;
 }
 
 export interface CoderSession {

@@ -64,6 +64,8 @@ import {
   setDesignSystemStore,
   setDesignSystemSkillStore,
 } from '../../../packages/company/src/tools/design-system/index.js';
+import { setAppStudioStore } from '../../../packages/company/src/tools/app-studio/index.js';
+import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
 import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
 import {
   VerdaccioService,
@@ -287,6 +289,8 @@ const companyStore = new CompanyStore(db.raw());
 // designSystemEnabled in packages/code-agent/src/index.ts.
 const rawDb = db.raw();
 setDesignSystemStore(new DesignSystemStore(rawDb));
+// App Studio store — mesma postura (module globals não cruzam workers).
+setAppStudioStore(new AppStudioStore(rawDb));
 // API client store for the `api_*` tools, re-wired per worker (module globals
 // don't cross worker_threads).
 setApiClientStore(new ApiClientStore(rawDb));

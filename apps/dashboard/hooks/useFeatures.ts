@@ -17,11 +17,13 @@ import { useEffect, useState } from 'react';
 export interface FeatureFlags {
   designSystemEnabled: boolean;
   spriteStudioEnabled: boolean;
+  appStudioEnabled: boolean;
 }
 
 const DEFAULTS: FeatureFlags = {
   designSystemEnabled: true,
   spriteStudioEnabled: true,
+  appStudioEnabled: true,
 };
 
 let cached: FeatureFlags | null = null;

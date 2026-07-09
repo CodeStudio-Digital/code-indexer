@@ -89,6 +89,8 @@ import {
   setDesignSystemStore,
   setDesignSystemSkillStore,
 } from '../../../packages/company/src/tools/design-system/index.js';
+import { setAppStudioStore } from '../../../packages/company/src/tools/app-studio/index.js';
+import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
 import {
   VerdaccioService,
   setVerdaccioService,
@@ -388,6 +390,8 @@ setGlobalDocsResearcher(docsResearcherShim);
 // state from the DB, so fresh instances here are equivalent to main's.
 setDesignSystemStore(new DesignSystemStore(dbPath));
 setDesignSystemSkillStore(new SkillStore(dbPath));
+// App Studio store — mesmo motivo (app_* tools rodam neste worker).
+setAppStudioStore(new AppStudioStore(dbPath));
 // API client store for the `api_*` agent tools (auto-test/auto-fix). Single
 // `api`-agent sessions run in this worker, so the main-thread binding is null
 // here — re-wire a fresh dual-mode instance. R1: when project-DB routing is on

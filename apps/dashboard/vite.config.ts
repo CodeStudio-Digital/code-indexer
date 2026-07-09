@@ -44,6 +44,9 @@ export default defineConfig({
       ...pkgAliases('@mcp/services', 'services'),
       ...pkgAliases('@mcp/indexer', 'indexer'),
       ...pkgAliases('@mcp/design-system', 'design-system'),
+      // App Studio: o dashboard importa SÓ os módulos puros (spec/*,
+      // blueprint/*) — gates/gate-checks usam node:fs e quebrariam o build.
+      ...pkgAliases('@mcp/app-studio', 'app-studio'),
       ...pkgAliases('@mcp/code-agent', 'code-agent'),
       ...pkgAliases('@mcp/company', 'company'),
       ...pkgAliases('@mcp/company-contracts', 'company-contracts'),

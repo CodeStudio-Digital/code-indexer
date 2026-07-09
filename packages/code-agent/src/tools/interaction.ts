@@ -79,6 +79,13 @@ export const askUser: CoderTool = {
         maxItems: 8,
       },
       allow_freeform: { type: 'boolean', description: 'When true and options are given, also allow a free-form answer alongside the buttons.' },
+      multi_select: {
+        type: 'boolean',
+        description:
+          'When true and options are given, the user can select MULTIPLE options (checkbox-style) and then confirm — ' +
+          'the answer returns the chosen values joined by ", ". Use for "select all that apply" questions ' +
+          '(e.g. which screens the app needs, what data it stores, which login methods). Default false = pick one.',
+      },
     },
     required: ['question'],
     additionalProperties: false,
@@ -117,6 +124,8 @@ export const askUser: CoderTool = {
       }
     }
     const allowFreeform = Boolean(args.allow_freeform);
+    // multi_select is only meaningful with buttons; ignored for free-form-only.
+    const multiSelect = Boolean(args.multi_select) && !!options && options.length > 0;
 
     // A button-backed ask in plan mode counts as a genuine decision put to the
     // user — it suppresses the one-shot decision-gate nudge. Free-form-only
@@ -130,6 +139,7 @@ export const askUser: CoderTool = {
       question,
       options,
       allowFreeform,
+      multiSelect,
       header: header || undefined,
     });
 

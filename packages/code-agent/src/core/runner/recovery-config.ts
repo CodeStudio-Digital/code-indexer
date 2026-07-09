@@ -15,6 +15,7 @@ export const RECOVERY_KINDS = [
   'provider-401-refresh',
   'provider-transient-retry',
   'provider-unknown-retry',
+  'provider-thinking-timeout',
   'provider-fallback',
   'compact-failure',
   'context-overflow',
@@ -35,6 +36,11 @@ export const RECOVERY_CAP_DEFAULTS: Record<RecoveryKind, number> = {
   // 5xx these usually repeat identically, so a small cap fails fast (~4
   // attempts / <1min) with the real message instead of looping ~5min.
   'provider-unknown-retry': 4,
+  // Thinking-only watchdog trips (reasoning ran past the budget without
+  // producing text/tools). Own low cap so legit-but-slow reasoning gets a few
+  // budget-doubling retries (see `thinkingOnlyBudgetMs`) without sharing — and
+  // prematurely tripping — the `provider-unknown-retry` bucket.
+  'provider-thinking-timeout': 2,
   'provider-fallback': 5,
   'compact-failure': 3,
   // Overflow → Compacting round-trips. Each attempt SHOULD shrink the
@@ -46,6 +52,7 @@ const RECOVERY_CAP_ENV_KEYS: Record<RecoveryKind, string> = {
   'provider-401-refresh': 'CODER_RECOVERY_401_MAX',
   'provider-transient-retry': 'CODER_RECOVERY_TRANSIENT_MAX',
   'provider-unknown-retry': 'CODER_RECOVERY_UNKNOWN_MAX',
+  'provider-thinking-timeout': 'CODER_RECOVERY_THINKING_MAX',
   'provider-fallback': 'CODER_RECOVERY_FALLBACK_MAX',
   'compact-failure': 'CODER_RECOVERY_COMPACT_MAX',
   'context-overflow': 'CODER_RECOVERY_OVERFLOW_MAX',

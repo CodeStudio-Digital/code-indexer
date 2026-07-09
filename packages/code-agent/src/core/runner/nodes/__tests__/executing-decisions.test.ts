@@ -82,6 +82,17 @@ describe('providerErrorEvent', () => {
     expect(ev.code).toBe('TIMEOUT');
   });
 
+  it('tags a thinking-only stream timeout with code THINKING_TIMEOUT (own bucket)', () => {
+    const err = new TimeoutError(240_000, 'provider thinking-only stream');
+    (err as { reason?: string }).reason = 'thinking-only';
+    const ev = asProviderError(providerErrorEvent(err));
+    expect(ev.status).toBe(0); // still the status-less sentinel
+    expect(ev.retryable).toBe(true);
+    // Distinct from the generic 'TIMEOUT' so Recovering routes it to
+    // provider-thinking-timeout (budget-doubling) instead of provider-unknown-retry.
+    expect(ev.code).toBe('THINKING_TIMEOUT');
+  });
+
   it('logs one [coder] ProviderError line unconditionally', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     providerErrorEvent(Object.assign(new Error('boom'), { status: 500 }));

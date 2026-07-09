@@ -101,6 +101,7 @@ import {
 } from '@mcp/company/tools/qa/index.js';
 import { startQaWatchdog } from '@mcp/services/qa/watchdog.js';
 import { setDesignSystemStore, setDesignSystemSkillStore } from '@mcp/company/tools/design-system/index.js';
+import { setAppStudioStore } from '@mcp/company/tools/app-studio/index.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { VerdaccioService, setVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
@@ -110,6 +111,7 @@ import {
 } from '@mcp/company/services/SandboxService.js';
 import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
 import { mountDesignSystemRoutes } from './server/routes/design-system/index.js';
+import { mountAppStudioRoutes } from './server/routes/app-studio/index.js';
 import { mountSpriteStudioRoutes } from './server/routes/sprite-studio/index.js';
 import { mountConfigRoutes } from './server/routes/config.js';
 import { mountDocsRoutes } from './server/routes/docs/index.js';
@@ -442,6 +444,10 @@ export function createApp() {
   if (deps.config.features.designSystemEnabled) {
     setDesignSystemStore(deps.designSystemStore);
     setDesignSystemSkillStore(deps.skillStore);
+  }
+  // App Studio store — wired for the app_* agent tools (same gate posture).
+  if (deps.config.features.appStudioEnabled) {
+    setAppStudioStore(deps.appStudioStore);
   }
   // API client (auto-test/auto-fix) store — wired for the `api_*` agent tools.
   setApiClientStore(deps.apiClientStore);
@@ -884,6 +890,9 @@ export function createApp() {
   if (deps.config.features.spriteStudioEnabled) {
     mountSpriteStudioRoutes(app, deps);
   }
+  // App Studio routes (Code Studio para leigos — scaffold SSE + sessões +
+  // pipeline). O gate APP_STUDIO_ENABLED vive dentro do mount.
+  mountAppStudioRoutes(app, deps);
   mountWorkspaceRoutes(app, deps);
   // Self-hosted draw.io editor webapp — served at /drawio/* (mcp://app/drawio
   // in Electron). Static assets, no auth; the embedded editor for the diagram

@@ -140,12 +140,16 @@ export function providerErrorEvent(e: unknown): BehaviorEvent {
   // a deterministic slow time-to-first-byte rarely helps, so route it to the
   // low-cap `provider-unknown-retry` path (status 0 sentinel) instead of the
   // 30-deep transient bucket. The real message/code stays in the warn log above.
+  // The thinking-only variant (marked `reason: 'thinking-only'` in
+  // executing-stream.ts) gets its OWN code so Recovering routes it to the
+  // dedicated `provider-thinking-timeout` bucket with budget-doubling retries.
   if (isTimeoutError(e)) {
+    const thinkingOnly = (e as { reason?: string }).reason === 'thinking-only';
     return events.providerError({
       retryable: true,
       status: 0,
       message,
-      ...(code ? { code } : {}),
+      ...(thinkingOnly ? { code: 'THINKING_TIMEOUT' } : code ? { code } : {}),
     });
   }
 

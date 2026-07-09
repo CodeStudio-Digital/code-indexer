@@ -1,0 +1,280 @@
+{
+  "home": {
+    "title": "My apps",
+    "subtitle": "Build a complete app by chatting with the AI — from idea to a live website.",
+    "create": "Create new app",
+    "empty": "No apps yet. Create your first one — just tell your idea.",
+    "open": "Open",
+    "delete": "Delete app",
+    "deleteConfirm": "Delete \"{{name}}\"? The project files stay on your computer; only the guided journey is removed.",
+    "status": {
+      "building": "In progress — step {{n}} of {{total}}",
+      "review": "Your turn to review",
+      "live": "Live",
+      "done": "Done"
+    }
+  },
+  "create": {
+    "title": "Create an app with AI",
+    "nameLabel": "What is your app called?",
+    "namePlaceholder": "E.g.: Ana's Diner",
+    "ideaLabel": "Describe what it does",
+    "ideaPlaceholder": "E.g.: manage my diner's orders and customers",
+    "advanced": "Advanced options",
+    "provider": "AI provider",
+    "model": "Model",
+    "effort": "Reasoning power",
+    "effortAuto": "Automatic (model default)",
+    "submit": "Start",
+    "creating": "Setting things up…",
+    "showLog": "Technical details",
+    "phase": {
+      "resolve-path": "Choosing a home for your app…",
+      "write-skeleton": "Building the structure…",
+      "configure": "Preparing the visual editor…",
+      "install-deps": "Downloading the app's parts…",
+      "install-dev-deps": "Downloading the tools…",
+      "register": "Almost there…"
+    },
+    "error": "We couldn't create your app. Try again — if it keeps failing, check the technical details."
+  },
+  "backToApps": "My apps",
+  "tabs": {
+    "guide": "Guide",
+    "blueprint": "Map",
+    "preview": "Your app",
+    "data": "Your data",
+    "publish": "Publish"
+  },
+  "blueprint": {
+    "locked": "Available once the app plan exists (\"Understand your idea\" step).",
+    "noSpec": "The map shows up once the app plan is created in the interview.",
+    "hint": "Drag blocks, connect them to create links, double-click a link to remove it. Click a block to edit.",
+    "save": "Save plan",
+    "apply": "Apply changes",
+    "discard": "Discard",
+    "issues": "{{count}} issue(s)",
+    "kind": {
+      "screen": "Screen",
+      "entity": "Data",
+      "feature": "Feature",
+      "auth": "Login",
+      "behavior": "Action"
+    },
+    "trigger": {
+      "click": "on click",
+      "submit": "on submit",
+      "open": "when the screen opens"
+    },
+    "action": {
+      "save": "save to",
+      "navigate": "go to",
+      "notify": "show a notice"
+    },
+    "fieldType": {
+      "text": "text",
+      "integer": "number",
+      "real": "decimal number",
+      "timestamp": "date"
+    },
+    "homeBadge": "home",
+    "protectedBadge": "login required",
+    "authTitle": "Login",
+    "cascadeTitle": "This removes other things too",
+    "cascadeBody": "To keep the plan consistent, these changes happen as well:",
+    "cascadeConfirm": "Remove anyway",
+    "removeEdgeTitle": "Remove this link?",
+    "applyTitle": "Apply changes to the plan?",
+    "applyBody": "The plan was already approved. Applying changes reopens the \"Understand your idea\" step until you approve again, and the AI adjusts the app to the new plan.",
+    "applyConfirm": "Apply and tell the AI",
+    "applyFallbackFeedback": "Plan edited in the Map (Blueprint).",
+    "applyMessage": "I edited the app plan visually in the Map. Re-read the spec with app_get_spec, adjust what was already built to the new plan and re-submit the discovery stage. Summary of changes:",
+    "conflictBody": "The AI updated the plan while you were editing. Reload to see the new version (your unsaved edits are lost) or save to overwrite.",
+    "conflictReload": "Reload",
+    "palette": {
+      "namePlaceholder": "Give it a name…",
+      "addScreen": "New screen",
+      "addEntity": "New data type",
+      "addFeature": "New feature",
+      "addBehavior": "New action",
+      "screenHint": "Add a screen to the app",
+      "entityHint": "Add a kind of information the app stores",
+      "featureHint": "Add a feature",
+      "behaviorHint": "Add a rule: when something happens → do something",
+      "authHint": "Turn the app's login on/off"
+    },
+    "inspector": {
+      "name": "Name",
+      "purpose": "What it's for",
+      "description": "Description",
+      "makeHome": "Make home screen",
+      "protect": "Require login",
+      "unprotect": "Don't require login",
+      "authHint": "Links from Login mark screens that require a password.",
+      "disableAuth": "Turn off login",
+      "fields": "Fields",
+      "addField": "Add field",
+      "removeField": "Remove field",
+      "trigger": "When",
+      "triggerLabel": "Description",
+      "actions": "What happens",
+      "notifyPlaceholder": "Notice text…",
+      "remove": "Remove"
+    }
+  },
+  "stages": {
+    "discovery": {
+      "name": "Understand your idea",
+      "tagline": "The AI chats with you to understand what the app needs to do.",
+      "userAction": "Answer the questions in the chat, then approve the plan."
+    },
+    "database": {
+      "name": "Store your data",
+      "tagline": "We create the place where the app keeps its information (customers, orders…).",
+      "userAction": "Check the cards in Your data and approve."
+    },
+    "design": {
+      "name": "Build the screens",
+      "tagline": "The app's screens come to life — watch them in Your app.",
+      "userAction": "Look at the app, ask for changes in the chat, approve when you like it."
+    },
+    "backend": {
+      "name": "Make it work",
+      "tagline": "We wire the buttons, forms and rules behind the screens.",
+      "userAction": "Test the app by clicking around and approve when it works."
+    },
+    "review": {
+      "name": "Quality check",
+      "tagline": "The AI reviews errors and security before publishing.",
+      "userAction": "Read the report and approve."
+    },
+    "launch": {
+      "name": "Publish to the internet",
+      "tagline": "Your app goes live with its own address.",
+      "userAction": "Connect your Cloudflare account and publish from the Publish tab."
+    },
+    "status": {
+      "pending": "to do",
+      "active": "in progress",
+      "review": "your turn",
+      "approved": "done",
+      "skipped": "not needed"
+    }
+  },
+  "explainers": {
+    "discovery": {
+      "title": "What happens here?",
+      "body": "The AI asks simple questions, one at a time, to draft your app's plan: what it does, which screens it has and what it stores. Nothing is built before you approve the plan."
+    },
+    "database": {
+      "title": "What is a database?",
+      "body": "It's like an organized notebook where your app writes everything down — each kind of information (customers, orders…) becomes a card with columns. You see it all in the Your data tab."
+    },
+    "design": {
+      "title": "Why screens first?",
+      "body": "We build the look with example data first, so you can see and adjust without waiting. Click any part of the app to request changes."
+    },
+    "backend": {
+      "title": "What does \"make it work\" mean?",
+      "body": "The invisible part: actually saving what you type, fetching the right information and protecting what needs a password."
+    },
+    "review": {
+      "title": "What gets checked?",
+      "body": "The AI tests the whole app, hunts for errors and verifies security items (protected passwords, data stored the right way) before allowing publication."
+    },
+    "launch": {
+      "title": "What is Cloudflare?",
+      "body": "It's the service (free to start) where your app will live on the internet. Connect your account with one click and the app gets its own shareable address."
+    }
+  },
+  "pipeline": {
+    "stageOf": "Step {{n}} of {{total}}",
+    "complete": "All done — your app is complete!",
+    "yourTurn": "Your turn",
+    "start": "Start step",
+    "resend": "Continue",
+    "reviewCta": "Review now",
+    "approve": "Approve and continue",
+    "requestChanges": "I want changes",
+    "feedbackPlaceholder": "Tell us what you'd like different…",
+    "reopenConfirm": "Send change request",
+    "cancel": "Cancel",
+    "notInitialized": "This app's journey has not started yet.",
+    "init": "Start journey",
+    "gateIssues": "The AI is still fixing these points:"
+  },
+  "guide": {
+    "title": "Your journey"
+  },
+  "preview": {
+    "title": "Your app",
+    "preparing": "Getting your app ready… this takes a few seconds.",
+    "hint": "Click any part of the app to request a change in the chat."
+  },
+  "spec": {
+    "what": "What your app does",
+    "screens": "Screens",
+    "data": "Data it stores",
+    "noData": "This app stores no data.",
+    "login": "Needs login?",
+    "loginYes": "Yes — some parts require a password.",
+    "loginNo": "No — the app is open."
+  },
+  "data": {
+    "title": "Your data",
+    "locked": "Available after the \"Store your data\" step.",
+    "empty": "Your data shows up here once the \"Store your data\" step finishes.",
+    "asSheet": "View as a sheet",
+    "rows_one": "{{count}} record",
+    "rows_other": "{{count}} records"
+  },
+  "publish": {
+    "title": "Publish to the internet",
+    "locked": "Available after the \"Quality check\". Finish the Guide steps first.",
+    "liveAt": "Your app is live at",
+    "cta": "Publish my app",
+    "retry": "Try again",
+    "error": "Something went wrong while publishing.",
+    "askAiFix": "Ask the AI to fix it",
+    "fixPrompt": "Publishing the app failed with this error — investigate and fix it, explaining to me in plain words what happened: {{error}}",
+    "step": {
+      "auth": "Checking your account",
+      "db": "Creating your cloud database",
+      "migrate": "Preparing the database",
+      "build": "Packing the files",
+      "deploy": "Sending your app",
+      "health": "Turning everything on",
+      "persist": "Done!"
+    },
+    "connect": {
+      "title": "Connect your Cloudflare account",
+      "cta": "Connect (opens the browser)",
+      "waiting": "Waiting for you in the browser…",
+      "connected": "Connected as",
+      "manualLink": "Browser didn't open?",
+      "openLink": "Click here",
+      "noAccount": "No account yet?",
+      "createFree": "Create one free in 2 minutes"
+    },
+    "live": {
+      "title": "Your app is live!",
+      "copy": "Copy",
+      "open": "Open",
+      "share": "Share the address — it works on any phone or computer."
+    }
+  },
+  "advanced": {
+    "label": "Advanced mode (full IDE)",
+    "confirmTitle": "Open advanced mode?",
+    "confirmBody": "You'll see the technical side of your app: files, code and terminal. Nothing is lost — come back anytime.",
+    "confirm": "Open anyway",
+    "guidedPill": "Guided mode"
+  },
+  "stageMessage": {
+    "discovery": "Let's start! I want to create an app and need your help planning it. Ask me ONE question at a time using the ask_user tool, in plain language with no technical terms, to understand: what the app does, who uses it, which screens it needs, what information it stores and whether people log in. Whenever the question has choices, pass options (2 to 8) with allow_freeform: true — so I can click a button OR type my own answer. When the question allows picking SEVERAL options (e.g. which screens, what data to store, login methods), pass multi_select: true. When you have everything, save the plan with app_save_spec, show me a simple summary and ask if I approve. Always speak my language.",
+    "database": "Let's store the app's data: create the migrations from the approved plan (app_get_spec), write realistic examples in seeds/seed.sql, apply with app_provision_db and double-check. When done, deliver the stage with app_submit_stage and explain in one simple sentence what was done.",
+    "design": "Let's build the plan's screens: build each screen with example data (lib/mock) so I can watch the app take shape, record each screen with app_record_feature AFTER checking it in the preview, and tell me to look. When they're all ready, deliver with app_submit_stage.",
+    "backend": "Now make the app really work: create the API routes for every piece of information in the plan, switch the screens from example data to real data, and if the plan has login, set up authentication securely. Verify everything in the preview, record with app_record_feature and deliver with app_submit_stage.",
+    "review": "Run the quality check: test the whole app in the preview as if you were me, fix any errors, and write the REVIEW.md report in words I understand. When everything is green, deliver with app_submit_stage."
+  }
+}

@@ -138,6 +138,7 @@ export const ASK_USER_DESC =
   "USE: when you need a decision/preference the user alone can make (which library, scope of refactor, naming, focus area).\n" +
   "USE: when critical context is missing and guessing would waste work.\n" +
   'PREFER: 2–8 mutually-exclusive `options` so the user clicks instead of types. Buttons render in a 2-column grid. Free-form is for open answers only.\n' +
+  'MULTI: set `multi_select: true` when several options can legitimately be combined ("select all that apply" — e.g. which screens, what data to store, which login methods). The answer returns the chosen values joined by ", ".\n' +
   'PREFER: if one option is your recommendation, list it FIRST and end its label with " (Recommended)" so the user sees the default at a glance.\n' +
   "DON'T: ask things you can verify yourself (file existence, type signatures, config values — READ them).\n" +
   "DON'T: ask for confirmation of obvious next steps ('should I now run the tests?'). Just do it.\n" +

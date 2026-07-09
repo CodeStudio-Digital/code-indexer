@@ -69,32 +69,53 @@ export interface ConsumeStreamArgs {
   thinkingOnlyTimeoutMs?: number;
 }
 
-const DEFAULT_IDLE_TIMEOUT_MS = (() => {
-  const v = process.env.CODER_STREAM_IDLE_TIMEOUT_MS;
+/**
+ * Timeout defaults are resolved at CALL time (not frozen at import) so a
+ * `process.env` override applied after this module loads still takes effect —
+ * same contract as `recoveryCap` in recovery-config.ts. Tests that stub the
+ * env post-import depend on this.
+ */
+function resolvePositiveEnvMs(envKey: string, fallback: number): number {
+  const v = process.env[envKey];
   if (v != null && v !== '') {
     const n = Number(v);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return 90_000;
-})();
+  return fallback;
+}
 
-const DEFAULT_FIRST_BYTE_TIMEOUT_MS = (() => {
-  const v = process.env.CODER_STREAM_FIRST_BYTE_TIMEOUT_MS;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 240_000;
-})();
+/**
+ * Base thinking-only budget. Bumped 120s→240s to match the first-byte budget:
+ * reasoning models (GLM-5/glm-5.2) on heavy plan-mode prompts legitimately
+ * emit only thinking deltas for well over two minutes before the first
+ * text/tool block. The old 120s killed that productive thinking and — because
+ * the retry re-sent the SAME prompt — looped straight into the recovery cap.
+ * Effort/attempt scaling lives in `thinkingOnlyBudgetMs`.
+ */
+function resolveThinkingOnlyTimeoutMs(): number {
+  return resolvePositiveEnvMs('CODER_STREAM_THINKING_ONLY_TIMEOUT_MS', 240_000);
+}
 
-const DEFAULT_THINKING_ONLY_TIMEOUT_MS = (() => {
-  const v = process.env.CODER_STREAM_THINKING_ONLY_TIMEOUT_MS;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 120_000;
-})();
+/**
+ * Effective thinking-only budget for a reasoning effort + retry attempt.
+ *
+ * Two adjustments over the flat base:
+ *   - effort scale: high/xhigh reasoning legitimately thinks longer.
+ *   - attempt scale: a retry of the SAME prompt only helps if it gets MORE
+ *     time than the attempt that just timed out — otherwise it re-times-out
+ *     identically and burns the recovery cap for nothing. Doubled per prior
+ *     attempt, bounded at 4× so a genuinely degenerate reasoning loop still
+ *     dies in bounded wall-clock instead of stalling the run for ~an hour.
+ *
+ * `attempts` is the count of thinking-timeouts ALREADY recorded this run
+ * (0 on the first turn).
+ */
+export function thinkingOnlyBudgetMs(effort: string | undefined, attempts: number): number {
+  const base = resolveThinkingOnlyTimeoutMs();
+  const effortScale = effort === 'xhigh' ? 2 : effort === 'high' ? 1.5 : 1;
+  const attemptScale = Math.min(2 ** Math.max(0, attempts), 4);
+  return Math.round(base * effortScale * attemptScale);
+}
 
 export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResult> {
   const textBlocks: string[] = [];
@@ -109,9 +130,10 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   let responseMessageCount: number | null = null;
   let responseMeta: ChatProviderResponseMeta | null = null;
 
-  const idleMs = args.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-  const firstByteMs = args.firstByteTimeoutMs ?? DEFAULT_FIRST_BYTE_TIMEOUT_MS;
-  const thinkingOnlyMs = args.thinkingOnlyTimeoutMs ?? DEFAULT_THINKING_ONLY_TIMEOUT_MS;
+  const idleMs = args.idleTimeoutMs ?? resolvePositiveEnvMs('CODER_STREAM_IDLE_TIMEOUT_MS', 90_000);
+  const firstByteMs =
+    args.firstByteTimeoutMs ?? resolvePositiveEnvMs('CODER_STREAM_FIRST_BYTE_TIMEOUT_MS', 240_000);
+  const thinkingOnlyMs = args.thinkingOnlyTimeoutMs ?? resolveThinkingOnlyTimeoutMs();
   const iterator = args.stream[Symbol.asyncIterator]();
   let lastNonThinkingAt = Date.now();
   // Until the first delta arrives, use the generous first-byte budget; after
@@ -163,7 +185,14 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
         if (thinkingOnlyMs > 0 && Date.now() - lastNonThinkingAt > thinkingOnlyMs) {
           try { await iterator.return?.(); } catch { /* ignore */ }
           const err = new TimeoutError(thinkingOnlyMs, 'provider thinking-only stream');
+          err.message =
+            `provider thinking-only stream exceeded ${thinkingOnlyMs}ms — aborting turn. ` +
+            `Tune CODER_STREAM_THINKING_ONLY_TIMEOUT_MS.`;
           (err as { status?: number }).status = 504;
+          // Distinct marker so `providerErrorEvent` tags this as THINKING_TIMEOUT
+          // and Recovering routes it to its own low-cap bucket instead of
+          // sharing `provider-unknown-retry` with connection/mid-stream drops.
+          (err as { reason?: string }).reason = 'thinking-only';
           throw err;
         }
         currentThinking += delta.text;

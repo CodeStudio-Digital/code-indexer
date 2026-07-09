@@ -40,3 +40,5 @@ export type {
   DsStudioScaffoldOutcome,
   DsStudioStack,
 } from './ds-studio/index.js';
+export { scaffoldAppStudioWorkspace } from './app-studio/index.js';
+export type { AppStudioScaffoldInput, AppStudioScaffoldOutcome } from './app-studio/index.js';

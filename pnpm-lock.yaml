@@ -329,6 +329,8 @@ importers:
 
   packages/api-handlers: {}
 
+  packages/app-studio: {}
+
   packages/candidate-pipeline:
     dependencies:
       '@mcp/shared':

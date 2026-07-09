@@ -13,13 +13,15 @@ import { AgentPicker } from './AgentPicker.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram' | 'builder';
 
 interface ComposerToolbarProps {
   hasInput: boolean;
   autoSuggestText: string;
   agent: AgentId;
   setAgent: (v: AgentId) => void;
+  /** Guided surfaces (App Studio) hide the picker — the session is agent-locked. */
+  hideAgentPicker?: boolean;
   onSend: () => void;
   onAbort: () => void;
   streaming: boolean;
@@ -45,6 +47,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   autoSuggestText,
   agent,
   setAgent,
+  hideAgentPicker,
   onSend,
   onAbort,
   streaming,
@@ -61,7 +64,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
 
   return (
     <div className="flex items-center gap-2 px-2 pb-1.5 flex-wrap">
-      <AgentPicker value={agent} onChange={setAgent} autoSuggestFor={autoSuggestText} />
+      {!hideAgentPicker && <AgentPicker value={agent} onChange={setAgent} autoSuggestFor={autoSuggestText} />}
 
       {/* Reasoning effort — only when the model exposes discrete effort levels. */}
       {setReasoningEffort && reasoningLevels && reasoningLevels.length > 0 && (

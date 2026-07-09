@@ -1,0 +1,134 @@
+/**
+ * Painel "Guia" — a jornada de 6 etapas do leigo em timeline vertical.
+ * Aprovação acontece AQUI (ApproveBar nas linhas em review; o agente não
+ * tem tool de aprovar). Sessões sem pipeline ganham o botão de init.
+ */
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Loader2, Sparkles } from 'lucide-react';
+import { Button } from '../../../components/ui/button.js';
+import {
+  initAppPipeline,
+  patchAppStage,
+  type AppRoadmapTier,
+  type AppStageAction,
+  type AppStageId,
+  type AppStudioSessionDetail,
+} from '../app-studio-api.js';
+import { isPromptableStage, startAppStage } from '../stage-prompts.js';
+import { JourneyStepRow } from './JourneyStepRow.js';
+import { SpecPanel } from './SpecPanel.js';
+
+const STAGE_TIER: Partial<Record<AppStageId, AppRoadmapTier>> = {
+  design: 'screen',
+  backend: 'api',
+};
+
+export function JourneyPanel({
+  detail,
+  discoveryExtra,
+  onChanged,
+  onOpenPublish,
+}: {
+  detail: AppStudioSessionDetail;
+  /** Frase de ideia digitada na criação — anexada ao prompt da discovery. */
+  discoveryExtra?: string | null;
+  onChanged: () => void;
+  onOpenPublish: () => void;
+}) {
+  const { t } = useTranslation('appStudio');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { pipeline, session, project } = detail;
+
+  async function run(fn: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!pipeline) {
+    return (
+      <div className="space-y-3 p-4 text-sm">
+        <p className="text-muted-foreground">{t('pipeline.notInitialized')}</p>
+        {error && <p className="text-xs text-red-600">{error}</p>}
+        <Button size="sm" disabled={busy} onClick={() => void run(() => initAppPipeline(session.id))}>
+          {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}
+          {t('pipeline.init')}
+        </Button>
+      </div>
+    );
+  }
+
+  const currentIndex = pipeline.stages.findIndex((s) => s.id === pipeline.current_stage);
+  const tierProgress = (tier: AppRoadmapTier): string | null => {
+    const items = pipeline.roadmap.filter((r) => r.tier === tier);
+    if (items.length === 0) return null;
+    return `${items.filter((r) => r.recorded).length}/${items.length}`;
+  };
+
+  const act = (stage: AppStageId, action: AppStageAction, feedback?: string) =>
+    void run(() => patchAppStage(session.id, stage, action, feedback));
+
+  return (
+    <div className="space-y-3 p-3">
+      <div>
+        <h3 className="text-sm font-semibold">{t('guide.title')}</h3>
+        <p className="text-xs text-muted-foreground">
+          {pipeline.current_stage
+            ? t('pipeline.stageOf', { n: currentIndex + 1, total: pipeline.stages.length })
+            : t('pipeline.complete')}
+        </p>
+      </div>
+      {error && <p className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-800">{error}</p>}
+
+      {/* O PLANO para revisar — quando a entrevista terminou e a spec
+          aguarda aprovação, o resumo legível fica acima da timeline. */}
+      {detail.spec && pipeline.stages.find((s) => s.id === 'discovery')?.status === 'review' && (
+        <SpecPanel
+          spec={detail.spec}
+          busy={busy}
+          onApprove={() => act('discovery', 'approve')}
+          onReopen={(feedback) => act('discovery', 'reopen', feedback)}
+        />
+      )}
+
+      <div>
+        {pipeline.stages.map((stage, index) => {
+          const tier = STAGE_TIER[stage.id];
+          return (
+            <JourneyStepRow
+              key={stage.id}
+              stage={stage}
+              index={index}
+              isLast={index === pipeline.stages.length - 1}
+              isCurrent={pipeline.current_stage === stage.id}
+              progressLabel={tier ? tierProgress(tier) : null}
+              busy={busy}
+              onAction={(action, feedback) => act(stage.id, action, feedback)}
+              onStart={() => {
+                if (!project || !isPromptableStage(stage.id)) return;
+                void run(() =>
+                  startAppStage(t, {
+                    sessionId: session.id,
+                    projectId: project.id,
+                    stage: stage.id,
+                    extra: stage.id === 'discovery' ? discoveryExtra : null,
+                  }),
+                );
+              }}
+              onOpenPublish={onOpenPublish}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}

@@ -162,4 +162,48 @@ export const AGENT_GUARD_SETTINGS: readonly SettingDef[] = [
     min: 0,
     advanced: true,
   },
+  {
+    key: 'CODER_RECOVERY_THINKING_MAX',
+    label: 'Recovery cap — thinking-only timeouts',
+    description:
+      'Max thinking-only stream timeouts (reasoning ran past its budget without producing text/tools) before aborting. Each retry doubles the budget. Default 2.',
+    type: 'int',
+    category: 'agent',
+    default: '2',
+    min: 0,
+    advanced: true,
+  },
+  {
+    key: 'CODER_STREAM_THINKING_ONLY_TIMEOUT_MS',
+    label: 'Stream — thinking-only budget (ms)',
+    description:
+      'Max time a provider stream may emit ONLY thinking deltas (no text/tool progress) before the turn is aborted and retried. Scaled up for high/xhigh reasoning effort and doubled per retry. Raise it if a reasoning model legitimately thinks longer. Default 240000 (4 min).',
+    type: 'int',
+    category: 'agent',
+    default: '240000',
+    min: 1000,
+    advanced: true,
+  },
+  {
+    key: 'CODER_STREAM_IDLE_TIMEOUT_MS',
+    label: 'Stream — inter-delta idle timeout (ms)',
+    description:
+      'Max gap between consecutive provider deltas AFTER the first byte before the turn is aborted as a stalled stream. Default 90000 (90s).',
+    type: 'int',
+    category: 'agent',
+    default: '90000',
+    min: 1000,
+    advanced: true,
+  },
+  {
+    key: 'CODER_STREAM_FIRST_BYTE_TIMEOUT_MS',
+    label: 'Stream — first-byte timeout (ms)',
+    description:
+      'Max time to wait for the FIRST delta of any kind (time-to-first-byte). Reasoning models on heavy prompts can stay silent far longer than the inter-delta idle budget. Default 240000 (4 min).',
+    type: 'int',
+    category: 'agent',
+    default: '240000',
+    min: 1000,
+    advanced: true,
+  },
 ];

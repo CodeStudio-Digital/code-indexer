@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDsConsumer, parseDsWorkspace } from '../builder-config.js';
+import { parseAppWorkspace, parseDsConsumer, parseDsWorkspace } from '../builder-config.js';
 
 const CONSUMER = JSON.stringify({
   stack: 'react-ts',
@@ -58,7 +58,34 @@ describe('parseDsWorkspace (regression)', () => {
   it('still parses a workspace and ignores consumer-only json', () => {
     expect(
       parseDsWorkspace(JSON.stringify({ stack: 'vue-ts', port: 5182, kind: 'ds', packageName: '@a/b' })),
-    ).toEqual({ stack: 'vue-ts', port: 5182, packageName: '@a/b' });
+    ).toEqual({ stack: 'vue-ts', port: 5182, packageName: '@a/b', mode: null });
     expect(parseDsWorkspace(CONSUMER)).toBeNull();
+  });
+});
+
+describe('parseAppWorkspace', () => {
+  it('parses a kind:app workspace with defaults', () => {
+    expect(
+      parseAppWorkspace(
+        JSON.stringify({ stack: 'cf-fullstack', port: 5183, kind: 'app', appName: 'Lanchonete', appSlug: 'lanchonete', dbEngine: 'd1' }),
+      ),
+    ).toEqual({ stack: 'cf-fullstack', port: 5183, appName: 'Lanchonete', appSlug: 'lanchonete', dbEngine: 'd1' });
+  });
+
+  it('returns null for non-app kinds', () => {
+    expect(parseAppWorkspace(JSON.stringify({ kind: 'ds' }))).toBeNull();
+    expect(parseAppWorkspace(CONSUMER)).toBeNull();
+    expect(parseAppWorkspace(null)).toBeNull();
+  });
+
+  it('a kind:app project is NOT treated as a DS consumer (mutual exclusivity)', () => {
+    // Even carrying a designSystem link, an app workspace must not register ds_* consumer tools.
+    const appWithDs = JSON.stringify({
+      kind: 'app',
+      stack: 'cf-fullstack',
+      designSystem: { sessionId: 3, packageName: '@acme/ui', semver: '1.0.0' },
+    });
+    expect(parseDsConsumer(appWithDs)).toBeNull();
+    expect(parseAppWorkspace(appWithDs)).not.toBeNull();
   });
 });

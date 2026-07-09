@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { usePipelineStream } from '../../hooks/usePipelineStream.js';
 import { apiDelete, apiPatch, apiPost, useApi } from '../../hooks/useApi.js';
+import { useElementWidth } from '../../hooks/useElementWidth.js';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
 import {
@@ -64,7 +65,7 @@ import type { AgentAttachment } from '../../hooks/useAgentStream.js';
 import type { NotificationSourceContext } from '../notifications/index.js';
 import { markRouteEvent } from '../../lib/perf/route-startup-metrics.js';
 
-export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId }: AgentChatProps) {
+export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId, hideAgentPicker }: AgentChatProps) {
   const { t } = useTranslation(['chat', 'common']);
   const confirm = useConfirm();
   // Global (multi-project) mode: the session list is cross-project (no
@@ -150,6 +151,35 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const composerRef = useRef<ComposerHandle>(null);
   const sessionsPanelRef = useRef<ImperativePanelHandle>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Auto-colapso da barra de sessões por LARGURA real da área de chat (não
+  // do viewport): quando o painel de chat aperta (App Studio ~45%, ProjectView
+  // com painel direito, janela pequena) a lista fica minúscula. Medimos a área
+  // e, em CRUZAMENTOS de faixa (histerese p/ não flapar), colapsamos/expandimos
+  // — sem brigar com o toggle manual (que limpa `autoCollapsedRef`).
+  const [chatAreaRef, chatAreaWidth] = useElementWidth<HTMLDivElement>();
+  const autoCollapsedRef = useRef(false);
+  const prevWidthBucketRef = useRef<'narrow' | 'mid' | 'wide' | null>(null);
+  // Auto-colapso da barra de sessões por largura real da área de chat. Só age
+  // em CRUZAMENTOS de faixa (histerese 600/660 p/ não flapar no meio): entrar
+  // em 'narrow' colapsa; entrar em 'wide' reexpande SE fomos nós que
+  // colapsamos. O toggle manual limpa `autoCollapsedRef`, então nunca
+  // reabrimos um colapso manual nem re-colapsamos um "abrir" manual.
+  // DEVE ficar APÓS a declaração de `chatAreaWidth` (o dep array é avaliado no
+  // render — referenciar antes cai na TDZ do const).
+  useEffect(() => {
+    if (chatAreaWidth === 0) return; // ainda não medido
+    const bucket = chatAreaWidth < 600 ? 'narrow' : chatAreaWidth > 660 ? 'wide' : 'mid';
+    const prev = prevWidthBucketRef.current;
+    prevWidthBucketRef.current = bucket;
+    if (prev === bucket || bucket === 'mid') return; // age só em transições reais
+    if (bucket === 'narrow' && !sidebarCollapsed) {
+      sessionsPanelRef.current?.collapse();
+      autoCollapsedRef.current = true;
+    } else if (bucket === 'wide' && sidebarCollapsed && autoCollapsedRef.current) {
+      sessionsPanelRef.current?.expand();
+      autoCollapsedRef.current = false;
+    }
+  }, [chatAreaWidth, sidebarCollapsed]);
   const pendingAutoTitle = useRef<Set<number>>(new Set());
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState('');
@@ -1376,7 +1406,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       {/* Snapshots is the only ex-modal that stays modal — full-width
           diff viewer needs the viewport. The other five (skills, tools,
           metrics, tool-stats, details) live in the right rail as panels. */}
-      <div className="flex h-full min-h-0">
+      <div ref={chatAreaRef} className="flex h-full min-h-0">
         {/* `agent-chat-cols-v2` bumps the persisted-storage key so the
             three-panel layout (sessions / chat / right-rail) gets a fresh
             split instead of inheriting the legacy two-panel sizing — which
@@ -1429,11 +1459,13 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         <Panel id="chat-main" order={2} minSize={40} className="min-w-0 relative">
           {/* Collapse/expand the sessions sidebar. */}
           <button
-            onClick={() =>
-              sidebarCollapsed
-                ? sessionsPanelRef.current?.expand()
-                : sessionsPanelRef.current?.collapse()
-            }
+            onClick={() => {
+              // Ação manual assume o controle: limpa o flag de auto-colapso
+              // para o observer de largura não brigar (reabrir/re-colapsar).
+              autoCollapsedRef.current = false;
+              if (sidebarCollapsed) sessionsPanelRef.current?.expand();
+              else sessionsPanelRef.current?.collapse();
+            }}
             title={sidebarCollapsed ? 'Show sessions' : 'Hide sessions'}
             className="absolute top-1.5 left-1.5 z-20 h-6 w-6 flex items-center justify-center rounded-md bg-card/80 border text-muted-foreground hover:text-foreground hover:bg-muted"
           >
@@ -1525,6 +1557,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 onClearSkillPicks={clearSkillPicks}
                 agent={agent}
                 setAgent={handleAgentChange}
+                hideAgentPicker={hideAgentPicker}
                 provider={provider}
                 model={model}
                 setModel={setModel}

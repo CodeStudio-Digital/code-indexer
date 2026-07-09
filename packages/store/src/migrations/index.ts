@@ -212,6 +212,8 @@ import { spriteStudio196 } from './196_sprite_studio.js';
 import { sshSecrets197 } from './197_ssh_secrets.js';
 import { sshHostShared198 } from './198_ssh_host_shared.js';
 import { spriteFrameTracks199 } from './199_sprite_frame_tracks.js';
+import { appStudio200 } from './200_app_studio.js';
+import { appStudioBlueprint201 } from './201_app_studio_blueprint.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -440,6 +442,8 @@ export const MIGRATIONS: Migration[] = [
   sshSecrets197,
   sshHostShared198,
   spriteFrameTracks199,
+  appStudio200,
+  appStudioBlueprint201,
 ];
 
 /**

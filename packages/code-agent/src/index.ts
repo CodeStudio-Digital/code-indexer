@@ -63,7 +63,7 @@ import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
-import { parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
+import { parseAppWorkspace, parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
 import { buildDsConsumerBlock } from '@mcp/code-agent/core/ds-consumer-prompt.js';
 import { buildDiagramGuidance } from '@mcp/code-agent/prompts/diagram-guidance.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
@@ -71,6 +71,7 @@ import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
 import { buildQaTools } from '@mcp/company/tools/qa/index.js';
 import { buildDesignSystemStudioTools, buildDesignSystemConsumerTools } from '@mcp/company/tools/design-system/index.js';
+import { buildAppStudioTools } from '@mcp/company/tools/app-studio/index.js';
 import { buildSpriteStudioTools } from '@mcp/code-agent/tools/sprite-studio/index.js';
 import { buildSubordinateTools } from '@mcp/company/tools/subordinate-tools.js';
 import { buildSharedDriveTools } from '@mcp/company/tools/shared-drive-tools.js';
@@ -506,6 +507,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const dsConsumer = !opts.companyContext && !dsWorkspace ? parseDsConsumer(project.builder_json) : null;
   if (dsConsumer && config.features.designSystemEnabled) {
     registry.registerAll(buildDesignSystemConsumerTools(dsConsumer));
+  }
+  // App Studio — single sessions on a `kind:'app'` workspace project
+  // (Code Studio para leigos) get the app_* tools (pipeline/spec/interview/
+  // provision) bound to the project. Same posture as DS Studio: outside
+  // company context, gated by the feature flag; mutually exclusive with
+  // the DS shapes (parseAppWorkspace returns null unless kind==='app').
+  const appWorkspace =
+    !opts.companyContext && !dsWorkspace ? parseAppWorkspace(project.builder_json) : null;
+  if (appWorkspace && config.features.appStudioEnabled) {
+    registry.registerAll(buildAppStudioTools(project.id));
   }
   // Sprite Studio — single sessions on a project that has a `.sprite-studio/`
   // directory get the sprite_* tools (get_project/list_assets/generate/
@@ -1553,6 +1564,17 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // DS consumer block — derives from the pinned published version
     // (immutable rows), so the prefix stays byte-stable across turns.
     systemPrompt += '\n' + buildDsConsumerBlock(dsConsumer);
+  } else if (appWorkspace && config.features.appStudioEnabled) {
+    // App Studio block — appended (not replacing the agent prompt) so the
+    // `builder` agent identity stays intact and the prefix remains
+    // cache-stable: every value comes from builder_json, fixed at scaffold
+    // time, no DB query per turn (spec/auth details reach the agent via
+    // the app_* tools at runtime, never via the prompt).
+    systemPrompt += '\n' + interpolate(loadPrompt('app-studio'), {
+      appName: appWorkspace.appName ?? '(see app_get_pipeline)',
+      appSlug: appWorkspace.appSlug ?? '',
+      dbEngine: appWorkspace.dbEngine,
+    });
   }
 
   // Draw.io diagram guidance — appended only when the `diagram` tier will be

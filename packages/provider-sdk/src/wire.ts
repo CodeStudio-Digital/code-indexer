@@ -86,6 +86,8 @@ export interface QuestionBlock {
   question: string;
   options?: Array<{ label: string; value: string }>;
   allowFreeform?: boolean;
+  /** When true + options: the user picks MULTIPLE options and confirms. */
+  multiSelect?: boolean;
   answer?: string;
   /** Optional ≤16-char UI label rendered above the question. */
   header?: string;

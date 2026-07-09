@@ -342,6 +342,8 @@
   "wizard.title": "New project",
   "wizard.description": "Pick a stack, clone a repo, or start empty. Created under ~/.mcp-code-indexer/projects.",
   "wizard.create": "Create project",
+  "wizard.appStudioTitle": "Create a complete app with AI",
+  "wizard.appStudioHelp": "Describe your idea and the AI builds it with you — from plan to publication.",
   "wizard.importFromCloud": "Import from cloud",
   "wizard.importLoading": "Loading your cloud projects…",
   "wizard.importEmpty": "No cloud projects yet. Publish one from a project's cloud-sync dialog.",

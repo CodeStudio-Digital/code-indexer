@@ -424,6 +424,8 @@
   "question.customAnswer": "Ou digite uma resposta customizada",
   "question.answerPlaceholder": "Digite sua resposta…",
   "question.answered": "Respondido:",
+  "question.multiHint": "Selecione todas que se aplicam",
+  "question.confirm": "Confirmar",
   "decision.title": "Decisão",
   "decision.confirm": "Confirmar decisões",
   "decision.confirmed": "Decidido",

@@ -239,6 +239,12 @@ export const SessionSidebar = memo(function SessionSidebar({
       <aside
         className={cn(
           'flex flex-col bg-card overflow-hidden',
+          // `@container`: os cards/rows reagem à largura REAL desta barra
+          // (não à do viewport) — via container queries do Tailwind v4. É o
+          // que o `lg:` abaixo não faz: no App Studio/ProjectView a janela é
+          // larga mas este painel pode ter 90–150px, então o conteúdo precisa
+          // compactar pela largura do container, não da tela.
+          '@container',
           // Mobile: fixed slide-in drawer from the left.
           'fixed inset-y-0 left-0 z-50 w-[85%] max-w-[320px] rounded-r-xl shadow-2xl border',
           'transition-transform duration-200 ease-out',
@@ -256,7 +262,8 @@ export const SessionSidebar = memo(function SessionSidebar({
       <div className="flex items-center gap-1 border-b px-2 h-9">
         <div className="flex min-w-0 items-center gap-1.5">
           <MessageSquareCode className="h-4 w-4 text-primary shrink-0" />
-          <span className="text-xs font-semibold truncate">{t('chat:sidebar.sessions')}</span>
+          {/* Some quando a barra aperta — sobra o ícone + as ações. */}
+          <span className="text-xs font-semibold truncate @max-[180px]:hidden">{t('chat:sidebar.sessions')}</span>
         </div>
         <div className="ml-auto flex items-center gap-0.5 shrink-0">
           {/* View filter — replaces the active/archived segmented control.
@@ -661,7 +668,12 @@ const SessionRow = memo(function SessionRow({
         </div>
       )}
 
-      <div className="flex-1 min-w-0 flex flex-col">
+      {/* `title` no wrapper carrega model · tempo · tokens para quando a
+          barra aperta e a linha 2 / o badge somem (container queries). */}
+      <div
+        className="flex-1 min-w-0 flex flex-col"
+        title={`${s.model} · ${formatRelativeTime(s.updated_at)} · ${tokens.toLocaleString()} tokens`}
+      >
         {/* Line 1: title + right-floated token figure (Linear-style numerals).
             Native title carries the exact count; the row shows it compacted. */}
         <div className="flex items-center gap-2 min-w-0">
@@ -672,8 +684,9 @@ const SessionRow = memo(function SessionRow({
             {s.title}
           </span>
           {/* Tokens fade out on hover so the action cluster can take their
-              place — no overlap / bleed-through. */}
-          <span className="ml-auto flex items-center gap-1 shrink-0 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+              place — no overlap / bleed-through. Some quando a barra aperta
+              (< ~170px) — o número vai para o tooltip do wrapper. */}
+          <span className="ml-auto flex items-center gap-1 shrink-0 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0 @max-[170px]:hidden">
             {!selectMode && s.is_favorite && (
               <Star className="h-3 w-3 fill-current text-yellow-500" aria-hidden="true" />
             )}
@@ -686,8 +699,9 @@ const SessionRow = memo(function SessionRow({
             </span>
           </span>
         </div>
-        {/* Line 2: model · relative time, all mono so it reads as metadata. */}
-        <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground tabular-nums min-w-0">
+        {/* Line 2: model · relative time, all mono so it reads as metadata.
+            Colapsa a barra para 1 linha (título só) abaixo de ~210px. */}
+        <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground tabular-nums min-w-0 @max-[210px]:hidden">
           <span className="text-muted-foreground/80 truncate min-w-0">{s.model}</span>
           <span className="text-muted-foreground/40 shrink-0">·</span>
           <span className="shrink-0">{formatRelativeTime(s.updated_at)}</span>

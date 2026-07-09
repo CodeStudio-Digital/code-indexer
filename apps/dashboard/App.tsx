@@ -3,6 +3,7 @@ import {
   createBrowserRouter,
   Navigate,
   RouterProvider,
+  useLocation,
   useNavigate,
   useParams,
   useSearchParams,
@@ -19,6 +20,7 @@ import { ProjectList, ProjectView } from './features/project/index.js';
 import { AgentChat } from './features/chat/index.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
+import { AppStudioHome, AppStudioView } from './features/app-studio/index.js';
 import { TelemetryDashboard } from './features/telemetry/TelemetryDashboard.js';
 import { DocsPage } from './features/docs/DocsPage.js';
 import { useFeatures } from './hooks/useFeatures.js';
@@ -255,6 +257,31 @@ function SpritesRoute() {
   );
 }
 
+function AppsRoute() {
+  const features = useFeatures();
+  if (!features.appStudioEnabled) return <Navigate to="/" replace />;
+  return <AppStudioHome />;
+}
+
+function AppStudioSessionRoute() {
+  const features = useFeatures();
+  const navigate = useNavigate();
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const location = useLocation();
+  if (!features.appStudioEnabled) return <Navigate to="/" replace />;
+  const id = Number(sessionId);
+  if (!Number.isFinite(id)) return <Navigate to="/apps" replace />;
+  const state = (location.state ?? {}) as { coderSessionId?: number; idea?: string };
+  return (
+    <AppStudioView
+      sessionId={id}
+      initialCoderSessionId={state.coderSessionId}
+      discoveryExtra={state.idea ? `Minha ideia inicial: ${state.idea}` : null}
+      onBack={() => navigate('/apps')}
+    />
+  );
+}
+
 // ─── Router setup ────────────────────────────────────────────
 
 // Janelas popout (openInNewWindow) carregam, em produção, `index.html` com
@@ -293,6 +320,8 @@ const router = createBrowserRouter([
       { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <AgentsTab /> },
       { path: 'admin', element: <Admin /> },
       { path: 'design-systems', element: <DesignSystemsRoute /> },
+      { path: 'apps', element: <AppsRoute /> },
+      { path: 'apps/:sessionId', element: <AppStudioSessionRoute /> },
       { path: 'sprites', element: <SpritesRoute /> },
       { path: 'telemetry', element: <TelemetryDashboard /> },
       { path: 'docs', element: <DocsPage /> },

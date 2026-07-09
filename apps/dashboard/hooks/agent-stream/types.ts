@@ -73,6 +73,8 @@ export interface QuestionPrompt {
   header?: string;
   options?: Array<{ label: string; value: string }>;
   allowFreeform?: boolean;
+  /** When true + options: user picks MULTIPLE and confirms (checkbox-style). */
+  multiSelect?: boolean;
   resolved?: string;
 }
 

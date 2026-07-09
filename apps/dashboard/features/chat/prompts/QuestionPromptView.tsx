@@ -12,6 +12,8 @@ interface QuestionPromptViewProps {
     header?: string;
     options?: Array<{ label: string; value: string }>;
     allowFreeform?: boolean;
+    /** When true + options: user picks MULTIPLE and confirms (checkbox-style). */
+    multiSelect?: boolean;
     resolved?: string;
   };
   onAnswer: (answer: string) => Promise<void>;
@@ -20,11 +22,24 @@ interface QuestionPromptViewProps {
 export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [text, setText] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
   const [resolved, setResolved] = useState<string | undefined>(question.resolved);
   const submit = async (val: string) => {
     await onAnswer(val);
     setResolved(val);
   };
+  const hasOptions = !!question.options && question.options.length > 0;
+  const multi = !!question.multiSelect && hasOptions;
+
+  // Multi-select: options toggle (by label — the readable answer both the user
+  // and the agent see); a confirm button submits the joined labels + freeform.
+  const toggleLabel = (label: string) =>
+    setSelected((cur) => (cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label]));
+  const confirmMulti = () => {
+    const parts = [...selected, text.trim()].filter(Boolean);
+    if (parts.length > 0) void submit(parts.join(', '));
+  };
+
   return (
     <div className="my-3 rounded-xl border border-info/40 bg-info/5 p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -44,24 +59,44 @@ export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewPro
         </div>
       ) : (
         <>
-          {question.options && question.options.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-              {question.options.map((o, i) => (
-                <button
-                  key={o.value}
-                  onClick={() => submit(o.value)}
-                  className="group flex items-start gap-2.5 text-left px-3 py-2.5 rounded-lg border border-info/30 bg-background hover:bg-info/10 hover:border-info transition-colors"
-                >
-                  <span className="mt-0.5 flex-shrink-0 h-5 w-5 rounded-full bg-info/15 text-info text-[11px] font-semibold flex items-center justify-center group-hover:bg-info group-hover:text-primary-foreground">
-                    {String.fromCharCode(65 + i)}
-                  </span>
-                  <span className="text-sm text-foreground flex-1">{o.label}</span>
-                </button>
-              ))}
-            </div>
+          {hasOptions && (
+            <>
+              {multi && (
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 px-1">
+                  {t('chat:question.multiHint')}
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                {question.options!.map((o, i) => {
+                  const active = multi && selected.includes(o.label);
+                  return (
+                    <button
+                      key={o.value}
+                      onClick={() => (multi ? toggleLabel(o.label) : submit(o.value))}
+                      className={`group flex items-start gap-2.5 text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                        active
+                          ? 'border-info bg-info/10'
+                          : 'border-info/30 bg-background hover:bg-info/10 hover:border-info'
+                      }`}
+                    >
+                      <span
+                        className={`mt-0.5 flex-shrink-0 h-5 w-5 rounded-full text-[11px] font-semibold flex items-center justify-center ${
+                          active
+                            ? 'bg-info text-primary-foreground'
+                            : 'bg-info/15 text-info group-hover:bg-info group-hover:text-primary-foreground'
+                        }`}
+                      >
+                        {active ? <Check className="h-3 w-3" /> : String.fromCharCode(65 + i)}
+                      </span>
+                      <span className="text-sm text-foreground flex-1">{o.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
           )}
           <div>
-            {question.options && question.options.length > 0 && (
+            {hasOptions && (
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 px-1">
                 {t('chat:question.customAnswer')}
               </div>
@@ -71,14 +106,26 @@ export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewPro
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && text.trim()) submit(text.trim());
+                  if (e.key !== 'Enter') return;
+                  if (multi) confirmMulti();
+                  else if (text.trim()) void submit(text.trim());
                 }}
                 placeholder={t('chat:question.answerPlaceholder')}
                 className="text-sm"
               />
-              <Button size="sm" onClick={() => text.trim() && submit(text.trim())} disabled={!text.trim()}>
-                {t('common:actions.send')}
-              </Button>
+              {multi ? (
+                <Button
+                  size="sm"
+                  onClick={confirmMulti}
+                  disabled={selected.length === 0 && !text.trim()}
+                >
+                  {t('chat:question.confirm')}
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => text.trim() && void submit(text.trim())} disabled={!text.trim()}>
+                  {t('common:actions.send')}
+                </Button>
+              )}
             </div>
           </div>
         </>

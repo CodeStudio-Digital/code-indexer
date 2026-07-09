@@ -60,7 +60,7 @@ import {
   buildConversationTail,
 } from '../memory-query.js';
 import { maybePlanNudge, maybeGoalVerifyNudge } from './executing-plan-gate.js';
-import { consumeStream } from './executing-stream.js';
+import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
 import { evaluatePerTurnLoops } from './executing-loop-guards.js';
@@ -563,6 +563,14 @@ export class ExecutingNode implements BehaviorNode {
       result = await consumeStream({
         stream,
         signal: ctx.opts.toolContext.signal,
+        // Scale the thinking-only watchdog by reasoning effort and by how many
+        // thinking-timeouts already fired this run, so a retry gets a strictly
+        // larger budget than the attempt that just timed out (a same-budget
+        // retry of the same prompt re-times-out identically and burns the cap).
+        thinkingOnlyTimeoutMs: thinkingOnlyBudgetMs(
+          ctx.opts.reasoningEffort,
+          ctx.recovery.get('provider-thinking-timeout') ?? 0,
+        ),
         onTextDelta: (text) => {
           ctx.operations.progress(providerOpId, { phase: 'text_delta' });
           ctx.emit('text_delta', text);

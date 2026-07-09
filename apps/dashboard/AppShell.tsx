@@ -26,6 +26,7 @@ import {
   PinOff,
   Search,
   Settings,
+  Sparkles,
   Sun,
   Users,
 } from 'lucide-react';
@@ -59,7 +60,7 @@ import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 
 interface NavItem {
-  id: ActiveView['page'];
+  id: ActiveView['page'] | string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   href: string;
@@ -193,6 +194,13 @@ export function AppShell() {
 
   const nav: NavItem[] = [
     { id: 'home', label: t('nav.projects'), icon: Home, href: '/' },
+    {
+      id: 'apps',
+      label: t('nav.apps', { defaultValue: 'Meus apps' }),
+      icon: Sparkles,
+      href: '/apps',
+      show: features.appStudioEnabled,
+    },
     { id: 'agents', label: t('nav.agents'), icon: Users, href: '/agents' },
     { id: 'global', label: t('nav.global'), icon: Orbit, href: '/global' },
     {
@@ -359,6 +367,7 @@ export function AppShell() {
           // under a compact top band (IDE-style), so they opt out of the
           // outer scroll+padding like the other two-pane surfaces above.
           view.page === 'admin' ||
+          view.page === 'apps' ||
           view.page === 'docs' ||
           view.page === 'telemetry'
             ? 'flex flex-col overflow-hidden'

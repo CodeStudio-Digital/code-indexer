@@ -424,6 +424,8 @@
   "question.customAnswer": "Or type a custom answer",
   "question.answerPlaceholder": "Type your answer…",
   "question.answered": "Answered:",
+  "question.multiHint": "Select all that apply",
+  "question.confirm": "Confirm",
   "decision.title": "Decision",
   "decision.confirm": "Confirm decisions",
   "decision.confirmed": "Decided",

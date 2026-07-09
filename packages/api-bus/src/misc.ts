@@ -107,6 +107,7 @@ export interface ConfigApi {
   features(input: void, ctx: ApiContext): Promise<{
     designSystemEnabled: boolean;
     spriteStudioEnabled: boolean;
+    appStudioEnabled: boolean;
     docsEnabled: boolean;
     hostTerminalEnabled: boolean;
     userAuthRequired: boolean;

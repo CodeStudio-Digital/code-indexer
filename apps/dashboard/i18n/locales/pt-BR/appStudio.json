@@ -1,0 +1,280 @@
+{
+  "home": {
+    "title": "Meus apps",
+    "subtitle": "Crie um app completo conversando com a IA — da ideia à publicação na internet.",
+    "create": "Criar novo app",
+    "empty": "Você ainda não tem apps. Crie o primeiro — é só contar sua ideia.",
+    "open": "Abrir",
+    "delete": "Excluir app",
+    "deleteConfirm": "Excluir \"{{name}}\"? Os arquivos do projeto continuam no seu computador; só a jornada guiada é removida.",
+    "status": {
+      "building": "Em construção — etapa {{n}} de {{total}}",
+      "review": "Sua vez de revisar",
+      "live": "No ar",
+      "done": "Concluído"
+    }
+  },
+  "create": {
+    "title": "Criar app com IA",
+    "nameLabel": "Como seu app vai se chamar?",
+    "namePlaceholder": "Ex.: Lanchonete da Ana",
+    "ideaLabel": "Fale sobre o projeto",
+    "ideaPlaceholder": "Ex.: controlar os pedidos e clientes da minha lanchonete",
+    "advanced": "Opções avançadas",
+    "provider": "Provedor de IA",
+    "model": "Modelo",
+    "effort": "Capacidade de raciocínio",
+    "effortAuto": "Automático (padrão do modelo)",
+    "submit": "Começar",
+    "creating": "Preparando tudo…",
+    "showLog": "Detalhes técnicos",
+    "phase": {
+      "resolve-path": "Escolhendo o lugar do seu app…",
+      "write-skeleton": "Montando a estrutura…",
+      "configure": "Preparando o editor visual…",
+      "install-deps": "Baixando as peças do app…",
+      "install-dev-deps": "Baixando as ferramentas…",
+      "register": "Quase pronto…"
+    },
+    "error": "Não conseguimos criar seu app. Tente de novo — se continuar, veja os detalhes técnicos."
+  },
+  "backToApps": "Meus apps",
+  "tabs": {
+    "guide": "Guia",
+    "blueprint": "Mapa",
+    "preview": "Seu app",
+    "data": "Seus dados",
+    "publish": "Publicar"
+  },
+  "blueprint": {
+    "locked": "Disponível quando o plano do app existir (etapa \"Entender sua ideia\").",
+    "noSpec": "O mapa aparece quando o plano do app for criado na entrevista.",
+    "hint": "Arraste os blocos, conecte-os para criar ligações e dê duplo-clique numa ligação para removê-la. Clique num bloco para editar.",
+    "save": "Salvar plano",
+    "apply": "Aplicar mudanças",
+    "discard": "Descartar",
+    "issues": "{{count}} pendência(s)",
+    "kind": {
+      "screen": "Tela",
+      "entity": "Dados",
+      "feature": "Recurso",
+      "auth": "Login",
+      "behavior": "Ação"
+    },
+    "trigger": {
+      "click": "ao clicar",
+      "submit": "ao enviar",
+      "open": "ao abrir a tela"
+    },
+    "action": {
+      "save": "salvar em",
+      "navigate": "ir para",
+      "notify": "mostrar aviso"
+    },
+    "fieldType": {
+      "text": "texto",
+      "integer": "número",
+      "real": "número decimal",
+      "timestamp": "data"
+    },
+    "homeBadge": "inicial",
+    "protectedBadge": "com login",
+    "authTitle": "Login",
+    "cascadeTitle": "Isso remove outras coisas junto",
+    "cascadeBody": "Para manter o plano consistente, estas mudanças acontecem também:",
+    "cascadeConfirm": "Remover mesmo assim",
+    "removeEdgeTitle": "Remover esta ligação?",
+    "applyTitle": "Aplicar mudanças no plano?",
+    "applyBody": "O plano já foi aprovado. Aplicar mudanças reabre a etapa \"Entender sua ideia\" até você aprovar de novo, e a IA ajusta o app ao novo plano.",
+    "applyConfirm": "Aplicar e avisar a IA",
+    "applyFallbackFeedback": "Plano editado no Mapa (Blueprint).",
+    "applyMessage": "Editei o plano do app visualmente no Mapa. Releia a spec com app_get_spec, ajuste o que já foi construído para o novo plano e re-submeta a etapa discovery. Resumo das mudanças:",
+    "conflictBody": "A IA atualizou o plano enquanto você editava. Recarregue para ver a versão nova (suas edições não salvas se perdem) ou salve para sobrescrever.",
+    "conflictReload": "Recarregar",
+    "palette": {
+      "namePlaceholder": "Dê um nome…",
+      "addScreen": "Nova tela",
+      "addEntity": "Novo tipo de dado",
+      "addFeature": "Novo recurso",
+      "addBehavior": "Nova ação",
+      "screenHint": "Adicionar uma tela ao app",
+      "entityHint": "Adicionar um tipo de informação que o app guarda",
+      "featureHint": "Adicionar um recurso/funcionalidade",
+      "behaviorHint": "Adicionar uma regra: quando algo acontecer → fazer algo",
+      "authHint": "Ligar/desligar o login do app"
+    },
+    "inspector": {
+      "name": "Nome",
+      "purpose": "Para que serve",
+      "description": "Descrição",
+      "makeHome": "Tornar tela inicial",
+      "protect": "Exigir login",
+      "unprotect": "Não exigir login",
+      "authHint": "Ligações partindo do Login marcam telas que exigem senha.",
+      "disableAuth": "Desligar login",
+      "fields": "Campos",
+      "addField": "Adicionar campo",
+      "removeField": "Remover campo",
+      "trigger": "Quando",
+      "triggerLabel": "Descrição",
+      "actions": "O que acontece",
+      "notifyPlaceholder": "Texto do aviso…",
+      "remove": "Remover"
+    }
+  },
+  "stages": {
+    "discovery": {
+      "name": "Entender sua ideia",
+      "tagline": "A IA conversa com você para entender o que o app precisa fazer.",
+      "userAction": "Responda as perguntas no chat e depois aprove o plano."
+    },
+    "database": {
+      "name": "Guardar seus dados",
+      "tagline": "Criamos o lugar onde o app guarda as informações (clientes, pedidos…).",
+      "userAction": "Confira as fichas na aba Seus dados e aprove."
+    },
+    "design": {
+      "name": "Montar as telas",
+      "tagline": "As telas do app ganham vida — acompanhe na aba Seu app.",
+      "userAction": "Olhe o app, peça mudanças no chat e aprove quando gostar."
+    },
+    "backend": {
+      "name": "Fazer funcionar",
+      "tagline": "Ligamos os botões, cadastros e regras por trás das telas.",
+      "userAction": "Teste o app clicando nele e aprove quando estiver funcionando."
+    },
+    "review": {
+      "name": "Checagem de qualidade",
+      "tagline": "A IA revisa erros e segurança antes de publicar.",
+      "userAction": "Leia o relatório e aprove."
+    },
+    "launch": {
+      "name": "Publicar na internet",
+      "tagline": "Seu app vai ao ar com um endereço próprio.",
+      "userAction": "Conecte sua conta Cloudflare e publique pela aba Publicar."
+    },
+    "status": {
+      "pending": "por fazer",
+      "active": "em andamento",
+      "review": "sua vez",
+      "approved": "pronta",
+      "skipped": "não precisou"
+    }
+  },
+  "explainers": {
+    "discovery": {
+      "title": "O que acontece aqui?",
+      "body": "A IA faz perguntas simples, uma de cada vez, para montar o plano do seu app: o que ele faz, quais telas tem e o que precisa guardar. Nada é construído sem você aprovar o plano."
+    },
+    "database": {
+      "title": "O que é um banco de dados?",
+      "body": "É como um caderno organizado onde seu app anota tudo — cada tipo de informação (clientes, pedidos…) vira uma ficha com colunas. Você vê tudo na aba Seus dados."
+    },
+    "design": {
+      "title": "Por que as telas vêm antes?",
+      "body": "Primeiro montamos a aparência com dados de exemplo, para você ver e ajustar sem esperar. Clique em qualquer parte do app para pedir mudanças."
+    },
+    "backend": {
+      "title": "O que é o \"funcionamento\"?",
+      "body": "É a parte invisível: salvar de verdade o que você digita, buscar as informações certas e proteger o que precisa de senha."
+    },
+    "review": {
+      "title": "O que é checado?",
+      "body": "A IA testa o app inteiro, procura erros e confere itens de segurança (senhas protegidas, dados guardados do jeito certo) antes de liberar a publicação."
+    },
+    "launch": {
+      "title": "O que é a Cloudflare?",
+      "body": "É o serviço (gratuito para começar) onde seu app vai morar na internet. Você conecta sua conta com um clique e o app ganha um endereço próprio para compartilhar."
+    }
+  },
+  "pipeline": {
+    "stageOf": "Etapa {{n}} de {{total}}",
+    "complete": "Tudo pronto — seu app está completo!",
+    "yourTurn": "Sua vez",
+    "start": "Começar etapa",
+    "resend": "Continuar",
+    "reviewCta": "Revisar agora",
+    "approve": "Aprovar e continuar",
+    "requestChanges": "Quero mudar algo",
+    "feedbackPlaceholder": "Conte o que você quer diferente…",
+    "reopenConfirm": "Enviar pedido de mudança",
+    "cancel": "Cancelar",
+    "notInitialized": "A jornada deste app ainda não foi iniciada.",
+    "init": "Iniciar jornada",
+    "gateIssues": "A IA ainda está ajustando estes pontos:"
+  },
+  "guide": {
+    "title": "Sua jornada"
+  },
+  "preview": {
+    "title": "Seu app",
+    "preparing": "Preparando seu app… isso leva alguns segundos.",
+    "hint": "Clique em qualquer parte do app para pedir uma mudança no chat."
+  },
+  "spec": {
+    "what": "O que seu app faz",
+    "screens": "Telas",
+    "data": "Dados que ele guarda",
+    "noData": "Este app não guarda dados.",
+    "login": "Precisa de login?",
+    "loginYes": "Sim — algumas partes só entram com senha.",
+    "loginNo": "Não — o app é aberto."
+  },
+  "data": {
+    "title": "Seus dados",
+    "locked": "Disponível depois da etapa \"Guardar seus dados\".",
+    "empty": "Seus dados aparecem aqui quando a etapa \"Guardar seus dados\" terminar.",
+    "asSheet": "Ver como planilha",
+    "rows_one": "{{count}} registro",
+    "rows_other": "{{count}} registros"
+  },
+  "publish": {
+    "title": "Publicar na internet",
+    "locked": "Disponível depois da \"Checagem de qualidade\". Complete as etapas do Guia primeiro.",
+    "liveAt": "Seu app está no ar em",
+    "cta": "Publicar meu app",
+    "retry": "Tentar de novo",
+    "error": "Algo deu errado ao publicar.",
+    "askAiFix": "Pedir para a IA consertar",
+    "fixPrompt": "A publicação do app falhou com este erro — investigue e conserte, me explicando em palavras simples o que aconteceu: {{error}}",
+    "step": {
+      "auth": "Conferindo sua conta",
+      "db": "Criando seu banco na nuvem",
+      "migrate": "Preparando o banco",
+      "build": "Preparando os arquivos",
+      "deploy": "Enviando seu app",
+      "health": "Ligando tudo",
+      "persist": "Pronto!"
+    },
+    "connect": {
+      "title": "Conecte sua conta Cloudflare",
+      "cta": "Conectar (abre o navegador)",
+      "waiting": "Aguardando você no navegador…",
+      "connected": "Conectado como",
+      "manualLink": "O navegador não abriu?",
+      "openLink": "Clique aqui",
+      "noAccount": "Não tem conta?",
+      "createFree": "Crie grátis em 2 minutos"
+    },
+    "live": {
+      "title": "Seu app está no ar!",
+      "copy": "Copiar",
+      "open": "Abrir",
+      "share": "Compartilhe o endereço — funciona em qualquer celular ou computador."
+    }
+  },
+  "advanced": {
+    "label": "Modo avançado (IDE completo)",
+    "confirmTitle": "Abrir o modo avançado?",
+    "confirmBody": "Você vai ver a versão técnica do seu app: arquivos, código e terminal. Nada se perde — pode voltar quando quiser.",
+    "confirm": "Abrir mesmo assim",
+    "guidedPill": "Modo guiado"
+  },
+  "stageMessage": {
+    "discovery": "Vamos começar! Quero criar um app e preciso da sua ajuda para planejar. Me faça UMA pergunta por vez usando a tool ask_user, em linguagem simples e sem termos técnicos, para entender: o que o app faz, quem vai usar, quais telas ele precisa, que informações ele guarda e se as pessoas fazem login. Sempre que a pergunta tiver alternativas, passe options (2 a 8) com allow_freeform: true — assim eu clico num botão OU digito minha própria resposta. Quando a pergunta permitir escolher VÁRIAS opções (ex.: quais telas, que dados guardar, formas de login), passe multi_select: true. Quando tiver tudo, salve o plano com app_save_spec, me mostre um resumo simples e pergunte se eu aprovo. Fale sempre no meu idioma.",
+    "database": "Vamos guardar os dados do app: crie as migrations a partir do plano aprovado (app_get_spec), escreva exemplos realistas em seeds/seed.sql, aplique com app_provision_db e confira se está tudo certo. Quando terminar, entregue a etapa com app_submit_stage e me explique em uma frase simples o que foi feito.",
+    "design": "Vamos montar as telas do plano: construa cada tela com dados de exemplo (lib/mock) para eu já ver o app tomando forma, registre cada tela com app_record_feature DEPOIS de conferir no preview, e me avise para eu olhar. Quando todas estiverem prontas, entregue com app_submit_stage.",
+    "backend": "Agora faça o app funcionar de verdade: crie as rotas da API para cada informação do plano, troque as telas dos dados de exemplo para os dados reais, e se o plano tiver login, configure a autenticação com segurança. Verifique tudo no preview, registre com app_record_feature e entregue com app_submit_stage.",
+    "review": "Faça a checagem de qualidade: teste o app inteiro no preview como se fosse eu usando, corrija qualquer erro, e escreva o relatório REVIEW.md num texto que eu entenda. Quando estiver tudo verde, entregue com app_submit_stage."
+  }
+}

@@ -50,6 +50,13 @@ export interface FeatureFlags {
    * the coder). Default ON. Set `SPRITE_STUDIO_ENABLED=false` to disable.
    */
   spriteStudioEnabled: boolean;
+  /**
+   * Master switch for the App Studio module (Code Studio para leigos —
+   * /apps surface, /api/app-studio routes, and the app_* tool group
+   * registered in the coder). Default ON. Set `APP_STUDIO_ENABLED=false`
+   * to disable.
+   */
+  appStudioEnabled: boolean;
 }
 
 export interface IndexerConfig {
@@ -178,6 +185,7 @@ const DEFAULT_CONFIG: IndexerConfig = {
   features: {
     designSystemEnabled: true,
     spriteStudioEnabled: true,
+    appStudioEnabled: true,
   },
   dashboard: {
     port: 7333,
@@ -212,6 +220,9 @@ function applyEnvOverrides(config: IndexerConfig): void {
   }
   if (process.env.SPRITE_STUDIO_ENABLED !== undefined) {
     config.features.spriteStudioEnabled = process.env.SPRITE_STUDIO_ENABLED !== 'false';
+  }
+  if (process.env.APP_STUDIO_ENABLED !== undefined) {
+    config.features.appStudioEnabled = process.env.APP_STUDIO_ENABLED !== 'false';
   }
 
   if (process.env.MCP_INDEX_DB) {

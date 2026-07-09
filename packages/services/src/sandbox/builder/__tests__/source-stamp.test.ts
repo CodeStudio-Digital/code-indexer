@@ -54,6 +54,12 @@ describe('getSourceStampPlugin', () => {
     expect(viteStamp).toContain("enforce: 'pre'");
     expect(viteStamp).toContain("apply: 'serve'");
     expect(viteStamp).toContain('./babel-mcp-stamp.cjs');
+    // @babel/core must be loaded version-agnostically: a bare default import
+    // breaks under v8 (ESM-only, no default). Namespace import + default/namespace
+    // fallback keeps it working on both v7 (CJS) and v8.
+    expect(viteStamp).toContain("import * as babelCore from '@babel/core'");
+    expect(viteStamp).toContain('babelCore.default ?? babelCore');
+    expect(viteStamp).not.toContain("import babel from '@babel/core'");
     // entry: dev-only inspector import, double-quoted for shell-safe append
     expect(c.entry.file).toBe('src/main.tsx');
     expect(c.entry.importLine).toContain('import.meta.env.DEV');

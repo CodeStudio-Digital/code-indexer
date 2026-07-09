@@ -23,7 +23,10 @@ import {
 
 /** npm deps a builder project needs (installed by the scaffold flow).
  *  `@babel/core` powers the dev-only element-selection stamp Vite plugin
- *  (`.mcp/vite-mcp-stamp.mjs`) — plugin-react no longer brings Babel.
+ *  (`.mcp/vite-mcp-stamp.mjs`) — plugin-react no longer brings Babel. Left
+ *  UNPINNED on purpose: the stamp's namespace import (`import * as babelCore`
+ *  + `default ?? namespace`) resolves `transformAsync` on both the v7 (CJS) and
+ *  v8 (ESM-only, no default) majors, so npm can take `latest`. Do not re-pin.
  *  Tailwind v4 is CSS-first: `@tailwindcss/postcss` replaces the standalone
  *  `postcss`/`autoprefixer`, and `tw-animate-css` is the v4-compatible
  *  successor to `tailwindcss-animate`. */
