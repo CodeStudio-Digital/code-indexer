@@ -86,6 +86,53 @@ export class SshStore {
     return this.getHost(Number(info.lastInsertRowid))!;
   }
 
+  /**
+   * Insert a host row with an EXPLICIT id, copying EVERY column from a source
+   * row (used when relocating a host between the central DB and a project DB on
+   * an `is_shared` toggle — the id must stay stable so `saved:<id>` terminal
+   * refs, jump-host FKs and the edit dialog's `initial.id` keep resolving, and
+   * the TOFU `known_host_sha256` / `sort_order` / timestamps must travel with
+   * it so no re-trust prompt fires and ordering is preserved). The source row
+   * is a full `SshHost` snapshot from `getHost` on the other store.
+   */
+  createHostWithId(row: SshHost): SshHost {
+    this.db
+      .prepare(
+        `INSERT INTO ssh_hosts
+           (id, project_id, label, hostname, port, username, auth_method, identity_id,
+            enc_password, enc_private_key, enc_passphrase, jump_host_id, group_name,
+            tags_json, agent_forwarding, keepalive_secs, known_host_sha256,
+            startup_snippet_id, last_used_at, sort_order, created_at, updated_at, is_shared)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.project_id,
+        row.label,
+        row.hostname,
+        row.port,
+        row.username,
+        row.auth_method,
+        row.identity_id,
+        row.enc_password,
+        row.enc_private_key,
+        row.enc_passphrase,
+        row.jump_host_id,
+        row.group_name,
+        row.tags_json,
+        row.agent_forwarding,
+        row.keepalive_secs,
+        row.known_host_sha256,
+        row.startup_snippet_id,
+        row.last_used_at,
+        row.sort_order,
+        row.created_at,
+        row.updated_at,
+        row.is_shared,
+      );
+    return this.getHost(row.id)!;
+  }
+
   updateHost(id: number, patch: SshHostPatch): void {
     const cols: Record<string, unknown> = { ...patch };
     if ('tags' in cols) {

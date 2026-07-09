@@ -218,7 +218,8 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: `/api/projects/${ip!.projectId}/files`, init: {} };
     case 'files.tree': {
       const depth = ip!.maxDepth != null ? `&maxDepth=${Number(ip!.maxDepth)}` : '';
-      return { url: `/api/projects/${ip!.projectId}/file-tree?root=${encodeURIComponent(String(ip!.root ?? '.'))}${depth}`, init: {} };
+      const stats = (ip as { withStats?: boolean }).withStats ? '&withStats=1' : '';
+      return { url: `/api/projects/${ip!.projectId}/file-tree?root=${encodeURIComponent(String(ip!.root ?? '.'))}${depth}${stats}`, init: {} };
     }
     case 'files.read': {
       const ims = ip!.ifModifiedSince ? `&ifModifiedSince=${encodeURIComponent(String(ip!.ifModifiedSince))}` : '';

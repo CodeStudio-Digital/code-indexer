@@ -19,6 +19,7 @@ import { createPaneSelection } from './pane-selection.js';
 import { useRemoteHost } from './use-remote-host.js';
 import { useTransfers } from './transfer-controller.js';
 import { FilePane } from './FilePane.js';
+import { useColumnConfig } from './column-config.js';
 import { TransferBar } from './TransferBar.js';
 import { ConflictDialogHost } from './conflict-dialog.js';
 import { extractLocal, extractRemote, zipLocal, zipRemote } from './zip-actions.js';
@@ -48,6 +49,8 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
   const remoteSel = useMemo(() => createPaneSelection(), []);
   const localAdapter = useMemo(() => (rootPath != null ? createLocalAdapter(projectId, rootPath) : null), [projectId, rootPath]);
   const { spec, adapter: remoteAdapter, error: remoteError, connecting } = useRemoteHost(hostId, hosts, identities, onNeedTrust);
+  // Shared column config across both panes so the layout stays symmetric.
+  const { visibility: columns, toggle: onToggleColumn } = useColumnConfig();
   const { transfers, transferItems, cancel } = useTransfers(spec);
 
   const [localCwd, setLocalCwd] = useState('');
@@ -158,6 +161,8 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
               onOpenFile={openLocal}
               onZip={localZip}
               onExtract={localExtract}
+              columns={columns}
+              onToggleColumn={onToggleColumn}
             />
           ) : (
             <div className="grid place-items-center h-full text-xs text-muted-foreground">
@@ -179,6 +184,8 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
               onOpenFile={editRemote}
               onZip={remoteZip}
               onExtract={remoteExtract}
+              columns={columns}
+              onToggleColumn={onToggleColumn}
             />
           ) : (
             <div className="grid place-items-center h-full text-xs text-muted-foreground">{t('sftp.selectHost')}</div>

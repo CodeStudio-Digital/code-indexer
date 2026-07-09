@@ -112,7 +112,15 @@
     "cancelled": "Cancelled",
     "editSaved": "Uploaded {{name}}",
     "editSaveFailed": "Upload to server failed",
-    "editHint": "Ctrl/⌘S saves to the server"
+    "editHint": "Ctrl/⌘S saves to the server",
+    "columnsTitle": "Columns",
+    "columnsToggle": "Show/hide columns",
+    "columns": {
+      "name": "Name",
+      "size": "Size",
+      "modified": "Modified",
+      "permissions": "Permissions"
+    }
   },
   "files": {
     "toRemote": "Send to server →",

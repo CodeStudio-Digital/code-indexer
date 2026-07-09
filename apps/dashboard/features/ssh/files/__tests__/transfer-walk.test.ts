@@ -8,6 +8,7 @@ const f = (name: string, path: string, type: FsItem['type'] = 'file'): FsItem =>
   type,
   size: type === 'file' ? 10 : 0,
   mtime: 0,
+  mode: 0,
 });
 
 /** Fake adapter — planTransfer only calls `list`. */

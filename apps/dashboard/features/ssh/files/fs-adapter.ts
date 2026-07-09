@@ -19,6 +19,8 @@ export interface FsItem {
   size: number;
   /** Modified time, epoch ms (0 when unknown — the local tree fast-path doesn't stat). */
   mtime: number;
+  /** Unix permission bits (0 when unknown). Remote SFTP always provides; local only with withStats. */
+  mode: number;
 }
 
 export interface FsAdapter {
@@ -45,6 +47,33 @@ export function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+/**
+ * Unix permission bits → `rwxr-xr-x` with a type prefix from `item.type`
+ * (Windows fs.stat fakes the mode bits, so the type comes from the Dirent
+ * instead). Returns empty for an unknown (0) mode.
+ */
+export function fmtMode(mode: number, type: 'file' | 'dir' | 'symlink' | 'other'): string {
+  if (!mode) return '';
+  const prefix = type === 'dir' ? 'd' : type === 'symlink' ? 'l' : '-';
+  const bits = mode & 0o777;
+  const triple = (shift: number): string => {
+    const r = (bits >> shift) & 4 ? 'r' : '-';
+    const w = (bits >> shift) & 2 ? 'w' : '-';
+    const x = (bits >> shift) & 1 ? 'x' : '-';
+    return `${r}${w}${x}`;
+  };
+  return `${prefix}${triple(6)}${triple(3)}${triple(0)}`;
+}
+
+/** Epoch ms → compact `YYYY-MM-DD HH:mm`. Empty when mtime is 0/unknown. */
+export function fmtDate(ms: number): string {
+  if (!ms) return '';
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** Last path segment of a posix or native path. */

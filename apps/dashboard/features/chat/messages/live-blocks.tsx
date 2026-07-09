@@ -9,6 +9,7 @@ import { memo, useDeferredValue, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import { Markdown } from './Markdown.js';
+import { cleanThinkingMarkdown } from './thinking-text.js';
 
 /**
  * Live markdown. `useDeferredValue` lets React keep the previous parse on
@@ -34,6 +35,7 @@ export const LiveTextBlock = memo(function LiveTextBlock({ text }: { text: strin
 export const LiveThinkingBlock = memo(function LiveThinkingBlock({ text }: { text: string }) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(true);
+  const displayText = cleanThinkingMarkdown(text);
   return (
     <div className="my-1 rounded-md border border-dashed border-border/40 bg-muted/15">
       <button
@@ -46,8 +48,11 @@ export const LiveThinkingBlock = memo(function LiveThinkingBlock({ text }: { tex
         <span className="font-medium">{t('messages.thinking')}</span>
       </button>
       {open && (
-        <div className="border-t border-dashed border-border/40 px-2.5 py-1.5 text-[11px] leading-[1.15rem] text-muted-foreground italic whitespace-pre-wrap max-h-[32vh] overflow-y-auto">
-          {text}
+        <div className="border-t border-dashed border-border/40 px-2.5 py-1.5 max-h-[32vh] overflow-y-auto">
+          <Markdown
+            text={displayText}
+            className="text-[11px] leading-[1.15rem] text-muted-foreground italic prose-p:my-1 prose-strong:text-muted-foreground prose-code:text-muted-foreground"
+          />
         </div>
       )}
     </div>

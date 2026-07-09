@@ -28,10 +28,19 @@ export function createLocalAdapter(projectId: number, rootPath: string): FsAdapt
     parentDir,
     join,
     async list(dir) {
-      // maxDepth 1 → one readdir, immediate children only (no per-file stat).
-      const node = await apiCall<FileTreeNode>('files.tree', { projectId, root: dir || '.', maxDepth: 1 });
+      // maxDepth 1 → one readdir, immediate children only. withStats populates
+      // size/mtime/mode per child for the SFTP pane's columns (one extra stat
+      // per entry; the default FileTreeRail path omits it).
+      const node = await apiCall<FileTreeNode>('files.tree', { projectId, root: dir || '.', maxDepth: 1, withStats: true } as Record<string, unknown>);
       return (node.children ?? []).map(
-        (c): FsItem => ({ name: c.name, path: c.path, type: c.type === 'dir' ? 'dir' : 'file', size: 0, mtime: 0 }),
+        (c): FsItem => ({
+          name: c.name,
+          path: c.path,
+          type: c.type === 'dir' ? 'dir' : 'file',
+          size: c.size ?? 0,
+          mtime: c.mtime ?? 0,
+          mode: c.mode ?? 0,
+        }),
       );
     },
     async mkdir(dir, name) {

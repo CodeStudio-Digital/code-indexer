@@ -7,12 +7,14 @@
  */
 import { useCallback, useEffect, useMemo, useState, type DragEvent, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowUp, Download, FolderPlus, Loader2, RefreshCw, Upload } from 'lucide-react';
+import { ArrowUp, Check, Columns2, Download, FolderPlus, Loader2, RefreshCw, Upload } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
+import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { FilePaneRow } from './FilePaneRow.js';
 import { hasPanePayload, readPanePayload, setPanePayload } from './pane-dnd.js';
 import { usePaneActions } from './use-pane-actions.js';
 import { usePaneMenu } from './use-pane-menu.js';
+import { COLUMNS, type ColumnId, type ColumnVisibility } from './column-config.js';
 import type { FsAdapter, FsItem } from './fs-adapter.js';
 import type { PaneSelectionStore } from './pane-selection.js';
 
@@ -30,10 +32,13 @@ interface FilePaneProps {
   onOpenFile?: (item: FsItem) => void;
   onZip: (cwd: string, names: string[]) => Promise<boolean> | void;
   onExtract: (cwd: string, name: string) => Promise<boolean> | void;
+  /** Which metadata columns are visible (shared by both panes). */
+  columns: ColumnVisibility;
+  onToggleColumn: (id: ColumnId) => void;
 }
 
 export function FilePane(props: FilePaneProps) {
-  const { adapter, useSel, otherKind, otherCwd, refreshKey, onCwdChange, onTransfer, onOpenFile, onZip, onExtract } = props;
+  const { adapter, useSel, otherKind, otherCwd, refreshKey, onCwdChange, onTransfer, onOpenFile, onZip, onExtract, columns, onToggleColumn } = props;
   const { t } = useTranslation('ssh');
   const [cwd, setCwd] = useState<string | null>(null);
   const [entries, setEntries] = useState<FsItem[]>([]);
@@ -153,9 +158,45 @@ export function FilePane(props: FilePaneProps) {
         </button>
         <span className="ml-1 truncate font-mono text-[10px] text-muted-foreground flex-1" title={cwd ?? ''}>{cwd || '/'}</span>
         {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" aria-label={t('sftp.columnsToggle')} title={t('sftp.columnsToggle')} className={iconBtn}>
+              <Columns2 className="h-3.5 w-3.5" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-44 p-1">
+            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t('sftp.columnsTitle')}</p>
+            {COLUMNS.map((col) => (
+              <button
+                key={col.id}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={columns[col.id]}
+                onClick={() => onToggleColumn(col.id)}
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent"
+              >
+                <span className="w-4 flex items-center justify-center">
+                  {columns[col.id] && <Check className="h-3 w-3" />}
+                </span>
+                {t(`sftp.columns.${col.labelKey}`)}
+              </button>
+            ))}
+          </PopoverContent>
+        </Popover>
       </div>
 
       {error && <div className="px-2 py-1 text-[10px] text-red-400 border-b bg-red-500/10 shrink-0">{error}</div>}
+
+      {/* Column header — mirrors the row layout so widths align. The Name
+          column flexes (flex-1); the others use the same fixed widths as
+          FilePaneRow so header and cells stay in lockstep. */}
+      <div className="flex items-center gap-2 px-3 h-6 shrink-0 border-b bg-muted/40 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="w-3.5 shrink-0" />
+        <span className="flex-1 truncate">{t('sftp.columns.name')}</span>
+        {columns.size && <span className="shrink-0 w-16 text-right">{t('sftp.columns.size')}</span>}
+        {columns.modified && <span className="shrink-0 w-28 text-right">{t('sftp.columns.modified')}</span>}
+        {columns.permissions && <span className="shrink-0 w-24 text-right">{t('sftp.columns.permissions')}</span>}
+      </div>
 
       <div
         className={cn('flex-1 min-h-0 overflow-y-auto', dropActive && 'ring-2 ring-inset ring-primary/60')}
@@ -178,6 +219,7 @@ export function FilePane(props: FilePaneProps) {
             item={e}
             useSel={useSel}
             busy={actions.busyPath === e.path}
+            columns={columns}
             onClick={onRowClick}
             onOpen={onOpen}
             onContext={menu.onRowContext}

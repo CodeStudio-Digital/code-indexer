@@ -13,7 +13,7 @@
  */
 
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
+import { promises as fs, type Stats } from 'node:fs';
 import AdmZip from 'adm-zip';
 import { ApiError, type FilesApi, type FileTreeNode } from '@mcp/api-bus';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
@@ -249,7 +249,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       return { ok: true as const, files, bytes };
     },
 
-    async tree({ projectId, maxDepth = 6, root = '.' }) {
+    async tree({ projectId, maxDepth = 6, root = '.', withStats }) {
       const project = requireProject(projectId);
       const startAbs = resolveSafe(project.root_path, root);
       const startRel = root === '.' ? '' : root;
@@ -261,7 +261,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       // optimistically for dirs (IntelliJ/VS Code do the same — an empty
       // dir just expands to nothing).
       if (maxDepth <= 1) {
-        if (cacheEnabled()) {
+        // Skip the cache entirely for withStats requests — a previously cached
+        // zero-stat node (from the FileTreeRail) would lack size/mtime/mode and
+        // render the SFTP columns blank.
+        if (cacheEnabled() && !withStats) {
           const cached = dirCache.get(projectId, startRel);
           if (cached) return cached;
         }
@@ -272,13 +275,22 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           // Symlinked dirs (pnpm links) report as symlink, not directory —
           // they're the only case worth a stat (rare outside node_modules).
           let isDir = e.isDirectory();
-          if (!isDir && e.isSymbolicLink()) {
-            const st = await fs.stat(path.join(startAbs, e.name)).catch(() => null);
-            isDir = st?.isDirectory() ?? false;
+          // withStats: one stat per child to populate size/mtime/mode for the
+          // SFTP file pane's columns. Skipped by the default FileTreeRail path.
+          let st: Stats | null = null;
+          if (withStats || (!isDir && e.isSymbolicLink())) {
+            st = await fs.stat(path.join(startAbs, e.name)).catch(() => null);
+            if (!isDir && e.isSymbolicLink()) isDir = st?.isDirectory() ?? false;
           }
-          return isDir
+          const node: FileTreeNode = isDir
             ? { name: e.name, path: relPath, type: 'dir', hasChildren: true }
             : { name: e.name, path: relPath, type: 'file' };
+          if (st) {
+            node.size = st.size;
+            node.mtime = st.mtimeMs;
+            node.mode = st.mode;
+          }
+          return node;
         }));
         children.sort((a, b) => {
           if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
@@ -290,7 +302,9 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           type: 'dir',
           children,
         };
-        if (cacheEnabled()) dirCache.set(projectId, startRel, node);
+        // Don't cache withStats results — they'd leak stat data into the
+        // zero-stat fast path for the FileTreeRail.
+        if (cacheEnabled() && !withStats) dirCache.set(projectId, startRel, node);
         return node;
       }
 
@@ -300,14 +314,17 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
         if (!stat) {
           return { name, path: relPath, type: 'file' };
         }
+        // The walker already stats every node; when withStats is set, attach
+        // size/mtime/mode so deep walks honor the contract too.
+        const stats = withStats ? { size: stat.size, mtime: stat.mtimeMs, mode: stat.mode } : {};
         if (!stat.isDirectory()) {
-          return { name, path: relPath, type: 'file' };
+          return { name, path: relPath, type: 'file', ...stats };
         }
         if (depth >= maxDepth) {
           // Peek so the lazy tree knows whether to draw an expand chevron.
           const peek = await fs.readdir(absPath, { withFileTypes: true }).catch(() => []);
           const hasChildren = peek.some((e) => !TREE_BLOCK.has(e.name));
-          return { name, path: relPath, type: 'dir', hasChildren };
+          return { name, path: relPath, type: 'dir', hasChildren, ...stats };
         }
         const entries = await fs.readdir(absPath, { withFileTypes: true }).catch(() => []);
         // Stable, case-insensitive ordering: dirs first, then files alphabetically.
@@ -321,7 +338,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
             walk(path.join(absPath, e.name), path.posix.join(relPath, e.name), depth + 1),
           ),
         );
-        return { name, path: relPath, type: 'dir', children };
+        return { name, path: relPath, type: 'dir', children, ...stats };
       }
 
       // The root node carries '.' as its relative path so descendants

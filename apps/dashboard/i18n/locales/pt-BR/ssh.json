@@ -112,7 +112,15 @@
     "cancelled": "Cancelado",
     "editSaved": "Enviado {{name}}",
     "editSaveFailed": "Falha ao enviar para o servidor",
-    "editHint": "Ctrl/⌘S salva no servidor"
+    "editHint": "Ctrl/⌘S salva no servidor",
+    "columnsTitle": "Colunas",
+    "columnsToggle": "Mostrar/ocultar colunas",
+    "columns": {
+      "name": "Nome",
+      "size": "Tamanho",
+      "modified": "Modificado",
+      "permissions": "Permissões"
+    }
   },
   "files": {
     "toRemote": "Enviar para o servidor →",

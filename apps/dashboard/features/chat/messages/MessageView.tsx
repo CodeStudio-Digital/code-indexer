@@ -30,6 +30,7 @@ import { FileEditBlock } from './FileEditBlock.js';
 import { isEditTool } from './edit-tools.js';
 import { deriveTaskCardState } from './task-card-state.js';
 import { parsePersistedAgentsGroup } from './agents-group-parser.js';
+import { cleanThinkingMarkdown, thinkingPreviewText } from './thinking-text.js';
 
 /**
  * `task_list` is the unified tool (merge of todo_write + submit_tasks). An
@@ -914,7 +915,9 @@ function GeneratedImageBlock({ mediaType, base64 }: { mediaType: string; base64:
 function ThinkingBlockView({ text }: { text: string }) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
-  const preview = text.length > 80 ? text.slice(0, 80) + '...' : text;
+  const displayText = cleanThinkingMarkdown(text);
+  const previewText = thinkingPreviewText(text);
+  const preview = previewText.length > 80 ? previewText.slice(0, 80) + '...' : previewText;
   return (
     <div className="my-1">
       <button
@@ -928,8 +931,11 @@ function ThinkingBlockView({ text }: { text: string }) {
         {!open && <span className="italic truncate max-w-[300px]">{preview}</span>}
       </button>
       {open && (
-        <div className="mt-1 ml-5 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap max-h-[40vh] overflow-y-auto">
-          {text}
+        <div className="mt-1 ml-5 rounded-lg border border-dashed bg-muted/30 px-3 py-2 max-h-[40vh] overflow-y-auto">
+          <Markdown
+            text={displayText}
+            className="text-xs leading-5 text-muted-foreground italic prose-p:my-1 prose-strong:text-muted-foreground prose-code:text-muted-foreground"
+          />
         </div>
       )}
     </div>

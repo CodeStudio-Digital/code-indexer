@@ -38,6 +38,16 @@ export interface FileTreeNode {
    * tree whether to draw an expand chevron without fetching first.
    */
   hasChildren?: boolean;
+  /**
+   * Populated only when `tree` is called with `withStats: true` (the SFTP file
+   * pane uses this to show size/modified/permissions columns). The default
+   * FileTreeRail fast path skips the per-file stat, so these stay undefined.
+   */
+  size?: number;
+  /** Modified time, epoch ms. Undefined unless `withStats` was requested. */
+  mtime?: number;
+  /** Unix permission bits (as reported by fs.stat / SFTP). Undefined unless `withStats`. */
+  mode?: number;
 }
 
 /**
@@ -96,8 +106,12 @@ export interface FilesApi {
   /** Create an empty directory (recursive). */
   mkdir(input: { projectId: number; path: string }, ctx: ApiContext): Promise<{ ok: true }>;
 
-  /** Recursive file tree for the IDE sidebar. */
-  tree(input: { projectId: number; maxDepth?: number; root?: string }, ctx: ApiContext): Promise<FileTreeNode>;
+  /**
+   * Recursive file tree for the IDE sidebar. `withStats` populates `size`/
+   * `mtime`/`mode` on each child (one extra stat per entry) — used by the SFTP
+   * file pane's columns. The default FileTreeRail fast path omits it (zero stats).
+   */
+  tree(input: { projectId: number; maxDepth?: number; root?: string; withStats?: boolean }, ctx: ApiContext): Promise<FileTreeNode>;
 
   /** Zip project files/folders into `out` (a project-relative `.zip` path). */
   archive(

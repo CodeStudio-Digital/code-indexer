@@ -49,7 +49,8 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
       const projectId = parseIdParam(c);
       const maxDepth = c.req.query('maxDepth') ? Number(c.req.query('maxDepth')) : undefined;
       const root = c.req.query('root') ?? undefined;
-      return c.json(await h.tree({ projectId, maxDepth, root }, createContext()));
+      const withStats = c.req.query('withStats') === '1';
+      return c.json(await h.tree({ projectId, maxDepth, root, withStats }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
     }
