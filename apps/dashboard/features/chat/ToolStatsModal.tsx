@@ -29,6 +29,8 @@ interface SavingsByTool {
 interface ToolStatsResponse {
   sessionId: number;
   totalCalls: number;
+  directCalls?: number;
+  nestedCalls?: number;
   byName: Array<{
     name: string;
     count: number;
@@ -54,6 +56,10 @@ interface ToolStatsResponse {
     totalSavedChars: number;
     totalSavedTokensEst: number;
     byTool: SavingsByTool[];
+    semanticSavedChars?: number;
+    jsonCrushSavedChars?: number;
+    hardCapSavedChars?: number;
+    nestedRawChars?: number;
   };
 }
 
@@ -153,6 +159,11 @@ export function ToolStatsView({
                 <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
                   <span className="text-muted-foreground">{t('toolStats.totalCalls')}</span>
                   <span className="font-mono font-semibold tabular-nums">{data.totalCalls}</span>
+                  {data.directCalls != null && data.nestedCalls != null && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {t('toolStats.scopeCalls', { direct: data.directCalls, nested: data.nestedCalls })}
+                    </span>
+                  )}
                   {dominant && (
                     <>
                       <span className="text-muted-foreground sm:ml-auto">{t('toolStats.dominant')}</span>
@@ -191,6 +202,12 @@ export function ToolStatsView({
                         <span className="text-[10px] text-muted-foreground tabular-nums">
                           {t('toolStats.rawPercent', { count: savedPct })}
                         </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 text-[10px] text-muted-foreground sm:grid-cols-4">
+                        <span>{t('toolStats.semantic')}: <b className="font-mono">{formatChars(sv.semanticSavedChars ?? 0)}</b></span>
+                        <span>{t('toolStats.jsonCrush')}: <b className="font-mono">{formatChars(sv.jsonCrushSavedChars ?? 0)}</b></span>
+                        <span>{t('toolStats.hardCap')}: <b className="font-mono">{formatChars(sv.hardCapSavedChars ?? 0)}</b></span>
+                        <span title={t('toolStats.nestedHint')}>{t('toolStats.nestedVolume')}: <b className="font-mono">{formatChars(sv.nestedRawChars ?? 0)}</b></span>
                       </div>
                       {sv.byTool.length > 0 && (
                         <div className="space-y-1">

@@ -18,6 +18,8 @@
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext, CoderTool } from '@mcp/code-agent/core/tool.js';
+import type { DetailedReduction, ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
+import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { checkDupCall } from '../guards/tuple-hash-dedup.js';
 import {
   checkFailureStreak,
@@ -80,6 +82,9 @@ export interface DispatchedToolResult {
   /** Set by the live finalize hook when the fail-safe cap truncated content. */
   truncated?: boolean;
   originalSize?: number;
+  reductionReport?: ReductionReport;
+  outputId?: string;
+  ledgerEntry?: ToolCallLedgerEntry;
 }
 
 export interface DispatchArgs {
@@ -122,7 +127,7 @@ export interface DispatchArgs {
    */
   enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
   /** Smart-reducer applied to the raw result content before push. */
-  reduceToolResult?: (toolName: string, content: string) => string;
+  reduceToolResult?: (toolName: string, content: string) => string | DetailedReduction;
   /**
    * Live final shaping: spill the raw original to the side-file store + apply
    * the generic fail-safe cap with an output_id marker. Returns the content to
@@ -134,7 +139,8 @@ export interface DispatchArgs {
     rawContent: string;
     shapedContent: string;
     isError: boolean;
-  }) => { content: string; truncated?: boolean; originalSize?: number };
+    reductionReport?: ReductionReport;
+  }) => { content: string; truncated?: boolean; originalSize?: number; outputId?: string; reductionReport?: ReductionReport };
   /**
    * Post-result hook for runner-owned state that needs the real tool_use id
    * and raw content (mutation-aware reread diffs, write tracking, etc.).
@@ -304,12 +310,15 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
 
   for (const tu of args.toolUses) {
     const tool = lookupTool(args.registry, tu.name);
-    const isRepeatable = !!tool?.repeatable;
+    const resolvedMetadata = tool ? resolveToolMetadata(tool) : null;
+    const isRepeatable = resolvedMetadata
+      ? resolvedMetadata.repeatPolicy === 'pollable' || resolvedMetadata.repeatPolicy === 'volatile'
+      : false;
     // Interactivity comes from the policy classification, NOT the raw tool
     // object: the built-in interactive tools (submit_plan, ask_user,
     // submit_tasks, submit_spec, master variants) declare `interactive` in
     // `policy.ts`'s BUILTIN_CLASSIFICATION, not on their CoderTool.
-    const interactive = tool ? resolveToolMetadata(tool).interactive : false;
+    const interactive = resolvedMetadata?.interactive ?? false;
 
     // Hidden-call handling (pin mechanism). A registered tool can be absent
     // from the model's visible list (tier-hidden or cap-cut) yet still be
@@ -520,6 +529,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // out (they pause on user input, not a stuck signal).
     if (invocationAbort) args.registerInFlightTool?.(tu.id, invocationAbort);
     let relayParentAbort: (() => void) | undefined;
+    let releaseUnsafe: (() => void) | undefined;
+    let releaseOwnedByInvocation = false;
     if (invocationAbort && parentSignal) {
       relayParentAbort = (): void => {
         const reason = (parentSignal as { reason?: unknown }).reason;
@@ -549,8 +560,16 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       // (interactive/repeatable → no timeout; slow tools → 30 min; else
       // 5 min). Abort signal applies in ALL cases except interactive tools
       // (which have their own pause/resume mechanism via provideUserInput).
+      if (resolvedMetadata && (resolvedMetadata.mutates || !resolvedMetadata.parallelSafe)) {
+        releaseUnsafe = await args.toolContext.toolCallLedger?.reserveUnsafe();
+      }
+      const rawInvocation = args.registry.invoke(tu.name, tu.input, callContext);
+      if (releaseUnsafe) {
+        releaseOwnedByInvocation = true;
+        void rawInvocation.then(releaseUnsafe, releaseUnsafe);
+      }
       const result = await withAbortAndTimeout(
-        args.registry.invoke(tu.name, tu.input, callContext),
+        rawInvocation,
         {
           signal: callContext.signal,
           ms: toolTimeoutMs,
@@ -586,6 +605,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       if (relayParentAbort && parentSignal) {
         parentSignal.removeEventListener('abort', relayParentAbort);
       }
+      if (releaseUnsafe && !releaseOwnedByInvocation) releaseUnsafe();
     }
 
     // Smart-reducer post-result. Tool-aware truncation that keeps the
@@ -599,8 +619,14 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // of escaping `dispatchTools` (which would propagate to the
     // orchestrator and abort the whole run).
     let shapedContent = invocationContent;
+    let reductionReport: ReductionReport | undefined;
     try {
-      shapedContent = args.reduceToolResult?.(tu.name, invocationContent) ?? invocationContent;
+      const reduced = args.reduceToolResult?.(tu.name, invocationContent) ?? invocationContent;
+      if (typeof reduced === 'string') shapedContent = reduced;
+      else {
+        shapedContent = reduced.content;
+        reductionReport = reduced.report;
+      }
     } catch (e) {
       console.warn(`[coder/bt] reduceToolResult threw (${tu.name}): ${errText(e)} — using raw content`);
     }
@@ -657,6 +683,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         errorContent: shapedContent,
         turn: args.turn,
         state: args.failureStreakState,
+        isRepeatable,
         // C2-b — opt-in error-signal classification (reset the streak when the
         // failure category changes). Off by default → identical legacy behavior.
         classifyErrors: process.env.CODER_FAILURE_CLASSIFICATION === '1',
@@ -694,16 +721,20 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let finalShaped = finalContent;
     let finalTruncated: boolean | undefined;
     let finalOriginalSize: number | undefined;
+    let finalOutputId: string | undefined;
     if (args.finalizeToolResult) {
       const fin = args.finalizeToolResult({
         toolName: tu.name,
         rawContent: invocationContent,
         shapedContent: finalContent,
         isError: finalIsError,
+        reductionReport,
       });
       finalShaped = fin.content;
       finalTruncated = fin.truncated;
       finalOriginalSize = fin.originalSize;
+      finalOutputId = fin.outputId;
+      reductionReport = fin.reductionReport ?? reductionReport;
     }
 
     // Pin AFTER finalizeToolResult so the fail-safe cap can't truncate the
@@ -717,6 +748,17 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     }
 
     args.onToolCallFinalized?.(tu.id, finalShaped.length);
+    const ledgerEntry = args.toolContext.toolCallLedger?.record({
+      name: tu.name,
+      args: tu.input,
+      content: finalShaped,
+      isError: finalIsError,
+      refusalKind,
+      mutates: resolvedMetadata?.mutates ?? false,
+      durationMs: Date.now() - t0,
+      executionClass: resolvedMetadata?.executionClass,
+      repeatPolicy: resolvedMetadata?.repeatPolicy,
+    });
     results.push({
       toolUseId: tu.id,
       name: tu.name,
@@ -728,7 +770,31 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       refusalKind,
       extraUserBlocks: invocationExtraBlocks,
       ...(finalTruncated ? { truncated: true, originalSize: finalOriginalSize } : {}),
+      ...(reductionReport ? { reductionReport } : {}),
+      ...(finalOutputId ? { outputId: finalOutputId } : {}),
+      ...(ledgerEntry ? { ledgerEntry } : {}),
     });
+  }
+
+  // Early gates (disabled/goal/pre-read/task-mode/permission/dedup) converge
+  // here so direct and nested calls share one complete accounting contract.
+  for (const result of results) {
+    if (result.ledgerEntry) continue;
+    const toolUse = args.toolUses.find((candidate) => candidate.id === result.toolUseId);
+    const tool = lookupTool(args.registry, result.name);
+    const metadata = tool ? resolveToolMetadata(tool) : null;
+    const entry = args.toolContext.toolCallLedger?.record({
+      name: result.name,
+      args: toolUse?.input ?? {},
+      content: result.content,
+      isError: result.isError,
+      refusalKind: result.refusalKind,
+      mutates: metadata?.mutates ?? false,
+      durationMs: result.durationMs,
+      executionClass: metadata?.executionClass,
+      repeatPolicy: metadata?.repeatPolicy,
+    });
+    if (entry) result.ledgerEntry = entry;
   }
 
   return { results, toolLoopDetected, loopGuard, loopDetail, loopEnforcement };

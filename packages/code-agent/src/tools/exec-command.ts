@@ -536,6 +536,7 @@ export const listSessions: CoderTool = {
   source: 'native',
   mutates: false,
   parallelSafe: true,
+  repeatPolicy: 'volatile',
   riskLevel: 'read',
   parameters: {
     type: 'object',

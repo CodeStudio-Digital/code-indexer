@@ -72,6 +72,42 @@ export const AGENT_SPAWN_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
+    key: 'CODER_SPAWN_VERIFY_MAX_TOOLS',
+    label: 'spawn verify — tool-call budget',
+    description: 'Max tool CALLS for a `verify` subagent. Default 40.',
+    type: 'int', category: 'agent', default: '40', min: 0, advanced: true,
+  },
+  {
+    key: 'CODER_SPAWN_VERIFY_TIMEOUT_MS',
+    label: 'spawn verify — wall-clock timeout (ms)',
+    description: 'Hard timeout for a `verify` subagent. Default 900000 (15 min).',
+    type: 'int', category: 'agent', default: '900000', min: 30_000, advanced: true,
+  },
+  {
+    key: 'CODER_SPAWN_VERIFY_STALL_MS',
+    label: 'spawn verify — stall threshold (ms)',
+    description: 'Abort a `verify` subagent after 120000ms without semantic progress.',
+    type: 'int', category: 'agent', default: '120000', min: 10_000, advanced: true,
+  },
+  {
+    key: 'CODER_SPAWN_REVIEW_MAX_TOOLS',
+    label: 'spawn review — tool-call budget',
+    description: 'Max tool CALLS for a `review` subagent. Default 40.',
+    type: 'int', category: 'agent', default: '40', min: 0, advanced: true,
+  },
+  {
+    key: 'CODER_SPAWN_REVIEW_TIMEOUT_MS',
+    label: 'spawn review — wall-clock timeout (ms)',
+    description: 'Hard timeout for a `review` subagent. Default 900000 (15 min).',
+    type: 'int', category: 'agent', default: '900000', min: 30_000, advanced: true,
+  },
+  {
+    key: 'CODER_SPAWN_REVIEW_STALL_MS',
+    label: 'spawn review — stall threshold (ms)',
+    description: 'Abort a `review` subagent after 120000ms without semantic progress.',
+    type: 'int', category: 'agent', default: '120000', min: 10_000, advanced: true,
+  },
+  {
     key: 'CODER_SPAWN_FULL_MAX_TOOLS',
     label: 'spawn full — tool-call budget',
     description:

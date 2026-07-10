@@ -34,13 +34,15 @@ import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
 
 export interface PersistTurnTelemetryArgs {
   /** Session store handle; persistence is skipped when omitted. */
-  store: SessionStore | undefined;
+  store: Pick<SessionStore, 'recordTurnTelemetry'> | undefined;
   /** Persistent coder_sessions row id; null for subagents/tests. */
   sessionId: number | null;
   /** Fresh per-run uuid for cross-table correlation. */
   runId: string;
   /** True when this run is inside a subagent (no kanban/board lifecycle). */
   isSubagent: boolean;
+  parentRunId?: string | null;
+  subagentProfile?: string | null;
   /** Provider name as it appears in the pricing table. */
   provider: string | null;
   /** Model id as it appears in the pricing table. */
@@ -63,6 +65,7 @@ export interface PersistTurnTelemetryArgs {
   systemPromptChars?: number;
   /** Tools array (stringified JSON) size in chars shipped this turn. */
   toolsDefChars?: number;
+  eligibleToolsDefChars?: number;
   /** How many tools were visible to the model this turn (mig 135). */
   visibleToolsCount?: number;
   /** SHA-1 of the serialized tools array (mig 143) — cache-prefix segment 1. */
@@ -146,6 +149,8 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
       run_id: args.runId,
       turn: args.turn,
       is_subagent: args.isSubagent,
+      parent_run_id: args.parentRunId ?? null,
+      subagent_profile: args.subagentProfile ?? null,
       provider: args.provider,
       model: args.model,
       input_tokens: args.usage?.input_tokens ?? null,
@@ -162,6 +167,7 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
       paginate_count: paginate,
       system_prompt_chars: args.systemPromptChars ?? null,
       tools_def_chars: args.toolsDefChars ?? null,
+      eligible_tools_def_chars: args.eligibleToolsDefChars ?? null,
       visible_tools_count: args.visibleToolsCount ?? null,
       tools_fingerprint: args.toolsFingerprint ?? null,
       prefix_head_hash: args.prefixHeadHash ?? null,

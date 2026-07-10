@@ -5,8 +5,7 @@
  *   - 1st identical call → allow, count=1, registered in the map.
  *   - 2nd identical call → allow-with-reminder, reminder mentions first turn.
  *   - 3rd+ identical call → refuse with payload citing the count.
- *   - Polling-pattern names (mcp__list_*, *_status, await_*, …) → never dedup.
- *   - Repeatable tool flag → never dedup.
+ *   - Names alone never bypass the guard; resolved repeat metadata does.
  *   - Different args under the same name → tracked separately.
  *   - resetDupCalls clears state fully.
  */
@@ -99,12 +98,13 @@ describe('checkDupCall', () => {
     expect(dupCalls.size).toBe(2);
   });
 
-  it('exempts polling-pattern tool names', () => {
+  it('does not infer repeatability from tool names', () => {
     const dupCalls = fresh();
     const cases = ['mcp__list_pages', 'wait_for_build', 'task_status', 'poll_artifact'];
     for (const name of cases) {
-      for (let i = 0; i < 10; i++) {
-        const verdict = checkDupCall({
+      let verdict: DupVerdict | undefined;
+      for (let i = 0; i < 3; i++) {
+        verdict = checkDupCall({
           name,
           input: { x: 1 },
           isRepeatable: false,
@@ -112,14 +112,13 @@ describe('checkDupCall', () => {
           useId: `u${i}`,
           dupCalls,
         });
-        expect(verdict.kind, name).toBe('allow');
       }
+      expect(verdict?.kind, name).toBe('refuse');
     }
-    // Nothing was registered for polling tools.
-    expect(dupCalls.size).toBe(0);
+    expect(dupCalls.size).toBe(cases.length);
   });
 
-  it('exempts CoderTool.repeatable=true', () => {
+  it('exempts tools whose resolved metadata is repeatable', () => {
     const dupCalls = fresh();
     const verdicts: DupVerdict[] = [];
     for (let i = 0; i < 5; i++) {

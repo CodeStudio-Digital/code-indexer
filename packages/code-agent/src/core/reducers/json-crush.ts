@@ -51,6 +51,36 @@ const MARKER_RESERVE = 200;
 const NDJSON_MIN_RATIO = 0.8;
 /** Cap on query text fed to the tokenizer (guards against giant prompts). */
 const QUERY_MAX = 4000;
+/** Avoid a full JSON.parse allocation for pathological single-payload arrays. */
+const MAX_PARSE_CHARS = 8_000_000;
+
+/** Count top-level array entries without allocating/parsing the whole value. */
+function topLevelArrayRows(text: string, stopAfter: number): number | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let rows = 0;
+  let sawValue = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '[' || ch === '{') { depth++; if (depth === 1 && ch === '[') continue; }
+    else if (ch === ']' || ch === '}') depth--;
+    else if (depth === 1 && ch === ',') {
+      rows++;
+      if (rows > stopAfter) return rows;
+    } else if (depth === 1 && !/\s/.test(ch)) {
+      sawValue = true;
+    }
+  }
+  return sawValue ? rows + 1 : 0;
+}
 
 interface Row {
   /** Original index — drives output ordering and the stable tie-break. */
@@ -68,6 +98,9 @@ function parseRows(content: string): { rows: Row[]; mode: 'array' | 'ndjson' } |
   const trimmed = content.trim();
   // Top-level JSON array.
   if (trimmed.startsWith('[')) {
+    if (trimmed.length > MAX_PARSE_CHARS) return null;
+    const preflightRows = topLevelArrayRows(trimmed, MAX_ROWS);
+    if (preflightRows == null || preflightRows > MAX_ROWS) return null;
     try {
       const parsed: unknown = JSON.parse(trimmed);
       if (Array.isArray(parsed) && parsed.length >= MIN_ROWS && parsed.length <= MAX_ROWS) {
@@ -94,7 +127,8 @@ function parseRows(content: string): { rows: Row[]; mode: 'array' | 'ndjson' } |
 
 export function jsonCrush({ content, cap, query }: JsonCrushInput): JsonCrushOutput {
   const pass: JsonCrushOutput = { content, applied: false };
-  if (content.length <= cap) return pass;
+  const safeCap = Number.isFinite(cap) && cap > 0 ? Math.max(1, Math.floor(cap)) : 1;
+  if (content.length <= safeCap) return pass;
   const parsed = parseRows(content);
   if (!parsed) return pass;
   const { rows, mode } = parsed;
@@ -124,7 +158,7 @@ export function jsonCrush({ content, cap, query }: JsonCrushInput): JsonCrushOut
   for (const r of unique.slice(Math.max(ANCHOR, unique.length - ANCHOR))) keep.add(r.idx);
 
   // 4. Budget fill: remaining rows by score desc, then original index asc.
-  const budget = Math.max(0, cap - MARKER_RESERVE);
+  const budget = Math.max(0, safeCap - MARKER_RESERVE);
   let used = unique.filter((r) => keep.has(r.idx)).reduce((n, r) => n + r.text.length + 1, 0);
   const middle = unique
     .filter((r) => !keep.has(r.idx))
@@ -141,15 +175,48 @@ export function jsonCrush({ content, cap, query }: JsonCrushInput): JsonCrushOut
   const elided = unique.length - kept.length;
   if (duplicates === 0 && elided === 0) return pass; // nothing saved
 
-  const body = mode === 'array'
-    ? '[' + kept.map((r) => r.text).join(',\n') + ']'
-    : kept.map((r) => r.text).join('\n');
-  const marker =
-    `\n[smart-reducer: json-crush — kept ${kept.length}/${rows.length} rows` +
-    (duplicates ? `; dropped ${duplicates} duplicate(s)` : '') +
-    (elided ? `; elided ${elided} lower-relevance row(s) — re-run with narrower params if needed` : '') +
-    `]\n`;
-  const out = body + marker;
+  const meta = {
+    technique: 'json-crush',
+    kept: kept.length,
+    total: rows.length,
+    duplicates,
+    elided,
+  };
+  // Keep the shaped value machine-readable. Arrays become a documented
+  // envelope; NDJSON receives one valid JSON metadata row.
+  let out = mode === 'array'
+    ? `{"_smart_reducer":${JSON.stringify(meta)},"rows":[${kept.map((r) => r.text).join(',')}]} `
+    : `${JSON.stringify({ _smart_reducer: meta })}\n${kept.map((r) => r.text).join('\n')}`;
+  if (out.length > safeCap) {
+    const first = unique[0]?.text ?? '';
+    const last = unique.at(-1)?.text ?? '';
+    const overhead = JSON.stringify({ _smart_reducer: meta, first: '', last: '' }).length;
+    const room = Math.max(0, safeCap - overhead);
+    const firstRoom = Math.ceil(room / 2);
+    const lastRoom = Math.max(0, room - firstRoom);
+    let firstValue = first.slice(0, firstRoom);
+    let lastValue = lastRoom > 0 ? last.slice(0, lastRoom) : '';
+    const compact = (): string => JSON.stringify({
+      _smart_reducer: { ...meta, anchors_compacted: true },
+      first: firstValue,
+      last: lastValue,
+    });
+    out = compact();
+    while (out.length > safeCap && (firstValue.length > 0 || lastValue.length > 0)) {
+      if (firstValue.length >= lastValue.length) firstValue = firstValue.slice(0, Math.floor(firstValue.length * 0.75));
+      else lastValue = lastValue.slice(0, Math.floor(lastValue.length * 0.75));
+      out = compact();
+    }
+    if (out.length > safeCap) {
+      const metadataOnly = JSON.stringify({ _smart_reducer: meta });
+      const minimal = JSON.stringify({ _smart_reducer: { technique: 'json-crush', total: rows.length } });
+      out = metadataOnly.length <= safeCap
+        ? metadataOnly
+        : minimal.length <= safeCap
+          ? minimal
+          : safeCap >= 2 ? '{}' : '0';
+    }
+  }
   if (out.length >= content.length) return pass; // reducer didn't help
   return { content: out, applied: true };
 }

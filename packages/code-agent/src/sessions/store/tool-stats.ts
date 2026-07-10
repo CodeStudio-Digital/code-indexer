@@ -2,6 +2,8 @@ import type { Database as DB } from 'better-sqlite3';
 
 export interface ToolCallStats {
   totalCalls: number;
+  directCalls: number;
+  nestedCalls: number;
   /**
    * `errorCount` = genuine tool failures only; harness refusals (dedup,
    * failure-streak, timeout, …) are split into `refusedCount` so a guard
@@ -22,6 +24,11 @@ export interface ToolCallStats {
     totalSavedChars: number;
     totalSavedTokensEst: number;
     byTool: Array<{ name: string; rawChars: number; shapedChars: number; savedChars: number }>;
+    semanticSavedChars: number;
+    jsonCrushSavedChars: number;
+    hardCapSavedChars: number;
+    nestedRawChars: number;
+    byTechnique: Array<{ kind: string; technique: string; calls: number; rawChars: number; shapedChars: number; savedChars: number }>;
   };
 }
 
@@ -55,6 +62,14 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
     )
     .all(sessionId) as Array<{ name: string; count: number; errorCount: number; refusedCount: number; lastAt: string | null }>;
   const totalCalls = byNameRows.reduce((acc, r) => acc + r.count, 0);
+  const scopeCounts = db.prepare(
+    `SELECT
+       COALESCE(SUM(CASE WHEN tc.parent_tool_use_id IS NULL THEN 1 ELSE 0 END), 0) AS directCalls,
+       COALESCE(SUM(CASE WHEN tc.parent_tool_use_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS nestedCalls
+     FROM coder_tool_calls tc
+     JOIN coder_messages m ON m.id = tc.message_id
+     WHERE m.session_id = ?`,
+  ).get(sessionId) as { directCalls: number; nestedCalls: number };
   const cappedLimit = Math.max(1, Math.min(200, Math.floor(recentLimit)));
   const recentRows = db
     .prepare(
@@ -67,7 +82,7 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
           tc.created_at  AS createdAt
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
-       WHERE m.session_id = ?
+       WHERE m.session_id = ? AND tc.parent_tool_use_id IS NULL
        ORDER BY tc.id DESC
        LIMIT ?`,
     )
@@ -88,7 +103,7 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
           COALESCE(SUM(COALESCE(tc.output_chars_shaped, tc.output_chars)), 0) AS shapedChars
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
-       WHERE m.session_id = ?
+       WHERE m.session_id = ? AND tc.parent_tool_use_id IS NULL
        GROUP BY tc.tool_name
        ORDER BY (rawChars - shapedChars) DESC, name ASC`,
     )
@@ -107,9 +122,49 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
     };
   });
   const totalSavedChars = Math.max(0, totalRawChars - totalShapedChars);
+  const techniqueRows = db.prepare(
+    `SELECT
+       CASE
+         WHEN tc.reduction_kind IS NOT NULL THEN tc.reduction_kind
+         WHEN tc.truncated = 1 OR tc.result_text LIKE '%[truncated:%' THEN 'hard_cap'
+         WHEN tc.result_text LIKE '%json-crush%' THEN 'json_crush'
+         WHEN tc.result_text LIKE '%[smart-reducer:%' THEN 'semantic'
+         ELSE 'none'
+       END AS kind,
+       COALESCE(tc.reduction_technique,
+         CASE
+           WHEN tc.truncated = 1 OR tc.result_text LIKE '%[truncated:%' THEN 'legacy-hard-cap'
+           WHEN tc.result_text LIKE '%json-crush%' THEN 'legacy-json-crush'
+           WHEN tc.result_text LIKE '%[smart-reducer:%' THEN 'legacy-semantic'
+           ELSE 'none'
+         END) AS technique,
+       COUNT(*) AS calls,
+       COALESCE(SUM(tc.output_chars), 0) AS rawChars,
+       COALESCE(SUM(COALESCE(tc.output_chars_shaped, tc.output_chars)), 0) AS shapedChars
+     FROM coder_tool_calls tc
+     JOIN coder_messages m ON m.id = tc.message_id
+     WHERE m.session_id = ? AND tc.parent_tool_use_id IS NULL
+     GROUP BY kind, technique
+     ORDER BY (rawChars - shapedChars) DESC`,
+  ).all(sessionId) as Array<{ kind: string; technique: string; calls: number; rawChars: number; shapedChars: number }>;
+  const nestedVolume = db.prepare(
+    `SELECT COALESCE(SUM(tc.output_chars), 0) AS rawChars
+       FROM coder_tool_calls tc
+       JOIN coder_messages m ON m.id = tc.message_id
+      WHERE m.session_id = ? AND tc.parent_tool_use_id IS NOT NULL`,
+  ).get(sessionId) as { rawChars: number };
+  const byTechnique = techniqueRows.map((r) => ({
+    ...r,
+    savedChars: Math.max(0, r.rawChars - r.shapedChars),
+  }));
+  const savedFor = (kind: string): number => byTechnique
+    .filter((r) => r.kind === kind)
+    .reduce((sum, r) => sum + r.savedChars, 0);
 
   return {
     totalCalls,
+    directCalls: scopeCounts.directCalls,
+    nestedCalls: scopeCounts.nestedCalls,
     byName: byNameRows.map((r) => ({ name: r.name, count: r.count, errorCount: r.errorCount, refusedCount: r.refusedCount, lastAt: r.lastAt })),
     recent: recentRows.map((r) => ({
       id: r.id, name: r.name,
@@ -126,6 +181,11 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
       // when no provider usage is available. Good enough for a "tokens saved" headline.
       totalSavedTokensEst: Math.round(totalSavedChars / 4),
       byTool: byToolSavings.filter((b) => b.savedChars > 0).slice(0, 20),
+      semanticSavedChars: savedFor('semantic'),
+      jsonCrushSavedChars: savedFor('json_crush'),
+      hardCapSavedChars: savedFor('hard_cap'),
+      nestedRawChars: nestedVolume.rawChars,
+      byTechnique,
     },
   };
 }

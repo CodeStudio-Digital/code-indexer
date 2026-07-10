@@ -74,6 +74,8 @@ export async function runBackgroundEphemeral(
     task: taskWithWorkspaceBriefing(a.task, ctx),
     label: a.label,
     maxTurns: a.maxTurns,
+    profile: a.profile.id,
+    spawnId: groupId,
     systemPrompt: a.profile.systemPrompt,
     allowlist: a.profile.allowlist,
     pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files?.length ? a.files : undefined,
@@ -106,7 +108,7 @@ async function runBackgroundJob(
   const manager = getSubagentJobManager();
   try {
     const { results, totalUsage } = await runParallelAgents(
-      { provider: deps.subagentProvider ?? deps.provider, tools: deps.parentTools, ctx: jobCtx, sessionId, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
+      { provider: deps.subagentProvider ?? deps.provider, tools: deps.parentTools, ctx: jobCtx, sessionId, sessionStore: deps.sessionStore, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
       specs,
       MICRO_AGENT_PROFILES.explore.systemPrompt,
       MICRO_AGENT_PROFILES.explore.allowlist,

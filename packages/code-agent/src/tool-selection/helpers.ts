@@ -3,6 +3,7 @@
  */
 import type { CoderTool } from '../core/tool.js';
 import type { ToolCandidate } from './types.js';
+import { NEVER_TRIM } from '../tools/tool-priority.js';
 
 /**
  * Canonical list of tool names that are ALWAYS included in the selection.
@@ -12,16 +13,7 @@ import type { ToolCandidate } from './types.js';
  * Intentionally short: anything that the agent uses on EVERY task lives here.
  * Specialized tools (e.g. design-system, qa, sandbox) are scored normally.
  */
-export const ESSENTIAL_TOOL_NAMES = new Set<string>([
-  'Read',
-  'Write',
-  'Edit',
-  'TodoWrite',
-  'Bash',
-  'Glob',
-  'Grep',
-  'PowerShell',
-]);
+export const ESSENTIAL_TOOL_NAMES = new Set<string>(NEVER_TRIM);
 
 const CATEGORY_PATTERNS: Array<[RegExp, string]> = [
   [/^(read|write|edit|glob|grep|notebook)/i, 'fs'],

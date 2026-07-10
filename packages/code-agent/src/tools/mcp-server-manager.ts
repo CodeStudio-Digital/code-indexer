@@ -238,15 +238,13 @@ export class McpServerManager {
 
           tierMap.set(prefixedName, conn.config.default_tier);
 
-          // Auto-flag polling-style tools so the runner's per-arg dup-call
-          // cap doesn't refuse legitimate repeated calls. Pattern matches
+          // Compatibility bridge for older MCP servers that cannot declare
+          // repeat metadata. Resolve the convention once at registration;
+          // runtime guards consume only the explicit repeatPolicy field.
           // the server-author convention: wait_for_compile_clean (Unity),
           // tail_logs, await_*, poll_*, monitor_*. The runner has its own
-          // name-pattern fallback for safety, but setting the typed flag
-          // here also exempts the tool from the post-call result-content
-          // dedup which the runner gates on the same flag. Server authors
-          // can opt non-conventional names in by renaming, or in the
-          // future via per-server config (`repeatable_tools: [...]`).
+          // Server authors can opt non-conventional names in through future
+          // MCP metadata without changing guard code.
           const repeatable = /^(?:wait_for|await|poll|tail|monitor)_/.test(t.name);
 
           allTools.push({
@@ -255,7 +253,7 @@ export class McpServerManager {
             parameters: schema,
             source: 'mcp_external',
             handler: this.createHandler(serverId, t.name),
-            repeatable,
+            repeatPolicy: repeatable ? 'pollable' : 'stable',
           });
         }
       } catch (e) {

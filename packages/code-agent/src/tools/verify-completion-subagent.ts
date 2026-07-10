@@ -156,6 +156,7 @@ export async function runVerifyCompletionSubagent(
   }
 
   const result = await runSubagent(parent, {
+    profile: 'verify',
     systemPrompt: VERIFY_SYSTEM_PROMPT,
     allowlist: REVIEW_ALLOWLIST,
     initialMessages,

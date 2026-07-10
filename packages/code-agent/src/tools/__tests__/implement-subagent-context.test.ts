@@ -94,4 +94,58 @@ describe('runSubagent context inheritance', () => {
     expect(seenContext?.ports).toBe(ports);
     expect(seenContext?.sessionId).toBe(1234);
   });
+
+  it('persists every child turn and correlates parent, spawn, run and profile', async () => {
+    const turns: Array<Record<string, unknown>> = [];
+    const starts: Array<Record<string, unknown>> = [];
+    const calls: Array<Record<string, unknown>> = [];
+    const completions: Array<Record<string, unknown>> = [];
+    const fakeStore = {
+      recordTurnTelemetry(input: Record<string, unknown>) { turns.push(input); return turns.length; },
+      startSubagentRun(input: Record<string, unknown>) { starts.push(input); },
+      recordSubagentToolCall(input: Record<string, unknown>) { calls.push(input); },
+      completeSubagentRun(input: Record<string, unknown>) { completions.push(input); },
+    };
+    const captureTool: CoderTool = {
+      name: 'capture_context',
+      description: 'capture context',
+      parameters: { type: 'object', properties: {} },
+      source: 'native',
+      parallelSafe: true,
+      handler: async () => ({ content: 'new symbol: TelemetryProbe' }),
+    };
+    const parentRunner = { runId: 'parent-run-1', emit() {} };
+    const result = await runSubagent({
+      provider: captureProvider(),
+      tools: [captureTool],
+      ctx: {
+        cwd: process.cwd(),
+        projectName: 'test',
+        runner: parentRunner,
+      } as unknown as ToolContext,
+      sessionId: 77,
+      sessionStore: fakeStore as never,
+    }, {
+      systemPrompt: 'You are a telemetry test subagent.',
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'capture' }] }],
+      maxTurns: 5,
+      profile: 'explore',
+      spawnId: 'spawn-abc',
+      limits: { maxToolCalls: 0, timeoutMs: 5_000, stallMs: 5_000 },
+    });
+
+    expect(result.reason).toBe('completed');
+    expect(turns).toHaveLength(2);
+    expect(turns.every((turn) => turn.is_subagent === true)).toBe(true);
+    expect(turns.every((turn) => turn.parent_run_id === 'parent-run-1')).toBe(true);
+    expect(turns.every((turn) => turn.subagent_profile === 'explore')).toBe(true);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ parent_run_id: 'parent-run-1', spawn_id: 'spawn-abc', profile: 'explore' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].run_id).toBe(starts[0].run_id);
+    expect(calls[0].logical_operation_id).toEqual(expect.any(String));
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ run_id: starts[0].run_id, reason: 'completed', turns: 2, tool_calls: 1 });
+  });
 });

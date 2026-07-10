@@ -56,7 +56,7 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
     parallelSafe: false,
     // Exempt from the dup-call cap AND the dispatch timeout — it enforces its
     // own deadline via `timeout_s`.
-    repeatable: true,
+    repeatPolicy: 'pollable',
     timeoutMs: Infinity,
     parameters: {
       type: 'object',

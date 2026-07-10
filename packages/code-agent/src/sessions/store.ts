@@ -47,6 +47,8 @@ import * as telemetryPayload from './store/telemetry-payload.js';
 import * as telemetrySession from './store/telemetry-session.js';
 import * as telemetryGlobal from './store/telemetry-global.js';
 import * as telemetryBackfill from './store/telemetry-backfill.js';
+import * as subagentTelemetry from './store/subagent-telemetry.js';
+import * as subagentRecommendations from './store/subagent-recommendations.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -266,6 +268,12 @@ export class SessionStore {
   copyToolConfig(fromSessionId: number, toSessionId: number): number { return disabledTools.copyConfig(this.db, fromSessionId, toSessionId); }
 
   // ─── Per-turn telemetry (migration 069) ────────────────────────
+  startSubagentRun(input: subagentTelemetry.StartSubagentRunInput): void { subagentTelemetry.start(this.db, input); }
+  recordSubagentToolCall(input: subagentTelemetry.SubagentToolCallInput): void { subagentTelemetry.recordToolCall(this.db, input); }
+  completeSubagentRun(input: subagentTelemetry.CompleteSubagentRunInput): void { subagentTelemetry.complete(this.db, input); }
+  getSubagentBudgetRecommendations(): subagentRecommendations.SubagentBudgetRecommendation[] {
+    return subagentRecommendations.getSubagentBudgetRecommendations(this.db);
+  }
   recordTurnTelemetry(input: telemetryRecord.RecordTurnTelemetryInput): number | null { return telemetryRecord.record(this.db, input); }
   getFirstTurnPayloadBreakdown(sessionId: number): telemetryPayload.FirstTurnPayloadBreakdown { return telemetryPayload.getFirstTurnPayloadBreakdown(this.db, sessionId); }
   getTurnTelemetry(sessionId: number): Array<Record<string, unknown>> { return telemetryPayload.getTurnTelemetry(this.db, sessionId); }

@@ -26,6 +26,7 @@ import { CoderRunner, SUBAGENT_TOOL_RESULT_CAP, extractPathsFromToolArgs, isPath
 import type { CoderTask, TaskResult, TaskReference } from '@mcp/code-agent/sessions/types.js';
 import { createSubagentMonitor } from '@mcp/code-agent/tools/subagent-monitor.js';
 import { buildSubagentSalvageSummary } from '@mcp/code-agent/tools/subagent-salvage.js';
+import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
 
 /**
  * Tool filter for a subagent. Three shapes:
@@ -47,6 +48,8 @@ export interface SubagentSpec {
   allowlist: SubagentAllowlist;
   initialMessages: AgentMessage[];
   maxTurns: number;
+  profile?: string;
+  spawnId?: string;
   pushTimeCap?: number;
   limits?: SubagentLimits;
   signal?: AbortSignal;
@@ -90,10 +93,18 @@ function isAllowed(allowlist: SubagentAllowlist, tool: CoderTool): boolean {
   return allowlist.has(tool.name);
 }
 
+function subagentLimit(name: string, fallback: number, allowZero = false): number {
+  const parsed = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  const value = Math.floor(parsed);
+  if (allowZero ? value < 0 : value <= 0) return fallback;
+  return value;
+}
+
 const DEFAULT_SUBAGENT_LIMITS: Required<SubagentLimits> = {
-  maxToolCalls: Number(process.env.CODER_SUBAGENT_MAX_TOOLS ?? 80) || 80,
-  timeoutMs: Number(process.env.CODER_SUBAGENT_TIMEOUT_MS ?? 10 * 60_000) || 10 * 60_000,
-  stallMs: Number(process.env.CODER_SUBAGENT_STALL_MS ?? 120_000) || 120_000,
+  maxToolCalls: subagentLimit('CODER_SUBAGENT_MAX_TOOLS', 80, true),
+  timeoutMs: subagentLimit('CODER_SUBAGENT_TIMEOUT_MS', 10 * 60_000),
+  stallMs: subagentLimit('CODER_SUBAGENT_STALL_MS', 120_000),
 };
 
 function withDefaultLimits(limits?: SubagentLimits): SubagentLimits {
@@ -212,6 +223,13 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   let lastToolName: string | undefined;
   let subToolCalls = 0;
   let currentTurn = 0;
+  let autoContinues = 0;
+  let productiveOperations = 0;
+  let paginateCalls = 0;
+  let duplicateCalls = 0;
+  let errorCalls = 0;
+  let refusedCalls = 0;
+  const logicalOperations = new Set<string>();
   let watchdogFailed = false;
   let watchdogPhase: string | undefined;
   let lastStreamProgressAt = 0;
@@ -340,6 +358,11 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     : '';
   const finalSystemPrompt = spec.systemPrompt + v2Framing;
 
+  const telemetryRolloutKey = `${parent.ctx.runner?.runId ?? parent.sessionId ?? 'adhoc'}:${spec.spawnId ?? spec.label ?? spec.profile ?? 'subagent'}`;
+  const subagentTelemetryEnabled = rolloutEnabled(
+    'CODER_SUBAGENT_TELEMETRY_ROLLOUT_PERCENT',
+    telemetryRolloutKey,
+  );
   const subRunner = new CoderRunner({
     provider: parent.provider,
     registry: subRegistry,
@@ -350,6 +373,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     pushTimeCap: spec.pushTimeCap ?? SUBAGENT_TOOL_RESULT_CAP,
     sessionId: parent.sessionId,
     isSubagent: true,
+    parentRunId: parent.ctx.runner?.runId,
+    subagentProfile: spec.profile ?? 'unknown',
+    turnTelemetryStore: subagentTelemetryEnabled ? parent.sessionStore : undefined,
     // PR-6: subagent inherits the parent's v2 flag so pre-read cap, result-
     // dup cap, and exp+jitter retry apply inside the subagent loop too.
     agentLoopV2: parent.agentLoopV2,
@@ -382,6 +408,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     currentTurn = typeof turn === 'number' ? turn : currentTurn + 1;
     markActivity('turn', `turn ${currentTurn}`);
   });
+  subRunner.on('auto_continue', (count) => { autoContinues = Math.max(autoContinues, count); });
   subRunner.on('provider_call', (payload: { provider?: string; model?: string }) => {
     const provider = payload.provider ?? parent.provider.name;
     const model = payload.model ?? parent.provider.model;
@@ -421,12 +448,38 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   })();
   let consecutiveNoToolCount = 0;
 
-  subRunner.on('tool_call_result', (_id, name) => {
+  subRunner.on('tool_call_result', (_id, name, toolResult, durationMs) => {
     subToolCalls++;
     lastToolName = name;
     monitor.recordToolResult(name);
     // PR-C quality watchdog — any tool call resets the "no-tool streak".
     consecutiveNoToolCount = 0;
+    const ledgerEntry = toolResult.ledgerEntry;
+    if (ledgerEntry?.logicalOperationId) {
+      if (logicalOperations.has(ledgerEntry.logicalOperationId)) paginateCalls++;
+      logicalOperations.add(ledgerEntry.logicalOperationId);
+      if (ledgerEntry.productive) productiveOperations++;
+    }
+    if (toolResult.isError) errorCalls++;
+    if (toolResult.refusalKind) refusedCalls++;
+    if (toolResult.refusalKind === 'dedup') duplicateCalls++;
+    if (subagentTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
+      try {
+        parent.sessionStore.recordSubagentToolCall({
+          session_id: parent.sessionId,
+          run_id: subRunner.runId,
+          seq: subToolCalls,
+          turn: currentTurn,
+          tool_name: name,
+          logical_operation_id: ledgerEntry?.logicalOperationId ?? null,
+          productive: ledgerEntry?.productive ?? false,
+          is_error: !!toolResult.isError,
+          refusal_kind: toolResult.refusalKind ?? null,
+          duration_ms: durationMs,
+          result_chars: toolResult.rawChars ?? toolResult.content.length,
+        });
+      } catch { /* telemetry must never affect the child */ }
+    }
     if (parentEmit) {
       parentEmit.emit('tool_progress', {
         id: `subagent-tool:${subRunner.runId}:${subToolCalls}`,
@@ -510,6 +563,61 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   abortFailure = (message) => handleWatchdogFailure(message, 'aborted');
   if (subAbort.signal.aborted) handleWatchdogFailure(lastAbortReason, 'aborted');
 
+  const taskPreview = spec.initialMessages
+    .flatMap((message) => Array.isArray(message.content)
+      ? message.content.filter((b): b is { type: 'text'; text: string } => b.type === 'text').map((b) => b.text)
+      : [])
+    .join('\n')
+    .slice(0, 1000);
+  if (subagentTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
+    try {
+      parent.sessionStore.startSubagentRun({
+        session_id: parent.sessionId,
+        run_id: subRunner.runId,
+        parent_run_id: parent.ctx.runner?.runId ?? null,
+        spawn_id: spec.spawnId ?? null,
+        profile: spec.profile ?? 'unknown',
+        label: spec.label ?? null,
+        task_preview: taskPreview,
+        max_turns: spec.maxTurns,
+        max_tool_calls: limits.maxToolCalls ?? null,
+        timeout_ms: limits.timeoutMs ?? null,
+        stall_ms: limits.stallMs ?? null,
+      });
+    } catch { /* best-effort */ }
+  }
+
+  const finishTelemetry = (out: SubagentRunResult): SubagentRunResult => {
+    if (subagentTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
+      try {
+        const outputId = out.finalText.length > SUBAGENT_TOOL_RESULT_CAP
+          ? parent.ctx.toolOutputStore?.put(out.finalText) ?? null
+          : null;
+        parent.sessionStore.completeSubagentRun({
+          run_id: subRunner.runId,
+          reason: out.reason,
+          turns: currentTurn,
+          auto_continues: autoContinues,
+          tool_calls: subToolCalls,
+          logical_operations: logicalOperations.size,
+          productive_operations: productiveOperations,
+          paginate_calls: paginateCalls,
+          duplicate_calls: duplicateCalls,
+          error_calls: errorCalls,
+          refused_calls: refusedCalls,
+          elapsed_ms: Date.now() - startedAt,
+          input_tokens: out.usage.input_tokens,
+          output_tokens: out.usage.output_tokens,
+          cache_read_input_tokens: out.usage.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: out.usage.cache_creation_input_tokens ?? 0,
+          has_summary: out.finalText.trim().length > 0,
+          output_id: outputId,
+        });
+      } catch { /* best-effort */ }
+    }
+    return out;
+  };
+
   function failWatchdog(message: string, phase = 'limit'): void {
     handleWatchdogFailure(message, phase);
     watchdog.fail(message, phase);
@@ -538,7 +646,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         sandboxViolations,
         parentSignal: parent.ctx.signal,
       });
-      return {
+      return finishTelemetry({
         reason,
         finalText: salvaged.text,
         usage: salvaged.usage,
@@ -546,9 +654,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         collected,
         transcript: subRunner.messages.slice(),
         failureDetail: e instanceof Error ? e.message : String(e),
-      };
+      });
     }
-    return {
+    return finishTelemetry({
       reason,
       finalText: e instanceof Error ? e.message : String(e),
       usage: {
@@ -559,7 +667,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       collected,
       transcript: subRunner.messages.slice(),
       failureDetail: e instanceof Error ? e.message : String(e),
-    };
+    });
   } finally {
     watchdog.cleanup();
     if (parent.ctx.signal) parent.ctx.signal.removeEventListener('abort', parentAbort);
@@ -568,14 +676,14 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     if (spec.signal) spec.signal.removeEventListener('abort', abortRunner);
   }
 
-  return {
+  return finishTelemetry({
     reason: result.reason,
     finalText: extractLastAssistantText(subRunner.messages),
     usage: result.totalUsage,
     sandboxViolations,
     collected: collector.snapshot(),
     transcript: subRunner.messages.slice(),
-  };
+  });
 }
 
 /**
@@ -826,6 +934,7 @@ export async function runImplementSubagent(parent: SubagentParent, task: CoderTa
   ];
 
   const result = await runSubagent(parent, {
+    profile: 'implement',
     systemPrompt,
     allowlist: IMPLEMENT_ALLOWLIST,
     initialMessages,
@@ -1023,6 +1132,8 @@ export interface ParallelAgentSpec {
   task: string;
   label: string;
   maxTurns: number;
+  profile?: string;
+  spawnId?: string;
   /**
    * Per-agent overrides — fall back to the global `systemPrompt` /
    * `allowlist` passed to `runParallelAgents` when omitted. Lets a single
@@ -1114,6 +1225,8 @@ export async function runParallelAgents(
         allowlist: spec.allowlist ?? allowlist,
         initialMessages: spec.initialMessages ?? [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
         maxTurns: spec.maxTurns,
+        profile: spec.profile,
+        spawnId: spec.spawnId,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,
         pathScopeMode: spec.pathScopeMode,

@@ -110,7 +110,7 @@ export const waitAgents: CoderTool = {
   // Repeated calls with the same paths/ids are the legitimate use case while
   // the targets are still running, and the result content is identical until
   // a status flips.
-  repeatable: true,
+  repeatPolicy: 'pollable',
   parameters: {
     type: 'object',
     properties: {

@@ -42,7 +42,7 @@ function makeTool(name: string, desc?: string): ThinTool {
 }
 
 const ALL_TOOLS: ThinTool[] = [
-  ...['Read','Write','Edit','Bash','Glob','Grep','TodoWrite','PowerShell'].map((n) => makeTool(n)),
+  ...['read_file','write_file','edit_file','run_command','glob','mcp__grep_code','task_list','code_exec'].map((n) => makeTool(n)),
   ...['DesignSystem','Database','WebFetch','GitStatus','Kanban','Slack','Notion','Jira','PlaywrightRun','Sandbox'].map((n) => makeTool(n)),
 ];
 
@@ -80,7 +80,7 @@ describe('applyToolSelectionThin', () => {
     expect(out.length).toBeLessThanOrEqual(10 + 8); // essentials + slots up to k
     const names = new Set(out.map((t) => t.name));
     // Core essentials must be present.
-    for (const ess of ['Read', 'Write', 'Edit', 'Bash', 'TodoWrite']) {
+    for (const ess of ['read_file', 'glob', 'task_list', 'code_exec']) {
       expect(names.has(ess)).toBe(true);
     }
   });

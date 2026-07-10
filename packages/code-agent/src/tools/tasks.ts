@@ -492,6 +492,7 @@ export const listTasks: CoderTool = {
   source: 'native',
   mutates: false,
   parallelSafe: true,
+  repeatPolicy: 'volatile',
   riskLevel: 'read',
   parameters: listTasksSchema,
   handler: async (args, ctx): Promise<ToolResult> => {

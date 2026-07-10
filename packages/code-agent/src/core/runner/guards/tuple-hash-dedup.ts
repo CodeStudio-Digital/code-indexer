@@ -8,13 +8,12 @@
  * This guard catches the loop on call #2 (system-reminder) and stops it on
  * call #3 (refuse + ToolLoopDetected event → routes to Planning).
  *
- * Polling tools — those matching `REPEATABLE_NAME_PATTERN` or with
- * `CoderTool.repeatable=true` — are exempt; repeated identical calls are
+ * Polling tools — those resolved to repeatPolicy=pollable|volatile — are
+ * exempt; repeated identical calls are
  * their LEGITIMATE workflow, not a loop signal.
  */
 import type { DupCallEntry } from '../machine/types.js';
 import { stableArgsKey, previewToolArgs } from '../dup-utils.js';
-import { REPEATABLE_NAME_PATTERN } from '../constants.js';
 
 /**
  * Call count at which `checkDupCall` hard-refuses (count 2 = reminder,
@@ -33,7 +32,7 @@ export interface CheckDupArgs {
   name: string;
   /** Tool input as provided by the model. */
   input: unknown;
-  /** Whether `CoderTool.repeatable=true`. Polling tools never dedup. */
+  /** Resolved metadata exemption. Polling/volatile tools never dedup. */
   isRepeatable: boolean;
   /** Current turn number for telemetry / first-seen tracking. */
   turn: number;
@@ -53,9 +52,8 @@ export interface CheckDupArgs {
 export function checkDupCall(args: CheckDupArgs): DupVerdict {
   const key = `${args.name}|${stableArgsKey(args.input)}`;
 
-  // Polling tools: convention-based exemption. We never register them so
-  // the table never grows for legit polling workflows (mcp__list_*, *_status).
-  if (args.isRepeatable || REPEATABLE_NAME_PATTERN.test(args.name)) {
+  // Polling tools are identified at metadata resolution/registration time.
+  if (args.isRepeatable) {
     return {
       kind: 'allow',
       entry: { count: 0, firstTurn: args.turn, lastUseId: args.useId },

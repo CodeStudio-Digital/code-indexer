@@ -156,7 +156,6 @@ export const saveNoteTool: CoderTool = {
 };
 
 export const listNotesTool: CoderTool = {
-  // Auto-repeatable via the `list_*` prefix.
   name: 'list_notes',
   description:
     'List the notes you saved with `save_note` in this session. Optional `kind` filter ' +
@@ -164,6 +163,7 @@ export const listNotesTool: CoderTool = {
   source: 'native',
   mutates: false,
   parallelSafe: true,
+  repeatPolicy: 'volatile',
   riskLevel: 'read',
   parameters: {
     type: 'object',

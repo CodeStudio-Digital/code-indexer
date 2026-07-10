@@ -414,7 +414,10 @@ export interface BridgeCallbacks {
    * and returns a possibly-shortened version (tool-aware truncation, e.g.
    * git_log keeps the head commits, grep keeps the first matches).
    */
-  reduceToolResult?: (toolName: string, content: string) => string;
+  reduceToolResult?: (
+    toolName: string,
+    content: string,
+  ) => string | import('@mcp/code-agent/core/smart-reducers.js').DetailedReduction;
   /**
    * Live final shaping hook. Spills the raw original to the side-file store
    * and applies the generic fail-safe cap with an output_id marker. Returns
@@ -425,7 +428,14 @@ export interface BridgeCallbacks {
     rawContent: string;
     shapedContent: string;
     isError: boolean;
-  }) => { content: string; truncated?: boolean; originalSize?: number };
+    reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;
+  }) => {
+    content: string;
+    truncated?: boolean;
+    originalSize?: number;
+    outputId?: string;
+    reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;
+  };
   /**
    * Post-result hook for runner-owned state that needs raw and shaped
    * content (mutation-aware reread diffs, write tracking, etc.).
@@ -576,6 +586,7 @@ export interface BridgeCallbacks {
     historyChars: number;
     systemPromptChars: number;
     toolsDefChars: number;
+    eligibleToolsDefChars?: number;
     visibleToolsCount?: number;
     /** Prompt-cache diagnostics (mig 143) — see telemetry/prefix-head.ts. */
     toolsFingerprint?: string | null;

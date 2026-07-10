@@ -27,14 +27,14 @@ import { runInNewContext, type Context } from 'node:vm';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from '@mcp/code-agent/core/policy.js';
+import { evaluateToolInvocation, findScopeViolations, resolveToolMetadata, type PolicyContext } from '@mcp/code-agent/core/policy.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
+import { capToolContent } from '@mcp/code-agent/core/runner/pure-helpers.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
-import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
@@ -127,7 +127,7 @@ const CODE_EXEC_DESC =
  *    coupling as the interactive prompts.
  */
 function isSafeTool(tool: CoderTool): boolean {
-  if (tool.interactive) return false;
+  if (resolveToolMetadata(tool).interactive) return false;
   if (
     tool.name === 'spawn_agent' ||
     tool.name === 'code_exec' ||
@@ -138,6 +138,25 @@ function isSafeTool(tool: CoderTool): boolean {
     tool.name === 'view_image'
   ) return false;
   return true;
+}
+
+function nestedRefusalError(
+  tool: string,
+  kind: string,
+  detail: string,
+): Error & { code: string; refusalKind: string; tool: string; detail: string } {
+  const error = new Error(`tool ${tool} refused (${kind}): ${detail}`) as Error & {
+    code: string;
+    refusalKind: string;
+    tool: string;
+    detail: string;
+  };
+  error.name = 'ToolCallRefusalError';
+  error.code = 'TOOL_CALL_REFUSED';
+  error.refusalKind = kind;
+  error.tool = tool;
+  error.detail = detail;
+  return error;
 }
 
 export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
@@ -203,6 +222,19 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const logBuffer: string[] = [];
       let toolCalls = 0;
       let outputBytes = 0;
+      // Reservation chain for mutating / non-parallel-safe tools. A timed-out
+      // caller gets its rejection promptly, but the lane is held until the
+      // underlying invocation actually settles, preventing late writes from
+      // racing the next call.
+      let unsafeLane: Promise<void> = Promise.resolve();
+      const reserveLocalUnsafe = async (): Promise<() => void> => {
+        const prior = unsafeLane;
+        let release!: () => void;
+        const reservation = new Promise<void>((resolve) => { release = resolve; });
+        unsafeLane = prior.then(() => reservation, () => reservation);
+        await prior;
+        return release;
+      };
 
       const appendLog = (...parts: unknown[]): void => {
         const line = parts.map((p) => {
@@ -271,6 +303,42 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
             throw new Error(`code_exec: exceeded ${MAX_TOOL_CALLS} tool calls per script`);
           }
           const argObj = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
+          const metadata = resolveToolMetadata(t);
+          const observer = ctx.nestedToolObserver;
+          const repeatable = metadata.repeatPolicy === 'pollable' || metadata.repeatPolicy === 'volatile';
+          const recordNestedOutcome = (input: {
+            content: string;
+            isError: boolean;
+            durationMs: number;
+            refusalKind?: string;
+            affectsFailureStreak?: boolean;
+          }) => {
+            const ledgerEntry = ctx.toolCallLedger?.record({
+              name: t.name,
+              args: argObj,
+              content: input.content,
+              isError: input.isError,
+              refusalKind: input.refusalKind,
+              mutates: metadata.mutates,
+              durationMs: input.durationMs,
+              executionClass: metadata.executionClass,
+              repeatPolicy: metadata.repeatPolicy,
+            });
+            observer?.afterNestedCall({
+              name: t.name,
+              args: argObj,
+              isError: input.isError,
+              durationMs: input.durationMs,
+              resultChars: input.content.length,
+              resultPreview: input.content,
+              ...(input.refusalKind ? { refusalKind: input.refusalKind } : {}),
+              logicalOperationId: ledgerEntry?.logicalOperationId,
+              productive: ledgerEntry?.productive,
+              repeatable,
+              affectsFailureStreak: input.affectsFailureStreak,
+            });
+            return ledgerEntry;
+          };
           const policyCtx = buildPolicyCtx();
           const decision = evaluateToolInvocation(t, argObj, policyCtx);
           if (!decision.allowed) {
@@ -286,35 +354,37 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               const violators = findScopeViolations(candidatePaths, policyCtx.taskScope.files, isPathInsideScope);
               unlocked = candidatePaths.length > 0 && violators.length === 0;
               if (!unlocked) {
-                throw new Error(
+                const detail =
                   `tool ${t.name} blocked: ${decision.detail} ` +
                   `Active task scope ${policyCtx.taskScope.id} declares files=[${policyCtx.taskScope.files.join(', ')}]; ` +
-                  `tried to touch [${violators.join(', ')}].`,
-                );
+                  `tried to touch [${violators.join(', ')}].`;
+                recordNestedOutcome({ content: detail, isError: true, durationMs: 0, refusalKind: 'gate', affectsFailureStreak: false });
+                throw nestedRefusalError(t.name, 'gate', detail);
               }
             }
             if (!unlocked) {
-              throw new Error(`tool ${t.name} blocked: ${decision.detail}`);
+              const detail = `tool ${t.name} blocked: ${decision.detail}`;
+              recordNestedOutcome({ content: detail, isError: true, durationMs: 0, refusalKind: 'gate', affectsFailureStreak: false });
+              throw nestedRefusalError(t.name, 'gate', detail);
             }
           }
           // Nested loop guards (tuple-hash dedup + failure-streak pre-check),
           // AFTER the policy gate so blocked calls don't pollute the dedup
           // counter — same ordering as top-level dispatch. A refusal is a
           // catchable JS exception, like every other nested failure.
-          const observer = ctx.nestedToolObserver;
           const nestedRefusal =
-            observer?.beforeNestedCall(t.name, argObj, { repeatable: !!t.repeatable }) ?? null;
+            observer?.beforeNestedCall(t.name, argObj, {
+              repeatable,
+            }) ?? null;
           if (nestedRefusal) {
-            observer?.afterNestedCall({
-              name: t.name,
-              args: argObj,
+            recordNestedOutcome({
+              content: nestedRefusal.refusalText,
               isError: true,
               durationMs: 0,
-              resultChars: nestedRefusal.refusalText.length,
-              resultPreview: nestedRefusal.refusalText,
               refusalKind: nestedRefusal.kind,
+              affectsFailureStreak: false,
             });
-            throw new Error(`tool ${t.name} refused: ${nestedRefusal.refusalText}`);
+            throw nestedRefusalError(t.name, nestedRefusal.kind, nestedRefusal.refusalText);
           }
           // Pause the JS-time budget while this tool runs (the script is not
           // charged for time inside a tool), and bound the tool by its OWN tier
@@ -324,7 +394,15 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           if (inFlight === 1) pauseClock();
           const perToolMs = resolveToolTimeoutMs(t);
           let toolTimer: ReturnType<typeof setTimeout> | null = null;
+          let releaseLane: (() => void) | undefined;
+          let laneReleaseOwnedByInvocation = false;
           try {
+            if (metadata.mutates || !metadata.parallelSafe) {
+              const sharedReserve = ctx.toolCallLedger?.reserveUnsafe;
+              releaseLane = typeof sharedReserve === 'function'
+                ? await sharedReserve.call(ctx.toolCallLedger)
+                : await reserveLocalUnsafe();
+            }
             // Permission gate (modes 'ask'/'auto') — INSIDE the try so a
             // denial throw still hits the finally (inFlight/clock restore),
             // and BEFORE the per-tool timer so the user's decision time is
@@ -343,11 +421,30 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               if (!decision.allowed) {
                 // Same propagation shape as the policy-block throw above —
                 // the script sees the denial as a JS exception.
-                throw new Error(decision.refusalText);
+                recordNestedOutcome({
+                  content: decision.refusalText,
+                  isError: true,
+                  durationMs: 0,
+                  refusalKind: 'user_denied',
+                  affectsFailureStreak: false,
+                });
+                throw nestedRefusalError(t.name, 'user_denied', decision.refusalText);
               }
             }
             const t0 = Date.now();
-            const invocation = registry.invoke(t.name, argObj, ctx);
+            const callAbort = new AbortController();
+            const parentAbort = (): void => {
+              try { callAbort.abort(ctx.signal?.reason); } catch { /* ignore */ }
+            };
+            if (ctx.signal?.aborted) parentAbort();
+            else ctx.signal?.addEventListener('abort', parentAbort, { once: true });
+            const invocation = registry.invoke(t.name, argObj, { ...ctx, signal: callAbort.signal });
+            const cleanupAbort = (): void => ctx.signal?.removeEventListener('abort', parentAbort);
+            void invocation.then(cleanupAbort, cleanupAbort);
+            if (releaseLane) {
+              laneReleaseOwnedByInvocation = true;
+              void invocation.then(releaseLane, releaseLane);
+            }
             const guarded =
               perToolMs === Infinity
                 ? invocation
@@ -355,7 +452,10 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                     invocation,
                     new Promise<never>((_, rej) => {
                       toolTimer = setTimeout(
-                        () => rej(new Error(`tool ${t.name} timed out after ${perToolMs} ms`)),
+                        () => {
+                          try { callAbort.abort(new Error(`tool ${t.name} timed out after ${perToolMs} ms`)); } catch { /* ignore */ }
+                          rej(new Error(`tool ${t.name} timed out after ${perToolMs} ms`));
+                        },
                         perToolMs,
                       );
                     }),
@@ -366,23 +466,22 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
             } catch (e) {
               // Timeout / unexpected throw — still an invocation outcome the
               // failure-streak state (and telemetry) must see.
-              observer?.afterNestedCall({
-                name: t.name,
-                args: argObj,
+              const errorText = e instanceof Error ? e.message : String(e);
+              const refusalKind = /timed out/i.test(errorText)
+                ? 'timeout'
+                : callAbort.signal.aborted ? 'abort' : undefined;
+              recordNestedOutcome({
+                content: errorText,
                 isError: true,
                 durationMs: Date.now() - t0,
-                resultChars: 0,
-                resultPreview: e instanceof Error ? e.message : String(e),
+                ...(refusalKind ? { refusalKind } : {}),
               });
               throw e;
             }
-            observer?.afterNestedCall({
-              name: t.name,
-              args: argObj,
+            recordNestedOutcome({
+              content: result.content,
               isError: !!result.isError,
               durationMs: Date.now() - t0,
-              resultChars: result.content.length,
-              resultPreview: result.content,
             });
             if (result.isError) {
               throw new Error(`tool ${t.name}: ${result.content}`);
@@ -390,6 +489,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
             return result.content;
           } finally {
             if (toolTimer) clearTimeout(toolTimer);
+            if (releaseLane && !laneReleaseOwnedByInvocation) releaseLane();
             inFlight -= 1;
             if (inFlight === 0) resumeClock();
           }
@@ -515,13 +615,16 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         returnValue = await Promise.race([scriptPromise, timeoutPromise]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        const structuredDetail = typeof (e as { detail?: unknown })?.detail === 'string'
+          ? `\n${(e as { detail: string }).detail}`
+          : '';
         // Defense-in-depth hints (wrong call shape, control tool, absent Node
         // builtin, import, nested-failure try/catch) — see code-exec-hints.ts.
         // Matching is on message text, never instanceof: errors thrown inside
         // node:vm carry the sandbox realm's constructors.
         const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
         const stderr = logBuffer.length > 0 ? `\n[output before failure]\n${logBuffer.join('\n')}` : '';
-        return err(`code_exec failed: ${msg}${hint}${stderr}`);
+        return err(`code_exec failed: ${msg}${structuredDetail}${hint}${stderr}`);
       } finally {
         if (clockTimer) clearTimeout(clockTimer);
       }
@@ -544,13 +647,8 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       }
       const out = lines.join('\n');
       if (out.length > effectiveMaxOutput) {
-        // Recovery steers AWAY from the re-read/re-print loop (telemetry:
-        // 34% of code_exec outputs truncated → model re-read the files and
-        // printed them again). The durable fix is the stash, not a retry.
-        return ok(out.slice(0, effectiveMaxOutput) + `\n${truncationMarker(
-          `output exceeded ${effectiveMaxOutput} bytes`,
-          'do NOT re-run to re-print — stash bulk content (stash.set) and return only extracted facts',
-        )}`);
+        const outputId = ctx.toolOutputStore?.put(out) ?? undefined;
+        return ok(capToolContent(out, effectiveMaxOutput, outputId, 'code_exec').content);
       }
       return ok(out);
     },

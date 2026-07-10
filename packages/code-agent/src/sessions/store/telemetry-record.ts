@@ -6,6 +6,8 @@ export interface RecordTurnTelemetryInput {
   run_id: string;
   turn: number;
   is_subagent: boolean;
+  parent_run_id?: string | null;
+  subagent_profile?: string | null;
   provider: string | null;
   model: string | null;
   input_tokens: number | null;
@@ -24,6 +26,7 @@ export interface RecordTurnTelemetryInput {
   system_prompt_chars?: number | null;
   /** Tools array (JSON-stringified) size in chars on this turn. Migration 072. */
   tools_def_chars?: number | null;
+  eligible_tools_def_chars?: number | null;
   /** How many tools were visible to the model this turn. Migration 135. */
   visible_tools_count?: number | null;
   /** SHA-1 of the serialized tools array. Migration 143. */
@@ -62,13 +65,13 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
     const r = db
       .prepare(
         `INSERT INTO coder_turn_telemetry (
-          session_id, run_id, turn, is_subagent,
+          session_id, run_id, turn, is_subagent, parent_run_id, subagent_profile,
           provider, model,
           input_tokens, output_tokens,
           cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens,
           history_chars, tool_count, tools_called_json,
           largest_tool_result_chars, compaction_triggered, summarizer_ran, paginate_count,
-          system_prompt_chars, tools_def_chars, visible_tools_count, estimated_cost_usd,
+          system_prompt_chars, tools_def_chars, eligible_tools_def_chars, visible_tools_count, estimated_cost_usd,
           tools_fingerprint, prefix_head_hash,
           reducer_retired_count, reducer_freed_chars, reducer_pending_chars,
           request_api_model, request_requested_model, request_display_model,
@@ -78,11 +81,12 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
           response_retry_after, response_x_should_retry,
           response_rate_limits_json, response_path,
           project_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           (SELECT s.project_id FROM coder_sessions s WHERE s.id = ?))`,
       )
       .run(
         input.session_id, input.run_id, input.turn, input.is_subagent ? 1 : 0,
+        input.parent_run_id ?? null, input.subagent_profile ?? null,
         input.provider, input.model,
         input.input_tokens, input.output_tokens,
         input.cache_read_input_tokens, input.cache_creation_input_tokens, input.thinking_tokens,
@@ -93,6 +97,7 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
         input.paginate_count,
         input.system_prompt_chars ?? null,
         input.tools_def_chars ?? null,
+        input.eligible_tools_def_chars ?? null,
         input.visible_tools_count ?? null,
         input.estimated_cost_usd ?? null,
         input.tools_fingerprint ?? null,

@@ -158,7 +158,9 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
     const label = typeof raw.label === 'string' && raw.label.trim()
       ? raw.label.trim()
       : `${profile.defaultLabel}-${i + 1}`;
-    const max_turns = typeof raw.max_turns === 'number' ? raw.max_turns : 100;
+    const max_turns = typeof raw.max_turns === 'number' && Number.isFinite(raw.max_turns)
+      ? raw.max_turns
+      : 100;
     const files = Array.isArray(raw.files)
       ? (raw.files as unknown[]).filter((f): f is string => typeof f === 'string' && f.length > 0)
       : undefined;
@@ -249,10 +251,13 @@ async function runSingleEphemeral(
       tools: deps.parentTools,
       ctx,
       sessionId: parentSessionId,
+      sessionStore: deps.sessionStore,
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
     },
     {
       label: agent.label,
+      profile: agent.profile.id,
+      spawnId,
       systemPrompt: agent.profile.systemPrompt,
       allowlist: agent.profile.allowlist,
       initialMessages,
@@ -343,6 +348,8 @@ async function runParallelEphemeral(
     task: taskWithWorkspaceBriefing(a.task, ctx),
     label: a.label,
     maxTurns: a.maxTurns,
+    profile: a.profile.id,
+    spawnId: groupId,
     systemPrompt: a.profile.systemPrompt,
     allowlist: a.profile.allowlist,
     pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files && a.files.length > 0
@@ -358,6 +365,7 @@ async function runParallelEphemeral(
       tools: deps.parentTools,
       ctx,
       sessionId: parentSessionId,
+      sessionStore: deps.sessionStore,
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
     },
     specs,
@@ -487,7 +495,7 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
                 description: 'Backward-compatible alias for profile. Prefer profile/tool_profile for named specializations.',
               },
               label: { type: 'string', description: 'Short UI label shown in parallel mode (3-5 words).' },
-              max_turns: { type: 'number', description: 'Max turns for this agent (default 50, min 50).' },
+              max_turns: { type: 'number', description: 'Max turns for this agent (default 100, min 50).' },
               files: { type: 'array', items: { type: 'string' }, description: 'Implement profile: paths the agent may write to.' },
             },
             required: ['task'],

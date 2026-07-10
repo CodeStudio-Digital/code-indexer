@@ -176,14 +176,13 @@ export const DUP_CALL_THRESHOLD = readEnvInt('CODER_DUP_CALL_THRESHOLD', 5);
 export const DUP_CALL_WINDOW = readEnvInt('CODER_DUP_CALL_WINDOW', 20);
 
 /**
- * Polling-tool name pattern — convention-based auto-detection of tools
+ * Compatibility-only polling name pattern for external tool registration.
  * where repeated identical-args calls are the LEGITIMATE workflow, not
  * a stuck-loop signal. Prefix matches at start-of-name or after `__`
  * separator. Suffix matches at end-of-name.
  *
- * Tools that match OR have `CoderTool.repeatable===true` are exempt
- * from: dup-call cap, strict/fuzzy doom-loop guards, dominance guard,
- * and post-call result-content dedup.
+ * Runtime guards no longer consult names; loaders may use this once to stamp
+ * explicit repeat metadata when an older MCP server does not provide it.
  */
 export const REPEATABLE_NAME_PATTERN =
   /(?:^|__)(?:wait_for|await|poll|tail|monitor|list)_|_(?:status|logs|pulse|stats)$/;
@@ -257,7 +256,7 @@ export const DUP_CALL_REMINDER_THRESHOLD = readEnvInt('CODER_DUP_CALL_REMINDER_T
  * `ToolLoopDetected{guard:'failure-streak'}` so the BT routes to
  * Planning. A single successful call resets the streak.
  *
- * Tools matching `REPEATABLE_NAME_PATTERN` are exempt — for polling
+ * Tools resolved to repeatPolicy=pollable|volatile are exempt — for polling
  * primitives a string of empty results is the workflow, not a loop.
  */
 export const FAILURE_STREAK_REMINDER_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_REMINDER', 3);

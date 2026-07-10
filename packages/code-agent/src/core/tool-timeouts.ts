@@ -107,7 +107,7 @@ export function resolveHeartbeatIntervalMs(): number {
  * Resolution order (first match wins):
  *   1. `tool.timeoutMs` explicit value (including `Infinity`)
  *   2. `tool.interactive === true`  → Infinity
- *   3. `tool.repeatable === true`   → Infinity
+ *   3. repeatPolicy pollable/volatile (or legacy repeatable) → Infinity
  *   4. name in `SLOW_NATIVE_NAMES`  → SLOW
  *   5. name matches `SLOW_NAME_RE`  → SLOW
  *   6. name starts with `SLOW_MCP_PREFIX` → SLOW
@@ -117,7 +117,7 @@ export function resolveHeartbeatIntervalMs(): number {
 export function resolveToolTimeoutMs(tool: CoderTool): number {
   if (tool.timeoutMs !== undefined) return tool.timeoutMs;
   if (tool.interactive) return Infinity;
-  if (tool.repeatable) return Infinity;
+  if (tool.repeatable || tool.repeatPolicy === 'pollable' || tool.repeatPolicy === 'volatile') return Infinity;
   if (SLOW_NATIVE_NAMES.has(tool.name)) return SLOW_TIMEOUT_MS;
   if (SLOW_NAME_RE.test(tool.name)) return SLOW_TIMEOUT_MS;
   if (tool.name.startsWith(SLOW_MCP_PREFIX)) return SLOW_TIMEOUT_MS;

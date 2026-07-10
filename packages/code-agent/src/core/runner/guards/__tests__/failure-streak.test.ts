@@ -5,7 +5,7 @@
  *   - isError=false → state cleared, return `pass`.
  *   - isError=true on non-exempt tool → increment, return verdict
  *     based on thresholds (`pass` → `reminder` → `refuse`).
- *   - REPEATABLE_NAME_PATTERN tools (mcp__list_*, await_*, *_status, …)
+ *   - tools explicitly marked repeatable
  *     are exempt — failure chain is the workflow there.
  *   - Independent counters per tool name.
  *   - lastError snippet truncated to 200 chars.
@@ -129,12 +129,13 @@ describe('checkFailureStreak — exemptions', () => {
     'project_pulse',
     'tail_logs',
     'monitor_health',
-  ])('exempts %s (matches REPEATABLE_NAME_PATTERN)', (name) => {
-    expect(isFailureStreakExempt(name)).toBe(true);
+  ])('exempts %s when metadata marks it repeatable', (name) => {
+    expect(isFailureStreakExempt(true)).toBe(true);
     const state = emptyFailureStreakState();
     for (let i = 1; i <= 10; i++) {
       const v = checkFailureStreak({
         toolName: name, isError: true, errorContent: 'still polling', turn: i, state,
+        isRepeatable: true,
       });
       expect(v.kind).toBe('pass');
     }
@@ -143,9 +144,7 @@ describe('checkFailureStreak — exemptions', () => {
   });
 
   it('does NOT exempt non-polling names like write_stdin or edit_file', () => {
-    expect(isFailureStreakExempt('write_stdin')).toBe(false);
-    expect(isFailureStreakExempt('edit_file')).toBe(false);
-    expect(isFailureStreakExempt('code_exec')).toBe(false);
+    expect(isFailureStreakExempt(false)).toBe(false);
   });
 });
 

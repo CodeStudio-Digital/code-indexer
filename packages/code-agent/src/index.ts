@@ -2404,6 +2404,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       turn_telemetry_id: number | null;
       /** Set on nested (code_exec script) rows only — links to the parent block. */
       parent_tool_use_id?: string | null;
+      reduction_kind?: string | null;
+      reduction_technique?: string | null;
+      reduction_meta_json?: string | null;
+      output_id?: string | null;
+      run_id?: string | null;
+      parent_run_id?: string | null;
+      is_subagent?: boolean;
+      subagent_profile?: string | null;
+      logical_operation_id?: string | null;
+      productive?: boolean | null;
     }>;
     /**
      * Nested code_exec invocations buffered from `nested_tool_call` events.
@@ -2588,6 +2598,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           refusal_kind: e.refusalKind ?? null,
           turn_telemetry_id: null,
           parent_tool_use_id: e.parentToolUseId,
+          reduction_kind: null,
+          reduction_technique: null,
+          reduction_meta_json: null,
+          output_id: null,
+          run_id: runner.runId,
+          parent_run_id: null,
+          is_subagent: false,
+          subagent_profile: null,
+          logical_operation_id: e.logicalOperationId ?? null,
+          productive: e.productive ?? null,
         });
       } catch { /* telemetry must never break the run */ }
     });
@@ -2624,6 +2644,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       output_chars_shaped: content.length,
       truncated: isTruncatedOutput(content),
       refusal_kind: result.refusalKind ?? null,
+      reduction_kind: result.reductionReport?.kind ?? null,
+      reduction_technique: result.reductionReport?.technique ?? null,
+      reduction_meta_json: result.reductionReport ? JSON.stringify(result.reductionReport) : null,
+      output_id: result.outputId ?? result.reductionReport?.outputId ?? null,
+      run_id: runner.runId,
+      parent_run_id: null,
+      is_subagent: false,
+      subagent_profile: null,
+      logical_operation_id: result.ledgerEntry?.logicalOperationId ?? null,
+      productive: result.ledgerEntry?.productive ?? null,
       // Stamped at flushPendingTurn time, when persistTurnTelemetry has
       // already run for this turn and runner.lastTurnTelemetryId is the
       // id of THIS turn's row. Setting it here would point at the prior turn.

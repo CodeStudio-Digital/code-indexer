@@ -222,7 +222,6 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // spawn_agent: orchestration that any session must be able to call.
   'execute_tasks',
   // update_task demoted to navigate (Phase B) — 0 calls in 12k turns.
-  'request_review',
   // self_review — pipeline-based review of the session's own snapshots; always on.
   'self_review',
   // Session Drive — single-session working notes (migrations 125/126).
@@ -290,6 +289,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
 
 /** Tier 1 — navigate + edit. Promoted via expand_toolset('navigate'). */
 export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
+  // Heavy independent reviewer remains callable/pinnable but is no longer in
+  // the bootstrap catalog; self_review is the canonical always-on review.
+  'request_review',
   // Native — write/edit + local exploration
   // P4: native read_file lives here (disk fallback; mcp__read_file is the
   // bootstrap read surface). Pin-by-name reaches it from bootstrap.

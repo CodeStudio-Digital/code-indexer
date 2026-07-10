@@ -30,6 +30,16 @@ export interface PersistAssistantTurnPayload {
     refusal_kind?: string | null;
     /** Nested (code_exec) rows only — parent block's tool_use id (mig 133). */
     parent_tool_use_id?: string | null;
+    reduction_kind?: string | null;
+    reduction_technique?: string | null;
+    reduction_meta_json?: string | null;
+    output_id?: string | null;
+    run_id?: string | null;
+    parent_run_id?: string | null;
+    is_subagent?: boolean;
+    subagent_profile?: string | null;
+    logical_operation_id?: string | null;
+    productive?: boolean | null;
   }>;
   /**
    * Nested code_exec invocations. Audit rows ONLY — excluded from the paired

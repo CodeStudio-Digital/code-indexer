@@ -31,6 +31,7 @@ const gitStatus: CoderTool = {
   name: 'git_status',
   description: maybeTerse(GIT_STATUS_DESC),
   source: 'native',
+  repeatPolicy: 'volatile',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   handler: async (_args, ctx) => git(['status', '--short'], ctx),
 };
@@ -39,6 +40,7 @@ const gitDiff: CoderTool = {
   name: 'git_diff',
   description: maybeTerse(GIT_DIFF_DESC),
   source: 'native',
+  repeatPolicy: 'volatile',
   parameters: {
     type: 'object',
     properties: {

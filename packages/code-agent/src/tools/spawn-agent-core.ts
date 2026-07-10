@@ -24,35 +24,43 @@ export interface NormalizedAgent {
   files?: string[];
 }
 
+function envBudget(name: string, fallback: number, allowZero = false): number {
+  const parsed = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  const value = Math.floor(parsed);
+  if (allowZero ? value < 0 : value <= 0) return fallback;
+  return value;
+}
+
 export const SPAWN_LIMITS: Record<MicroAgentCapability, Required<SubagentLimits>> = {
   explore: {
     // `maxToolCalls` is a budget of tool *CALLS* (invocations), NOT the number
     // of tools available (the env name is kept for back-compat). Default 0 =
     // unlimited: explore is read-only, so we let it run until it concludes or
     // trips the time/turn/stall guards below.
-    maxToolCalls: Number(process.env.CODER_SPAWN_EXPLORE_MAX_TOOLS ?? 0) || 0,
-    timeoutMs: Number(process.env.CODER_SPAWN_EXPLORE_TIMEOUT_MS ?? 10 * 60_000) || 10 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_EXPLORE_STALL_MS ?? 90_000) || 90_000,
+    maxToolCalls: envBudget('CODER_SPAWN_EXPLORE_MAX_TOOLS', 0, true),
+    timeoutMs: envBudget('CODER_SPAWN_EXPLORE_TIMEOUT_MS', 10 * 60_000),
+    stallMs: envBudget('CODER_SPAWN_EXPLORE_STALL_MS', 90_000),
   },
   implement: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_IMPLEMENT_MAX_TOOLS ?? 80) || 80,
-    timeoutMs: Number(process.env.CODER_SPAWN_IMPLEMENT_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_IMPLEMENT_STALL_MS ?? 120_000) || 120_000,
+    maxToolCalls: envBudget('CODER_SPAWN_IMPLEMENT_MAX_TOOLS', 80, true),
+    timeoutMs: envBudget('CODER_SPAWN_IMPLEMENT_TIMEOUT_MS', 20 * 60_000),
+    stallMs: envBudget('CODER_SPAWN_IMPLEMENT_STALL_MS', 120_000),
   },
   verify: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_VERIFY_MAX_TOOLS ?? 40) || 40,
-    timeoutMs: Number(process.env.CODER_SPAWN_VERIFY_TIMEOUT_MS ?? 15 * 60_000) || 15 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_VERIFY_STALL_MS ?? 120_000) || 120_000,
+    maxToolCalls: envBudget('CODER_SPAWN_VERIFY_MAX_TOOLS', 40, true),
+    timeoutMs: envBudget('CODER_SPAWN_VERIFY_TIMEOUT_MS', 15 * 60_000),
+    stallMs: envBudget('CODER_SPAWN_VERIFY_STALL_MS', 120_000),
   },
   review: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_REVIEW_MAX_TOOLS ?? 40) || 40,
-    timeoutMs: Number(process.env.CODER_SPAWN_REVIEW_TIMEOUT_MS ?? 15 * 60_000) || 15 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_REVIEW_STALL_MS ?? 120_000) || 120_000,
+    maxToolCalls: envBudget('CODER_SPAWN_REVIEW_MAX_TOOLS', 40, true),
+    timeoutMs: envBudget('CODER_SPAWN_REVIEW_TIMEOUT_MS', 15 * 60_000),
+    stallMs: envBudget('CODER_SPAWN_REVIEW_STALL_MS', 120_000),
   },
   full: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_FULL_MAX_TOOLS ?? 80) || 80,
-    timeoutMs: Number(process.env.CODER_SPAWN_FULL_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
-    stallMs: Number(process.env.CODER_SPAWN_FULL_STALL_MS ?? 120_000) || 120_000,
+    maxToolCalls: envBudget('CODER_SPAWN_FULL_MAX_TOOLS', 80, true),
+    timeoutMs: envBudget('CODER_SPAWN_FULL_TIMEOUT_MS', 20 * 60_000),
+    stallMs: envBudget('CODER_SPAWN_FULL_STALL_MS', 120_000),
   },
 };
 

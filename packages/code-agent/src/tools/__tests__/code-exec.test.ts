@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { buildCodeExecTool, _exposedToolNames } from '@mcp/code-agent/tools/code-exec.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, type CoderTool, type ToolContext } from '@mcp/code-agent/core/tool.js';
+import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -351,6 +352,150 @@ describe('code_exec nested loop guards (observer wired via ToolContext)', () => 
 
     expect(res.isError).toBeFalsy();
     expect(res.content).toContain('finished');
+  });
+});
+
+describe('code_exec metadata safety and scheduling', () => {
+  it('exposes nested dedup refusals as structured catchable errors', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    const observer = {
+      beforeNestedCall: () => ({ refusalText: 'duplicate call', kind: 'dedup' as const }),
+      afterNestedCall: () => {},
+    };
+    const result = await buildCodeExecTool(registry).handler({
+      code: `
+        try { await tools.read_file({path:'x'}); }
+        catch (e) { return { code: e.code, kind: e.refusalKind, tool: e.tool }; }
+      `,
+    }, { ...makeCtx(), nestedToolObserver: observer });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('"code": "TOOL_CALL_REFUSED"');
+    expect(result.content).toContain('"kind": "dedup"');
+    expect(result.content).toContain('"tool": "read_file"');
+  });
+
+  it('records policy refusals in the shared ledger without executing the tool', async () => {
+    const registry = new ToolRegistry();
+    let invoked = false;
+    registry.register({
+      ...noopTool('edit_file'),
+      handler: async () => { invoked = true; return ok('unexpected'); },
+    });
+    const entries: unknown[] = [];
+    const ledger = {
+      record(input: unknown) {
+        entries.push(input);
+        return {
+          seq: entries.length, name: 'edit_file', logicalOperationId: 'op', productive: false,
+          isError: true, refusalKind: 'gate', resultFingerprint: 'x', outcome: 'refusal',
+          durationMs: 0, resultNovel: true, coverageNovel: false,
+        };
+      },
+    };
+    const result = await buildCodeExecTool(registry).handler({
+      code: `try { await tools.edit_file({path:'x'}); } catch (e) { return e.refusalKind; }`,
+    }, {
+      ...makeCtx(),
+      toolCallLedger: ledger as never,
+      runner: {
+        isPlanApproved: () => false,
+        currentTaskScopeId: () => null,
+        currentTaskScopeFiles: () => null,
+        opts: { planMode: true },
+      } as never,
+    });
+    expect(invoked).toBe(false);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ refusalKind: 'gate', isError: true });
+    expect(result.content).toContain('[return]\ngate');
+  });
+
+  it('withholds policy-interactive tools even when the raw tool flag is absent', () => {
+    const registry = new ToolRegistry();
+    for (const name of ['ask_user', 'decision_gate', 'submit_plan', 'submit_tasks', 'task_list']) {
+      registry.register(noopTool(name));
+    }
+    registry.register(noopTool('read_file'));
+    expect(_exposedToolNames(registry)).toContain('read_file');
+    for (const name of ['ask_user', 'decision_gate', 'submit_plan', 'submit_tasks', 'task_list']) {
+      expect(_exposedToolNames(registry)).not.toContain(name);
+    }
+  });
+
+  it('serializes mutating calls issued through Promise.all', async () => {
+    const registry = new ToolRegistry();
+    let active = 0;
+    let maxActive = 0;
+    registry.register({
+      ...noopTool('edit_file'),
+      mutates: true,
+      parallelSafe: false,
+      handler: async () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await sleep(20);
+        active--;
+        return ok('done');
+      },
+    });
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await Promise.all([tools.edit_file({n:1}), tools.edit_file({n:2})]);`,
+    }, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(maxActive).toBe(1);
+  });
+
+  it('still permits parallel-safe reads to overlap', async () => {
+    const registry = new ToolRegistry();
+    let active = 0;
+    let maxActive = 0;
+    registry.register({
+      ...slowTool('read_file', 1),
+      parallelSafe: true,
+      handler: async () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await sleep(20);
+        active--;
+        return ok('done');
+      },
+    });
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await Promise.all([tools.read_file({n:1}), tools.read_file({n:2})]);`,
+    }, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(maxActive).toBe(2);
+  });
+
+  it('keeps the shared mutation lane locked after timeout until a non-cancellable tool settles', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...noopTool('edit_file'),
+      timeoutMs: 20,
+      mutates: true,
+      parallelSafe: false,
+      handler: async () => {
+        await sleep(80); // deliberately ignores ctx.signal
+        return ok('late write finished');
+      },
+    });
+    const ledger = new ToolCallLedger();
+    const result = await buildCodeExecTool(registry).handler({
+      code: `await tools.edit_file({path:'x'}); return 'unexpected';`,
+    }, { ...makeCtx(), toolCallLedger: ledger });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('timed out');
+
+    let acquired = false;
+    const queued = ledger.reserveUnsafe().then((release) => {
+      acquired = true;
+      release();
+    });
+    await sleep(25);
+    expect(acquired).toBe(false);
+    await queued;
+    expect(acquired).toBe(true);
   });
 });
 

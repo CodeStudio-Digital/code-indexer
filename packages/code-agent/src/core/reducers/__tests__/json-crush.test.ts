@@ -42,18 +42,20 @@ describe('jsonCrush', () => {
     const content = JSON.stringify(Array.from({ length: 20 }, () => ({ v: 'same' })));
     const r = jsonCrush({ content, cap: 100 });
     expect(r.applied).toBe(true);
-    expect(r.content).toContain('kept 1/20 rows');
-    expect(r.content).toContain('dropped 19 duplicate(s)');
+    const parsed = JSON.parse(r.content) as { _smart_reducer: { kept: number; total: number; duplicates: number } };
+    expect(parsed._smart_reducer).toMatchObject({ kept: 1, total: 20, duplicates: 19 });
+    expect(r.content.length).toBeLessThanOrEqual(100);
   });
 
   it('always keeps head and tail anchors, elides the middle', () => {
     const content = jsonArray(30, (i) => ({ id: i, pad: 'p'.repeat(20) }));
     const r = jsonCrush({ content, cap: 200 });
     expect(r.applied).toBe(true);
-    expect(r.content).toContain('"id":0'); // head anchor
-    expect(r.content).toContain('"id":29'); // tail anchor
+    const parsed = JSON.parse(r.content) as { first?: string; last?: string };
+    expect(parsed.first).toContain('"id":0'); // head anchor
+    expect(parsed.last).toContain('"id":29'); // tail anchor
     expect(r.content).not.toContain('"id":15'); // middle elided
-    expect(r.content).toMatch(/elided \d+ lower-relevance/);
+    expect(r.content.length).toBeLessThanOrEqual(200);
   });
 
   it('uses the query to decide which middle rows survive', () => {

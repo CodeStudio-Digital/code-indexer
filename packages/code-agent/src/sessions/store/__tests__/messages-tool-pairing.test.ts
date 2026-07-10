@@ -105,7 +105,18 @@ beforeEach(() => {
       phase TEXT,
       turn_telemetry_id INTEGER,
       refusal_kind TEXT,
-      parent_tool_use_id TEXT
+      parent_tool_use_id TEXT,
+      error_class TEXT,
+      reduction_kind TEXT,
+      reduction_technique TEXT,
+      reduction_meta_json TEXT,
+      output_id TEXT,
+      run_id TEXT,
+      parent_run_id TEXT,
+      is_subagent INTEGER NOT NULL DEFAULT 0,
+      subagent_profile TEXT,
+      logical_operation_id TEXT,
+      productive INTEGER
     );
   `);
   sessionId = mkSession();

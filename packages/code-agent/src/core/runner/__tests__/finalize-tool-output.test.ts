@@ -16,19 +16,22 @@ import { capToolContent, finalizeToolOutput } from '../pure-helpers.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { dispatchTools, toToolResultBlock, type DispatchArgs } from '../nodes/executing-dispatch.js';
+import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 
 describe('capToolContent', () => {
   it('no-ops when content fits the cap', () => {
     expect(capToolContent('short', 100)).toEqual({ content: 'short', truncated: false });
   });
 
-  it('head-cuts and marks when over cap', () => {
+  it('keeps head/tail and marks without exceeding cap', () => {
     const content = 'x'.repeat(500);
     const r = capToolContent(content, 100);
     expect(r.truncated).toBe(true);
     expect(r.originalSize).toBe(500);
-    expect(r.content.startsWith('x'.repeat(100))).toBe(true);
-    expect(r.content).toContain('original_size=500 chars');
+    expect(r.content.startsWith('x')).toBe(true);
+    expect(r.content.endsWith('x')).toBe(true);
+    expect(r.content).toContain('original_size=500');
+    expect(r.content.length).toBeLessThanOrEqual(100);
   });
 
   it('embeds output_id in the marker when provided, omits it otherwise', () => {
@@ -40,6 +43,41 @@ describe('capToolContent', () => {
   it('is deterministic', () => {
     const content = 'z'.repeat(400);
     expect(capToolContent(content, 80, 'abc')).toEqual(capToolContent(content, 80, 'abc'));
+  });
+
+  it('preserves code_exec errors and the [return] block', () => {
+    const content = [
+      'code_exec: 4 tool call(s)',
+      '[output]',
+      'noise'.repeat(200),
+      'Error: final assertion failed',
+      '[return]',
+      JSON.stringify({ answer: 'important', tail: 'z'.repeat(300) }),
+    ].join('\n');
+    const result = capToolContent(content, 320, 'exec1234', 'code_exec');
+    expect(result.content).toContain('output_id=exec1234');
+    expect(result.content).toContain('Error: final assertion failed');
+    expect(result.content).toContain('[return]');
+    expect(result.content).toContain('important');
+    expect(result.content.length).toBeLessThanOrEqual(320);
+  });
+
+  it('shares spawn_agent budget across every agent report', () => {
+    const content = ['header', ...[1, 2, 3].map((n) =>
+      `### Agent ${n}: agent-${n}\n[type=explore reason=completed]\n${String(n).repeat(500)}`,
+    )].join('\n\n');
+    const result = capToolContent(content, 480, 'agents1234', 'spawn_agent');
+    for (const n of [1, 2, 3]) expect(result.content).toContain(`### Agent ${n}:`);
+    expect(result.content.length).toBeLessThanOrEqual(480);
+  });
+
+  it('respects every positive cap exactly', () => {
+    const content = 'head-' + 'x'.repeat(1000) + '-tail';
+    for (const cap of [1, 2, 8, 32, 100, 255]) {
+      const result = capToolContent(content, cap, 'abcdef');
+      expect(result.content.length).toBeLessThanOrEqual(cap);
+      expect(capToolContent(content, cap, 'abcdef')).toEqual(result);
+    }
   });
 });
 
@@ -58,6 +96,7 @@ describe('finalizeToolOutput', () => {
     expect(calls).toEqual([raw]); // spilled the RAW, not the shaped
     expect(r.truncated).toBe(true);
     expect(r.content).toContain('output_id=cafe1234');
+    expect(r.outputId).toBe('cafe1234');
   });
 
   it('advertises output_id when shaped fits but the reducer dropped rows', () => {
@@ -75,7 +114,8 @@ describe('finalizeToolOutput', () => {
     const { store, calls } = recorder();
     const r = finalizeToolOutput({ rawContent: 'tiny', shapedContent: 'tiny', isError: false, cap: 100, store });
     expect(calls).toEqual([]);
-    expect(r).toEqual({ content: 'tiny' });
+    expect(r.content).toBe('tiny');
+    expect(r.reductionReport).toMatchObject({ kind: 'none', rawChars: 4, shapedChars: 4 });
   });
 
   it('caps without an output_id when no store is available (subagent/test)', () => {
@@ -144,5 +184,19 @@ describe('dispatchTools — finalize hook', () => {
     });
     expect(res.results[0].content).toBe('RAWBODY-reduced');
     expect(res.results[0].truncated).toBeUndefined();
+  });
+
+  it('records early direct refusals in the shared ledger', async () => {
+    const context = { ...toolContext, toolCallLedger: new ToolCallLedger() };
+    const res = await dispatchTools({
+      ...baseArgs(registryWith('never invoked')),
+      toolContext: context,
+      isToolBlocked: () => 'disabled by session policy',
+    });
+    expect(res.results[0].ledgerEntry).toMatchObject({
+      outcome: 'refusal',
+      isError: true,
+      refusalKind: 'gate',
+    });
   });
 });

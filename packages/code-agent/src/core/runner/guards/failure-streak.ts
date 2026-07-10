@@ -7,7 +7,7 @@
  *     produced 13 unique keys.
  *   - doom-loop fuzzy required ALL last 6 sigs identical ⇒ no-tool
  *     turns between failures reset the window.
- *   - REPEATABLE_NAME_PATTERN doesn't match `write_stdin` (correctly).
+ *   - `write_stdin` has no repeat-policy exemption (correctly).
  *   - quality watchdog has a long cooldown and doesn't distinguish
  *     `isError=true` from success.
  *
@@ -24,7 +24,6 @@
 import {
   FAILURE_STREAK_REMINDER_THRESHOLD,
   FAILURE_STREAK_REFUSE_THRESHOLD,
-  REPEATABLE_NAME_PATTERN,
 } from '@mcp/code-agent/core/runner/constants.js';
 
 /**
@@ -108,6 +107,8 @@ export interface CheckFailureStreakInput {
   errorContent: string;
   turn: number;
   state: FailureStreakState;
+  /** Resolved repeatPolicy is pollable/volatile. */
+  isRepeatable?: boolean;
   /**
    * Override for the reminder threshold. Production callers always omit;
    * tests use it to keep fixtures small. Default
@@ -132,15 +133,15 @@ const ERROR_SNIPPET_CHARS = 200;
 
 /**
  * Test whether a tool is exempt from the failure-streak guard. Polling
- * primitives (matching `REPEATABLE_NAME_PATTERN`) legitimately produce
+ * primitives marked pollable/volatile in resolved metadata legitimately produce
  * a string of "no progress yet" results — counting those as a loop
  * would force-Plan over a healthy wait.
  *
  * Exported so callers can short-circuit storage (no entry created at
  * all for exempt tools).
  */
-export function isFailureStreakExempt(toolName: string): boolean {
-  return REPEATABLE_NAME_PATTERN.test(toolName);
+export function isFailureStreakExempt(isRepeatable: boolean): boolean {
+  return isRepeatable;
 }
 
 /**
@@ -165,7 +166,7 @@ export function checkFailureStreak(inp: CheckFailureStreakInput): FailureStreakV
   }
 
   // Exempt path — polling tools are allowed long failure chains.
-  if (isFailureStreakExempt(inp.toolName)) {
+  if (isFailureStreakExempt(inp.isRepeatable === true)) {
     return { kind: 'pass' };
   }
 

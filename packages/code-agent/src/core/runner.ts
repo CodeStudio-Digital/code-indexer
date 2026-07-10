@@ -62,7 +62,9 @@ import { filterByTiers, profileToTiers, PREVIEW_TOOLS, type ToolTier, type Coder
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { parkForBackgroundWork } from '@mcp/code-agent/tools/subagent-jobs-lifecycle.js';
 import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
-import { applySmartReducer } from '@mcp/code-agent/core/smart-reducers.js';
+import { applySmartReducerDetailed, type ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
+import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
@@ -90,7 +92,6 @@ import {
   worstVerdictOf,
   fnv1aSample,
 } from '@mcp/services/quality/index.js';
-import type { QualityResult } from '@mcp/services/quality/index.js';
 import type { QualityClassificationRow } from '@mcp/store/quality-classification-store.js';
 import type { InterventionVerdictSnapshot } from '@mcp/store/quality-intervention-store.js';
 import {
@@ -130,10 +131,15 @@ export type { RunResult, RunnerOptions, StopReason, TransitionKind };
  * The legacy sliding-window logic (KEEP_LAST_TOOL_TURNS, HARD_CAP_CHARS) is
  * removed because it mutated old blocks every turn, busting the cache.
  */
-const PUSH_TIME_CAP = Number(process.env.CODER_PUSH_TIME_CAP ?? 24_000);
+function positiveEnvNumber(key: string, fallback: number): number {
+  const parsed = Number(process.env[key] ?? fallback);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const PUSH_TIME_CAP = positiveEnvNumber('CODER_PUSH_TIME_CAP', 24_000);
 /** Tighter per-block cap used inside subagents — they accumulate many small
  *  tool results in a short window, so a 12k cap fits ~10 turns under the budget. */
-const SUBAGENT_PUSH_TIME_CAP = Number(process.env.CODER_SUBAGENT_PUSH_TIME_CAP ?? 12_000);
+const SUBAGENT_PUSH_TIME_CAP = positiveEnvNumber('CODER_SUBAGENT_PUSH_TIME_CAP', 12_000);
 /**
  * "Unrestricted tool output" ceilings — picked when a session has
  * `unrestricted_tool_output = 1`. Deliberately NOT `Infinity` so that
@@ -156,7 +162,6 @@ const SUBAGENT_PUSH_TIME_CAP = Number(process.env.CODER_SUBAGENT_PUSH_TIME_CAP ?
 import {
   UNRESTRICTED_PUSH_TIME_CAP,
   UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP,
-  REPEATABLE_NAME_PATTERN,
   POLLING_STUCK_CAP,
   POLLING_STUCK_MIN_CHARS,
   canRunSummarizer,
@@ -260,7 +265,7 @@ const SUBORDINATE_REMINDER_MSG =
   '[System reminder] Before you stop or consider the task done, your LAST action MUST be ' +
   '`post_to_board` with kind="deliverable" summarizing your work. Never finish silently — ' +
   'the master is waiting for your report and cannot see your work any other way.';
-const PRESERVED_TOOL_OUTPUT_CAP = Number(process.env.CODER_PRESERVED_TOOL_OUTPUT_CAP ?? 200_000);
+const PRESERVED_TOOL_OUTPUT_CAP = positiveEnvNumber('CODER_PRESERVED_TOOL_OUTPUT_CAP', 200_000);
 
 // (toolCallsSignature + toolNamesSignature moved to './runner/signatures.ts'.)
 import { toolCallsSignature, toolNamesSignature } from './runner/signatures.js';
@@ -679,19 +684,6 @@ export class CoderRunner extends EventEmitter {
   private lastToolMisuseInterventionTurn: number | null = null;
 
   /**
-   * Quality v2, A2 — In-flight classifier Promises, keyed by the turn
-   * they were fired for. The next turn's `buildQualityFeedbackSuffix`
-   * races this Promise against a 2s timeout so the nudge text actually
-   * reflects the latest verdicts (vs the fire-and-forget v1 which left
-   * a race window where the next turn's prompt was assembled BEFORE
-   * the prior turn's classifier finished).
-   *
-   * Auto-cleaned: entries older than `this.turn - 3` are dropped to
-   * avoid memory leak in long sessions.
-   */
-  private pendingClassifyByTurn = new Map<number, Promise<QualityResult | null>>();
-
-  /**
    * Quality v2, D1 — Last-emitted nudge hash per turn. When the nudge
    * text is byte-identical to one emitted in the last 5 turns, we suppress
    * the duplicate (the model already received this message) but still
@@ -1022,47 +1014,6 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
-   * Quality v2, A2 — Wait briefly for the PRIOR turn's classifier Promise
-   * to complete so `buildQualityFeedbackSuffix` reads fresh verdicts.
-   *
-   * Behavior:
-   *   - When no Promise is pending → returns immediately ('no_op').
-   *   - When the Promise resolves within `timeoutMs` (default 2000) →
-   *     returns 'resolved'. The DB will have the verdicts; the
-   *     subsequent sync builder picks them up.
-   *   - On timeout → returns 'timed_out'. The builder still runs; nudge
-   *     may be empty for this turn (acceptable — fires next turn).
-   *
-   * Configurable timeout via env `MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS`.
-   * Setting it to `0` disables the wait entirely (back to v1 race behavior).
-   *
-   * Never throws — any error path returns 'no_op' to fail safely.
-   */
-  private async awaitPriorTurnClassifier(): Promise<'no_op' | 'resolved' | 'timed_out'> {
-    try {
-      const timeoutMs = Number(process.env.MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS ?? 2000);
-      if (timeoutMs <= 0) return 'no_op';
-      const priorTurn = this.turn - 1;
-      const pending = this.pendingClassifyByTurn.get(priorTurn);
-      if (!pending) return 'no_op';
-      let timeoutId: NodeJS.Timeout | undefined;
-      const timeoutSentinel = Symbol('timeout');
-      const race = await Promise.race<unknown>([
-        pending,
-        new Promise((resolve) => {
-          timeoutId = setTimeout(() => resolve(timeoutSentinel), timeoutMs);
-        }),
-      ]);
-      if (timeoutId) clearTimeout(timeoutId);
-      // Consumed — drop so a re-entry doesn't re-await the same Promise.
-      this.pendingClassifyByTurn.delete(priorTurn);
-      return race === timeoutSentinel ? 'timed_out' : 'resolved';
-    } catch {
-      return 'no_op';
-    }
-  }
-
-  /**
    * Wires #1 + #2 — Build the per-turn quality-feedback suffix that gets
    * appended to the static system prompt at chat-call time.
    *
@@ -1088,6 +1039,7 @@ export class CoderRunner extends EventEmitter {
    */
   private buildQualityFeedbackSuffix(): string {
     try {
+      if (process.env.MCP_QUALITY_ACTIVE_INTERVENTIONS !== '1') return '';
       if (this.sessionId == null) return '';
       const store = getGlobalQualityClassificationStore();
       if (!store) return '';
@@ -1296,6 +1248,9 @@ export class CoderRunner extends EventEmitter {
     this.maxTurns = opts.maxTurns ?? 50;
     // back-reference so native interaction tools can pause the loop
     this.opts.toolContext.runner = this;
+    if (rolloutEnabled('CODER_TOOL_LEDGER_ROLLOUT_PERCENT', this.runId)) {
+      this.opts.toolContext.toolCallLedger ??= new ToolCallLedger();
+    }
     this.opts.toolContext.planMode = opts.planMode;
     // Tier filtering: prefer explicit activeTiers, fall back to profile,
     // else null = no filtering.
@@ -2074,12 +2029,37 @@ export class CoderRunner extends EventEmitter {
             toolMutates,
           });
         },
-        reduceToolResult: (toolName, content) =>
-          this.shouldPreserveToolOutput(toolName)
-            ? content
-            : applySmartReducer(toolName, content, this.effectivePushTimeCap, {
-                query: this.getLastUserText(),
-              }),
+        reduceToolResult: (toolName, content) => {
+          if (this.shouldPreserveToolOutput(toolName)) {
+            return {
+              content,
+              report: {
+                kind: 'none' as const,
+                technique: 'preserved',
+                rawChars: content.length,
+                shapedChars: content.length,
+                cap: this.effectivePushTimeCap,
+                preserved: ['full'],
+              },
+            };
+          }
+          if (!rolloutEnabled('CODER_SMART_REDUCER_ROLLOUT_PERCENT', this.runId)) {
+            return {
+              content,
+              report: {
+                kind: 'none' as const,
+                technique: 'rollout-bypass',
+                rawChars: content.length,
+                shapedChars: content.length,
+                cap: this.effectivePushTimeCap,
+                preserved: ['full_before_hard_cap'],
+              },
+            };
+          }
+          return applySmartReducerDetailed(toolName, content, this.effectivePushTimeCap, {
+            query: this.getLastUserText(),
+          });
+        },
         finalizeToolResult: (a) => this.finalizeToolResultForBridge(a),
         detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>
           this.detectPollingStuckForBridge(toolName, content, isError, isRepeatable, turn),
@@ -2134,8 +2114,8 @@ export class CoderRunner extends EventEmitter {
         // Per-turn telemetry persistence. The pure insert lives in
         // `core/runner/telemetry/persist-turn.ts`; the class-bound
         // side-effects (quality classifier dispatch + tool-selection
-        // observer) stay here because they read `this.messages`,
-        // `this.pendingClassifyByTurn`, etc. The wrapper also mirrors
+        // observer) stay here because they read `this.messages` and run state.
+        // The wrapper also mirrors
         // the inserted id into `this.lastTurnTelemetryId` so the host's
         // `flushPendingTurn` in `index.ts` (which reads
         // `runner.lastTurnTelemetryId`) keeps working unchanged.
@@ -2186,6 +2166,7 @@ export class CoderRunner extends EventEmitter {
     historyChars: number;
     systemPromptChars: number;
     toolsDefChars: number;
+    eligibleToolsDefChars?: number;
     visibleToolsCount?: number;
     toolsFingerprint?: string | null;
     prefixHeadHash?: string | null;
@@ -2195,10 +2176,12 @@ export class CoderRunner extends EventEmitter {
     summarizerRan: boolean;
   }): number | null {
     const id = persistTurnTelemetryPure({
-      store: this.sessionStore,
+      store: this.opts.turnTelemetryStore ?? this.sessionStore,
       sessionId: this.sessionId ?? null,
       runId: this.runId,
       isSubagent: this.isSubagent,
+      parentRunId: this.opts.parentRunId ?? null,
+      subagentProfile: this.opts.subagentProfile ?? null,
       provider: this.opts.provider.name ?? null,
       model: this.opts.provider.model ?? null,
       turn: input.turn,
@@ -2210,6 +2193,7 @@ export class CoderRunner extends EventEmitter {
       summarizerRan: input.summarizerRan,
       systemPromptChars: input.systemPromptChars,
       toolsDefChars: input.toolsDefChars,
+      eligibleToolsDefChars: input.eligibleToolsDefChars,
       visibleToolsCount: input.visibleToolsCount,
       toolsFingerprint: input.toolsFingerprint,
       prefixHeadHash: input.prefixHeadHash,
@@ -2241,20 +2225,30 @@ export class CoderRunner extends EventEmitter {
       // Observer failures must never break telemetry.
     }
 
-    // Adaptive quality classifier dispatch (v2). The Promise stays in
-    // `pendingClassifyByTurn` so the NEXT turn's nudge builder can race
-    // it with a 2s timeout — closes the v1 race where the next prompt
-    // was assembled before the prior verdict landed.
-    if (isGlobalQualityClassifierEnabled() && lastUserText && this.sessionId != null) {
+    // Passive quality evaluator dispatch. It never blocks the agent turn;
+    // prompt intervention remains disabled unless explicitly re-enabled.
+    if (
+      !this.isSubagent
+      && rolloutEnabled('CODER_QUALITY_CLASSIFIER_ROLLOUT_PERCENT', this.runId)
+      && isGlobalQualityClassifierEnabled()
+      && lastUserText
+      && this.sessionId != null
+    ) {
       try {
         const lastAssistantText = this.extractLastAssistantText();
         const hasNarrative = lastAssistantText.length > 0;
-        const lastWorst = this.peekLastSessionWorstVerdict();
+        const activeInterventions = process.env.MCP_QUALITY_ACTIVE_INTERVENTIONS === '1';
+        const lastWorst = activeInterventions ? this.peekLastSessionWorstVerdict() : null;
         const shouldClassify = shouldClassifyTurn({
           turn: input.turn,
           sessionId: this.sessionId,
           hasNarrativeText: hasNarrative,
+          // Passive default: fixed deterministic 10% sample, no warmup and
+          // no pressure-mode feedback loop. Legacy active behavior remains
+          // available only behind MCP_QUALITY_ACTIVE_INTERVENTIONS=1.
           lastWorstVerdict: lastWorst,
+          warmupTurns: activeInterventions ? 5 : 0,
+          sampleRate: activeInterventions ? 1 / 3 : 0.1,
         });
         if (shouldClassify) {
           // Snapshot the identifiers into locals — `this` may have been
@@ -2263,13 +2257,16 @@ export class CoderRunner extends EventEmitter {
           const snapshotCompanySessionId = this.opts.companySessionId ?? null;
           const snapshotAgentRunId = this.opts.companyAgentRunId ?? null;
           const snapshotTurn = input.turn;
-          const promise = new Promise<QualityResult | null>((resolve) => {
-            setImmediate(() => {
-              runGlobalQualityClassifiers({
+          setImmediate(() => {
+            void runGlobalQualityClassifiers({
                 sessionId: snapshotSessionId,
                 companySessionId: snapshotCompanySessionId,
                 agentRunId: snapshotAgentRunId,
-                messageId: `turn-${snapshotTurn}`,
+                coderRunId: this.runId,
+                parentRunId: this.opts.parentRunId ?? null,
+                isSubagent: false,
+                subagentProfile: null,
+                messageId: `${this.runId}:turn-${snapshotTurn}`,
                 taskText: lastUserText,
                 outputText: lastAssistantText,
                 recentToolCalls: input.toolUseBlocks.map((b) => ({
@@ -2277,15 +2274,8 @@ export class CoderRunner extends EventEmitter {
                   success: true,
                   timestampMs: Date.now(),
                 })),
-              }).then(resolve).catch(() => resolve(null));
-            });
+              }).catch(() => null);
           });
-          this.pendingClassifyByTurn.set(snapshotTurn, promise);
-          // Auto-trim — only the immediately prior turn's Promise is
-          // ever awaited; older entries are dead weight.
-          for (const [t] of this.pendingClassifyByTurn) {
-            if (t < snapshotTurn - 3) this.pendingClassifyByTurn.delete(t);
-          }
         }
       } catch {
         // Classifier failures must never break the run.
@@ -2494,7 +2484,8 @@ export class CoderRunner extends EventEmitter {
     rawContent: string;
     shapedContent: string;
     isError: boolean;
-  }): { content: string; truncated?: boolean; originalSize?: number } {
+    reductionReport?: ReductionReport;
+  }): { content: string; truncated?: boolean; originalSize?: number; outputId?: string; reductionReport: ReductionReport } {
     // P3 — clamp the user's cap with a context-relative ceiling so a single
     // tool_result can't exceed the protected tail and deadlock compaction
     // (`compact_exhausted`). `Infinity` ceiling (knob off) → user cap only.
@@ -2504,11 +2495,13 @@ export class CoderRunner extends EventEmitter {
       : this.effectivePushTimeCap;
     const cap = resolveFinalizeCap(userCap, this.opts.provider.model);
     return finalizeToolOutput({
+      toolName: args.toolName,
       rawContent: args.rawContent,
       shapedContent: args.shapedContent,
       isError: args.isError,
       cap,
       store: this.opts.toolContext.toolOutputStore,
+      reductionReport: args.reductionReport,
     });
   }
 

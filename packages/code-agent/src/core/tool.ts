@@ -17,6 +17,8 @@ import type { JsonSchema } from '@mcp/provider-sdk';
  *   3. conservative fallback (for MCP-external + unknown tools).
  */
 export type ToolRiskLevel = 'read' | 'write' | 'execute' | 'admin';
+export type ToolRepeatPolicy = 'stable' | 'volatile' | 'pollable' | 'mutating';
+export type ToolExecutionClass = 'read' | 'write' | 'execute' | 'control';
 
 export interface CoderTool {
   name: string;
@@ -94,6 +96,10 @@ export interface CoderTool {
    * identical args are an expected workflow, not a regression.
    */
   repeatable?: boolean;
+  /** Explicit replacement for name-pattern repeatability heuristics. */
+  repeatPolicy?: ToolRepeatPolicy;
+  /** Scheduling class used by nested and future parallel dispatchers. */
+  executionClass?: ToolExecutionClass;
   /**
    * Hard timeout for a single invocation, in milliseconds. When undefined,
    * the runner applies a default from `core/tool-timeouts.ts` based on the
@@ -124,6 +130,12 @@ export interface NestedToolCallRecord {
   resultPreview: string;
   /** Guard refusal tag when the observer blocked the call (dedup/failure-streak). */
   refusalKind?: string;
+  logicalOperationId?: string;
+  productive?: boolean;
+  /** Resolved repeatPolicy is pollable/volatile. */
+  repeatable?: boolean;
+  /** False for policy/dedup refusals that should be audited but not count as a tool failure. */
+  affectsFailureStreak?: boolean;
 }
 
 /**
@@ -198,6 +210,8 @@ export interface ToolContext {
    * can fetch the full content later. Undefined inside subagents and tests.
    */
   toolOutputStore?: import('@mcp/code-agent/overlay/tool-output-store.js').ToolOutputStore;
+  /** Shared direct+nested accounting; it does not enforce budgets. */
+  toolCallLedger?: import('./tool-call-ledger.js').ToolCallLedger;
   /**
    * Per-session tool-output cap LEVEL (economic|medium|high|extra|max|ultra).
    * Replaces the legacy binary `unrestrictedToolOutput`. Each cap site calls

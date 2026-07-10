@@ -69,6 +69,10 @@ export interface RunnerOptions {
   sessionId?: number;
   /** True for ephemeral subagents. Tags logs as `s=<parentId>/sub`. */
   isSubagent?: boolean;
+  /** Parent runner correlation for an ephemeral child. */
+  parentRunId?: string;
+  /** Stable micro-agent profile id (explore/implement/verify/review/full). */
+  subagentProfile?: string;
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
   /**
@@ -304,6 +308,8 @@ export interface RunnerOptions {
   roleTemperature?: number | null;
   /** SessionStore — when present, lifecycle injections get mirrored into `coder_session_inputs`. */
   sessionStore?: import('@mcp/code-agent/sessions/store.js').SessionStore;
+  /** Telemetry-only store; unlike sessionStore it never mirrors child messages. */
+  turnTelemetryStore?: Pick<import('@mcp/code-agent/sessions/store.js').SessionStore, 'recordTurnTelemetry'>;
   /**
    * SkillStore — resolves each `selectedSkillIds` entry and injects bodies
    * as `<active_skills>` each turn.

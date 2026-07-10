@@ -220,7 +220,7 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
       `SELECT provider, model,
               COALESCE(input_tokens, 0)            AS input_tokens,
               COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
-              tools_def_chars
+              tools_def_chars, eligible_tools_def_chars
        FROM coder_turn_telemetry WHERE session_id = ?`,
     )
     .all(sessionId) as TurnForSavings[];
@@ -230,7 +230,7 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
               COALESCE(SUM(COALESCE(tc.output_chars_shaped, tc.output_chars)), 0) AS shaped
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
-       WHERE m.session_id = ?`,
+       WHERE m.session_id = ? AND tc.parent_tool_use_id IS NULL`,
     )
     .get(sessionId) as { raw: number; shaped: number };
   const savings = computeSavings({

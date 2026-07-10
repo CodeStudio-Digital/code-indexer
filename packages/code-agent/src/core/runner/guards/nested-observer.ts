@@ -72,7 +72,7 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
         // Failure-streak pre-check: refuse re-running a tool whose streak
         // already crossed the refuse threshold (top level would have routed
         // to Planning; a script must not become the escape hatch).
-        if (!isFailureStreakExempt(name)) {
+        if (!isFailureStreakExempt(opts?.repeatable === true)) {
           const entry = deps.failureStreaks.streaks.get(name);
           if (entry && entry.consecutive >= FAILURE_STREAK_REFUSE_THRESHOLD) {
             return {
@@ -113,13 +113,16 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
         // streak, a failure increments it. The verdict itself is ignored —
         // enforcement happens on the NEXT attempt via the pre-check above
         // (a result that already reached the script can't be un-delivered).
-        checkFailureStreak({
-          toolName: e.name,
-          isError: e.isError,
-          errorContent: e.resultPreview,
-          turn: deps.turn,
-          state: deps.failureStreaks,
-        });
+        if (e.affectsFailureStreak !== false) {
+          checkFailureStreak({
+            toolName: e.name,
+            isError: e.isError,
+            errorContent: e.resultPreview,
+            turn: deps.turn,
+            state: deps.failureStreaks,
+            isRepeatable: e.repeatable === true,
+          });
+        }
       } catch { /* never throw into the script */ }
       try {
         recordSeq += 1;

@@ -72,6 +72,8 @@ export interface BuildToolsCapInfo {
 export interface BuildToolsResult {
   tools: SerializedTool[];
   capInfo: BuildToolsCapInfo | null;
+  /** Actual serialized size of the eligible pre-cap catalog this turn. */
+  eligibleToolsDefChars: number;
 }
 
 export function buildTools(args: BuildToolsArgs): BuildToolsResult {
@@ -129,6 +131,8 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // (sessions 656/658) now lives entirely in the handler: `bumpCreateBurst`
   // hard-refuses bursts, and a redundant call while a goal is in_progress is
   // rejected (not superseded). See `packages/code-agent/src/tools/goal.ts`.
+
+  const eligibleBeforeCap = [...filtered];
 
   // Protection partition BEFORE truncation: company orchestration tools
   // (master / subordinate) and the session-class-agnostic NEVER_TRIM floor
@@ -216,8 +220,17 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     description: useTerse(t.name) ? terseDescription(t.description) : t.description,
     parameters: t.parameters,
   }));
+  const eligibleToolsDefChars = JSON.stringify(
+    eligibleBeforeCap
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((t) => ({
+        name: t.name,
+        description: useTerse(t.name) ? terseDescription(t.description) : t.description,
+        parameters: t.parameters,
+      })),
+  ).length;
 
-  return { tools, capInfo };
+  return { tools, capInfo, eligibleToolsDefChars };
 }
 
 export interface BuildToolsCacheKeyArgs {

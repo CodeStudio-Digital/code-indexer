@@ -45,7 +45,7 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     description: 'How many times the runner can auto-continue after a tool result without a user message.',
     type: 'int',
     category: 'agent',
-    default: '40',
+    default: '3',
     min: 1,
   },
   {

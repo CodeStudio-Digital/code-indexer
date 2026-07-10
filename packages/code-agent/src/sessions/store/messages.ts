@@ -103,6 +103,16 @@ export interface AppendToolCallInput {
    * audit-only — never synthesized into the paired tool-role message.
    */
   parent_tool_use_id?: string | null;
+  reduction_kind?: string | null;
+  reduction_technique?: string | null;
+  reduction_meta_json?: string | null;
+  output_id?: string | null;
+  run_id?: string | null;
+  parent_run_id?: string | null;
+  is_subagent?: boolean;
+  subagent_profile?: string | null;
+  logical_operation_id?: string | null;
+  productive?: boolean | null;
 }
 
 // Moved to tool-refusal.ts (dependency-free) so the dbWriter worker mirror
@@ -116,8 +126,10 @@ export function appendToolCall(db: DB, input: AppendToolCallInput): void {
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
        output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
-       parent_tool_use_id, error_class)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       parent_tool_use_id, error_class, reduction_kind, reduction_technique,
+       reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
+       subagent_profile, logical_operation_id, productive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.message_id, input.tool_use_id, input.tool_name, JSON.stringify(input.args),
     input.result_text, input.is_error ? 1 : 0, input.duration_ms,
@@ -127,6 +139,16 @@ export function appendToolCall(db: DB, input: AppendToolCallInput): void {
     input.refusal_kind ?? classifyToolRefusal(input.result_text, input.is_error),
     input.parent_tool_use_id ?? null,
     classifyToolError(input.result_text, input.is_error),
+    input.reduction_kind ?? null,
+    input.reduction_technique ?? null,
+    input.reduction_meta_json ?? null,
+    input.output_id ?? null,
+    input.run_id ?? null,
+    input.parent_run_id ?? null,
+    input.is_subagent ? 1 : 0,
+    input.subagent_profile ?? null,
+    input.logical_operation_id ?? null,
+    input.productive == null ? null : input.productive ? 1 : 0,
   );
 }
 
@@ -181,8 +203,10 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
        output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
-       parent_tool_use_id, error_class)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       parent_tool_use_id, error_class, reduction_kind, reduction_technique,
+       reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
+       subagent_profile, logical_operation_id, productive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const bumpStmt = db.prepare(`
     UPDATE coder_sessions
@@ -233,6 +257,16 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
         tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
         tc.parent_tool_use_id ?? null,
         classifyToolError(tc.result_text, tc.is_error),
+        tc.reduction_kind ?? null,
+        tc.reduction_technique ?? null,
+        tc.reduction_meta_json ?? null,
+        tc.output_id ?? null,
+        tc.run_id ?? null,
+        tc.parent_run_id ?? null,
+        tc.is_subagent ? 1 : 0,
+        tc.subagent_profile ?? null,
+        tc.logical_operation_id ?? null,
+        tc.productive == null ? null : tc.productive ? 1 : 0,
       );
     };
     for (const tc of input.tool_calls) runInsertTool(tc);

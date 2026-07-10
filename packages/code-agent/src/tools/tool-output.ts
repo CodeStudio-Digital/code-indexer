@@ -1,7 +1,12 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 
-const DEFAULT_PAGE_SIZE = Number(process.env.CODER_PUSH_TIME_CAP ?? 24_000);
+function positiveNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const DEFAULT_PAGE_SIZE = positiveNumber(process.env.CODER_PUSH_TIME_CAP, 24_000);
 
 /**
  * get_tool_output — retrieve the full, untruncated content of a previous
@@ -57,8 +62,9 @@ export const getToolOutput: CoderTool = {
     }
 
     const total = content.length;
-    const offset = Math.max(0, Math.floor(Number(args.offset ?? 0)));
-    const limit = Math.max(1, Math.floor(Number(args.limit ?? DEFAULT_PAGE_SIZE)));
+    const rawOffset = Number(args.offset ?? 0);
+    const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
+    const limit = positiveNumber(args.limit, DEFAULT_PAGE_SIZE);
     const slice = content.slice(offset, offset + limit);
     const end = offset + slice.length;
     const remaining = total - end;

@@ -12,15 +12,14 @@
  * only when the per-call guards (tuple-hash / failure-streak) didn't already
  * flag a loop — they're more specific, so they win.
  *
- * Polling / `repeatable` tools (wait_for_*, list_*, *_status, or a CoderTool
- * flagged `repeatable`) are filtered out first: a string of identical polls is
+ * Polling / volatile tools resolved from ToolMetadata are filtered out first:
+ * a string of identical polls is
  * the legitimate workflow, not a loop (mirrors the dup-call / failure-streak
  * exemptions), so a master polling `list_subordinates` is never derailed.
  */
 import { checkDoomLoop, resetDoomLoopState, type DoomLoopState } from '../guards/doom-loop.js';
 import { checkDominance, resetDominanceState, type DominanceState } from '../guards/dominance.js';
 import {
-  REPEATABLE_NAME_PATTERN,
   doomLoopThreshold,
   DOOM_LOOP_FUZZY_THRESHOLD,
   FUZZY_LOOP_TOOLS,
@@ -64,7 +63,7 @@ export interface PerTurnLoopArgs {
  */
 export function evaluatePerTurnLoops(args: PerTurnLoopArgs): PerTurnLoopVerdict | null {
   const blocks = args.toolUses.filter(
-    (t) => !REPEATABLE_NAME_PATTERN.test(t.name) && !args.repeatableNames.has(t.name),
+    (t) => !args.repeatableNames.has(t.name),
   );
 
   let verdict: Omit<PerTurnLoopVerdict, 'snapshot'> | null = null;

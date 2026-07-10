@@ -38,8 +38,66 @@ export interface ReducerOutput {
   applied: boolean;
 }
 
+export type ReductionKind = 'none' | 'semantic' | 'json_crush' | 'hard_cap';
+
+/** Structured accounting for one push-time shaping decision. */
+export interface ReductionReport {
+  kind: ReductionKind;
+  technique: string;
+  rawChars: number;
+  shapedChars: number;
+  cap: number;
+  preserved: string[];
+  /** Filled by the finalizer when the raw payload was spilled. */
+  outputId?: string;
+}
+
+export interface DetailedReduction {
+  content: string;
+  report: ReductionReport;
+}
+
 const ELIDED = (label: string, original: number, kept: number): string =>
   `\n[smart-reducer: ${label} — kept ${kept}/${original} chars]\n`;
+
+function validCap(cap: number): number {
+  return Number.isFinite(cap) && cap > 0 ? Math.max(1, Math.floor(cap)) : 1;
+}
+
+/** Final invariant for semantic reducers: deterministic head/tail, never > cap. */
+function fitReducedContent(content: string, cap: number, technique: string): string {
+  const safeCap = validCap(cap);
+  if (content.length <= safeCap) return content;
+  const markerBase = `\n[smart-reducer: ${technique} — reduced output still exceeded cap; middle elided]\n`;
+  if (markerBase.length >= safeCap) return markerBase.slice(0, safeCap);
+  const room = safeCap - markerBase.length;
+  const head = Math.ceil(room * 0.55);
+  const tail = Math.max(0, room - head);
+  return content.slice(0, head) + markerBase + (tail > 0 ? content.slice(-tail) : '');
+}
+
+function compactMiddle(value: string, cap: number): string {
+  if (value.length <= cap) return value;
+  if (cap <= 1) return value.slice(0, Math.max(0, cap));
+  if (cap === 2) return value[0] + value.at(-1);
+  const room = cap - 1;
+  const head = Math.ceil(room / 2);
+  return value.slice(0, head) + '…' + value.slice(-(room - head));
+}
+
+function compactGitFileIndex(ids: string[], cap: number): string {
+  const header = `changed files (${ids.length}):\n`;
+  const footer = '\n[smart-reducer: git_diff file index — every changed file represented]';
+  if (header.length + footer.length >= cap) {
+    return fitReducedContent(`${header}${ids.join(', ')}`, cap, 'git_diff file index');
+  }
+  const separators = Math.max(0, ids.length - 1);
+  const available = cap - header.length - footer.length - separators;
+  const quota = ids.length > 0 ? Math.floor(available / ids.length) : 0;
+  if (quota <= 0) return fitReducedContent(`${header}${ids.join(', ')}`, cap, 'git_diff file index');
+  const lines = ids.map((id) => compactMiddle(id, quota));
+  return (header + lines.join('\n') + footer).slice(0, cap);
+}
 
 /**
  * git_log reducer: keep the FIRST few commits (newest, since git log is
@@ -81,7 +139,7 @@ export function reduceGitLog({ content, cap }: ReducerInput): ReducerOutput {
     head.join('\n') +
     `\n\n[smart-reducer: git_log — elided ${elidedCount} middle commit(s) of ${commits.length} total]\n\n` +
     tail.join('\n');
-  return { content: reduced, applied: true };
+  return { content: fitReducedContent(reduced, cap, 'git_log'), applied: true };
 }
 
 /**
@@ -92,42 +150,48 @@ export function reduceGitLog({ content, cap }: ReducerInput): ReducerOutput {
  */
 export function reduceGitDiff({ content, cap }: ReducerInput): ReducerOutput {
   if (content.length <= cap) return { content, applied: false };
-  // Split per-file ("diff --git" markers).
-  const files = content.split(/\n(?=diff --git )/);
+  const safeCap = validCap(cap);
+  const files = content.split(/\n(?=diff --git )/).filter(Boolean);
   if (files.length === 0) return { content, applied: false };
 
-  const reducedFiles: string[] = [];
-  let total = 0;
-  let elidedFiles = 0;
+  const parsed = files.map((file) => {
+    const hunks = file.split(/\n(?=@@ )/);
+    const header = hunks[0] ?? '';
+    const id = /^diff --git\s+a\/(.+?)\s+b\/(.+)$/m.exec(header)?.[2]
+      ?? /^\+\+\+\s+b\/(.+)$/m.exec(header)?.[1]
+      ?? `(unknown file ${files.indexOf(file) + 1})`;
+    return { id, header, hunks: hunks.slice(1) };
+  });
+  const marker = `\n[smart-reducer: git_diff — ${parsed.length} file(s); hunks distributed across files]\n`;
+  const joinCost = Math.max(0, parsed.length - 1) * 2;
+  const headersCost = parsed.reduce((n, file) => n + file.header.length, 0) + joinCost + marker.length;
+
+  // Full headers do not fit: retain a compact representation of the complete
+  // file set (count + both ends) rather than silently dropping later files.
+  if (headersCost > safeCap) {
+    return { content: compactGitFileIndex(parsed.map((file) => file.id), safeCap), applied: true };
+  }
+
+  const remaining = Math.max(0, safeCap - headersCost);
+  const perFileBudget = parsed.length > 0 ? Math.floor(remaining / parsed.length) : 0;
   let elidedHunks = 0;
-  for (const f of files) {
-    if (total > cap * 0.85) {
-      elidedFiles++;
-      continue;
+  const pieces = parsed.map((file) => {
+    let used = 0;
+    const kept: string[] = [];
+    for (const hunk of file.hunks) {
+      const cost = hunk.length + 1;
+      if (used + cost > perFileBudget) {
+        elidedHunks++;
+        continue;
+      }
+      kept.push(hunk);
+      used += cost;
     }
-    // Per-file: keep headers + first 2 hunks.
-    const hunks = f.split(/\n(?=@@ )/);
-    if (hunks.length <= 3) {
-      reducedFiles.push(f);
-      total += f.length + 1;
-      continue;
-    }
-    const kept = [hunks[0], ...hunks.slice(1, 3)].join('\n');
-    const elided = hunks.length - 3;
-    elidedHunks += elided;
-    const piece = kept + `\n[smart-reducer: git_diff — ${elided} hunk(s) elided in this file]\n`;
-    reducedFiles.push(piece);
-    total += piece.length + 1;
-  }
-  if (elidedFiles === 0 && elidedHunks === 0) {
-    // Reducer found nothing to elide (every file already small).
-    return { content, applied: false };
-  }
-  let out = reducedFiles.join('\n');
-  if (elidedFiles > 0) {
-    out += `\n\n[smart-reducer: git_diff — ${elidedFiles} file(s) entirely elided due to budget]\n`;
-  }
-  return { content: out, applied: true };
+    return [file.header, ...kept].join('\n');
+  });
+  const out = pieces.join('\n\n') +
+    `\n[smart-reducer: git_diff — ${elidedHunks} hunk(s) elided; all ${parsed.length} file header(s) kept]\n`;
+  return { content: fitReducedContent(out, safeCap, 'git_diff'), applied: true };
 }
 
 /**
@@ -137,12 +201,17 @@ export function reduceGitDiff({ content, cap }: ReducerInput): ReducerOutput {
  *
  * We expect lines shaped like `path/to/file.ts:42: matched line`.
  */
-const GREP_PATH_RE = /^([^\s:]+(?:\.[a-zA-Z0-9]+)?):(\d+):/;
-const PER_FILE_CAP = Number(process.env.CODER_GREP_PER_FILE_CAP ?? 8);
+const GREP_PATH_RE = /^(.+?):(\d+):/;
+
+function grepPerFileCap(): number {
+  const value = Number(process.env.CODER_GREP_PER_FILE_CAP ?? 8);
+  return Number.isFinite(value) && value >= 1 ? Math.min(1000, Math.floor(value)) : 8;
+}
 
 export function reduceGrep({ content, cap }: ReducerInput): ReducerOutput {
   if (content.length <= cap) return { content, applied: false };
   const lines = content.split('\n');
+  const perFileCap = grepPerFileCap();
   const perFile = new Map<string, number>();
   const out: string[] = [];
   let totalElided = 0;
@@ -155,7 +224,7 @@ export function reduceGrep({ content, cap }: ReducerInput): ReducerOutput {
     const file = m[1];
     const count = (perFile.get(file) ?? 0) + 1;
     perFile.set(file, count);
-    if (count <= PER_FILE_CAP) {
+    if (count <= perFileCap) {
       out.push(line);
     } else {
       totalElided++;
@@ -164,8 +233,8 @@ export function reduceGrep({ content, cap }: ReducerInput): ReducerOutput {
   if (totalElided === 0) return { content, applied: false };
   const reduced =
     out.join('\n') +
-    `\n[smart-reducer: grep — kept top ${PER_FILE_CAP} match(es) per file; elided ${totalElided} additional match(es)]\n`;
-  return { content: reduced, applied: true };
+    `\n[smart-reducer: grep — kept top ${perFileCap} match(es) per file; elided ${totalElided} additional match(es)]\n`;
+  return { content: fitReducedContent(reduced, cap, 'grep'), applied: true };
 }
 
 /**
@@ -539,7 +608,7 @@ function reduceRunCommandHeadTail({ content, cap }: ReducerInput): ReducerOutput
     head +
     `\n${ELIDED('run_command head/tail', content.length, headBudget + tailBudget).trim()} — ${elided} chars elided from middle\n` +
     tail;
-  return { content: reduced, applied: true };
+  return { content: fitReducedContent(reduced, cap, 'run_command head/tail'), applied: true };
 }
 
 export function reduceRunCommand({ content, cap }: ReducerInput): ReducerOutput {
@@ -593,11 +662,49 @@ export function applySmartReducer(
   cap: number,
   opts?: { query?: string },
 ): string {
+  return applySmartReducerDetailed(toolName, content, cap, opts).content;
+}
+
+/** Same reducer path as `applySmartReducer`, with loss accounting attached. */
+export function applySmartReducerDetailed(
+  toolName: string,
+  content: string,
+  cap: number,
+  opts?: { query?: string },
+): DetailedReduction {
+  const safeCap = validCap(cap);
   const fn = SMART_REDUCERS[toolName];
   if (fn) {
-    const out = fn({ content, cap });
-    return out.applied ? out.content : content;
+    const out = fn({ content, cap: safeCap });
+    const shaped = out.applied ? fitReducedContent(out.content, safeCap, toolName) : content;
+    return {
+      content: shaped,
+      report: {
+        kind: out.applied ? 'semantic' : 'none',
+        technique: out.applied ? toolName : 'none',
+        rawChars: content.length,
+        shapedChars: shaped.length,
+        cap: safeCap,
+        preserved: out.applied
+          ? toolName === 'git_diff' ? ['file_headers', 'hunks']
+            : toolName.includes('grep') ? ['file_diversity']
+              : toolName === 'run_command' ? ['head', 'tail', 'errors']
+                : ['head', 'tail']
+          : [],
+      },
+    };
   }
-  const crushed = jsonCrush({ content, cap, query: opts?.query });
-  return crushed.applied ? crushed.content : content;
+  const crushed = jsonCrush({ content, cap: safeCap, query: opts?.query });
+  const shaped = crushed.applied ? fitReducedContent(crushed.content, safeCap, 'json-crush') : content;
+  return {
+    content: shaped,
+    report: {
+      kind: crushed.applied ? 'json_crush' : 'none',
+      technique: crushed.applied ? 'json-crush' : 'none',
+      rawChars: content.length,
+      shapedChars: shaped.length,
+      cap: safeCap,
+      preserved: crushed.applied ? ['first_rows', 'last_rows', 'relevant_rows'] : [],
+    },
+  };
 }

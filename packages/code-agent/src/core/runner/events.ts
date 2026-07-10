@@ -22,7 +22,17 @@ export interface RunnerEvents {
    * persists `args_json='{}'`. `refusalKind` distinguishes synthesized
    * refusals from genuine tool failures (both have isError=true).
    */
-  tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage; rawChars?: number; input?: Record<string, unknown>; refusalKind?: string }, durationMs: number) => void;
+  tool_call_result: (id: string, name: string, result: {
+    content: string;
+    isError?: boolean;
+    subUsage?: ChatUsage;
+    rawChars?: number;
+    input?: Record<string, unknown>;
+    refusalKind?: string;
+    reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;
+    outputId?: string;
+    ledgerEntry?: import('@mcp/code-agent/core/tool-call-ledger.js').ToolCallLedgerEntry;
+  }, durationMs: number) => void;
   /**
    * Periodic heartbeat fired while a tool is in flight, and explicit
    * progress reports from cooperating tools (via `ctx.reportProgress`).

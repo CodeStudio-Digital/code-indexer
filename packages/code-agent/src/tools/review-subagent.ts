@@ -269,6 +269,7 @@ export async function runReviewSubagent(parent: SubagentParent, input: ReviewInp
   }
 
   const result = await runSubagent(parent, {
+    profile: 'review',
     systemPrompt,
     allowlist: REVIEW_ALLOWLIST,
     initialMessages,

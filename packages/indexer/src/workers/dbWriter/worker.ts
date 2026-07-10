@@ -34,8 +34,10 @@ const insertTool = db.prepare(`
   INSERT INTO coder_tool_calls
     (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
      output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
-     parent_tool_use_id, error_class)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     parent_tool_use_id, error_class, reduction_kind, reduction_technique,
+     reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
+     subagent_profile, logical_operation_id, productive)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const bumpStmt = db.prepare(`
   UPDATE coder_sessions
@@ -94,6 +96,16 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
       tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
       tc.parent_tool_use_id ?? null,
       classifyToolError(tc.result_text, tc.is_error),
+      tc.reduction_kind ?? null,
+      tc.reduction_technique ?? null,
+      tc.reduction_meta_json ?? null,
+      tc.output_id ?? null,
+      tc.run_id ?? null,
+      tc.parent_run_id ?? null,
+      tc.is_subagent ? 1 : 0,
+      tc.subagent_profile ?? null,
+      tc.logical_operation_id ?? null,
+      tc.productive == null ? null : tc.productive ? 1 : 0,
     );
   };
   for (const tc of p.tool_calls) runInsertTool(tc);

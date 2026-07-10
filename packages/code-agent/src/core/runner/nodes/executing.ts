@@ -31,6 +31,7 @@ import { assembleMessagesForChat } from '../assembly/messages.js';
 import { buildTools, fingerprintToolsJson } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { filterByTiers } from '@mcp/code-agent/tools/tiers.js';
+import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
 import { buildLoopEnforcementMarker } from '../markers.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
 // PR-F integration — Codex BodyAfterPrefix (post-response, prefix-cache-aware
@@ -385,7 +386,33 @@ export class ExecutingNode implements BehaviorNode {
       toolContext: ctx.opts.toolContext,
       provider: ctx.opts.provider,
     });
-    dbg(`tools=${toolsBuilt.tools.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
+    let toolsForModel = toolsBuilt.tools;
+    if (ctx.opts.toolSelectionFilter) {
+      try {
+        let taskText = '';
+        for (let i = messagesForChat.length - 1; i >= 0; i--) {
+          const message = messagesForChat[i];
+          if (message.role !== 'user') continue;
+          taskText = message.content
+            .map((block) => block.type === 'text' ? block.text : '')
+            .filter(Boolean)
+            .join(' ');
+          if (taskText) break;
+        }
+        const selected = await ctx.opts.toolSelectionFilter(toolsBuilt.tools, {
+          taskText,
+          recentToolCalls: [],
+        });
+        // Default is observability-only. An explicit second flag is required
+        // to mutate the provider surface after shadow telemetry is trusted.
+        if (process.env.MCP_PIPELINES_TOOL_SELECTION_APPLY === '1' && selected.length > 0) {
+          toolsForModel = selected;
+        }
+      } catch (e) {
+        console.warn(`[coder] tool-selection shadow failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    dbg(`tools=${toolsForModel.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
 
     const qualitySuffix = ctx.bridge?.buildQualityFeedbackSuffix?.() ?? '';
     const systemPrompt = qualitySuffix ? `${ctx.opts.systemPrompt}${qualitySuffix}` : ctx.opts.systemPrompt;
@@ -401,7 +428,7 @@ export class ExecutingNode implements BehaviorNode {
     // length guard inside `shouldCompactPreEmit` covers the first case;
     // we cover the unknown-usage case implicitly because the estimate
     // works from `messagesForChat` alone, not from a provider count.
-    const prefixTokensEstimate = computePrefixTokens(systemPrompt, toolsBuilt.tools);
+    const prefixTokensEstimate = computePrefixTokens(systemPrompt, toolsForModel);
     const preEmit = shouldCompactPreEmit({
       messages: messagesForChat,
       // No pending tool_results at this point in the loop — the model
@@ -484,7 +511,7 @@ export class ExecutingNode implements BehaviorNode {
       turn: ctx.turn,
       provider: ctx.opts.provider.name,
       model: ctx.opts.provider.model,
-      toolCount: toolsBuilt.tools.length,
+      toolCount: toolsForModel.length,
       historyChars,
     });
 
@@ -518,7 +545,7 @@ export class ExecutingNode implements BehaviorNode {
       stream = ctx.opts.provider.chat({
         system: systemPrompt,
         messages: chatMessages,
-        tools: toolsBuilt.tools,
+        tools: toolsForModel,
         thinking: ctx.opts.thinking,
         thinkingBudgetTokens: ctx.opts.thinkingBudgetTokens,
         ...(ctx.opts.reasoningEffort
@@ -635,7 +662,7 @@ export class ExecutingNode implements BehaviorNode {
     // one row.
     const { toolsDefChars, toolsFingerprint } = (() => {
       try {
-        const json = JSON.stringify(toolsBuilt.tools);
+        const json = JSON.stringify(toolsForModel);
         return { toolsDefChars: json.length, toolsFingerprint: fingerprintToolsJson(json) };
       } catch {
         return { toolsDefChars: 0, toolsFingerprint: null };
@@ -658,7 +685,8 @@ export class ExecutingNode implements BehaviorNode {
           historyChars,
           systemPromptChars: systemPrompt.length,
           toolsDefChars,
-          visibleToolsCount: toolsBuilt.tools.length,
+          eligibleToolsDefChars: toolsBuilt.eligibleToolsDefChars,
+          visibleToolsCount: toolsForModel.length,
           toolsFingerprint,
           prefixHeadHash,
           reducerStats,
@@ -774,7 +802,7 @@ export class ExecutingNode implements BehaviorNode {
       loopRefusals: ctx.loopRefusals,
       // Pin mechanism — hidden registered tools execute and join the
       // visible list next turn; disabled tools hard-block at dispatch.
-      visibleToolNames: new Set(toolsBuilt.tools.map((t) => t.name)),
+      visibleToolNames: new Set(toolsForModel.map((t) => t.name)),
       pinnedTools: ctx.pinnedTools,
       onToolPinned: (name) => ctx.pinnedTools.add(name),
       isToolBlocked: (name) =>
@@ -893,6 +921,9 @@ export class ExecutingNode implements BehaviorNode {
           rawChars: r.rawChars,
           input: inputByUseId.get(r.toolUseId),
           refusalKind: r.refusalKind,
+          reductionReport: r.reductionReport,
+          outputId: r.outputId,
+          ledgerEntry: r.ledgerEntry,
           ...(img ? { image: { mediaType: img.mediaType, base64: img.base64 } } : {}),
         },
         r.durationMs,
@@ -955,7 +986,12 @@ export class ExecutingNode implements BehaviorNode {
         toolUses: result.toolUses,
         hadText,
         repeatableNames: new Set(
-          ctx.opts.registry.list().filter((t) => t.repeatable).map((t) => t.name),
+          ctx.opts.registry.list()
+            .filter((t) => {
+              const repeatPolicy = resolveToolMetadata(t).repeatPolicy;
+              return repeatPolicy === 'pollable' || repeatPolicy === 'volatile';
+            })
+            .map((t) => t.name),
         ),
         doom: ctx.doomLoop,
         dominance: ctx.dominance,

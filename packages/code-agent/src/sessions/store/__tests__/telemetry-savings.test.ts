@@ -3,7 +3,7 @@
  * injected so no DB/network. Pins the honest contract:
  *  - cache saving = read × (input_rate − cacheRead_rate)  [EXACT]
  *  - shaping saving = raw − shaped chars                   [EXACT fwd]
- *  - tier saving = (full_catalog − active) / 4             [ESTIMATE]
+ *  - tier saving = (eligible_catalog − active) / 4         [ESTIMATE]
  */
 import { describe, it, expect } from 'vitest';
 import { computeSavings, type TurnForSavings } from '../telemetry-savings.js';
@@ -19,6 +19,7 @@ const turn = (over: Partial<TurnForSavings>): TurnForSavings => ({
   input_tokens: 0,
   cache_read_input_tokens: 0,
   tools_def_chars: null,
+  eligible_tools_def_chars: null,
   ...over,
 });
 
@@ -71,14 +72,27 @@ describe('computeSavings', () => {
 
   it('estimates tier savings from full-catalog counterfactual', () => {
     const r = computeSavings({
-      turns: [turn({ tools_def_chars: 60_000 }), turn({ tools_def_chars: 60_000 })],
+      turns: [
+        turn({ tools_def_chars: 60_000, eligible_tools_def_chars: 180_000 }),
+        turn({ tools_def_chars: 60_000, eligible_tools_def_chars: 180_000 }),
+      ],
       rawToolChars: 0,
       shapedToolChars: 0,
       resolvePricing: resolve,
     });
-    // default FULL_CATALOG_CHARS_EST = 180_000 → (180000 − 60000)/4 = 30000/turn
+    // Serialized eligible catalog is 180k → (180000 − 60000)/4 = 30000/turn.
     expect(r.tierSavedTokensEstPerTurn).toBe(30_000);
     expect(r.tierSavedTokensEstTotal).toBe(60_000); // × 2 turns
+  });
+
+  it('falls back to zero tier savings for historical rows without eligible catalog size', () => {
+    const r = computeSavings({
+      turns: [turn({ tools_def_chars: 60_000, eligible_tools_def_chars: null })],
+      rawToolChars: 0,
+      shapedToolChars: 0,
+      resolvePricing: resolve,
+    });
+    expect(r.tierSavedTokensEstPerTurn).toBe(0);
   });
 
   it('returns zeros for an empty session without crashing', () => {

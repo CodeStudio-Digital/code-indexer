@@ -50,14 +50,14 @@ const toyEmbed: EmbeddingFn = async (text: string) => {
 
 describe('ToolSelectionPipeline', () => {
   const allTools: CoderTool[] = [
-    makeTool('Read', 'Read file at path'),
-    makeTool('Edit', 'Edit existing file'),
-    makeTool('Write', 'Write a new file'),
-    makeTool('Bash', 'Run a shell command'),
-    makeTool('Glob', 'Find files by pattern'),
-    makeTool('Grep', 'Search file content'),
-    makeTool('TodoWrite', 'Manage task list'),
-    makeTool('PowerShell', 'Run a PS command'),
+    makeTool('read_file', 'Read file at path'),
+    makeTool('edit_file', 'Edit existing file'),
+    makeTool('write_file', 'Write a new file'),
+    makeTool('run_command', 'Run a shell command'),
+    makeTool('glob', 'Find files by pattern'),
+    makeTool('mcp__grep_code', 'Search file content'),
+    makeTool('task_list', 'Manage task list'),
+    makeTool('code_exec', 'Run structured tool calls'),
     makeTool('DesignSystemExtract', 'Extract design tokens from a project'),
     makeTool('DatabaseQuery', 'Run a SQL query on the attached database'),
     makeTool('WebFetch', 'Fetch the content of a URL'),
@@ -85,7 +85,7 @@ describe('ToolSelectionPipeline', () => {
     const result = await selectTools(pipeline, {
       queryId: 'q', taskText: 'reading and editing files',
     });
-    // Essentials = up to 8 in our set (Read/Edit/Write/TodoWrite/Bash/Glob/Grep/PowerShell)
+    // Essentials come from the live NEVER_TRIM contract, not provider-specific aliases.
     // Plus best-scoring others up to total K = 8. With all essentials present,
     // others slots = 0. So selected.length === 8.
     expect(result.selected.length).toBe(8);
@@ -98,11 +98,10 @@ describe('ToolSelectionPipeline', () => {
       taskText: 'totally unrelated topic about astronomy and stars',
     });
     const selectedNames = new Set(result.selected.map((t) => t.name));
-    expect(selectedNames.has('Read')).toBe(true);
-    expect(selectedNames.has('Edit')).toBe(true);
-    expect(selectedNames.has('Write')).toBe(true);
-    expect(selectedNames.has('TodoWrite')).toBe(true);
-    expect(selectedNames.has('Bash')).toBe(true);
+    expect(selectedNames.has('read_file')).toBe(true);
+    expect(selectedNames.has('glob')).toBe(true);
+    expect(selectedNames.has('task_list')).toBe(true);
+    expect(selectedNames.has('code_exec')).toBe(true);
   });
 
   it('drops admin-risk tools at navigate tier', async () => {

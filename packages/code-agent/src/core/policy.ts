@@ -27,6 +27,8 @@
 import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
 import type {
   CoderTool,
+  ToolExecutionClass,
+  ToolRepeatPolicy,
   ToolRiskLevel,
 } from '@mcp/code-agent/core/tool.js';
 
@@ -96,6 +98,7 @@ const BUILTIN_CLASSIFICATION: Record<
 
   // ─── Interactive (pause for human) ────────────────────────────
   ask_user:         { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
+  decision_gate:    { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_plan:      { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   // task_list: interactive because gate:'approve' pauses for approval (must opt
   // out of the NORMAL tool timeout). gate:'track' returns immediately, for which
@@ -141,6 +144,8 @@ export interface ResolvedToolMetadata {
   requiresSandbox: boolean;
   scopeAware: boolean;
   interactive: boolean;
+  repeatPolicy: ToolRepeatPolicy;
+  executionClass: ToolExecutionClass;
 }
 
 export function resolveToolMetadata(tool: CoderTool): ResolvedToolMetadata {
@@ -171,8 +176,23 @@ export function resolveToolMetadata(tool: CoderTool): ResolvedToolMetadata {
   const requiresSandbox = tool.requiresSandbox ?? false;
   const scopeAware = tool.scopeAware ?? builtin?.scopeAware ?? false;
   const interactive = tool.interactive ?? builtin?.interactive ?? false;
+  const repeatPolicy: ToolRepeatPolicy = tool.repeatPolicy
+    ?? (tool.repeatable ? 'pollable' : mutates ? 'mutating' : 'stable');
+  const executionClass: ToolExecutionClass = tool.executionClass
+    ?? (interactive || riskLevel === 'admin' ? 'control'
+      : riskLevel === 'execute' ? 'execute'
+        : mutates ? 'write' : 'read');
 
-  return { mutates, parallelSafe, riskLevel, requiresSandbox, scopeAware, interactive };
+  return {
+    mutates,
+    parallelSafe,
+    riskLevel,
+    requiresSandbox,
+    scopeAware,
+    interactive,
+    repeatPolicy,
+    executionClass,
+  };
 }
 
 /**

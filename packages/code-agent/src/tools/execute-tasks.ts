@@ -719,6 +719,7 @@ async function runOneTask(
           agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         },
         {
+          profile: task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement',
           systemPrompt: art.systemPrompt,
           label: task.title,
           allowlist: art.allowlist,

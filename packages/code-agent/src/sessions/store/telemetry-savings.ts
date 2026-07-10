@@ -17,16 +17,13 @@ import type { ModelPricing } from '@mcp/code-agent/providers/pricing.js';
  */
 
 const CHARS_PER_TOKEN = 4;
-// Rough serialized-JSON size of the FULL tool catalog (~279 tools) with no
-// tiering — the counterfactual for the tier-savings ESTIMATE only. Env-tunable.
-const FULL_CATALOG_CHARS_EST = Number(process.env.CODER_FULL_CATALOG_CHARS_EST ?? 180_000);
-
 export interface TurnForSavings {
   provider: string | null;
   model: string | null;
   input_tokens: number;
   cache_read_input_tokens: number;
   tools_def_chars: number | null;
+  eligible_tools_def_chars?: number | null;
 }
 
 export interface SavingsInput {
@@ -65,6 +62,8 @@ export function computeSavings(input: SavingsInput): SavingsBreakdown {
   let weightedRateDen = 0; // Σ input_tokens (priced turns)
   let toolsDefCharsSum = 0;
   let toolsDefCharsCount = 0;
+  let eligibleToolsDefCharsSum = 0;
+  let eligibleToolsDefCharsCount = 0;
   let hasUnpricedTurns = false;
 
   for (const t of turns) {
@@ -73,6 +72,10 @@ export function computeSavings(input: SavingsInput): SavingsBreakdown {
     if (t.tools_def_chars != null) {
       toolsDefCharsSum += t.tools_def_chars;
       toolsDefCharsCount++;
+    }
+    if (t.eligible_tools_def_chars != null) {
+      eligibleToolsDefCharsSum += t.eligible_tools_def_chars;
+      eligibleToolsDefCharsCount++;
     }
     const pricing = resolvePricing(t.provider, t.model);
     if (!pricing) {
@@ -92,9 +95,12 @@ export function computeSavings(input: SavingsInput): SavingsBreakdown {
   const shapingSavedUsdEst = (shapingSavedTokensEst * avgInputRate) / 1_000_000;
 
   const avgToolsDefChars = toolsDefCharsCount > 0 ? toolsDefCharsSum / toolsDefCharsCount : 0;
+  const avgEligibleToolsDefChars = eligibleToolsDefCharsCount > 0
+    ? eligibleToolsDefCharsSum / eligibleToolsDefCharsCount
+    : avgToolsDefChars;
   const tierSavedTokensEstPerTurn = Math.max(
     0,
-    Math.round((FULL_CATALOG_CHARS_EST - avgToolsDefChars) / CHARS_PER_TOKEN),
+    Math.round((avgEligibleToolsDefChars - avgToolsDefChars) / CHARS_PER_TOKEN),
   );
 
   return {
