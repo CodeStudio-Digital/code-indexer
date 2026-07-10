@@ -12,6 +12,7 @@ export {
   CodeQualityClassifier,
   PolicyClassifier,
   ToolMisuseClassifier,
+  CombinedQualityClassifier,
 } from './classifiers.js';
 
 export {

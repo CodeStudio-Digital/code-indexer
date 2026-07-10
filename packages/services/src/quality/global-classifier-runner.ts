@@ -4,7 +4,7 @@
  * The runtime (CoderRunner) doesn't know about `@mcp/services/quality`
  * directly — it just calls `runGlobalQualityClassifiers(output)` after a
  * turn completes. When the boot path has installed a pipeline (and the
- * env flag is on), the call runs the 5 classifiers in parallel and
+ * env flag is on), the call runs the configured passive evaluator and
  * persists verdicts to `quality_classifications`. Otherwise it's a no-op.
  *
  * Mirror of `setGlobalToolSelectionFilter` from the tool-selection module
@@ -117,7 +117,7 @@ export function setGlobalQualityResultObserver(
 }
 
 /**
- * Run the 5 classifiers in parallel on the agent's output. Returns the
+ * Run the configured evaluator(s) on the agent's output. Returns the
  * structured result, or null when the pipeline isn't installed/enabled
  * (so callers can use `?.` chains without an undefined check).
  *
@@ -169,7 +169,7 @@ function backfillPendingInterventions(
   if (!store) return;
   if (output.sessionId == null) return;
   // messageId format: "turn-N" — extract N.
-  const m = (output.messageId ?? '').match(/^turn-(\d+)$/);
+  const m = (output.messageId ?? '').match(/(?:^|:)turn-(\d+)$/);
   if (!m) return;
   const currentTurn = Number(m[1]);
   if (!Number.isFinite(currentTurn) || currentTurn <= 0) return;

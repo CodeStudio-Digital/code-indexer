@@ -97,6 +97,7 @@ import {
   PolicyClassifier,
   QualityClassifierPipeline,
   ToolMisuseClassifier,
+  CombinedQualityClassifier,
 } from '@mcp/services/quality/index.js';
 import {
   ShadowTrafficRunner,
@@ -1163,20 +1164,22 @@ export function createDeps(): ServerDeps {
   // template revision invalidates entries automatically.
   const roleEmbeddingStore = new InMemoryRoleEmbeddingStore();
 
-  // Quality classifier pipeline — five single-task classifiers running in
-  // parallel via Promise.allSettled. Provider per classifier resolves via
-  // PipelineProviderResolver (admin-configured).
+  // Quality pipeline — one passive combined evaluator by default. The old
+  // five-call form remains an explicit rollback flag only.
   const qualityClassificationStore = new QualityClassificationStore(db.raw());
   const qualityInterventionStore = new QualityInterventionStore(db.raw());
   const counterfactualLogStore = new CounterfactualLogStore(db.raw());
+  const legacyQualityClassifiers = process.env.MCP_QUALITY_LEGACY_FIVE === '1';
   const qualityClassifierPipeline = new QualityClassifierPipeline({
-    classifiers: [
-      new OffTopicClassifier(pipelineProviderResolver),
-      new CompletenessClassifier(pipelineProviderResolver),
-      new CodeQualityClassifier(pipelineProviderResolver),
-      new PolicyClassifier(pipelineProviderResolver),
-      new ToolMisuseClassifier(pipelineProviderResolver),
-    ],
+    classifiers: legacyQualityClassifiers
+      ? [
+          new OffTopicClassifier(pipelineProviderResolver),
+          new CompletenessClassifier(pipelineProviderResolver),
+          new CodeQualityClassifier(pipelineProviderResolver),
+          new PolicyClassifier(pipelineProviderResolver),
+          new ToolMisuseClassifier(pipelineProviderResolver),
+        ]
+      : [new CombinedQualityClassifier(pipelineProviderResolver)],
     store: qualityClassificationStore,
     telemetry: pipelineTelemetrySink,
   });

@@ -14,6 +14,10 @@ export interface AgentOutputForClassification {
   sessionId?: number | null;
   companySessionId?: number | null;
   agentRunId?: number | null;
+  coderRunId?: string | null;
+  parentRunId?: string | null;
+  isSubagent?: boolean;
+  subagentProfile?: string | null;
   /** Optional message id within the conversation. */
   messageId?: string | null;
   /** Free-form task description / user prompt that triggered the output. */

@@ -1,5 +1,5 @@
 /**
- * QualityClassifierPipeline — runs all configured classifiers in parallel
+ * QualityClassifierPipeline — runs all configured evaluators with bounded concurrency
  * (the `PlanMaster.exec` pattern from grox/plans/plan_master.py:18-29):
  *
  *   results = await Promise.all(classifiers.map(c => c.classify(output)))
@@ -38,8 +38,8 @@ export interface QualityClassifierPipelineOptions {
   /** Optional telemetry sink. */
   telemetry?: TelemetrySink;
   /**
-   * Max classifiers calling the provider at once. The 5 classifiers share
-   * one provider quota, so firing all 5 simultaneously every turn is what
+   * Max evaluators calling the provider at once. Legacy classifiers share
+   * one provider quota, so firing all five simultaneously every turn is what
    * trips the rate-limit. Default 2 — enough parallelism to stay fast,
    * low enough to avoid self-inflicted 429 bursts.
    */
@@ -99,6 +99,10 @@ export class QualityClassifierPipeline {
           session_id: output.sessionId ?? null,
           company_session_id: output.companySessionId ?? null,
           agent_run_id: output.agentRunId ?? null,
+          coder_run_id: output.coderRunId ?? null,
+          parent_run_id: output.parentRunId ?? null,
+          is_subagent: output.isSubagent === true,
+          subagent_profile: output.subagentProfile ?? null,
           message_id: output.messageId ?? null,
           classifier_name: v.classifierName,
           verdict: v.verdict,

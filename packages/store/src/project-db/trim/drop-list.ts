@@ -29,6 +29,7 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   // session runtime + telemetry (central per the final scope decision)
   'coder_sessions', 'coder_messages', 'coder_plans', 'coder_tasks_state', 'coder_tool_calls',
   'coder_turn_telemetry', 'coder_investigations', 'coder_session_inputs', 'coder_session_memory',
+  'coder_subagent_runs', 'coder_subagent_tool_calls',
   'coder_phase_profiles', 'coder_session_groups', 'coder_task_runs', 'coder_task_run_items',
   'coder_session_index', 'coder_session_projects',
   'session_file_baselines', 'session_file_edits', 'session_file_hunk_decisions',

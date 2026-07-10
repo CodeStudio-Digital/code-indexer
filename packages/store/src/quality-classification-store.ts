@@ -13,6 +13,10 @@ export interface QualityClassificationRow {
   session_id: number | null;
   company_session_id: number | null;
   agent_run_id: number | null;
+  coder_run_id: string | null;
+  parent_run_id: string | null;
+  is_subagent: 0 | 1;
+  subagent_profile: string | null;
   message_id: string | null;
   classifier_name: string;
   verdict: QualityVerdict;
@@ -36,6 +40,10 @@ export interface QualityClassificationInsert {
   session_id?: number | null;
   company_session_id?: number | null;
   agent_run_id?: number | null;
+  coder_run_id?: string | null;
+  parent_run_id?: string | null;
+  is_subagent?: boolean;
+  subagent_profile?: string | null;
   message_id?: string | null;
   classifier_name: string;
   verdict: QualityVerdict;
@@ -57,11 +65,13 @@ export class QualityClassificationStore {
     const result = this.db
       .prepare(
         `INSERT INTO quality_classifications (
-           session_id, company_session_id, agent_run_id, message_id,
+           session_id, company_session_id, agent_run_id, coder_run_id, parent_run_id,
+           is_subagent, subagent_profile, message_id,
            classifier_name, verdict, system_error, confidence, reason,
            provider_id, model_id, latency_ms, cost_usd, raw_response_json
          ) VALUES (
-           @session_id, @company_session_id, @agent_run_id, @message_id,
+           @session_id, @company_session_id, @agent_run_id, @coder_run_id, @parent_run_id,
+           @is_subagent, @subagent_profile, @message_id,
            @classifier_name, @verdict, @system_error, @confidence, @reason,
            @provider_id, @model_id, @latency_ms, @cost_usd, @raw_response_json
          )`,
@@ -70,6 +80,10 @@ export class QualityClassificationStore {
         session_id: row.session_id ?? null,
         company_session_id: row.company_session_id ?? null,
         agent_run_id: row.agent_run_id ?? null,
+        coder_run_id: row.coder_run_id ?? null,
+        parent_run_id: row.parent_run_id ?? null,
+        is_subagent: row.is_subagent ? 1 : 0,
+        subagent_profile: row.subagent_profile ?? null,
         message_id: row.message_id ?? null,
         classifier_name: row.classifier_name,
         verdict: row.verdict,
