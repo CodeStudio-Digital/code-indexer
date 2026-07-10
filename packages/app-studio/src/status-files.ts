@@ -16,6 +16,8 @@ export interface AppDbStatusFile {
   applied: string[];
   /** true = seeds/seed.sql foi carregado no banco local. */
   seeded?: boolean;
+  /** Hash do seed carregado; evita reaplicar INSERTs em retries sem mudanca. */
+  seed_hash?: string | null;
   last_apply_at: string;
 }
 

@@ -67,7 +67,7 @@ describe('sticky toolset — byte-identical array across resumes with different 
     const resolve = (tail: string[]) => resolveSessionProfile({
       hasHistory: true, stickyEnabled: true, persisted: null, historyToolNames: tail,
     }).profile;
-    expect(resolve(['read_file'])).toBe('bootstrap');
+    expect(resolve(['mcp__read_file'])).toBe('bootstrap');
     expect(resolve(['read_file', 'git_commit'])).toBe('full');
   });
 

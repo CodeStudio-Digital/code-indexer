@@ -19,6 +19,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { listSqlMigrations, sqlHasStatements } from '@mcp/app-studio/pipeline/gate-checks.js';
 import { readDbStatus, writeDbStatus } from '@mcp/app-studio/status-files.js';
 import type {
@@ -73,6 +74,17 @@ function seedHasContent(ctx: ProvisionCtx): boolean {
   }
 }
 
+function seedHash(ctx: ProvisionCtx): string | null {
+  const path = join(ctx.workspaceDir, SEED_REL);
+  if (!existsSync(path)) return null;
+  try {
+    const contents = readFileSync(path, 'utf8');
+    return sqlHasStatements(contents) ? createHash('sha256').update(contents).digest('hex') : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Carrega seeds/seed.sql via `wrangler d1 execute` (local ou remote). */
 async function execSeed(ctx: ProvisionCtx, scope: '--local' | '--remote'): Promise<{ ok: boolean; error?: string }> {
   if (!seedHasContent(ctx)) return { ok: true }; // sem dados de exemplo → nada a carregar
@@ -97,13 +109,21 @@ export const d1Provisioner: DatabaseProvisioner = {
     // Carrega os dados de exemplo (seeds/seed.sql) no MESMO estado local
     // que o preview lê — sem isso as telas e o painel "Seus dados" ficam
     // vazios apesar do agente ter escrito o seed.
-    const seed = await execSeed(ctx, '--local');
-    if (!seed.ok) return fail(seed.error ?? 'seed failed');
+    const previous = readDbStatus(ctx.workspaceDir);
+    const currentSeedHash = seedHash(ctx);
+    const seedAlreadyLoaded = !!currentSeedHash && previous?.seeded === true && (
+      previous.seed_hash === currentSeedHash || previous.seed_hash == null
+    );
+    if (!seedAlreadyLoaded) {
+      const seed = await execSeed(ctx, '--local');
+      if (!seed.ok) return fail(seed.error ?? 'seed failed');
+    }
     writeDbStatus(ctx.workspaceDir, {
       engine: 'd1',
       local_ready: true,
       applied: migrations,
       seeded: seedHasContent(ctx),
+      seed_hash: currentSeedHash,
       last_apply_at: new Date().toISOString(),
     });
     return { ok: true, applied: migrations };

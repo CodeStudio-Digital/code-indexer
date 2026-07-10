@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { specToGraph } from '../blueprint/spec-to-graph.js';
+import { calculateBlueprintAutoLayout, specToGraph } from '../blueprint/spec-to-graph.js';
 import { applySpecMutation, type BlueprintMutation } from '../blueprint/mutations.js';
 import { diffSpec, formatDiffSummary } from '../blueprint/diff-summary.js';
 import { nodeIds } from '../blueprint/types.js';
@@ -64,6 +64,57 @@ describe('specToGraph', () => {
     expect(g.nodes.find((n) => n.id === 'screen:painel')!.position).toEqual({ x: 999, y: 42 });
     // Nó sem posição salva usa a coluna default.
     expect(g.nodes.find((n) => n.id === 'entity:pedidos')!.position.x).toBe(940);
+  });
+
+  it('orders screens by the navigation journey starting at a root screen', () => {
+    const spec = richSpec();
+    spec.screens = [
+      { id: 'relatorios', name: 'RelatoriosScreen', label: 'Relatorios', purpose: 'ver resultados' },
+      ...spec.screens,
+    ];
+    spec.behaviors!.push({
+      id: 'abrir-relatorios',
+      screen_id: 'clientes',
+      trigger: 'click',
+      trigger_label: 'ao abrir relatorios',
+      actions: [{ kind: 'navigate', screen_id: 'relatorios' }],
+    });
+
+    const positions = calculateBlueprintAutoLayout(spec);
+    expect(positions['screen:painel'].y).toBeLessThan(positions['screen:clientes'].y);
+    expect(positions['screen:clientes'].y).toBeLessThan(positions['screen:relatorios'].y);
+  });
+
+  it('keeps behaviors beside their source screen and packs data cards tightly', () => {
+    const positions = calculateBlueprintAutoLayout(richSpec());
+    const behaviorY = positions['behavior:salvar-pedido'].y;
+    const sourceScreenY = positions['screen:painel'].y;
+    const nextScreenY = positions['screen:clientes'].y;
+    const entityGap = positions['entity:clientes'].y - positions['entity:pedidos'].y;
+
+    expect(behaviorY).toBeLessThan(nextScreenY);
+    expect(Math.abs(behaviorY - sourceScreenY)).toBeLessThan(40);
+    expect(entityGap).toBeGreaterThanOrEqual(100);
+    expect(entityGap).toBeLessThan(160);
+  });
+
+  it('spreads large data models across adaptive columns', () => {
+    const spec = richSpec();
+    for (let index = 0; index < 19; index += 1) {
+      spec.database.entities.push({
+        name: `extra_${index}`,
+        label: `Extra ${index}`,
+        fields: [{ name: 'nome', label: 'Nome', type: 'text' }],
+      });
+    }
+
+    const positions = calculateBlueprintAutoLayout(spec);
+    const entityPositions = Object.entries(positions)
+      .filter(([id]) => id.startsWith('entity:'))
+      .map(([, position]) => position);
+
+    expect(new Set(entityPositions.map((position) => position.x)).size).toBe(3);
+    expect(Math.max(...entityPositions.map((position) => position.y))).toBeLessThan(1_000);
   });
 
   it('drops dangling edges instead of rendering them', () => {

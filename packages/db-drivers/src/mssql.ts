@@ -46,7 +46,67 @@ interface MssqlTransaction {
   rollback(): Promise<void>;
 }
 
+interface MssqlApi {
+  ConnectionPool: new (c: unknown) => MssqlPool;
+  Transaction: new (pool: MssqlPool) => MssqlTransaction;
+  Request: new (txn: MssqlTransaction) => MssqlRequest;
+}
+
+/**
+ * `mssql` is CommonJS. Native Node ESM exposes its API under `default`, while
+ * some bundlers synthesize named exports. Accept both shapes so the driver
+ * behaves the same in tests, the HTTP process and packaged Electron builds.
+ */
+export function normalizeMssqlModule(module: unknown): MssqlApi {
+  const namespace = module as Partial<MssqlApi> & { default?: Partial<MssqlApi> };
+  const candidate = typeof namespace.ConnectionPool === 'function' ? namespace : namespace.default;
+  if (
+    !candidate ||
+    typeof candidate.ConnectionPool !== 'function' ||
+    typeof candidate.Transaction !== 'function' ||
+    typeof candidate.Request !== 'function'
+  ) {
+    throw new TypeError('mssql module did not expose ConnectionPool, Transaction and Request constructors');
+  }
+  return candidate as MssqlApi;
+}
+
 const SYSTEM_SCHEMAS = new Set(['sys', 'INFORMATION_SCHEMA', 'guest', 'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin', 'db_backupoperator', 'db_datareader', 'db_datawriter', 'db_denydatareader', 'db_denydatawriter']);
+
+/** Reconstruct the declared SQL Server type from sys.columns metadata. */
+export function formatMssqlType(
+  type: string,
+  maxLength: number | null,
+  precision: number | null,
+  scale: number | null,
+): string {
+  const lower = type.toLowerCase();
+  if (lower === 'varchar' || lower === 'char' || lower === 'varbinary' || lower === 'binary') {
+    const length = maxLength === -1 ? 'max' : String(maxLength ?? 1);
+    return `${type}(${length})`;
+  }
+  if (lower === 'nvarchar' || lower === 'nchar') {
+    const length = maxLength === -1 ? 'max' : String(Math.max(1, Math.trunc((maxLength ?? 2) / 2)));
+    return `${type}(${length})`;
+  }
+  if (lower === 'decimal' || lower === 'numeric') {
+    return `${type}(${precision ?? 18},${scale ?? 0})`;
+  }
+  if (lower === 'datetime2' || lower === 'datetimeoffset' || lower === 'time') {
+    return `${type}(${scale ?? 7})`;
+  }
+  if (lower === 'float' && precision != null) return `${type}(${precision})`;
+  return type;
+}
+
+function mssqlCharacterLength(type: string, maxLength: number | null): number | null {
+  const lower = type.toLowerCase();
+  if (lower === 'nvarchar' || lower === 'nchar') {
+    return maxLength === -1 ? -1 : Math.trunc((maxLength ?? 0) / 2);
+  }
+  if (lower === 'varchar' || lower === 'char') return maxLength;
+  return null;
+}
 
 function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
   const opts = config.options ?? {};
@@ -63,6 +123,9 @@ function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
   if (ssl?.ca || ssl?.cert || ssl?.key) {
     options.cryptoCredentialsDetails = { ca: ssl.ca, cert: ssl.cert, key: ssl.key };
   }
+  if (typeof opts.applicationName === 'string' && opts.applicationName) {
+    options.appName = opts.applicationName;
+  }
   return {
     server: config.host ?? 'localhost',
     port: config.port ?? 1433,
@@ -76,11 +139,7 @@ function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
 }
 
 export async function createMssqlDriver(config: DbConnectConfig): Promise<DatabaseDriver> {
-  const mssql = (await import('mssql')) as unknown as {
-    ConnectionPool: new (c: unknown) => MssqlPool;
-    Transaction: new (pool: MssqlPool) => MssqlTransaction;
-    Request: new (txn: MssqlTransaction) => MssqlRequest;
-  };
+  const mssql = normalizeMssqlModule(await import('mssql'));
   // node-mssql only parses a connection string when it's passed as a bare STRING
   // (an object's `connectionString` property is ignored, unlike pg/mysql2). So in
   // URL mode hand the string straight to the pool; otherwise build the config object.
@@ -150,13 +209,15 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
   }
 
   async function describeTable(schemaName: string, name: string): Promise<TableInfo> {
+    const schema = schemaName || 'dbo';
     const cols = await rows<{
       COLUMN_NAME: string; DATA_TYPE: string; IS_NULLABLE: number; COLUMN_DEFAULT: string | null;
-      ORD: number; CHAR_LEN: number | null; NUM_PREC: number | null; IS_IDENTITY: number;
+      ORD: number; CHAR_LEN: number | null; NUM_PREC: number | null; NUM_SCALE: number | null; IS_IDENTITY: number;
     }>(
       `SELECT col.name AS COLUMN_NAME, t.name AS DATA_TYPE, col.is_nullable AS IS_NULLABLE,
               dc.definition AS COLUMN_DEFAULT, col.column_id AS ORD,
-              col.max_length AS CHAR_LEN, col.precision AS NUM_PREC, col.is_identity AS IS_IDENTITY
+              col.max_length AS CHAR_LEN, col.precision AS NUM_PREC, col.scale AS NUM_SCALE,
+              col.is_identity AS IS_IDENTITY
          FROM sys.columns col
          JOIN sys.objects o ON o.object_id = col.object_id
          JOIN sys.schemas s ON s.schema_id = o.schema_id
@@ -164,7 +225,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
          LEFT JOIN sys.default_constraints dc ON dc.object_id = col.default_object_id
         WHERE s.name = @p0 AND o.name = @p1
         ORDER BY col.column_id`,
-      [schemaName, name],
+      [schema, name],
     );
     const idxRows = await rows<{ INDEX_NAME: string; IS_UNIQUE: number; IS_PRIMARY: number; COLUMN_NAME: string }>(
       `SELECT i.name AS INDEX_NAME, i.is_unique AS IS_UNIQUE, i.is_primary_key AS IS_PRIMARY, c.name AS COLUMN_NAME
@@ -175,18 +236,18 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
          JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
         WHERE s.name = @p0 AND o.name = @p1 AND i.name IS NOT NULL
         ORDER BY i.name, ic.key_ordinal`,
-      [schemaName, name],
+      [schema, name],
     );
     const pkCols = new Set(idxRows.filter((r) => Number(r.IS_PRIMARY) === 1).map((r) => r.COLUMN_NAME));
     const columns: ColumnInfo[] = cols.map((c) => ({
       name: c.COLUMN_NAME,
-      dataType: c.DATA_TYPE,
+      dataType: formatMssqlType(c.DATA_TYPE, c.CHAR_LEN, c.NUM_PREC, c.NUM_SCALE),
       nullable: Number(c.IS_NULLABLE) === 1,
       isPrimaryKey: pkCols.has(c.COLUMN_NAME),
       isAutoIncrement: Number(c.IS_IDENTITY) === 1,
       defaultValue: c.COLUMN_DEFAULT,
       ordinal: c.ORD,
-      charMaxLength: c.CHAR_LEN,
+      charMaxLength: mssqlCharacterLength(c.DATA_TYPE, c.CHAR_LEN),
       numericPrecision: c.NUM_PREC,
     }));
     const indexes = groupIndexes(idxRows);
@@ -207,11 +268,11 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
          JOIN sys.columns rc ON rc.object_id = fk.referenced_object_id AND rc.column_id = fkc.referenced_column_id
         WHERE s.name = @p0 AND o.name = @p1
         ORDER BY fk.name, fkc.constraint_column_id`,
-      [schemaName, name],
+      [schema, name],
     );
     const foreignKeys = groupForeignKeys(fkRows);
 
-    return { schema: schemaName, name, kind: 'table', columns, indexes, foreignKeys };
+    return { schema, name, kind: 'table', columns, indexes, foreignKeys };
   }
 
   const driver: DatabaseDriver = {

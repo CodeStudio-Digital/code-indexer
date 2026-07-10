@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from './api.js';
 import { engineLabel, engineKindFor } from './engines.js';
+import { preferredTreeName, restrictTreeNames } from './tree/tree-preferences.js';
 import type { DbConnection, DbConnectionStatus, DbTableInfo, DbTreeGroupKind, DbTreeNode, WorkTab } from './types.js';
 
 export interface UseDbClient {
@@ -23,7 +24,7 @@ export interface UseDbClient {
   expanded: Set<string>;
   loadingNodes: Set<string>;
   activeConnectionId: number | null;
-  refresh: () => Promise<void>;
+  refresh: (changedConnectionId?: number) => Promise<void>;
   connectConn: (conn: DbConnection) => Promise<void>;
   disconnectConn: (conn: DbConnection) => Promise<void>;
   toggleExpand: (node: DbTreeNode) => Promise<void>;
@@ -37,7 +38,7 @@ export interface UseDbClient {
   openNewTable: (connectionId: number, schema?: string, database?: string) => Promise<void>;
   /** Open an ER-diagram tab for a schema. */
   openErDiagram: (connectionId: number, schema?: string, database?: string) => Promise<void>;
-  /** Live-op routing key for a node — `id`, or `id@db` for a non-default Postgres database. */
+  /** Live-op routing key for a node — `id`, or `id@db` for a dedicated catalog pool. */
   connKeyFor: (connectionId: number, database?: string) => string;
   /** Pending "import CSV into this table" request (drives the import dialog). */
   importRequest: { connectionId: number; connKey: string; schema?: string; table: string } | null;
@@ -117,7 +118,7 @@ export function useDbClient(projectId: number): UseDbClient {
   const [importRequest, setImportRequest] = useState<{ connectionId: number; connKey: string; schema?: string; table: string } | null>(null);
 
   const connectedRef = useRef<Set<number>>(new Set());
-  /** Extra Postgres per-database pools (keyed `id@db`), separate from the root. */
+  /** Extra per-database pools (Postgres/SQL Server, keyed `id@db`). */
   const connectedDbPoolsRef = useRef<Set<string>>(new Set());
   const querySeqRef = useRef(0);
   const connectionsRef = useRef<DbConnection[]>([]);
@@ -125,10 +126,38 @@ export function useDbClient(projectId: number): UseDbClient {
   /** Cache TableInfo so columns + Indexes + FKs folders don't each refetch. */
   const tableInfoRef = useRef<Map<string, DbTableInfo>>(new Map());
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (changedConnectionId?: number) => {
     setLoading(true);
     try {
       const list = await api.listConnections(projectId);
+      connectionsRef.current = list;
+      if (changedConnectionId != null) {
+        const root = `conn:${changedConnectionId}`;
+        const extraKeys = [...connectedDbPoolsRef.current].filter(
+          (key) => api.parseConnKey(key).id === changedConnectionId,
+        );
+        await Promise.all([
+          api.disconnect(String(changedConnectionId)).catch(() => void 0),
+          ...extraKeys.map((key) => api.disconnect(key).catch(() => void 0)),
+        ]);
+        connectedRef.current.delete(changedConnectionId);
+        for (const key of extraKeys) connectedDbPoolsRef.current.delete(key);
+        tableInfoRef.current.clear();
+        setStatusById((prev) => ({ ...prev, [changedConnectionId]: 'idle' }));
+        setChildrenById((prev) => Object.fromEntries(
+          Object.entries(prev).filter(([key]) => key !== root && !key.startsWith(`${root}/`)),
+        ));
+        setExpanded((prev) => new Set([...prev].filter((key) => key !== root && !key.startsWith(`${root}/`))));
+        setLoadingNodes((prev) => new Set([...prev].filter((key) => key !== root && !key.startsWith(`${root}/`))));
+        setWorkTabs((prev) => {
+          const next = prev.filter((tab) => tab.connectionId !== changedConnectionId);
+          setActiveTabId((active) =>
+            active && next.some((tab) => tab.id === active) ? active : (next.at(-1)?.id ?? null),
+          );
+          return next;
+        });
+        setImportRequest((request) => request?.connectionId === changedConnectionId ? null : request);
+      }
       setConnections(list);
       setError(null);
     } catch (e) {
@@ -153,7 +182,7 @@ export function useDbClient(projectId: number): UseDbClient {
   }, []);
 
   // Auto-reconnect: let the api layer rebuild a connect spec from the saved row
-  // (parsing an `id@db` Postgres key) so a live op that lands on a vanished pool
+  // (parsing an `id@db` catalog key) so a live op that lands on a vanished pool
   // reconnects + retries instead of failing with "not connected".
   useEffect(() => {
     api.setSpecResolver(async (cid) => {
@@ -200,7 +229,7 @@ export function useDbClient(projectId: number): UseDbClient {
     async (conn: DbConnection) => {
       await api.disconnect(String(conn.id)).catch(() => void 0);
       connectedRef.current.delete(conn.id);
-      // Drop any Postgres per-database pools opened under this connection.
+      // Drop any per-database pools opened under this connection.
       for (const key of [...connectedDbPoolsRef.current]) {
         if (api.parseConnKey(key).id === conn.id) {
           void api.disconnect(key).catch(() => void 0);
@@ -217,16 +246,21 @@ export function useDbClient(projectId: number): UseDbClient {
     [setStatus],
   );
 
-  /** Routing key for a node: `id@db` only for a non-default Postgres database (field mode). */
+  /** Routing key for a non-default database that requires its own pool. */
   const connKeyFor = useCallback((connectionId: number, database?: string): string => {
     const conn = connectionsRef.current.find((c) => c.id === connectionId);
-    if (conn?.engine === 'postgres' && !api.isUrlMode(conn) && database && database !== conn.database_name) {
+    if (
+      (conn?.engine === 'postgres' || conn?.engine === 'mssql') &&
+      !api.isUrlMode(conn) &&
+      database &&
+      database !== conn.database_name
+    ) {
       return `${connectionId}@${database}`;
     }
     return String(connectionId);
   }, []);
 
-  /** Ensure the pool behind a routing key is live (connects a pg per-db pool lazily). */
+  /** Ensure the pool behind a routing key is live (connects a per-db pool lazily). */
   const ensureDbConnected = useCallback(
     async (connKey: string): Promise<boolean> => {
       const { id, database } = api.parseConnKey(connKey);
@@ -262,7 +296,9 @@ export function useDbClient(projectId: number): UseDbClient {
       const key = `${connKey}:${schema ?? ''}:${table}`;
       const cached = tableInfoRef.current.get(key);
       if (cached) return cached;
-      const info = await api.describeTable(connKey, schema ?? 'public', table);
+      const engine = connectionsRef.current.find((c) => c.id === api.parseConnKey(connKey).id)?.engine;
+      const fallbackSchema = engine === 'mssql' ? 'dbo' : engine === 'postgres' ? 'public' : '';
+      const info = await api.describeTable(connKey, schema ?? fallbackSchema, table);
       tableInfoRef.current.set(key, info);
       return info;
     },
@@ -272,11 +308,11 @@ export function useDbClient(projectId: number): UseDbClient {
   /** Fetch the children of a node (connect-aware, engine-aware). */
   const fetchChildren = useCallback(async (node: DbTreeNode): Promise<DbTreeNode[]> => {
     // Root lists databases on the root pool; deeper nodes route by `id@db` so a
-    // non-default Postgres database hits its own pool.
+    // non-default Postgres/SQL Server database hits its own pool.
     const cid = node.depth === 0 ? String(node.connectionId) : connKeyFor(node.connectionId, node.database);
     if (node.depth === 0) {
-      // Connection root → databases. Postgres lists every database (each browsed
-      // through its own lazily-connected pool); the others switch db in place.
+      // Connection root → databases. Postgres/SQL Server list every database
+      // (each browsed through its own lazily-connected pool).
       const conn = connections.find((c) => c.id === node.connectionId);
       // Key-value (Redis): logical DBs ARE the browse unit — list them as leaf
       // "table" nodes (double-click → key browser), skipping the schema level.
@@ -294,10 +330,10 @@ export function useDbClient(projectId: number): UseDbClient {
           expandable: false,
         }));
       }
-      // URL-mode Postgres can't switch db (the DSN fixes it) — expose ONLY the
+      // URL-mode Postgres/SQL Server can't switch db (the DSN fixes it) — expose ONLY the
       // connected database (database:undefined → routes to the root pool), so we
       // never render a sibling db node whose content/ops silently hit the URL's db.
-      if (conn?.engine === 'postgres' && api.isUrlMode(conn)) {
+      if ((conn?.engine === 'postgres' || conn?.engine === 'mssql') && api.isUrlMode(conn)) {
         return [{
           id: `conn:${node.connectionId}/db:default`,
           kind: 'database' as const,
@@ -308,7 +344,12 @@ export function useDbClient(projectId: number): UseDbClient {
           expandable: true,
         }];
       }
-      const dbs = await api.listDatabases(cid);
+      // A configured database is a tree scope, not just a connection hint.
+      // Avoid listing every catalog when the user explicitly selected one.
+      const configuredDatabase = preferredTreeName(conn?.database_name);
+      const dbs = configuredDatabase
+        ? restrictTreeNames([], configuredDatabase)
+        : await api.listDatabases(cid);
       return dbs.map((db) => ({
         id: `conn:${node.connectionId}/db:${db}`,
         kind: 'database' as const,
@@ -336,10 +377,12 @@ export function useDbClient(projectId: number): UseDbClient {
           expandable: false,
         }));
       }
-      // A non-default Postgres database needs its own pool before introspection.
+      // A non-default Postgres/SQL Server database needs its own pool before introspection.
       if (!(await ensureDbConnected(cid))) return [];
       const { schemas } = await api.introspect(cid, node.database);
-      return schemas.map((s) => ({
+      const conn = connections.find((c) => c.id === node.connectionId);
+      const configuredSchema = preferredTreeName(conn ? api.parseConnOptions(conn).defaultSchema : undefined);
+      return restrictTreeNames(schemas, configuredSchema).map((s) => ({
         id: `${node.id}/schema:${s}`,
         kind: 'schema' as const,
         label: s,
@@ -366,8 +409,10 @@ export function useDbClient(projectId: number): UseDbClient {
       }));
       const engine = connections.find((c) => c.id === node.connectionId)?.engine;
       const groups: DbTreeNode[] = [];
-      if (engine === 'postgres' || engine === 'mysql' || engine === 'mariadb') groups.push(groupNode(node, 'functions'));
-      if (engine === 'postgres') groups.push(groupNode(node, 'sequences'));
+      if (engine === 'postgres' || engine === 'mysql' || engine === 'mariadb' || engine === 'mssql' || engine === 'oracle') {
+        groups.push(groupNode(node, 'functions'));
+      }
+      if (engine === 'postgres' || engine === 'mssql' || engine === 'oracle') groups.push(groupNode(node, 'sequences'));
       return [...tableNodes, ...groups];
     }
     if (node.kind === 'table' || node.kind === 'view') {

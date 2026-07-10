@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildDdl } from '../ddl/build.js';
 import { buildDml } from '../sql/dml.js';
 import { quoteIdent, quoteRelation, placeholder } from '../sql/identifiers.js';
+import { formatMssqlType } from '../mssql.js';
 
 /**
  * Pure SQL Server dialect tests — verify the T-SQL strings without a live server
@@ -13,6 +14,20 @@ describe('mssql identifiers', () => {
     expect(quoteRelation('mssql', 'dbo', 'Users')).toBe('[dbo].[Users]');
     expect(placeholder('mssql', 0)).toBe('@p0');
     expect(placeholder('mssql', 2)).toBe('@p2');
+  });
+});
+
+describe('mssql type introspection', () => {
+  it('preserves character, max and Unicode lengths', () => {
+    expect(formatMssqlType('varchar', 120, 0, 0)).toBe('varchar(120)');
+    expect(formatMssqlType('nvarchar', 510, 0, 0)).toBe('nvarchar(255)');
+    expect(formatMssqlType('varbinary', -1, 0, 0)).toBe('varbinary(max)');
+  });
+
+  it('preserves precision and scale where T-SQL requires them', () => {
+    expect(formatMssqlType('decimal', 18, 12, 4)).toBe('decimal(12,4)');
+    expect(formatMssqlType('datetime2', 8, 0, 3)).toBe('datetime2(3)');
+    expect(formatMssqlType('int', 4, 10, 0)).toBe('int');
   });
 });
 

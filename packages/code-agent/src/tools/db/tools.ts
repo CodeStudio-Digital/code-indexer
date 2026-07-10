@@ -9,12 +9,57 @@ import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { hasMultipleStatements, isReadStatement } from '@mcp/db-drivers/sql/read-guard.js';
 import { isWriteCommand } from '@mcp/db-drivers/command-classify.js';
-import type { DbCommand } from '@mcp/db-drivers/types.js';
+import type { DatabaseDriver, DbCommand, TableRef } from '@mcp/db-drivers/types.js';
 import { engineKind } from './scope.js';
 import { CONNECTION_PARAM, clampMaxRows, pickFromCtx, resolveToolScope } from './shared.js';
 import { scrubDbError } from './resolve-spec.js';
 import { acquireAgentDriver } from './pool.js';
-import { renderQueryResult, renderSchema } from './render.js';
+import { renderQueryResult, renderSchema, renderSchemaCatalog } from './render.js';
+
+export const DEFAULT_SCHEMA_PAGE_SIZE = 40;
+export const MAX_SCHEMA_PAGE_SIZE = 100;
+
+function schemaPageLimit(value: unknown): number {
+  const parsed = typeof value === 'number' && Number.isFinite(value)
+    ? Math.floor(value)
+    : DEFAULT_SCHEMA_PAGE_SIZE;
+  return Math.max(1, Math.min(parsed, MAX_SCHEMA_PAGE_SIZE));
+}
+
+function schemaPageOffset(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+/** Progressive schema inspection: list cheaply, expand exactly one table. */
+export async function inspectRelationalSchema(
+  driver: DatabaseDriver,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const schema = typeof args.schema === 'string' && args.schema.trim() ? args.schema.trim() : undefined;
+  const refs = await driver.listTables(schema);
+  const tableName = typeof args.table === 'string' && args.table.trim() ? args.table.trim() : undefined;
+  if (tableName) {
+    const ref = refs.find((table) => table.name === tableName)
+      ?? refs.find((table) => table.name.toLocaleLowerCase() === tableName.toLocaleLowerCase());
+    if (!ref) {
+      throw new Error(`table '${tableName}' not found in the selected schema; use db_schema search to locate it`);
+    }
+    return renderSchema([await driver.describeTable(ref.schema, ref.name)]);
+  }
+
+  const search = typeof args.search === 'string' && args.search.trim() ? args.search.trim() : undefined;
+  const filtered: TableRef[] = search
+    ? refs.filter((table) => `${table.schema}.${table.name}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+    : refs;
+  const offset = schemaPageOffset(args.offset);
+  const limit = schemaPageLimit(args.limit);
+  return renderSchemaCatalog(filtered.slice(offset, offset + limit), {
+    total: filtered.length,
+    offset,
+    limit,
+    search,
+  });
+}
 
 const dbList: CoderTool = {
   name: 'db_list',
@@ -45,9 +90,10 @@ const dbList: CoderTool = {
 const dbSchema: CoderTool = {
   name: 'db_schema',
   description:
-    'Introspect tables and columns of a registered connection — one block per table with ' +
-    'column types, nullability and PK flags. `schema` defaults to public (Postgres) or the ' +
-    "connection's database (MySQL). Pass `connection` when more than one is registered.",
+    'Progressively inspect a relational database without flooding context. With no `table`, ' +
+    'returns a compact paginated catalog of table/view names only (default 40, max 100); use ' +
+    '`search` to narrow. Pass exactly one `table` to fetch its columns, nullability and PK flags. ' +
+    '`schema` defaults per engine. Never try to load every table definition at once.',
   source: 'native',
   riskLevel: 'read',
   parameters: {
@@ -55,6 +101,10 @@ const dbSchema: CoderTool = {
     properties: {
       connection: CONNECTION_PARAM,
       schema: { type: 'string', description: 'Schema / database name (defaults per engine).' },
+      table: { type: 'string', description: 'One exact table/view name to expand with columns and keys.' },
+      search: { type: 'string', description: 'Case-insensitive substring filter for the compact catalog.' },
+      offset: { type: 'number', description: 'Catalog offset for pagination (default 0).' },
+      limit: { type: 'number', description: 'Catalog page size (default 40, max 100).' },
     },
     additionalProperties: false,
   },
@@ -64,10 +114,10 @@ const dbSchema: CoderTool = {
     let acquired = null as Awaited<ReturnType<typeof acquireAgentDriver>> | null;
     try {
       acquired = await acquireAgentDriver(picked.value.conn);
-      const tables = await acquired.driver.schema(
-        typeof args.schema === 'string' && args.schema ? args.schema : undefined,
-      );
-      return ok(renderSchema(tables));
+      if ((acquired.meta.kind ?? 'relational') !== 'relational') {
+        return err(`db_schema targets relational engines; use db_command for ${acquired.meta.kind} stores.`);
+      }
+      return ok(await inspectRelationalSchema(acquired.driver, args));
     } catch (e) {
       return err(`db_schema failed: ${scrubDbError(e, acquired?.spec)}`);
     }

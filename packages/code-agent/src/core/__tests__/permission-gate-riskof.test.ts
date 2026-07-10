@@ -105,3 +105,45 @@ describe('PermissionGate.check with riskOf under mode=ask', () => {
     expect(r.allowed).toBe(true);
   });
 });
+
+describe('database writes are mandatory gates in every global mode', () => {
+  for (const mode of ['auto', 'unrestricted'] as const) {
+    it(`db_query INSERT pauses under mode=${mode}`, async () => {
+      const emit = vi.fn();
+      const waitForUserInput = vi.fn().mockResolvedValue(JSON.stringify({ approved: false }));
+      const gate = new PermissionGate({ getMode: () => mode, emit, waitForUserInput });
+      const result = await gate.check({
+        toolUseId: `db-${mode}`,
+        toolName: 'db_query',
+        tool: byName('db_query'),
+        input: { sql: 'DELETE FROM users WHERE id = 7' },
+      });
+      expect(result.allowed).toBe(false);
+      expect(waitForUserInput).toHaveBeenCalledOnce();
+      expect(emit).toHaveBeenCalledWith('tool_approval_request', expect.objectContaining({
+        approvalKind: 'database_write',
+        riskClass: 'write',
+      }));
+    });
+  }
+
+  it('an explicit always-allow grant bypasses later DB write prompts in the same session', async () => {
+    const waitForUserInput = vi.fn().mockResolvedValue(JSON.stringify({ approved: true, alwaysAllow: true }));
+    const onGrant = vi.fn();
+    const gate = new PermissionGate({
+      getMode: () => 'unrestricted',
+      emit: vi.fn(),
+      waitForUserInput,
+      onGrant,
+    });
+    const request = {
+      toolName: 'db_query',
+      tool: byName('db_query'),
+      input: { sql: 'UPDATE users SET active = false WHERE id = 7' },
+    };
+    expect((await gate.check({ toolUseId: 'first', ...request })).allowed).toBe(true);
+    expect((await gate.check({ toolUseId: 'second', ...request })).allowed).toBe(true);
+    expect(waitForUserInput).toHaveBeenCalledOnce();
+    expect(onGrant).toHaveBeenCalledWith('db_query');
+  });
+});

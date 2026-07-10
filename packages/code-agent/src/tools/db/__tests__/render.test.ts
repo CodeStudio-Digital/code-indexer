@@ -5,6 +5,7 @@ import {
   MAX_RESULT_CHARS,
   renderQueryResult,
   renderSchema,
+  renderSchemaCatalog,
   stringifyCell,
 } from '../render.js';
 
@@ -85,5 +86,22 @@ describe('renderSchema', () => {
 
   it('empty schema → didactic note', () => {
     expect(renderSchema([])).toContain('no tables in schema');
+  });
+});
+
+describe('renderSchemaCatalog', () => {
+  it('renders a compact page and a progressive next-step hint', () => {
+    const out = renderSchemaCatalog(
+      [
+        { schema: 'dbo', name: 'customers', kind: 'table' },
+        { schema: 'dbo', name: 'customer_summary', kind: 'view' },
+      ],
+      { total: 500, offset: 0, limit: 2, search: 'customer' },
+    );
+    expect(out).toContain('SCHEMA CATALOG');
+    expect(out).toContain('- dbo.customers [table]');
+    expect(out).toContain('returned=2 total=500 more=true');
+    expect(out).toContain('db_schema({offset:2, limit:2})');
+    expect(out).toContain('table:"name"');
   });
 });

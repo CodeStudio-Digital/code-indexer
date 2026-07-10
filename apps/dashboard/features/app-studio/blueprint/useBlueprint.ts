@@ -98,6 +98,21 @@ export function useBlueprint(detail: AppStudioSessionDetail, t: TFunction, refre
     [sessionId],
   );
 
+  /** Reorganiza o mapa inteiro e persiste todas as posicoes em um unico PUT. */
+  const setNodePositions = useCallback(
+    (positions: Record<string, BlueprintPosition>) => {
+      setLayout((prev) => {
+        const next = { ...prev, positions };
+        if (layoutTimer.current) clearTimeout(layoutTimer.current);
+        layoutTimer.current = setTimeout(() => {
+          void putBlueprintLayout(sessionId, next).catch(() => {});
+        }, LAYOUT_DEBOUNCE_MS);
+        return next;
+      });
+    },
+    [sessionId],
+  );
+
   const discoveryApproved =
     detail.pipeline?.stages.find((s) => s.id === 'discovery')?.status === 'approved';
 
@@ -158,6 +173,7 @@ export function useBlueprint(detail: AppStudioSessionDetail, t: TFunction, refre
     discoveryApproved,
     mutate,
     setNodePosition,
+    setNodePositions,
     save,
     reload,
   };

@@ -120,13 +120,19 @@ describe('db_query', () => {
 });
 
 describe('db_schema', () => {
-  it('introspects tables/columns end-to-end', async () => {
-    const r = await byName('db_schema').handler({ connection: 'main' }, ctx);
-    expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('TABLE main.items');
-    expect(r.content).toContain('id: INTEGER');
-    expect(r.content).toContain('[PK]');
-    expect(r.content).toContain('name: TEXT NOT NULL');
+  it('lists compactly, then introspects one table end-to-end', async () => {
+    const catalog = await byName('db_schema').handler({ connection: 'main' }, ctx);
+    expect(catalog.isError).toBeFalsy();
+    expect(catalog.content).toContain('SCHEMA CATALOG');
+    expect(catalog.content).toContain('main.items');
+    expect(catalog.content).not.toContain('id: INTEGER');
+
+    const detail = await byName('db_schema').handler({ connection: 'main', table: 'items' }, ctx);
+    expect(detail.isError).toBeFalsy();
+    expect(detail.content).toContain('TABLE main.items');
+    expect(detail.content).toContain('id: INTEGER');
+    expect(detail.content).toContain('[PK]');
+    expect(detail.content).toContain('name: TEXT NOT NULL');
   });
 });
 

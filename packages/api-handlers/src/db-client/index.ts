@@ -15,9 +15,12 @@ import { ApiError, type DbClientApi, type DbConnectSpec, type DbEngineKind, type
 import {
   buildDdl,
   buildDml,
+  buildExplainStatement,
+  buildSelectTemplate,
   buildSqliteRebuild,
   sqliteAlterNeedsRebuild,
   createDriver,
+  defaultSchemaFor,
   hasMultipleStatements,
   insertLiteral,
   isReadStatement,
@@ -164,14 +167,14 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       const driver = requireDriver(connectionId);
       const engine = requireEngine(connectionId);
       const rel = quoteRelation(engine, schema, table);
-      if (kind === 'select') return { sql: `SELECT * FROM ${rel} LIMIT 100;` };
+      if (kind === 'select') return { sql: buildSelectTemplate(engine, rel) };
       if (kind === 'truncate') {
         // SQLite has no TRUNCATE — DELETE FROM is the equivalent.
         return { sql: engine === 'sqlite' ? `DELETE FROM ${rel};` : `TRUNCATE TABLE ${rel};` };
       }
       // Default the schema for relational engines so describeTable doesn't match
       // zero rows (which would emit a column-less CREATE).
-      const effSchema = schema ?? (engine === 'postgres' ? 'public' : undefined);
+      const effSchema = schema ?? defaultSchemaFor(engine);
       const info = await driver.describeTable(effSchema ?? '', table);
       if (kind === 'insert') {
         const cols = info.columns.filter((c) => !c.isAutoIncrement);
@@ -227,12 +230,10 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       if (mgr.getMeta(keyFor(connectionId))?.readOnly && !isReadStatement(sql)) {
         throw new ApiError('db_read_only', 403, 'Connection is read-only — only read statements can be explained.');
       }
-      // SQL Server has no single-statement EXPLAIN; SHOWPLAN is a session toggle
-      // that would leak into the pooled connection, so skip it cleanly.
-      if (engine === 'mssql') throw new ApiError('db_explain_unsupported', 422, 'Execution plans are not yet supported for SQL Server in this client.');
-      const prefix = engine === 'sqlite' ? 'EXPLAIN QUERY PLAN ' : 'EXPLAIN ';
+      const statement = buildExplainStatement(engine, sql);
+      if (!statement) throw new ApiError('db_explain_unsupported', 422, 'Execution plans are not yet supported for SQL Server in this client.');
       const started = Date.now();
-      const res = await requireDriver(connectionId).runQuery(prefix + sql, { maxRows: 2000 });
+      const res = await requireDriver(connectionId).runQuery(statement, { maxRows: 2000 });
       return { ...res, durationMs: Date.now() - started };
     },
 
@@ -347,7 +348,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       assertRelational(connectionId, 'dumpStream');
       const engine = requireEngine(connectionId);
       const driver = requireDriver(connectionId);
-      const effSchema = schema ?? (engine === 'postgres' ? 'public' : undefined);
+      const effSchema = schema ?? defaultSchemaFor(engine);
       // Selected tables, or every base table in the schema (skip views).
       const list = tables && tables.length
         ? tables

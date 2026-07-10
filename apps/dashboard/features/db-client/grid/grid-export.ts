@@ -60,7 +60,7 @@ export function toInsertSql(table: string, columns: string[], rows: Row[]): stri
   const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const cols = columns.map(q).join(', ');
   return rows
-    .map((r) => `INSERT INTO ${q(table)} (${cols}) VALUES (${columns.map((c) => sqlLiteral(r[c], engine)).join(', ')});`)
+    .map((r) => `INSERT INTO ${q(table)} (${cols}) VALUES (${columns.map((c) => sqlLiteral(r[c])).join(', ')});`)
     .join('\n');
 }
 
@@ -81,6 +81,6 @@ export function toDumpInserts(engine: string, table: string, columns: string[], 
     : (s: string) => '"' + s.replace(/"/g, '""') + '"';
   const cols = columns.map(q).join(', ');
   return rows
-    .map((r) => `INSERT INTO ${q(table)} (${cols}) VALUES (${columns.map((c) => sqlLiteral(r[c])).join(', ')});`)
+    .map((r) => `INSERT INTO ${q(table)} (${cols}) VALUES (${columns.map((c) => sqlLiteral(r[c], engine)).join(', ')});`)
     .join('\n');
 }

@@ -27,17 +27,18 @@ describe('tool tiers — persistent-shell session trio', () => {
     expect(getToolTier('run_command')).toBe('navigate');
   });
 
-  it('hides the trio from a bootstrap-profile session but keeps read tools', () => {
+  it('hides the trio and native read_file from bootstrap while keeping the MCP read surface', () => {
     const bootstrap = profileToTiers('bootstrap');
     const tools = [
       { name: 'read_file' },
+      { name: 'mcp__read_file' },
       { name: 'write_stdin' },
       { name: 'exec_command' },
       { name: 'list_sessions' },
       { name: 'write_file' },
     ];
     const visible = filterByTiers(tools, bootstrap).map((t) => t.name);
-    expect(visible).toEqual(['read_file']);
+    expect(visible).toEqual(['mcp__read_file']);
   });
 
   it('reveals the trio once navigate is active', () => {

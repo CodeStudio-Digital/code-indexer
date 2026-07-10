@@ -119,8 +119,8 @@ export function parseConnOptions(conn: DbConnection): Record<string, unknown> {
 
 /**
  * URL-mode connections carry the whole DSN (with the database baked in) as one
- * encrypted blob — there's no separate `database` to override, so Postgres
- * per-database browsing doesn't apply to them.
+ * encrypted blob — there's no separate `database` to override, so dedicated
+ * per-database browsing (Postgres/SQL Server) doesn't apply to them.
  */
 export function isUrlMode(conn: DbConnection): boolean {
   return parseConnOptions(conn).urlMode === true;
@@ -155,8 +155,8 @@ export async function resolveSpec(conn: DbConnection, dbOverride?: string): Prom
   const secret = conn.enc_password ? await decryptSecret(conn.enc_password) : '';
   const ssl = await resolveSsl(conn);
   const connectOptions = pickConnectOptions(options);
-  // Postgres binds one connection to one database; browsing another db needs a
-  // separate pool. Key it `id@db` so the manager keeps it distinct. URL mode
+  // Postgres and SQL Server bind a pool to one database; browsing another db
+  // needs a separate pool. Key it `id@db` so the manager keeps it distinct. URL mode
   // bakes the db into the DSN with no field to override, so it's field-mode only
   // — otherwise we'd mint an `id@db` pool that still connects to the URL's db.
   const useDb = options.urlMode !== true && dbOverride && dbOverride !== conn.database_name ? dbOverride : undefined;

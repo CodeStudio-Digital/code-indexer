@@ -24,6 +24,7 @@ import { isIrreversibleTool, resolveToolMetadata } from './policy.js';
 
 export type ToolPermissionMode = 'ask' | 'auto' | 'unrestricted';
 export type ApprovalRiskClass = 'write' | 'execute' | 'admin';
+export type ApprovalKind = 'standard' | 'database_write';
 
 export const TOOL_PERMISSION_MODES: readonly ToolPermissionMode[] = ['ask', 'auto', 'unrestricted'];
 
@@ -117,6 +118,13 @@ export function approvalArgsSummary(input: unknown): string {
   }
 }
 
+/** Database mutations always require an explicit session-level safety decision. */
+export function approvalKindFor(toolName: string, riskClass: ApprovalRiskClass): ApprovalKind {
+  return riskClass === 'write' && (toolName === 'db_query' || toolName === 'db_command')
+    ? 'database_write'
+    : 'standard';
+}
+
 export interface ApprovalCheckInput {
   /** Unique per request — `tu.id` at dispatch, synthetic for nested calls. */
   toolUseId: string;
@@ -188,10 +196,15 @@ export class PermissionGate {
   async check(req: ApprovalCheckInput): Promise<ApprovalCheckResult> {
     const riskClass = classifyForGate(req.tool, req.toolName, req.input);
     if (riskClass === 'allow') return { allowed: true };
-    const mode = this.deps.getMode();
-    if (mode === 'unrestricted') return { allowed: true };
-    if (mode === 'auto' && riskClass === 'write') return { allowed: true };
+    const approvalKind = approvalKindFor(req.toolName, riskClass);
+    // A deliberate "always allow" grant is the only bypass for DB writes.
+    // Global auto/unrestricted modes must not silently authorize data mutation.
     if (this.grants.has(req.toolName)) return { allowed: true };
+    const mode = this.deps.getMode();
+    if (approvalKind !== 'database_write') {
+      if (mode === 'unrestricted') return { allowed: true };
+      if (mode === 'auto' && riskClass === 'write') return { allowed: true };
+    }
 
     // Slot first, event second — a same-tick approval must find the resolver.
     const wait = this.deps.waitForUserInput(approvalAskId(req.toolUseId));
@@ -203,6 +216,7 @@ export class PermissionGate {
         toolName: req.toolName,
         argsSummary: approvalArgsSummary(req.input),
         riskClass,
+        approvalKind,
         turn: req.turn,
         nested: req.nested ?? false,
       });

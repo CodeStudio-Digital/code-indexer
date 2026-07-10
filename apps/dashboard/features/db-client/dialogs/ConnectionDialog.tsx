@@ -9,7 +9,7 @@
  * store. In URL mode the connection string carries the password, so the WHOLE
  * URL is what gets encrypted (the server only ever persists ciphertext).
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldCheck } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../../components/ui/dialog.js';
@@ -102,7 +102,18 @@ export function ConnectionDialog({
   const [testing, setTesting] = useState(false);
   const meta = useMemo(() => engineMeta(form.engine), [form.engine]);
   const usesFile = !!meta?.usesFile;
-  const isUrl = form.connType === 'url';
+  const isUrl = !usesFile && form.connType === 'url';
+  const existingIsUrl = existing ? api.isUrlMode(existing) : false;
+  const canKeepConnectionSecret = !!existing && existingIsUrl === isUrl;
+  const hasConnectionTarget = usesFile
+    ? !!form.file_path.trim()
+    : !isUrl || !!form.url.trim() || (canKeepConnectionSecret && !!existing?.enc_password);
+
+  // The dialog stays mounted between opens. Rehydrate it for New/Edit instead
+  // of leaking the previous connection's fields into the next one.
+  useEffect(() => {
+    if (open) setForm(initialForm(existing));
+  }, [open, existing]);
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -146,17 +157,22 @@ export function ConnectionDialog({
       options: Object.keys(options).length ? options : undefined,
       readOnly: form.is_read_only,
     };
+    if (usesFile) {
+      return { ...base, filePath: form.file_path || undefined };
+    }
     if (isUrl) {
-      return { ...base, connectionString: (await keptSecret(form.url, existing?.enc_password)) || undefined };
+      return {
+        ...base,
+        connectionString: (await keptSecret(form.url, canKeepConnectionSecret ? existing?.enc_password : undefined)) || undefined,
+      };
     }
     return {
       ...base,
       host: form.host || undefined,
       port: form.port ? Number(form.port) : undefined,
       username: form.username || undefined,
-      password: (await keptSecret(form.password, existing?.enc_password)) || undefined,
-      database: form.database || undefined,
-      filePath: form.file_path || undefined,
+      password: (await keptSecret(form.password, canKeepConnectionSecret ? existing?.enc_password : undefined)) || undefined,
+      database: form.database.trim() || undefined,
     };
   }
 
@@ -183,7 +199,7 @@ export function ConnectionDialog({
         host: usesFile || isUrl ? null : form.host || null,
         port: usesFile || isUrl || !form.port ? null : Number(form.port),
         username: usesFile || isUrl ? null : form.username || null,
-        database_name: isUrl ? null : form.database || null,
+        database_name: isUrl ? null : form.database.trim() || null,
         file_path: usesFile ? form.file_path || null : null,
         ssl_mode: usesFile ? null : form.ssl_mode,
         is_read_only: form.is_read_only,
@@ -192,10 +208,16 @@ export function ConnectionDialog({
         options: buildOptions(),
       };
       // Encrypted secret blob: URL (carries the password) or the password itself.
-      if (isUrl) {
+      // Never reinterpret a saved URL as a password (or vice versa) after the
+      // user switches modes; SQLite carries no connection secret at all.
+      if (usesFile) {
+        if (existing) body.enc_password = null;
+      } else if (isUrl) {
         if (form.url) body.enc_password = await api.encryptSecretValue(form.url);
       } else if (form.password) {
         body.enc_password = await api.encryptSecretValue(form.password);
+      } else if (existing && existingIsUrl) {
+        body.enc_password = null;
       }
       // SSL certs (encrypted at rest; re-encrypt only what the user typed).
       if (!usesFile && form.ssl_mode !== 'disable') {
@@ -308,6 +330,7 @@ export function ConnectionDialog({
                     <Field label={t('dialog.database')}>
                       <Input value={form.database} onChange={(e) => set('database', e.target.value)} />
                     </Field>
+                    <p className="text-[11px] text-muted-foreground">{t('dialog.databaseHint')}</p>
                   </>
                 )}
 
@@ -340,7 +363,11 @@ export function ConnectionDialog({
 
               <TabsContent value="schemas" className="mt-3 grid gap-2">
                 <Field label={t('dialog.defaultSchema')}>
-                  <Input value={form.defaultSchema} onChange={(e) => set('defaultSchema', e.target.value)} placeholder={'public'} />
+                  <Input
+                    value={form.defaultSchema}
+                    onChange={(e) => set('defaultSchema', e.target.value)}
+                    placeholder={form.engine === 'mssql' ? 'dbo' : 'public'}
+                  />
                 </Field>
                 <p className="text-[11px] text-muted-foreground">{t('dialog.defaultSchemaHint')}</p>
               </TabsContent>
@@ -379,14 +406,14 @@ export function ConnectionDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" onClick={onTest} disabled={testing}>
+          <Button variant="outline" size="sm" onClick={onTest} disabled={testing || !hasConnectionTarget}>
             {testing ? t('dialog.testing') : t('dialog.test')}
           </Button>
           <div className="flex-1" />
           <Button variant="ghost" size="sm" onClick={onClose}>
             {t('dialog.cancel')}
           </Button>
-          <Button size="sm" onClick={onSave} disabled={saving || !form.label.trim()}>
+          <Button size="sm" onClick={onSave} disabled={saving || !form.label.trim() || !hasConnectionTarget}>
             {t('dialog.save')}
           </Button>
         </DialogFooter>

@@ -150,6 +150,18 @@ describe("grid-export serializers", () => {
         "INSERT INTO \"t\" (\"s\", \"n\", \"nul\") VALUES ('O''Brien', 5, NULL);",
       );
     });
+
+    it("uses numeric booleans for SQL Server and Oracle", () => {
+      expect(toDumpInserts("mssql", "flags", ["enabled"], [{ enabled: true }]))
+        .toBe('INSERT INTO "flags" ("enabled") VALUES (1);');
+      expect(toDumpInserts("oracle", "flags", ["enabled"], [{ enabled: false }]))
+        .toBe('INSERT INTO "flags" ("enabled") VALUES (0);');
+    });
+
+    it("escapes MySQL backslashes in string literals", () => {
+      expect(toDumpInserts("mysql", "paths", ["value"], [{ value: "C:\\tmp" }]))
+        .toBe("INSERT INTO `paths` (`value`) VALUES ('C:\\\\tmp');");
+    });
   });
 
   describe("cellToCopy", () => {

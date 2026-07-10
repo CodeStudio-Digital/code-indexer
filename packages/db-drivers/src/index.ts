@@ -14,6 +14,7 @@ export { insertLiteral } from './sql/dump.js';
 export { buildDdl, buildSqliteRebuild, sqliteAlterNeedsRebuild } from './ddl/build.js';
 export { isWriteCommand } from './command-classify.js';
 export { stripSqlNoise, hasMultipleStatements, WRITE_KW, isReadStatement } from './sql/read-guard.js';
+export { buildSelectTemplate, buildExplainStatement, defaultSchemaFor } from './sql/templates.js';
 export {
   DB_DRIVER_REGISTRY, driverDefFor, driverInstallDir, isDriverInstalled, resolveDriverEntry,
   type DbDriverDef,

@@ -82,3 +82,29 @@ export const BUILDER_TOOLS: ReadonlySet<string> = new Set([
   'service_start',
   'service_stop',
 ]);
+
+/**
+ * App Studio tools are registered only for `builder_json.kind === 'app'`.
+ * Keeping the catalog explicit prevents them from riding the unknown-tool
+ * bootstrap fallback and lets cap-priority tests reason about the executor.
+ */
+export const APP_STUDIO_TOOLS: ReadonlySet<string> = new Set([
+  'app_get_context',
+  'app_get_pipeline',
+  'app_get_spec',
+  'app_get_spec_history',
+  'app_save_spec',
+  'app_propose_spec_revision',
+  'app_spec_audit',
+  'app_get_architecture',
+  'app_save_architecture',
+  'app_architecture_audit',
+  'app_search_architecture_docs',
+  'app_fetch_architecture_doc',
+  'app_run_test_cycle',
+  'app_save_db_migration',
+  'app_submit_stage',
+  'app_record_feature',
+  'app_list_features',
+  'app_provision_db',
+]);
