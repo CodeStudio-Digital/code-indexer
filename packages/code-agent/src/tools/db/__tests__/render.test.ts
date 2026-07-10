@@ -101,7 +101,8 @@ describe('renderSchemaCatalog', () => {
     expect(out).toContain('SCHEMA CATALOG');
     expect(out).toContain('- dbo.customers [table]');
     expect(out).toContain('returned=2 total=500 more=true');
-    expect(out).toContain('db_schema({offset:2, limit:2})');
+    expect(out).toContain('next_offset=2');
+    expect(out).toContain('Do not page through the whole catalog');
     expect(out).toContain('table:"name"');
   });
 });

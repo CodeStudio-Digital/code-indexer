@@ -99,8 +99,10 @@ export function renderSchemaCatalog(tables: TableRef[], meta: SchemaCatalogMeta)
   const end = meta.offset + tables.length;
   const more = end < meta.total;
   const lines = tables.map((table) => `- ${table.schema}.${table.name} [${table.kind}]`);
-  const page = `page offset=${meta.offset} returned=${tables.length} total=${meta.total} more=${more}`;
-  const next = more ? ` Next page: db_schema({offset:${end}, limit:${meta.limit}}).` : '';
-  const hint = ' Pass table:"name" for columns/keys, or search:"term" to narrow.';
-  return truncateText(`SCHEMA CATALOG\n${lines.join('\n')}\n${page}\n[progressive inspection.${next}${hint}]`);
+  const page = `page offset=${meta.offset} returned=${tables.length} total=${meta.total} more=${more}`
+    + (more ? ` next_offset=${end}` : '');
+  const hint = more
+    ? 'Do not page through the whole catalog. Use search:"term" to narrow, then table:"name" for columns/keys; use next_offset only when the current page is genuinely insufficient.'
+    : 'Use search:"term" to narrow or table:"name" for columns/keys.';
+  return truncateText(`SCHEMA CATALOG\n${lines.join('\n')}\n${page}\n[progressive inspection: ${hint}]`);
 }

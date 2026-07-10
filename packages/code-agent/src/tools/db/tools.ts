@@ -19,6 +19,18 @@ import { renderQueryResult, renderSchema, renderSchemaCatalog } from './render.j
 export const DEFAULT_SCHEMA_PAGE_SIZE = 40;
 export const MAX_SCHEMA_PAGE_SIZE = 100;
 
+export function defaultSchemaFromOptions(optionsJson: unknown): string | undefined {
+  if (typeof optionsJson !== 'string' || !optionsJson) return undefined;
+  try {
+    const parsed = JSON.parse(optionsJson) as { defaultSchema?: unknown };
+    return typeof parsed.defaultSchema === 'string' && parsed.defaultSchema.trim()
+      ? parsed.defaultSchema.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function schemaPageLimit(value: unknown): number {
   const parsed = typeof value === 'number' && Number.isFinite(value)
     ? Math.floor(value)
@@ -93,7 +105,7 @@ const dbSchema: CoderTool = {
     'Progressively inspect a relational database without flooding context. With no `table`, ' +
     'returns a compact paginated catalog of table/view names only (default 40, max 100); use ' +
     '`search` to narrow. Pass exactly one `table` to fetch its columns, nullability and PK flags. ' +
-    '`schema` defaults per engine. Never try to load every table definition at once.',
+    '`schema` defaults to the connection filter or the engine default. Never try to load every table definition at once.',
   source: 'native',
   riskLevel: 'read',
   parameters: {
@@ -117,7 +129,11 @@ const dbSchema: CoderTool = {
       if ((acquired.meta.kind ?? 'relational') !== 'relational') {
         return err(`db_schema targets relational engines; use db_command for ${acquired.meta.kind} stores.`);
       }
-      return ok(await inspectRelationalSchema(acquired.driver, args));
+      const savedSchema = defaultSchemaFromOptions(picked.value.conn.options_json);
+      const inspectionArgs = typeof args.schema === 'string' && args.schema.trim()
+        ? args
+        : { ...args, schema: savedSchema };
+      return ok(await inspectRelationalSchema(acquired.driver, inspectionArgs));
     } catch (e) {
       return err(`db_schema failed: ${scrubDbError(e, acquired?.spec)}`);
     }

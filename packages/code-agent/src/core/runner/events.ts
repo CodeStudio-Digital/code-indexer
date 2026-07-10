@@ -111,7 +111,8 @@ export interface RunnerEvents {
   }) => void;
   /**
    * Emitted by the PermissionGate when a write/execute/admin tool call pauses
-   * waiting for user approval (modes 'ask'/'auto'). Resolved via
+   * waiting for user approval. Database writes also pause in unrestricted mode.
+   * Resolved via
    * POST /tool-approval → provideUserInput(json, 'tool_approval:<toolUseId>').
    */
   tool_approval_request: (payload: {
@@ -121,6 +122,7 @@ export interface RunnerEvents {
     toolName: string;
     argsSummary: string;
     riskClass: 'write' | 'execute' | 'admin';
+    approvalKind: 'standard' | 'database_write';
     turn?: number;
     nested?: boolean;
   }) => void;

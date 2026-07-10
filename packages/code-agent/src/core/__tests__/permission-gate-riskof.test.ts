@@ -127,6 +127,22 @@ describe('database writes are mandatory gates in every global mode', () => {
     });
   }
 
+  it('a mutating NoSQL db_command also pauses under unrestricted mode', async () => {
+    const emit = vi.fn();
+    const waitForUserInput = vi.fn().mockResolvedValue(JSON.stringify({ approved: false }));
+    const gate = new PermissionGate({ getMode: () => 'unrestricted', emit, waitForUserInput });
+    const result = await gate.check({
+      toolUseId: 'nosql-write',
+      toolName: 'db_command',
+      tool: byName('db_command'),
+      input: { command: { op: 'deleteMany', collection: 'events', payload: { filter: {} } } },
+    });
+    expect(result.allowed).toBe(false);
+    expect(emit).toHaveBeenCalledWith('tool_approval_request', expect.objectContaining({
+      approvalKind: 'database_write',
+    }));
+  });
+
   it('an explicit always-allow grant bypasses later DB write prompts in the same session', async () => {
     const waitForUserInput = vi.fn().mockResolvedValue(JSON.stringify({ approved: true, alwaysAllow: true }));
     const onGrant = vi.fn();

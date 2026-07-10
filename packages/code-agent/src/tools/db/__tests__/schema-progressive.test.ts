@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DatabaseDriver, TableInfo, TableRef } from '@mcp/db-drivers/types.js';
-import { DEFAULT_SCHEMA_PAGE_SIZE, inspectRelationalSchema } from '../tools.js';
+import { DEFAULT_SCHEMA_PAGE_SIZE, defaultSchemaFromOptions, inspectRelationalSchema } from '../tools.js';
 
 function fakeDriver(tableCount = 500): {
   driver: DatabaseDriver;
@@ -26,6 +26,11 @@ function fakeDriver(tableCount = 500): {
 }
 
 describe('progressive db_schema inspection', () => {
+  it('reads the schema filter saved by the connection dialog', () => {
+    expect(defaultSchemaFromOptions('{"defaultSchema":"  dbo  "}')).toBe('dbo');
+    expect(defaultSchemaFromOptions('{broken')).toBeUndefined();
+  });
+
   it('lists only one compact page and performs zero per-table introspections', async () => {
     const { driver, listTables, describeTable } = fakeDriver(500);
     const out = await inspectRelationalSchema(driver, {});
