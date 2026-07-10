@@ -36,6 +36,7 @@ export interface PendingToolApproval {
   toolName: string;
   argsSummary: string;
   riskClass: 'write' | 'execute' | 'admin';
+  approvalKind: 'standard' | 'database_write';
   nested?: boolean;
   receivedAt: number;
 }

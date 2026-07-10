@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ShieldQuestion, X } from 'lucide-react';
+import { AlertTriangle, Check, ShieldQuestion, X } from 'lucide-react';
 import type { PendingToolApproval } from '../../../hooks/agent-stream/types.js';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
@@ -49,6 +49,7 @@ function ApprovalRow({
   const [note, setNote] = useState('');
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const isDatabaseWrite = approval.approvalKind === 'database_write';
 
   const respond = async (approved: boolean) => {
     if (resolving) return;
@@ -86,6 +87,12 @@ function ApprovalRow({
           {approval.argsSummary}
         </pre>
       )}
+      {isDatabaseWrite && (
+        <div className="mb-2 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-2 text-[11px] leading-relaxed text-foreground">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+          <span>{t('approval.databaseWriteWarning')}</span>
+        </div>
+      )}
       {!compact && (
         <Textarea
           value={note}
@@ -97,7 +104,10 @@ function ApprovalRow({
       )}
       <div className="flex items-center gap-2 flex-wrap">
         <Button size="sm" variant="success" disabled={resolving} onClick={() => void respond(true)}>
-          <Check className="h-3.5 w-3.5" /> {t('approval.approve', { defaultValue: 'Aprovar' })}
+          <Check className="h-3.5 w-3.5" />
+          {isDatabaseWrite
+            ? t('approval.executeOnce', { defaultValue: 'Executar uma vez' })
+            : t('approval.approve', { defaultValue: 'Aprovar' })}
         </Button>
         <Button size="sm" variant="destructive" disabled={resolving} onClick={() => void respond(false)}>
           <X className="h-3.5 w-3.5" /> {t('approval.deny', { defaultValue: 'Negar' })}
@@ -109,7 +119,9 @@ function ApprovalRow({
             onChange={(e) => setAlwaysAllow(e.target.checked)}
             className="h-3.5 w-3.5 accent-primary"
           />
-          {t('approval.alwaysAllow', { defaultValue: 'Sempre permitir esta ferramenta nesta sessão' })}
+          {isDatabaseWrite
+            ? t('approval.alwaysAllowDatabaseWrite')
+            : t('approval.alwaysAllow', { defaultValue: 'Sempre permitir esta ferramenta nesta sessão' })}
         </label>
       </div>
     </div>

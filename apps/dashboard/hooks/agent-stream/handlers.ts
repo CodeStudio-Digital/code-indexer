@@ -153,6 +153,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         toolName: string;
         argsSummary?: string;
         riskClass?: 'write' | 'execute' | 'admin';
+        approvalKind?: 'standard' | 'database_write';
         nested?: boolean;
       };
       if (!d.toolUseId) return;
@@ -162,6 +163,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         toolName: String(d.toolName ?? ''),
         argsSummary: String(d.argsSummary ?? ''),
         riskClass: d.riskClass ?? 'write',
+        approvalKind: d.approvalKind ?? 'standard',
         nested: !!d.nested,
         receivedAt: Date.now(),
       };

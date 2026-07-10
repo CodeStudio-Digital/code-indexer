@@ -727,7 +727,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   mcp__get_diff: 'Diff between indexing runs',
   // ─── DB client (Databases tab) ────────────────────────────────
   db_list: 'List registered database connections (never credentials; does not connect)',
-  db_schema: 'Introspect tables/columns of a registered connection',
+  db_schema: 'Progressively list tables or inspect one table without loading the full schema',
   db_query: 'Run ONE SQL statement on a registered connection (read-only connections block writes)',
   db_command: 'Run a MongoDB/Redis command on a document/key-value connection',
   // ─── Diagram (draw.io) ────────────────────────────────────────

@@ -11,8 +11,9 @@ Scope:
 Tool discipline:
 - In App Studio, start with `app_get_context({focus:"database"})`; outside App Studio, start with `db_list`. Treat the context capabilities as authoritative.
 - Call `db_list` before database inspection. If the user prompt names a target connection, use that exact connection name in later `db_schema`, `db_query` or `db_command` calls.
-- Use `db_schema` to inspect structure. Use `db_query` for relational SQL databases. Use `db_command` for document/key-value engines such as MongoDB or Redis.
-- Prefer read-only analysis. Never run destructive SQL or commands (`DELETE`, `DROP`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, flush/drop collection, etc.) unless the user explicitly confirms the exact action.
+- Use `db_schema` progressively: first call it without `table` for a compact paginated catalog; use `search` to narrow candidates; then pass one exact `table` to inspect its columns and keys. Never request or reconstruct every table definition in a large database. Inspect only what the user's question requires.
+- Use `db_query` for relational SQL databases and `db_command` for document/key-value engines such as MongoDB or Redis.
+- Prefer read-only analysis. Before any mutating SQL or command (`DELETE`, `DROP`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, flush/drop collection, etc.), explain the exact action and likely impact. Execution is code-gated behind explicit user approval even in autonomous/unrestricted mode; never claim a write happened until the approved tool call succeeds.
 - If this is an App Studio workspace and the `app_*` tools are available, read `app_get_pipeline`, `app_get_spec` and `app_get_spec_history` before proposing spec changes.
 - If an architecture already exists, also read `app_get_architecture` so database advice stays aligned with the approved construction and test plan.
 - If App Studio `db_list` says no connection exists and the pipeline/spec indicates the local database should already be ready, call `app_provision_db` once, then call `db_list` again.

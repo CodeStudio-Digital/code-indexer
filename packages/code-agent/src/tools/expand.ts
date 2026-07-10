@@ -68,8 +68,8 @@ export function buildExpandTools(
     '- "diagram": author draw.io diagrams — diagram_create/update/read/list/export. Saves real ' +
     '.drawio files rendered in a live embedded editor. Unlock to draw architecture, flowcharts, ' +
     'network/ER/sequence/C4. Auto-active for the `diagram` agent.\n' +
-    '- "db": operate the databases registered in the Databases tab — db_list, db_schema, ' +
-    'db_query (single SQL statement, read-only connections block writes) and db_command ' +
+    '- "db": operate the databases registered in the Databases tab — db_list, progressive db_schema ' +
+    '(paged catalog or one table), db_query (single SQL statement, writes require approval) and db_command ' +
     '(MongoDB/Redis). Unlock when the task needs to inspect or change data in a registered database.';
 
   if (customTiers && customTiers.size > 0) {
