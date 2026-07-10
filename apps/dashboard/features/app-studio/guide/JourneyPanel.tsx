@@ -15,7 +15,7 @@ import {
   type AppStageId,
   type AppStudioSessionDetail,
 } from '../app-studio-api.js';
-import { isPromptableStage, startAppStage } from '../stage-prompts.js';
+import { activateAppStage, isPromptableStage, specialistForStage, stagePrompt, startAppStage } from '../stage-prompts.js';
 import { JourneyStepRow } from './JourneyStepRow.js';
 import { SpecPanel } from './SpecPanel.js';
 import { JourneyRepairDialog } from './JourneyRepairDialog.js';
@@ -30,6 +30,8 @@ export function JourneyPanel({
   discoveryExtra,
   onChanged,
   onOpenPublish,
+  onOpenSpecAgent,
+  onOpenDbAgent,
   onOpenArchitectureAgent,
 }: {
   detail: AppStudioSessionDetail;
@@ -37,6 +39,8 @@ export function JourneyPanel({
   discoveryExtra?: string | null;
   onChanged: () => void;
   onOpenPublish: () => void;
+  onOpenSpecAgent?: (prompt: string) => void;
+  onOpenDbAgent?: (prompt: string) => void;
   onOpenArchitectureAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
@@ -133,8 +137,19 @@ export function JourneyPanel({
               onAction={(action, feedback) => act(stage.id, action, feedback)}
               onStart={() => {
                 if (!project || !isPromptableStage(stage.id)) return;
-                if (stage.id === 'architecture') {
-                  onOpenArchitectureAgent?.(t('stageMessage.architecture'));
+                const specialist = specialistForStage(stage.id);
+                const openSpecialist = specialist === 'spec'
+                  ? onOpenSpecAgent
+                  : specialist === 'db'
+                    ? onOpenDbAgent
+                    : specialist === 'architecture'
+                      ? onOpenArchitectureAgent
+                      : null;
+                if (openSpecialist) {
+                  void run(async () => {
+                    await activateAppStage(session.id, stage.id);
+                    openSpecialist(stagePrompt(t, stage.id, stage.id === 'discovery' ? discoveryExtra : null));
+                  });
                   return;
                 }
                 void run(() =>

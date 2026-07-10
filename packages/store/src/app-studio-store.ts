@@ -500,6 +500,26 @@ export class AppStudioStore {
     return row ? hydrateSpecRevision(row) : null;
   }
 
+  /**
+   * The draft currently attached to an evolution that is genuinely waiting
+   * for user review. Historical/orphan drafts must never block later stages.
+   */
+  getPendingSpecRevision(sessionId: number): AppStudioSpecRevision | null {
+    const row = this.db
+      .prepare(
+        `SELECT revision.*
+         FROM app_studio_spec_revisions revision
+         JOIN app_studio_evolutions evolution ON evolution.proposed_revision_id = revision.id
+         WHERE evolution.app_session_id = ?
+           AND evolution.status = 'review'
+           AND revision.status = 'draft'
+         ORDER BY evolution.submitted_at DESC, evolution.id DESC
+         LIMIT 1`,
+      )
+      .get(sessionId) as SpecRevisionRow | undefined;
+    return row ? hydrateSpecRevision(row) : null;
+  }
+
   createSpecRevision(input: CreateAppStudioSpecRevisionInput): AppStudioSpecRevision {
     const tx = this.db.transaction((payload: CreateAppStudioSpecRevisionInput) => {
       const next = this.nextSpecRevisionNumber(payload.app_session_id);
@@ -635,28 +655,46 @@ export class AppStudioStore {
   }
 
   updateEvolution(id: number, input: UpdateAppStudioEvolutionInput): AppStudioEvolution {
-    const current = this.getEvolution(id);
-    if (!current) throw new Error(`App Studio evolution ${id} not found.`);
-    const next = {
-      status: input.status ?? current.status,
-      proposed_revision_id: input.proposed_revision_id ?? current.proposed_revision_id,
-      impact_json: input.impact_json ?? current.impact_json,
-      submitted_at: input.submitted_at ?? current.submitted_at,
-      approved_at: input.approved_at ?? current.approved_at,
-      applied_at: input.applied_at ?? current.applied_at,
-    };
-    this.db
-      .prepare(
-        `UPDATE app_studio_evolutions
-         SET status = @status,
-             proposed_revision_id = @proposed_revision_id,
-             impact_json = @impact_json,
-             submitted_at = @submitted_at,
-             approved_at = @approved_at,
-             applied_at = @applied_at
-         WHERE id = @id`,
-      )
-      .run({ id, ...next });
+    const tx = this.db.transaction(() => {
+      const current = this.getEvolution(id);
+      if (!current) throw new Error(`App Studio evolution ${id} not found.`);
+      const next = {
+        status: input.status ?? current.status,
+        proposed_revision_id: input.proposed_revision_id ?? current.proposed_revision_id,
+        impact_json: input.impact_json ?? current.impact_json,
+        submitted_at: input.submitted_at ?? current.submitted_at,
+        approved_at: input.approved_at ?? current.approved_at,
+        applied_at: input.applied_at ?? current.applied_at,
+      };
+
+      if (
+        current.proposed_revision_id &&
+        next.proposed_revision_id &&
+        current.proposed_revision_id !== next.proposed_revision_id
+      ) {
+        this.db
+          .prepare(
+            `UPDATE app_studio_spec_revisions
+             SET status = 'superseded'
+             WHERE id = ? AND app_session_id = ? AND status = 'draft'`,
+          )
+          .run(current.proposed_revision_id, current.app_session_id);
+      }
+
+      this.db
+        .prepare(
+          `UPDATE app_studio_evolutions
+           SET status = @status,
+               proposed_revision_id = @proposed_revision_id,
+               impact_json = @impact_json,
+               submitted_at = @submitted_at,
+               approved_at = @approved_at,
+               applied_at = @applied_at
+           WHERE id = @id`,
+        )
+        .run({ id, ...next });
+    });
+    tx();
     return this.getEvolution(id)!;
   }
 

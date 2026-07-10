@@ -13,6 +13,7 @@ import { requestStudioSend } from '../builder/studio/studio-context-store.js';
 import { patchAppStage, type AppStageId } from './app-studio-api.js';
 
 export type PromptableStage = Exclude<AppStageId, 'launch'>;
+export type AppStudioStageSpecialist = 'spec' | 'db' | 'architecture';
 
 const STAGE_MESSAGE_KEY: Record<PromptableStage, string> = {
   discovery: 'stageMessage.discovery',
@@ -21,6 +22,12 @@ const STAGE_MESSAGE_KEY: Record<PromptableStage, string> = {
   design: 'stageMessage.design',
   backend: 'stageMessage.backend',
   review: 'stageMessage.review',
+};
+
+const STAGE_SPECIALIST: Partial<Record<PromptableStage, AppStudioStageSpecialist>> = {
+  discovery: 'spec',
+  architecture: 'architecture',
+  database: 'db',
 };
 
 export function isPromptableStage(stage: AppStageId): stage is PromptableStage {
@@ -32,6 +39,18 @@ export function stagePrompt(t: TFunction, stage: PromptableStage, extra?: string
   return extra?.trim() ? `${base}\n\n${extra.trim()}` : base;
 }
 
+export function specialistForStage(stage: AppStageId): AppStudioStageSpecialist | null {
+  return isPromptableStage(stage) ? STAGE_SPECIALIST[stage] ?? null : null;
+}
+
+export async function activateAppStage(sessionId: number, stage: PromptableStage): Promise<void> {
+  try {
+    await patchAppStage(sessionId, stage, 'start');
+  } catch {
+    /* A etapa já pode estar ativa; abrir o especialista continua válido. */
+  }
+}
+
 /**
  * Dispara a etapa: marca 'start' no servidor (falha silenciosa — ex.: já
  * active) e manda o prompt para o chat. `extra` acrescenta contexto ao
@@ -41,10 +60,6 @@ export async function startAppStage(
   t: TFunction,
   opts: { sessionId: number; projectId: number; stage: PromptableStage; extra?: string | null },
 ): Promise<void> {
-  try {
-    await patchAppStage(opts.sessionId, opts.stage, 'start');
-  } catch {
-    /* já active/fora de ordem — o chat ainda leva o prompt; o servidor manda no estado */
-  }
+  await activateAppStage(opts.sessionId, opts.stage);
   requestStudioSend(opts.projectId, stagePrompt(t, opts.stage, opts.extra));
 }

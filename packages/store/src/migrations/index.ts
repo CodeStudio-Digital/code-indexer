@@ -219,6 +219,7 @@ import { appStudioSpecRevisions203 } from './203_app_studio_spec_revisions.js';
 import { appStudioArchitecture204 } from './204_app_studio_architecture.js';
 import { appStudioPipelineRepairs205 } from './205_app_studio_pipeline_repairs.js';
 import { codeAgentOptimizationTelemetry206 } from './206_code_agent_optimization_telemetry.js';
+import { appStudioOrphanSpecRevisions207 } from './207_app_studio_orphan_spec_revisions.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -454,6 +455,7 @@ export const MIGRATIONS: Migration[] = [
   appStudioArchitecture204,
   appStudioPipelineRepairs205,
   codeAgentOptimizationTelemetry206,
+  appStudioOrphanSpecRevisions207,
 ];
 
 /**

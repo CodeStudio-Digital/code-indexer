@@ -145,6 +145,41 @@ describe('AppStudioStore', () => {
     expect(h.store.listEvolutions(s.id)[0]?.proposed_revision_id).toBe(draft.id);
   });
 
+  it('supersedes replaced proposals and only reports genuinely pending revisions', () => {
+    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
+    h.store.setSpecJson(s.id, '{"v":1,"summary":"v1"}');
+    const initial = h.store.ensureInitialSpecRevision(s.id)!;
+    const evolution = h.store.createEvolution({
+      app_session_id: s.id,
+      title: 'Refinar carreira',
+      base_revision_id: initial.id,
+    });
+    const first = h.store.createSpecRevision({
+      app_session_id: s.id,
+      status: 'draft',
+      title: 'Primeira proposta',
+      spec_json: '{"v":1,"summary":"v2"}',
+      base_revision_id: initial.id,
+    });
+    h.store.updateEvolution(evolution.id, { status: 'review', proposed_revision_id: first.id });
+    expect(h.store.getPendingSpecRevision(s.id)?.id).toBe(first.id);
+
+    const replacement = h.store.createSpecRevision({
+      app_session_id: s.id,
+      status: 'draft',
+      title: 'Proposta refinada',
+      spec_json: '{"v":1,"summary":"v3"}',
+      base_revision_id: initial.id,
+    });
+    h.store.updateEvolution(evolution.id, { status: 'review', proposed_revision_id: replacement.id });
+
+    expect(h.store.getSpecRevision(first.id)?.status).toBe('superseded');
+    expect(h.store.getPendingSpecRevision(s.id)?.id).toBe(replacement.id);
+
+    h.store.updateEvolution(evolution.id, { status: 'applied' });
+    expect(h.store.getPendingSpecRevision(s.id)).toBeNull();
+  });
+
   it('versions architecture drafts against the approved spec revision', () => {
     const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
     h.store.setSpecJson(s.id, '{"v":1,"summary":"v1"}');

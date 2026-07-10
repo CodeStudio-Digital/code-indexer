@@ -16,8 +16,9 @@ import type { AppStageId, AppStudioSessionDetail } from './app-studio-api.js';
 import { useAppStudioSession } from './useAppStudioSession.js';
 import { AppStudioRail, AppStudioTabContent, type AppStudioTab } from './AppStudioRail.js';
 import { AppPreviewPanel } from './preview/AppPreviewPanel.js';
-import { isPromptableStage, startAppStage } from './stage-prompts.js';
+import { activateAppStage, isPromptableStage, specialistForStage, stagePrompt, startAppStage } from './stage-prompts.js';
 import { AppStudioChatRail } from './AppStudioChatRail.js';
+import { AppStudioSurfaceFind } from './AppStudioSurfaceFind.js';
 import {
   AppStudioSpecAgentLauncher,
   type AppStudioSpecAgentConfig,
@@ -125,6 +126,14 @@ export function AppStudioView({
   const openArchitectureAgent = useCallback((prompt: string) => {
     setArchitectureLaunchPrompt(prompt);
   }, []);
+  const openStageSpecialist = useCallback((stage: AppStageId, prompt: string): boolean => {
+    const specialist = specialistForStage(stage);
+    if (specialist === 'spec') openSpecAgent(prompt);
+    else if (specialist === 'db') openDbAgent(prompt);
+    else if (specialist === 'architecture') openArchitectureAgent(prompt);
+    else return false;
+    return true;
+  }, [openArchitectureAgent, openDbAgent, openSpecAgent]);
   const launchSpecAgent = useCallback((config: AppStudioSpecAgentConfig) => {
     if (specLaunchPrompt === null) return;
     setSpecAgentConfig(config);
@@ -256,8 +265,12 @@ export function AppStudioView({
                 openPublish();
                 return;
               }
-              if (currentStage.id === 'architecture') {
-                openArchitectureAgent(t('stageMessage.architecture'));
+              const prompt = stagePrompt(t, currentStage.id, currentStage.id === 'discovery' ? discoveryExtra : null);
+              if (specialistForStage(currentStage.id)) {
+                void activateAppStage(session.id, currentStage.id).then(() => {
+                  openStageSpecialist(currentStage.id, prompt);
+                  void refresh();
+                });
                 return;
               }
               void startAppStage(t, {
@@ -341,24 +354,26 @@ export function AppStudioView({
           <Panel id="app-stage" order={1} defaultSize={chatCollapsed ? 100 : 72} minSize={48}>
             <main className="flex h-full min-h-0 flex-col">
               <div className="min-h-0 flex-1 overflow-hidden">
-                {studioTab === 'preview' ? (
-                  <AppPreviewPanel
-                    projectId={project.id}
-                    builderPort={builderPort}
-                    onHide={() => setActiveTab(detail.spec ? 'blueprint' : 'guide')}
-                  />
-                ) : (
-                  <AppStudioTabContent
-                    tab={studioTab}
-                    detail={detail}
-                    discoveryExtra={discoveryExtra}
-                    onChanged={() => void refresh()}
-                    onOpenPublish={openPublish}
-                    onOpenSpecAgent={openSpecAgent}
-                    onOpenDbAgent={openDbAgent}
-                    onOpenArchitectureAgent={openArchitectureAgent}
-                  />
-                )}
+                <AppStudioSurfaceFind key={studioTab}>
+                  {studioTab === 'preview' ? (
+                    <AppPreviewPanel
+                      projectId={project.id}
+                      builderPort={builderPort}
+                      onHide={() => setActiveTab(detail.spec ? 'blueprint' : 'guide')}
+                    />
+                  ) : (
+                    <AppStudioTabContent
+                      tab={studioTab}
+                      detail={detail}
+                      discoveryExtra={discoveryExtra}
+                      onChanged={() => void refresh()}
+                      onOpenPublish={openPublish}
+                      onOpenSpecAgent={openSpecAgent}
+                      onOpenDbAgent={openDbAgent}
+                      onOpenArchitectureAgent={openArchitectureAgent}
+                    />
+                  )}
+                </AppStudioSurfaceFind>
               </div>
             </main>
           </Panel>

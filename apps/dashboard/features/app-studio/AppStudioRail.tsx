@@ -116,6 +116,8 @@ export function AppStudioTabContent({
             discoveryExtra={discoveryExtra}
             onChanged={onChanged}
             onOpenPublish={onOpenPublish}
+            onOpenSpecAgent={onOpenSpecAgent}
+            onOpenDbAgent={onOpenDbAgent}
             onOpenArchitectureAgent={onOpenArchitectureAgent}
           />
         )}

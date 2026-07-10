@@ -7,7 +7,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, Circle, CircleDot, Eye, Play, Rocket, RotateCcw, SkipForward } from 'lucide-react';
+import { Bot, CheckCircle2, Circle, CircleDot, Eye, Play, Rocket, RotateCcw, SkipForward } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { cn } from '../../../lib/utils.js';
 import type { AppPipelineStage, AppStageAction } from '../app-studio-api.js';
@@ -92,6 +92,13 @@ export function JourneyStepRow({
           </span>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{t(`stages.${stage.id}.tagline`)}</p>
+        {!isLaunch && (
+          <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Bot className="h-3 w-3 text-primary" />
+            <span>{t('pipeline.stageAgent')}:</span>
+            <strong className="font-medium text-foreground">{t(`stages.${stage.id}.agent`)}</strong>
+          </p>
+        )}
 
         {stage.summary && stage.status !== 'pending' && (
           <p className="mt-1.5 rounded bg-muted/40 px-2 py-1 text-xs">{stage.summary}</p>

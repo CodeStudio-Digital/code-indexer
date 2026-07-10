@@ -46,7 +46,7 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
         const spec = parseAppSpec(session.spec_json);
         const specRevision = store.getLatestApprovedSpecRevision(session.id);
         const specRevisions = store.listSpecRevisions(session.id);
-        const pendingSpecRevision = specRevisions.find((revision) => revision.status === 'draft') ?? null;
+        const pendingSpecRevision = store.getPendingSpecRevision(session.id);
         const architectureRevision = store.getLatestArchitectureRevision(session.id);
         const architecture = parseAppArchitecturePlan(architectureRevision?.architecture_json);
         const resolved = resolveHostPath('.', ctx);

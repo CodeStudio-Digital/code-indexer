@@ -177,31 +177,37 @@
   "stages": {
     "discovery": {
       "name": "Entender sua ideia",
+      "agent": "Especialista em requisitos",
       "tagline": "A IA conversa com você para entender o que o app precisa fazer.",
       "userAction": "Responda as perguntas no chat e depois aprove o plano."
     },
     "architecture": {
       "name": "Planejar a construção",
+      "agent": "Especialista em arquitetura",
       "tagline": "Definimos como o app será montado e como cada resultado será comprovado.",
       "userAction": "Confira as decisões e garantias na aba Construção e aprove."
     },
     "database": {
       "name": "Guardar seus dados",
+      "agent": "Especialista em dados",
       "tagline": "Criamos o lugar onde o app guarda as informações (clientes, pedidos…).",
       "userAction": "Confira as fichas na aba Seus dados e aprove."
     },
     "design": {
       "name": "Montar as telas",
+      "agent": "Construtor de interface",
       "tagline": "As telas do app ganham vida — acompanhe na aba Seu app.",
       "userAction": "Olhe o app, peça mudanças no chat e aprove quando gostar."
     },
     "backend": {
       "name": "Fazer funcionar",
+      "agent": "Executor da aplicação",
       "tagline": "Ligamos os botões, cadastros e regras por trás das telas.",
       "userAction": "Teste o app clicando nele e aprove quando estiver funcionando."
     },
     "review": {
       "name": "Checagem de qualidade",
+      "agent": "Revisor da aplicação",
       "tagline": "A IA revisa erros e segurança antes de publicar.",
       "userAction": "Leia o relatório e aprove."
     },
@@ -252,6 +258,7 @@
     "stageOf": "Etapa {{n}} de {{total}}",
     "complete": "Tudo pronto — seu app está completo!",
     "yourTurn": "Sua vez",
+    "stageAgent": "Agente desta etapa",
     "start": "Começar etapa",
     "resend": "Continuar",
     "reviewCta": "Revisar agora",
@@ -512,6 +519,15 @@
       "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
       "launch": "Abrir sessão"
     }
+  },
+  "surfaceFind": {
+    "title": "Pesquisar nesta página",
+    "placeholder": "Pesquisar nesta página...",
+    "noResults": "0/0",
+    "matchCase": "Diferenciar maiúsculas e minúsculas",
+    "previous": "Ocorrência anterior",
+    "next": "Próxima ocorrência",
+    "close": "Fechar pesquisa"
   },
   "stageMessage": {
     "discovery": "Vamos começar! Quero criar um app e preciso da sua ajuda para planejar. Me faça UMA pergunta por vez usando a tool ask_user, em linguagem simples e sem termos técnicos, para entender: o que o app faz, quem vai usar, quais telas ele precisa, que informações ele guarda, se as pessoas fazem login, quais regras importantes existem, como vou saber que ficou pronto e o que fica fora da primeira versão. Sempre que a pergunta tiver alternativas, passe options (2 a 8) com allow_freeform: true — assim eu clico num botão OU digito minha própria resposta. Quando a pergunta permitir escolher VÁRIAS opções (ex.: quais telas, que dados guardar, formas de login), passe multi_select: true. Quando tiver tudo, salve o plano com app_save_spec incluindo requirements, rode app_spec_audit, me mostre um resumo simples e pergunte se eu aprovo. Fale sempre no meu idioma.",

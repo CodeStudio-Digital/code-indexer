@@ -177,31 +177,37 @@
   "stages": {
     "discovery": {
       "name": "Understand your idea",
+      "agent": "Requirements specialist",
       "tagline": "The AI chats with you to understand what the app needs to do.",
       "userAction": "Answer the questions in the chat, then approve the plan."
     },
     "architecture": {
       "name": "Plan the construction",
+      "agent": "Architecture specialist",
       "tagline": "We define how the app will be assembled and how every outcome will be proven.",
       "userAction": "Review the decisions and guarantees in Construction, then approve."
     },
     "database": {
       "name": "Store your data",
+      "agent": "Data specialist",
       "tagline": "We create the place where the app keeps its information (customers, orders…).",
       "userAction": "Check the cards in Your data and approve."
     },
     "design": {
       "name": "Build the screens",
+      "agent": "Interface builder",
       "tagline": "The app's screens come to life — watch them in Your app.",
       "userAction": "Look at the app, ask for changes in the chat, approve when you like it."
     },
     "backend": {
       "name": "Make it work",
+      "agent": "Application executor",
       "tagline": "We wire the buttons, forms and rules behind the screens.",
       "userAction": "Test the app by clicking around and approve when it works."
     },
     "review": {
       "name": "Quality check",
+      "agent": "Application reviewer",
       "tagline": "The AI reviews errors and security before publishing.",
       "userAction": "Read the report and approve."
     },
@@ -252,6 +258,7 @@
     "stageOf": "Step {{n}} of {{total}}",
     "complete": "All done — your app is complete!",
     "yourTurn": "Your turn",
+    "stageAgent": "Agent for this step",
     "start": "Start step",
     "resend": "Continue",
     "reviewCta": "Review now",
@@ -512,6 +519,15 @@
       "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
       "launch": "Open session"
     }
+  },
+  "surfaceFind": {
+    "title": "Find on this page",
+    "placeholder": "Find on this page...",
+    "noResults": "0/0",
+    "matchCase": "Match case",
+    "previous": "Previous occurrence",
+    "next": "Next occurrence",
+    "close": "Close search"
   },
   "stageMessage": {
     "discovery": "Let's start! I want to create an app and need your help planning it. Ask me ONE question at a time using the ask_user tool, in plain language with no technical terms, to understand: what the app does, who uses it, which screens it needs, what information it stores, whether people log in, which important rules exist, how I will know it is ready, and what stays out of the first version. Whenever the question has choices, pass options (2 to 8) with allow_freeform: true — so I can click a button OR type my own answer. When the question allows picking SEVERAL options (e.g. which screens, what data to store, login methods), pass multi_select: true. When you have everything, save the plan with app_save_spec including requirements, run app_spec_audit, show me a simple summary and ask if I approve. Always speak my language.",

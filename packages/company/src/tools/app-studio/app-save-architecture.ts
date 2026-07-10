@@ -73,7 +73,7 @@ export function appSaveArchitecture(binding: AppToolBinding): CoderTool {
         const state = parsePipelineState(session.pipeline_json);
         const discovery = state?.stages.find((stage) => stage.id === 'discovery');
         if (discovery?.status !== 'approved') return err('Discovery is not approved. Finish and approve the app plan before architecture.');
-        const pendingSpecRevision = store.listSpecRevisions(session.id).find((revision) => revision.status === 'draft');
+        const pendingSpecRevision = store.getPendingSpecRevision(session.id);
         if (pendingSpecRevision) {
           return err(
             `Spec revision v${pendingSpecRevision.revision_number} is waiting for user review. ` +
