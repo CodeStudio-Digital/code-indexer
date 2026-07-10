@@ -25,7 +25,18 @@ import type { ApiContext, AsyncStream } from './common.js';
  * stable while the agent internals evolve.
  */
 
-export type AgentPreset = 'explore' | 'plan' | 'build' | 'admin';
+export type AgentPreset =
+  | 'explore'
+  | 'plan'
+  | 'build'
+  | 'admin'
+  | 'spec'
+  | 'app_spec'
+  | 'app_db'
+  | 'app_architect'
+  | 'api'
+  | 'diagram'
+  | 'builder';
 export type ToolProfile = 'bootstrap' | 'navigate' | 'full' | 'auto';
 export type CoderProvider = 'anthropic' | 'openai' | 'openrouter' | 'gemini' | 'bedrock' | 'zai' | 'deepseek' | 'kimi-code' | 'claude-code' | 'cloudflare';
 
@@ -55,6 +66,7 @@ export interface CreateSessionInput {
   provider: CoderProvider;
   model?: string;
   agent?: AgentPreset;
+  reasoning_effort?: string | null;
   phase_profile_id?: number | null;
 }
 

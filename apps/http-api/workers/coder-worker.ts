@@ -48,6 +48,7 @@ import {
   type RunCoderHandle,
   type CoderAttachment,
 } from '../../../packages/code-agent/src/index.js';
+import type { AgentId } from '../../../packages/code-agent/src/agents/index.js';
 import type { CoderRunner } from '../../../packages/code-agent/src/core/runner.js';
 import { resolveAgentRuntimeEnv } from '../../../packages/api-handlers/src/runtime/runtime-resolve.js';
 import { hydrateWorkerCapabilities } from './worker-capabilities.js';
@@ -89,7 +90,10 @@ import {
   setDesignSystemStore,
   setDesignSystemSkillStore,
 } from '../../../packages/company/src/tools/design-system/index.js';
-import { setAppStudioStore } from '../../../packages/company/src/tools/app-studio/index.js';
+import {
+  setAppStudioDbClientStore,
+  setAppStudioStore,
+} from '../../../packages/company/src/tools/app-studio/index.js';
 import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
 import {
   VerdaccioService,
@@ -411,7 +415,13 @@ setApiClientStore(new ApiClientStore(apiClientDbPath));
 // Single sessions have no company session-projects (null). Secrets are
 // keychain-bound to the MAIN process, so decryption RPCs over the bridge
 // (registered by CoderWorkerPool via worker-secrets-handlers).
-setDbToolsStores(new DbClientStore(apiClientDbPath), null);
+const dbClientStore = new DbClientStore(apiClientDbPath);
+setDbToolsStores(dbClientStore, null);
+setAppStudioDbClientStore({
+  listConnections: (projectId) => dbClientStore.listConnections(projectId),
+  createConnection: (input) => dbClientStore.createConnection(input),
+  updateConnection: (_projectId, id, patch) => dbClientStore.updateConnection(id, patch),
+});
 setDbSecretDecryptor((blob) =>
   bridge.request<string>('secretsDecrypt', { blob }, { timeoutMs: 10_000 }),
 );
@@ -707,7 +717,7 @@ interface RunFreshPayload {
   attachments?: CoderAttachment[];
   maxTurns?: number;
   planMode?: boolean;
-  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+  agent?: AgentId;
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;

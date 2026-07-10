@@ -136,15 +136,15 @@ describe('find_tools — ranking quality', () => {
     expect(names[0]).toBe('git_diff');
   });
 
-  it('"parallel" alone does NOT match enter_worktree (single weak desc hit)', async () => {
+  it('"parallel" alone returns only WEAK candidates, clearly labeled', async () => {
     const output = await findTools(buildRegistry(), 'parallel');
-    const names = namesIn(output);
-    // enter_worktree has a single "parallel" hit in description, no name
-    // match — must fail both the minScore (3) AND the desc-floor (>=2 hits).
-    expect(names).not.toContain('enter_worktree');
-    // spawn_agent might survive if "parallel" appears 2+ times in its
-    // description (mentioned in two clauses). That's acceptable. We only
-    // assert the noise tool is cut.
+    // Description-only hits never present as a strong match ("Top N…") — the
+    // relaxed pass surfaces them as labeled closest-candidates instead of the
+    // old dead end, so the agent learns the landscape without being misled.
+    expect(output).toContain('No strong matches');
+    expect(output).not.toMatch(/^Top /);
+    expect(namesIn(output)).toContain('spawn_agent');
+    expect(output).toContain('[matched: description only]');
   });
 });
 

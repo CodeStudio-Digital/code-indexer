@@ -13,6 +13,8 @@ export interface AppTemplateInput {
   appSlug: string;
   /** Nome de exibição do app ("Lanchonete da Ana"). */
   appName: string;
+  /** Porta local reservada para Vite/Playwright. */
+  port: number;
 }
 
 export interface AppStudioScaffoldInput {

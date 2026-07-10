@@ -9,6 +9,7 @@
  * `wrangler d1 migrations apply --local` (mesmo default de persistência).
  */
 import type { AppTemplateInput, AppWorkspaceFile } from './types.js';
+import { APP_STUDIO_SCAFFOLD_PROFILE } from './stack-profile.js';
 
 function packageJson(i: AppTemplateInput): string {
   return `${JSON.stringify(
@@ -20,6 +21,9 @@ function packageJson(i: AppTemplateInput): string {
         dev: 'vite dev',
         build: 'tsc -b && vite build',
         typecheck: 'tsc -b',
+        test: 'npm run test:worker && npm run test:e2e',
+        'test:worker': 'vitest run --config vitest.config.ts --passWithNoTests',
+        'test:e2e': 'playwright test --pass-with-no-tests',
         preview: 'vite preview',
         deploy: 'npm run build && wrangler deploy',
         'db:migrate:local': 'wrangler d1 migrations apply DB --local',
@@ -40,7 +44,7 @@ function wranglerJsonc(i: AppTemplateInput): string {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "${i.appSlug}",
   "main": "worker/index.ts",
-  "compatibility_date": "2025-06-01",
+  "compatibility_date": "${APP_STUDIO_SCAFFOLD_PROFILE.compatibilityDate}",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "not_found_handling": "single-page-application",
@@ -140,6 +144,41 @@ function indexHtml(i: AppTemplateInput): string {
 `;
 }
 
+function vitestConfig(): string {
+  return `import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  plugins: [
+    cloudflareTest(async () => ({
+      wrangler: { configPath: './wrangler.jsonc' },
+      miniflare: {
+        bindings: { TEST_MIGRATIONS: await readD1Migrations('./migrations') },
+      },
+    })),
+  ],
+  test: { include: ['tests/worker/**/*.test.ts'] },
+});
+`;
+}
+
+function playwrightConfig(i: AppTemplateInput): string {
+  const url = `http://127.0.0.1:${i.port}`;
+  return `import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './tests/e2e',
+  use: { baseURL: process.env.APP_URL ?? '${url}', trace: 'retain-on-failure' },
+  webServer: {
+    command: 'npm run dev',
+    url: process.env.APP_URL ?? '${url}',
+    reuseExistingServer: true,
+    timeout: 120_000,
+  },
+});
+`;
+}
+
 export function buildConfigFiles(i: AppTemplateInput): AppWorkspaceFile[] {
   return [
     { path: 'package.json', contents: packageJson(i) },
@@ -150,5 +189,9 @@ export function buildConfigFiles(i: AppTemplateInput): AppWorkspaceFile[] {
     { path: '.gitignore', contents: GITIGNORE },
     { path: '.dev.vars', contents: DEV_VARS },
     { path: 'index.html', contents: indexHtml(i) },
+    { path: 'vitest.config.ts', contents: vitestConfig() },
+    { path: 'playwright.config.ts', contents: playwrightConfig(i) },
+    { path: 'tests/worker/.gitkeep', contents: '' },
+    { path: 'tests/e2e/.gitkeep', contents: '' },
   ];
 }

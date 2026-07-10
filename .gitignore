@@ -11,6 +11,11 @@ dist/
 .gradle/
 
 data/
+!apps/dashboard/features/app-studio/data/
+apps/dashboard/features/app-studio/data/*
+!apps/dashboard/features/app-studio/data/DataPanel.tsx
+!apps/dashboard/features/app-studio/data/TableSheetDialog.tsx
+!apps/dashboard/features/app-studio/data/useAppData.ts
 .tmp/
 .reference/
 

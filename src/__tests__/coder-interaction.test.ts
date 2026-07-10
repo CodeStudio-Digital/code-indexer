@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { CoderRunner, compactHistoryForLLM, buildToolResultBlock, normalizeMessageForCache } from '@mcp/code-agent/core/runner.js';
+import {
+  CoderRunner,
+  compactHistoryForLLM,
+  buildToolResultBlock,
+  normalizeMessageForCache,
+  normalizeMessagesForCache,
+} from '@mcp/code-agent/core/runner.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { planTools } from '@mcp/code-agent/tools/plan.js';
@@ -180,5 +186,24 @@ describe('normalizeMessageForCache — legacy resume normalization', () => {
     const once = normalizeMessageForCache(legacy);
     const twice = normalizeMessageForCache(once);
     expect(JSON.stringify(once)).toBe(JSON.stringify(twice));
+  });
+
+  it('preserves selected specialist tool outputs on session resume', () => {
+    const big = 's'.repeat(30_000);
+    const history: AgentMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'spec-call', name: 'app_get_spec', input: {} }],
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'tool_result', tool_use_id: 'spec-call', content: big }],
+      },
+    ];
+    const normalized = normalizeMessagesForCache(history, 24_000, new Set(['app_get_spec']));
+    const block = normalized[1].content[0];
+    if (block.type !== 'tool_result') throw new Error('expected tool_result');
+    expect(block.truncated).toBeUndefined();
+    expect(block.content).toBe(big);
   });
 });

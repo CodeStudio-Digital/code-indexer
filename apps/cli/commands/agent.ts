@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
+import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import { resolve } from 'node:path';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
@@ -72,10 +73,10 @@ export function register(program: Command): void {
       }
 
       const { runCoder } = await import('@mcp/code-agent/index.js');
-      const { isAgentId } = await import('@mcp/code-agent/agents/index.js');
+      const { AGENTS, isAgentId } = await import('@mcp/code-agent/agents/index.js');
 
       if (opts.agent && !isAgentId(opts.agent)) {
-        console.error(`Error: unknown agent '${opts.agent}'. Valid: explore, plan, build, admin.`);
+        console.error(`Error: unknown agent '${opts.agent}'. Valid: ${Object.keys(AGENTS).join(', ')}.`);
         process.exit(1);
       }
       if (opts.profile && !['bootstrap', 'navigate', 'full', 'auto'].includes(opts.profile)) {
@@ -111,7 +112,7 @@ export function register(program: Command): void {
         userMessage: task,
         maxTurns: opts.maxTurns,
         planMode: opts.plan,
-        agent: opts.agent as 'explore' | 'plan' | 'build' | 'admin' | 'spec' | undefined,
+        agent: opts.agent as AgentId | undefined,
         profile: opts.profile as 'bootstrap' | 'navigate' | 'full' | 'auto' | undefined,
         worktree: worktreeOpt,
       });

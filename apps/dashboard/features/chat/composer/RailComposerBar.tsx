@@ -34,7 +34,7 @@ import type { OutputCapLevel } from './output-cap-levels.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram' | 'builder';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'api' | 'diagram' | 'builder';
 
 interface RailComposerBarProps {
   hasInput: boolean;
@@ -91,7 +91,6 @@ interface RailComposerBarProps {
 export function RailComposerBar(props: RailComposerBarProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const pickerAgent = props.agent === 'builder' ? 'build' : props.agent;
 
   return (
     <div className="flex flex-col gap-1 px-2 pb-2 pt-1">
@@ -138,7 +137,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
           toolbar so the rail exposes the mode at a glance. */}
       <div className="flex items-center gap-1 flex-wrap">
         {!props.hideAgentPicker && (
-          <AgentPicker value={pickerAgent} onChange={props.setAgent} autoSuggestFor={props.autoSuggestText} />
+          <AgentPicker value={props.agent} onChange={props.setAgent} autoSuggestFor={props.autoSuggestText} />
         )}
 
         {/* Reasoning effort — only when the model exposes discrete effort levels. */}

@@ -5,9 +5,9 @@
  * owns the product stage; the rail only hosts the current conversation, the
  * session list, and the new-session action.
  */
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, ChevronRight, FolderPlus, Loader2, MessageSquare, Plus } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Bot, Boxes, ChevronRight, Database, FolderPlus, Loader2, MessageSquare, Plus } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { confirm, prompt } from '../../components/ui/prompt-dialog.js';
@@ -16,11 +16,20 @@ import { Composer } from '../chat/composer/Composer.js';
 import { QueuedMessages } from '../chat/composer/QueuedMessages.js';
 import { SessionPickerDropdown } from '../project/editor-chat/SessionPickerDropdown.js';
 import { useEditorChatSession } from '../project/editor-chat/useEditorChatSession.js';
+import type { AppStudioSpecAgentConfig } from './AppStudioSpecAgentLauncher.js';
+
+export type AppStudioChatMode = 'builder' | 'spec' | 'db' | 'architecture';
 
 interface AppStudioChatRailProps {
   projectId: number;
   projectName: string;
   initialSessionId?: number;
+  mode?: AppStudioChatMode;
+  initialPrompt?: string | null;
+  initialConfig?: AppStudioSpecAgentConfig | null;
+  sessionTitle?: string;
+  onInitialPromptConsumed?: () => void;
+  onModeChange?: (mode: AppStudioChatMode) => void;
   onCollapse: () => void;
 }
 
@@ -28,16 +37,91 @@ export function AppStudioChatRail({
   projectId,
   projectName,
   initialSessionId,
+  mode = 'builder',
+  initialPrompt,
+  initialConfig,
+  sessionTitle,
+  onInitialPromptConsumed,
+  onModeChange,
   onCollapse,
 }: AppStudioChatRailProps) {
   const { t } = useTranslation(['appStudio', 'workspace', 'chat', 'common']);
+  const pendingPromptRef = useRef<string | null>(null);
+  const autoCreatedSpecialistRef = useRef(false);
+  const [specialistStartError, setSpecialistStartError] = useState(false);
+  const initialAgent = mode === 'spec' ? 'app_spec' : mode === 'db' ? 'app_db' : mode === 'architecture' ? 'app_architect' : 'builder';
   const s = useEditorChatSession(projectId, {
     initialSessionId,
-    agentLock: 'builder',
+    initialAgent,
+    agentLock: mode === 'builder' ? undefined : initialAgent,
     includeEditorContext: false,
     selectionPrefixSessionId: projectId,
-    newSessionTitle: projectName,
+    initialProvider: initialConfig?.provider,
+    initialModel: initialConfig?.model,
+    initialThinking: initialConfig?.thinking,
+    initialReasoningEffort: initialConfig?.reasoningEffort ?? null,
+    newSessionTitle: sessionTitle ??
+      (mode === 'spec'
+        ? t('appStudio:chatRail.specSessionTitle', { name: projectName, defaultValue: `Refinar plano - ${projectName}` })
+        : mode === 'db'
+          ? t('appStudio:chatRail.dbSessionTitle', { name: projectName, defaultValue: `Analisar dados - ${projectName}` })
+          : mode === 'architecture'
+            ? t('appStudio:chatRail.architectureSessionTitle', { name: projectName, defaultValue: `Planejar construção - ${projectName}` })
+          : projectName),
   });
+
+  useEffect(() => {
+    if (initialPrompt?.trim()) pendingPromptRef.current = initialPrompt.trim();
+  }, [initialPrompt]);
+
+  useEffect(() => {
+    if (mode === 'builder') {
+      autoCreatedSpecialistRef.current = false;
+      return;
+    }
+    if (s.selectedId != null || s.creating || autoCreatedSpecialistRef.current) return;
+    autoCreatedSpecialistRef.current = true;
+    setSpecialistStartError(false);
+    void s.createSession().catch(() => {
+      autoCreatedSpecialistRef.current = false;
+      setSpecialistStartError(true);
+    });
+  }, [mode, s.selectedId, s.creating, s.createSession]);
+
+  useEffect(() => {
+    if (mode === 'builder' || !s.selectedId || s.streaming || !pendingPromptRef.current) return;
+    const message = pendingPromptRef.current;
+    pendingPromptRef.current = null;
+    setSpecialistStartError(false);
+    void s.handleSend(message, [])
+      .then(() => onInitialPromptConsumed?.())
+      .catch(() => {
+        pendingPromptRef.current = message;
+        setSpecialistStartError(true);
+      });
+  }, [mode, s.selectedId, s.streaming, s.handleSend, onInitialPromptConsumed]);
+
+  const switchMode = () => onModeChange?.(mode === 'builder' ? 'spec' : 'builder');
+  const modeToggle = onModeChange ? (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-6 w-6 text-muted-foreground hover:text-foreground"
+      onClick={switchMode}
+      aria-label={
+        mode !== 'builder'
+          ? t('appStudio:chatRail.builderMode', { defaultValue: 'Chat de construcao' })
+          : t('appStudio:chatRail.specMode', { defaultValue: 'Especialista em spec' })
+      }
+      title={
+        mode !== 'builder'
+          ? t('appStudio:chatRail.builderMode', { defaultValue: 'Chat de construcao' })
+          : t('appStudio:chatRail.specMode', { defaultValue: 'Especialista em spec' })
+      }
+    >
+      {mode === 'builder' ? <Bot className="h-3.5 w-3.5" /> : <MessageSquare className="h-3.5 w-3.5" />}
+    </Button>
+  ) : null;
 
   const createGroup = async () => {
     const name = await prompt({
@@ -78,8 +162,10 @@ export function AppStudioChatRail({
         <RailHeader
           title={t('appStudio:chatRail.sessions', { defaultValue: 'Conversas' })}
           onClose={onCollapse}
+          mode={mode}
           action={
             <>
+              {modeToggle}
               <Button
                 variant="ghost"
                 size="icon"
@@ -104,6 +190,27 @@ export function AppStudioChatRail({
             </>
           }
         />
+        {specialistStartError && mode !== 'builder' ? (
+          <div className="mx-2 mt-2 flex items-center gap-2 border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-xs text-destructive">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1">{t('appStudio:chatRail.specialistStartError', { defaultValue: 'Nao foi possivel iniciar o especialista.' })}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                autoCreatedSpecialistRef.current = true;
+                setSpecialistStartError(false);
+                void s.createSession().catch(() => {
+                  autoCreatedSpecialistRef.current = false;
+                  setSpecialistStartError(true);
+                });
+              }}
+            >
+              {t('common:actions.retry', { defaultValue: 'Tentar novamente' })}
+            </Button>
+          </div>
+        ) : null}
         <div className="flex-1 min-h-0">
           <SessionPickerDropdown
             projectName={projectName}
@@ -129,18 +236,22 @@ export function AppStudioChatRail({
           title={s.sessionData?.session.title ?? t('appStudio:chatRail.assistant', { defaultValue: 'Assistente' })}
           onBack={() => s.setSelectedId(null)}
           onClose={onCollapse}
+          mode={mode}
           action={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 text-muted-foreground hover:text-foreground"
-              onClick={() => void s.createSession()}
-              disabled={s.creating}
-              aria-label={t('workspace:chat.new')}
-              title={t('workspace:chat.new')}
-            >
-              {s.creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-            </Button>
+            <>
+              {modeToggle}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                onClick={() => void s.createSession()}
+                disabled={s.creating}
+                aria-label={t('workspace:chat.new')}
+                title={t('workspace:chat.new')}
+              >
+                {s.creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              </Button>
+            </>
           }
         />
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -156,11 +267,13 @@ export function AppStudioChatRail({
             tasksState={s.tasksState}
             handlers={s.handlers}
             onLoadEarlier={s.loadEarlierMessages}
+            snapshotActions={s.snapshotActions}
+            snapshotFiles={s.snapshotFiles}
           />
         </div>
         <Composer
           compact
-          hideAgentPicker
+          hideAgentPicker={mode !== 'builder'}
           agent={s.agent}
           setAgent={s.setAgent}
           provider={s.provider}
@@ -208,11 +321,13 @@ function RailHeader({
   title,
   onBack,
   onClose,
+  mode,
   action,
 }: {
   title: string;
   onBack?: () => void;
   onClose: () => void;
+  mode: AppStudioChatMode;
   action?: ReactNode;
 }) {
   const { t } = useTranslation('appStudio');
@@ -229,7 +344,15 @@ function RailHeader({
           <ArrowLeft className="h-3.5 w-3.5" />
         </Button>
       )}
-      <MessageSquare className="h-3.5 w-3.5 shrink-0 text-primary" />
+      {mode === 'spec' ? (
+        <Bot className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'db' ? (
+        <Database className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'architecture' ? (
+        <Boxes className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : (
+        <MessageSquare className="h-3.5 w-3.5 shrink-0 text-primary" />
+      )}
       <span className="min-w-0 flex-1 truncate text-xs font-semibold">{title}</span>
       {action}
       <Button

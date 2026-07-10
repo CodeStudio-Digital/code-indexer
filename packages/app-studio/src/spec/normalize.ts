@@ -15,6 +15,7 @@ import type {
   AppSpecEntity,
   AppSpecField,
   AppSpecFeature,
+  AppSpecRequirements,
   AppSpecScreen,
 } from './types.js';
 import { kebab, snake, titleize } from './names.js';
@@ -24,6 +25,18 @@ function str(v: unknown): string {
 }
 function rec(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function stringList(v: unknown): string[] | undefined {
+  if (Array.isArray(v)) {
+    const items = v
+      .filter((x): x is string => typeof x === 'string')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    return items.length > 0 ? items : undefined;
+  }
+  if (typeof v === 'string' && v.trim()) return [v.trim()];
+  return undefined;
 }
 
 // Métodos de auth: o enum canônico é password | oauth-google | oauth-github,
@@ -166,6 +179,38 @@ function coerceBehavior(b: unknown, i: number): AppBehavior {
   };
 }
 
+function pickList(o: Record<string, unknown>, keys: string[]): string[] | undefined {
+  for (const key of keys) {
+    const value = stringList(o[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function coerceRequirements(raw: unknown): AppSpecRequirements | undefined {
+  const o = rec(raw);
+  const requirements: AppSpecRequirements = {};
+  const goals = pickList(o, ['goals', 'objectives', 'objetivos']);
+  const businessRules = pickList(o, ['business_rules', 'businessRules', 'rules', 'regras', 'regras_de_negocio']);
+  const acceptance = pickList(o, [
+    'acceptance_criteria',
+    'acceptanceCriteria',
+    'criteria',
+    'done',
+    'criterios_de_aceite',
+  ]);
+  const outOfScope = pickList(o, ['out_of_scope', 'outOfScope', 'fora_de_escopo', 'not_included']);
+  const assumptions = pickList(o, ['assumptions', 'suposicoes', 'premissas']);
+  const risks = pickList(o, ['risks', 'riscos', 'open_questions', 'duvidas']);
+  if (goals) requirements.goals = goals;
+  if (businessRules) requirements.business_rules = businessRules;
+  if (acceptance) requirements.acceptance_criteria = acceptance;
+  if (outOfScope) requirements.out_of_scope = outOfScope;
+  if (assumptions) requirements.assumptions = assumptions;
+  if (risks) requirements.risks = risks;
+  return Object.keys(requirements).length > 0 ? requirements : undefined;
+}
+
 /** Garante exatamente uma tela primary (a home). */
 function ensureSinglePrimary(screens: AppSpecScreen[]): void {
   const primaries = screens.filter((s) => s.primary);
@@ -217,6 +262,7 @@ export function normalizeAppSpec(raw: unknown): unknown {
   if (screens) out.screens = screens;
   if (database) out.database = database;
   if (Array.isArray(auth.methods)) out.auth = { ...auth, methods };
+  if (r.requirements !== undefined) out.requirements = coerceRequirements(r.requirements);
   if (Array.isArray(r.behaviors)) out.behaviors = r.behaviors.map(coerceBehavior);
   return out;
 }

@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link2, Plus, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Link2, Plus, X } from 'lucide-react';
 import type { AppBehaviorAction, AppFieldType } from '@mcp/app-studio/spec/types.js';
 import { prompt } from '../../../components/ui/prompt-dialog.js';
 import { Button } from '../../../components/ui/button.js';
@@ -21,12 +21,26 @@ export function EntitySection({ data, spec, onMutate }: InspectorProps) {
   const targetOptions = spec.database.entities.map((e) => ({ id: e.name, label: e.label }));
   const fallbackTarget = targetOptions.find((o) => o.id !== entity)?.id ?? targetOptions[0]?.id ?? '';
   const [newReferenceTarget, setNewReferenceTarget] = useState(fallbackTarget);
+  const [expandedFields, setExpandedFields] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     setNewReferenceTarget(fallbackTarget);
   }, [entity, fallbackTarget]);
 
+  useEffect(() => {
+    setExpandedFields(new Set());
+  }, [entity]);
+
   if (data.kind !== 'entity') return null;
+
+  function toggleField(field: string): void {
+    setExpandedFields((current) => {
+      const next = new Set(current);
+      if (next.has(field)) next.delete(field);
+      else next.add(field);
+      return next;
+    });
+  }
 
   async function addRelationship(): Promise<void> {
     if (!newReferenceTarget) return;
@@ -48,18 +62,33 @@ export function EntitySection({ data, spec, onMutate }: InspectorProps) {
       </Field>
       <Field label={t('blueprint.inspector.fields')}>
         <ul className="space-y-2">
-          {data.fields.map((f) => (
-            <li key={f.name} className="rounded-md border bg-background/60 p-2">
+          {data.fields.map((f) => {
+            const expanded = expandedFields.has(f.name);
+            const target = f.references ? targetOptions.find((o) => o.id === f.references) : undefined;
+            const summary = [
+              f.name,
+              f.references ? `FK -> ${target?.label ?? f.references}` : t(`blueprint.fieldType.${f.type}`),
+              f.required ? t('blueprint.inspector.required') : null,
+            ].filter(Boolean).join(' · ');
+            return (
+            <li key={f.name} className={cn('rounded-md border bg-background/60', expanded ? 'p-2' : 'p-1.5')}>
               <div className="flex items-center gap-1.5">
-                <input
-                  defaultValue={f.label}
-                  onBlur={(e) => {
-                    const label = e.target.value.trim();
-                    if (label && label !== f.label) void onMutate({ op: 'update-field', entity, field: f.name, patch: { label } });
-                  }}
-                  className={cn(smallControl, 'min-w-0 flex-1 font-medium')}
-                  title={t('blueprint.inspector.fieldLabel')}
-                />
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => toggleField(f.name)}
+                  className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded px-1 text-left hover:bg-muted/60"
+                >
+                  {expanded ? (
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] font-medium">{f.label}</span>
+                    <span className="block truncate text-[10px] text-muted-foreground">{summary}</span>
+                  </span>
+                </button>
                 <button
                   onClick={() => void onMutate({ op: 'remove-field', entity, field: f.name })}
                   className="grid h-7 w-7 place-items-center rounded border text-muted-foreground hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-600"
@@ -68,58 +97,72 @@ export function EntitySection({ data, spec, onMutate }: InspectorProps) {
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <div className="mt-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-1.5">
-                <input
-                  defaultValue={f.name}
-                  onBlur={(e) => {
-                    const name = e.target.value.trim();
-                    if (name && name !== f.name) void onMutate({ op: 'update-field', entity, field: f.name, patch: { name } });
-                  }}
-                  className={cn(smallControl, 'w-full font-mono')}
-                  title={t('blueprint.inspector.fieldColumn')}
-                />
-                <select
-                  value={f.type}
-                  disabled={Boolean(f.references)}
-                  title={f.references ? t('blueprint.inspector.fkTypeLocked') : t('blueprint.inspector.fieldType')}
-                  onChange={(e) =>
-                    void onMutate({ op: 'update-field', entity, field: f.name, patch: { type: e.target.value as AppFieldType } })
-                  }
-                  className={cn(smallControl, 'w-full truncate', f.references && 'opacity-60')}
-                >
-                  {FIELD_TYPES.map((ft) => (
-                    <option key={ft} value={ft}>{t(`blueprint.fieldType.${ft}`)}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-1.5">
-                <label className="flex h-7 shrink-0 items-center gap-1.5 rounded border bg-background px-2 text-[11px]">
+              {expanded && (
+                <div className="mt-1.5 space-y-1.5">
                   <input
-                    type="checkbox"
-                    checked={Boolean(f.required)}
-                    onChange={(e) => void onMutate({ op: 'update-field', entity, field: f.name, patch: { required: e.target.checked } })}
-                    className="h-3 w-3"
+                    defaultValue={f.label}
+                    onBlur={(e) => {
+                      const label = e.target.value.trim();
+                      if (label && label !== f.label) void onMutate({ op: 'update-field', entity, field: f.name, patch: { label } });
+                    }}
+                    className={cn(smallControl, 'w-full font-medium')}
+                    title={t('blueprint.inspector.fieldLabel')}
                   />
-                  {t('blueprint.inspector.required')}
-                </label>
-                <select
-                  value={f.references ?? ''}
-                  onChange={(e) => {
-                    const target = e.target.value;
-                    if (target) void onMutate({ op: 'set-field-reference', entity, target, field: f.name, label: f.label });
-                    else void onMutate({ op: 'update-field', entity, field: f.name, patch: { references: null } });
-                  }}
-                  className={cn(smallControl, 'w-full truncate')}
-                  title={t('blueprint.inspector.relationship')}
-                >
-                  <option value="">{t('blueprint.inspector.noRelationship')}</option>
-                  {targetOptions.map((o) => (
-                    <option key={o.id} value={o.id}>{o.id === entity ? t('blueprint.inspector.sameEntity', { name: o.label }) : o.label}</option>
-                  ))}
-                </select>
-              </div>
+                  <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-1.5">
+                    <input
+                      defaultValue={f.name}
+                      onBlur={(e) => {
+                        const name = e.target.value.trim();
+                        if (name && name !== f.name) void onMutate({ op: 'update-field', entity, field: f.name, patch: { name } });
+                      }}
+                      className={cn(smallControl, 'w-full font-mono')}
+                      title={t('blueprint.inspector.fieldColumn')}
+                    />
+                    <select
+                      value={f.type}
+                      disabled={Boolean(f.references)}
+                      title={f.references ? t('blueprint.inspector.fkTypeLocked') : t('blueprint.inspector.fieldType')}
+                      onChange={(e) =>
+                        void onMutate({ op: 'update-field', entity, field: f.name, patch: { type: e.target.value as AppFieldType } })
+                      }
+                      className={cn(smallControl, 'w-full truncate', f.references && 'opacity-60')}
+                    >
+                      {FIELD_TYPES.map((ft) => (
+                        <option key={ft} value={ft}>{t(`blueprint.fieldType.${ft}`)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-1.5">
+                    <label className="flex h-7 shrink-0 items-center gap-1.5 rounded border bg-background px-2 text-[11px]">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(f.required)}
+                        onChange={(e) => void onMutate({ op: 'update-field', entity, field: f.name, patch: { required: e.target.checked } })}
+                        className="h-3 w-3"
+                      />
+                      {t('blueprint.inspector.required')}
+                    </label>
+                    <select
+                      value={f.references ?? ''}
+                      onChange={(e) => {
+                        const targetValue = e.target.value;
+                        if (targetValue) void onMutate({ op: 'set-field-reference', entity, target: targetValue, field: f.name, label: f.label });
+                        else void onMutate({ op: 'update-field', entity, field: f.name, patch: { references: null } });
+                      }}
+                      className={cn(smallControl, 'w-full truncate')}
+                      title={t('blueprint.inspector.relationship')}
+                    >
+                      <option value="">{t('blueprint.inspector.noRelationship')}</option>
+                      {targetOptions.map((o) => (
+                        <option key={o.id} value={o.id}>{o.id === entity ? t('blueprint.inspector.sameEntity', { name: o.label }) : o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
             </li>
-          ))}
+            );
+          })}
         </ul>
       </Field>
       <div className="flex flex-wrap gap-1.5">

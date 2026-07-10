@@ -13,6 +13,11 @@
  *      signatures that were already refusing (count ≥ `DUP_REFUSE_MIN`) for
  *      exactly one turn, so the immediate next turn can't replay the exact
  *      call that tripped the guard. Executing expires the retention.
+ *   2b. Reset the failure-streak table too. This is the documented "clears
+ *      both together" contract (nested-observer.ts): without it, a tool that
+ *      crossed the refuse threshold inside a code_exec script was pre-refused
+ *      for the rest of the run (it can never succeed to clear itself), so a
+ *      later legitimately-needed retry was permanently blocked.
  *   3. Record the trigger reason in `ctx.transition` for `RunResult`
  *      attribution.
  */
@@ -20,6 +25,7 @@ import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.j
 import type { TransitionKind } from '../types.js';
 import { events } from '../machine/events.js';
 import { resetDupCalls, DUP_REFUSE_MIN } from '../guards/tuple-hash-dedup.js';
+import { resetFailureStreaks } from '../guards/failure-streak.js';
 import { buildLoopGuardReflectionMarker } from '../markers.js';
 
 export class PlanningNode implements BehaviorNode {
@@ -42,6 +48,13 @@ export class PlanningNode implements BehaviorNode {
         expiresAfterTurn: ctx.turn + 1,
       };
     }
+    // Clear the per-tool failure streaks too (see nested-observer.ts): a tool
+    // that crossed the refuse threshold — especially one hit from inside a
+    // code_exec script, where the nested pre-check refuses before dispatch —
+    // otherwise stays blocked for the whole run because it can never run to
+    // succeed and self-clear. The forced re-plan is exactly the moment to give
+    // it a clean slate.
+    resetFailureStreaks(ctx.failureStreaks);
 
     if (loopEvent) {
       ctx.transition = guardToTransition(loopEvent.guard);

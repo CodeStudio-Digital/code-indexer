@@ -146,6 +146,11 @@ import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import {
+  APP_SPECIALIST_PRESERVE_OUTPUT_TOOLS,
+  APP_SPECIALIST_TOOL_ALLOWLISTS,
+  isAppSpecialistAgentId,
+} from '@mcp/code-agent/agents/app-specialists.js';
 
 // Public types live in ./index/types.ts (extracted to keep this file under
 // the LOC cap). Re-exported below so external consumers of @mcp/code-agent
@@ -1393,6 +1398,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
+  if (isAppSpecialistAgentId(effectiveAgentId)) {
+    const before = registry.list().length;
+    const allowlist = APP_SPECIALIST_TOOL_ALLOWLISTS[effectiveAgentId];
+    registry.filterInPlace((t) => allowlist.has(t.name));
+    const after = registry.list().length;
+    console.log(`[coder] ${effectiveAgentId} agent: reduced tool surface ${before} → ${after}`);
+  }
+
   // Optional repo map (B6). Auto-sized by indexed file count: 0 (<50 files),
   // 1500 chars (50-499), 3000 (500-1999), 4500 (≥2000). Set CODER_REPOMAP_TOKENS
   // to a positive integer to override the auto budget, or "0" to disable.
@@ -1579,6 +1592,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       appSlug: appWorkspace.appSlug ?? '',
       dbEngine: appWorkspace.dbEngine,
     });
+    if (effectiveAgentId === 'app_spec') {
+      systemPrompt += '\n' + loadPrompt('app_spec');
+    } else if (effectiveAgentId === 'app_db') {
+      systemPrompt += '\n' + loadPrompt('app_db');
+    } else if (effectiveAgentId === 'app_architect') {
+      systemPrompt += '\n' + loadPrompt('app_architect');
+    }
+  }
+  if (effectiveAgentId === 'app_db' && !(appWorkspace && config.features.appStudioEnabled)) {
+    systemPrompt += '\n' + loadPrompt('app_db');
   }
 
   // Draw.io diagram guidance — appended only when the `diagram` tier will be
@@ -1706,6 +1729,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // via `expand_toolset('diagram')`.
   if (effectiveAgentId === 'diagram') {
     activeTiers.add('diagram');
+  }
+  if (effectiveAgentId === 'app_db') {
+    activeTiers.add('db');
   }
   // Sticky extra tiers (mig 142): master/preview/custom tiers this session
   // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that
@@ -2166,6 +2192,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     companySessionId: opts.companyContext?.companySessionId ?? null,
     adminOverride: opts.adminOverride,
     agentId: effectiveAgentId,
+    preserveToolOutputNames:
+      isAppSpecialistAgentId(effectiveAgentId)
+        ? APP_SPECIALIST_PRESERVE_OUTPUT_TOOLS
+        : undefined,
     sessionTemperature: session.temperature_override,
     roleTemperature: opts.roleTemperature,
     // Reasoning-effort override (orthogonal to thinking). Company callers pass

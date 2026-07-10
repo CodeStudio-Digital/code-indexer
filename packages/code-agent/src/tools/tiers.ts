@@ -28,12 +28,12 @@
  * unlocks on-demand via `expand_toolset`. ToolTier is widened to `string` so
  * the runner, filter, and promotion logic work generically with any tier name.
  */
-import { COMPANY_TOOLS, BUILDER_TOOLS } from '@mcp/code-agent/tools/tiers-company.js';
+import { APP_STUDIO_TOOLS, COMPANY_TOOLS, BUILDER_TOOLS } from '@mcp/code-agent/tools/tiers-company.js';
 
 // Company/builder tool catalogs live in a sibling module (pure data) to keep
 // this file focused on tiering logic; re-exported so tiers.ts stays the single
 // public entry point for tier data.
-export { COMPANY_TOOLS, BUILDER_TOOLS };
+export { APP_STUDIO_TOOLS, COMPANY_TOOLS, BUILDER_TOOLS };
 
 export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview' | 'api' | 'diagram' | 'db';
 export type ToolTier = string;
@@ -507,12 +507,12 @@ export function getToolTier(
   if (DIAGRAM_TOOLS.has(name)) return 'diagram';
   if (DB_TOOLS.has(name)) return 'db';
   // Always-on within their own session class; map to bootstrap (see set docs).
-  if (COMPANY_TOOLS.has(name) || BUILDER_TOOLS.has(name)) return 'bootstrap';
+  if (COMPANY_TOOLS.has(name) || BUILDER_TOOLS.has(name) || APP_STUDIO_TOOLS.has(name)) return 'bootstrap';
   // Unlisted — no explicit tier.
   if (opts?.strict) {
     throw new Error(
       `getToolTier: tool "${name}" is not in any tier set. Add it to a tier in ` +
-        `tiers.ts (or COMPANY_TOOLS / BUILDER_TOOLS) so it stops riding the ` +
+        `tiers.ts (or COMPANY_TOOLS / BUILDER_TOOLS / APP_STUDIO_TOOLS) so it stops riding the ` +
         `silent bootstrap fallback.`,
     );
   }
@@ -533,6 +533,7 @@ export function allTieredToolNames(): Set<string> {
     ...DB_TOOLS,
     ...COMPANY_TOOLS,
     ...BUILDER_TOOLS,
+    ...APP_STUDIO_TOOLS,
   ]);
 }
 
@@ -632,7 +633,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   delete_tasks: 'Delete tasks from the current task list',
   archive_task_list: 'Clear the current task list',
   expand_toolset: 'Unlock higher-tier tools (navigate/admin)',
-  find_tools: 'Search the full tool catalog by description',
+  find_tools: 'Search the tool catalog by name, description, and argument names',
   request_review: 'Spawn a reviewer subagent to second-opinion the diff',
   read_plan: 'Re-read your submitted plan and its approval status',
   save_note: 'Jot a scratchpad note for THIS session (ephemeral — use remember for durable memory)',
@@ -774,6 +775,7 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   // their session class); label them as such so the catalog matches.
   push('bootstrap', COMPANY_TOOLS);
   push('bootstrap', BUILDER_TOOLS);
+  push('bootstrap', APP_STUDIO_TOOLS);
   return result;
 }
 
@@ -789,4 +791,5 @@ export const TIER_COUNTS = {
   db: DB_TOOLS.size,
   company: COMPANY_TOOLS.size,
   builder: BUILDER_TOOLS.size,
+  appStudio: APP_STUDIO_TOOLS.size,
 } as const;

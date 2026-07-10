@@ -30,6 +30,27 @@ describe('PlanningNode', () => {
     expect(ctx.dupCalls.size).toBe(0);
   });
 
+  it('clears the failure-streak table so a refuse-thresholded tool can retry', async () => {
+    const { ctx } = makeTestContext();
+    // A tool that crossed the refuse threshold (e.g. app_provision_db hit from
+    // inside code_exec) would otherwise stay pre-refused for the whole run.
+    ctx.failureStreaks.streaks.set('app_provision_db', {
+      consecutive: 5,
+      firstFailureTurn: 1,
+      lastFailureTurn: 5,
+      lastError: 'boom',
+    });
+    expect(ctx.failureStreaks.streaks.size).toBe(1);
+
+    await new PlanningNode().execute(ctx, {
+      kind: 'ToolLoopDetected',
+      guard: 'failure-streak',
+      toolName: 'code_exec',
+      count: 5,
+    });
+    expect(ctx.failureStreaks.streaks.size).toBe(0);
+  });
+
   it('yields TurnSucceeded so the run continues into Executing', async () => {
     const { ctx } = makeTestContext();
     const event = await new PlanningNode().execute(ctx, null);

@@ -14,6 +14,8 @@ import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stage
 import { roadmapProgress } from '@mcp/app-studio/pipeline/roadmap.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import type { AppStudioSession } from '@mcp/store/app-studio-store.js';
+import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
+import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 
@@ -71,12 +73,26 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
     const session = appStudioStore.getSession(id);
     if (!session) return notFound(c);
     const enriched = enrich(session);
+    const architectureRevision = appStudioStore.getLatestArchitectureRevision(id);
+    const architecture = parseAppArchitecturePlan(architectureRevision?.architecture_json);
+    const spec = parseAppSpec(session.spec_json);
     return c.json({
       session,
       project: enriched.project,
       builder_port: enriched.builder_port,
       pipeline: pipelineView(session),
-      spec: parseAppSpec(session.spec_json),
+      spec,
+      architecture: architectureRevision && architecture ? {
+        id: architectureRevision.id,
+        revision_number: architectureRevision.revision_number,
+        spec_revision_id: architectureRevision.spec_revision_id,
+        status: architectureRevision.status,
+        created_at: architectureRevision.created_at,
+        updated_at: architectureRevision.updated_at,
+        approved_at: architectureRevision.approved_at,
+        plan: architecture,
+        audit: auditAppArchitecture(architecture, spec),
+      } : null,
       deploy: parseJsonColumn(session.deploy_json),
       features: appStudioStore.listFeatures(id),
     });

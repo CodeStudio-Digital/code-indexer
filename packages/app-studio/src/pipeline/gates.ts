@@ -12,6 +12,9 @@ import type { AppSpec } from '../spec/types.js';
 import { validateAppSpec } from '../spec/validate.js';
 import { readDbStatus, readDeployStatus } from '../status-files.js';
 import { runSecurityAudit } from '../audit/security.js';
+import { auditAppArchitecture } from '../architecture/audit.js';
+import type { AppArchitecturePlan } from '../architecture/types.js';
+import { readTddCycles } from '../architecture/tdd-cycles.js';
 import type { AppPipelineState, AppStageGateResult, AppStageId } from './stages.js';
 import { roadmapProgress, type AppRecordedKind } from './roadmap.js';
 import {
@@ -34,6 +37,10 @@ export interface AppStageGateInput {
   spec: AppSpec | null;
   /** Features registradas via app_record_feature. */
   recorded: Array<{ name: string; kind: AppRecordedKind }>;
+  /** Plano técnico mais recente, obrigatório na etapa architecture. */
+  architecture?: AppArchitecturePlan | null;
+  /** Revisão aprovada da spec que a arquitetura precisa representar. */
+  currentSpecRevisionId?: number | null;
   /** false pula spawns de typecheck/build (testes). Default true. */
   runBuild?: boolean;
 }
@@ -60,6 +67,22 @@ async function scriptIssue(
   return `\`npm run ${script}\` failed (exit ${result.code ?? 'timeout'}):\n${summarizeOutput(result.output)}`;
 }
 
+function tddIssues(input: AppStageGateInput, ownerStage: 'database' | 'design' | 'backend' | 'review'): string[] {
+  const cases = (input.architecture?.tdd.cases ?? []).filter((testCase) => testCase.owner_stage === ownerStage);
+  if (cases.length === 0) return [];
+  const issues: string[] = [];
+  const testFiles = filesContaining(join(input.workspaceDir, 'tests'), /\.(ts|tsx)$/, /./);
+  const testText = testFiles.map((rel) => readIfExists(join(input.workspaceDir, 'tests', rel)) ?? '').join('\n');
+  const cycles = readTddCycles(input.workspaceDir).cycles;
+  for (const testCase of cases) {
+    if (!testText.includes(testCase.id)) issues.push(`TDD case '${testCase.id}' is not referenced in tests/**/*.ts.`);
+    const cycle = cycles[testCase.id];
+    if (!cycle?.red_at) issues.push(`TDD case '${testCase.id}' has no recorded red run — call app_run_test_cycle before implementation.`);
+    if (!cycle?.green_at) issues.push(`TDD case '${testCase.id}' has no recorded green run — call app_run_test_cycle after implementation.`);
+  }
+  return issues;
+}
+
 export async function runAppStageGate(input: AppStageGateInput): Promise<AppStageGateResult> {
   const issues: string[] = [];
   const { workspaceDir, spec } = input;
@@ -73,12 +96,28 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
       issues.push(...validateAppSpec(spec));
       break;
     }
+    case 'architecture': {
+      if (!spec) {
+        issues.push('Spec missing — approve discovery before planning the architecture.');
+        break;
+      }
+      const audit = auditAppArchitecture(input.architecture ?? null, spec);
+      issues.push(...audit.issues);
+      if (
+        input.currentSpecRevisionId != null &&
+        input.architecture?.spec_revision_id !== input.currentSpecRevisionId
+      ) {
+        issues.push('Architecture is stale — save it again against the current approved spec revision.');
+      }
+      break;
+    }
     case 'database': {
       if (!spec) {
         issues.push('Spec missing — discovery must be approved before the database stage.');
         break;
       }
       if (!spec.database.required) break; // app sem banco: etapa passa direto (ou é pulada).
+      issues.push(...tddIssues(input, 'database'));
       const migrations = listSqlMigrations(workspaceDir);
       if (migrations.length === 0) {
         issues.push('migrations/ has no .sql files — create 0001_init.sql from the spec entities.');
@@ -108,6 +147,8 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
           issues.push('Seed data not loaded — run app_provision_db again after writing seeds/seed.sql.');
         }
       }
+      const tests = await scriptIssue(workspaceDir, 'test:worker', input.runBuild);
+      if (tests) issues.push(tests);
       break;
     }
     case 'design': {
@@ -116,6 +157,7 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
         break;
       }
       const missing = missingRoadmap(input, 'screen');
+      issues.push(...tddIssues(input, 'design'));
       if (missing.length > 0) {
         issues.push(`Screens not recorded (build + app_record_feature kind:'screen'): ${missing.join(', ')}.`);
       }
@@ -131,6 +173,8 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
       }
       const typecheck = await scriptIssue(workspaceDir, 'typecheck', input.runBuild);
       if (typecheck) issues.push(typecheck);
+      const tests = await scriptIssue(workspaceDir, 'test:e2e', input.runBuild);
+      if (tests) issues.push(tests);
       break;
     }
     case 'backend': {
@@ -139,6 +183,7 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
         break;
       }
       const missing = missingRoadmap(input, 'api');
+      issues.push(...tddIssues(input, 'backend'));
       if (missing.length > 0) {
         issues.push(`API deliverables not recorded (app_record_feature kind:'api'): ${missing.join(', ')}.`);
       }
@@ -177,9 +222,12 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
       }
       const typecheck = await scriptIssue(workspaceDir, 'typecheck', input.runBuild);
       if (typecheck) issues.push(typecheck);
+      const tests = await scriptIssue(workspaceDir, 'test:worker', input.runBuild);
+      if (tests) issues.push(tests);
       break;
     }
     case 'review': {
+      issues.push(...tddIssues(input, 'review'));
       const audit = runSecurityAudit(workspaceDir, spec);
       issues.push(...audit.errors);
       if (!existsSync(join(workspaceDir, 'REVIEW.md'))) {
@@ -187,6 +235,8 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
       }
       const build = await scriptIssue(workspaceDir, 'build', input.runBuild);
       if (build) issues.push(build);
+      const tests = await scriptIssue(workspaceDir, 'test', input.runBuild);
+      if (tests) issues.push(tests);
       break;
     }
     case 'launch': {

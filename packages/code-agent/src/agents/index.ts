@@ -25,10 +25,23 @@
  */
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 
-export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'builder' | 'api' | 'diagram';
+export type AgentId =
+  | 'explore'
+  | 'plan'
+  | 'build'
+  | 'admin'
+  | 'spec'
+  | 'app_spec'
+  | 'app_db'
+  | 'app_architect'
+  | 'builder'
+  | 'api'
+  | 'diagram';
 
 export interface AgentDefinition {
   id: AgentId;
+  /** Human-facing name. Keep `id` stable for stored sessions, prompts and APIs. */
+  label: string;
   description: string;
   profile: CoderProfile;
   /** Starts the runner in plan mode — mutating tools blocked until submit_plan approved. */
@@ -60,6 +73,7 @@ export interface AgentDefinition {
 export const AGENTS: Record<AgentId, AgentDefinition> = {
   explore: {
     id: 'explore',
+    label: 'Explore',
     description:
       'Read-only investigation. Bootstrap tools only (~17). Use for "explain", "find", "where", "how does X work".',
     profile: 'bootstrap',
@@ -69,6 +83,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
   },
   plan: {
     id: 'plan',
+    label: 'Plan',
     description:
       'Read + planning. Navigate tier (~47 tools) with plan mode ON — the agent must submit_plan and get approval before any mutating tool.',
     profile: 'navigate',
@@ -77,6 +92,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
   },
   build: {
     id: 'build',
+    label: 'Code',
     description:
       'Read + edit + shell + git-read. Navigate tier (~47 tools), no plan gate. Use when you trust end-to-end execution (small features, bugfixes).',
     profile: 'navigate',
@@ -85,6 +101,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
   },
   admin: {
     id: 'admin',
+    label: 'Ops',
     description:
       'Everything unlocked. Full tier (~60 tools) including git_commit, index_project, get_diff. Use only when the user explicitly asks for admin actions.',
     profile: 'full',
@@ -94,6 +111,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
   },
   spec: {
     id: 'spec',
+    label: 'Spec Doc',
     description:
       'Spec-driven authoring. Navigate tier with dedicated spec gate — must submit_spec and get human approval before mutating the workspace. One spec → N tasks/PRs.',
     profile: 'navigate',
@@ -102,8 +120,39 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     maxTurns: 120,
     defaultTemperature: 0.3,
   },
+  app_spec: {
+    id: 'app_spec',
+    label: 'App Plan',
+    description:
+      'App Studio requirements specialist. Plans and versions requirements with an explicit context snapshot, deterministic audit, user questions and reviewable revisions.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 80,
+    defaultTemperature: 0.25,
+  },
+  app_db: {
+    id: 'app_db',
+    label: 'Data Model',
+    description:
+      'App Studio database specialist. Audits data, persists versioned migrations, provisions the local database and verifies the real schema with database tools.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 80,
+    defaultTemperature: 0.2,
+  },
+  app_architect: {
+    id: 'app_architect',
+    label: 'App Architecture',
+    description:
+      'App Studio architecture specialist. Evolves requirements when architecture reveals product changes, researches official stack documentation, and produces a versioned architecture plus traceable TDD contract without editing code.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 100,
+    defaultTemperature: 0.2,
+  },
   builder: {
     id: 'builder',
+    label: 'UI Builder',
     description:
       'V0-style frontend builder. Navigate tier, no plan gate. Tailwind + shadcn/ui, element-targeted edits from the live preview, self-healing from console/network errors. Used by the Builder studio.',
     profile: 'navigate',
@@ -114,6 +163,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
   },
   api: {
     id: 'api',
+    label: 'API Test',
     description:
       'API verification. Imports an OpenAPI/Swagger spec, runs each endpoint against the LIVE dev server, fixes the request/spec to match real responses, and marks each request verified — building a non-LLM regression battery. Navigate tier + the `api` tool tier; edit_file patches the spec.',
     profile: 'navigate',
@@ -124,6 +174,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
   },
   diagram: {
     id: 'diagram',
+    label: 'Diagram',
     description:
       'Draw.io diagrams. Authors complex diagrams (flowchart, software/cloud architecture, network, ER, sequence, C4) as real .drawio files rendered in a live embedded editor. Navigate tier + the `diagram` tool tier (diagram_create/update/read/list/export). Use to design architecture and implementation solutions visually.',
     profile: 'navigate',
@@ -141,6 +192,9 @@ export function isAgentId(v: string): v is AgentId {
     v === 'build' ||
     v === 'admin' ||
     v === 'spec' ||
+    v === 'app_spec' ||
+    v === 'app_db' ||
+    v === 'app_architect' ||
     v === 'builder' ||
     v === 'api' ||
     v === 'diagram'
@@ -154,6 +208,6 @@ export function getAgent(id: AgentId): AgentDefinition {
 /** Return a short one-line summary of all agents — used by `--help` and the dashboard picker. */
 export function agentsSummary(): string {
   return Object.values(AGENTS)
-    .map((a) => `  ${a.id.padEnd(8)} ${a.description}`)
+    .map((a) => `  ${a.id.padEnd(8)} ${a.label.padEnd(10)} ${a.description}`)
     .join('\n');
 }

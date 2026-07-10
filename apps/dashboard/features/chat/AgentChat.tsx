@@ -86,13 +86,21 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     // Groups are per-project; disabled in global mode ('' → useApi skips the fetch).
     isGlobal ? '' : `/coder/groups?project_id=${projectId}`,
   );
+  useEffect(() => {
+    const onSessionsChanged = () => {
+      refetchSessions();
+      if (!isGlobal) refetchGroups();
+    };
+    window.addEventListener('coder:sessions-changed', onSessionsChanged);
+    return () => window.removeEventListener('coder:sessions-changed', onSessionsChanged);
+  }, [refetchSessions, refetchGroups, isGlobal]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Global mode: which linked project the right-rail file tree is rooted at.
   // Defaults to the selected session's primary; reset when the session changes.
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
-  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram'>('explore');
+  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'api' | 'diagram' | 'builder'>('explore');
 
   // SSE-driven agent transitions (Plan→Build after submit_plan approval,
   // Spec→Build after submit_spec, manual server-side switches). Backend
@@ -109,7 +117,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       if (
         next
         && next !== agent
-        && (next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' || next === 'spec' || next === 'api' || next === 'diagram')
+        && (
+          next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' ||
+          next === 'spec' || next === 'app_spec' || next === 'app_db' || next === 'app_architect' || next === 'api' || next === 'diagram' || next === 'builder'
+        )
       ) {
         setAgent(next);
       }
@@ -557,13 +568,14 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       title: (title ?? 'Nova sessão').slice(0, 80),
       provider,
       model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
+      agent,
     });
     if (!title) pendingAutoTitle.current.add(created.id);
     refetchSessions();
     setSelectedId(created.id);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
     return created;
-  }, [projectId, provider, model, refetchSessions]);
+  }, [projectId, provider, model, agent, refetchSessions]);
 
   const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseProjectId?: number }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
@@ -573,6 +585,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       title: (opts.title ?? 'Nova sessão global').slice(0, 80),
       provider,
       model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
+      agent,
     });
     if (!opts.title) pendingAutoTitle.current.add(created.id);
     refetchSessions();
@@ -625,8 +638,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: allAtts, agent, maxTurns, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
-  }, [selectedId, indexing, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
+    }, { attachments: allAtts, maxTurns, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
+  }, [selectedId, indexing, sendMessage, refetchSession, refetchSessions, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Delivery is run-state-aware and serves BOTH queue modes:
@@ -646,9 +659,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       if (r?.injected) { refetchSession(); return; }
     } catch { /* fall through to a fresh streamed send */ }
     await sendMessage(text, async () => { refetchSession(); }, {
-      agent, maxTurns, thinking, describeImages, selectedSkillIds: skillIds, interject,
+      maxTurns, thinking, describeImages, selectedSkillIds: skillIds, interject,
     });
-  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, describeImages]);
+  }, [selectedId, sendMessage, refetchSession, maxTurns, thinking, describeImages]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
   const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
     if (!selectedId) return;
@@ -827,11 +840,15 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // an end-of-run refetch — same id, new object — never clobbers a manual
   // dropdown pick made mid-session; only a session switch / first load
   // re-hydrates. Live transitions (plan→build) arrive via the
-  // `coder:session_agent_changed` handler above (disjoint trigger). 'builder'
-  // sessions aren't selectable in this composer, so they're left untouched.
+  // `coder:session_agent_changed` handler above (disjoint trigger).
   useEffect(() => {
     const a = sessionData?.session?.agent;
-    if (a && (a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' || a === 'spec' || a === 'api' || a === 'diagram')) {
+    if (
+      a && (
+        a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' ||
+        a === 'spec' || a === 'app_spec' || a === 'app_db' || a === 'app_architect' || a === 'api' || a === 'diagram' || a === 'builder'
+      )
+    ) {
       setAgent(a);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -840,7 +857,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Persist a manual dropdown pick immediately so leaving WITHOUT sending still
   // remembers it. Applies to the NEXT run (agent identity is baked into the
   // runner at construction; mid-run transitions are runner-driven).
-  const handleAgentChange = useCallback((next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram') => {
+  const handleAgentChange = useCallback((next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'api' | 'diagram' | 'builder') => {
     setAgent(next);
     if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
   }, [selectedId]);
@@ -1190,7 +1207,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               if (
                 s.agent
                 && s.agent !== agent
-                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec' || s.agent === 'api')
+                && (
+                  s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
+                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                )
               ) {
                 setAgent(s.agent);
               }
@@ -1214,7 +1234,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               if (
                 s.agent
                 && s.agent !== agent
-                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec' || s.agent === 'api')
+                && (
+                  s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
+                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                )
               ) {
                 setAgent(s.agent);
               }

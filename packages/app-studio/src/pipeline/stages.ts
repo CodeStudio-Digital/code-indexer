@@ -1,9 +1,9 @@
 /**
  * Máquina de etapas do App Studio — o estado serializado em
- * `app_studio_sessions.pipeline_json` (schema versionado AQUI, v1).
+ * `app_studio_sessions.pipeline_json` (schema versionado AQUI, v2).
  *
- * 6 etapas fixas: discovery → database → design → backend → review →
- * launch. Status por etapa: pending → active → review → approved
+ * 7 etapas fixas: discovery → architecture → database → design → backend →
+ * review → launch. Status por etapa: pending → active → review → approved
  * (+ skipped; reopen devolve para active com feedback). `current_stage` é
  * DERIVADO — primeira etapa não aprovada/pulada — nunca armazenado.
  *
@@ -19,7 +19,7 @@
 import type { AppRoadmapItem } from './roadmap.js';
 
 export const APP_STAGE_IDS = [
-  'discovery', 'database', 'design', 'backend', 'review', 'launch',
+  'discovery', 'architecture', 'database', 'design', 'backend', 'review', 'launch',
 ] as const;
 export type AppStageId = (typeof APP_STAGE_IDS)[number];
 
@@ -45,14 +45,14 @@ export interface AppPipelineStage {
 }
 
 export interface AppPipelineState {
-  v: 1;
+  v: 2;
   stages: AppPipelineStage[];
   roadmap: AppRoadmapItem[];
 }
 
 export function createPipelineState(): AppPipelineState {
   return {
-    v: 1,
+    v: 2,
     stages: APP_STAGE_IDS.map((id) => ({
       id,
       status: 'pending',
@@ -69,9 +69,11 @@ export function createPipelineState(): AppPipelineState {
 export function parsePipelineState(json: string | null | undefined): AppPipelineState | null {
   if (!json) return null;
   try {
-    const state = JSON.parse(json) as AppPipelineState;
-    if (state?.v !== 1 || !Array.isArray(state.stages)) return null;
-    return state;
+    const state = JSON.parse(json) as AppPipelineState | (Omit<AppPipelineState, 'v'> & { v: 1 });
+    if (!Array.isArray(state?.stages)) return null;
+    if (state.v === 2) return state;
+    if (state.v !== 1) return null;
+    return upgradeV1Pipeline(state);
   } catch {
     return null;
   }
@@ -92,6 +94,35 @@ function stageOf(state: AppPipelineState, id: AppStageId): AppPipelineStage {
   const stage = state.stages.find((s) => s.id === id);
   if (!stage) throw new AppStageTransitionError(`Unknown stage '${id}'.`);
   return stage;
+}
+
+function upgradeV1Pipeline(state: Omit<AppPipelineState, 'v'> & { v: 1 }): AppPipelineState {
+  const stages = [...state.stages];
+  const discoveryIndex = stages.findIndex((stage) => stage.id === 'discovery');
+  if (discoveryIndex < 0) return createPipelineState();
+  const downstreamStarted = stages
+    .slice(discoveryIndex + 1)
+    .some((stage) => stage.status !== 'pending');
+  const architecture: AppPipelineStage = {
+    id: 'architecture',
+    status: downstreamStarted ? 'skipped' : 'pending',
+    summary: downstreamStarted ? 'Etapa adicionada depois que este app já estava em construção.' : null,
+    gate: null,
+    feedback: null,
+    submitted_at: null,
+    approved_at: null,
+  };
+  stages.splice(discoveryIndex + 1, 0, architecture);
+  return { v: 2, stages, roadmap: Array.isArray(state.roadmap) ? state.roadmap : [] };
+}
+
+function resetStage(stage: AppPipelineStage): void {
+  stage.status = 'pending';
+  stage.summary = null;
+  stage.gate = null;
+  stage.feedback = null;
+  stage.submitted_at = null;
+  stage.approved_at = null;
 }
 
 /**
@@ -156,6 +187,9 @@ export function applyStageAction(
       stage.status = 'active';
       stage.approved_at = null;
       stage.feedback = feedback?.trim() || null;
+      for (const later of state.stages.slice(state.stages.indexOf(stage) + 1)) {
+        resetStage(later);
+      }
       return state;
     case 'skip':
       if (stage.status === 'approved') {
@@ -166,6 +200,35 @@ export function applyStageAction(
     default:
       throw new AppStageTransitionError(`Unknown action '${String(action)}'.`);
   }
+}
+
+/**
+ * Reabre a jornada por uma evolução aprovada da spec.
+ *
+ * Diferente de `applyStageAction(..., 'reopen')`, esta função não exige que o
+ * usuário esteja clicando numa etapa específica: a análise de impacto diz
+ * quais partes foram afetadas, a etapa mais cedo vira active e tudo depois
+ * volta para pending. Etapas anteriores continuam aprovadas.
+ */
+export function applyEvolutionImpact(
+  state: AppPipelineState,
+  impactedStages: AppStageId[],
+  feedback?: string | null,
+): AppPipelineState {
+  const impacted = impactedStages
+    .map((id) => state.stages.findIndex((s) => s.id === id))
+    .filter((idx) => idx >= 0);
+  if (impacted.length === 0) return state;
+  const first = Math.min(...impacted);
+  for (let i = first; i < state.stages.length; i += 1) {
+    const stage = state.stages[i]!;
+    resetStage(stage);
+    if (i === first) {
+      stage.status = 'active';
+      stage.feedback = feedback?.trim() || 'Plano do app evoluiu; confira esta etapa antes de seguir.';
+    }
+  }
+  return state;
 }
 
 /**

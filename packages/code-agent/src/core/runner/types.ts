@@ -30,6 +30,7 @@ export type TransitionKind =
   | 'pre-read-allowed-mutation'
   | 'pre-read-auto-downgraded'
   | 'pre-read-coverage-pointer'
+  | 'pre-read-coverage-degraded'
   | 'pre-read-force-reread'
   | 'stop-guard-nudge'
   | 'tool-timeout';
@@ -83,6 +84,14 @@ export interface RunnerOptions {
   specMode?: boolean;
   /** Override the per-tool-result push-time cap. Subagents pass a tighter value. */
   pushTimeCap?: number;
+  /**
+   * Tool names whose results should be preserved with a higher inline cap.
+   * Used by constrained specialist agents whose small tool surface returns
+   * high-value structured context (for example App Studio specs).
+   */
+  preserveToolOutputNames?: ReadonlySet<string>;
+  /** Optional cap for preserved tool outputs. Defaults in runner.ts. */
+  preservedToolOutputCap?: number;
   /**
    * Per-session resolved tunables. When omitted, falls back to `envTunables()`
    * (i.e. `process.env.CODER_*` with hardcoded defaults).

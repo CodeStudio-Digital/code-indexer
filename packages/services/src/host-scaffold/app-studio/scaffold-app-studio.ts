@@ -37,6 +37,9 @@ export const APP_STUDIO_DEV_DEPS = [
   '@cloudflare/vite-plugin',
   'wrangler',
   '@cloudflare/workers-types',
+  'vitest',
+  '@cloudflare/vitest-pool-workers',
+  '@playwright/test',
   // @babel/core fica sem pin: o vite-mcp-stamp.mjs importa o namespace
   // (`import * as babelCore`) e resolve `default ?? namespace`, então roda tanto
   // no Babel 7 (CJS) quanto no 8 (ESM-only, sem default). npm resolve `latest`.
@@ -72,7 +75,7 @@ export async function scaffoldAppStudioWorkspace(
 
   try {
     const port = await findFreeBuilderPort();
-    const tpl = { slug: target.slug, appSlug: input.appSlug, appName: input.name.trim() };
+    const tpl = { slug: target.slug, appSlug: input.appSlug, appName: input.name.trim(), port };
 
     onPhase?.({ phase: 'write-skeleton', label: 'Writing workspace skeleton' });
     writeWorkspaceFiles(targetDir, [

@@ -8,6 +8,7 @@
  */
 import type { AppSpec } from './types.js';
 import { normalizeAppSpec } from './normalize.js';
+import { findSpecTextEncodingIssues, sanitizeSpecText } from './text-quality.js';
 import { validateAppSpec } from './validate.js';
 import { serializeAppSpec } from './types.js';
 import {
@@ -31,8 +32,8 @@ export type PrepareSpecSaveResult =
     };
 
 export function prepareSpecSave(rawSpec: unknown, pipelineJson: string | null): PrepareSpecSaveResult {
-  const normalized = normalizeAppSpec(rawSpec);
-  const issues = validateAppSpec(normalized);
+  const normalized = normalizeAppSpec(sanitizeSpecText(rawSpec));
+  const issues = [...validateAppSpec(normalized), ...findSpecTextEncodingIssues(normalized)];
   if (issues.length > 0) return { ok: false, issues };
   const spec = normalized as AppSpec;
 

@@ -26,6 +26,7 @@
     "user": "Usuário",
     "password": "Senha",
     "database": "Banco",
+    "databaseHint": "Se preenchido, a árvore mostra somente este banco.",
     "filePath": "Caminho do arquivo",
     "ssl": "Modo SSL",
     "readOnly": "Somente leitura (bloquear escrita)",
@@ -49,8 +50,8 @@
     "urlPlaceholder": "postgres://usuario:senha@host:5432/banco",
     "urlKept": "Deixe em branco para manter a URL salva",
     "driverBundled": "Driver embutido",
-    "defaultSchema": "Schema padrão",
-    "defaultSchemaHint": "Schema expandido primeiro (ex.: public). Vazio = todos.",
+    "defaultSchema": "Filtrar por schema",
+    "defaultSchemaHint": "Mostra somente este schema (SQL Server normalmente usa dbo). Vazio = todos.",
     "sslCa": "Certificado CA (PEM)",
     "sslCert": "Certificado cliente (PEM)",
     "sslKey": "Chave cliente (PEM)",
@@ -65,6 +66,14 @@
   "toolbar": {
     "noConnection": "Nenhuma conexão selecionada",
     "connectedTo": "Conectado"
+  },
+  "specialist": {
+    "open": "Especialista",
+    "selectConnection": "Escolha o banco",
+    "searchConnection": "Buscar conexão...",
+    "noConnections": "Nenhuma conexão",
+    "sessionTitle": "Especialista DB - {{name}}",
+    "sessionTitleFallback": "Especialista DB"
   },
   "query": {
     "placeholder": "Escreva SQL e clique em Executar (Ctrl/Cmd+Enter)",

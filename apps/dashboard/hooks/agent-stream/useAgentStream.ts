@@ -93,10 +93,10 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       onMessageComplete?: () => void,
       extras?: {
         attachments?: AgentAttachment[];
-        /** Agent preset: explore | plan | build | admin | spec | api | diagram | builder.
+        /** Agent preset: explore | plan | build | admin | spec | app_spec | app_db | app_architect | api | diagram | builder.
          *  undefined = não afirmar (o servidor usa o agente persistido da sessão —
          *  regra do composer: só mandar em desvio explícito). */
-        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram' | 'builder';
+        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'api' | 'diagram' | 'builder';
         /** Tool tier profile override (takes precedence over agent). */
         profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
         /** Override max turns for this run. null/undefined = use default. */
@@ -357,7 +357,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       spec_path: string,
       requested_changes?: string,
       onMessageComplete?: () => void,
-      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' },
+      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/spec-response`,

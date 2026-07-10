@@ -51,6 +51,7 @@ import {
   readCoverageEnabled,
   parseServedRange,
   buildCoveragePointer,
+  visibleSpanOf,
 } from '@mcp/code-agent/core/runner/guards/read-coverage.js';
 import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.js';
 import { repairToolPairing } from '@mcp/code-agent/core/transcript-repair.js';
@@ -259,6 +260,7 @@ const SUBORDINATE_REMINDER_MSG =
   '[System reminder] Before you stop or consider the task done, your LAST action MUST be ' +
   '`post_to_board` with kind="deliverable" summarizing your work. Never finish silently — ' +
   'the master is waiting for your report and cannot see your work any other way.';
+const PRESERVED_TOOL_OUTPUT_CAP = Number(process.env.CODER_PRESERVED_TOOL_OUTPUT_CAP ?? 200_000);
 
 // (toolCallsSignature + toolNamesSignature moved to './runner/signatures.ts'.)
 import { toolCallsSignature, toolNamesSignature } from './runner/signatures.js';
@@ -316,16 +318,45 @@ export const SUBAGENT_TOOL_RESULT_CAP = SUBAGENT_PUSH_TIME_CAP;
  *   raised ceiling are NOT re-truncated to 24k on resume.
  */
 export function normalizeMessageForCache(m: AgentMessage, cap: number = PUSH_TIME_CAP): AgentMessage {
+  return normalizeMessageForCacheWithPreservedIds(m, cap);
+}
+
+function normalizeMessageForCacheWithPreservedIds(
+  m: AgentMessage,
+  cap: number = PUSH_TIME_CAP,
+  preservedToolUseIds?: ReadonlySet<string>,
+): AgentMessage {
   if (m.role !== 'tool' && m.role !== 'user') return m;
   let mutated = false;
   const content = m.content.map((b): ContentBlock => {
     if (b.type !== 'tool_result') return b;
     if (b.truncated) return b; // already deterministic, leave alone
+    if (preservedToolUseIds?.has(b.tool_use_id)) return b;
     if (b.content.length <= cap) return b;
     mutated = true;
     return buildToolResultBlock(b.tool_use_id, b.content, b.is_error, cap);
   });
   return mutated ? { ...m, content } : m;
+}
+
+export function normalizeMessagesForCache(
+  messages: AgentMessage[],
+  cap: number = PUSH_TIME_CAP,
+  preserveToolOutputNames?: ReadonlySet<string>,
+): AgentMessage[] {
+  if (!preserveToolOutputNames || preserveToolOutputNames.size === 0) {
+    return messages.map((m) => normalizeMessageForCache(m, cap));
+  }
+  const preservedToolUseIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const b of m.content) {
+      if (b.type === 'tool_use' && preserveToolOutputNames.has(b.name)) {
+        preservedToolUseIds.add(b.id);
+      }
+    }
+  }
+  return messages.map((m) => normalizeMessageForCacheWithPreservedIds(m, cap, preservedToolUseIds));
 }
 
 /**
@@ -1257,8 +1288,10 @@ export class CoderRunner extends EventEmitter {
       : this.tunables.unrestrictedPushTimeCap;
     this.effectivePushTimeCap =
       capLevel === 'economic' ? (opts.pushTimeCap ?? capBase) : capFor(capLevel, capBase, capCeiling);
-    this.messages = (opts.initialMessages ?? []).map((m) =>
-      normalizeMessageForCache(m, this.effectivePushTimeCap),
+    this.messages = normalizeMessagesForCache(
+      opts.initialMessages ?? [],
+      this.effectivePushTimeCap,
+      opts.preserveToolOutputNames,
     );
     this.maxTurns = opts.maxTurns ?? 50;
     // back-reference so native interaction tools can pause the loop
@@ -2042,9 +2075,11 @@ export class CoderRunner extends EventEmitter {
           });
         },
         reduceToolResult: (toolName, content) =>
-          applySmartReducer(toolName, content, this.effectivePushTimeCap, {
-            query: this.getLastUserText(),
-          }),
+          this.shouldPreserveToolOutput(toolName)
+            ? content
+            : applySmartReducer(toolName, content, this.effectivePushTimeCap, {
+                query: this.getLastUserText(),
+              }),
         finalizeToolResult: (a) => this.finalizeToolResultForBridge(a),
         detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>
           this.detectPollingStuckForBridge(toolName, content, isError, isRepeatable, turn),
@@ -2301,7 +2336,16 @@ export class CoderRunner extends EventEmitter {
         return null;
       }
 
-      if (allPriorReadsElided(prior.slice(0, -1), this.messages)) {
+      // Ranged reads carry the span the model is asking to quote — a prior
+      // whose live content no longer shows those lines (reducer/finalize-cap
+      // truncation) must count as elided, or the refusal below lies.
+      const requestedSpan =
+        typeof inp?.start_line === 'number' &&
+        typeof inp?.end_line === 'number' &&
+        inp.end_line >= inp.start_line
+          ? { start: inp.start_line, end: inp.end_line }
+          : undefined;
+      if (allPriorReadsElided(prior.slice(0, -1), this.messages, requestedSpan)) {
         this.setTransition('pre-read-allowed-elided');
         return null;
       }
@@ -2365,32 +2409,51 @@ export class CoderRunner extends EventEmitter {
         /* stat failed → cannot validate staleness → allow the read */
       }
       if (nowMtimeMs !== undefined) {
-        const covering = this.readCoverage.coveringSegments(
+        // Two-step: cheap ledger query first, then live verification. The
+        // ledger records the HEADER range of each serve, but the smart
+        // reducer / finalize cap can trim the delivered content after
+        // recording — a truncated `[lines 550-1000]` read cut at ~761 made
+        // this pointer claim lines the model never saw. Only lines still
+        // visible in the live history (ledger∩live per segment) may be
+        // pointed at.
+        const claimed = this.readCoverage.coveringSegments(
           path,
           inp.start_line,
           inp.end_line,
           { requireMtimeMs: nowMtimeMs },
         );
-        if (
-          covering !== null &&
-          covering.every((s) => {
-            const r = findToolResultByUseId(s.useId, this.messages);
-            return !!r && !r.isElided;
-          })
-        ) {
-          this.setTransition('pre-read-coverage-pointer');
-          // Pointer, not content — keep the exact-slice ledger honest.
-          prior.pop();
-          return {
-            content: buildCoveragePointer({
-              toolName,
-              path,
-              start: inp.start_line,
-              end: inp.end_line,
-              segments: covering,
-            }),
-            isError: false,
-          };
+        if (claimed !== null) {
+          const covering = this.readCoverage.coveringSegments(
+            path,
+            inp.start_line,
+            inp.end_line,
+            {
+              requireMtimeMs: nowMtimeMs,
+              liveSpanOf: (s) => {
+                const r = findToolResultByUseId(s.useId, this.messages);
+                return r && !r.isElided ? visibleSpanOf(r.content) : null;
+              },
+            },
+          );
+          if (covering !== null) {
+            this.setTransition('pre-read-coverage-pointer');
+            // Pointer, not content — keep the exact-slice ledger honest.
+            prior.pop();
+            return {
+              content: buildCoveragePointer({
+                toolName,
+                path,
+                start: inp.start_line,
+                end: inp.end_line,
+                segments: covering,
+              }),
+              isError: false,
+            };
+          }
+          // Ledger claimed coverage but the live content cannot prove it —
+          // allow the read; the transition records the degradation so
+          // telemetry can measure how often trims invalidate coverage.
+          this.setTransition('pre-read-coverage-degraded');
         }
       }
     }
@@ -2436,7 +2499,10 @@ export class CoderRunner extends EventEmitter {
     // tool_result can't exceed the protected tail and deadlock compaction
     // (`compact_exhausted`). `Infinity` ceiling (knob off) → user cap only.
     // Resolved from the CURRENT provider model so it tracks `swapProvider`.
-    const cap = resolveFinalizeCap(this.effectivePushTimeCap, this.opts.provider.model);
+    const userCap = this.shouldPreserveToolOutput(args.toolName)
+      ? Math.max(this.effectivePushTimeCap, this.opts.preservedToolOutputCap ?? PRESERVED_TOOL_OUTPUT_CAP)
+      : this.effectivePushTimeCap;
+    const cap = resolveFinalizeCap(userCap, this.opts.provider.model);
     return finalizeToolOutput({
       rawContent: args.rawContent,
       shapedContent: args.shapedContent,
@@ -2444,6 +2510,10 @@ export class CoderRunner extends EventEmitter {
       cap,
       store: this.opts.toolContext.toolOutputStore,
     });
+  }
+
+  private shouldPreserveToolOutput(toolName: string): boolean {
+    return this.opts.preserveToolOutputNames?.has(toolName) === true;
   }
 
   private postProcessToolResultForBridge(args: {
@@ -2489,16 +2559,25 @@ export class CoderRunner extends EventEmitter {
         // P1b — record the range actually SERVED (parsed from the result
         // header, not the requested args: auto-full/clamping can serve more
         // or less than asked). Diff/pointer results parse to null — only
-        // real line content accrues coverage.
+        // real line content accrues coverage. The header states intent and
+        // survives trims, so clamp it to the numbered lines still present in
+        // the SHAPED content (the smart reducer runs before this hook). The
+        // finalize cap runs after — the query-time liveSpanOf check covers
+        // that layer and any later in-place rewrite.
         const served = parseServedRange(args.rawContent);
         if (served) {
-          this.readCoverage.noteServed(path, {
-            start: served.start,
-            end: served.end,
-            turn: args.turn,
-            useId: args.toolUseId,
-            mtimeMs: servedMtimeMs,
-          });
+          const visible = visibleSpanOf(args.content);
+          const start = visible ? Math.max(served.start, visible.start) : served.start;
+          const end = visible ? Math.min(served.end, visible.end) : served.end;
+          if (end >= start) {
+            this.readCoverage.noteServed(path, {
+              start,
+              end,
+              turn: args.turn,
+              useId: args.toolUseId,
+              mtimeMs: servedMtimeMs,
+            });
+          }
         }
       }
 

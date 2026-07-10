@@ -15,8 +15,12 @@
  *  - Never wired into rolling-reduction/elision: eliding distinct chunks
  *    was the session-609 regression (the model re-read MORE).
  *  - Honesty rule (see buildRichRefusal): only claim "in your context" when
- *    the covering tool_results are verifiably still visible — the caller
- *    must check each covering segment's useId against the live messages.
+ *    the covering tool_results are verifiably still visible AND still SHOW
+ *    the claimed lines — the ledger records what the tool emitted, but the
+ *    smart reducer / finalize cap can trim the delivered content AFTER
+ *    recording. Callers pass `liveSpanOf` so every segment contributes only
+ *    ledger∩live (observed 2026-07-09: a `[lines 550-1000]` read truncated
+ *    at ~761 made the pointer claim lines the model never saw).
  *  - Mutations clear a path's coverage: a re-read after an edit fetches new
  *    state (the mutation-aware diff path in the runner handles that flow).
  *  - Top-level only: nested code_exec reads deliver into script space, not
@@ -71,12 +75,21 @@ export class ReadCoverageLedger {
    * `requireMtimeMs`: only segments observed at exactly that file mtime
    * count — guards against edits made OUTSIDE the session (the IDE editor),
    * which `recentWrites` cannot see.
+   *
+   * `liveSpanOf`: honesty hook — resolves the line span a segment's
+   * tool_result STILL shows in the live history (null → gone / elided /
+   * not line content). When provided, each segment contributes only
+   * ledger∩live, so reducer or cap truncation shrinks a segment instead
+   * of letting it claim lines the model cannot quote.
    */
   coveringSegments(
     path: string,
     start: number,
     end: number,
-    opts?: { requireMtimeMs?: number },
+    opts?: {
+      requireMtimeMs?: number;
+      liveSpanOf?: (seg: ServedSegment) => { start: number; end: number } | null;
+    },
   ): ServedSegment[] | null {
     if (start < 1 || end < start) return null;
     let segs = this.byPath.get(path);
@@ -85,18 +98,65 @@ export class ReadCoverageLedger {
       segs = segs.filter((s) => s.mtimeMs === opts.requireMtimeMs);
       if (segs.length === 0) return null;
     }
-    const sorted = [...segs].sort((a, b) => a.start - b.start || a.end - b.end);
+    let ranges = segs.map((s) => ({ seg: s, start: s.start, end: s.end }));
+    if (opts?.liveSpanOf) {
+      const verified: typeof ranges = [];
+      for (const r of ranges) {
+        const live = opts.liveSpanOf(r.seg);
+        if (!live) continue;
+        const s = Math.max(r.start, live.start);
+        const e = Math.min(r.end, live.end);
+        if (e >= s) verified.push({ seg: r.seg, start: s, end: e });
+      }
+      if (verified.length === 0) return null;
+      ranges = verified;
+    }
+    const sorted = [...ranges].sort((a, b) => a.start - b.start || a.end - b.end);
     const contributors: ServedSegment[] = [];
     let need = start;
-    for (const s of sorted) {
+    for (const r of sorted) {
       if (need > end) break;
-      if (s.end < need) continue; // entirely before the uncovered point
-      if (s.start > need) return null; // gap
-      contributors.push(s);
-      need = s.end + 1;
+      if (r.end < need) continue; // entirely before the uncovered point
+      if (r.start > need) return null; // gap
+      contributors.push(r.seg);
+      need = r.end + 1;
     }
     return need > end ? contributors : null;
   }
+}
+
+/**
+ * The contiguous line span actually VISIBLE in a read result's live content.
+ * Read bodies are line-numbered (`%5d\t` in the native fs.ts read, `%d\t` in
+ * the MCP file.ts read); we walk numbered lines from the first hit and stop
+ * at the first break in contiguity — reducer/finalize-cap tail truncation,
+ * mid-content elision markers, footers. Returns null when no numbered body
+ * line is present (diffs, pointers, skeletons — nothing quotable as lines).
+ *
+ * This is the honesty primitive behind `liveSpanOf`/`requiredSpan`: headers
+ * state what the tool INTENDED to serve and survive truncation, so only the
+ * numbered body proves what the model can actually quote.
+ */
+export function visibleSpanOf(content: string): { start: number; end: number } | null {
+  let start = -1;
+  let end = -1;
+  for (const line of content.split('\n')) {
+    const m = /^ *(\d+)\t/.exec(line);
+    if (!m) {
+      if (start !== -1) break; // numbered run ended (marker / truncation / footer)
+      continue; // header lines / notes before the body
+    }
+    const n = parseInt(m[1], 10);
+    if (start === -1) {
+      start = n;
+      end = n;
+    } else if (n === end + 1) {
+      end = n;
+    } else {
+      break; // gap — beyond this nothing is contiguous with the start
+    }
+  }
+  return start === -1 ? null : { start, end };
 }
 
 /**
@@ -111,9 +171,9 @@ export function parseServedRange(
   rawContent: string,
 ): { fileLines: number; start: number; end: number } | null {
   const head = rawContent.slice(0, 300);
-  const fl = head.match(/\|\s*(\d+)\s+lines\b/);
+  const fl = head.match(/\|\s*(\d+)\s+lines\b/i);
   if (!fl) return null;
-  const win = head.match(/\[lines\s+(\d+)\s*-\s*(\d+)\]/);
+  const win = head.match(/\[lines\s+(\d+)\s*-\s*(\d+)\]/i);
   if (!win) return null;
   const start = parseInt(win[1], 10);
   const end = parseInt(win[2], 10);

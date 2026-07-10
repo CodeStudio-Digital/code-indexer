@@ -64,7 +64,10 @@ import {
   setDesignSystemStore,
   setDesignSystemSkillStore,
 } from '../../../packages/company/src/tools/design-system/index.js';
-import { setAppStudioStore } from '../../../packages/company/src/tools/app-studio/index.js';
+import {
+  setAppStudioDbClientStore,
+  setAppStudioStore,
+} from '../../../packages/company/src/tools/app-studio/index.js';
 import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
 import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
 import {
@@ -299,7 +302,13 @@ setApiClientStore(new ApiClientStore(rawDb));
 // concern) + the session's linked projects via CompanyStore. Secrets are
 // keychain-bound to the MAIN process → decrypt RPCs over the bridge
 // (registered by WorkerOrchestratorPool via worker-secrets-handlers).
-setDbToolsStores(new DbClientStore(rawDb), companyStore);
+const dbClientStore = new DbClientStore(rawDb);
+setDbToolsStores(dbClientStore, companyStore);
+setAppStudioDbClientStore({
+  listConnections: (projectId) => dbClientStore.listConnections(projectId),
+  createConnection: (input) => dbClientStore.createConnection(input),
+  updateConnection: (_projectId, id, patch) => dbClientStore.updateConnection(id, patch),
+});
 setDbSecretDecryptor((blob) =>
   bridge.request<string>('secretsDecrypt', { blob }, { timeoutMs: 10_000 }),
 );

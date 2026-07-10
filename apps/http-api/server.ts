@@ -101,7 +101,7 @@ import {
 } from '@mcp/company/tools/qa/index.js';
 import { startQaWatchdog } from '@mcp/services/qa/watchdog.js';
 import { setDesignSystemStore, setDesignSystemSkillStore } from '@mcp/company/tools/design-system/index.js';
-import { setAppStudioStore } from '@mcp/company/tools/app-studio/index.js';
+import { setAppStudioDbClientStore, setAppStudioStore } from '@mcp/company/tools/app-studio/index.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { VerdaccioService, setVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
@@ -448,6 +448,11 @@ export function createApp() {
   // App Studio store — wired for the app_* agent tools (same gate posture).
   if (deps.config.features.appStudioEnabled) {
     setAppStudioStore(deps.appStudioStore);
+    setAppStudioDbClientStore({
+      listConnections: (projectId) => deps.dbClientFor(projectId).listConnections(projectId),
+      createConnection: (input) => deps.dbClientFor(input.project_id).createConnection(input),
+      updateConnection: (projectId, id, patch) => deps.dbClientFor(projectId).updateConnection(id, patch),
+    });
   }
   // API client (auto-test/auto-fix) store — wired for the `api_*` agent tools.
   setApiClientStore(deps.apiClientStore);

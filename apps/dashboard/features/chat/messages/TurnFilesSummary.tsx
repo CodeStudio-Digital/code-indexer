@@ -39,6 +39,7 @@ export function TurnFilesSummary({ paths }: { paths: EditFileRef[] }) {
   }, [paths, byPath]);
 
   if (paths.length === 0) return null;
+  const showToolbar = !!actions && actions.showToolbar !== false;
 
   const undoAll = async () => {
     if (!actions || baselineIds.length === 0) return;
@@ -89,7 +90,7 @@ export function TurnFilesSummary({ paths }: { paths: EditFileRef[] }) {
             <span className="text-rose-600 dark:text-rose-400">−{removed}</span>
           </span>
         </button>
-        {actions && (
+        {showToolbar && actions && (
           <div className="flex items-center gap-1 shrink-0">
             <Button size="sm" variant="ghost" className="h-6 text-[11px] px-1.5" disabled={busy || baselineIds.length === 0} onClick={undoAll}>
               {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}

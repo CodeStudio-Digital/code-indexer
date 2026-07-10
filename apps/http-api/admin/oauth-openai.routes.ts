@@ -17,7 +17,14 @@ import {
 
 const CHATGPT_CODEX_BASE_URL =
   process.env.CHATGPT_CODEX_BASE_URL ?? 'https://chatgpt.com/backend-api/codex';
-const CHATGPT_SEED_MODEL_IDS = ['gpt-5.3-codex', 'gpt-5-codex', 'gpt-4o'];
+const CHATGPT_SEED_MODEL_IDS = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.3-codex',
+  'gpt-5-codex',
+  'gpt-4o',
+];
 
 export function openaiOAuthRouter(store: ProviderStore): Hono {
   const app = new Hono();

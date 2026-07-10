@@ -27,10 +27,8 @@ vi.mock('../../../../sse/closeCoderPreview.js', () => ({
   closePreviewSession: () => {},
 }));
 vi.mock('../../../../sse/builder-checkpoint.js', () => ({ notifyBuilderRunEnded: () => {} }));
-vi.mock('@mcp/code-agent/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@mcp/code-agent/index.js')>();
-  return { ...actual, runCoder: runCoderMock };
-});
+vi.mock('@mcp/code-agent/index.js', () => ({ runCoder: runCoderMock }));
+vi.mock('@mcp/app-studio/local-db.js', () => ({ findLocalD1File: () => null }));
 
 import { mountCoderStreamRoutes } from '../stream.js';
 import { createBus, markEnded, setBusRunner, type CoderRunBus } from '../../../../coder-bus.js';
@@ -52,14 +50,17 @@ function makeRunner() {
   };
 }
 
-function setup(recentMessageKeys: Pick<RecentMessageKeys, 'lookup' | 'record'> = new RecentMessageKeys()) {
+function setup(
+  recentMessageKeys: Pick<RecentMessageKeys, 'lookup' | 'record'> = new RecentMessageKeys(),
+  opts: { sessionAgent?: string | null } = {},
+) {
   const appendCalls: unknown[] = [];
   const sessionStore = {
-    getSession: (id: number) => ({ id, project_id: null, status: 'idle' }),
+    getSession: (id: number) => ({ id, project_id: null, status: 'idle', agent: opts.sessionAgent ?? null }),
     getMessageCount: () => 1,
     appendMessage: (_id: number, msg: unknown) => { appendCalls.push(msg); return appendCalls.length; },
     loadSessionWithMessages: (id: number) => ({
-      session: { id, project_id: null },
+      session: { id, project_id: null, agent: opts.sessionAgent ?? null },
       messages: [{ role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1' }] }],
     }),
   };
@@ -209,6 +210,49 @@ describe('POST /messages idempotency', () => {
 
     markEnded(live.bus, 'done', {});
   });
+
+  it('keeps a persisted app_spec session on the specialist agent even if the POST carries a stale agent', async () => {
+    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_spec' });
+
+    const res = await h.post('/api/coder/sessions/1/messages', {
+      content: 'seguir refinando',
+      agent: 'explore',
+      client_msg_id: 'K6',
+    });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_spec' });
+  });
+
+  it.each(['app_db', 'app_architect'] as const)(
+    'keeps a persisted %s session on the specialist agent even if the POST carries a stale agent',
+    async (specialist) => {
+      const h = setup(new RecentMessageKeys(), { sessionAgent: specialist });
+      const res = await h.post('/api/coder/sessions/1/messages', {
+        content: 'continuar o trabalho especializado',
+        agent: 'explore',
+        client_msg_id: `lock-${specialist}`,
+      });
+      expect(res.status).toBe(200);
+      await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+      expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: specialist });
+    },
+  );
+
+  it('still honors explicit agent changes for normal non-specialist sessions', async () => {
+    const h = setup(new RecentMessageKeys(), { sessionAgent: 'build' });
+
+    const res = await h.post('/api/coder/sessions/1/messages', {
+      content: 'investigar primeiro',
+      agent: 'explore',
+      client_msg_id: 'K7',
+    });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'explore' });
+  });
 });
 
 describe('POST /continue idempotency + live-run hardening', () => {
@@ -241,5 +285,29 @@ describe('POST /continue idempotency + live-run hardening', () => {
     expect(r2.status).toBe(200);
     await new Promise((r) => setTimeout(r, 20));
     expect(runCoderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a persisted app_spec session on the specialist agent during continue', async () => {
+    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_spec' });
+
+    const res = await h.post('/api/coder/sessions/1/continue', {
+      agent: 'explore',
+      client_msg_id: 'C2',
+    });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_spec', resume: true });
+  });
+
+  it('keeps a persisted app_architect session on the specialist agent during continue', async () => {
+    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_architect' });
+    const res = await h.post('/api/coder/sessions/1/continue', {
+      agent: 'explore',
+      client_msg_id: 'architect-continue',
+    });
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_architect', resume: true });
   });
 });

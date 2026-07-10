@@ -22,6 +22,7 @@ import {
 } from '@mcp/app-studio/pipeline/stages.js';
 import { runAppStageGate } from '@mcp/app-studio/pipeline/gates.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
+import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -74,12 +75,16 @@ export function appSubmitStage(binding: AppToolBinding): CoderTool {
         const resolved = resolveHostPath('.', ctx);
         if (resolved.kind === 'no-bind-mount') return err(resolved.message);
 
+        const architectureRevision = store.getLatestArchitectureRevision(session.id);
+        const currentSpecRevision = store.getLatestApprovedSpecRevision(session.id);
         const gate = await runAppStageGate({
           stage,
           workspaceDir: resolved.path,
           state,
           spec: parseAppSpec(session.spec_json),
           recorded: store.listFeatures(session.id).map((f) => ({ name: f.name, kind: f.kind })),
+          architecture: parseAppArchitecturePlan(architectureRevision?.architecture_json),
+          currentSpecRevisionId: currentSpecRevision?.id ?? null,
         });
 
         let next;

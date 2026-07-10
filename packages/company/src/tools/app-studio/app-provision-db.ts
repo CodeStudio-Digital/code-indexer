@@ -11,7 +11,12 @@ import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { AppToolBinding } from '@mcp/company/tools/app-studio/binding.js';
 import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
+import {
+  ensureAppStudioDbConnection,
+  getAppStudioDbClientStore,
+} from '@mcp/company/tools/app-studio/db-client-bridge.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
+import { findLocalD1File } from '@mcp/app-studio/local-db.js';
 import { getDatabaseProvisioner } from '@mcp/services/app-studio/index.js';
 
 const PARAMETERS: JsonSchema = { type: 'object', properties: {} };
@@ -47,9 +52,19 @@ export function appProvisionDb(binding: AppToolBinding): CoderTool {
         if (!outcome.ok) {
           return err(`Local database provisioning failed: ${outcome.error ?? 'unknown error'}`);
         }
+        const dbStore = getAppStudioDbClientStore();
+        const dbFile = findLocalD1File(resolved.path);
+        const registration =
+          dbStore && dbFile
+            ? ensureAppStudioDbConnection(dbStore, session, dbFile)
+            : null;
         return ok(
           `Local database ready — applied ${outcome.applied.length} migration(s): ${outcome.applied.join(', ')}, ` +
-            'and loaded seeds/seed.sql. Verify the example data shows in the preview before submitting the stage.',
+            'and synchronized seeds/seed.sql without reapplying an unchanged seed. ' +
+            (registration
+              ? `Registered native database connection '${registration.connection.label}' for db_list/db_schema/db_query/db_command. `
+              : 'Native database connection registration was skipped because the local DB file/store was not available. ') +
+            'Verify the example data shows in the preview before submitting the stage.',
         );
       } catch (e) {
         return err(`app_provision_db failed: ${(e as Error).message}`);

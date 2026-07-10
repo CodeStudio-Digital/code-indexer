@@ -36,6 +36,12 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   'claude-sonnet-4-6':          { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 32_000 },
   'claude-haiku-4-5-20251001':  { maxTools: 120, contextWindow: 200_000, maxOutputTokens: 16_000, note: 'Haiku prefers tighter catalogs' },
   // ── OpenAI ───────────────────────────────────────────────────────────────
+  // GPT-5.6 family (Sol / Terra / Luna) — Codex catalog advertises a 372K
+  // context window (codex-rs/models-manager/models.json). Sol is the flagship,
+  // Terra the mid-tier, Luna the small/fast tier.
+  'gpt-5.6-sol':                { maxTools: 128, contextWindow: 372_000, maxOutputTokens: 16_000 },
+  'gpt-5.6-terra':              { maxTools: 128, contextWindow: 372_000, maxOutputTokens: 16_000 },
+  'gpt-5.6-luna':               { maxTools: 128, contextWindow: 372_000, maxOutputTokens: 16_000 },
   'gpt-5':                      { maxTools: 128, contextWindow: 272_000, maxOutputTokens: 16_000 },
   'gpt-5.5':                    { maxTools: 128, contextWindow: 272_000, maxOutputTokens: 16_000 },
   'gpt-5-mini':                 { maxTools: 128, contextWindow: 272_000, maxOutputTokens: 16_000 },

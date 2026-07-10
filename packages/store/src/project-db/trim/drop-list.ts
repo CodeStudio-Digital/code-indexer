@@ -63,6 +63,9 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'skill_definitions', 'skill_session_config', 'skill_usage_log', 'chrome_service_configs',
   'installed_plugins', 'plugin_storage', 'verdaccio_configs', 'disabled_tools_global',
   'pending_vector_deletes',
+  // guided App Studio lives in the central product DB, never in code-index DBs
+  'app_studio_pipeline_repairs', 'app_studio_architecture_revisions', 'app_studio_evolutions', 'app_studio_spec_revisions',
+  'app_studio_features', 'app_studio_sessions',
   // QA + pipeline global bindings/telemetry (company-scoped)
   'qa_test_runs', 'qa_test_results', 'pipeline_provider_bindings', 'pipeline_telemetry',
 ];

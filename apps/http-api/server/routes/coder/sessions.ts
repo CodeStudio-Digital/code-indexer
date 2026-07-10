@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import { TOOL_OUTPUT_CAP_LEVELS, parseToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
-import { AGENTS } from '@mcp/code-agent/agents/index.js';
+import { AGENTS, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { getAllKnownToolsMeta, getToolTier, inferProfileFromMessage, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
 import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
@@ -279,8 +279,10 @@ interface CreateSessionBody {
   title: string;
   provider: CoderProviderName;
   model?: string;
-  /** Initial agent preset (explore | plan | build | admin). Persisted on the session row. */
-  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+  /** Initial agent preset. Persisted on the session row. */
+  agent?: AgentId;
+  /** Sticky reasoning-effort override for the new session. Null = model default. */
+  reasoning_effort?: string | null;
   /** Optional phase profile binding (Camada 2). Null = walk cascade. */
   phase_profile_id?: number | null;
 }
@@ -326,6 +328,23 @@ export function mountCoderSessionsRoutes(
     } catch {
       return false;
     }
+  };
+
+  const validateReasoningEffort = (
+    provider: string,
+    model: string | undefined,
+    effort: string | null,
+  ): string | null => {
+    if (!effort) return null;
+    const bareModel = (model ?? '').split('::')[0];
+    const row = providerStore
+      .listModels(provider)
+      .find((m) => m.model_id === bareModel);
+    const supported = row?.supported_reasoning_levels;
+    if (supported && supported.length > 0 && !supported.includes(effort)) {
+      return `reasoning effort '${effort}' not supported for ${model ?? '(default model)'}; supported: ${supported.join(',')}`;
+    }
+    return null;
   };
 
   /**
@@ -853,6 +872,14 @@ export function mountCoderSessionsRoutes(
     if (!body.project_id || !body.title || !body.provider) {
       return c.json({ error: 'project_id, title, provider required' }, 400);
     }
+    if (body.reasoning_effort !== undefined && body.reasoning_effort !== null && typeof body.reasoning_effort !== 'string') {
+      return c.json({ error: 'reasoning_effort:string|null required' }, 400);
+    }
+    const reasoningEffort = typeof body.reasoning_effort === 'string'
+      ? body.reasoning_effort.trim() || null
+      : null;
+    const effortError = validateReasoningEffort(body.provider, body.model, reasoningEffort);
+    if (effortError) return c.json({ error: effortError }, 400);
     // Builder projects (projects.builder_json set) default the chat agent to
     // `builder` (persona + scope) unless the caller passed an explicit agent.
     const isBuilderProject = !!deps.db.getProject(body.project_id)?.builder_json;
@@ -864,6 +891,9 @@ export function mountCoderSessionsRoutes(
       agent: body.agent ?? (isBuilderProject ? 'builder' : null),
       phase_profile_id: body.phase_profile_id ?? null,
     });
+    if (reasoningEffort) {
+      sessionStore.setSessionReasoningEffort(session.id, reasoningEffort);
+    }
     // Best-effort base_commit_sha capture for Camada 4's reviewer subagent.
     // We need the project workdir to run `git rev-parse HEAD`. If the project
     // isn't a git repo, or the workdir lookup fails, leave it null and the

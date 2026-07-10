@@ -5,7 +5,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Sparkles } from 'lucide-react';
+import { Loader2, Sparkles, Wrench } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import {
   initAppPipeline,
@@ -18,6 +18,7 @@ import {
 import { isPromptableStage, startAppStage } from '../stage-prompts.js';
 import { JourneyStepRow } from './JourneyStepRow.js';
 import { SpecPanel } from './SpecPanel.js';
+import { JourneyRepairDialog } from './JourneyRepairDialog.js';
 
 const STAGE_TIER: Partial<Record<AppStageId, AppRoadmapTier>> = {
   design: 'screen',
@@ -29,16 +30,19 @@ export function JourneyPanel({
   discoveryExtra,
   onChanged,
   onOpenPublish,
+  onOpenArchitectureAgent,
 }: {
   detail: AppStudioSessionDetail;
   /** Frase de ideia digitada na criação — anexada ao prompt da discovery. */
   discoveryExtra?: string | null;
   onChanged: () => void;
   onOpenPublish: () => void;
+  onOpenArchitectureAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repairOpen, setRepairOpen] = useState(false);
   const { pipeline, session, project } = detail;
 
   async function run(fn: () => Promise<unknown>) {
@@ -63,6 +67,15 @@ export function JourneyPanel({
           {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}
           {t('pipeline.init')}
         </Button>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => setRepairOpen(true)}>
+          <Wrench className="mr-1 h-3.5 w-3.5" /> {t('pipeline.repairAction')}
+        </Button>
+        <JourneyRepairDialog
+          sessionId={session.id}
+          open={repairOpen}
+          onOpenChange={setRepairOpen}
+          onRepaired={onChanged}
+        />
       </div>
     );
   }
@@ -79,13 +92,18 @@ export function JourneyPanel({
 
   return (
     <div className="space-y-3 p-3">
-      <div>
-        <h3 className="text-sm font-semibold">{t('guide.title')}</h3>
-        <p className="text-xs text-muted-foreground">
-          {pipeline.current_stage
-            ? t('pipeline.stageOf', { n: currentIndex + 1, total: pipeline.stages.length })
-            : t('pipeline.complete')}
-        </p>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold">{t('guide.title')}</h3>
+          <p className="text-xs text-muted-foreground">
+            {pipeline.current_stage
+              ? t('pipeline.stageOf', { n: currentIndex + 1, total: pipeline.stages.length })
+              : t('pipeline.complete')}
+          </p>
+        </div>
+        <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" disabled={busy} onClick={() => setRepairOpen(true)}>
+          <Wrench className="mr-1 h-3 w-3" /> {t('pipeline.repairAction')}
+        </Button>
       </div>
       {error && <p className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-800">{error}</p>}
 
@@ -115,6 +133,10 @@ export function JourneyPanel({
               onAction={(action, feedback) => act(stage.id, action, feedback)}
               onStart={() => {
                 if (!project || !isPromptableStage(stage.id)) return;
+                if (stage.id === 'architecture') {
+                  onOpenArchitectureAgent?.(t('stageMessage.architecture'));
+                  return;
+                }
                 void run(() =>
                   startAppStage(t, {
                     sessionId: session.id,
@@ -129,6 +151,12 @@ export function JourneyPanel({
           );
         })}
       </div>
+      <JourneyRepairDialog
+        sessionId={session.id}
+        open={repairOpen}
+        onOpenChange={setRepairOpen}
+        onRepaired={onChanged}
+      />
     </div>
   );
 }

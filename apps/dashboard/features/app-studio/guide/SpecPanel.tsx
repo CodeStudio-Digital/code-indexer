@@ -6,7 +6,7 @@
  */
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Database, KeyRound, Layout, ScrollText } from 'lucide-react';
+import { CheckCircle2, Database, KeyRound, Layout, ScrollText } from 'lucide-react';
 import type { AppSpecView } from '../app-studio-api.js';
 import { ApproveBar } from './ApproveBar.js';
 
@@ -33,6 +33,12 @@ export function SpecPanel({
   onReopen: (feedback: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
+  const requirementItems = [
+    ...(spec.requirements?.goals ?? []),
+    ...(spec.requirements?.acceptance_criteria ?? []),
+    ...(spec.requirements?.business_rules ?? []),
+    ...(spec.requirements?.out_of_scope ?? []).map((item) => `${t('spec.outOfScopePrefix', { defaultValue: 'Fora de escopo' })}: ${item}`),
+  ].slice(0, 6);
   return (
     <div className="rounded-lg border border-amber-300/60 bg-amber-50/40 dark:border-amber-400/30 dark:bg-amber-950/20">
       <div className="space-y-3 p-3">
@@ -44,6 +50,16 @@ export function SpecPanel({
             ))}
           </ul>
         </Section>
+
+        {requirementItems.length > 0 && (
+          <Section icon={CheckCircle2} title={t('spec.requirements', { defaultValue: 'Requisitos de aprovação' })}>
+            <ul className="space-y-0.5 text-xs">
+              {requirementItems.map((item) => (
+                <li key={item}>• {item}</li>
+              ))}
+            </ul>
+          </Section>
+        )}
 
         <Section icon={Layout} title={t('spec.screens', { defaultValue: 'Telas' })}>
           <ul className="space-y-0.5 text-xs">

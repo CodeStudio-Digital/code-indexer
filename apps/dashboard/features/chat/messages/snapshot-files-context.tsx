@@ -18,6 +18,9 @@ export interface SnapshotActions {
   /** Re-fetch the snapshot list after a user action (keep/revert) that the
    *  agent-driven `snapshotTick` won't cover. */
   refresh: () => void;
+  /** Compact rails can still expand inline diffs without showing the full
+   *  snapshot review toolbar in every turn summary. */
+  showToolbar?: boolean;
 }
 
 const ActionsContext = createContext<SnapshotActions | null>(null);

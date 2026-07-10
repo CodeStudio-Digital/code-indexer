@@ -26,6 +26,7 @@
     "user": "User",
     "password": "Password",
     "database": "Database",
+    "databaseHint": "When set, the tree shows only this database.",
     "filePath": "File path",
     "ssl": "SSL mode",
     "readOnly": "Read-only (block writes)",
@@ -49,8 +50,8 @@
     "urlPlaceholder": "postgres://user:pass@host:5432/db",
     "urlKept": "Leave blank to keep the saved URL",
     "driverBundled": "Driver bundled",
-    "defaultSchema": "Default schema",
-    "defaultSchemaHint": "Schema expanded first (e.g. public). Blank = all schemas.",
+    "defaultSchema": "Filter by schema",
+    "defaultSchemaHint": "Shows only this schema (SQL Server normally uses dbo). Blank = all schemas.",
     "sslCa": "CA certificate (PEM)",
     "sslCert": "Client certificate (PEM)",
     "sslKey": "Client key (PEM)",
@@ -65,6 +66,14 @@
   "toolbar": {
     "noConnection": "No connection selected",
     "connectedTo": "Connected"
+  },
+  "specialist": {
+    "open": "Specialist",
+    "selectConnection": "Choose database",
+    "searchConnection": "Search connection...",
+    "noConnections": "No connection",
+    "sessionTitle": "DB specialist - {{name}}",
+    "sessionTitleFallback": "DB specialist"
   },
   "query": {
     "placeholder": "Write SQL and press Run (Ctrl/Cmd+Enter)",

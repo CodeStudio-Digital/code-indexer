@@ -4,9 +4,9 @@
  * JSON); sucesso grava spec_json + espelho legível `spec/app-spec.json`
  * no workspace e (re)constrói o roadmap do pipeline.
  *
- * A spec TRAVA quando a etapa discovery é aprovada — mudanças depois disso
- * exigem que o USUÁRIO reabra a etapa no painel (mantém o contrato de
- * aprovação da UI).
+ * Depois que discovery é aprovada, a mesma chamada degrada com segurança para
+ * uma revisão versionada: nunca sobrescreve o contrato vigente e o usuário
+ * continua aprovando a mudança no painel de versões.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,12 +17,14 @@ import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.j
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import { prepareSpecSave } from '@mcp/app-studio/spec/save-core.js';
 import { parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
+import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
+import { diffAppSpecs, impactFromSpecDiff, specDiffHasChanges, summarizeSpecDiff } from '@mcp/app-studio/spec/revisions.js';
 
 // Full JSON Schema for the spec — constrains the model's tool call AND
 // documents the EXACT shape (the old `type:object` hint made the model guess
 // field names/enums and fail repeatedly). Field names are code identifiers;
 // `label` fields are human names in the user's language.
-const SPEC_SCHEMA: JsonSchema = {
+export const APP_SPEC_TOOL_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     v: { type: 'number', enum: [1] },
@@ -111,6 +113,19 @@ const SPEC_SCHEMA: JsonSchema = {
       },
       required: ['tone'],
     },
+    requirements: {
+      type: 'object',
+      description:
+        'OPTIONAL product refinement. Use it to capture goals, acceptance criteria, rules, scope limits, assumptions, and risks in the user language.',
+      properties: {
+        goals: { type: 'array', items: { type: 'string' } },
+        business_rules: { type: 'array', items: { type: 'string' } },
+        acceptance_criteria: { type: 'array', items: { type: 'string' } },
+        out_of_scope: { type: 'array', items: { type: 'string' } },
+        assumptions: { type: 'array', items: { type: 'string' } },
+        risks: { type: 'array', items: { type: 'string' } },
+      },
+    },
     behaviors: {
       type: 'array',
       description:
@@ -166,6 +181,12 @@ const SPEC_EXAMPLE = `{
   },
   "auth": { "enabled": true, "methods": ["password", "oauth-google"] },
   "design": { "tone": "clean e amigável" },
+  "requirements": {
+    "goals": ["A dona acompanha pedidos abertos sem planilha externa"],
+    "acceptance_criteria": ["Criar pedido com cliente e total", "Ver pedidos recentes no painel"],
+    "business_rules": ["Pedido novo começa com status aberto"],
+    "out_of_scope": ["Integração com delivery nesta primeira versão"]
+  },
   "behaviors": [
     { "id": "salvar-pedido", "screen_id": "painel", "trigger": "submit",
       "trigger_label": "ao enviar o formulário de pedido",
@@ -180,9 +201,10 @@ const PARAMETERS: JsonSchema = {
   type: 'object',
   properties: {
     spec: {
-      ...SPEC_SCHEMA,
+      ...APP_SPEC_TOOL_SCHEMA,
       description:
         'The complete AppSpec v1 object. CRITICAL SHAPE (the tool rejects wrong shapes): `features` and `database.entities[].fields` are ARRAYS OF OBJECTS, never strings. Every screen needs `id` (kebab-case) + `purpose`, and EXACTLY ONE screen has `primary:true`. `auth.methods` uses ONLY "password" | "oauth-google" | "oauth-github". Example:\n' +
+        'Text quality: use valid UTF-8 text in the user language. Never send replacement characters (U+FFFD) or mojibake like "Ã§", "Ã£", "â€™"; rewrite the affected sentence before saving. Example:\n' +
         SPEC_EXAMPLE,
     },
   },
@@ -193,7 +215,7 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_save_spec',
     description:
-      'Validate and save the app spec produced by the interview (discovery stage). On validation issues you get an actionable list to fix and re-call. Saving rebuilds the feature roadmap. Refused after discovery is approved (spec locked — the user must reopen the stage in the panel).',
+      'Validate and save the app spec. During discovery it updates the draft and roadmap. After discovery is approved it safely creates a reviewable versioned revision instead of overwriting the approved plan.',
     parameters: PARAMETERS,
     source: 'native',
     handler: async (args, ctx) => {
@@ -205,13 +227,6 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
 
         const state = parsePipelineState(session.pipeline_json);
         const discovery = state?.stages.find((s) => s.id === 'discovery');
-        if (discovery?.status === 'approved') {
-          return err(
-            'Spec is LOCKED — the discovery stage is approved. Ask the user to reopen it in the stage panel ' +
-              'if the plan needs to change.',
-          );
-        }
-
         // Core compartilhado (normalize→validate→serialize→roadmap) — a rota
         // PUT spec do modo Blueprint usa o MESMO caminho.
         const prepared = prepareSpecSave(args.spec, session.pipeline_json);
@@ -221,6 +236,48 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
           );
         }
         const { spec } = prepared;
+
+        if (discovery?.status === 'approved') {
+          const baseRevision = store.getLatestApprovedSpecRevision(session.id) ?? store.ensureInitialSpecRevision(session.id);
+          if (!baseRevision) return err('Approved discovery has no base spec revision. Reopen and approve discovery once to repair the version history.');
+          const diff = diffAppSpecs(parseAppSpec(baseRevision.spec_json), spec);
+          if (!specDiffHasChanges(diff)) {
+            return ok('The submitted spec is identical to the approved version. No revision was created.');
+          }
+          const impact = impactFromSpecDiff(diff);
+          const summary = summarizeSpecDiff(diff);
+          const evolution = store.findOpenEvolution(session.id) ?? store.createEvolution({
+            app_session_id: session.id,
+            title: 'Refinamento do plano',
+            description: 'Mudanca proposta pelo especialista de requisitos.',
+            base_revision_id: baseRevision.id,
+          });
+          const revision = store.createSpecRevision({
+            app_session_id: session.id,
+            status: 'draft',
+            title: evolution.title,
+            summary: summary.join('\n'),
+            change_reason: evolution.description,
+            spec_json: prepared.specJson,
+            base_revision_id: baseRevision.id,
+            diff_json: JSON.stringify(diff),
+            impact_json: JSON.stringify(impact),
+            created_by: 'agent',
+          });
+          store.updateEvolution(evolution.id, {
+            status: 'review',
+            proposed_revision_id: revision.id,
+            impact_json: JSON.stringify(impact),
+            submitted_at: evolution.submitted_at ?? new Date().toISOString(),
+          });
+          return ok(JSON.stringify({
+            mode: 'versioned_revision',
+            revision: { id: revision.id, number: revision.revision_number, status: revision.status },
+            impact,
+            summary,
+            next: 'The approved spec was not overwritten. Explain the changes and ask the user to review them in Versoes/Mudancas.',
+          }, null, 2));
+        }
 
         store.setSpecJson(session.id, prepared.specJson);
         if (prepared.pipelineJson) store.setPipelineJson(session.id, prepared.pipelineJson);

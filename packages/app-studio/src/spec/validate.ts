@@ -11,6 +11,14 @@ const CODE_NAME_RE = /^[a-z][a-z0-9_]*$/;
 const PASCAL_RE = /^[A-Z][A-Za-z0-9]*$/;
 const FIELD_TYPES = new Set(['text', 'integer', 'real', 'timestamp']);
 const AUTH_METHODS = new Set(['password', 'oauth-google', 'oauth-github']);
+const REQUIREMENT_KEYS = new Set([
+  'goals',
+  'business_rules',
+  'acceptance_criteria',
+  'out_of_scope',
+  'assumptions',
+  'risks',
+]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -164,6 +172,27 @@ export function validateAppSpec(value: unknown): string[] {
   // ── design ──
   if (!isRecord(spec.design) || !str(spec.design.tone)) {
     issues.push("design.tone: a short style direction (e.g. 'clean e amigável, tons de verde')");
+  }
+
+  // ── requirements (opcional — refinamento de produto) ──
+  if (spec.requirements !== undefined) {
+    if (!isRecord(spec.requirements)) {
+      issues.push('requirements must be an object when present');
+    } else {
+      for (const [key, value] of Object.entries(spec.requirements)) {
+        if (!REQUIREMENT_KEYS.has(key)) {
+          issues.push(`requirements.${key} is not supported`);
+          continue;
+        }
+        if (!Array.isArray(value)) {
+          issues.push(`requirements.${key} must be an array of text items`);
+          continue;
+        }
+        value.forEach((item, i) => {
+          if (!str(item)) issues.push(`requirements.${key}[${i}] must be non-empty text`);
+        });
+      }
+    }
   }
 
   // ── behaviors (opcional — nós de fluxo do Blueprint) ──

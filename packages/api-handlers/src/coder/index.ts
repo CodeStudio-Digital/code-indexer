@@ -76,6 +76,10 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
           agent: input.agent ?? null,
           phase_profile_id: input.phase_profile_id ?? null,
         });
+        const effort = input.reasoning_effort?.trim();
+        if (effort) {
+          sessionStore.setSessionReasoningEffort(session.id, effort);
+        }
         return session as unknown as CoderSession;
       },
 

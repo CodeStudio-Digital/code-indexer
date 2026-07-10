@@ -167,6 +167,8 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
             tasksState={s.tasksState}
             handlers={s.handlers}
             onLoadEarlier={s.loadEarlierMessages}
+            snapshotActions={s.snapshotActions}
+            snapshotFiles={s.snapshotFiles}
           />
         </div>
         <SelectionChips projectId={projectId} />

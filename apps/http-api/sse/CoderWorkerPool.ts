@@ -34,6 +34,7 @@ import {
   type CoderRunBus,
 } from '../coder-bus.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
+import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
 import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
@@ -152,7 +153,7 @@ export interface RunFreshOpts {
   attachments?: CoderAttachment[];
   maxTurns?: number;
   planMode?: boolean;
-  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+  agent?: AgentId;
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** POJO worktree opts — survives structuredClone across MessagePort. */
   worktree?: { name?: string; branch?: string };

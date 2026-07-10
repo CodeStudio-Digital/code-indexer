@@ -17,6 +17,31 @@ export const CHATGPT_SEED_MODELS: Array<{
   supported_reasoning_levels?: string[];
   apply_patch_tool_type?: string;
 }> = [
+  // GPT-5.6 family (Sol / Terra / Luna) — mirrored from the upstream Codex
+  // catalog (codex-rs/models-manager/models.json): 372K context, `freeform`
+  // apply_patch, reasoning efforts low→ultra (Luna caps at `max`). Sol is the
+  // flagship (the `gpt-5.6` alias routes to Sol). Live discovery overrides.
+  {
+    model_id: 'gpt-5.6-sol',
+    name: 'GPT-5.6 Sol',
+    default_reasoning_level: 'low',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.6-terra',
+    name: 'GPT-5.6 Terra',
+    default_reasoning_level: 'medium',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.6-luna',
+    name: 'GPT-5.6 Luna',
+    default_reasoning_level: 'medium',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    apply_patch_tool_type: 'freeform',
+  },
   {
     model_id: 'gpt-5.4',
     name: 'GPT-5.4',

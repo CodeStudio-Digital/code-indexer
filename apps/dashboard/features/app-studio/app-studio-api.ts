@@ -5,7 +5,7 @@
  * (start/phase/log/done/error — parse manual, EventSource não faz POST).
  */
 
-export type AppStageId = 'discovery' | 'database' | 'design' | 'backend' | 'review' | 'launch';
+export type AppStageId = 'discovery' | 'architecture' | 'database' | 'design' | 'backend' | 'review' | 'launch';
 export type AppStageStatus = 'pending' | 'active' | 'review' | 'approved' | 'skipped';
 export type AppStageAction = 'start' | 'approve' | 'reopen' | 'skip';
 export type AppRoadmapTier = 'screen' | 'api';
@@ -58,6 +58,25 @@ export interface AppSpecView {
   };
   auth: { enabled: boolean; methods?: string[]; protected_screen_ids?: string[] };
   design: { tone: string; primary_color?: string };
+  requirements?: {
+    goals?: string[];
+    business_rules?: string[];
+    acceptance_criteria?: string[];
+    out_of_scope?: string[];
+    assumptions?: string[];
+    risks?: string[];
+  };
+  behaviors?: Array<{
+    id: string;
+    screen_id: string;
+    trigger: 'click' | 'submit' | 'open';
+    trigger_label: string;
+    actions: Array<
+      | { kind: 'save'; entity: string }
+      | { kind: 'navigate'; screen_id: string }
+      | { kind: 'notify'; message: string }
+    >;
+  }>;
 }
 
 export interface AppDeployView {
@@ -84,8 +103,127 @@ export interface AppStudioSessionDetail {
   builder_port: number | null;
   pipeline: AppPipelineView | null;
   spec: AppSpecView | null;
+  architecture: AppArchitectureView | null;
   deploy: AppDeployView | null;
   features: Array<{ id: number; name: string; kind: string; summary: string | null; verified_in_preview: boolean }>;
+}
+
+export interface AppPipelineRepairReport {
+  changed: boolean;
+  issues: Array<{
+    code: string;
+    severity: 'warning' | 'error';
+    stage_id: AppStageId | null;
+    message: string;
+  }>;
+  changes: Array<{
+    stage_id: AppStageId | null;
+    before: AppStageStatus | 'missing' | 'outdated';
+    after: AppStageStatus | 'rebuilt';
+    reason: string;
+  }>;
+  pipeline: {
+    v: 2;
+    stages: AppPipelineStage[];
+    roadmap: Array<{ name: string; tier: AppRoadmapTier; feature_id: string | null; source: 'spec' }>;
+  };
+}
+
+export interface AppPipelineRepairPreview {
+  preview_token: string;
+  report: AppPipelineRepairReport;
+}
+
+export interface AppArchitectureView {
+  id: number;
+  revision_number: number;
+  spec_revision_id: number | null;
+  status: 'draft' | 'approved' | 'superseded' | 'rejected';
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  audit: { ok: boolean; issues: string[]; required_source_ids: string[]; covered_source_ids: string[] };
+  plan: {
+    v: 1;
+    spec_revision_id: number | null;
+    stack_profile_id: 'cf-fullstack-v1';
+    summary: string;
+    modules: Array<{ id: string; name: string; layer: 'ui' | 'worker' | 'data' | 'cross-cutting'; responsibility: string; depends_on: string[] }>;
+    decisions: Array<{ id: string; title: string; decision: string; rationale: string; source_urls: string[] }>;
+    data_flow: string[];
+    security: string[];
+    observability: string[];
+    risks: Array<{ id: string; title: string; mitigation: string; severity: 'low' | 'medium' | 'high' }>;
+    sources: Array<{ title: string; url: string; checked_at: string; notes: string }>;
+    tdd: {
+      strategy: string;
+      cases: Array<{
+        id: string;
+        title: string;
+        layer: 'database' | 'worker' | 'browser' | 'e2e';
+        owner_stage: 'database' | 'design' | 'backend' | 'review';
+        priority: 'critical' | 'important' | 'supporting';
+        source_ids: string[];
+        preconditions: string[];
+        steps: string[];
+        expected: string;
+      }>;
+    };
+  };
+}
+
+export interface AppSpecImpactView {
+  level: 'none' | 'low' | 'medium' | 'high';
+  stage_ids: AppStageId[];
+  reasons: string[];
+}
+
+export interface AppSpecRevisionView {
+  id: number;
+  app_session_id: number;
+  revision_number: number;
+  base_revision_id: number | null;
+  status: 'draft' | 'approved' | 'superseded' | 'rejected';
+  title: string | null;
+  summary: string | null;
+  change_reason: string | null;
+  diff_json?: never;
+  impact_json?: never;
+  diff: unknown | null;
+  impact: AppSpecImpactView | null;
+  spec_summary: {
+    summary: string;
+    screens: number;
+    entities: number;
+    features: number;
+    behaviors: number;
+  } | null;
+  created_by: string;
+  coder_session_id: number | null;
+  created_at: string;
+  approved_at: string | null;
+}
+
+export interface AppEvolutionView {
+  id: number;
+  app_session_id: number;
+  base_revision_id: number | null;
+  proposed_revision_id: number | null;
+  title: string;
+  description: string | null;
+  status: 'draft' | 'review' | 'approved' | 'applied' | 'rejected';
+  impact_json?: never;
+  impact: AppSpecImpactView | null;
+  created_at: string;
+  submitted_at: string | null;
+  approved_at: string | null;
+  applied_at: string | null;
+}
+
+export interface AppSpecHistoryView {
+  current_revision_id: number | null;
+  revisions: AppSpecRevisionView[];
+  evolutions: AppEvolutionView[];
 }
 
 async function unwrap<T>(r: Response): Promise<T> {
@@ -129,8 +267,70 @@ export async function initAppPipeline(sessionId: number): Promise<void> {
   await unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/init`, { method: 'POST' }));
 }
 
+export async function previewAppPipelineRepair(sessionId: number): Promise<AppPipelineRepairPreview> {
+  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/repair/preview`, { method: 'POST' }));
+}
+
+export async function applyAppPipelineRepair(
+  sessionId: number,
+  previewToken: string,
+): Promise<{ report: AppPipelineRepairReport; repair_id: number | null }> {
+  return unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/repair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preview_token: previewToken }),
+    }),
+  );
+}
+
+export async function undoAppPipelineRepair(sessionId: number, repairId: number): Promise<void> {
+  await unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/repair/${repairId}/undo`, { method: 'POST' }),
+  );
+}
+
 export async function deleteAppStudioSession(sessionId: number): Promise<void> {
   await unwrap(await fetch(`/api/app-studio/sessions/${sessionId}`, { method: 'DELETE' }));
+}
+
+export async function getAppSpecHistory(sessionId: number): Promise<AppSpecHistoryView> {
+  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/revisions`));
+}
+
+export async function createAppEvolution(
+  sessionId: number,
+  input: { title: string; description?: string | null },
+): Promise<{ evolution: AppEvolutionView; base_revision: AppSpecRevisionView | null }> {
+  return unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/evolutions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function applyAppEvolution(
+  sessionId: number,
+  evolutionId: number,
+): Promise<{ impact: AppSpecImpactView; evolution: AppEvolutionView }> {
+  return unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/evolutions/${evolutionId}/apply`, { method: 'POST' }),
+  );
+}
+
+export async function rejectAppEvolution(sessionId: number, evolutionId: number): Promise<{ evolution: AppEvolutionView }> {
+  return unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/evolutions/${evolutionId}/reject`, { method: 'POST' }),
+  );
+}
+
+/** Discard an empty draft evolution (409 if it already has a proposed revision). */
+export async function deleteAppEvolution(sessionId: number, evolutionId: number): Promise<{ deleted_id: number }> {
+  return unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/evolutions/${evolutionId}`, { method: 'DELETE' }),
+  );
 }
 
 // ── Criação (SSE) ────────────────────────────────────────────────────

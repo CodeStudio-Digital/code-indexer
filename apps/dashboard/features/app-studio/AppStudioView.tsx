@@ -18,14 +18,20 @@ import { AppStudioRail, AppStudioTabContent, type AppStudioTab } from './AppStud
 import { AppPreviewPanel } from './preview/AppPreviewPanel.js';
 import { isPromptableStage, startAppStage } from './stage-prompts.js';
 import { AppStudioChatRail } from './AppStudioChatRail.js';
+import {
+  AppStudioSpecAgentLauncher,
+  type AppStudioSpecAgentConfig,
+} from './AppStudioSpecAgentLauncher.js';
 
 const TAB_STORAGE_KEY = 'mcp.app-studio.tab';
 const ADVANCED_SEEN_KEY = 'mcp.app-studio.advanced-seen';
-const TAB_IDS: AppStudioTab[] = ['guide', 'blueprint', 'preview', 'data', 'publish'];
+const TAB_IDS: AppStudioTab[] = ['guide', 'blueprint', 'versions', 'architecture', 'preview', 'data', 'publish'];
+type AppStudioChatMode = 'builder' | 'spec' | 'db' | 'architecture';
 
 /** Aba sugerida por etapa (auto-switch one-shot em transição de etapa). */
 const STAGE_TAB: Record<AppStageId, AppStudioTab> = {
   discovery: 'guide',
+  architecture: 'architecture',
   database: 'data',
   design: 'preview',
   backend: 'preview',
@@ -85,6 +91,19 @@ export function AppStudioView({
   const { detail, error, refresh } = useAppStudioSession(sessionId);
   const [activeTab, setActiveTab] = usePersistedTab();
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [chatMode, setChatMode] = useState<AppStudioChatMode>('builder');
+  const [pendingSpecPrompt, setPendingSpecPrompt] = useState<string | null>(null);
+  const [specLaunchPrompt, setSpecLaunchPrompt] = useState<string | null>(null);
+  const [specAgentConfig, setSpecAgentConfig] = useState<AppStudioSpecAgentConfig | null>(null);
+  const [specLaunchId, setSpecLaunchId] = useState(0);
+  const [pendingDbPrompt, setPendingDbPrompt] = useState<string | null>(null);
+  const [dbLaunchPrompt, setDbLaunchPrompt] = useState<string | null>(null);
+  const [dbAgentConfig, setDbAgentConfig] = useState<AppStudioSpecAgentConfig | null>(null);
+  const [dbLaunchId, setDbLaunchId] = useState(0);
+  const [pendingArchitecturePrompt, setPendingArchitecturePrompt] = useState<string | null>(null);
+  const [architectureLaunchPrompt, setArchitectureLaunchPrompt] = useState<string | null>(null);
+  const [architectureAgentConfig, setArchitectureAgentConfig] = useState<AppStudioSpecAgentConfig | null>(null);
+  const [architectureLaunchId, setArchitectureLaunchId] = useState(0);
   const lastAutoSwitched = useRef<AppStageId | null>(null);
 
   // Auto-switch de aba quando a ETAPA corrente muda (one-shot por etapa —
@@ -97,6 +116,57 @@ export function AppStudioView({
   }, [currentStageId, setActiveTab]);
 
   const openPublish = useCallback(() => setActiveTab('publish'), [setActiveTab]);
+  const openSpecAgent = useCallback((prompt: string) => {
+    setSpecLaunchPrompt(prompt);
+  }, []);
+  const openDbAgent = useCallback((prompt: string) => {
+    setDbLaunchPrompt(prompt);
+  }, []);
+  const openArchitectureAgent = useCallback((prompt: string) => {
+    setArchitectureLaunchPrompt(prompt);
+  }, []);
+  const launchSpecAgent = useCallback((config: AppStudioSpecAgentConfig) => {
+    if (specLaunchPrompt === null) return;
+    setSpecAgentConfig(config);
+    setChatMode('spec');
+    setPendingSpecPrompt(specLaunchPrompt.trim() ? specLaunchPrompt : null);
+    setSpecLaunchId((n) => n + 1);
+    setChatCollapsed(false);
+    setSpecLaunchPrompt(null);
+  }, [specLaunchPrompt]);
+  const launchDbAgent = useCallback((config: AppStudioSpecAgentConfig) => {
+    if (dbLaunchPrompt === null) return;
+    setDbAgentConfig(config);
+    setChatMode('db');
+    setPendingDbPrompt(dbLaunchPrompt.trim() ? dbLaunchPrompt : null);
+    setDbLaunchId((n) => n + 1);
+    setChatCollapsed(false);
+    setDbLaunchPrompt(null);
+  }, [dbLaunchPrompt]);
+  const launchArchitectureAgent = useCallback((config: AppStudioSpecAgentConfig) => {
+    if (architectureLaunchPrompt === null) return;
+    setArchitectureAgentConfig(config);
+    setChatMode('architecture');
+    setPendingArchitecturePrompt(architectureLaunchPrompt.trim() ? architectureLaunchPrompt : null);
+    setArchitectureLaunchId((n) => n + 1);
+    setChatCollapsed(false);
+    setArchitectureLaunchPrompt(null);
+  }, [architectureLaunchPrompt]);
+  const handleChatModeChange = useCallback((next: AppStudioChatMode) => {
+    if (next === 'spec') {
+      setSpecLaunchPrompt('');
+      return;
+    }
+    if (next === 'db') {
+      setDbLaunchPrompt('');
+      return;
+    }
+    if (next === 'architecture') {
+      setArchitectureLaunchPrompt('');
+      return;
+    }
+    setChatMode('builder');
+  }, []);
 
   // Entrevista automática: app recém-criado (initialCoderSessionId setado)
   // com discovery ainda pending → dispara o prompt sozinho, sem o leigo
@@ -186,6 +256,10 @@ export function AppStudioView({
                 openPublish();
                 return;
               }
+              if (currentStage.id === 'architecture') {
+                openArchitectureAgent(t('stageMessage.architecture'));
+                return;
+              }
               void startAppStage(t, {
                 sessionId: session.id,
                 projectId: project.id,
@@ -234,6 +308,30 @@ export function AppStudioView({
       </header>
 
       <div className="flex min-h-0 flex-1 bg-background">
+        <AppStudioSpecAgentLauncher
+          kind="spec"
+          open={specLaunchPrompt !== null}
+          onOpenChange={(open) => {
+            if (!open) setSpecLaunchPrompt(null);
+          }}
+          onLaunch={launchSpecAgent}
+        />
+        <AppStudioSpecAgentLauncher
+          kind="db"
+          open={dbLaunchPrompt !== null}
+          onOpenChange={(open) => {
+            if (!open) setDbLaunchPrompt(null);
+          }}
+          onLaunch={launchDbAgent}
+        />
+        <AppStudioSpecAgentLauncher
+          kind="architecture"
+          open={architectureLaunchPrompt !== null}
+          onOpenChange={(open) => {
+            if (!open) setArchitectureLaunchPrompt(null);
+          }}
+          onLaunch={launchArchitectureAgent}
+        />
         <AppStudioRail
           active={studioTab}
           detail={detail}
@@ -256,6 +354,9 @@ export function AppStudioView({
                     discoveryExtra={discoveryExtra}
                     onChanged={() => void refresh()}
                     onOpenPublish={openPublish}
+                    onOpenSpecAgent={openSpecAgent}
+                    onOpenDbAgent={openDbAgent}
+                    onOpenArchitectureAgent={openArchitectureAgent}
                   />
                 )}
               </div>
@@ -266,9 +367,19 @@ export function AppStudioView({
               <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
               <Panel id="app-chat-rail" order={2} defaultSize={28} minSize={20} maxSize={42} className="min-w-[320px]">
                 <AppStudioChatRail
+                  key={chatMode === 'spec' ? `spec-${specLaunchId}` : chatMode === 'db' ? `db-${dbLaunchId}` : chatMode === 'architecture' ? `architecture-${architectureLaunchId}` : 'builder'}
                   projectId={project.id}
                   projectName={project.name}
-                  initialSessionId={initialCoderSessionId}
+                  initialSessionId={chatMode === 'builder' ? initialCoderSessionId : undefined}
+                  mode={chatMode}
+                  initialPrompt={chatMode === 'spec' ? pendingSpecPrompt : chatMode === 'db' ? pendingDbPrompt : chatMode === 'architecture' ? pendingArchitecturePrompt : null}
+                  initialConfig={chatMode === 'spec' ? specAgentConfig : chatMode === 'db' ? dbAgentConfig : chatMode === 'architecture' ? architectureAgentConfig : null}
+                  onInitialPromptConsumed={() => {
+                    if (chatMode === 'spec') setPendingSpecPrompt(null);
+                    if (chatMode === 'db') setPendingDbPrompt(null);
+                    if (chatMode === 'architecture') setPendingArchitecturePrompt(null);
+                  }}
+                  onModeChange={handleChatModeChange}
                   onCollapse={() => setChatCollapsed(true)}
                 />
               </Panel>

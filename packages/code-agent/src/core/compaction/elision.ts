@@ -1,4 +1,5 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import { visibleSpanOf } from '@mcp/code-agent/core/runner/guards/read-coverage.js';
 
 // ─── Smarter pre-read enforcement helpers ──────────────────────────────────
 // These helpers back the context-aware / mutation-aware variant of the
@@ -67,18 +68,31 @@ export function findToolResultByUseId(
  * When true, the model has lost the content — a fresh read is legitimate,
  * not a doom loop.
  *
- * Conservative on ambiguity: if ANY prior is still readable, returns false.
+ * `requiredSpan` (ranged reads only): a prior whose live content no longer
+ * SHOWS every requested line — reducer/finalize-cap truncation cuts the tail
+ * while the result stays present — counts as elided too. Without this, the
+ * refusal/downgrade claims "content is in your context" for lines the model
+ * never saw (observed 2026-07-09 on a `[lines 550-1000]` read cut at ~761).
+ *
+ * Conservative on ambiguity: if ANY prior is still readable (and covering,
+ * when a span is required), returns false.
  */
 export function allPriorReadsElided(
   prior: Array<{ useId: string }>,
   messages: AgentMessage[],
+  requiredSpan?: { start: number; end: number },
 ): boolean {
   if (prior.length === 0) return false;
   for (const p of prior) {
     const r = findToolResultByUseId(p.useId, messages);
     // Missing tool_result is treated as elided (the pair was dropped by
     // pair-preserving cutoff). Readable & non-elided → still in context.
-    if (r && !r.isElided) return false;
+    if (!r || r.isElided) continue;
+    if (requiredSpan) {
+      const span = visibleSpanOf(r.content);
+      if (!span || span.start > requiredSpan.start || span.end < requiredSpan.end) continue;
+    }
+    return false;
   }
   return true;
 }

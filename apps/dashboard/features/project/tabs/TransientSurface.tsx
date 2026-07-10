@@ -57,7 +57,7 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
   // Database client — DataGrip × phpMyAdmin. key={projectId} → remount per
   // project so a live connection session never bleeds across projects.
   if (tab === 'databases') {
-    return <Suspense fallback={<TabSpinner />}><DbClientTab key={projectId} projectId={projectId} /></Suspense>;
+    return <Suspense fallback={<TabSpinner />}><DbClientTab key={projectId} projectId={projectId} projectName={projectName} /></Suspense>;
   }
 
   // Preview tab — the live dev-server preview, full-width.

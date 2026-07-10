@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Compass, ClipboardList, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
+import { Bot, Boxes, Compass, ClipboardList, Database, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 
 /**
@@ -17,7 +17,8 @@ import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.j
  */
 
 interface AgentDef {
-  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api' | 'diagram';
+  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'api' | 'diagram' | 'builder';
+  label?: string;
   description: string;
   profile: string;
   planMode: boolean;
@@ -25,26 +26,46 @@ interface AgentDef {
 
 type AgentId = AgentDef['id'];
 
+const AGENT_LABEL: Record<AgentId, string> = {
+  explore: 'Explore',
+  plan: 'Plan',
+  build: 'Code',
+  admin: 'Ops',
+  spec: 'Spec Doc',
+  app_spec: 'App Plan',
+  app_db: 'Data Model',
+  app_architect: 'App Architecture',
+  api: 'API Test',
+  diagram: 'Diagram',
+  builder: 'UI Builder',
+};
+
+const AGENT_PROMISE: Record<AgentId, string> = {
+  explore: 'Answers, not edits',
+  plan: 'Proposes a plan, waits for OK',
+  build: 'Edits, verifies, reports',
+  admin: 'Commits, snapshots, ops - asks first',
+  spec: 'Writes a spec, waits for approval',
+  app_spec: 'Refines App Studio requirements',
+  app_db: 'Analyzes App Studio data',
+  app_architect: 'Plans the App Studio architecture and test contract',
+  api: 'Tests the API, fixes the spec',
+  diagram: 'Draws .drawio diagrams of the design',
+  builder: 'Builds the live app UI',
+};
+
 const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
   explore: Compass,
   plan: ClipboardList,
   build: Hammer,
   admin: ShieldAlert,
   spec: ScrollText,
+  app_spec: Bot,
+  app_db: Database,
+  app_architect: Boxes,
   api: Webhook,
   diagram: Workflow,
-};
-
-// Positive framing per mode — what it PROMISES, not what it blocks.
-// Used as the option hint in the picker and (optionally) as the icon tooltip.
-const PROMISE: Record<AgentId, string> = {
-  explore: 'Answers, not edits',
-  plan: 'Proposes a plan, waits for OK',
-  build: 'Edits, verifies, reports',
-  admin: 'Commits, snapshots, ops — asks first',
-  spec: 'Writes a spec, waits for approval',
-  api: 'Tests the API, fixes the spec',
-  diagram: 'Draws .drawio diagrams of the design',
+  builder: Hammer,
 };
 
 // Tailwind text-color class per mode — applied to the leading icon so the
@@ -55,8 +76,12 @@ const MODE_TINT: Record<AgentId, string> = {
   build: 'text-emerald-500',
   admin: 'text-rose-500',
   spec: 'text-amber-500',
+  app_spec: 'text-indigo-500',
+  app_db: 'text-teal-500',
+  app_architect: 'text-blue-500',
   api: 'text-cyan-500',
   diagram: 'text-violet-500',
+  builder: 'text-fuchsia-500',
 };
 
 interface AgentPickerProps {
@@ -70,6 +95,11 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
   const { t } = useTranslation('chat');
   const [agents, setAgents] = useState<AgentDef[] | null>(null);
   const [suggestion, setSuggestion] = useState<AgentId | null>(null);
+
+  const agentLabel = (id: AgentId, fallback?: string) =>
+    t(`agentPicker.labels.${id}`, { defaultValue: fallback ?? AGENT_LABEL[id] ?? capitalise(id) });
+  const agentPromise = (id: AgentId, fallback?: string) =>
+    t(`agentPicker.promises.${id}`, { defaultValue: fallback ?? AGENT_PROMISE[id] ?? '' });
 
   useEffect(() => {
     let aborted = false;
@@ -126,23 +156,29 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
     const source =
       agents ??
       ([
-        { id: 'explore', description: t('agentPicker.bootstrap'), profile: 'bootstrap', planMode: false },
-        { id: 'plan', description: t('agentPicker.navigate'), profile: 'navigate', planMode: true },
-        { id: 'build', description: t('agentPicker.navigateFull'), profile: 'navigate', planMode: false },
-        { id: 'admin', description: t('agentPicker.full'), profile: 'full', planMode: false },
-        { id: 'spec', description: t('agentPicker.spec', { defaultValue: 'Spec-driven authoring — pauses for human approval before code.' }), profile: 'navigate', planMode: false },
+        { id: 'explore', label: AGENT_LABEL.explore, description: t('agentPicker.bootstrap'), profile: 'bootstrap', planMode: false },
+        { id: 'plan', label: AGENT_LABEL.plan, description: t('agentPicker.navigate'), profile: 'navigate', planMode: true },
+        { id: 'build', label: AGENT_LABEL.build, description: t('agentPicker.navigateFull'), profile: 'navigate', planMode: false },
+        { id: 'admin', label: AGENT_LABEL.admin, description: t('agentPicker.full'), profile: 'full', planMode: false },
+        { id: 'spec', label: AGENT_LABEL.spec, description: t('agentPicker.spec', { defaultValue: 'Spec-driven authoring - pauses for human approval before code.' }), profile: 'navigate', planMode: false },
+        { id: 'app_spec', label: AGENT_LABEL.app_spec, description: agentPromise('app_spec'), profile: 'bootstrap', planMode: false },
+        { id: 'app_db', label: AGENT_LABEL.app_db, description: agentPromise('app_db'), profile: 'bootstrap', planMode: false },
+        { id: 'app_architect', label: AGENT_LABEL.app_architect, description: agentPromise('app_architect'), profile: 'bootstrap', planMode: false },
+        { id: 'builder', label: AGENT_LABEL.builder, description: agentPromise('builder'), profile: 'navigate', planMode: false },
+        { id: 'api', label: AGENT_LABEL.api, description: agentPromise('api'), profile: 'navigate', planMode: false },
+        { id: 'diagram', label: AGENT_LABEL.diagram, description: agentPromise('diagram'), profile: 'navigate', planMode: false },
       ] satisfies AgentDef[]);
     return source.map((a) => ({
       value: a.id,
-      label: capitalise(a.id),
+      label: agentLabel(a.id, a.label),
       // Promise-first description: what the mode delivers, not what
       // tier it sits in. Stacks BELOW the label inside Combobox rows so
       // long copy ("Commits, snapshots, ops — asks first") doesn't
       // squeeze the label column down to "PL…" / "S…" as it did when
       // we used `hint` (which competes side-by-side).
-      description: PROMISE[a.id] ?? a.description.split('.')[0],
+      description: agentPromise(a.id, a.description.split('.')[0]),
     }));
-  }, [agents]);
+  }, [agents, t]);
 
   // Defensive: never render <undefined/> if `value` is somehow unmapped
   // (a stale persisted agent id predating the validation guards, or a dep
@@ -150,12 +186,14 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
   // single missing glyph can't white-screen the whole composer.
   const SelectedIcon = ICONS[value] ?? Compass;
   const SuggestionIcon = suggestion ? ICONS[suggestion] : null;
+  const selectedPromise = agentPromise(value);
+  const suggestionLabel = suggestion ? agentLabel(suggestion) : '';
 
   return (
     <div className="flex items-center gap-1.5">
       <div
         className={`flex items-center gap-1 text-xs ${MODE_TINT[value] ?? 'text-muted-foreground'}`}
-        title={PROMISE[value]}
+        title={selectedPromise}
       >
         <SelectedIcon className="h-3.5 w-3.5" />
       </div>
@@ -181,10 +219,10 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
             setSuggestion(null);
           }}
           className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 hover:underline"
-          title={t('agentPicker.suggestionTooltip', { suggestion })}
+          title={t('agentPicker.suggestionTooltip', { suggestion: suggestionLabel })}
         >
           <Sparkles className="h-3 w-3" />
-          <span>{t('agentPicker.suggestion', { suggestion })}</span>
+          <span>{t('agentPicker.suggestion', { suggestion: suggestionLabel })}</span>
         </button>
       )}
     </div>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   APP_STAGE_IDS,
   AppStageTransitionError,
+  applyEvolutionImpact,
   applyStageAction,
   applyStageSubmit,
   createPipelineState,
@@ -17,7 +18,7 @@ const GATE_OK = { ok: true, issues: [] };
 const GATE_FAIL = { ok: false, issues: ['spec missing'] };
 
 describe('pipeline state', () => {
-  it('starts with all 6 stages pending, empty roadmap and discovery current', () => {
+  it('starts with all 7 stages pending, empty roadmap and discovery current', () => {
     const state = createPipelineState();
     expect(state.stages.map((s) => s.id)).toEqual([...APP_STAGE_IDS]);
     expect(state.stages.every((s) => s.status === 'pending')).toBe(true);
@@ -27,9 +28,9 @@ describe('pipeline state', () => {
 
   it('round-trips through serialize/parse and rejects garbage', () => {
     const state = createPipelineState();
-    expect(parsePipelineState(serializePipelineState(state))?.stages).toHaveLength(6);
+    expect(parsePipelineState(serializePipelineState(state))?.stages).toHaveLength(7);
     expect(parsePipelineState('not json')).toBeNull();
-    expect(parsePipelineState(JSON.stringify({ v: 2 }))).toBeNull();
+    expect(parsePipelineState(JSON.stringify({ v: 3, stages: [] }))).toBeNull();
     expect(parsePipelineState(null)).toBeNull();
   });
 });
@@ -42,7 +43,7 @@ describe('stage transitions', () => {
     expect(currentStage(state)?.id).toBe('discovery');
     state = applyStageAction(state, 'discovery', 'approve');
     expect(state.stages[0].status).toBe('approved');
-    expect(currentStage(state)?.id).toBe('database');
+    expect(currentStage(state)?.id).toBe('architecture');
   });
 
   it('failed gate keeps the stage active for re-submit', () => {
@@ -65,7 +66,48 @@ describe('stage transitions', () => {
     expect(state.stages[0].feedback).toBe('faltou a tela de clientes');
 
     state = applyStageAction(state, 'discovery', 'skip');
-    expect(currentStage(state)?.id).toBe('database');
+    expect(currentStage(state)?.id).toBe('architecture');
+  });
+
+  it('upgrades v1 pipelines without blocking apps that already started building', () => {
+    const current = createPipelineState();
+    const legacy = { ...current, v: 1, stages: current.stages.filter((stage) => stage.id !== 'architecture') };
+    legacy.stages[0]!.status = 'approved';
+    legacy.stages[1]!.status = 'approved';
+    const parsed = parsePipelineState(JSON.stringify(legacy));
+    expect(parsed?.v).toBe(2);
+    expect(parsed?.stages.find((stage) => stage.id === 'architecture')?.status).toBe('skipped');
+  });
+
+  it('reopening an approved earlier stage resets downstream stages', () => {
+    let state = createPipelineState();
+    state = applyStageSubmit(state, 'discovery', 'spec v1', GATE_OK);
+    state = applyStageAction(state, 'discovery', 'approve');
+    state = applyStageSubmit(state, 'architecture', 'architecture v1', GATE_OK);
+    state = applyStageAction(state, 'architecture', 'approve');
+    state = applyStageSubmit(state, 'database', 'db v1', GATE_OK);
+    state = applyStageAction(state, 'database', 'approve');
+    state = applyStageAction(state, 'design', 'start');
+
+    state = applyStageAction(state, 'discovery', 'reopen', 'trocar login');
+
+    expect(currentStage(state)?.id).toBe('discovery');
+    expect(state.stages[0]).toMatchObject({
+      id: 'discovery',
+      status: 'active',
+      feedback: 'trocar login',
+      approved_at: null,
+    });
+    expect(state.stages[1]).toMatchObject({
+      id: 'architecture',
+      status: 'pending',
+      summary: null,
+      gate: null,
+      feedback: null,
+      submitted_at: null,
+      approved_at: null,
+    });
+    expect(state.stages[2].status).toBe('pending');
   });
 
   it('start only applies to the current stage', () => {
@@ -86,6 +128,33 @@ describe('stage transitions', () => {
     applyStageSubmit(state, 'discovery', 'ok', GATE_OK);
     applyStageAction(state, 'discovery', 'approve');
     expect(state.stages[0].status).toBe('approved');
+  });
+
+  it('evolution impact reopens the earliest affected stage and resets downstream only', () => {
+    let state = createPipelineState();
+    state = applyStageSubmit(state, 'discovery', 'spec v1', GATE_OK);
+    state = applyStageAction(state, 'discovery', 'approve');
+    state = applyStageSubmit(state, 'architecture', 'architecture v1', GATE_OK);
+    state = applyStageAction(state, 'architecture', 'approve');
+    state = applyStageSubmit(state, 'database', 'db v1', GATE_OK);
+    state = applyStageAction(state, 'database', 'approve');
+    state = applyStageSubmit(state, 'design', 'screens v1', GATE_OK);
+    state = applyStageAction(state, 'design', 'approve');
+    state = applyStageAction(state, 'backend', 'start');
+
+    state = applyEvolutionImpact(state, ['design', 'backend'], 'adicionar tela de relatorio');
+
+    expect(state.stages[0].status).toBe('approved');
+    expect(state.stages[1].status).toBe('approved');
+    expect(state.stages[3]).toMatchObject({
+      id: 'design',
+      status: 'active',
+      feedback: 'adicionar tela de relatorio',
+      summary: null,
+      gate: null,
+    });
+    expect(state.stages[4].status).toBe('pending');
+    expect(state.stages[5].status).toBe('pending');
   });
 });
 

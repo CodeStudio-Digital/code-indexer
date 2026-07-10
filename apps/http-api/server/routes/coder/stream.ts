@@ -5,8 +5,12 @@ import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import { isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
+import { isAppSpecialistAgentId } from '@mcp/code-agent/agents/app-specialists.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
+import { findLocalD1File } from '@mcp/app-studio/local-db.js';
+import { ensureAppStudioDbConnection } from '@mcp/company/tools/app-studio/db-client-bridge.js';
 import {
   createBus,
   publish,
@@ -55,8 +59,8 @@ interface SendMessageBody {
   max_turns?: number;
   plan_mode?: boolean;
   attachments?: CoderAttachment[];
-  /** Agent preset: explore | plan | build | admin | spec. Takes precedence over profile/plan_mode when unset. */
-  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+  /** Agent preset. Takes precedence over profile/plan_mode when unset. */
+  agent?: AgentId;
   /** Tool tier profile: bootstrap | navigate | full | auto. */
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /**
@@ -122,7 +126,7 @@ function projectRootForSession(deps: ServerDeps, sessionId: number): string | nu
 interface ContinueBody {
   plan_mode?: boolean;
   max_turns?: number;
-  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+  agent?: AgentId;
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** Force the vision fallback (image → text) on a resumed run. */
   describe_images?: boolean;
@@ -158,6 +162,31 @@ export function mountCoderStreamRoutes(
       modelId: session.model,
       inputModalities: row?.input_modalities,
     });
+  }
+
+  function resolveRunAgent(id: number, requested: unknown): AgentId | undefined {
+    const session = sessionStore.getSession(id);
+    const persisted = typeof session?.agent === 'string' && isAgentId(session.agent) ? session.agent : undefined;
+    if (persisted && isAppSpecialistAgentId(persisted)) {
+      return persisted;
+    }
+    return typeof requested === 'string' && isAgentId(requested) ? requested : undefined;
+  }
+
+  function syncAppStudioDbConnectionForAgentRun(id: number): void {
+    const session = sessionStore.getSession(id);
+    if (session?.project_id == null) return;
+    const appSession = deps.appStudioStore.getSessionByProjectId(session.project_id);
+    if (!appSession) return;
+    const project = deps.db.getProject(session.project_id);
+    if (!project?.root_path) return;
+    const dbFile = findLocalD1File(project.root_path);
+    if (!dbFile) return;
+    ensureAppStudioDbConnection({
+      listConnections: (projectId) => deps.dbClientFor(projectId).listConnections(projectId),
+      createConnection: (input) => deps.dbClientFor(input.project_id).createConnection(input),
+      updateConnection: (projectId, connId, patch) => deps.dbClientFor(projectId).updateConnection(connId, patch),
+    }, appSession, dbFile);
   }
 
   /** Resolved provider `kind` for the session (drives PDF-native gating). */
@@ -379,6 +408,14 @@ export function mountCoderStreamRoutes(
     // /answer-via-worker fallback, where the tool_result is already in
     // history and there's no new user message to attach.
     if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
+    const runAgent = resolveRunAgent(id, body.agent);
+    if (runAgent === 'app_db') {
+      try {
+        syncAppStudioDbConnectionForAgentRun(id);
+      } catch (e) {
+        console.warn('[app-studio] failed to sync native DB connection for app_db agent:', e);
+      }
+    }
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Log the route hit. The bus may not exist yet (fresh session) —
     // emitWorkerLog no-ops in that case, but if a worker is still alive
@@ -390,7 +427,8 @@ export function mountCoderStreamRoutes(
       emitWorkerLog(existing, 'info', 'route', 'POST /messages', {
         content_preview: body.content?.slice(0, 80) ?? '',
         resume: !!body.resume,
-        agent: body.agent,
+        agent: runAgent,
+        requested_agent: body.agent ?? null,
         profile: body.profile,
         interject: !!body.interject,
         attachment_count: body.attachments?.length ?? 0,
@@ -511,7 +549,7 @@ export function mountCoderStreamRoutes(
           attachments: body.attachments,
           maxTurns: body.max_turns,
           planMode: body.plan_mode,
-          agent: body.agent,
+          agent: runAgent,
           profile: body.profile,
           worktree: body.worktree,
           thinking: body.thinking,
@@ -703,7 +741,7 @@ export function mountCoderStreamRoutes(
           attachments: body.attachments,
           maxTurns: body.max_turns,
           planMode: body.plan_mode,
-          agent: body.agent,
+          agent: runAgent,
           profile: body.profile,
           worktree: body.worktree,
           thinking: body.thinking,
@@ -797,6 +835,14 @@ export function mountCoderStreamRoutes(
     if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);
     }
+    const runAgent = resolveRunAgent(id, body.agent);
+    if (runAgent === 'app_db') {
+      try {
+        syncAppStudioDbConnectionForAgentRun(id);
+      } catch (e) {
+        console.warn('[app-studio] failed to sync native DB connection for app_db continue:', e);
+      }
+    }
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Pre-spawn log: bus is about to be created below. We can't emit
     // here because no bus exists yet — but the route-entry hit will
@@ -856,7 +902,8 @@ export function mountCoderStreamRoutes(
     // Log the route hit on the fresh bus — the dashboard will see the
     // POST /continue entry seq=0 with the resume context.
     emitWorkerLog(bus, 'info', 'route', 'POST /continue', {
-      agent: body.agent,
+      agent: runAgent,
+      requested_agent: body.agent ?? null,
       profile: body.profile,
       plan_mode: body.plan_mode,
       max_turns: body.max_turns,
@@ -882,7 +929,7 @@ export function mountCoderStreamRoutes(
           userMessage: '',
           maxTurns: body.max_turns,
           planMode: body.plan_mode,
-          agent: body.agent,
+          agent: runAgent,
           profile: body.profile,
           resume: true,
           modelSupportsVision: resolveModelSupportsVision(id),

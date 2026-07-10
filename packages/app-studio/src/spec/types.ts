@@ -91,6 +91,26 @@ export interface AppSpecDatabase {
   entities: AppSpecEntity[];
 }
 
+/**
+ * Requisitos de produto em linguagem humana. São opcionais por compatibilidade
+ * com specs antigas, mas usados pelo painel/assistente para refinar o plano
+ * antes do build.
+ */
+export interface AppSpecRequirements {
+  /** Objetivos que o app precisa cumprir. */
+  goals?: string[];
+  /** Regras de negócio que não são apenas telas ou campos. */
+  business_rules?: string[];
+  /** Critérios objetivos para o usuário aprovar que está pronto. */
+  acceptance_criteria?: string[];
+  /** O que explicitamente não entra nesta versão. */
+  out_of_scope?: string[];
+  /** Suposições feitas enquanto o usuário não confirmou detalhes. */
+  assumptions?: string[];
+  /** Riscos, dúvidas ou pontos que precisam de atenção no build. */
+  risks?: string[];
+}
+
 export interface AppSpec {
   v: 1;
   /** Uma frase: o que o app faz. */
@@ -104,6 +124,8 @@ export interface AppSpec {
   auth: AppSpecAuth;
   design: { tone: string; primary_color?: string };
   integrations?: { r2?: boolean };
+  /** Requisitos refinados do produto (opcional; specs antigas podem não ter). */
+  requirements?: AppSpecRequirements;
   /** Nós de fluxo do Blueprint (opcional; ausente = sem comportamentos declarados). */
   behaviors?: AppBehavior[];
 }

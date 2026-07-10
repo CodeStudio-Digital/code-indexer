@@ -54,7 +54,7 @@ export function InlineDiff({
             ? t('messages.fileTooLargeOpenSnapshot')
             : t('messages.noRemainingChanges')}
         </span>
-        {actions && (
+        {actions && actions.showToolbar !== false && (
           <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => actions.openSnapshots(baselineId)}>
             {t('messages.viewSnapshot')}
           </Button>

@@ -2,6 +2,15 @@ import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/too
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import {
+  getToolText,
+  passesRelaxed,
+  passesStrict,
+  scoreTool,
+  tokenizeQuery,
+  topLevelParams,
+  type ToolScore,
+} from './find-tools-score.js';
 
 /**
  * find_tools — lazy tool discovery (Camada 3, "Tool Search Tool" pattern).
@@ -27,12 +36,19 @@ import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
  * as visible here — harmless, a direct call works and pins it.
  *
  * Implementation notes:
- *  - Cheap lexical match: substring + per-token overlap. No vector store
+ *  - Cheap lexical match over three fields — name parts, TOP-LEVEL parameter
+ *    names, and description words (see find-tools-score.ts). No vector store
  *    dependency — this tool is the cheap path; if you need semantic search
  *    over code, use mcp__search.
+ *  - Two passes: a strict pass (coverage + an anchor hit, or full coverage on
+ *    a >=3-token query), and — only when strict comes back empty — a relaxed
+ *    pass whose candidates are clearly labeled weak. A near-miss list the
+ *    agent can learn the landscape from beats a dead end.
+ *  - Known imprecision: ubiquitous params ("query", "path", "limit") anchor
+ *    many tools on single-token queries naming them — honest behavior (those
+ *    tools DO take that arg), flat-ranked and capped at `limit`.
  *  - Returns up to `limit` candidates (default 5, cap 10) — keep the result
  *    small so it doesn't itself become a token tax.
- *  - Excludes tools already in the active tier (those are visible already).
  */
 export function buildFindToolsTool(
   registry: ToolRegistry,
@@ -44,12 +60,17 @@ export function buildFindToolsTool(
     mutates: false,
     parallelSafe: true,
     description:
-      'Find tools by description (lazy discovery for tools NOT in your visible list).\n\n' +
+      'Find tools by capability — searches tool NAMES, DESCRIPTIONS, and ARGUMENT names ' +
+      '(lazy discovery for tools NOT in your visible list).\n\n' +
       'Use when you suspect a tool exists for a task but cannot see it in your current tools array. ' +
       'Returns up to 5 candidates with their `name`, `tier`, `source`, argument summary, and a ' +
       'short description. You can call a discovered tool DIRECTLY even while hidden — it executes ' +
       'and is pinned into your visible list from the next turn. `expand_toolset(<tier>)` unlocks a ' +
       'whole tier at once when you need several of its tools.\n\n' +
+      'QUERY TIPS: concept nouns ("worktree", "spec revision"), verbs ("edit", "spawn"), and exact ' +
+      'argument names seen in other tool results ("evolution_id") all match; filler words are ' +
+      'ignored. When nothing matches strongly, the closest weak candidates are returned, labeled ' +
+      'with why each one matched.\n\n' +
       'WHEN TO USE: before guessing tool names, before calling expand_toolset speculatively, when ' +
       'a generic search/edit/git/web/lsp/mcp capability is needed but no matching tool is visible.\n\n' +
       "DON'T: use this when you already see the tool you need in your tools array — call it directly. " +
@@ -60,9 +81,9 @@ export function buildFindToolsTool(
         query: {
           type: 'string',
           description:
-            'Free-text description of the capability you need (e.g. "edit a file", "run shell command", ' +
-            '"find references to a symbol", "create a git commit"). The matcher is lexical — keywords ' +
-            'and verbs work better than full sentences.',
+            'What you need — concept nouns, verbs, or exact argument names work better than full ' +
+            'sentences (e.g. "edit a file", "evolution_id", "create git commit"). Names, ' +
+            'descriptions, and argument names are all searched; filler words are ignored.',
         },
         limit: {
           type: 'number',
@@ -85,36 +106,16 @@ export function buildFindToolsTool(
         | undefined;
       const active = runner?.activeTiers ?? null;
       const pinned = runner?.pinnedTools;
-      const tools = registry.list();
 
-      // Tokenize query into lowercase keywords; keep words >=2 chars.
-      // We split on non-alphanumeric INCLUDING underscores so that compound
-      // names like "spawn_agent" become ["spawn", "agent"] — same shape as
-      // `nameParts` below. Without this, the whole-part bonus never fires
-      // for snake_case queries and substring fallback dominates.
-      const qTokens = query
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((t) => t.length >= 2);
-      if (qTokens.length === 0) {
+      const tokens = tokenizeQuery(query);
+      if (tokens.length === 0) {
         return err('find_tools: query has no usable tokens.');
       }
 
-      // Score each tool:
-      //   - whole snake_case part match in NAME: +4 (e.g. "agent" hits "spawn_agent" parts)
-      //   - substring match in NAME (fallback):  +2 (catches "agent" inside "subagent")
-      //   - substring match in DESCRIPTION:      +1
-      // Then enforce a minimum score so weak fuzzy hits don't crowd the top-N:
-      //   - 1 token   → need >= 3 (i.e. at least a name match)
-      //   - N tokens  → need >= max(3, ceil(N * 1.5))
-      // And a floor for pure-description matches: at least 2 desc hits when
-      // the name didn't match at all — kills "agent" in a JSON example
-      // bleeding into a totally unrelated tool's description.
-      const ratioOverride = Number(process.env.CODER_FIND_TOOLS_MIN_SCORE_RATIO ?? '1.5');
-      const ratio = Number.isFinite(ratioOverride) && ratioOverride > 0 ? ratioOverride : 1.5;
-      const minScore = qTokens.length === 1
-        ? 3
-        : Math.max(3, Math.ceil(qTokens.length * ratio));
+      // Coverage knob: fraction of distinct query tokens that must hit for
+      // the strict pass (default 0.5 — see passesStrict/passesRelaxed).
+      const covRaw = Number(process.env.CODER_FIND_TOOLS_MIN_COVERAGE ?? '0.5');
+      const coverage = Number.isFinite(covRaw) ? Math.min(1, Math.max(0.1, covRaw)) : 0.5;
 
       type Scored = {
         name: string;
@@ -122,71 +123,77 @@ export function buildFindToolsTool(
         source: string;
         description: string;
         params: string;
-        score: number;
+        score: ToolScore;
         visible: boolean;
       };
-      const scored: Scored[] = [];
-      for (const t of tools) {
-        const name = t.name.toLowerCase();
-        const desc = (t.description ?? '').toLowerCase();
-        const nameParts = name.split(/[^a-z0-9]+/).filter(Boolean);
-        let nameScore = 0;
-        let descScore = 0;
-        for (const tok of qTokens) {
-          if (nameParts.includes(tok)) nameScore += 4;
-          else if (name.includes(tok)) nameScore += 2;
-          if (desc.includes(tok)) descScore += 1;
-        }
-        const score = nameScore + descScore;
-        if (score < minScore) continue;
-        // Pure-description matches need at least 2 desc hits — otherwise a
-        // single incidental token in an example/snippet ranks alongside
-        // real candidates.
-        if (nameScore === 0 && descScore < 2) continue;
+      const all: Scored[] = [];
+      for (const t of registry.list()) {
+        const score = scoreTool(tokens, getToolText(t));
+        if (score.hitCount === 0) continue;
         const tier = getToolTier(t.name, tierOverrides);
-        const visible = active ? active.has(tier) || !!pinned?.has(t.name) : true;
-        scored.push({
+        all.push({
           name: t.name,
           tier,
           source: t.source,
           description: t.description ?? '',
           params: paramSummary(t.parameters),
           score,
-          visible,
+          visible: active ? active.has(tier) || !!pinned?.has(t.name) : true,
         });
       }
 
-      if (scored.length === 0) {
+      // Pass A (strict), and only when it comes back empty, pass B (relaxed,
+      // labeled weak). One scoring sweep, two filters.
+      const strict = all.filter((c) => passesStrict(c.score, tokens.length, coverage));
+      const weak = strict.length === 0;
+      const pool = weak
+        ? all.filter((c) => passesRelaxed(c.score, tokens.length, coverage))
+        : strict;
+
+      if (pool.length === 0) {
         return ok(
-          `No tools matched "${query}". Try simpler verbs ("edit", "run", "search") or ` +
-            `mcp__search for code-level concepts.`,
+          `No tools matched "${query}". Retry with exact argument names you know ` +
+            `(e.g. "evolution_id"), concept nouns ("worktree", "spec revision"), or verbs ` +
+            `("edit", "spawn") — or run list_tools() inside code_exec for the full catalog.`,
         );
       }
 
       // Sort by score desc, then prefer hidden tools (the whole point of this
       // tool is surfacing tools the agent cannot already see). Tie-break by
       // alphabetical name for determinism.
-      scored.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
+      pool.sort((a, b) => {
+        if (b.score.total !== a.score.total) return b.score.total - a.score.total;
         if (a.visible !== b.visible) return a.visible ? 1 : -1;
         return a.name.localeCompare(b.name);
       });
-
-      const top = scored.slice(0, limit);
+      const top = pool.slice(0, limit);
 
       // Compact rendering — one line per candidate. The agent reads this in
       // its tool result; verbose multi-paragraph output here would defeat the
-      // economy goal of Camada 3.
-      const lines: string[] = [`Top ${top.length} tool match${top.length === 1 ? '' : 'es'} for "${query}":`];
-      for (const r of top) {
+      // economy goal of Camada 3. Weak candidates always say WHY they matched
+      // (strong ones only when the match came via an argument name).
+      const renderCandidate = (r: Scored): string => {
         const visTag = r.visible
           ? ''
           : ` [hidden — call it directly (it will be pinned into your toolset) or expand_toolset('${r.tier}')]`;
         // Trim description to one sentence-ish for compactness.
         const shortDesc = r.description.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '';
         const argsTag = r.params ? ` (args: ${r.params})` : '';
-        lines.push(`- ${r.name} (tier=${r.tier}, source=${r.source})${argsTag}${visTag}: ${shortDesc}`);
-      }
+        let matchTag = '';
+        if (r.score.matchedParams.length > 0 && !r.score.nameHit) {
+          matchTag = ` [matched arg: ${r.score.matchedParams.slice(0, 2).join(', ')}]`;
+        } else if (weak) {
+          matchTag = r.score.nameHit ? ' [matched: name]' : ' [matched: description only]';
+        }
+        return `- ${r.name} (tier=${r.tier}, source=${r.source})${argsTag}${matchTag}${visTag}: ${shortDesc}`;
+      };
+
+      const lines: string[] = [
+        weak
+          ? `No strong matches for "${query}". Closest candidates (weak matches):`
+          : `Top ${top.length} tool match${top.length === 1 ? '' : 'es'} for "${query}":`,
+      ];
+      for (const r of top) lines.push(renderCandidate(r));
       // Steer the follow-up when the top candidate is hidden.
       const firstHidden = top.find((r) => !r.visible);
       if (firstHidden) {
@@ -195,6 +202,13 @@ export function buildFindToolsTool(
           `Hint: call ${firstHidden.name} directly with the args above — it executes and joins your ` +
             `toolset next turn. Use \`expand_toolset({ tier: "${firstHidden.tier}" })\` instead if you ` +
             `need several ${firstHidden.tier}-tier tools.`,
+        );
+      }
+      if (weak) {
+        lines.push('');
+        lines.push(
+          'If none fit, retry with different words: exact argument names you know, concept nouns, ' +
+            'or verbs — or run list_tools() inside code_exec for the full catalog.',
         );
       }
       return ok(lines.join('\n'));
@@ -212,20 +226,12 @@ export function buildFindToolsTool(
  * renders the same compact arg summary for the full (tier-agnostic) catalog.
  */
 export function paramSummary(schema: JsonSchema | undefined): string {
-  const s = schema as
-    | { properties?: Record<string, { type?: string | string[] }>; required?: string[] }
-    | undefined;
-  const props = s?.properties;
-  if (!props) return '';
-  const required = new Set(s?.required ?? []);
-  const keys = Object.keys(props).sort(
-    (a, b) => Number(required.has(b)) - Number(required.has(a)) || a.localeCompare(b),
-  );
+  const params = topLevelParams(schema);
+  if (params.length === 0) return '';
+  params.sort((a, b) => Number(b.required) - Number(a.required) || a.name.localeCompare(b.name));
   const parts: string[] = [];
-  for (const k of keys) {
-    const t = props[k]?.type;
-    const typeLabel = Array.isArray(t) ? t.join('|') : t ?? 'any';
-    const next = `${k}${required.has(k) ? '' : '?'}:${typeLabel}`;
+  for (const p of params) {
+    const next = `${p.name}${p.required ? '' : '?'}:${p.typeLabel}`;
     if ([...parts, next].join(', ').length > 90) {
       parts.push('…');
       break;

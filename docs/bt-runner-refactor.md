@@ -189,6 +189,13 @@ Fix em [find-tools.ts](../packages/code-agent/src/tools/find-tools.ts):
 - Env override: `CODER_FIND_TOOLS_MIN_SCORE_RATIO`
 - **7 testes novos** em `find-tools.test.ts` (primeiro coverage do find_tools)
 
+> **Superado (jul/2026)**: o scorer acima tornava match puro de descrição
+> matematicamente impossível (máx. `N` pontos vs. threshold `ceil(N*1.5)`) e
+> não buscava nomes de argumentos. Substituído pelo scorer de 2 passes em
+> `find-tools-score.ts` (nome + params top-level + palavras de descrição,
+> coverage-based). Env `CODER_FIND_TOOLS_MIN_SCORE_RATIO` → substituído por
+> `CODER_FIND_TOOLS_MIN_COVERAGE` (default `0.5`).
+
 ### Heartbeats (4 camadas)
 
 | Camada | Onde | Quando | Period | Env |
@@ -332,7 +339,7 @@ execute_tasks()
 ### Find_tools
 | Env | Default | Função |
 |---|---|---|
-| `CODER_FIND_TOOLS_MIN_SCORE_RATIO` | `1.5` | Multiplicador no `minScore = ceil(N * ratio)` |
+| `CODER_FIND_TOOLS_MIN_COVERAGE` | `0.5` | Fração de tokens da query que precisam acertar no passe forte (`hitCount >= ceil(N * coverage)`); substituiu `CODER_FIND_TOOLS_MIN_SCORE_RATIO` |
 
 ### Recovery circuit breakers
 | Env | Default | Função |

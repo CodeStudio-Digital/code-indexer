@@ -4,7 +4,7 @@
  * entende primeiro: ver o app e ver a especificação em blocos.
  */
 import { useTranslation } from 'react-i18next';
-import { Database, Globe, ListChecks, Monitor, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, Database, GitBranch, Globe, ListChecks, Monitor, Workflow, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import type { AppStudioSessionDetail } from './app-studio-api.js';
@@ -12,12 +12,16 @@ import { JourneyPanel } from './guide/JourneyPanel.js';
 import { DataPanel, dataTabUnlocked } from './data/DataPanel.js';
 import { PublishPanel } from './publish/PublishPanel.js';
 import { BlueprintPanel } from './blueprint/BlueprintPanel.js';
+import { VersionsPanel } from './versions/VersionsPanel.js';
+import { ArchitecturePanel } from './architecture/ArchitecturePanel.js';
 
-export type AppStudioTab = 'guide' | 'blueprint' | 'preview' | 'data' | 'publish';
+export type AppStudioTab = 'guide' | 'blueprint' | 'versions' | 'architecture' | 'preview' | 'data' | 'publish';
 
 const TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string; separated?: boolean }> = [
   { id: 'preview', icon: Monitor, labelKey: 'tabs.preview' },
   { id: 'blueprint', icon: Workflow, labelKey: 'tabs.blueprint' },
+  { id: 'versions', icon: GitBranch, labelKey: 'tabs.versions' },
+  { id: 'architecture', icon: Boxes, labelKey: 'tabs.architecture' },
   { id: 'guide', icon: ListChecks, labelKey: 'tabs.guide', separated: true },
   { id: 'data', icon: Database, labelKey: 'tabs.data' },
   { id: 'publish', icon: Globe, labelKey: 'tabs.publish' },
@@ -43,10 +47,12 @@ export function AppStudioRail({
         const isActive = active === id;
         const disabled =
           (id === 'data' && !dataTabUnlocked(detail)) ||
-          (id === 'blueprint' && !detail?.spec);
+          ((id === 'blueprint' || id === 'versions' || id === 'architecture') && !detail?.spec);
         const label =
           disabled && id === 'data' ? t('data.locked')
           : disabled && id === 'blueprint' ? t('blueprint.locked')
+          : disabled && id === 'versions' ? t('versions.locked')
+          : disabled && id === 'architecture' ? t('architecture.locked')
           : t(labelKey);
         return (
           <div key={id} className={cn('flex flex-col items-center', separated && 'mt-2 border-t pt-2')}>
@@ -88,12 +94,18 @@ export function AppStudioTabContent({
   discoveryExtra,
   onChanged,
   onOpenPublish,
+  onOpenSpecAgent,
+  onOpenDbAgent,
+  onOpenArchitectureAgent,
 }: {
   tab: Exclude<AppStudioTab, 'preview'>;
   detail: AppStudioSessionDetail;
   discoveryExtra?: string | null;
   onChanged: () => void;
   onOpenPublish: () => void;
+  onOpenSpecAgent?: (prompt: string) => void;
+  onOpenDbAgent?: (prompt: string) => void;
+  onOpenArchitectureAgent?: (prompt: string) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
@@ -104,10 +116,13 @@ export function AppStudioTabContent({
             discoveryExtra={discoveryExtra}
             onChanged={onChanged}
             onOpenPublish={onOpenPublish}
+            onOpenArchitectureAgent={onOpenArchitectureAgent}
           />
         )}
-        {tab === 'blueprint' && <BlueprintPanel detail={detail} onChanged={onChanged} />}
-        {tab === 'data' && <DataPanel detail={detail} />}
+        {tab === 'blueprint' && <BlueprintPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
+        {tab === 'versions' && <VersionsPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
+        {tab === 'architecture' && <ArchitecturePanel detail={detail} onChanged={onChanged} onOpenAgent={onOpenArchitectureAgent} />}
+        {tab === 'data' && <DataPanel detail={detail} onChanged={onChanged} onOpenDbAgent={onOpenDbAgent} />}
         {tab === 'publish' && <PublishPanel detail={detail} onChanged={onChanged} />}
       </div>
     </div>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeAppSpec } from '../spec/normalize.js';
 import { validateAppSpec } from '../spec/validate.js';
 import type { AppSpec } from '../spec/types.js';
+import { makeSpec } from './fixtures.js';
 
 /**
  * Reproduz o formato "natural" que os modelos (GLM/zai, gpt-5.5) mandaram e
@@ -38,6 +39,27 @@ describe('normalizeAppSpec', () => {
   it('coerces the natural model output into a spec that validates clean', () => {
     const normalized = normalizeAppSpec(NATURAL_SPEC);
     expect(validateAppSpec(normalized)).toEqual([]);
+  });
+
+  it('coerces product requirements aliases', () => {
+    const normalized = normalizeAppSpec({
+      ...makeSpec(),
+      requirements: {
+        objetivos: 'Acompanhar pedidos sem planilha',
+        businessRules: ['Pedido novo comeca aberto'],
+        acceptanceCriteria: ['Criar pedido com total'],
+        outOfScope: ['Delivery'],
+      },
+    });
+
+    const issues = validateAppSpec(normalized);
+    expect(issues).toEqual([]);
+    expect((normalized as ReturnType<typeof makeSpec>).requirements).toEqual({
+      goals: ['Acompanhar pedidos sem planilha'],
+      business_rules: ['Pedido novo comeca aberto'],
+      acceptance_criteria: ['Criar pedido com total'],
+      out_of_scope: ['Delivery'],
+    });
   });
 
   it('wraps string features into objects with kebab ids', () => {

@@ -215,6 +215,9 @@ import { spriteFrameTracks199 } from './199_sprite_frame_tracks.js';
 import { appStudio200 } from './200_app_studio.js';
 import { appStudioBlueprint201 } from './201_app_studio_blueprint.js';
 import { qualitySystemError202 } from './202_quality_system_error.js';
+import { appStudioSpecRevisions203 } from './203_app_studio_spec_revisions.js';
+import { appStudioArchitecture204 } from './204_app_studio_architecture.js';
+import { appStudioPipelineRepairs205 } from './205_app_studio_pipeline_repairs.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -446,6 +449,9 @@ export const MIGRATIONS: Migration[] = [
   appStudio200,
   appStudioBlueprint201,
   qualitySystemError202,
+  appStudioSpecRevisions203,
+  appStudioArchitecture204,
+  appStudioPipelineRepairs205,
 ];
 
 /**

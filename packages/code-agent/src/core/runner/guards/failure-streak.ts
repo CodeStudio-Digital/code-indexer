@@ -258,3 +258,18 @@ export function buildFailureStreakRefusalText(verdict: {
 export function emptyFailureStreakState(): FailureStreakState {
   return { streaks: new Map() };
 }
+
+/**
+ * Clear every per-tool streak in place. Called by the Planning node alongside
+ * `resetDupCalls` so a forced re-plan gives failing tools a clean slate — the
+ * documented "the Planning-turn reset clears both together" contract (see
+ * nested-observer.ts). Without this, a tool that crossed the refuse threshold
+ * INSIDE a code_exec script stayed pre-refused for the rest of the run (its
+ * nested pre-check throws before dispatch, so it can never succeed to clear
+ * itself) — permanently blocking a legitimately-needed retry. A fresh count is
+ * safe: a genuinely-broken tool simply re-accumulates and re-trips, which is
+ * already bounded by maxTurns and the loop-guard reflection marker.
+ */
+export function resetFailureStreaks(state: FailureStreakState): void {
+  state.streaks.clear();
+}

@@ -25,19 +25,22 @@ import {
   type Edge,
   type Node,
   type NodeChange,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertTriangle, Loader2, RotateCcw, Save } from 'lucide-react';
-import { specToGraph } from '@mcp/app-studio/blueprint/spec-to-graph.js';
+import { AlertTriangle, LayoutDashboard, Loader2, RotateCcw, Save } from 'lucide-react';
+import { calculateBlueprintAutoLayout, specToGraph } from '@mcp/app-studio/blueprint/spec-to-graph.js';
 import type { BlueprintMutation } from '@mcp/app-studio/blueprint/mutations.js';
 import type { BlueprintEdge, BlueprintNodeData } from '@mcp/app-studio/blueprint/types.js';
 import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { Button } from '../../../components/ui/button.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import type { AppStudioSessionDetail } from '../app-studio-api.js';
 import { useBlueprint } from './useBlueprint.js';
 import { BLUEPRINT_NODE_TYPES } from './BlueprintNodes.js';
 import { NodePalette } from './NodePalette.js';
 import { NodeInspector } from './NodeInspector.js';
+import { SpecOverviewPanel } from './SpecOverviewPanel.js';
 
 type RFNode = Node<BlueprintNodeData & Record<string, unknown>>;
 
@@ -68,7 +71,15 @@ function edgeRemovalMutation(edge: BlueprintEdge): BlueprintMutation | null {
   }
 }
 
-export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSessionDetail; onChanged: () => void }) {
+export function BlueprintPanel({
+  detail,
+  onChanged,
+  onOpenSpecAgent,
+}: {
+  detail: AppStudioSessionDetail;
+  onChanged: () => void;
+  onOpenSpecAgent?: (prompt: string) => void;
+}) {
   const { t } = useTranslation('appStudio');
   const bp = useBlueprint(detail, t, onChanged);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -81,8 +92,14 @@ export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSession
   const [bpEdges, setBpEdges] = useState<BlueprintEdge[]>([]);
   const nodesRef = useRef<RFNode[]>([]);
   nodesRef.current = nodes;
+  const flowRef = useRef<ReactFlowInstance<RFNode, Edge> | null>(null);
+  const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const layoutRef = useRef(bp.layout);
   layoutRef.current = bp.layout;
+
+  useEffect(() => () => {
+    if (fitTimerRef.current) window.clearTimeout(fitTimerRef.current);
+  }, []);
 
   // Re-seed SÓ quando a ESTRUTURA muda (mutação/reload/troca de sessão).
   // Posições correntes do canvas vencem (o usuário pode estar organizando);
@@ -109,8 +126,13 @@ export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSession
         id: e.id,
         source: e.source,
         target: e.target,
-        label: e.label,
-        animated: e.kind === 'behavior-target',
+        // Cards explicam gatilhos, destinos e FKs; labels nas linhas apenas
+        // repetem isso e viram ruido quando o mapa e reduzido.
+        label: undefined,
+        type: 'smoothstep',
+        interactionWidth: 18,
+        style: { strokeWidth: e.kind === 'behavior-target' ? 1.5 : 1.15, opacity: 0.68 },
+        zIndex: e.kind === 'behavior-target' ? 1 : 0,
       })),
     );
   }, [bp.draft]);
@@ -150,6 +172,17 @@ export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSession
     [bpEdges, bp, t],
   );
 
+  const organizeMap = useCallback(() => {
+    if (!bp.draft) return;
+    const positions = calculateBlueprintAutoLayout(bp.draft);
+    setNodes((current) => current.map((node) => ({ ...node, position: positions[node.id] ?? node.position })));
+    bp.setNodePositions(positions);
+    if (fitTimerRef.current) window.clearTimeout(fitTimerRef.current);
+    fitTimerRef.current = window.setTimeout(() => {
+      void flowRef.current?.fitView({ padding: 0.12, duration: 300 });
+    }, 100);
+  }, [bp.draft, bp.setNodePositions]);
+
   const selectedData = (nodes.find((n) => n.id === selectedId)?.data ?? null) as
     | (RFNode['data'] & BlueprintNodeData)
     | null;
@@ -163,6 +196,20 @@ export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSession
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-2 py-1.5">
         <NodePalette spec={bp.draft} onMutate={bp.mutate} />
         <div className="min-w-4 flex-1" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              aria-label={t('blueprint.organize')}
+              onClick={organizeMap}
+            >
+              <LayoutDashboard className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('blueprint.organize')}</TooltipContent>
+        </Tooltip>
         {bp.issues.length > 0 && (
           <span className="flex items-center gap-1 text-[11px] text-amber-600" title={bp.issues.join('\n')}>
             <AlertTriangle className="h-3 w-3" /> {t('blueprint.issues', { count: bp.issues.length })}
@@ -195,6 +242,7 @@ export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSession
             <ReactFlow<RFNode, Edge>
               nodes={nodes}
               edges={edges}
+              onInit={(instance) => { flowRef.current = instance; }}
               nodeTypes={BLUEPRINT_NODE_TYPES}
               onNodesChange={onNodesChange}
               onNodeDragStop={onNodeDragStop}
@@ -203,8 +251,9 @@ export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSession
               onNodeClick={(_, node) => setSelectedId(node.id)}
               onPaneClick={() => setSelectedId(null)}
               deleteKeyCode={null}
+              minZoom={0.2}
               fitView
-              fitViewOptions={{ padding: 0.2 }}
+              fitViewOptions={{ padding: 0.12 }}
               proOptions={{ hideAttribution: true }}
             >
               <Background gap={18} />
@@ -213,8 +262,10 @@ export function BlueprintPanel({ detail, onChanged }: { detail: AppStudioSession
             </ReactFlow>
           </ReactFlowProvider>
         </div>
-        {selectedData && bp.draft && (
+        {selectedData && bp.draft ? (
           <NodeInspector data={selectedData} spec={bp.draft} onMutate={bp.mutate} onClose={() => setSelectedId(null)} />
+        ) : (
+          <SpecOverviewPanel spec={bp.draft} onOpenSpecAgent={onOpenSpecAgent} />
         )}
       </div>
       <p className="shrink-0 border-t px-3 py-1 text-[10px] text-muted-foreground">{t('blueprint.hint')}</p>

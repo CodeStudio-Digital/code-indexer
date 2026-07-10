@@ -16,6 +16,7 @@ export type PromptableStage = Exclude<AppStageId, 'launch'>;
 
 const STAGE_MESSAGE_KEY: Record<PromptableStage, string> = {
   discovery: 'stageMessage.discovery',
+  architecture: 'stageMessage.architecture',
   database: 'stageMessage.database',
   design: 'stageMessage.design',
   backend: 'stageMessage.backend',

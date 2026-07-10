@@ -41,7 +41,7 @@ interface Props {
   onArchive?: (id: number) => Promise<void> | void;
   onDelete?: (id: number) => Promise<void> | void;
   onRename?: (id: number, currentTitle: string) => Promise<void> | void;
-  onDuplicate?: (id: number) => Promise<void> | void;
+  onDuplicate?: (id: number) => Promise<unknown> | void;
   onMoveToGroup?: (id: number, groupId: number | null) => Promise<void> | void;
 }
 
@@ -199,7 +199,7 @@ function SessionRow({
   onArchive?: (id: number) => Promise<void> | void;
   onDelete?: (id: number) => Promise<void> | void;
   onRename?: (id: number, currentTitle: string) => Promise<void> | void;
-  onDuplicate?: (id: number) => Promise<void> | void;
+  onDuplicate?: (id: number) => Promise<unknown> | void;
   onMoveToGroup?: (id: number, groupId: number | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
@@ -359,7 +359,7 @@ function SessionActionsMenu({
   onArchive?: (id: number) => Promise<void> | void;
   onDelete?: (id: number) => Promise<void> | void;
   onRename?: (id: number, currentTitle: string) => Promise<void> | void;
-  onDuplicate?: (id: number) => Promise<void> | void;
+  onDuplicate?: (id: number) => Promise<unknown> | void;
   onMoveToGroup?: (id: number, groupId: number | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
