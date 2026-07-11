@@ -15,10 +15,22 @@ export interface PreflightSeed {
   /** Tool names to pin visible from turn 1 (≤ maxTools, validated against the catalog). */
   pinTools?: string[];
   /** Project memories the agent should READ (titles only, never content). */
-  memories?: Array<{ title: string; reason: string }>;
+  memories?: Array<{ title: string; reason: string; projectSlug?: string }>;
   /** Skills the agent should consider loading before starting (ids, validated). */
-  suggestedSkills?: Array<{ id: string; reason: string }>;
+  suggestedSkills?: Array<{ id: string; reason: string; evidence?: PreflightSkillEvidence }>;
+  /** Likely linked projects for a global task; advisory and catalog-validated. */
+  targetProjects?: Array<{ slug: string; reason: string }>;
   taskKind?: string;
+}
+
+export type PreflightSkillEvidence = 'explicit' | 'project_scope' | 'trigger' | 'dependency';
+
+export interface PreflightWorkspaceProject {
+  projectId: number;
+  name: string;
+  slug: string;
+  rootPath: string;
+  isPrimary: boolean;
 }
 
 export interface PreflightToolMeta {
@@ -31,12 +43,23 @@ export interface PreflightMemoryEntry {
   title: string;
   category?: string;
   excerpt?: string;
+  projectSlug?: string;
 }
 
 export interface PreflightSkillMeta {
   id: string;
+  name?: string;
   description?: string;
   namespace?: string;
+  scope?: string;
+  triggerPaths?: string[];
+  triggerRoles?: string[];
+  triggerTags?: string[];
+  packageNames?: string[];
+  dependencyMatched?: boolean;
+  /** Filled after deterministic eligibility filtering, before the LLM call. */
+  evidence?: PreflightSkillEvidence;
+  projectSlugs?: string[];
 }
 
 export interface PreflightPromptInput {
@@ -44,6 +67,7 @@ export interface PreflightPromptInput {
   toolCatalog: readonly PreflightToolMeta[];
   memoryIndex: readonly PreflightMemoryEntry[];
   skillCatalog: readonly PreflightSkillMeta[];
+  workspaceProjects?: readonly PreflightWorkspaceProject[];
   maxTools: number;
   maxMemories: number;
   maxSkills: number;
@@ -59,8 +83,9 @@ export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage
     '{"task_kind":"bugfix|feature|refactor|explore|docs|config|test|other",',
     ' "profile":"bootstrap|navigate|full",',
     ' "tools":[{"name":"<catalog name>","why":"<=10 words"}],',
+    ' "projects":[{"slug":"<workspace project slug>","why":"one line"}],',
     ' "skills":[{"id":"<catalog id>","why":"one line"}],',
-    ' "memories":[{"title":"<exact title from the index>","why":"one line"}]}',
+    ' "memories":[{"title":"<exact title from the index>","project":"<slug if shown>","why":"one line"}]}',
     `Rules: pick AT MOST ${input.maxTools} tools the agent will most likely need FIRST`,
     '(read-only exploration counts). The catalog includes external integrations whose names',
     'begin with `ext_` (connected MCP servers) — pin one ONLY when the task clearly needs that',
@@ -70,6 +95,7 @@ export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage
     `AT MOST ${input.maxSkills} skills whose id LITERALLY appears in the skill catalog and whose`,
     'description clearly matches this task. List AT MOST',
     `${input.maxMemories} memories and ONLY titles that literally appear in the index. Empty arrays are valid.`,
+    'For a global workspace, select only project slugs that appear in workspace_projects.',
     'Do not invent tool names, skill ids or memory titles.',
   ].join('\n');
 
@@ -83,16 +109,27 @@ export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage
 
   const parts = [`<task>\n${task}\n</task>`, `<tool_catalog>\n${catalog}\n</tool_catalog>`];
 
+  if (input.workspaceProjects && input.workspaceProjects.length > 0) {
+    const projects = input.workspaceProjects
+      .map((p) => `- ${p.slug} — ${p.name}${p.isPrimary ? ' (primary)' : ''}`)
+      .join('\n');
+    parts.push(`<workspace_projects>\n${projects}\n</workspace_projects>`);
+  }
+
   if (input.skillCatalog.length > 0) {
     const skills = input.skillCatalog
-      .map((s) => `- ${s.id} [${s.namespace ?? 'skill'}]${s.description ? ` — ${s.description.replace(/\s+/g, ' ').trim()}` : ''}`)
+      .map((s) => {
+        const projects = s.projectSlugs?.length ? ` projects=${s.projectSlugs.join(',')}` : '';
+        const evidence = s.evidence ? ` evidence=${s.evidence}` : '';
+        return `- ${s.id} [${s.namespace ?? 'skill'}]${projects}${evidence}${s.description ? ` — ${s.description.replace(/\s+/g, ' ').trim()}` : ''}`;
+      })
       .join('\n');
     parts.push(`<skill_catalog>\n${skills}\n</skill_catalog>`);
   }
 
   if (input.memoryIndex.length > 0) {
     const memory = input.memoryIndex
-      .map((m) => `- [${m.category ?? 'note'}] ${m.title}${m.excerpt ? ` — "${m.excerpt.replace(/\s+/g, ' ').trim()}"` : ''}`)
+      .map((m) => `- ${m.projectSlug ? `[${m.projectSlug}] ` : ''}[${m.category ?? 'note'}] ${m.title}${m.excerpt ? ` — "${m.excerpt.replace(/\s+/g, ' ').trim()}"` : ''}`)
       .join('\n');
     parts.push(`<memory_index>\n${memory}\n</memory_index>`);
   }

@@ -135,6 +135,9 @@ const runCommandTool: CoderTool = {
   mutates: false,
   parallelSafe: false,
   riskLevel: 'execute',
+  // Command results are snapshots of mutable workspace/process state. They
+  // must never be reused solely because command/cwd match a prior invocation.
+  repeatPolicy: 'volatile',
   // Runner backstop: a one-shot command is capped at 10 min (previously it
   // inherited the 30-min SLOW tier). The handler also clamps `timeout_ms` to
   // the same ceiling, so the shell port's clean SIGKILL fires before this

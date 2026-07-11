@@ -34,6 +34,7 @@ import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } 
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
 import { PopoutRoot } from './features/popout/PopoutRoot.js';
+import { GlobalNotificationListener } from './features/notifications/GlobalNotificationListener.js';
 
 // Sprite Studio is a heavy standalone surface (virtualized library now,
 // canvas engine later) — lazy so it never weighs on the other routes.
@@ -143,6 +144,7 @@ function AppRoot() {
     <>
       {signedIn ? (
         <>
+          <GlobalNotificationListener />
           <AppShell />
           {showPreflight ? (
             <PreflightWizard onDone={() => setShowPreflight(false)} />

@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ChevronDown, ChevronUp, History, ScrollText } from 'lucide-react';
+import { AlertCircle, ChevronUp, History } from 'lucide-react';
 import type { AssistantTurn } from '../../../hooks/useAgentStream.js';
 import { Alert, AlertDescription } from '../../../components/ui/alert.js';
-import { cn } from '../../../lib/utils.js';
 import { INITIAL_PAGE_SIZE, LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
 import { collectLatestPersistedInteractivePromptSignatures, groupMessages, visibleLiveBlocks } from '../utils.js';
@@ -17,6 +16,12 @@ import { TurnFilesSummary } from './TurnFilesSummary.js';
 import { computeTurnEditSummaries } from './turn-summaries.js';
 import { filesFromEditToolCall, type EditFileRef } from './edit-tools.js';
 import type { SnapshotFileSummary } from '../../snapshots/types.js';
+import {
+  ConversationChapterDivider,
+  ConversationChaptersTimeline,
+  useConversationChapters,
+} from './ConversationChapters.js';
+import { loadedChapterMarkers } from './chapter-markers.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 
@@ -39,40 +44,12 @@ interface MessageListProps {
   handlers: PromptHandlers;
   /** Fetch earlier messages from the backend. Returns count of rows loaded (0 = nothing more).
    *  `includeArchived` crosses a "summarize & clear" boundary to reveal hidden history. */
-  onLoadEarlier?: (beforeId: number, limit?: number, includeArchived?: boolean) => Promise<number>;
+  onLoadEarlier?: (beforeId: number | undefined, limit?: number, includeArchived?: boolean) => Promise<number>;
   /** Session-snapshot wiring for the file-edit blocks + per-turn "files changed"
    *  summary. Optional — mounts without snapshot support (e.g. the editor rail)
    *  degrade to plain file rows and skip the summary. */
   snapshotActions?: SnapshotActions | null;
   snapshotFiles?: Map<string, SnapshotFileSummary>;
-}
-
-/**
- * Distinct, collapsible card for the synthetic message written by a manual
- * "summarize & clear". Styled apart from a normal user bubble so the fresh
- * transcript reads as "here's the summary of what came before", not "the user
- * pasted a wall of text".
- */
-function SummaryCard({ text, label }: { text: string; label: string }) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="rounded-lg border border-border/60 bg-muted/30 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 transition-colors"
-      >
-        <ScrollText className="h-3.5 w-3.5 shrink-0" />
-        <span>{label}</span>
-        <ChevronDown className={cn('h-3.5 w-3.5 ml-auto transition-transform', open ? '' : '-rotate-90')} />
-      </button>
-      {open && (
-        <div className="px-3 pb-3 pt-1 text-xs whitespace-pre-wrap break-words text-foreground/80 leading-relaxed">
-          {text}
-        </div>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -94,7 +71,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
   tasksState: PersistedTasksState | null;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   streaming: boolean;
-  onLoadEarlier?: (beforeId: number, limit?: number, includeArchived?: boolean) => Promise<number>;
+  onLoadEarlier?: (beforeId: number | undefined, limit?: number, includeArchived?: boolean) => Promise<number>;
 }) {
   // Build tool-result map once per sessionData change. Tool-produced images
   // (preview_screenshot / view_image) are rendered as their own image bubble
@@ -185,6 +162,12 @@ const PersistedMessages = React.memo(function PersistedMessages({
     ? groups.slice(-renderCap)
     : groups;
 
+  const chapterIndex = useConversationChapters(sessionData.session.id);
+  const chapterMarkers = useMemo(
+    () => loadedChapterMarkers(chapterIndex.chapters, displayGroups),
+    [chapterIndex.chapters, displayGroups],
+  );
+
   // Per-turn "files changed" summary refs, keyed by each turn's last assistant
   // group index. Derived from persisted tool calls → survives scrollback/reload.
   const turnSummaries = useMemo(() => computeTurnEditSummaries(displayGroups), [displayGroups]);
@@ -227,7 +210,10 @@ const PersistedMessages = React.memo(function PersistedMessages({
   const handleLoadEarlier = useCallback(async () => {
     if (!onLoadEarlier || loadingRef.current || exhaustedRef.current) return;
     const earliestId = sessionData.message_rows[0]?.id;
-    if (!earliestId) return;
+    // A summarize boundary can leave zero visible rows. In that case there is
+    // no `before_id`; the backend anchors at maxMessageId + 1 when the user
+    // explicitly asks to cross into archived history.
+    if (!earliestId && !revealArchivedRef.current) return;
     loadingRef.current = true;
     const el = scrollContainerRef.current;
     if (el) prevScrollHeightRef.current = el.scrollHeight;
@@ -303,10 +289,10 @@ const PersistedMessages = React.memo(function PersistedMessages({
             className="flex items-center justify-center gap-1.5 py-1.5 px-3 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors disabled:opacity-50"
           >
             <ChevronUp className="h-3.5 w-3.5" />
-            {loadingMore ? 'Loading...' : 'Load earlier'}
+            {loadingMore ? t('messages.loading') : t('messages.loadEarlier')}
           </button>
           <span className="text-[10px] text-muted-foreground/60">
-            {loadedCount} of {displayTotal} loaded
+            {t('messages.loadedCount', { loaded: loadedCount, total: displayTotal })}
           </span>
         </div>
       )}
@@ -320,19 +306,22 @@ const PersistedMessages = React.memo(function PersistedMessages({
           >
             <History className="h-3.5 w-3.5" />
             {loadingMore
-              ? 'Loading...'
+              ? t('messages.loading')
               : t('messages.showEarlierHistory', { count: archivedCount })}
           </button>
         </div>
       )}
       {exhausted && loadedCount < fullTotal && (
         <div className="text-center py-1.5 text-[10px] text-muted-foreground/50">
-          All available messages loaded
+          {t('messages.allAvailableLoaded')}
         </div>
       )}
-      {sessionData.session.compaction_summary && (
-        <SummaryCard text={sessionData.session.compaction_summary} label={t('messages.summaryCard')} />
-      )}
+      <ConversationChaptersTimeline
+        key={sessionData.session.id}
+        sessionId={sessionData.session.id}
+        fallbackSummary={sessionData.session.compaction_summary}
+        {...chapterIndex}
+      />
       {displayGroups.map((g, gi) => {
         const groupKey = g.kind === 'user'
           ? `u-${g.messageId ?? gi}`
@@ -398,13 +387,14 @@ const PersistedMessages = React.memo(function PersistedMessages({
         // Inject the per-turn "files changed" summary after the turn's final
         // assistant group. For the very last group, only once the turn has
         // ended (not streaming) — the in-flight turn gets a live summary below.
+        const dividers = chapterMarkers.get(gi) ?? [];
         const summaryRefs = turnSummaries.get(gi);
         const showSummary = !!summaryRefs && (gi < displayGroups.length - 1 || !streaming);
-        if (!showSummary) return el;
         return (
           <React.Fragment key={`grp-${groupKey}`}>
+            {dividers.map((chapter) => <ConversationChapterDivider key={chapter.id} chapter={chapter} />)}
             {el}
-            <TurnFilesSummary paths={summaryRefs!} />
+            {showSummary && <TurnFilesSummary paths={summaryRefs!} />}
           </React.Fragment>
         );
       })}

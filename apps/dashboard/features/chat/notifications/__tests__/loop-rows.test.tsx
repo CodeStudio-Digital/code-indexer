@@ -9,21 +9,6 @@ function render(iv: ToolLoopIntervention): string {
 }
 
 describe('LoopBody', () => {
-  it('renders loop-enforced bodies without a snapshot', () => {
-    const html = render({
-      kind: 'loop-enforced',
-      turn: 8,
-      toolName: 'update_todo',
-      count: 2,
-      severity: 'enforced',
-      reason: 'Injected a break-the-loop reminder.',
-      receivedAt: 1,
-    });
-    expect(html).toContain('Loop enforcement reminder');
-    expect(html).toContain('update_todo');
-    expect(html).toContain('refused across planning cycles');
-  });
-
   it('renders failure-streak bodies with the last error', () => {
     const html = render({
       kind: 'failure-streak',

@@ -45,7 +45,14 @@ export interface SessionNotification {
   dismissed: boolean;
   /** Cleared when the panel is opened — drives the rail unread badge. */
   read: boolean;
+  /** Stable producer key used to suppress reconnect/StrictMode replay. */
+  sourceKey?: string;
   payload: SessionNotificationPayload;
+}
+
+export interface PushNotificationOptions {
+  sourceKey?: string;
+  receivedAt?: number;
 }
 
 /** Auto-dismiss budgets by severity. Higher severity lingers longer; the most
@@ -106,20 +113,10 @@ function deriveLoop(severity: ToolLoopIntervention['severity']): {
       return { severity: 'error', autoDismissMs: null };
     case 'informational':
       return { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
-    // 'refused' | 'enforced'
+    // 'refused'
     default:
       return { severity: 'warning', autoDismissMs: WARN_DISMISS_MS };
   }
-}
-
-/**
- * dup-result-marker INFORMATIONAL tiers are content-delivery hints, not
- * failures — callers should skip them so they don't pollute the history
- * (matches the old banner's `shouldRenderInBanner` filter). Everything else
- * (including failure-streak reminders) is worth a notification.
- */
-export function isNotifiableLoopIntervention(iv: ToolLoopIntervention): boolean {
-  return !(iv.kind === 'dup-result-marker' && iv.severity === 'informational');
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -128,19 +125,25 @@ export function isNotifiableLoopIntervention(iv: ToolLoopIntervention): boolean 
 export function pushNotification(
   sessionId: number,
   payload: SessionNotificationPayload,
+  options: PushNotificationOptions = {},
 ): string {
   const key = keyFor(sessionId);
+  const cur = byKey.get(key) ?? [];
+  if (options.sourceKey) {
+    const duplicate = cur.find((entry) => entry.sourceKey === options.sourceKey);
+    if (duplicate) return duplicate.id;
+  }
   const { severity, autoDismissMs } = derive(payload);
   const entry: SessionNotification = {
     id: String((counter += 1)),
-    receivedAt: Date.now(),
+    receivedAt: options.receivedAt ?? Date.now(),
     severity,
     autoDismissMs,
     dismissed: false,
     read: false,
+    ...(options.sourceKey ? { sourceKey: options.sourceKey } : {}),
     payload,
   };
-  const cur = byKey.get(key) ?? [];
   const next = [...cur, entry];
   byKey.set(key, next.length > HISTORY_CAP ? next.slice(-HISTORY_CAP) : next);
   notify(key);

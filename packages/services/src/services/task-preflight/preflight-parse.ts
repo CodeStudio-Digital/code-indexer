@@ -5,7 +5,11 @@
  * validated seed is reported as a parse failure (the session then runs
  * exactly as today).
  */
-import type { PreflightSeed } from './preflight-prompt.js';
+import type {
+  PreflightMemoryEntry,
+  PreflightSeed,
+  PreflightSkillEvidence,
+} from './preflight-prompt.js';
 
 const TASK_KINDS = new Set(['bugfix', 'feature', 'refactor', 'explore', 'docs', 'config', 'test', 'other']);
 const PROFILES = new Set(['bootstrap', 'navigate', 'full']);
@@ -29,7 +33,13 @@ function extractJson(raw: string): unknown {
 export interface PreflightParseContext {
   toolNames: ReadonlySet<string>;
   memoryTitles: readonly string[];
+  memoryEntries?: readonly PreflightMemoryEntry[];
   skillIds: ReadonlySet<string>;
+  skillMetaById?: ReadonlyMap<string, {
+    evidence?: PreflightSkillEvidence;
+    projectSlugs?: readonly string[];
+  }>;
+  projectSlugs?: ReadonlySet<string>;
   maxTools: number;
   maxMemories: number;
   maxSkills: number;
@@ -71,32 +81,66 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
     if (pins.length > 0) seed.pinTools = pins;
   }
 
+  if (Array.isArray(parsed.projects) && ctx.projectSlugs && ctx.projectSlugs.size > 0) {
+    const projects: Array<{ slug: string; reason: string }> = [];
+    for (const item of parsed.projects) {
+      const slug = typeof item === 'string' ? item : (item as { slug?: unknown } | null)?.slug;
+      if (typeof slug !== 'string') continue;
+      const trimmed = slug.trim();
+      if (!ctx.projectSlugs.has(trimmed) || projects.some((p) => p.slug === trimmed)) continue;
+      const whyRaw = typeof item === 'string' ? '' : (item as { why?: unknown }).why;
+      const reason = typeof whyRaw === 'string' ? whyRaw.trim().slice(0, MAX_REASON_CHARS) : '';
+      projects.push({ slug: trimmed, reason });
+    }
+    if (projects.length > 0) seed.targetProjects = projects;
+  }
+
   if (Array.isArray(parsed.skills)) {
-    const suggested: Array<{ id: string; reason: string }> = [];
+    const suggested: NonNullable<PreflightSeed['suggestedSkills']> = [];
+    const targetSlugs = new Set(seed.targetProjects?.map((p) => p.slug) ?? []);
     for (const item of parsed.skills) {
       const id = typeof item === 'string' ? item : (item as { id?: unknown } | null)?.id;
       if (typeof id !== 'string') continue;
       const trimmed = id.trim();
       if (!ctx.skillIds.has(trimmed) || suggested.some((s) => s.id === trimmed)) continue;
+      const meta = ctx.skillMetaById?.get(trimmed);
+      if (ctx.skillMetaById && !meta?.evidence) continue;
+      if (
+        meta?.evidence === 'project_scope' &&
+        meta?.projectSlugs && meta.projectSlugs.length > 0 &&
+        (targetSlugs.size === 0 || !meta.projectSlugs.some((slug) => targetSlugs.has(slug)))
+      ) continue;
       const whyRaw = typeof item === 'string' ? '' : (item as { why?: unknown }).why;
       const reason = typeof whyRaw === 'string' ? whyRaw.trim().slice(0, MAX_REASON_CHARS) : '';
-      suggested.push({ id: trimmed, reason });
+      suggested.push({ id: trimmed, reason, ...(meta?.evidence ? { evidence: meta.evidence } : {}) });
       if (suggested.length >= ctx.maxSkills) break;
     }
     if (suggested.length > 0) seed.suggestedSkills = suggested;
   }
 
   if (Array.isArray(parsed.memories)) {
-    const byLowerTitle = new Map(ctx.memoryTitles.map((t) => [t.toLowerCase(), t]));
-    const memories: Array<{ title: string; reason: string }> = [];
+    const entries: readonly PreflightMemoryEntry[] =
+      ctx.memoryEntries ?? ctx.memoryTitles.map((title): PreflightMemoryEntry => ({ title }));
+    const memories: Array<{ title: string; reason: string; projectSlug?: string }> = [];
     for (const item of parsed.memories) {
       if (!item || typeof item !== 'object') continue;
-      const row = item as { title?: unknown; why?: unknown };
+      const row = item as { title?: unknown; project?: unknown; why?: unknown };
       if (typeof row.title !== 'string') continue;
-      const canonical = byLowerTitle.get(row.title.trim().toLowerCase());
-      if (!canonical || memories.some((m) => m.title === canonical)) continue;
+      const wantedTitle = row.title.trim().toLowerCase();
+      const wantedProject = typeof row.project === 'string' ? row.project.trim() : '';
+      const candidates = entries.filter((entry) =>
+        entry.title.toLowerCase() === wantedTitle &&
+        (!wantedProject || entry.projectSlug === wantedProject),
+      );
+      if (candidates.length !== 1) continue;
+      const canonical = candidates[0]!;
+      if (memories.some((m) => m.title === canonical.title && m.projectSlug === canonical.projectSlug)) continue;
       const reason = typeof row.why === 'string' ? row.why.trim().slice(0, MAX_REASON_CHARS) : '';
-      memories.push({ title: canonical, reason });
+      memories.push({
+        title: canonical.title,
+        reason,
+        ...(canonical.projectSlug ? { projectSlug: canonical.projectSlug } : {}),
+      });
       if (memories.length >= ctx.maxMemories) break;
     }
     if (memories.length > 0) seed.memories = memories;
@@ -104,6 +148,7 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
 
   const usable = seed.profile !== undefined
     || (seed.pinTools?.length ?? 0) > 0
+    || (seed.targetProjects?.length ?? 0) > 0
     || (seed.suggestedSkills?.length ?? 0) > 0
     || (seed.memories?.length ?? 0) > 0;
   return usable ? seed : null;

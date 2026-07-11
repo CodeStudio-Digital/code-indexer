@@ -11,12 +11,15 @@ beforeEach(() => {
   db.exec(`
     CREATE TABLE coder_messages (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL);
     CREATE TABLE coder_tool_calls (
-      id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, tool_name TEXT NOT NULL,
+      id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, tool_use_id TEXT,
+      tool_name TEXT NOT NULL,
       args_json TEXT NOT NULL DEFAULT '{}', result_text TEXT NOT NULL DEFAULT '',
       is_error INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER NOT NULL DEFAULT 0,
       output_chars INTEGER, output_chars_shaped INTEGER, truncated INTEGER NOT NULL DEFAULT 0,
       refusal_kind TEXT, parent_tool_use_id TEXT, reduction_kind TEXT,
-      reduction_technique TEXT, created_at TEXT DEFAULT (datetime('now'))
+      reduction_technique TEXT, guard_action TEXT, guard_reason TEXT,
+      would_block INTEGER, guard_origin_tool_use_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
     );
     INSERT INTO coder_messages (id, session_id) VALUES (1, 1187);
     INSERT INTO coder_tool_calls
@@ -47,5 +50,58 @@ describe('tool stats reduction accounting', () => {
       hardCapSavedChars: 60,
       nestedRawChars: 1000,
     });
+  });
+
+  it('separates root refusals from propagated parent failures and guard savings', () => {
+    db.exec(`
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_use_id, tool_name, is_error, refusal_kind, parent_tool_use_id,
+         guard_action, guard_reason)
+      VALUES
+        (4, 1, 'ce-root#1', 'mcp__read_file', 1, 'dedup', 'ce-root', 'block', 'mutating-repeat'),
+        (5, 1, 'ce-root', 'code_exec', 1, 'dedup', NULL, 'block', 'nested-refusal');
+      UPDATE coder_tool_calls
+         SET guard_origin_tool_use_id = 'ce-root#1'
+       WHERE id = 5;
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_name, is_error)
+      VALUES (6, 1, 'run_command', 1);
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_name, parent_tool_use_id, guard_action, guard_reason)
+      VALUES (7, 1, 'mcp__read_file', 'ce-reuse', 'reuse', 'same-scope-stable-call');
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_name, guard_action, would_block, guard_reason)
+      VALUES (8, 1, 'git_status', 'shadow', 1, 'no-progress');
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_use_id, tool_name, is_error, refusal_kind,
+         guard_action, guard_origin_tool_use_id, guard_reason)
+      VALUES (9, 1, 'direct-root', 'git_diff', 1, 'dedup',
+              'block', 'direct-root', 'mutating-repeat');
+    `);
+
+    const stats = getToolCallStats(db, 1187, 20);
+
+    expect(stats.guardOutcomes).toEqual({
+      genuineErrors: 1,
+      rootRefusals: 2,
+      propagatedParentFailures: 1,
+      reusedCalls: 1,
+      shadowCandidates: 1,
+    });
+    expect(stats.byName.find((row) => row.name === 'code_exec')).toMatchObject({
+      errorCount: 0,
+      refusedCount: 0,
+      propagatedFailureCount: 1,
+    });
+    expect(stats.byName.find((row) => row.name === 'mcp__read_file')).toMatchObject({
+      refusedCount: 1,
+      reuseCount: 1,
+    });
+    expect(stats.recent.slice(0, 4).map((row) => row.outcome)).toEqual([
+      'root_refusal',
+      'shadow',
+      'genuine_error',
+      'propagated_parent_failure',
+    ]);
   });
 });

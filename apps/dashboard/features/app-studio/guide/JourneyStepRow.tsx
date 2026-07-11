@@ -7,10 +7,11 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, CheckCircle2, Circle, CircleDot, Eye, Play, Rocket, RotateCcw, SkipForward } from 'lucide-react';
+import { Bot, CheckCircle2, Circle, CircleDot, Eye, Play, RefreshCw, Rocket, RotateCcw, ShieldAlert, SkipForward, Wrench } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { cn } from '../../../lib/utils.js';
 import type { AppPipelineStage, AppStageAction } from '../app-studio-api.js';
+import { isStageApprovalBlocked, stageBlockingIssueCount } from '../stage-review-state.js';
 import { ApproveBar } from './ApproveBar.js';
 import { ExplainerCard } from './ExplainerCard.js';
 
@@ -30,6 +31,7 @@ export function JourneyStepRow({
   progressLabel,
   busy,
   onAction,
+  onRecheck,
   onStart,
   onOpenPublish,
 }: {
@@ -41,6 +43,7 @@ export function JourneyStepRow({
   progressLabel?: string | null;
   busy: boolean;
   onAction: (action: AppStageAction, feedback?: string) => void;
+  onRecheck: () => void;
   /** Dispara o prompt da etapa no chat (etapas conversáveis). */
   onStart: () => void;
   /** launch: a ação é abrir a aba Publicar, não mandar prompt. */
@@ -51,6 +54,8 @@ export function JourneyStepRow({
   const [reopenFeedback, setReopenFeedback] = useState('');
   const Icon = STATUS_ICON[stage.status];
   const isLaunch = stage.id === 'launch';
+  const approvalBlocked = isStageApprovalBlocked(stage);
+  const blockingIssueCount = stageBlockingIssueCount(stage);
 
   return (
     <div className="flex gap-2.5">
@@ -157,23 +162,45 @@ export function JourneyStepRow({
 
         {isCurrent && (
           <div className="mt-2 space-y-2">
-            <div className="rounded border border-amber-300/60 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-200">
-              <span className="font-semibold">{t('pipeline.yourTurn')}:</span> {t(`stages.${stage.id}.userAction`)}
-            </div>
+            {approvalBlocked ? (
+              <div className="border-l-2 border-amber-500 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-900 dark:text-amber-200" role="alert">
+                <span className="flex items-center gap-1 font-semibold">
+                  <ShieldAlert className="h-3.5 w-3.5" /> {t('pipeline.approvalBlocked')}
+                </span>
+                <span className="mt-0.5 block">{t('pipeline.approvalBlockedDescription', { count: blockingIssueCount })}</span>
+              </div>
+            ) : (
+              <div className="rounded border border-amber-300/60 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-200">
+                <span className="font-semibold">{t('pipeline.yourTurn')}:</span> {t(`stages.${stage.id}.userAction`)}
+              </div>
+            )}
             {(stage.status === 'pending' || stage.status === 'active') && (
-              <Button
-                size="sm"
-                className="h-7 text-xs"
-                disabled={busy}
-                onClick={isLaunch ? onOpenPublish : onStart}
-              >
-                {isLaunch ? <Rocket className="mr-1 h-3 w-3" /> : <Play className="mr-1 h-3 w-3" />}
-                {isLaunch
-                  ? t('tabs.publish')
-                  : stage.status === 'pending'
-                    ? t('pipeline.start')
-                    : t('pipeline.resend')}
-              </Button>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={busy}
+                  onClick={isLaunch ? onOpenPublish : onStart}
+                >
+                  {isLaunch
+                    ? <Rocket className="mr-1 h-3 w-3" />
+                    : approvalBlocked
+                      ? <Wrench className="mr-1 h-3 w-3" />
+                      : <Play className="mr-1 h-3 w-3" />}
+                  {isLaunch
+                    ? t('tabs.publish')
+                    : approvalBlocked
+                      ? t('pipeline.resolvePending')
+                      : stage.status === 'pending'
+                        ? t('pipeline.start')
+                        : t('pipeline.resend')}
+                </Button>
+                {approvalBlocked && (
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onRecheck}>
+                    <RefreshCw className="mr-1 h-3 w-3" /> {t('pipeline.recheck')}
+                  </Button>
+                )}
+              </div>
             )}
             {stage.status === 'review' && (
               <ApproveBar

@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   renderSessionStateBlock,
   renderMemoryIndex,
+  renderConversationChapterIndex,
   hashSessionState,
   type SessionStateData,
   type SessionStateBudget,
@@ -113,5 +114,20 @@ describe('renderMemoryIndex', () => {
   it('returns null for empty entries or zero budget', () => {
     expect(renderMemoryIndex([], 1000)).toBeNull();
     expect(renderMemoryIndex([{ title: 'x', category: 'note' }], 0)).toBeNull();
+  });
+});
+
+describe('renderConversationChapterIndex', () => {
+  it('injects at most ten titles and stays inside the total 1200-char gate', () => {
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      ordinal: index + 1,
+      title: `Chapter ${index + 1} ${'x'.repeat(120)}`,
+      source: 'auto',
+    }));
+    const text = renderConversationChapterIndex(entries, 20, 1200)!;
+    expect(text.length).toBeLessThanOrEqual(1200);
+    expect((text.match(/^- #/gm) ?? []).length).toBeLessThanOrEqual(10);
+    expect(text).toContain('recall_conversation');
   });
 });

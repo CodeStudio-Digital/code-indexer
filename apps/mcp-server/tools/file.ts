@@ -1,6 +1,7 @@
-import { join } from 'node:path';
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+import { readFileSync, readdirSync, existsSync, lstatSync, statSync } from 'node:fs';
 import { defineTool, type McpTool } from '../tool.js';
+import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import {
   readFileSlice,
   extractSkeletonFromFile,
@@ -487,7 +488,10 @@ const list_directory = defineTool({
     // Disk fallback: index is empty for this prefix. Walk the directory
     // directly so the agent gets useful results in non-indexed projects
     // and on freshly created paths.
-    const diskEntries = listDirectoryFromDisk(project.root_path, prefix, depth);
+    const topLevelLinks = project.is_synthetic
+      ? new Set(assignWorkspaceSlugs(db.listUnionProjectIds(project.id)).map((p) => p.slug))
+      : undefined;
+    const diskEntries = listDirectoryFromDisk(project.root_path, prefix, depth, topLevelLinks);
     if (diskEntries.length === 0) {
       return 'Empty.';
     }
@@ -502,9 +506,31 @@ const list_directory = defineTool({
  * (`<rel-path> (<size>B)`) so the LLM doesn't need to special-case the
  * fallback output.
  */
-function listDirectoryFromDisk(rootPath: string, prefix: string, depth: number): string[] {
+export function listDirectoryFromDisk(
+  rootPath: string,
+  prefix: string,
+  depth: number,
+  topLevelLinks?: ReadonlySet<string>,
+): string[] {
   const IGNORE = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', '.mcp-indexer', '.cache', '.turbo', 'coverage']);
-  const startAbs = prefix ? join(rootPath, prefix) : rootPath;
+  const normalizedPrefix = prefix.replace(/\\/g, '/').replace(/^\.\/+/, '');
+  const prefixParts = normalizedPrefix.split('/').filter((part) => part && part !== '.');
+  if (isAbsolute(prefix) || prefixParts.includes('..')) return [];
+  if (topLevelLinks && prefixParts.length > 0) {
+    if (!topLevelLinks.has(prefixParts[0])) return [];
+    // The first segment is the DB-authorized workspace junction. Reject a
+    // replaced first link and every nested link in a direct-prefix request so
+    // callers cannot skip the guarded root walk.
+    let cursor = join(rootPath, prefixParts[0]);
+    try {
+      if (!lstatSync(cursor).isSymbolicLink()) return [];
+      for (const part of prefixParts.slice(1)) {
+        cursor = join(cursor, part);
+        if (lstatSync(cursor).isSymbolicLink()) return [];
+      }
+    } catch { return []; }
+  }
+  const startAbs = prefixParts.length > 0 ? join(rootPath, ...prefixParts) : rootPath;
   let stat: { isDirectory(): boolean };
   try { stat = statSync(startAbs); } catch { return []; }
   if (!stat.isDirectory()) {
@@ -518,7 +544,12 @@ function listDirectoryFromDisk(rootPath: string, prefix: string, depth: number):
   const out: string[] = [];
   const walk = (absDir: string, relDir: string, level: number): void => {
     if (level > depth) return;
-    let entries: { name: string; isDirectory(): boolean; isFile(): boolean }[] = [];
+    let entries: {
+      name: string;
+      isDirectory(): boolean;
+      isFile(): boolean;
+      isSymbolicLink(): boolean;
+    }[] = [];
     try { entries = readdirSync(absDir, { withFileTypes: true }); } catch { return; }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
@@ -527,7 +558,11 @@ function listDirectoryFromDisk(rootPath: string, prefix: string, depth: number):
       if (entry.name.startsWith('.') && entry.name !== '.env.example') continue;
       const childRel = relDir ? `${relDir}/${entry.name}` : entry.name;
       const childAbs = join(absDir, entry.name);
-      if (entry.isDirectory()) {
+      const atSyntheticRoot = level === 0 && !relDir && !!topLevelLinks;
+      const isAuthorizedTopLevelLink =
+        atSyntheticRoot && topLevelLinks.has(entry.name) && entry.isSymbolicLink();
+      if (atSyntheticRoot && !isAuthorizedTopLevelLink) continue;
+      if (entry.isDirectory() || isAuthorizedTopLevelLink) {
         out.push(`${childRel}/`);
         walk(childAbs, childRel, level + 1);
       } else if (entry.isFile()) {
@@ -537,7 +572,7 @@ function listDirectoryFromDisk(rootPath: string, prefix: string, depth: number):
       }
     }
   };
-  walk(startAbs, prefix, 0);
+  walk(startAbs, normalizedPrefix, 0);
   return out;
 }
 

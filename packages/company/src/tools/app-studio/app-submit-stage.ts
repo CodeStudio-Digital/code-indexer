@@ -23,6 +23,7 @@ import {
 import { runAppStageGate } from '@mcp/app-studio/pipeline/gates.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
+import { parseAppUxBrief, parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -77,6 +78,8 @@ export function appSubmitStage(binding: AppToolBinding): CoderTool {
 
         const architectureRevision = store.getLatestArchitectureRevision(session.id);
         const currentSpecRevision = store.getLatestApprovedSpecRevision(session.id);
+        const uxRevision = store.getLatestUxRevision(session.id);
+        const wireframeRevision = store.getLatestWireframeRevision(session.id);
         const gate = await runAppStageGate({
           stage,
           workspaceDir: resolved.path,
@@ -85,6 +88,14 @@ export function appSubmitStage(binding: AppToolBinding): CoderTool {
           recorded: store.listFeatures(session.id).map((f) => ({ name: f.name, kind: f.kind })),
           architecture: parseAppArchitecturePlan(architectureRevision?.architecture_json),
           currentSpecRevisionId: currentSpecRevision?.id ?? null,
+          currentArchitectureRevisionId: architectureRevision?.id ?? null,
+          currentUxRevisionId: uxRevision?.id ?? null,
+          ux: parseAppUxBrief(uxRevision?.ux_json),
+          uxStatus: uxRevision?.status ?? null,
+          wireframe: parseAppWireframePlan(wireframeRevision?.wireframe_json),
+          wireframeStatus: wireframeRevision?.status ?? null,
+          buildGroups: wireframeRevision ? store.listBuildGroups(wireframeRevision.id) : [],
+          buildTasks: wireframeRevision ? store.listBuildTaskEvidence(wireframeRevision.id) : [],
         });
 
         let next;

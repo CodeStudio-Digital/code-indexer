@@ -22,17 +22,26 @@ export function renderPreflightHint(seed: PreflightSeed): string {
     lines.push(`toolset seeded for this task: ${toolsetParts.join('; ')}`);
   }
 
+  if (seed.targetProjects?.length) {
+    lines.push('likely linked projects — verify before editing:');
+    for (const project of seed.targetProjects) {
+      lines.push(`- ${project.slug}${project.reason ? ` — ${project.reason}` : ''}`);
+    }
+  }
+
   if (seed.suggestedSkills?.length) {
-    lines.push('skills that may fit this task — load the body BEFORE starting (get_skill_content({skill_id:"<id>"})):');
+    lines.push('skills with objective applicability evidence — confirm the target project before loading:');
     for (const skill of seed.suggestedSkills) {
-      lines.push(`- ${skill.id}${skill.reason ? ` — ${skill.reason}` : ''}`);
+      const evidence = skill.evidence ? ` [evidence=${skill.evidence}]` : '';
+      lines.push(`- ${skill.id}${evidence}${skill.reason ? ` — ${skill.reason}` : ''}`);
     }
   }
 
   if (seed.memories?.length) {
     lines.push('read these project memories BEFORE exploring (recall_memory({query:"<title>"})):');
     for (const memory of seed.memories) {
-      lines.push(`- "${memory.title}"${memory.reason ? ` — ${memory.reason}` : ''}`);
+      const project = memory.projectSlug ? `[${memory.projectSlug}] ` : '';
+      lines.push(`- ${project}"${memory.title}"${memory.reason ? ` — ${memory.reason}` : ''}`);
     }
   }
 

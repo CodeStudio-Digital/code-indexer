@@ -15,12 +15,9 @@ import type {
   ToolLoopIntervention,
   ToolLoopGuardIntervention,
   FailureStreakIntervention,
-  LoopEnforcedIntervention,
-  DupResultMarkerIntervention,
 } from '../../../hooks/agent-stream/types.js';
 
 const KIND_LABELS: Record<ToolLoopGuardIntervention['kind'], string> = {
-  'dup-call-cap': 'Repeated identical call',
   'doom-loop-strict': 'Doom loop (strict)',
   'doom-loop-fuzzy': 'Doom loop (fuzzy)',
   dominance: 'Tool dominance',
@@ -31,10 +28,6 @@ export function LoopBody({ intervention: iv }: { intervention: ToolLoopIntervent
   switch (iv.kind) {
     case 'failure-streak':
       return <FailureStreakBody intervention={iv} />;
-    case 'loop-enforced':
-      return <LoopEnforcedBody intervention={iv} />;
-    case 'dup-result-marker':
-      return <DupRefusedBody intervention={iv} />;
     default:
       return <GuardBody intervention={iv} />;
   }
@@ -96,42 +89,6 @@ function FailureStreakBody({ intervention: iv }: { intervention: FailureStreakIn
           {iv.lastError}
         </p>
       )}
-    </>
-  );
-}
-
-function LoopEnforcedBody({ intervention: iv }: { intervention: LoopEnforcedIntervention }) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-semibold">Loop enforcement reminder</span>
-        <span className="text-[10px] opacity-70">turn {iv.turn}</span>
-        <span className="text-[10px] opacity-70">{iv.count}× refused across planning cycles</span>
-        <span className="ml-auto text-[10px] uppercase opacity-70">{iv.severity}</span>
-      </div>
-      <p className="mt-0.5 leading-snug">
-        <span className="font-mono">{iv.toolName}</span> {iv.reason}
-      </p>
-    </>
-  );
-}
-
-function DupRefusedBody({ intervention: iv }: { intervention: DupResultMarkerIntervention }) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-semibold">Identical fetch refused</span>
-        <span className="text-[10px] opacity-70">turn {iv.currentTurn}</span>
-        <span className="text-[10px] opacity-70">
-          {iv.hitCount}× identical since turn {iv.originalTurn}
-        </span>
-        <span className="ml-auto text-[10px] uppercase opacity-70">refused</span>
-      </div>
-      <p className="mt-0.5 leading-snug">
-        <span className="font-mono">{iv.toolName}</span> returned the same content for the{' '}
-        {iv.hitCount}th time in a row. The agent should act on the data it already has, or pass{' '}
-        <span className="font-mono">force_reread: true</span> if the source genuinely changed.
-      </p>
     </>
   );
 }

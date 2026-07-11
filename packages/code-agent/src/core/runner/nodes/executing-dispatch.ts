@@ -1,13 +1,13 @@
 /**
- * Tool dispatch with tuple-hash guard. Walks the assistant's emitted
+ * Tool dispatch with invocation-scoped guards. Walks the assistant's emitted
  * tool_use blocks serially:
  *
- *   1. Look up the CoderTool to read its `repeatable` flag.
- *   2. Run `checkDupCall` — verdict decides what happens:
- *        - allow            → registry.invoke → wrap result
- *        - allow-with-rmd   → registry.invoke → prepend system-reminder
- *        - refuse           → synthesize error result, set tool-loop flag
- *   3. Build a single tool-role AgentMessage with all the tool_result
+ *   1. Resolve repeat/execution policy and normalize the equality key.
+ *   2. Run policy + permission gates (denials never enter repeat state).
+ *   3. Reuse stable reads only inside this batch/epoch; volatile/pollable
+ *      calls execute; hazardous mutations warn on #2 and stop on #3.
+ *   4. Observe unchanged cross-turn results after execution without blocking.
+ *   5. Build a single tool-role AgentMessage with all the tool_result
  *      blocks so the next turn sees them as one atomic batch.
  *
  * Serial (not parallel) by design: tools may share filesystem state and
@@ -17,10 +17,16 @@
  */
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import type { ToolContext, CoderTool } from '@mcp/code-agent/core/tool.js';
+import type { ToolContext, CoderTool, GuardVerdict } from '@mcp/code-agent/core/tool.js';
 import type { DetailedReduction, ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
 import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.js';
-import { checkDupCall } from '../guards/tuple-hash-dedup.js';
+import {
+  checkDupCall,
+  createInvocationGuardState,
+  dedupPolicyMode,
+  normalizeGuardInput,
+} from '../guards/tuple-hash-dedup.js';
+import type { NoProgressTracker } from '../guards/no-progress.js';
 import {
   checkFailureStreak,
   buildFailureStreakReminderMarker,
@@ -35,8 +41,8 @@ import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js'
 
 /**
  * Per-invocation timeout is delegated to `resolveToolTimeoutMs` (the
- * `core/tool-timeouts.ts` classification): interactive/repeatable tools get
- * no timeout; known-slow tools (subagents, code_exec, run_command, research,
+ * `core/tool-timeouts.ts` classification): interactive/explicit-Infinity tools
+ * get no timeout; known-slow tools (subagents, code_exec, run_command, research,
  * MCP) get 30 min; everything else 5 min. Interactivity is resolved through
  * `resolveToolMetadata` because the built-in interactive set declares the
  * flag in `policy.ts` (BUILTIN_CLASSIFICATION), NOT on the tool object —
@@ -58,6 +64,7 @@ export type RefusalKind =
   | 'dedup'
   | 'user_denied' // permission-gate denial — name matches classifyToolRefusal's legacy tag
   | 'failure-streak'
+  | 'polling-stuck'
   | 'timeout'
   | 'abort';
 
@@ -85,6 +92,10 @@ export interface DispatchedToolResult {
   reductionReport?: ReductionReport;
   outputId?: string;
   ledgerEntry?: ToolCallLedgerEntry;
+  /** Structured guard/reuse/shadow metadata carried into persistence. */
+  guardVerdict?: GuardVerdict;
+  /** Workspace/state version at result delivery, independent of guard action. */
+  stateEpoch?: number;
 }
 
 export interface DispatchArgs {
@@ -93,14 +104,8 @@ export interface DispatchArgs {
   toolContext: ToolContext;
   turn: number;
   dupCalls: Map<string, DupCallEntry>;
-  /**
-   * Cross-cycle loop-refusal counter (`ctx.loopRefusals`). Survives the
-   * per-Planning `dupCalls` reset, so it remembers a refused call that keeps
-   * coming back. When a tool+args crosses `ENFORCE_AFTER_REFUSALS`, the
-   * result's `loopEnforcement` is set so the Executing node injects an active
-   * enforcement reminder. Omit to disable (tests / subagent paths).
-   */
-  loopRefusals?: Map<string, number>;
+  /** Run-scoped, post-result observation and state epoch. */
+  noProgressTracker?: NoProgressTracker;
   /**
    * Optional pre-dispatch gate. Returning a non-null string blocks the
    * invocation and synthesises an error tool_result carrying that text
@@ -214,9 +219,9 @@ export interface DispatchArgs {
   /**
    * Factory for the nested-call guard/telemetry observer. Consulted once per
    * dispatched tool; the Executing node only returns one for `code_exec`
-   * parents (and when nested guards are enabled). The observer closes over
-   * the run's `dupCalls`/`failureStreaks`, so nested calls count against the
-   * SAME guard state as direct ones.
+   * parents (and when nested guards are enabled). Invocation counts live in
+   * the observer's local scope; only result-aware failure/no-progress state
+   * is shared with direct dispatch.
    */
   makeNestedObserver?: (
     parentToolUseId: string,
@@ -278,23 +283,7 @@ export interface DispatchResult {
    * reflection reminder instead of a generic "a repeated tool call".
    */
   loopDetail?: { toolName: string; count: number };
-  /**
-   * Set when a tool+args was hard-refused enough times across planning
-   * cycles (≥ `ENFORCE_AFTER_REFUSALS`) to count as an INSISTENT loop. The
-   * Executing node reacts by injecting an active enforcement
-   * `<system-reminder>` (available tools + "stop looping") and emitting
-   * `tool_loop_intervention { kind: 'loop-enforced' }`. Last one in the
-   * batch wins (mirrors `loopGuard`).
-   */
-  loopEnforcement?: { toolName: string; count: number };
 }
-
-/**
- * How many cross-cycle hard refusals of the same tool+args trigger active
- * enforcement. 2 ≈ ~6 identical calls (each refuse follows a 2nd reminder),
- * i.e. the agent burned two full clean-slate cycles still repeating itself.
- */
-const ENFORCE_AFTER_REFUSALS = 2;
 
 export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult> {
   const results: DispatchedToolResult[] = [];
@@ -304,15 +293,22 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   let loopGuard: DispatchResult['loopGuard'] | undefined;
   // A1 — tool/count behind the last refusal (mirrors loopGuard).
   let loopDetail: DispatchResult['loopDetail'];
-  // Insistent-loop enforcement signal (last refused call that crossed the
-  // cross-cycle threshold wins).
-  let loopEnforcement: DispatchResult['loopEnforcement'];
+  const invocationGuard = createInvocationGuardState(
+    args.noProgressTracker?.stateEpoch ?? 0,
+  );
+  // Successful, stable read results may be reused only inside this dispatch
+  // batch and state epoch. Nothing survives into a later turn.
+  const reusableResults = new Map<string, {
+    result: DispatchedToolResult;
+    count: number;
+  }>();
 
   for (const tu of args.toolUses) {
     const tool = lookupTool(args.registry, tu.name);
     const resolvedMetadata = tool ? resolveToolMetadata(tool) : null;
+    const normalizedInput = normalizeGuardInput(tool, tu.input);
     const isRepeatable = resolvedMetadata
-      ? resolvedMetadata.repeatPolicy === 'pollable' || resolvedMetadata.repeatPolicy === 'volatile'
+      ? resolvedMetadata.repeatPolicy === 'pollable'
       : false;
     // Interactivity comes from the policy classification, NOT the raw tool
     // object: the built-in interactive tools (submit_plan, ask_user,
@@ -338,6 +334,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           durationMs: 0,
           wasRefusedByDedup: false,
           refusalKind: 'gate',
+          stateEpoch: invocationGuard.stateEpoch,
         });
         continue;
       }
@@ -363,6 +360,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           durationMs: 0,
           wasRefusedByDedup: false,
           refusalKind: 'gate',
+          stateEpoch: invocationGuard.stateEpoch,
         });
         continue;
       }
@@ -381,6 +379,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         durationMs: 0,
         wasRefusedByDedup: false,
         refusalKind: 'gate',
+        stateEpoch: invocationGuard.stateEpoch,
       });
       continue;
     }
@@ -389,9 +388,36 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Refuses re-reads BEFORE the dedup check so the dedup counter
     // stays meaningful only for non-read tools.
     const preReadRefusal = args.enforcePreRead?.(tu.name, tu.input, args.turn, tu.id) ?? null;
-    if (preReadRefusal !== null) {
+    // Hybrid/observe never turn a historical read into a hard error. Preserve
+    // the mtime/coverage-aware non-error pointer, but ignore the legacy string
+    // refusal and fetch fresh content. `force_reread:true` already makes the
+    // bridge return null and also bypasses the local reuse path below.
+    const enforcePreReadResult =
+      preReadRefusal !== null &&
+      (typeof preReadRefusal !== 'string' || dedupPolicyMode() === 'legacy');
+    if (enforcePreReadResult) {
       const content = typeof preReadRefusal === 'string' ? preReadRefusal : preReadRefusal.content;
       const isError = typeof preReadRefusal === 'string' ? true : preReadRefusal.isError ?? true;
+      const guardVerdict: GuardVerdict = isError
+        ? {
+            action: 'block',
+            reason: 'legacy-pre-read',
+            refusalKind: 'pre-read',
+            shouldReflect: false,
+            affectsFailureStreak: false,
+            sourceTool: tu.name,
+            originToolUseId: tu.id,
+            stateEpoch: invocationGuard.stateEpoch,
+          }
+        : {
+            action: 'reuse',
+            reason: 'read-coverage-pointer',
+            shouldReflect: false,
+            affectsFailureStreak: false,
+            sourceTool: tu.name,
+            originToolUseId: tu.id,
+            stateEpoch: invocationGuard.stateEpoch,
+          };
       results.push({
         toolUseId: tu.id,
         name: tu.name,
@@ -402,6 +428,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         // The auto-downgrade variant (isError=false) is a degraded SUCCESS,
         // not a refusal — leave it untagged so error analytics stay clean.
         ...(isError ? { refusalKind: 'pre-read' as const } : {}),
+        guardVerdict,
+        stateEpoch: invocationGuard.stateEpoch,
       });
       continue;
     }
@@ -422,44 +450,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         durationMs: 0,
         wasRefusedByDedup: false,
         refusalKind: 'task-mode',
+        stateEpoch: invocationGuard.stateEpoch,
       });
       continue;
     }
 
-    const verdict = checkDupCall({
-      name: tu.name,
-      input: tu.input,
-      isRepeatable,
-      turn: args.turn,
-      useId: tu.id,
-      dupCalls: args.dupCalls,
-    });
-
-    if (verdict.kind === 'refuse') {
-      results.push({
-        toolUseId: tu.id,
-        name: tu.name,
-        content: verdict.refuseText,
-        isError: true,
-        durationMs: 0,
-        wasRefusedByDedup: true,
-        refusalKind: 'dedup',
-      });
-      toolLoopDetected = true;
-      loopGuard = 'tuple-hash';
-      loopDetail = { toolName: tu.name, count: verdict.entry.count };
-      // Cross-cycle memory: the Planning reset clears `dupCalls`, so without
-      // this the loop never escalates past one passive refusal. Count refusals
-      // that survive the reset; once they pile up, flag active enforcement.
-      if (args.loopRefusals) {
-        const n = (args.loopRefusals.get(verdict.key) ?? 0) + 1;
-        args.loopRefusals.set(verdict.key, n);
-        if (n >= ENFORCE_AFTER_REFUSALS) loopEnforcement = { toolName: tu.name, count: n };
-      }
-      continue;
-    }
-
-    const reminderPrefix = verdict.kind === 'allow-with-reminder' ? verdict.reminderText : '';
     // Telemetry: signal start BEFORE invoking so the dashboard can render
     // "tool in flight" the moment the call is dispatched.
     args.onToolCallStart?.(tu.id, tu.name, tu.input);
@@ -468,10 +463,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // approval. Sits AFTER onToolCallStart (the dashboard block must exist
     // as the anchor for the approval card) and BEFORE the duration clock,
     // heartbeat and timeout wrappers (decision time is free; a long pause
-    // must not be killed by toolTimeoutMs). Runs after checkDupCall so the
-    // user is never asked to approve a call the dedup guard would refuse.
-    // A denial synthesizes an error result without touching the dedup or
-    // failure-streak state — mirrors the toolGate refusal shape above.
+    // must not be killed by toolTimeoutMs). It intentionally runs BEFORE the
+    // invocation guard: a denied attempt never increments repeat counters.
     const permissionGate = args.toolContext.permissionGate;
     if (permissionGate) {
       const decision = await permissionGate.check({
@@ -491,21 +484,92 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           durationMs: 0,
           wasRefusedByDedup: false,
           refusalKind: 'user_denied',
+          stateEpoch: invocationGuard.stateEpoch,
         });
         continue;
       }
     }
 
+    const verdict = checkDupCall({
+      name: tu.name,
+      input: tu.input,
+      normalizedInput,
+      isRepeatable,
+      repeatPolicy: resolvedMetadata?.repeatPolicy,
+      turn: args.turn,
+      useId: tu.id,
+      dupCalls: args.dupCalls,
+      invocationState: invocationGuard,
+      stateEpoch: invocationGuard.stateEpoch,
+      forceReread: tu.input.force_reread === true,
+    });
+
+    if (verdict.action === 'block') {
+      results.push({
+        toolUseId: tu.id,
+        name: tu.name,
+        content: verdict.refuseText,
+        isError: true,
+        durationMs: 0,
+        wasRefusedByDedup: true,
+        refusalKind: 'dedup',
+        guardVerdict: verdict,
+        stateEpoch: invocationGuard.stateEpoch,
+      });
+      toolLoopDetected = verdict.shouldReflect;
+      loopGuard = 'tuple-hash';
+      loopDetail = { toolName: tu.name, count: verdict.entry.count };
+      continue;
+    }
+
+    const reusable =
+      verdict.action === 'allow' &&
+      resolvedMetadata?.repeatPolicy === 'stable' &&
+      resolvedMetadata.executionClass === 'read' &&
+      !interactive &&
+      tu.input.force_reread !== true
+        ? reusableResults.get(`${verdict.key}|epoch:${invocationGuard.stateEpoch}`)
+        : undefined;
+    if (reusable && !reusable.result.isError && !reusable.result.extraUserBlocks) {
+      reusable.count += 1;
+      const reuseVerdict: GuardVerdict = {
+        action: 'reuse',
+        reason: 'same-batch-stable-result',
+        shouldReflect: false,
+        affectsFailureStreak: false,
+        count: reusable.count,
+        sourceTool: tu.name,
+        originToolUseId: reusable.result.toolUseId,
+        stateEpoch: invocationGuard.stateEpoch,
+      };
+      const reused: DispatchedToolResult = {
+        ...reusable.result,
+        toolUseId: tu.id,
+        name: tu.name,
+        durationMs: 0,
+        wasRefusedByDedup: false,
+        refusalKind: undefined,
+        ledgerEntry: undefined,
+        guardVerdict: reuseVerdict,
+      };
+      args.onToolCallFinalized?.(tu.id, reused.content.length);
+      results.push(reused);
+      continue;
+    }
+
+    const reminderPrefix = verdict.kind === 'allow-with-reminder' ? verdict.reminderText : '';
+
     const t0 = Date.now();
     let invocationContent: string;
     let invocationIsError = false;
     let invocationExtraBlocks: ContentBlock[] | undefined;
+    let invocationGuardVerdict: GuardVerdict | undefined;
     let refusalKind: RefusalKind | undefined;
 
     // Periodic heartbeat — keeps the dashboard StuckBanner alive during
     // long-running invocations (web_fetch, run_command, spawn_agent
-    // parallel batches). Suppressed for `interactive: true` (waiting for
-    // user input) and `timeoutMs: Infinity` (legitimately long polling).
+    // parallel batches). Suppressed only for interactive waits or when no
+    // progress sink is installed; explicitly unbounded work still heartbeats.
     const heartbeatSuppressed = interactive || !args.onToolProgress;
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     if (!heartbeatSuppressed) {
@@ -517,7 +581,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
 
     // Delegate the timeout to the classification util. Interactive tools
     // (resolved via policy) opt out entirely. `resolveToolTimeoutMs` may
-    // return Infinity (interactive/repeatable/explicit) — map that to 0
+    // return Infinity (interactive/explicit only) — map that to 0
     // ("no timeout"), because `withAbortAndTimeout` treats ms<=0 as a no-op
     // whereas passing Infinity to setTimeout would fire almost immediately.
     const resolvedTimeout = tool ? resolveToolTimeoutMs(tool) : NORMAL_TIMEOUT_MS;
@@ -557,7 +621,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         },
       };
       // A4 — global tool timeout, resolved above via `resolveToolTimeoutMs`
-      // (interactive/repeatable → no timeout; slow tools → 30 min; else
+      // (interactive/explicit Infinity → no timeout; slow tools → 30 min; else
       // 5 min). Abort signal applies in ALL cases except interactive tools
       // (which have their own pause/resume mechanism via provideUserInput).
       if (resolvedMetadata && (resolvedMetadata.mutates || !resolvedMetadata.parallelSafe)) {
@@ -579,6 +643,18 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       invocationContent = typeof result.content === 'string' ? result.content : String(result.content);
       invocationIsError = !!result.isError;
       invocationExtraBlocks = result.extraUserBlocks;
+      invocationGuardVerdict = result.guardVerdict;
+      if (invocationGuardVerdict?.action === 'block') {
+        refusalKind = (invocationGuardVerdict.refusalKind as RefusalKind | undefined) ?? 'dedup';
+        if (invocationGuardVerdict.shouldReflect) {
+          toolLoopDetected = true;
+          loopGuard = 'tuple-hash';
+          loopDetail = {
+            toolName: invocationGuardVerdict.sourceTool ?? tu.name,
+            count: invocationGuardVerdict.count ?? 1,
+          };
+        }
+      }
     } catch (e) {
       if (isTimeoutError(e)) {
         if (invocationAbort && !invocationAbort.signal.aborted) {
@@ -667,6 +743,17 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     if (stuckRefusal !== null) {
       shapedContent = stuckRefusal;
       invocationIsError = true;
+      refusalKind = 'polling-stuck';
+      invocationGuardVerdict = {
+        action: 'block',
+        reason: 'polling-stuck',
+        refusalKind: 'polling-stuck',
+        shouldReflect: false,
+        affectsFailureStreak: false,
+        sourceTool: tu.name,
+        originToolUseId: tu.id,
+        stateEpoch: invocationGuard.stateEpoch,
+      };
     }
 
     let finalContent = reminderPrefix + shapedContent;
@@ -676,7 +763,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // all post-processing applied) we record the success/failure and
     // decide whether the streak crossed a threshold. Mutates state in
     // place; verdict drives content rewrite + ToolLoopDetected routing.
-    if (args.failureStreakState) {
+    const affectsFailureStreak = invocationGuardVerdict
+      ? invocationGuardVerdict.affectsFailureStreak !== false
+      : true;
+    if (args.failureStreakState && affectsFailureStreak) {
       const verdict: FailureStreakVerdict = checkFailureStreak({
         toolName: tu.name,
         isError: finalIsError,
@@ -748,24 +838,62 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     }
 
     args.onToolCallFinalized?.(tu.id, finalShaped.length);
+    const durationMs = Date.now() - t0;
     const ledgerEntry = args.toolContext.toolCallLedger?.record({
       name: tu.name,
-      args: tu.input,
+      args: normalizedInput,
       content: finalShaped,
       isError: finalIsError,
       refusalKind,
       mutates: resolvedMetadata?.mutates ?? false,
-      durationMs: Date.now() - t0,
+      durationMs,
       executionClass: resolvedMetadata?.executionClass,
       repeatPolicy: resolvedMetadata?.repeatPolicy,
     });
-    results.push({
+
+    // A successful write/execute advances the shared workspace epoch. Local
+    // stable caches are invalidated; an identical mutating signature keeps
+    // only its own safety count so a third repeated mutation can still stop.
+    const stateChangingSuccess =
+      !finalIsError &&
+      (resolvedMetadata?.executionClass === 'write' || resolvedMetadata?.executionClass === 'execute');
+    if (stateChangingSuccess) {
+      const sharedEpochBefore = args.noProgressTracker?.stateEpoch;
+      args.noProgressTracker?.noteStateChange();
+      if (sharedEpochBefore !== undefined && invocationGuard.stateEpoch !== sharedEpochBefore) {
+        invocationGuard.syncEpoch(sharedEpochBefore);
+      }
+      invocationGuard.noteStateChange(verdict.key);
+      reusableResults.clear();
+    }
+
+    const noProgressVerdict = args.noProgressTracker?.observe({
+      name: tu.name,
+      normalizedInput,
+      content: finalShaped,
+      isError: finalIsError,
+      turn: args.turn,
+      toolUseId: tu.id,
+      repeatPolicy: resolvedMetadata?.repeatPolicy ?? 'stable',
+      resultNovel: ledgerEntry?.resultNovel,
+      coverageNovel: ledgerEntry?.coverageNovel,
+      productive: stateChangingSuccess || ledgerEntry?.productive,
+      stateEpoch: args.noProgressTracker.stateEpoch,
+    }) ?? null;
+    const selectedGuardVerdict = invocationGuardVerdict
+      ?? noProgressVerdict
+      ?? (verdict.action === 'allow' ? undefined : verdict);
+    const finalGuardVerdict = selectedGuardVerdict && stateChangingSuccess
+      ? { ...selectedGuardVerdict, stateEpoch: invocationGuard.stateEpoch }
+      : selectedGuardVerdict;
+
+    const dispatched: DispatchedToolResult = {
       toolUseId: tu.id,
       name: tu.name,
       content: finalShaped,
       rawChars: invocationContent.length,
       isError: finalIsError,
-      durationMs: Date.now() - t0,
+      durationMs,
       wasRefusedByDedup: false,
       refusalKind,
       extraUserBlocks: invocationExtraBlocks,
@@ -773,19 +901,37 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       ...(reductionReport ? { reductionReport } : {}),
       ...(finalOutputId ? { outputId: finalOutputId } : {}),
       ...(ledgerEntry ? { ledgerEntry } : {}),
-    });
+      ...(finalGuardVerdict ? { guardVerdict: finalGuardVerdict } : {}),
+      stateEpoch: invocationGuard.stateEpoch,
+    };
+    results.push(dispatched);
+
+    if (
+      !dispatched.isError &&
+      !dispatched.extraUserBlocks &&
+      resolvedMetadata?.repeatPolicy === 'stable' &&
+      resolvedMetadata.executionClass === 'read' &&
+      !interactive &&
+      tu.input.force_reread !== true
+    ) {
+      reusableResults.set(
+        `${verdict.key}|epoch:${invocationGuard.stateEpoch}`,
+        { result: dispatched, count: 1 },
+      );
+    }
   }
 
   // Early gates (disabled/goal/pre-read/task-mode/permission/dedup) converge
   // here so direct and nested calls share one complete accounting contract.
   for (const result of results) {
+    result.stateEpoch ??= invocationGuard.stateEpoch;
     if (result.ledgerEntry) continue;
     const toolUse = args.toolUses.find((candidate) => candidate.id === result.toolUseId);
     const tool = lookupTool(args.registry, result.name);
     const metadata = tool ? resolveToolMetadata(tool) : null;
     const entry = args.toolContext.toolCallLedger?.record({
       name: result.name,
-      args: toolUse?.input ?? {},
+      args: normalizeGuardInput(tool, toolUse?.input ?? {}),
       content: result.content,
       isError: result.isError,
       refusalKind: result.refusalKind,
@@ -797,7 +943,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     if (entry) result.ledgerEntry = entry;
   }
 
-  return { results, toolLoopDetected, loopGuard, loopDetail, loopEnforcement };
+  return { results, toolLoopDetected, loopGuard, loopDetail };
 }
 
 /** Compact error-to-string for the guarded bridge-callback warnings. */

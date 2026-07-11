@@ -36,8 +36,12 @@ const insertTool = db.prepare(`
      output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
      parent_tool_use_id, error_class, reduction_kind, reduction_technique,
      reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
-     subagent_profile, logical_operation_id, productive)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     subagent_profile, logical_operation_id, productive,
+     guard_action, guard_reason, would_block, state_epoch, result_novel,
+     coverage_novel, delivered, repeat_policy, execution_class,
+     guard_origin_tool_use_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const bumpStmt = db.prepare(`
   UPDATE coder_sessions
@@ -106,6 +110,16 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
       tc.subagent_profile ?? null,
       tc.logical_operation_id ?? null,
       tc.productive == null ? null : tc.productive ? 1 : 0,
+      tc.guard_action ?? null,
+      tc.guard_reason ?? null,
+      tc.would_block == null ? null : tc.would_block ? 1 : 0,
+      tc.state_epoch ?? null,
+      tc.result_novel == null ? null : tc.result_novel ? 1 : 0,
+      tc.coverage_novel == null ? null : tc.coverage_novel ? 1 : 0,
+      tc.delivered == null ? null : tc.delivered ? 1 : 0,
+      tc.repeat_policy ?? null,
+      tc.execution_class ?? null,
+      tc.guard_origin_tool_use_id ?? null,
     );
   };
   for (const tc of p.tool_calls) runInsertTool(tc);

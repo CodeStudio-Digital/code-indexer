@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Boxes, Brain, Database, Gauge } from 'lucide-react';
+import { Bot, Boxes, Brain, Code2, Database, Gauge, Monitor, Palette, ShieldCheck, Workflow } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Combobox, type ComboboxOption } from '../../components/ui/combobox.js';
 import {
@@ -17,12 +17,17 @@ import { useProviders } from '../../hooks/useProviders.js';
 import type { EnrichedProviderModel } from '../chat/types.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../chat/composer/provider-caps.js';
 
-export type AppStudioSpecialistKind = 'spec' | 'db' | 'architecture';
+export type AppStudioSpecialistKind = 'spec' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
 
 const STORAGE_KEYS: Record<AppStudioSpecialistKind, string> = {
   spec: 'mcp.app-studio.spec-agent-config',
   db: 'mcp.app-studio.db-agent-config',
   architecture: 'mcp.app-studio.architecture-agent-config',
+  ux: 'mcp.app-studio.ux-agent-config',
+  wireframe: 'mcp.app-studio.wireframe-agent-config',
+  design: 'mcp.app-studio.design-agent-config',
+  backend: 'mcp.app-studio.backend-agent-config',
+  review: 'mcp.app-studio.review-agent-config',
 };
 
 export interface AppStudioSpecAgentConfig {
@@ -92,8 +97,36 @@ export function AppStudioSpecAgentLauncher({
   const [model, setModel] = useState('');
   const [thinking, setThinking] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState('');
-  const scope = kind === 'db' ? 'dbLaunch' : kind === 'architecture' ? 'architectureLaunch' : 'specLaunch';
-  const Icon = kind === 'db' ? Database : kind === 'architecture' ? Boxes : Bot;
+  const scope = kind === 'db'
+    ? 'dbLaunch'
+    : kind === 'architecture'
+      ? 'architectureLaunch'
+      : kind === 'design'
+        ? 'designLaunch'
+        : kind === 'ux'
+          ? 'uxLaunch'
+          : kind === 'wireframe'
+            ? 'wireframeLaunch'
+        : kind === 'backend'
+          ? 'backendLaunch'
+          : kind === 'review'
+            ? 'reviewLaunch'
+            : 'specLaunch';
+  const Icon = kind === 'db'
+    ? Database
+    : kind === 'architecture'
+      ? Boxes
+      : kind === 'design'
+        ? Monitor
+        : kind === 'ux'
+          ? Palette
+          : kind === 'wireframe'
+            ? Workflow
+        : kind === 'backend'
+          ? Code2
+          : kind === 'review'
+            ? ShieldCheck
+            : Bot;
 
   const models = useMemo(
     () => providerOptions.find((p) => p.id === provider)?.models ?? [],

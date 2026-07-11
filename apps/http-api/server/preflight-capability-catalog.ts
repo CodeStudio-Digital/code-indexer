@@ -13,6 +13,8 @@ import type {
   PreflightSkillMeta,
   PreflightToolMeta,
 } from '@mcp/services/services/task-preflight/index.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const DEFAULT_EXT_CATALOG_MAX = 40;
 const DEFAULT_SKILLS_MAX = 30;
@@ -57,16 +59,43 @@ export function buildPreflightSkillCatalog(
   skillStore: SkillStore,
   sessionId: number,
   projectId: number,
+  projectRoot?: string,
 ): PreflightSkillMeta[] {
   try {
+    let dependencies = new Set<string>();
+    if (projectRoot) {
+      try {
+        const pkg = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf-8')) as Record<string, unknown>;
+        for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+          const section = pkg[key];
+          if (!section || typeof section !== 'object' || Array.isArray(section)) continue;
+          for (const name of Object.keys(section)) dependencies.add(name.toLowerCase());
+        }
+      } catch { /* non-Node projects simply have no package evidence */ }
+    }
     return skillStore
       .resolveActiveSkills(sessionId, projectId)
       .slice(0, envInt('CODER_PREFLIGHT_SKILLS_MAX', DEFAULT_SKILLS_MAX))
-      .map((s) => ({
-        id: s.id,
-        description: s.description,
-        namespace: deriveSkillNamespace(s),
-      }));
+      .map((s) => {
+        const definition = typeof (skillStore as SkillStore & { getSkill?: unknown }).getSkill === 'function'
+          ? skillStore.getSkill(s.id)
+          : null;
+        const packageNames = [...`${s.name} ${s.description}`.matchAll(/@[a-z0-9._-]+\/[a-z0-9._-]+/gi)]
+          .map((m) => m[0]!.toLowerCase())
+          .filter((name, index, all) => all.indexOf(name) === index);
+        return {
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          namespace: deriveSkillNamespace(s),
+          scope: definition?.scope,
+          triggerPaths: s.triggerPaths ?? undefined,
+          triggerRoles: s.triggerRoles ?? undefined,
+          triggerTags: s.triggerTags ?? undefined,
+          packageNames,
+          dependencyMatched: packageNames.some((name) => dependencies.has(name)),
+        };
+      });
   } catch {
     return [];
   }

@@ -163,6 +163,12 @@ export interface ProviderResolveCredentialsContext {
   config: ProviderConfigLike;
   /** Per-provider OAuth/token store, backed by the host. */
   credentials: ProviderCredentials;
+  /**
+   * Resolve a host-owned exotic credential shape without importing host
+   * services or persistence into the plugin bundle. Present only when the host
+   * has a resolver for this provider kind (currently Claude Code).
+   */
+  resolveHostCredentials?: () => Promise<ResolvedCreds>;
   /** Network primitive. The host may wrap this later for proxy/telemetry policy. */
   fetch: typeof fetch;
   /** Best-effort diagnostic logger; callers must not log secrets. */

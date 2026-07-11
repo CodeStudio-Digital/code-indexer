@@ -145,22 +145,53 @@ function indexHtml(i: AppTemplateInput): string {
 }
 
 function vitestConfig(): string {
-  return `import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
+  return `import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
-export default defineConfig({
-  plugins: [
-    cloudflareTest(async () => ({
+export default defineConfig(async () => {
+  const migrations = await readD1Migrations(path.join(__dirname, 'migrations'));
+  const seedPath = path.join(__dirname, 'seeds', 'seed.sql');
+  const seedMigrations = existsSync(seedPath) ? await readD1Migrations(path.dirname(seedPath)) : [];
+  const seedQueries = seedMigrations.flatMap((migration) => migration.queries);
+  return {
+    plugins: [
+      cloudflareTest({
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
-        bindings: { TEST_MIGRATIONS: await readD1Migrations('./migrations') },
+          bindings: { TEST_MIGRATIONS: migrations, TEST_SEED_QUERIES: seedQueries },
       },
-    })),
-  ],
-  test: { include: ['tests/worker/**/*.test.ts'] },
+      }),
+    ],
+    test: {
+      include: ['tests/worker/**/*.test.ts'],
+      setupFiles: ['./tests/worker/setup.ts'],
+    },
+  };
 });
 `;
 }
+
+const WORKER_TEST_SETUP = `import { applyD1Migrations, type D1Migration } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
+
+type AppTestEnv = {
+  DB: D1Database;
+  TEST_MIGRATIONS: D1Migration[];
+  TEST_SEED_QUERIES: string[];
+};
+
+const testEnv = env as unknown as AppTestEnv;
+for (const migration of testEnv.TEST_MIGRATIONS) {
+  try {
+    await applyD1Migrations(testEnv.DB, [migration]);
+  } catch (error) {
+    throw new Error(\`D1 migration '\${migration.name}' failed in an empty test database: \${String(error)}\`);
+  }
+}
+for (const query of testEnv.TEST_SEED_QUERIES) await testEnv.DB.prepare(query).run();
+`;
 
 function playwrightConfig(i: AppTemplateInput): string {
   const url = `http://127.0.0.1:${i.port}`;
@@ -190,6 +221,7 @@ export function buildConfigFiles(i: AppTemplateInput): AppWorkspaceFile[] {
     { path: '.dev.vars', contents: DEV_VARS },
     { path: 'index.html', contents: indexHtml(i) },
     { path: 'vitest.config.ts', contents: vitestConfig() },
+    { path: 'tests/worker/setup.ts', contents: WORKER_TEST_SETUP },
     { path: 'playwright.config.ts', contents: playwrightConfig(i) },
     { path: 'tests/worker/.gitkeep', contents: '' },
     { path: 'tests/e2e/.gitkeep', contents: '' },

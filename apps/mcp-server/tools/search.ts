@@ -6,6 +6,7 @@ import { buildContentMatchQuery } from '@mcp/indexer/search/content-grep.js';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
 import { renderDegradedTrailer, renderZeroResultDiagnostics } from './search-diagnostics.js';
+import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 
 const DISK_FALLBACK_MAX_FILES = 2000;
 const DISK_FALLBACK_IGNORE = [
@@ -20,9 +21,48 @@ const DISK_FALLBACK_IGNORE = [
   '**/*.map',
 ];
 
-export async function scanDiskForGrep(rootPath: string, glob: string | undefined): Promise<string[]> {
+export interface DiskScanSource {
+  rootPath: string;
+  prefix: string;
+}
+
+export async function scanDiskForGrep(
+  rootPath: string,
+  glob: string | undefined,
+  sources?: readonly DiskScanSource[],
+): Promise<string[]> {
   const pattern = glob && glob.length > 0 ? glob : '**/*';
   try {
+    if (sources && sources.length > 0) {
+      const out: string[] = [];
+      for (const source of sources) {
+        // Scan each DB-authorized real root directly. Prefix after discovery so
+        // callers keep the synthetic workspace's path contract without asking
+        // glob to follow junctions.
+        let matches: string[];
+        try {
+          matches = await fastGlob('**/*', {
+            cwd: source.rootPath,
+            nodir: true,
+            dot: false,
+            absolute: false,
+            ignore: DISK_FALLBACK_IGNORE,
+          });
+        } catch {
+          continue; // deleted/unavailable linked project; keep scanning peers
+        }
+        let accepted = 0;
+        for (const match of matches) {
+          const rel = match.split('\\').join('/');
+          const globalRel = `${source.prefix}/${rel}`;
+          if (glob && !minimatch(globalRel, pattern)) continue;
+          out.push(globalRel);
+          accepted++;
+          if (accepted >= DISK_FALLBACK_MAX_FILES) break;
+        }
+      }
+      return out;
+    }
     const matches = await fastGlob(pattern, {
       cwd: rootPath,
       nodir: true,
@@ -191,7 +231,13 @@ const grep_code = defineTool({
     let usedFallback = false;
     let diskScanned = 0;
     if (hits.length === 0) {
-      const diskFiles = await scanDiskForGrep(project.root_path, glob);
+      const diskSources = project.is_synthetic
+        ? assignWorkspaceSlugs(db.listUnionProjectIds(project.id)).map((p) => ({
+            rootPath: p.root_path,
+            prefix: p.slug,
+          }))
+        : undefined;
+      const diskFiles = await scanDiskForGrep(project.root_path, glob, diskSources);
       diskScanned = diskFiles.length;
       if (diskFiles.length > 0) {
         hits = grepInFiles(project.root_path, diskFiles, re, maxResults);

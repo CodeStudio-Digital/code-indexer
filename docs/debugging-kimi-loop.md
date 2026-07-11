@@ -4,21 +4,19 @@ Quando o agente fica preso em loop de tools usando o provider KIMI, ative o logg
 
 ## Ativando
 
-Duas variáveis de ambiente independentes (ative as duas):
+Ative o log do provider:
 
 ```bash
 KIMI_CODE_DEBUG=1        # logs do provider: requests, tool_call chunks, flushes, finish
-CODER_DOOM_LOOP_DEBUG=1  # logs do runner: doom-loop guards (strict/fuzzy/dup-call/result-dup)
 ```
 
 Aceito também `CODER_PROVIDER_DEBUG=1` como alias do primeiro.
 
-Ambas escrevem em **stderr**, prefixadas para grep:
+O log escreve em **stderr**, prefixado para grep:
 
 | Prefixo | Origem |
 |---|---|
 | `[kimi-debug]` | `packages/code-agent/src/providers/kimi-code-debug.ts` |
-| `[doom-loop-debug]` | `packages/code-agent/src/core/runner.ts:527` |
 
 ## Formato dos eventos `[kimi-debug]`
 

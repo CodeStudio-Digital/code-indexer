@@ -6,7 +6,6 @@ import {
   getActiveNotifications,
   getNotifications,
   getUnreadCount,
-  isNotifiableLoopIntervention,
   markAllRead,
   pushNotification,
 } from '../session-notifications-store.js';
@@ -107,21 +106,4 @@ describe('session-notifications-store', () => {
     expect(getNotifications(s)).toHaveLength(0);
   });
 
-  it('isNotifiableLoopIntervention filters informational dup-result-markers only', () => {
-    const dupInfo: ToolLoopIntervention = {
-      kind: 'dup-result-marker',
-      severity: 'informational',
-      escalationLevel: 'light',
-      hitCount: 2,
-      toolName: 'read_file',
-      originalTurn: 1,
-      currentTurn: 2,
-      mode: 'light',
-      priorIsCompacted: false,
-      receivedAt: 0,
-    };
-    expect(isNotifiableLoopIntervention(dupInfo)).toBe(false);
-    expect(isNotifiableLoopIntervention({ ...dupInfo, severity: 'refused' })).toBe(true);
-    expect(isNotifiableLoopIntervention(failureStreak('informational'))).toBe(true);
-  });
 });

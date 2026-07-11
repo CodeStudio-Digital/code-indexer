@@ -12,6 +12,7 @@ import type { CoderProfile, ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { AsyncOperationRegistry } from '../../operations.js';
+import { NoProgressTracker } from '../../guards/no-progress.js';
 
 export interface RecordedEvent<E extends keyof RunnerEvents = keyof RunnerEvents> {
   event: E;
@@ -89,7 +90,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     terseDescriptionsLock: null,
     recovery: new Map(),
     dupCalls: new Map(),
-    loopRefusals: new Map(),
+    noProgressTracker: new NoProgressTracker(),
     autoContinues: 0,
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
@@ -110,8 +111,6 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     // per-turn backstops seed these directly.
     doomLoop: { strict: [], fuzzy: [] },
     dominance: { window: [] },
-    // A1 — no retained dedup signatures until a loop guard fires.
-    retainedLoopKeys: null,
     // Fix B — loop-aware compaction signals start at zero.
     consecutiveNoTextTurns: 0,
     cumulativeInputTokens: 0,
@@ -125,8 +124,10 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
       lastInjectedMemoryIds: new Set<string>(),
+      lastInjectedConversationChapterIds: new Set<string>(),
       lastInjectedSessionStateHash: null,
       lastInjectedProjectIndexHash: null,
+      lastInjectedConversationChapterIndexHash: null,
       lastInjectedUserMemoryHash: null,
       lastInjectedPreflightHash: null,
       // Fix A — self_review nudge gate state.

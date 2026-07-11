@@ -598,6 +598,19 @@ const listDirectory: CoderTool = {
       const fs = fsPort(ctx);
       const recursive = Boolean(args.recursive);
       const p = pathFor(root);
+      const atGlobalRoot = !!ctx.globalWorkspace && (path === '.' || path === '');
+      if (atGlobalRoot) {
+        const lines = recursive
+          ? (await Promise.all(ctx.globalWorkspace!.projects.map(async (project) => {
+              const nested = await walkDir(fs, project.rootPath, project.rootPath);
+              return [
+                `d ${project.slug}`,
+                ...nested.map((line) => line.replace(/^([df]) /, `$1 ${project.slug}/`)),
+              ];
+            }))).flat()
+          : ctx.globalWorkspace!.projects.map((project) => `d ${project.slug}`);
+        return ok(`${path} (${lines.length} entries)\n${lines.sort().join('\n')}`);
+      }
       const entries = recursive
         ? await walkDir(fs, abs, root)
         : (await fs.readdir(abs, { withFileTypes: true })).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${p.relative(root, p.resolve(abs, e.name)).replace(/\\/g, '/')}`);

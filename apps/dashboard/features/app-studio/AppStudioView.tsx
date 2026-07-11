@@ -17,8 +17,9 @@ import { useAppStudioSession } from './useAppStudioSession.js';
 import { AppStudioRail, AppStudioTabContent, type AppStudioTab } from './AppStudioRail.js';
 import { AppPreviewPanel } from './preview/AppPreviewPanel.js';
 import { activateAppStage, isPromptableStage, specialistForStage, stagePrompt, startAppStage } from './stage-prompts.js';
-import { AppStudioChatRail } from './AppStudioChatRail.js';
+import { AppStudioChatRail, type AppStudioChatMode } from './AppStudioChatRail.js';
 import { AppStudioSurfaceFind } from './AppStudioSurfaceFind.js';
+import { isStageApprovalBlocked } from './stage-review-state.js';
 import {
   AppStudioSpecAgentLauncher,
   type AppStudioSpecAgentConfig,
@@ -26,15 +27,17 @@ import {
 
 const TAB_STORAGE_KEY = 'mcp.app-studio.tab';
 const ADVANCED_SEEN_KEY = 'mcp.app-studio.advanced-seen';
-const TAB_IDS: AppStudioTab[] = ['guide', 'blueprint', 'versions', 'architecture', 'preview', 'data', 'publish'];
-type AppStudioChatMode = 'builder' | 'spec' | 'db' | 'architecture';
+const TAB_IDS: AppStudioTab[] = ['guide', 'blueprint', 'versions', 'architecture', 'experience', 'preview', 'data', 'publish'];
+type StageLaunchKind = 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
 
 /** Aba sugerida por etapa (auto-switch one-shot em transição de etapa). */
 const STAGE_TAB: Record<AppStageId, AppStudioTab> = {
   discovery: 'guide',
   architecture: 'architecture',
   database: 'data',
-  design: 'preview',
+  ux: 'experience',
+  wireframe: 'experience',
+  design: 'experience',
   backend: 'preview',
   review: 'preview',
   launch: 'publish',
@@ -91,7 +94,8 @@ export function AppStudioView({
   const navigate = useNavigate();
   const { detail, error, refresh } = useAppStudioSession(sessionId);
   const [activeTab, setActiveTab] = usePersistedTab();
-  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  const [chatCollapsed, setChatCollapsed] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   const [chatMode, setChatMode] = useState<AppStudioChatMode>('builder');
   const [pendingSpecPrompt, setPendingSpecPrompt] = useState<string | null>(null);
   const [specLaunchPrompt, setSpecLaunchPrompt] = useState<string | null>(null);
@@ -105,7 +109,26 @@ export function AppStudioView({
   const [architectureLaunchPrompt, setArchitectureLaunchPrompt] = useState<string | null>(null);
   const [architectureAgentConfig, setArchitectureAgentConfig] = useState<AppStudioSpecAgentConfig | null>(null);
   const [architectureLaunchId, setArchitectureLaunchId] = useState(0);
+  const [executionLaunch, setExecutionLaunch] = useState<{
+    kind: StageLaunchKind;
+    prompt: string;
+  } | null>(null);
+  const [executionMode, setExecutionMode] = useState<StageLaunchKind>('design');
+  const [pendingExecutionPrompt, setPendingExecutionPrompt] = useState<string | null>(null);
+  const [executionAgentConfig, setExecutionAgentConfig] = useState<AppStudioSpecAgentConfig | null>(null);
+  const [executionLaunchId, setExecutionLaunchId] = useState(0);
   const lastAutoSwitched = useRef<AppStageId | null>(null);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 767px)');
+    const update = () => {
+      setCompact(media.matches);
+      if (media.matches) setChatCollapsed(true);
+    };
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   // Auto-switch de aba quando a ETAPA corrente muda (one-shot por etapa —
   // nunca briga com escolha manual dentro da mesma etapa).
@@ -126,14 +149,25 @@ export function AppStudioView({
   const openArchitectureAgent = useCallback((prompt: string) => {
     setArchitectureLaunchPrompt(prompt);
   }, []);
+  const openGuidedStageAgent = useCallback((kind: StageLaunchKind, prompt: string) => {
+    setExecutionLaunch({ kind, prompt });
+  }, []);
+  const openExecutionAgent = useCallback((kind: 'design' | 'backend' | 'review', prompt: string) => openGuidedStageAgent(kind, prompt), [openGuidedStageAgent]);
+  const openUxAgent = useCallback((prompt: string) => openGuidedStageAgent('ux', prompt), [openGuidedStageAgent]);
+  const openWireframeAgent = useCallback((prompt: string) => openGuidedStageAgent('wireframe', prompt), [openGuidedStageAgent]);
   const openStageSpecialist = useCallback((stage: AppStageId, prompt: string): boolean => {
     const specialist = specialistForStage(stage);
     if (specialist === 'spec') openSpecAgent(prompt);
     else if (specialist === 'db') openDbAgent(prompt);
     else if (specialist === 'architecture') openArchitectureAgent(prompt);
+    else if (specialist === 'ux') openUxAgent(prompt);
+    else if (specialist === 'wireframe') openWireframeAgent(prompt);
+    else if (specialist === 'design' || specialist === 'backend' || specialist === 'review') {
+      openExecutionAgent(specialist, prompt);
+    }
     else return false;
     return true;
-  }, [openArchitectureAgent, openDbAgent, openSpecAgent]);
+  }, [openArchitectureAgent, openDbAgent, openExecutionAgent, openSpecAgent, openUxAgent, openWireframeAgent]);
   const launchSpecAgent = useCallback((config: AppStudioSpecAgentConfig) => {
     if (specLaunchPrompt === null) return;
     setSpecAgentConfig(config);
@@ -161,6 +195,16 @@ export function AppStudioView({
     setChatCollapsed(false);
     setArchitectureLaunchPrompt(null);
   }, [architectureLaunchPrompt]);
+  const launchExecutionAgent = useCallback((config: AppStudioSpecAgentConfig) => {
+    if (!executionLaunch) return;
+    setExecutionAgentConfig(config);
+    setExecutionMode(executionLaunch.kind);
+    setChatMode(executionLaunch.kind);
+    setPendingExecutionPrompt(executionLaunch.prompt.trim() ? executionLaunch.prompt : null);
+    setExecutionLaunchId((n) => n + 1);
+    setChatCollapsed(false);
+    setExecutionLaunch(null);
+  }, [executionLaunch]);
   const handleChatModeChange = useCallback((next: AppStudioChatMode) => {
     if (next === 'spec') {
       setSpecLaunchPrompt('');
@@ -244,6 +288,7 @@ export function AppStudioView({
   const currentStageIndex = currentStage && pipeline
     ? pipeline.stages.findIndex((s) => s.id === currentStage.id)
     : -1;
+  const approvalBlocked = isStageApprovalBlocked(currentStage);
   const stageAction = currentStage && project
     ? currentStage.status === 'review'
       ? {
@@ -257,6 +302,8 @@ export function AppStudioView({
             icon: currentStage.id === 'launch' ? Rocket : Play,
             label: currentStage.id === 'launch'
               ? t('tabs.publish')
+              : approvalBlocked
+                ? t('pipeline.resolvePending')
               : currentStage.status === 'pending'
                 ? t('pipeline.start')
                 : t('pipeline.resend'),
@@ -287,12 +334,39 @@ export function AppStudioView({
   const stageTooltip = stageAction && currentStage && pipeline
     ? `${stageAction.label} · ${t('pipeline.stageOf', { n: currentStageIndex + 1, total: pipeline.stages.length })} · ${t(`stages.${currentStage.id}.name`)}`
     : '';
+  const chatRail = (
+    <AppStudioChatRail
+      key={chatMode === 'spec'
+        ? `spec-${specLaunchId}`
+        : chatMode === 'db'
+          ? `db-${dbLaunchId}`
+          : chatMode === 'architecture'
+            ? `architecture-${architectureLaunchId}`
+            : chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review'
+              ? `${chatMode}-${executionLaunchId}`
+              : 'builder'}
+      projectId={project.id}
+      projectName={project.name}
+      initialSessionId={chatMode === 'builder' ? initialCoderSessionId : undefined}
+      mode={chatMode}
+      initialPrompt={chatMode === 'spec' ? pendingSpecPrompt : chatMode === 'db' ? pendingDbPrompt : chatMode === 'architecture' ? pendingArchitecturePrompt : chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review' ? pendingExecutionPrompt : null}
+      initialConfig={chatMode === 'spec' ? specAgentConfig : chatMode === 'db' ? dbAgentConfig : chatMode === 'architecture' ? architectureAgentConfig : chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review' ? executionAgentConfig : null}
+      onInitialPromptConsumed={() => {
+        if (chatMode === 'spec') setPendingSpecPrompt(null);
+        if (chatMode === 'db') setPendingDbPrompt(null);
+        if (chatMode === 'architecture') setPendingArchitecturePrompt(null);
+        if (chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review') setPendingExecutionPrompt(null);
+      }}
+      onModeChange={handleChatModeChange}
+      onCollapse={() => setChatCollapsed(true)}
+    />
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-11 shrink-0 items-center gap-3 border-b bg-background px-3">
-        <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft className="mr-1 h-4 w-4" /> {t('backToApps')}
+        <Button variant="ghost" size="sm" className="shrink-0 px-2 sm:px-3" onClick={onBack} aria-label={t('backToApps')}>
+          <ArrowLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">{t('backToApps')}</span>
         </Button>
         <div className="min-w-0 flex-1">
           <span className="font-semibold">{session.name}</span>
@@ -315,12 +389,12 @@ export function AppStudioView({
             <TooltipContent side="bottom">{stageTooltip}</TooltipContent>
           </Tooltip>
         )}
-        <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => void openAdvanced()}>
-          <Wrench className="mr-1 h-3.5 w-3.5" /> {t('advanced.label')}
+        <Button variant="ghost" size="sm" className="shrink-0 px-2 text-xs text-muted-foreground sm:px-3" onClick={() => void openAdvanced()} aria-label={t('advanced.label')}>
+          <Wrench className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">{t('advanced.label')}</span>
         </Button>
       </header>
 
-      <div className="flex min-h-0 flex-1 bg-background">
+      <div className="relative flex min-h-0 min-w-0 flex-1 bg-background">
         <AppStudioSpecAgentLauncher
           kind="spec"
           open={specLaunchPrompt !== null}
@@ -345,13 +419,21 @@ export function AppStudioView({
           }}
           onLaunch={launchArchitectureAgent}
         />
+        <AppStudioSpecAgentLauncher
+          kind={executionLaunch?.kind ?? executionMode}
+          open={executionLaunch !== null}
+          onOpenChange={(open) => {
+            if (!open) setExecutionLaunch(null);
+          }}
+          onLaunch={launchExecutionAgent}
+        />
         <AppStudioRail
           active={studioTab}
           detail={detail}
           onSelect={(tab) => setActiveTab(tab)}
         />
-        <PanelGroup direction="horizontal" autoSaveId="mcp-app-studio-stage-chat" className="min-h-0 flex-1">
-          <Panel id="app-stage" order={1} defaultSize={chatCollapsed ? 100 : 72} minSize={48}>
+        <PanelGroup direction="horizontal" autoSaveId="mcp-app-studio-stage-chat" className="min-h-0 min-w-0 flex-1">
+          <Panel id="app-stage" order={1} defaultSize={compact || chatCollapsed ? 100 : 72} minSize={compact ? 100 : 48}>
             <main className="flex h-full min-h-0 flex-col">
               <div className="min-h-0 flex-1 overflow-hidden">
                 <AppStudioSurfaceFind key={studioTab}>
@@ -371,36 +453,29 @@ export function AppStudioView({
                       onOpenSpecAgent={openSpecAgent}
                       onOpenDbAgent={openDbAgent}
                       onOpenArchitectureAgent={openArchitectureAgent}
+                      onOpenExecutionAgent={openExecutionAgent}
+                      onOpenUxAgent={openUxAgent}
+                      onOpenWireframeAgent={openWireframeAgent}
                     />
                   )}
                 </AppStudioSurfaceFind>
               </div>
             </main>
           </Panel>
-          {!chatCollapsed && (
+          {!compact && !chatCollapsed && (
             <>
               <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
               <Panel id="app-chat-rail" order={2} defaultSize={28} minSize={20} maxSize={42} className="min-w-[320px]">
-                <AppStudioChatRail
-                  key={chatMode === 'spec' ? `spec-${specLaunchId}` : chatMode === 'db' ? `db-${dbLaunchId}` : chatMode === 'architecture' ? `architecture-${architectureLaunchId}` : 'builder'}
-                  projectId={project.id}
-                  projectName={project.name}
-                  initialSessionId={chatMode === 'builder' ? initialCoderSessionId : undefined}
-                  mode={chatMode}
-                  initialPrompt={chatMode === 'spec' ? pendingSpecPrompt : chatMode === 'db' ? pendingDbPrompt : chatMode === 'architecture' ? pendingArchitecturePrompt : null}
-                  initialConfig={chatMode === 'spec' ? specAgentConfig : chatMode === 'db' ? dbAgentConfig : chatMode === 'architecture' ? architectureAgentConfig : null}
-                  onInitialPromptConsumed={() => {
-                    if (chatMode === 'spec') setPendingSpecPrompt(null);
-                    if (chatMode === 'db') setPendingDbPrompt(null);
-                    if (chatMode === 'architecture') setPendingArchitecturePrompt(null);
-                  }}
-                  onModeChange={handleChatModeChange}
-                  onCollapse={() => setChatCollapsed(true)}
-                />
+                {chatRail}
               </Panel>
             </>
           )}
         </PanelGroup>
+        {compact && !chatCollapsed && (
+          <aside className="absolute inset-y-0 left-11 right-0 z-40 bg-background shadow-xl">
+            {chatRail}
+          </aside>
+        )}
         {chatCollapsed && (
           <nav
             className="flex w-11 shrink-0 flex-col items-center gap-0.5 border-l bg-card/45 py-1.5"

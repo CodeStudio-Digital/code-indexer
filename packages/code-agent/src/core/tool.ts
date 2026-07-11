@@ -20,6 +20,31 @@ export type ToolRiskLevel = 'read' | 'write' | 'execute' | 'admin';
 export type ToolRepeatPolicy = 'stable' | 'volatile' | 'pollable' | 'mutating';
 export type ToolExecutionClass = 'read' | 'write' | 'execute' | 'control';
 
+/** Structured outcome from an invocation/no-progress guard. */
+export type GuardAction = 'allow' | 'reuse' | 'warn' | 'block' | 'shadow';
+
+export interface GuardVerdict {
+  action: GuardAction;
+  /** Stable, machine-readable reason (for example `mutating-repeat`). */
+  reason: string;
+  /** Refusal classification when the verdict prevented an invocation. */
+  refusalKind?: string;
+  /** Whether the runner should route through an explicit reflection turn. */
+  shouldReflect: boolean;
+  /** Whether this outcome contributes to the ordinary tool failure streak. */
+  affectsFailureStreak: boolean;
+  /** Number of equivalent attempts observed in the current guard scope. */
+  count?: number;
+  /** Tool whose invocation produced this verdict. */
+  sourceTool?: string;
+  /** Tool-use id that caused or originally produced the verdict. */
+  originToolUseId?: string;
+  /** Observe mode: the action that enforcement would have taken. */
+  wouldBlock?: boolean;
+  /** Workspace/state version used when the guard made its decision. */
+  stateEpoch?: number;
+}
+
 export interface CoderTool {
   name: string;
   description: string;
@@ -84,10 +109,10 @@ export interface CoderTool {
    * with identical args because it polls / awaits external state changes.
    * Examples: `wait_for_compile_clean` (Unity assembly state), `wait_agents`
    * (subordinate terminal status), tail-style log readers. Marking the tool
-   * `repeatable: true` exempts it from the per-arg duplicate-call cap (the
-   * runner's "Refused: called with these exact arguments N times" guard) —
-   * because for these tools, repeated identical calls are the entire use
-   * case, not a stuck-loop signal.
+   * `repeatable: true` is the legacy spelling for `repeatPolicy: 'pollable'`.
+   * Pollable tools may repeat identical calls, so polling-stuck (not tuple
+   * dedup) owns unchanged-result intervention. This does not imply an infinite
+   * timeout; declare `timeoutMs: Infinity` explicitly when required.
    *
    * Defaults to `false`. The dup-call cap remains active for all other
    * tools, including MCP external tools that don't follow the
@@ -96,7 +121,10 @@ export interface CoderTool {
    * identical args are an expected workflow, not a regression.
    */
   repeatable?: boolean;
-  /** Explicit replacement for name-pattern repeatability heuristics. */
+  /**
+   * Repetition semantics. `volatile` means results may change but invocation
+   * timeout remains active; only `pollable` opts into unbounded waiting.
+   */
   repeatPolicy?: ToolRepeatPolicy;
   /** Scheduling class used by nested and future parallel dispatchers. */
   executionClass?: ToolExecutionClass;
@@ -132,10 +160,20 @@ export interface NestedToolCallRecord {
   refusalKind?: string;
   logicalOperationId?: string;
   productive?: boolean;
+  resultNovel?: boolean;
+  coverageNovel?: boolean;
   /** Resolved repeatPolicy is pollable/volatile. */
   repeatable?: boolean;
   /** False for policy/dedup refusals that should be audited but not count as a tool failure. */
   affectsFailureStreak?: boolean;
+  /** Structured invocation/no-progress verdict for direct/nested parity. */
+  guardVerdict?: GuardVerdict;
+  /** Whether this result was actually delivered back to the script/model. */
+  delivered?: boolean;
+  /** State version observed by the nested invocation. */
+  stateEpoch?: number;
+  repeatPolicy?: ToolRepeatPolicy;
+  executionClass?: ToolExecutionClass;
 }
 
 /**
@@ -152,8 +190,21 @@ export interface NestedToolObserver {
   beforeNestedCall(
     name: string,
     args: Record<string, unknown>,
-    opts?: { repeatable?: boolean },
-  ): { refusalText: string; kind: 'dedup' | 'failure-streak' } | null;
+    opts?: {
+      repeatable?: boolean;
+      repeatPolicy?: ToolRepeatPolicy;
+      executionClass?: ToolExecutionClass;
+      stateEpoch?: number;
+      forceReread?: boolean;
+      /** Parent-scoped physical attempt id supplied by code_exec. */
+      originToolUseId?: string;
+    },
+  ): (GuardVerdict & {
+    /** Human-facing detail for a blocking verdict. */
+    refusalText?: string;
+    /** Compatibility alias used by refusal/error classification. */
+    kind?: 'dedup' | 'failure-streak' | 'allow-with-reminder' | 'shadow';
+  }) | null;
   /** Feed guard state + telemetry AFTER a nested call settles. Never throws. */
   afterNestedCall(e: Omit<NestedToolCallRecord, 'parentToolUseId' | 'seq'>): void;
 }
@@ -367,6 +418,18 @@ export interface ToolContext {
     recallInvestigations(query: string, limit?: number): Promise<Array<{ topic: string; summary: string; source_label: string | null; agent_type: string | null; created_at: string }>>;
   };
   /**
+   * Append-only conversation history created by automatic/manual compaction.
+   * The small chapter index is injected proactively; this port backs the
+   * explicit `recall_conversation` drill-down without putting the complete
+   * historical summaries (or raw transcript) into every prompt.
+   */
+  conversationHistory?: {
+    list(opts?: { limit?: number; cursor?: string | null }): import('@mcp/code-agent/sessions/types.js').ConversationChapterPage<import('@mcp/code-agent/sessions/types.js').ConversationChapterRow>;
+    search(query: string, opts?: { limit?: number; cursor?: string | null }): import('@mcp/code-agent/sessions/types.js').ConversationChapterPage<import('@mcp/code-agent/sessions/types.js').ConversationChapterSearchResult>;
+    get(chapterId: number): import('@mcp/code-agent/sessions/types.js').ConversationChapterRow | null;
+    source(chapterId: number, opts?: { limit?: number; cursor?: string | null }): import('@mcp/code-agent/sessions/types.js').ConversationChapterPage<import('@mcp/code-agent/sessions/types.js').CoderMessageRow>;
+  };
+  /**
    * Durable PROJECT memory ports (cross-session, snapshots table). Wired by
    * `runCoder` from the host's `RunCoderOptions.projectMemory` callback when
    * the project has memory enabled. `save` rides the same dedup/merge as the
@@ -460,6 +523,8 @@ export interface ToolContext {
 export interface ToolResult {
   content: string;
   isError?: boolean;
+  /** Structured guard metadata, including observe-mode would-block signals. */
+  guardVerdict?: GuardVerdict;
   /**
    * Token usage consumed by a sub-runner spawned inside this tool (e.g.
    * spawn_subagent). The parent runner adds these into its `totalUsage` so

@@ -27,8 +27,14 @@ const TTL_MS = TTL_DAYS * 24 * 60 * 60 * 1000;
 export class ToolOutputStore {
   private readonly dir: string;
 
-  constructor(projectRoot: string, sessionId: number | string) {
-    this.dir = join(projectRoot, '.mcp-indexer', 'coder', 'tool-outputs', String(sessionId));
+  constructor(
+    projectRoot: string,
+    sessionId: number | string,
+    opts: { externalBaseDir?: string } = {},
+  ) {
+    this.dir = opts.externalBaseDir
+      ? join(opts.externalBaseDir, String(sessionId))
+      : join(projectRoot, '.mcp-indexer', 'coder', 'tool-outputs', String(sessionId));
     try {
       mkdirSync(this.dir, { recursive: true });
     } catch {

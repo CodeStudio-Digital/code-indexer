@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { addBusEventSink, type BufferedEvent, type CoderRunBus } from '../coder-bus.js';
+import { publishNotificationRuntimeEvent } from './notification-event-bus.js';
 
 export type RuntimeLogKind = 'coder' | 'company';
 
@@ -52,6 +53,7 @@ export function installRuntimeEventLog(
   return addBusEventSink(bus, (ev) => {
     if (SKIP_DELTAS && isReconstructableDelta(ev)) return;
     const env = enrichEvent(ev, kind, sessionId);
+    publishNotificationRuntimeEvent(env);
     const key = logKey(kind, sessionId);
     const list = logs.get(key) ?? [];
     list.push(env);

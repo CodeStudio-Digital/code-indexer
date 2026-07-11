@@ -18,7 +18,7 @@ const GATE_OK = { ok: true, issues: [] };
 const GATE_FAIL = { ok: false, issues: ['spec missing'] };
 
 describe('pipeline state', () => {
-  it('starts with all 7 stages pending, empty roadmap and discovery current', () => {
+  it('starts with all 9 stages pending, empty roadmap and discovery current', () => {
     const state = createPipelineState();
     expect(state.stages.map((s) => s.id)).toEqual([...APP_STAGE_IDS]);
     expect(state.stages.every((s) => s.status === 'pending')).toBe(true);
@@ -28,7 +28,7 @@ describe('pipeline state', () => {
 
   it('round-trips through serialize/parse and rejects garbage', () => {
     const state = createPipelineState();
-    expect(parsePipelineState(serializePipelineState(state))?.stages).toHaveLength(7);
+    expect(parsePipelineState(serializePipelineState(state))?.stages).toHaveLength(9);
     expect(parsePipelineState('not json')).toBeNull();
     expect(parsePipelineState(JSON.stringify({ v: 3, stages: [] }))).toBeNull();
     expect(parsePipelineState(null)).toBeNull();
@@ -87,6 +87,10 @@ describe('stage transitions', () => {
     state = applyStageAction(state, 'architecture', 'approve');
     state = applyStageSubmit(state, 'database', 'db v1', GATE_OK);
     state = applyStageAction(state, 'database', 'approve');
+    state = applyStageSubmit(state, 'ux', 'ux v1', GATE_OK);
+    state = applyStageAction(state, 'ux', 'approve');
+    state = applyStageSubmit(state, 'wireframe', 'wireframes v1', GATE_OK);
+    state = applyStageAction(state, 'wireframe', 'approve');
     state = applyStageAction(state, 'design', 'start');
 
     state = applyStageAction(state, 'discovery', 'reopen', 'trocar login');
@@ -138,6 +142,10 @@ describe('stage transitions', () => {
     state = applyStageAction(state, 'architecture', 'approve');
     state = applyStageSubmit(state, 'database', 'db v1', GATE_OK);
     state = applyStageAction(state, 'database', 'approve');
+    state = applyStageSubmit(state, 'ux', 'ux v1', GATE_OK);
+    state = applyStageAction(state, 'ux', 'approve');
+    state = applyStageSubmit(state, 'wireframe', 'wireframes v1', GATE_OK);
+    state = applyStageAction(state, 'wireframe', 'approve');
     state = applyStageSubmit(state, 'design', 'screens v1', GATE_OK);
     state = applyStageAction(state, 'design', 'approve');
     state = applyStageAction(state, 'backend', 'start');
@@ -146,15 +154,15 @@ describe('stage transitions', () => {
 
     expect(state.stages[0].status).toBe('approved');
     expect(state.stages[1].status).toBe('approved');
-    expect(state.stages[3]).toMatchObject({
+    expect(state.stages.find((stage) => stage.id === 'design')).toMatchObject({
       id: 'design',
       status: 'active',
       feedback: 'adicionar tela de relatorio',
       summary: null,
       gate: null,
     });
-    expect(state.stages[4].status).toBe('pending');
-    expect(state.stages[5].status).toBe('pending');
+    expect(state.stages.find((stage) => stage.id === 'backend')?.status).toBe('pending');
+    expect(state.stages.find((stage) => stage.id === 'review')?.status).toBe('pending');
   });
 });
 

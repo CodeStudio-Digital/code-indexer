@@ -12,7 +12,8 @@ describe('renderPreflightHint', () => {
       profile: 'navigate',
       taskKind: 'bugfix',
       pinTools: ['read_file', 'edit_file'],
-      suggestedSkills: [{ id: 'api-collection', reason: 'build the HTTP client' }],
+      targetProjects: [{ slug: 'poa-intranet-angular', reason: 'task names intranet' }],
+      suggestedSkills: [{ id: 'api-collection', reason: 'build the HTTP client', evidence: 'project_scope' }],
       memories: [
         { title: 'Auth token refresh gotcha', reason: 'same login flow' },
         { title: 'API error envelope', reason: '' },
@@ -22,8 +23,10 @@ describe('renderPreflightHint', () => {
       '<preflight>',
       'task_kind: bugfix',
       'toolset seeded for this task: profile=navigate; prioritized: read_file, edit_file',
-      'skills that may fit this task — load the body BEFORE starting (get_skill_content({skill_id:"<id>"})):',
-      '- api-collection — build the HTTP client',
+      'likely linked projects — verify before editing:',
+      '- poa-intranet-angular — task names intranet',
+      'skills with objective applicability evidence — confirm the target project before loading:',
+      '- api-collection [evidence=project_scope] — build the HTTP client',
       'read these project memories BEFORE exploring (recall_memory({query:"<title>"})):',
       '- "Auth token refresh gotcha" — same login flow',
       '- "API error envelope"',
@@ -41,7 +44,7 @@ describe('renderPreflightHint', () => {
 
   it('skills-only seed renders the skills nudge and omits memories', () => {
     const hint = renderPreflightHint({ suggestedSkills: [{ id: 'qa-playwright', reason: '' }] });
-    expect(hint).toContain('get_skill_content({skill_id:"<id>"})');
+    expect(hint).toContain('confirm the target project before loading');
     expect(hint).toContain('- qa-playwright');
     expect(hint).not.toContain('recall_memory');
   });

@@ -353,12 +353,10 @@ export interface InteractionPending {
  */
 export type ToolLoopIntervention =
   | (ToolLoopGuardIntervention & { receivedAt: number })
-  | (FailureStreakIntervention & { receivedAt: number })
-  | (LoopEnforcedIntervention & { receivedAt: number })
-  | (DupResultMarkerIntervention & { receivedAt: number });
+  | (FailureStreakIntervention & { receivedAt: number });
 
 export interface ToolLoopGuardIntervention {
-  kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
+  kind: 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
   turn: number;
   toolName: string;
   count: number;
@@ -389,57 +387,6 @@ export interface FailureStreakIntervention {
   lastError: string;
   severity: 'informational' | 'refused';
   reason: string;
-}
-
-export interface LoopEnforcedIntervention {
-  kind: 'loop-enforced';
-  turn: number;
-  toolName: string;
-  /**
-   * Cross-cycle hard-refusal count for this exact tool+args. Counts refusals
-   * that survive the per-Planning dedup reset.
-   */
-  count: number;
-  severity: 'enforced';
-  reason: string;
-}
-
-export interface DupResultMarkerIntervention {
-  kind: 'dup-result-marker';
-  /**
-   * `'informational'` for the light + medium tiers (content delivered
-   * with a marker prefix, no error). `'refused'` for the hard-refuse
-   * tier (content REPLACED with refusal text, `is_error` set on the
-   * tool result). The dashboard banner only renders the latter — the
-   * light/medium tiers don't deserve a permanent visual interrupt.
-   */
-  severity: 'informational' | 'refused';
-  /**
-   * Three-tier escalation indicator, derived from the runner's
-   * `matches.length` count against `RESULT_DUP_ESCALATION_{WARN,REFUSE}`:
-   *   - `'light'`   → 2nd identical hit (`matches.length === 1`),
-   *                   light marker prefixed, content delivered.
-   *   - `'medium'`  → WARN tier reached (`matches.length >= _WARN`),
-   *                   sharper marker prefixed, content still delivered.
-   *   - `'refused'` → REFUSE tier reached (`matches.length >= _REFUSE`),
-   *                   content replaced with refusal text.
-   */
-  escalationLevel: 'light' | 'medium' | 'refused';
-  /** Human-readable hit number for this identical content (1 = first
-   *  fetch; markers never fire on 1; 2 = first duplicate; 3 = warn tier;
-   *  4+ = refuse tier with default thresholds). */
-  hitCount: number;
-  toolName: string;
-  /** Turn where the original duplicate content was first seen. */
-  originalTurn: number;
-  currentTurn: number;
-  /** `'light'` = full content delivered with marker prefix.
-   *  `'medium'` = head excerpt + output_id pointer (large outputs).
-   *  Only meaningful when `escalationLevel !== 'refused'`. */
-  mode: 'light' | 'medium';
-  /** True when the original tool_result block was elided by
-   *  post-compact cleanup. Drives the marker text variant. */
-  priorIsCompacted: boolean;
 }
 
 /**

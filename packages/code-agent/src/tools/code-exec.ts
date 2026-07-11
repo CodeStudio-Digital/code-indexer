@@ -24,7 +24,7 @@
  * the tool's text content, or thrown Error when the tool reports isError.
  */
 import { runInNewContext, type Context } from 'node:vm';
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, GuardVerdict, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { evaluateToolInvocation, findScopeViolations, resolveToolMetadata, type PolicyContext } from '@mcp/code-agent/core/policy.js';
@@ -38,6 +38,8 @@ import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools
 import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
+import { stableArgsKey } from '@mcp/code-agent/core/runner/dup-utils.js';
+import { normalizeGuardInput } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
@@ -140,23 +142,54 @@ function isSafeTool(tool: CoderTool): boolean {
   return true;
 }
 
+type NestedRefusalError = Error & {
+  code: string;
+  refusalKind: string;
+  tool: string;
+  detail: string;
+  guardVerdict: GuardVerdict;
+};
+
 function nestedRefusalError(
   tool: string,
   kind: string,
   detail: string,
-): Error & { code: string; refusalKind: string; tool: string; detail: string } {
-  const error = new Error(`tool ${tool} refused (${kind}): ${detail}`) as Error & {
-    code: string;
-    refusalKind: string;
-    tool: string;
-    detail: string;
-  };
+  guardVerdict: GuardVerdict,
+): NestedRefusalError {
+  const error = new Error(`tool ${tool} refused (${kind}): ${detail}`) as NestedRefusalError;
   error.name = 'ToolCallRefusalError';
   error.code = 'TOOL_CALL_REFUSED';
   error.refusalKind = kind;
   error.tool = tool;
   error.detail = detail;
+  error.guardVerdict = guardVerdict;
   return error;
+}
+
+function refusalVerdict(args: {
+  tool: string;
+  reason: string;
+  refusalKind: string;
+  shouldReflect?: boolean;
+  stateEpoch: number;
+  originToolUseId?: string;
+}): GuardVerdict {
+  return {
+    action: 'block',
+    reason: args.reason,
+    refusalKind: args.refusalKind,
+    shouldReflect: args.shouldReflect === true,
+    affectsFailureStreak: false,
+    sourceTool: args.tool,
+    ...(args.originToolUseId ? { originToolUseId: args.originToolUseId } : {}),
+    stateEpoch: args.stateEpoch,
+  };
+}
+
+function isNestedRefusal(value: unknown): value is NestedRefusalError {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<NestedRefusalError>;
+  return candidate.code === 'TOOL_CALL_REFUSED' && !!candidate.guardVerdict;
 }
 
 export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
@@ -165,8 +198,14 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
     description: maybeTerse(CODE_EXEC_DESC),
     source: 'native',
     mutates: false,
-    parallelSafe: false,
+    // The wrapper itself owns no mutable resource. Nested shell/write calls
+    // reserve the shared unsafe lane individually; reserving it for the parent
+    // would deadlock when the first nested unsafe call tries to re-acquire it.
+    parallelSafe: true,
     riskLevel: 'read',
+    // The wrapper can contain arbitrary reads/writes and must never be reused
+    // as though the script itself were a stable read.
+    repeatPolicy: 'volatile',
     parameters: {
       type: 'object',
       properties: {
@@ -222,6 +261,25 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const logBuffer: string[] = [];
       let toolCalls = 0;
       let outputBytes = 0;
+      let stateEpoch = 0;
+      let executionClosing = false;
+      // Both maps are scoped to THIS handler call: no result or counter can
+      // leak into a later code_exec script.
+      const stableCalls = new Map<string, {
+        promise: Promise<string>;
+        originToolUseId: string;
+        count: number;
+      }>();
+      const activeToolPromises = new Set<Promise<unknown>>();
+      const activeControllers = new Set<AbortController>();
+      const nestedOutcomes: Array<{
+        name: string;
+        args: Record<string, unknown>;
+        content: string;
+        isError: boolean;
+        delivered: boolean;
+        refusalKind?: string;
+      }> = [];
       // Reservation chain for mutating / non-parallel-safe tools. A timed-out
       // caller gets its rejection promptly, but the lane is held until the
       // underlying invocation actually settles, preventing late writes from
@@ -278,6 +336,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         rejectTimeout = reject;
       });
       const armClock = (): void => {
+        if (executionClosing || clockTimer) return;
         clockStartedAt = Date.now();
         clockTimer = setTimeout(() => rejectTimeout(timeoutError()), budgetRemainingMs);
       };
@@ -289,6 +348,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         }
       };
       const resumeClock = (): void => {
+        if (executionClosing) return;
         if (budgetRemainingMs <= 0) {
           rejectTimeout(timeoutError());
           return;
@@ -298,21 +358,31 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
 
       const toolsProxy: Record<string, (a: unknown) => Promise<string>> = {};
       for (const t of safe) {
+        const metadata = resolveToolMetadata(t);
         const impl = async (rawArgs: unknown): Promise<string> => {
+          if (executionClosing) {
+            throw new Error('code_exec: script already finished; refusing a late nested call');
+          }
           if (++toolCalls > MAX_TOOL_CALLS) {
             throw new Error(`code_exec: exceeded ${MAX_TOOL_CALLS} tool calls per script`);
           }
-          const argObj = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
-          const metadata = resolveToolMetadata(t);
+          const rawArgObj = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
+          const argObj = normalizeGuardInput(t, rawArgObj);
           const observer = ctx.nestedToolObserver;
-          const repeatable = metadata.repeatPolicy === 'pollable' || metadata.repeatPolicy === 'volatile';
+          const repeatable = metadata.repeatPolicy === 'pollable';
+          const forceReread = argObj.force_reread === true;
+          const callEpoch = stateEpoch;
+          const attemptOrigin = `${ctx.currentToolUseId ?? ctx.approvalAnchorId ?? 'code_exec'}#${toolCalls}`;
           const recordNestedOutcome = (input: {
             content: string;
             isError: boolean;
             durationMs: number;
             refusalKind?: string;
             affectsFailureStreak?: boolean;
+            guardVerdict?: GuardVerdict;
+            delivered?: boolean;
           }) => {
+            const delivered = input.delivered !== false;
             const ledgerEntry = ctx.toolCallLedger?.record({
               name: t.name,
               args: argObj,
@@ -334,8 +404,23 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               ...(input.refusalKind ? { refusalKind: input.refusalKind } : {}),
               logicalOperationId: ledgerEntry?.logicalOperationId,
               productive: ledgerEntry?.productive,
+              resultNovel: ledgerEntry?.resultNovel,
+              coverageNovel: ledgerEntry?.coverageNovel,
               repeatable,
               affectsFailureStreak: input.affectsFailureStreak,
+              guardVerdict: input.guardVerdict,
+              delivered,
+              stateEpoch: callEpoch,
+              repeatPolicy: metadata.repeatPolicy,
+              executionClass: metadata.executionClass,
+            });
+            nestedOutcomes.push({
+              name: t.name,
+              args: argObj,
+              content: input.content,
+              isError: input.isError,
+              delivered,
+              ...(input.refusalKind ? { refusalKind: input.refusalKind } : {}),
             });
             return ledgerEntry;
           };
@@ -356,59 +441,38 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               if (!unlocked) {
                 const detail =
                   `tool ${t.name} blocked: ${decision.detail} ` +
-                  `Active task scope ${policyCtx.taskScope.id} declares files=[${policyCtx.taskScope.files.join(', ')}]; ` +
-                  `tried to touch [${violators.join(', ')}].`;
-                recordNestedOutcome({ content: detail, isError: true, durationMs: 0, refusalKind: 'gate', affectsFailureStreak: false });
-                throw nestedRefusalError(t.name, 'gate', detail);
+                   `Active task scope ${policyCtx.taskScope.id} declares files=[${policyCtx.taskScope.files.join(', ')}]; ` +
+                   `tried to touch [${violators.join(', ')}].`;
+                const guardVerdict = refusalVerdict({
+                  tool: t.name, reason: 'policy-gate', refusalKind: 'gate', stateEpoch: callEpoch,
+                  originToolUseId: attemptOrigin,
+                });
+                recordNestedOutcome({
+                  content: detail, isError: true, durationMs: 0, refusalKind: 'gate',
+                  affectsFailureStreak: false, guardVerdict, delivered: false,
+                });
+                throw nestedRefusalError(t.name, 'gate', detail, guardVerdict);
               }
             }
             if (!unlocked) {
               const detail = `tool ${t.name} blocked: ${decision.detail}`;
-              recordNestedOutcome({ content: detail, isError: true, durationMs: 0, refusalKind: 'gate', affectsFailureStreak: false });
-              throw nestedRefusalError(t.name, 'gate', detail);
+              const guardVerdict = refusalVerdict({
+                tool: t.name, reason: 'policy-gate', refusalKind: 'gate', stateEpoch: callEpoch,
+                originToolUseId: attemptOrigin,
+              });
+              recordNestedOutcome({
+                content: detail, isError: true, durationMs: 0, refusalKind: 'gate',
+                affectsFailureStreak: false, guardVerdict, delivered: false,
+              });
+              throw nestedRefusalError(t.name, 'gate', detail, guardVerdict);
             }
           }
-          // Nested loop guards (tuple-hash dedup + failure-streak pre-check),
-          // AFTER the policy gate so blocked calls don't pollute the dedup
-          // counter — same ordering as top-level dispatch. A refusal is a
-          // catchable JS exception, like every other nested failure.
-          const nestedRefusal =
-            observer?.beforeNestedCall(t.name, argObj, {
-              repeatable,
-            }) ?? null;
-          if (nestedRefusal) {
-            recordNestedOutcome({
-              content: nestedRefusal.refusalText,
-              isError: true,
-              durationMs: 0,
-              refusalKind: nestedRefusal.kind,
-              affectsFailureStreak: false,
-            });
-            throw nestedRefusalError(t.name, nestedRefusal.kind, nestedRefusal.refusalText);
-          }
-          // Pause the JS-time budget while this tool runs (the script is not
-          // charged for time inside a tool), and bound the tool by its OWN tier
-          // so a hung tool can't stall the batch — `run_command` gets its 10-min
-          // budget, reads get NORMAL, etc.
+
+          // Permission must be decided before the local repetition observer:
+          // a denial is not a tool attempt and must never advance its counter.
           inFlight += 1;
           if (inFlight === 1) pauseClock();
-          const perToolMs = resolveToolTimeoutMs(t);
-          let toolTimer: ReturnType<typeof setTimeout> | null = null;
-          let releaseLane: (() => void) | undefined;
-          let laneReleaseOwnedByInvocation = false;
           try {
-            if (metadata.mutates || !metadata.parallelSafe) {
-              const sharedReserve = ctx.toolCallLedger?.reserveUnsafe;
-              releaseLane = typeof sharedReserve === 'function'
-                ? await sharedReserve.call(ctx.toolCallLedger)
-                : await reserveLocalUnsafe();
-            }
-            // Permission gate (modes 'ask'/'auto') — INSIDE the try so a
-            // denial throw still hits the finally (inFlight/clock restore),
-            // and BEFORE the per-tool timer so the user's decision time is
-            // free. The clock is already paused (inFlight ≥ 1), so the
-            // script's JS budget isn't burned while waiting. The approval
-            // card anchors to the chat-visible code_exec block.
             if (ctx.permissionGate) {
               const decision = await ctx.permissionGate.check({
                 toolUseId: `nx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -419,77 +483,201 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                 nested: true,
               });
               if (!decision.allowed) {
-                // Same propagation shape as the policy-block throw above —
-                // the script sees the denial as a JS exception.
+                const guardVerdict = refusalVerdict({
+                  tool: t.name, reason: 'user-denied', refusalKind: 'user_denied', stateEpoch: callEpoch,
+                  originToolUseId: attemptOrigin,
+                });
                 recordNestedOutcome({
                   content: decision.refusalText,
                   isError: true,
                   durationMs: 0,
                   refusalKind: 'user_denied',
                   affectsFailureStreak: false,
+                  guardVerdict,
+                  delivered: false,
                 });
-                throw nestedRefusalError(t.name, 'user_denied', decision.refusalText);
+                throw nestedRefusalError(t.name, 'user_denied', decision.refusalText, guardVerdict);
               }
             }
-            const t0 = Date.now();
-            const callAbort = new AbortController();
-            const parentAbort = (): void => {
-              try { callAbort.abort(ctx.signal?.reason); } catch { /* ignore */ }
-            };
-            if (ctx.signal?.aborted) parentAbort();
-            else ctx.signal?.addEventListener('abort', parentAbort, { once: true });
-            const invocation = registry.invoke(t.name, argObj, { ...ctx, signal: callAbort.signal });
-            const cleanupAbort = (): void => ctx.signal?.removeEventListener('abort', parentAbort);
-            void invocation.then(cleanupAbort, cleanupAbort);
-            if (releaseLane) {
-              laneReleaseOwnedByInvocation = true;
-              void invocation.then(releaseLane, releaseLane);
-            }
-            const guarded =
-              perToolMs === Infinity
-                ? invocation
-                : Promise.race([
-                    invocation,
-                    new Promise<never>((_, rej) => {
-                      toolTimer = setTimeout(
-                        () => {
-                          try { callAbort.abort(new Error(`tool ${t.name} timed out after ${perToolMs} ms`)); } catch { /* ignore */ }
-                          rej(new Error(`tool ${t.name} timed out after ${perToolMs} ms`));
-                        },
-                        perToolMs,
-                      );
-                    }),
-                  ]);
-            let result: Awaited<typeof invocation>;
-            try {
-              result = await guarded;
-            } catch (e) {
-              // Timeout / unexpected throw — still an invocation outcome the
-              // failure-streak state (and telemetry) must see.
-              const errorText = e instanceof Error ? e.message : String(e);
-              const refusalKind = /timed out/i.test(errorText)
-                ? 'timeout'
-                : callAbort.signal.aborted ? 'abort' : undefined;
+
+            const observedGuardVerdict = observer?.beforeNestedCall(t.name, argObj, {
+              repeatable,
+              repeatPolicy: metadata.repeatPolicy,
+              executionClass: metadata.executionClass,
+              stateEpoch: callEpoch,
+              forceReread,
+              originToolUseId: attemptOrigin,
+            }) ?? null;
+            const guardVerdict: (typeof observedGuardVerdict) = observedGuardVerdict
+              ? {
+                  ...observedGuardVerdict,
+                  sourceTool: observedGuardVerdict.sourceTool ?? t.name,
+                  originToolUseId: observedGuardVerdict.originToolUseId ?? attemptOrigin,
+                }
+              : null;
+            if (guardVerdict?.action === 'block') {
+              const kind = guardVerdict.refusalKind ?? guardVerdict.kind ?? 'dedup';
+              const detail = guardVerdict.refusalText ?? `nested guard blocked ${t.name}`;
               recordNestedOutcome({
-                content: errorText,
+                content: detail,
                 isError: true,
-                durationMs: Date.now() - t0,
-                ...(refusalKind ? { refusalKind } : {}),
+                durationMs: 0,
+                refusalKind: kind,
+                affectsFailureStreak: guardVerdict.affectsFailureStreak,
+                guardVerdict,
+                delivered: false,
               });
+              throw nestedRefusalError(t.name, kind, detail, guardVerdict);
+            }
+
+            const eligibleStableRead =
+              metadata.repeatPolicy === 'stable' &&
+              metadata.executionClass === 'read' &&
+              !metadata.mutates &&
+              metadata.parallelSafe &&
+              !forceReread;
+            const stableKey = eligibleStableRead
+              ? `${t.name}|epoch:${callEpoch}|${stableArgsKey(argObj)}`
+              : null;
+            const cached = stableKey ? stableCalls.get(stableKey) : undefined;
+            if (cached) {
+              cached.count += 1;
+              const reuseVerdict: GuardVerdict = {
+                action: 'reuse',
+                reason: 'same-scope-stable-call',
+                shouldReflect: false,
+                affectsFailureStreak: false,
+                count: cached.count,
+                sourceTool: t.name,
+                originToolUseId: cached.originToolUseId,
+                stateEpoch: callEpoch,
+              };
+              const started = Date.now();
+              try {
+                const content = await cached.promise;
+                recordNestedOutcome({
+                  content, isError: false, durationMs: Date.now() - started,
+                  guardVerdict: reuseVerdict, affectsFailureStreak: false,
+                });
+                return content;
+              } catch (e) {
+                const content = e instanceof Error ? e.message : String(e);
+                recordNestedOutcome({
+                  content, isError: true, durationMs: Date.now() - started,
+                  guardVerdict: reuseVerdict, affectsFailureStreak: false,
+                });
+                throw e;
+              }
+            }
+
+            const invokePhysical = async (): Promise<string> => {
+              const perToolMs = resolveToolTimeoutMs(t);
+              let toolTimer: ReturnType<typeof setTimeout> | null = null;
+              let releaseLane: (() => void) | undefined;
+              let laneReleaseOwnedByInvocation = false;
+              const started = Date.now();
+              try {
+                if (metadata.mutates || !metadata.parallelSafe) {
+                  const sharedReserve = ctx.toolCallLedger?.reserveUnsafe;
+                  releaseLane = typeof sharedReserve === 'function'
+                    ? await sharedReserve.call(ctx.toolCallLedger)
+                    : await reserveLocalUnsafe();
+                }
+                const callAbort = new AbortController();
+                activeControllers.add(callAbort);
+                const parentAbort = (): void => {
+                  try { callAbort.abort(ctx.signal?.reason); } catch { /* ignore */ }
+                };
+                if (ctx.signal?.aborted) parentAbort();
+                else ctx.signal?.addEventListener('abort', parentAbort, { once: true });
+                const cancelled = new Promise<never>((_, reject) => {
+                  const rejectCancelled = (): void => {
+                    const reason = callAbort.signal.reason;
+                    reject(reason instanceof Error ? reason : new Error(`tool ${t.name} cancelled`));
+                  };
+                  if (callAbort.signal.aborted) rejectCancelled();
+                  else callAbort.signal.addEventListener('abort', rejectCancelled, { once: true });
+                });
+                const invocation = registry.invoke(t.name, argObj, { ...ctx, signal: callAbort.signal });
+                const cleanupAbort = (): void => {
+                  ctx.signal?.removeEventListener('abort', parentAbort);
+                  activeControllers.delete(callAbort);
+                };
+                void invocation.then(cleanupAbort, cleanupAbort);
+                if (releaseLane) {
+                  laneReleaseOwnedByInvocation = true;
+                  void invocation.then(releaseLane, releaseLane);
+                }
+                const guarded = Promise.race([
+                  invocation,
+                  cancelled,
+                  ...(perToolMs === Infinity ? [] : [new Promise<never>((_, reject) => {
+                    toolTimer = setTimeout(() => {
+                      const error = new Error(`tool ${t.name} timed out after ${perToolMs} ms`);
+                      try { callAbort.abort(error); } catch { /* ignore */ }
+                      reject(error);
+                    }, perToolMs);
+                  })]),
+                ]);
+                let result: Awaited<typeof invocation>;
+                try {
+                  result = await guarded;
+                } catch (e) {
+                  const errorText = e instanceof Error ? e.message : String(e);
+                  const refusalKind = /timed out/i.test(errorText)
+                    ? 'timeout'
+                    : callAbort.signal.aborted ? 'abort' : undefined;
+                  recordNestedOutcome({
+                    content: errorText,
+                    isError: true,
+                    durationMs: Date.now() - started,
+                    ...(refusalKind ? { refusalKind } : {}),
+                    guardVerdict: guardVerdict ?? undefined,
+                  });
+                  throw e;
+                }
+                recordNestedOutcome({
+                  content: result.content,
+                  isError: !!result.isError,
+                  durationMs: Date.now() - started,
+                  guardVerdict: guardVerdict ?? undefined,
+                });
+                if (result.isError) {
+                  throw new Error(`tool ${t.name}: ${result.content}`);
+                }
+                if (
+                  metadata.mutates ||
+                  metadata.executionClass === 'write' ||
+                  metadata.executionClass === 'execute'
+                ) {
+                  stateEpoch += 1;
+                }
+                return result.content;
+              } finally {
+                if (toolTimer) clearTimeout(toolTimer);
+                if (releaseLane && !laneReleaseOwnedByInvocation) releaseLane();
+              }
+            };
+
+            const physical = invokePhysical();
+            if (stableKey) {
+              stableCalls.set(stableKey, {
+                promise: physical,
+                originToolUseId: attemptOrigin,
+                count: 1,
+              });
+            }
+            try {
+              return await physical;
+            } catch (e) {
+              // A failed stable result is shared only with already-concurrent
+              // callers. A later retry gets a fresh physical invocation.
+              if (stableKey && stableCalls.get(stableKey)?.promise === physical) {
+                stableCalls.delete(stableKey);
+              }
               throw e;
             }
-            recordNestedOutcome({
-              content: result.content,
-              isError: !!result.isError,
-              durationMs: Date.now() - t0,
-            });
-            if (result.isError) {
-              throw new Error(`tool ${t.name}: ${result.content}`);
-            }
-            return result.content;
           } finally {
-            if (toolTimer) clearTimeout(toolTimer);
-            if (releaseLane && !laneReleaseOwnedByInvocation) releaseLane();
             inFlight -= 1;
             if (inFlight === 0) resumeClock();
           }
@@ -497,6 +685,11 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         toolsProxy[t.name] = (rawArgs: unknown): Promise<string> => {
           const p = impl(rawArgs);
           ownedToolPromises.add(p);
+          activeToolPromises.add(p);
+          void p.then(
+            () => { activeToolPromises.delete(p); },
+            () => { activeToolPromises.delete(p); },
+          );
           return p;
         };
       }
@@ -586,6 +779,48 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       // Wrap as async IIFE so user code can use top-level await + return.
       const wrapped = `(async () => {\n${code}\n})()`;
 
+      const closeAndSettle = async (reason?: unknown, abortActive = false): Promise<void> => {
+        executionClosing = true;
+        pauseClock();
+        if (clockTimer) {
+          clearTimeout(clockTimer);
+          clockTimer = null;
+        }
+        if (abortActive) {
+          const abortReason = reason instanceof Error
+            ? reason
+            : new Error(reason === undefined ? 'code_exec finished' : String(reason));
+          for (const controller of activeControllers) {
+            try { controller.abort(abortReason); } catch { /* ignore */ }
+          }
+        }
+        // A detached continuation can enqueue one more proxy promise while a
+        // sibling settles. Refuse late calls (executionClosing) and drain until
+        // the set is genuinely empty.
+        while (activeToolPromises.size > 0) {
+          await Promise.allSettled([...activeToolPromises]);
+        }
+      };
+
+      const partialResultsNote = (): string => {
+        const completed = nestedOutcomes.filter((entry) => entry.delivered && !entry.isError);
+        if (completed.length === 0) return '';
+        const payload = JSON.stringify({
+          kind: 'code_exec_partial_results',
+          count: completed.length,
+          results: completed,
+        }, null, 2);
+        const outputId = ctx.toolOutputStore?.put(payload) ?? null;
+        if (outputId) {
+          return (
+            `\n\n[nested partial results: ${completed.length} completed sibling call(s) were preserved; ` +
+            `call get_tool_output({output_id:"${outputId}"}) to inspect them.]`
+          );
+        }
+        const names = completed.map((entry) => entry.name).slice(0, 8).join(', ');
+        return `\n\n[nested partial results: ${completed.length} completed sibling call(s): ${names}.]`;
+      };
+
       // Arm the JS-time budget BEFORE running: invoking the async IIFE executes
       // its synchronous prefix immediately, so a script that opens with
       // `await tools.foo()` calls `pauseClock()` during `runInNewContext`. The
@@ -602,7 +837,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           filename: 'code_exec.js',
         }) as Promise<unknown>;
       } catch (e) {
-        if (clockTimer) clearTimeout(clockTimer);
+        await closeAndSettle(e, true);
         const msg = e instanceof Error ? e.message : String(e);
         // Parse-time failures get hints too — `import x from 'y'` dies here
         // ("Cannot use import statement"), never reaching the async catch.
@@ -615,19 +850,30 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         returnValue = await Promise.race([scriptPromise, timeoutPromise]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        const structuredDetail = typeof (e as { detail?: unknown })?.detail === 'string'
-          ? `\n${(e as { detail: string }).detail}`
-          : '';
+        // Once the script has failed it cannot consume any sibling result.
+        // Cancel cooperative work, then settle every proxy before returning;
+        // already-completed siblings remain available in nestedOutcomes.
+        await closeAndSettle(e, true);
         // Defense-in-depth hints (wrong call shape, control tool, absent Node
         // builtin, import, nested-failure try/catch) — see code-exec-hints.ts.
         // Matching is on message text, never instanceof: errors thrown inside
         // node:vm carry the sandbox realm's constructors.
         const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
         const stderr = logBuffer.length > 0 ? `\n[output before failure]\n${logBuffer.join('\n')}` : '';
-        return err(`code_exec failed: ${msg}${structuredDetail}${hint}${stderr}`);
+        const result: ToolResult = {
+          content: `code_exec failed: ${msg}${hint}${stderr}${partialResultsNote()}`,
+          isError: true,
+        };
+        if (isNestedRefusal(e)) result.guardVerdict = e.guardVerdict;
+        return result;
       } finally {
         if (clockTimer) clearTimeout(clockTimer);
       }
+
+      // Fire-and-forget proxy calls are still owned by this batch. Let them
+      // settle before returning, while preventing a late sibling from rearming
+      // the JS clock after the parent has completed.
+      await closeAndSettle();
 
       const lines: string[] = [];
       lines.push(`code_exec: ${toolCalls} tool call(s), ${(outputBytes / 1024).toFixed(1)} KB output, exposed=${exposedNames.length} tools`);

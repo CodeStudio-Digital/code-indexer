@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ArrowLeft, Bot, Boxes, ChevronRight, Database, FolderPlus, Loader2, MessageSquare, Plus } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Bot, Boxes, ChevronRight, Code2, Database, FolderPlus, Loader2, MessageSquare, Monitor, Palette, Plus, ShieldCheck, Workflow } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { confirm, prompt } from '../../components/ui/prompt-dialog.js';
@@ -18,7 +18,7 @@ import { SessionPickerDropdown } from '../project/editor-chat/SessionPickerDropd
 import { useEditorChatSession } from '../project/editor-chat/useEditorChatSession.js';
 import type { AppStudioSpecAgentConfig } from './AppStudioSpecAgentLauncher.js';
 
-export type AppStudioChatMode = 'builder' | 'spec' | 'db' | 'architecture';
+export type AppStudioChatMode = 'builder' | 'spec' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
 
 interface AppStudioChatRailProps {
   projectId: number;
@@ -49,7 +49,21 @@ export function AppStudioChatRail({
   const pendingPromptRef = useRef<string | null>(null);
   const autoCreatedSpecialistRef = useRef(false);
   const [specialistStartError, setSpecialistStartError] = useState(false);
-  const initialAgent = mode === 'spec' ? 'app_spec' : mode === 'db' ? 'app_db' : mode === 'architecture' ? 'app_architect' : 'builder';
+  const initialAgent = mode === 'spec'
+    ? 'app_spec'
+    : mode === 'db'
+      ? 'app_db'
+      : mode === 'architecture'
+        ? 'app_architect'
+        : mode === 'ux'
+          ? 'app_ux'
+          : mode === 'wireframe'
+            ? 'app_wireframe'
+        : mode === 'design'
+          ? 'builder'
+          : mode === 'backend' || mode === 'review'
+            ? 'build'
+            : 'builder';
   const s = useEditorChatSession(projectId, {
     initialSessionId,
     initialAgent,
@@ -67,6 +81,16 @@ export function AppStudioChatRail({
           ? t('appStudio:chatRail.dbSessionTitle', { name: projectName, defaultValue: `Analisar dados - ${projectName}` })
           : mode === 'architecture'
             ? t('appStudio:chatRail.architectureSessionTitle', { name: projectName, defaultValue: `Planejar construção - ${projectName}` })
+          : mode === 'design'
+            ? t('appStudio:chatRail.designSessionTitle', { name: projectName, defaultValue: `Montar telas - ${projectName}` })
+          : mode === 'ux'
+            ? t('appStudio:chatRail.uxSessionTitle', { name: projectName, defaultValue: `Direção UX - ${projectName}` })
+          : mode === 'wireframe'
+            ? t('appStudio:chatRail.wireframeSessionTitle', { name: projectName, defaultValue: `Fluxos e wireframes - ${projectName}` })
+          : mode === 'backend'
+            ? t('appStudio:chatRail.backendSessionTitle', { name: projectName, defaultValue: `Fazer funcionar - ${projectName}` })
+          : mode === 'review'
+            ? t('appStudio:chatRail.reviewSessionTitle', { name: projectName, defaultValue: `Revisar aplicação - ${projectName}` })
           : projectName),
   });
 
@@ -350,6 +374,16 @@ function RailHeader({
         <Database className="h-3.5 w-3.5 shrink-0 text-primary" />
       ) : mode === 'architecture' ? (
         <Boxes className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'design' ? (
+        <Monitor className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'ux' ? (
+        <Palette className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'wireframe' ? (
+        <Workflow className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'backend' ? (
+        <Code2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'review' ? (
+        <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
       ) : (
         <MessageSquare className="h-3.5 w-3.5 shrink-0 text-primary" />
       )}

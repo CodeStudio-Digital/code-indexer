@@ -5,7 +5,7 @@
  * test overrides (`vi.stubEnv`), prefer the lazy `envInt` helpers
  * exported from `dup-utils.ts` / `recovery-config.ts`.
  *
- * Owns: doom-loop / dup-call / dup-result / polling / summarizer /
+ * Owns: doom-loop / dominance / failure-streak / polling / summarizer /
  * push-time-cap / per-turn budget knobs.
  */
 
@@ -160,86 +160,12 @@ export function dominanceRatio(): number {
 }
 
 /**
- * Opt-in debug logging for the 3 doom-loop guards (strict, fuzzy,
- * dominance) + the dup-call cap. When `CODER_DOOM_LOOP_DEBUG=1` every
- * push, reset, and check writes a structured `[doom-loop-debug]` line.
- * Zero overhead when off.
- */
-export const DEBUG_DOOM_LOOP = process.env.CODER_DOOM_LOOP_DEBUG === '1';
-
-/**
- * Per-arg duplicate-call cap (Fix F — session 609 regression). Default
- * 5: balances "agent legitimately re-reads after editing" (1–2 calls)
- * against "agent stuck rotating chunks" (>>5).
- */
-export const DUP_CALL_THRESHOLD = readEnvInt('CODER_DUP_CALL_THRESHOLD', 5);
-export const DUP_CALL_WINDOW = readEnvInt('CODER_DUP_CALL_WINDOW', 20);
-
-/**
- * Compatibility-only polling name pattern for external tool registration.
- * where repeated identical-args calls are the LEGITIMATE workflow, not
- * a stuck-loop signal. Prefix matches at start-of-name or after `__`
- * separator. Suffix matches at end-of-name.
- *
- * Runtime guards no longer consult names; loaders may use this once to stamp
- * explicit repeat metadata when an older MCP server does not provide it.
- */
-export const REPEATABLE_NAME_PATTERN =
-  /(?:^|__)(?:wait_for|await|poll|tail|monitor|list)_|_(?:status|logs|pulse|stats)$/;
-
-/**
- * Agent Loop v2 result-content dedup. Refuses a tool result that has the
- * same byte content as a previous result from the same tool within the
- * window. Threshold = how many earlier matches in the window before the
- * NEXT call gets refused.
- */
-export const RESULT_DUP_THRESHOLD = readEnvInt('CODER_RESULT_DUP_THRESHOLD', 1);
-export const RESULT_DUP_WINDOW = readEnvInt('CODER_RESULT_DUP_WINDOW', 15);
-export const RESULT_DUP_MIN_CHARS = readEnvInt('CODER_RESULT_DUP_MIN_CHARS', 50);
-
-/**
- * Mode selector for dup-result behaviour: 'escalate' (default — three
- * tiers: light marker → warn marker → hard refuse), 'marker' (always
- * marker, never refuse — legacy), or 'refuse' (refuse from the first
- * duplicate — oldest behaviour, not recommended).
- */
-export const RESULT_DUP_MODE: 'escalate' | 'marker' | 'refuse' = (() => {
-  const v = (process.env.CODER_RESULT_DUP_MODE ?? 'escalate').toLowerCase();
-  if (v === 'refuse') return 'refuse';
-  if (v === 'marker') return 'marker';
-  return 'escalate';
-})();
-
-/**
- * Escalation thresholds — `matches.length` values (NOT hit counts) at
- * which the next tier kicks in. `_WARN` (default 2) = 3rd fetch gets
- * warn marker. `_REFUSE` (default 3) = 4th+ fetch hard refuse.
- */
-export const RESULT_DUP_ESCALATION_WARN = readEnvInt('CODER_RESULT_DUP_ESCALATION_WARN', 2);
-export const RESULT_DUP_ESCALATION_REFUSE = readEnvInt('CODER_RESULT_DUP_ESCALATION_REFUSE', 3);
-
-/**
- * Polling-tool caps (Phase C). Polling tools are exempt from the 4
- * main guards but get their own brake: soft cap injects a reminder
- * into the result content, hard cap refuses the call.
- */
-export const REPEATABLE_SOFT_CAP = readEnvInt('CODER_REPEATABLE_SOFT_CAP', 20);
-export const REPEATABLE_HARD_CAP = readEnvInt('CODER_REPEATABLE_HARD_CAP', 60);
-export const REPEATABLE_WINDOW = readEnvInt('CODER_REPEATABLE_WINDOW', 30);
-
-/**
  * Polling-result stuck cap. Even legitimate polling SHOULD see state
  * evolve. When the RESULT content is byte-identical for N polls in a
  * row, the polling is stuck and the agent is wasting tokens.
  */
 export const POLLING_STUCK_CAP = readEnvInt('CODER_POLLING_STUCK_CAP', 10);
 export const POLLING_STUCK_MIN_CHARS = readEnvInt('CODER_POLLING_STUCK_MIN_CHARS', 50);
-
-/**
- * Reminder tier for the standard dup-call-cap (non-polling tools).
- * Calls 3-4 get a `<system-reminder>` appended; call 5+ refuses.
- */
-export const DUP_CALL_REMINDER_THRESHOLD = readEnvInt('CODER_DUP_CALL_REMINDER_THRESHOLD', 3);
 
 /**
  * PR 5 (failure-streak guard) — per-tool consecutive-failure counters.
@@ -256,8 +182,9 @@ export const DUP_CALL_REMINDER_THRESHOLD = readEnvInt('CODER_DUP_CALL_REMINDER_T
  * `ToolLoopDetected{guard:'failure-streak'}` so the BT routes to
  * Planning. A single successful call resets the streak.
  *
- * Tools resolved to repeatPolicy=pollable|volatile are exempt — for polling
- * primitives a string of empty results is the workflow, not a loop.
+ * Tools resolved to repeatPolicy=pollable are exempt — for polling
+ * primitives a string of empty results is the workflow, not a loop. Volatile
+ * calls still use the ordinary failure-streak protection.
  */
 export const FAILURE_STREAK_REMINDER_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_REMINDER', 3);
 export const FAILURE_STREAK_REFUSE_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_REFUSE', 5);
@@ -270,16 +197,6 @@ export const FAILURE_STREAK_REFUSE_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_
  */
 export const SUMMARIZER_MAX_RUNS = readEnvInt('CODER_SUMMARIZER_MAX_RUNS', 6);
 export const SUMMARIZER_COOLDOWN_TURNS = readEnvInt('CODER_SUMMARIZER_COOLDOWN_TURNS', 8);
-
-/**
- * Above this character count, the dup-result marker switches to
- * "medium" mode: head excerpt + pointer to persisted output_id
- * instead of inlining the full duplicate.
- */
-export const RESULT_DUP_LARGE_THRESHOLD = readEnvInt('CODER_RESULT_DUP_LARGE_THRESHOLD', 8000);
-
-/** Length of the head excerpt embedded in the medium marker. */
-export const RESULT_DUP_HEAD_CHARS = readEnvInt('CODER_RESULT_DUP_HEAD_CHARS', 400);
 
 /**
  * Pure helper exported for testability. Returns true when the LLM

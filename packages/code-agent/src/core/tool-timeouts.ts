@@ -21,8 +21,8 @@
  *     is correct. (code_exec self-caps at 30s; run_command declares its
  *     own 10-min timeoutMs — neither belongs in this tier.)
  *   - INFINITY        — interactive tools (`submit_plan`, `ask_user`,
- *     `submit_tasks`) and repeatable wait-style tools manage their own
- *     blocking and must NOT have a runner-level timeout.
+ *     `submit_tasks`) and tools that explicitly declare `timeoutMs: Infinity`.
+ *     Repeat policy never implies an unbounded invocation.
  *
  * Override the defaults at runtime via env:
  *   - MCP_TOOL_NORMAL_TIMEOUT_MS  (default 300_000 = 5 min)
@@ -102,22 +102,20 @@ export function resolveHeartbeatIntervalMs(): number {
 
 /**
  * Pick the right timeout (ms) for a given tool. Returns `Infinity` for
- * tools that opt out of runner-level timeouts (interactive / repeatable).
+ * interactive tools and tools that explicitly set `timeoutMs: Infinity`.
  *
  * Resolution order (first match wins):
  *   1. `tool.timeoutMs` explicit value (including `Infinity`)
  *   2. `tool.interactive === true`  → Infinity
- *   3. repeatPolicy pollable/volatile (or legacy repeatable) → Infinity
- *   4. name in `SLOW_NATIVE_NAMES`  → SLOW
- *   5. name matches `SLOW_NAME_RE`  → SLOW
- *   6. name starts with `SLOW_MCP_PREFIX` → SLOW
- *   7. `tool.source === 'mcp' | 'mcp_external'` → SLOW (latency unknown)
- *   8. otherwise → NORMAL
+ *   3. name in `SLOW_NATIVE_NAMES`  → SLOW
+ *   4. name matches `SLOW_NAME_RE`  → SLOW
+ *   5. name starts with `SLOW_MCP_PREFIX` → SLOW
+ *   6. `tool.source === 'mcp' | 'mcp_external'` → SLOW (latency unknown)
+ *   7. otherwise → NORMAL
  */
 export function resolveToolTimeoutMs(tool: CoderTool): number {
   if (tool.timeoutMs !== undefined) return tool.timeoutMs;
   if (tool.interactive) return Infinity;
-  if (tool.repeatable || tool.repeatPolicy === 'pollable' || tool.repeatPolicy === 'volatile') return Infinity;
   if (SLOW_NATIVE_NAMES.has(tool.name)) return SLOW_TIMEOUT_MS;
   if (SLOW_NAME_RE.test(tool.name)) return SLOW_TIMEOUT_MS;
   if (tool.name.startsWith(SLOW_MCP_PREFIX)) return SLOW_TIMEOUT_MS;

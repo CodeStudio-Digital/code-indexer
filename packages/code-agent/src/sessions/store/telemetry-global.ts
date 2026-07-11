@@ -1,4 +1,11 @@
 import type { Database as DB } from 'better-sqlite3';
+import {
+  GENUINE_ERROR_SQL,
+  PROPAGATED_PARENT_FAILURE_SQL,
+  REUSE_SQL,
+  ROOT_REFUSAL_SQL,
+  SHADOW_CANDIDATE_SQL,
+} from './guard-outcome-sql.js';
 
 export interface GlobalTelemetrySummary {
   overall: {
@@ -49,10 +56,27 @@ export interface GlobalTelemetrySummary {
     total_output_chars: number;
     avg_duration_ms: number;
     truncated_count: number;
-    /** Real tool failures (is_error=1) EXCLUDING loop-guard refusals (mig 124). */
+    /** Real tool failures, excluding refusals and their propagated parent row. */
     errors: number;
-    /** Loop-guard refusals (dedup / failure-streak) — NOT tool failures (mig 124). */
+    /** Root-cause refusals only; propagated code_exec failures are separate. */
     refused: number;
+    propagated_failures: number;
+    reused: number;
+    shadow_candidates: number;
+  }>;
+  /** Shadow rollout evidence grouped by repeat policy + execution class. */
+  guard_rollout: Array<{
+    repeat_policy: string;
+    execution_class: string;
+    candidates: number;
+    delivered_candidates: number;
+    confirmed_redundant: number;
+    false_block_signals: number;
+    precision: number;
+    confidence_lower_bound: number;
+    false_block_rate: number;
+    target_candidates: number;
+    eligible_for_enforcement: boolean;
   }>;
   /** Migration 072 — phase breakdown (Camada 2). */
   phase_breakdown: Array<{
@@ -226,8 +250,11 @@ export function getGlobalTelemetrySummary(
           COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
           COALESCE(AVG(tc.duration_ms), 0)          AS avg_duration_ms,
           COALESCE(SUM(tc.truncated), 0)            AS truncated_count,
-          COALESCE(SUM(CASE WHEN tc.is_error=1 AND tc.refusal_kind IS NULL THEN 1 ELSE 0 END), 0) AS errors,
-          COALESCE(SUM(CASE WHEN tc.refusal_kind IS NOT NULL THEN 1 ELSE 0 END), 0) AS refused
+          COALESCE(SUM(CASE WHEN ${GENUINE_ERROR_SQL} THEN 1 ELSE 0 END), 0) AS errors,
+          COALESCE(SUM(CASE WHEN ${ROOT_REFUSAL_SQL} THEN 1 ELSE 0 END), 0) AS refused,
+          COALESCE(SUM(CASE WHEN ${PROPAGATED_PARENT_FAILURE_SQL} THEN 1 ELSE 0 END), 0) AS propagated_failures,
+          COALESCE(SUM(CASE WHEN ${REUSE_SQL} THEN 1 ELSE 0 END), 0) AS reused,
+          COALESCE(SUM(CASE WHEN ${SHADOW_CANDIDATE_SQL} THEN 1 ELSE 0 END), 0) AS shadow_candidates
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
        ${toolWhere}
@@ -236,6 +263,55 @@ export function getGlobalTelemetrySummary(
        LIMIT 25`,
     )
     .all(...toolParams) as GlobalTelemetrySummary['top_tools'];
+
+  const shadowWhere = toolWhere
+    ? `${toolWhere} AND (${SHADOW_CANDIDATE_SQL})`
+    : `WHERE (${SHADOW_CANDIDATE_SQL})`;
+  const guardRolloutRaw = db
+    .prepare(
+      `SELECT
+          COALESCE(tc.repeat_policy, 'unknown') AS repeat_policy,
+          COALESCE(tc.execution_class, 'unknown') AS execution_class,
+          COUNT(*) AS candidates,
+          COALESCE(SUM(CASE WHEN tc.delivered = 1 THEN 1 ELSE 0 END), 0) AS delivered_candidates,
+          COALESCE(SUM(CASE
+            WHEN tc.delivered = 1 AND tc.result_novel = 0 AND tc.coverage_novel = 0 THEN 1
+            ELSE 0 END), 0) AS confirmed_redundant,
+          COALESCE(SUM(CASE
+            WHEN tc.result_novel = 1 OR tc.coverage_novel = 1 THEN 1
+            ELSE 0 END), 0) AS false_block_signals
+       FROM coder_tool_calls tc
+       JOIN coder_messages m ON m.id = tc.message_id
+       ${shadowWhere}
+       GROUP BY tc.repeat_policy, tc.execution_class
+       ORDER BY candidates DESC, repeat_policy, execution_class`,
+    )
+    .all(...toolParams) as Array<{
+      repeat_policy: string;
+      execution_class: string;
+      candidates: number;
+      delivered_candidates: number;
+      confirmed_redundant: number;
+      false_block_signals: number;
+    }>;
+  const targetCandidates = 500;
+  const guard_rollout: GlobalTelemetrySummary['guard_rollout'] = guardRolloutRaw.map((row) => {
+    const precision = row.candidates > 0 ? row.confirmed_redundant / row.candidates : 0;
+    const falseBlockRate = row.candidates > 0 ? row.false_block_signals / row.candidates : 0;
+    const confidenceLowerBound = wilsonLowerBound(row.confirmed_redundant, row.candidates);
+    return {
+      ...row,
+      precision,
+      confidence_lower_bound: confidenceLowerBound,
+      false_block_rate: falseBlockRate,
+      target_candidates: targetCandidates,
+      eligible_for_enforcement:
+        row.candidates >= targetCandidates &&
+        precision >= 0.95 &&
+        confidenceLowerBound >= 0.90 &&
+        falseBlockRate < 0.05,
+    };
+  });
 
   const phase_breakdown = db
     .prepare(
@@ -293,6 +369,7 @@ export function getGlobalTelemetrySummary(
     by_model,
     skills_modes: skillsModes,
     top_tools: top_tools.map((r) => ({ ...r, avg_duration_ms: Math.round(r.avg_duration_ms) })),
+    guard_rollout,
     phase_breakdown,
     top_sessions: top_sessions_raw.map((r) => ({
       session_id: r.session_id,
@@ -307,4 +384,16 @@ export function getGlobalTelemetrySummary(
       last_turn_at: r.last_turn_at,
     })),
   };
+}
+
+/** 95% Wilson score lower bound for a binomial precision estimate. */
+function wilsonLowerBound(successes: number, total: number): number {
+  if (total <= 0) return 0;
+  const z = 1.96;
+  const p = Math.max(0, Math.min(1, successes / total));
+  const z2 = z * z;
+  const denominator = 1 + z2 / total;
+  const center = p + z2 / (2 * total);
+  const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * total)) / total);
+  return Math.max(0, (center - margin) / denominator);
 }

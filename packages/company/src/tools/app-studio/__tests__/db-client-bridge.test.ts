@@ -95,7 +95,7 @@ describe('ensureAppStudioDbConnection', () => {
       database_name: 'futebol-fantasy-db',
       file_path: 'C:/app/.wrangler/state/v3/d1/local.sqlite',
       group_name: 'App Studio',
-      is_read_only: 0,
+      is_read_only: 1,
     });
     expect(JSON.parse(result.connection.options_json)).toMatchObject({
       managedBy: 'app-studio',

@@ -7,11 +7,13 @@
  * a tool-free synchronous spin still trips the budget. Shell/mutating tools stay
  * exposed inside `code_exec`.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildCodeExecTool, _exposedToolNames } from '@mcp/code-agent/tools/code-exec.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import { ok, type CoderTool, type ToolContext } from '@mcp/code-agent/core/tool.js';
+import { ok, type CoderTool, type GuardVerdict, type ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import { dispatchTools } from '@mcp/code-agent/core/runner/nodes/executing-dispatch.js';
+import { invocationGuardKey } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -206,6 +208,22 @@ describe('code_exec permission gate (nested calls)', () => {
     expect(res.content).toContain('read_file-ok');
   });
 
+  it('a permission denial does not advance the nested guard counter', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('edit_file'));
+    const beforeNestedCall = vi.fn(() => null);
+    const result = await buildCodeExecTool(registry).handler({
+      code: `try { await tools.edit_file({path:'x'}); } catch (e) { return e.refusalKind; }`,
+    }, {
+      ...gateCtx(async () => ({ allowed: false, refusalText: '[user-denied: no.]' })),
+      nestedToolObserver: { beforeNestedCall, afterNestedCall: () => {} },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('[return]\nuser_denied');
+    expect(beforeNestedCall).not.toHaveBeenCalled();
+  });
+
   it('anchors nested requests to the code_exec block (parentToolUseId + nested)', async () => {
     const registry = new ToolRegistry();
     registry.register(noopTool('run_command'));
@@ -304,9 +322,9 @@ describe('code_exec tools-proxy misses (telemetry: "tools.X is not a function")'
 });
 
 describe('code_exec nested loop guards (observer wired via ToolContext)', () => {
-  it('a script looping the SAME nested call is interrupted by the dedup guard', async () => {
+  it('a script looping the SAME unsafe mutation is interrupted by the local guard', async () => {
     const registry = new ToolRegistry();
-    registry.register(noopTool('read_file'));
+    registry.register(noopTool('edit_file'));
     const codeExec = buildCodeExecTool(registry);
 
     const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
@@ -321,7 +339,7 @@ describe('code_exec nested loop guards (observer wired via ToolContext)', () => 
       {
         code: `
           for (let i = 0; i < 10; i++) {
-            await tools.read_file({ path: 'same.ts' });
+            await tools.edit_file({ path: 'same.ts' });
           }
           return 'finished all 10';
         `,
@@ -330,7 +348,7 @@ describe('code_exec nested loop guards (observer wired via ToolContext)', () => 
     );
 
     expect(res.isError).toBe(true);
-    expect(res.content).toContain('tool read_file refused');
+    expect(res.content).toContain('tool edit_file refused');
     expect(res.content).toContain('[loop-refused');
     expect(res.content).not.toContain('finished all 10');
   });
@@ -355,12 +373,222 @@ describe('code_exec nested loop guards (observer wired via ToolContext)', () => 
   });
 });
 
+describe('code_exec invocation-local stable reuse', () => {
+  function stableRead(
+    handler: CoderTool['handler'],
+  ): CoderTool {
+    return {
+      name: 'read_file',
+      description: 'stable read',
+      source: 'native',
+      mutates: false,
+      parallelSafe: true,
+      repeatPolicy: 'stable',
+      executionClass: 'read',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          force_reread: { type: 'boolean', default: false },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      },
+      handler,
+    };
+  }
+
+  it('coalesces concurrent stable reads after alias/default normalization', async () => {
+    const registry = new ToolRegistry();
+    let invocations = 0;
+    const verdicts: Array<GuardVerdict | undefined> = [];
+    registry.register(stableRead(async (args) => {
+      invocations += 1;
+      await sleep(20);
+      return ok(`read:${args.path}`);
+    }));
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `const pair = await Promise.all([
+        tools.read_file({path:'same.ts'}),
+        tools.read_file({file_path:'same.ts', force_reread:false})
+      ]);
+      const settledReuse = await tools.read_file({path:'same.ts'});
+      return [...pair, settledReuse];`,
+    }, {
+      ...makeCtx(),
+      currentToolUseId: 'parent-read',
+      nestedToolObserver: {
+        beforeNestedCall: () => null,
+        afterNestedCall: (event) => { verdicts.push(event.guardVerdict); },
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(invocations).toBe(1);
+    expect(result.content.match(/read:same\.ts/g)).toHaveLength(3);
+    expect(verdicts.find((verdict) => verdict?.action === 'reuse')).toMatchObject({
+      action: 'reuse',
+      count: 2,
+      originToolUseId: 'parent-read#1',
+    });
+  });
+
+  it('force_reread bypasses local reuse', async () => {
+    const registry = new ToolRegistry();
+    let invocations = 0;
+    registry.register(stableRead(async () => ok(`fresh:${++invocations}`)));
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return [
+        await tools.read_file({path:'same.ts'}),
+        await tools.read_file({path:'same.ts', force_reread:true})
+      ];`,
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(invocations).toBe(2);
+    expect(result.content).toContain('fresh:1');
+    expect(result.content).toContain('fresh:2');
+  });
+
+  it('volatile and pollable calls always execute', async () => {
+    const registry = new ToolRegistry();
+    let volatileCalls = 0;
+    let pollCalls = 0;
+    registry.register({
+      ...stableRead(async () => ok(`volatile:${++volatileCalls}`)),
+      name: 'live_status',
+      repeatPolicy: 'volatile',
+    });
+    registry.register({
+      ...stableRead(async () => ok(`poll:${++pollCalls}`)),
+      name: 'poll_status',
+      repeatPolicy: 'pollable',
+    });
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await Promise.all([
+        tools.live_status({path:'x'}), tools.live_status({path:'x'}),
+        tools.poll_status({path:'x'}), tools.poll_status({path:'x'})
+      ]);`,
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(volatileCalls).toBe(2);
+    expect(pollCalls).toBe(2);
+  });
+
+  it('a successful write advances the epoch and invalidates stable reuse', async () => {
+    const registry = new ToolRegistry();
+    let reads = 0;
+    registry.register(stableRead(async () => ok(`version:${++reads}`)));
+    registry.register(noopTool('edit_file'));
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `
+        const before = await tools.read_file({path:'a.ts'});
+        await tools.edit_file({path:'a.ts'});
+        const after = await tools.read_file({path:'a.ts'});
+        return {before, after};
+      `,
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(reads).toBe(2);
+    expect(result.content).toContain('version:1');
+    expect(result.content).toContain('version:2');
+  });
+
+  it('does not reuse results across separate code_exec scripts', async () => {
+    const registry = new ToolRegistry();
+    let reads = 0;
+    registry.register(stableRead(async () => ok(`read:${++reads}`)));
+    const codeExec = buildCodeExecTool(registry);
+    const input = { code: `return await tools.read_file({path:'a.ts'});` };
+
+    expect((await codeExec.handler(input, makeCtx())).isError).toBeFalsy();
+    expect((await codeExec.handler(input, makeCtx())).isError).toBeFalsy();
+    expect(reads).toBe(2);
+  });
+
+  it('a populated legacy table cannot discard any Promise.all sibling', async () => {
+    vi.stubEnv('CODER_DEDUP_POLICY', 'hybrid');
+    const registry = new ToolRegistry();
+    registry.register(stableRead(async (args) => ok(`result:${args.path}`)));
+    const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
+    const priorExactRead = invocationGuardKey('read_file', {
+      path: 'component.ts',
+      force_reread: false,
+    });
+    const observer = buildNestedToolObserver({
+      dupCalls: new Map([[priorExactRead, { count: 2, firstTurn: 1, lastUseId: 'old' }]]),
+      failureStreaks: { streaks: new Map() },
+      turn: 2,
+      parentToolUseId: 'parent-batch',
+    });
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await Promise.all([
+        tools.read_file({path:'component.ts'}),
+        tools.read_file({path:'template.html'}),
+        tools.read_file({path:'spec.ts'}),
+        tools.read_file({path:'service.php'})
+      ]);`,
+    }, { ...makeCtx(), nestedToolObserver: observer });
+    vi.unstubAllEnvs();
+
+    expect(result.isError).toBeFalsy();
+    for (const path of ['component.ts', 'template.html', 'spec.ts', 'service.php']) {
+      expect(result.content).toContain(`result:${path}`);
+    }
+  });
+});
+
 describe('code_exec metadata safety and scheduling', () => {
+  it('does not deadlock the shared unsafe lane when dispatched with nested shell work', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...noopTool('run_command'),
+      mutates: false,
+      parallelSafe: false,
+      handler: async () => ok('git status complete'),
+    });
+    const codeExec = buildCodeExecTool(registry);
+    codeExec.timeoutMs = 200;
+    registry.register(codeExec);
+    const result = await dispatchTools({
+      toolUses: [{
+        id: 'parent-code-exec',
+        name: 'code_exec',
+        input: { code: `return await tools.run_command({command:'git status --short'});` },
+      }],
+      registry,
+      toolContext: { ...makeCtx(), toolCallLedger: new ToolCallLedger() },
+      turn: 1,
+      dupCalls: new Map(),
+    });
+
+    expect(codeExec.parallelSafe).toBe(true);
+    expect(result.results[0]).toMatchObject({ isError: false });
+    expect(result.results[0].content).toContain('git status complete');
+  });
+
   it('exposes nested dedup refusals as structured catchable errors', async () => {
     const registry = new ToolRegistry();
     registry.register(noopTool('read_file'));
     const observer = {
-      beforeNestedCall: () => ({ refusalText: 'duplicate call', kind: 'dedup' as const }),
+      beforeNestedCall: () => ({
+        action: 'block' as const,
+        reason: 'test-block',
+        refusalKind: 'dedup',
+        shouldReflect: true,
+        affectsFailureStreak: false,
+        sourceTool: 'read_file',
+        originToolUseId: 'parent#1',
+        refusalText: 'duplicate call',
+        kind: 'dedup' as const,
+      }),
       afterNestedCall: () => {},
     };
     const result = await buildCodeExecTool(registry).handler({
@@ -373,6 +601,64 @@ describe('code_exec metadata safety and scheduling', () => {
     expect(result.content).toContain('"code": "TOOL_CALL_REFUSED"');
     expect(result.content).toContain('"kind": "dedup"');
     expect(result.content).toContain('"tool": "read_file"');
+  });
+
+  it('settles Promise.all siblings, preserves partial results, and propagates an uncaught block once', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new ToolRegistry();
+      let editInvocations = 0;
+      let siblingSettled = false;
+      registry.register({
+        ...noopTool('edit_file'),
+        handler: async () => ok(`edit:${++editInvocations}`),
+      });
+      registry.register({
+        ...slowTool('read_file', 0),
+        parallelSafe: true,
+        handler: async () => {
+          await Promise.resolve();
+          siblingSettled = true;
+          return ok('sibling-read-result');
+        },
+      });
+      const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
+      const observer = buildNestedToolObserver({
+        failureStreaks: { streaks: new Map() },
+        turn: 1,
+        parentToolUseId: 'parent-refusal',
+      });
+      const put = vi.fn(() => 'abc123def456');
+
+      const result = await buildCodeExecTool(registry).handler({
+        code: `
+          await tools.edit_file({path:'same.ts'});
+          await tools.edit_file({path:'same.ts'});
+          return await Promise.all([
+            tools.edit_file({path:'same.ts'}),
+            tools.read_file({path:'sibling.ts'})
+          ]);
+        `,
+      }, {
+        ...makeCtx(),
+        currentToolUseId: 'parent-refusal',
+        nestedToolObserver: observer,
+        toolOutputStore: { put } as never,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.guardVerdict).toMatchObject({
+        action: 'block', reason: 'mutating-repeat-blocked', originToolUseId: 'parent-refusal#3',
+      });
+      expect(editInvocations).toBe(2);
+      expect(siblingSettled).toBe(true);
+      expect(result.content).toContain('output_id:"abc123def456"');
+      expect(put).toHaveBeenCalledWith(expect.stringContaining('sibling-read-result'));
+      expect(result.content.match(/\[loop-refused:/g)).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('records policy refusals in the shared ledger without executing the tool', async () => {

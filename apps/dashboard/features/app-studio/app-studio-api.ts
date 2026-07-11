@@ -5,7 +5,7 @@
  * (start/phase/log/done/error — parse manual, EventSource não faz POST).
  */
 
-export type AppStageId = 'discovery' | 'architecture' | 'database' | 'design' | 'backend' | 'review' | 'launch';
+export type AppStageId = 'discovery' | 'architecture' | 'database' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review' | 'launch';
 export type AppStageStatus = 'pending' | 'active' | 'review' | 'approved' | 'skipped';
 export type AppStageAction = 'start' | 'approve' | 'reopen' | 'skip';
 export type AppRoadmapTier = 'screen' | 'api';
@@ -104,34 +104,93 @@ export interface AppStudioSessionDetail {
   pipeline: AppPipelineView | null;
   spec: AppSpecView | null;
   architecture: AppArchitectureView | null;
+  ux: AppUxView | null;
+  wireframe: AppWireframeView | null;
+  build_groups: AppBuildGroupView[];
+  build_tasks: AppBuildTaskEvidenceView[];
   deploy: AppDeployView | null;
   features: Array<{ id: number; name: string; kind: string; summary: string | null; verified_in_preview: boolean }>;
 }
 
-export interface AppPipelineRepairReport {
-  changed: boolean;
+export interface AppUxView {
+  id: number;
+  revision_number: number;
+  spec_revision_id: number | null;
+  architecture_revision_id: number | null;
+  data_fingerprint: string;
+  status: 'draft' | 'approved' | 'superseded' | 'rejected';
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  audit: { ok: boolean; issues: string[] };
+  brief: {
+    v: 1;
+    summary: string;
+    selected_direction_id: string;
+    directions: Array<{ id: string; name: string; rationale: string; palette: string[]; typography: string; density: 'compact' | 'comfortable' | 'spacious' }>;
+    tokens: Record<string, string> & { density: 'compact' | 'comfortable' | 'spacious' };
+    navigation: string;
+    principles: string[];
+    constraints: string[];
+    rejected_directions: string[];
+    accessibility: { standard: string; contrast: string; keyboard: string; focus: string; reduced_motion: string };
+    references: Array<{ kind: 'image' | 'url' | 'design-system'; value: string; note: string }>;
+  };
+}
+
+export interface AppWireframeView {
+  id: number;
+  revision_number: number;
+  spec_revision_id: number | null;
+  architecture_revision_id: number | null;
+  ux_revision_id: number | null;
+  data_fingerprint: string;
+  status: 'draft' | 'approved' | 'superseded' | 'rejected';
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  audit: { ok: boolean; issues: string[] };
+  plan: {
+    v: 1;
+    summary: string;
+    flows: Array<{ id: string; name: string; actor: string; goal: string; entry_screen_id: string; source_ids: string[]; steps: Array<{ id: string; screen_id: string; action: string; result: string; reads: string[]; writes: string[]; next_step_ids: string[] }> }>;
+    screens: Array<{ screen_id: string; route: string; flow_ids: string[]; hierarchy: string[]; regions: Array<{ id: string; purpose: string; components: string[] }>; actions: string[]; data_bindings: Array<{ entity: string; fields: string[]; purpose: string; fixture_scenario: string }>; states: string[]; responsive: string; accessibility: string[] }>;
+    tdd_cases: Array<{ id: string; title: string; architecture_case_ids: string[]; source_ids: string[]; flow_ids: string[]; screen_ids: string[]; preconditions: string[]; steps: string[]; expected: string }>;
+    build_groups: Array<{ id: string; name: string; goal: string; sequence: number; complexity: 'small' | 'medium' | 'large'; flow_ids: string[]; screen_ids: string[]; depends_on: string[]; task_ids: string[] }>;
+    tasks: Array<{ id: string; group_id: string; screen_id: string | null; kind: string; title: string; sequence: number; complexity: 'small' | 'medium' | 'large'; depends_on: string[]; tdd_case_ids: string[]; entity_names: string[]; source_ids: string[] }>;
+  };
+}
+
+export interface AppBuildGroupView { id: number; wireframe_revision_id: number; group_id: string; status: 'pending' | 'active' | 'review' | 'approved'; summary: string | null; feedback: string | null; submitted_at: string | null; approved_at: string | null }
+export interface AppBuildTaskEvidenceView { id: number; wireframe_revision_id: number; task_id: string; status: 'pending' | 'active' | 'done'; summary: string | null; evidence_json: string | null; completed_at: string | null }
+
+export interface AppRepairArea {
+  id: 'workspace' | 'database' | 'pipeline';
+  status: 'healthy' | 'repairable' | 'attention';
   issues: Array<{
     code: string;
     severity: 'warning' | 'error';
-    stage_id: AppStageId | null;
     message: string;
+    repairable: boolean;
   }>;
-  changes: Array<{
-    stage_id: AppStageId | null;
-    before: AppStageStatus | 'missing' | 'outdated';
-    after: AppStageStatus | 'rebuilt';
-    reason: string;
-  }>;
+  actions: Array<{ title: string; reason: string }>;
+}
+
+export interface AppRepairReport {
+  changed: boolean;
+  healthy: boolean;
+  action_count: number;
+  areas: AppRepairArea[];
   pipeline: {
-    v: 2;
+    v: 2 | 3;
     stages: AppPipelineStage[];
     roadmap: Array<{ name: string; tier: AppRoadmapTier; feature_id: string | null; source: 'spec' }>;
   };
 }
 
-export interface AppPipelineRepairPreview {
+export interface AppRepairPreview {
   preview_token: string;
-  report: AppPipelineRepairReport;
+  report: AppRepairReport;
 }
 
 export interface AppArchitectureView {
@@ -263,20 +322,30 @@ export async function patchAppStage(
   );
 }
 
+export async function recheckAppStage(sessionId: number, stageId: AppStageId): Promise<{ ready_for_review: boolean }> {
+  return unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/stage/recheck`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage_id: stageId }),
+    }),
+  );
+}
+
 export async function initAppPipeline(sessionId: number): Promise<void> {
   await unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/init`, { method: 'POST' }));
 }
 
-export async function previewAppPipelineRepair(sessionId: number): Promise<AppPipelineRepairPreview> {
-  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/repair/preview`, { method: 'POST' }));
+export async function previewAppRepair(sessionId: number): Promise<AppRepairPreview> {
+  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/repair/preview`, { method: 'POST' }));
 }
 
-export async function applyAppPipelineRepair(
+export async function applyAppRepair(
   sessionId: number,
   previewToken: string,
-): Promise<{ report: AppPipelineRepairReport; repair_id: number | null }> {
+): Promise<{ report: AppRepairReport; repair_id: number | null }> {
   return unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/repair`, {
+    await fetch(`/api/app-studio/sessions/${sessionId}/repair`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ preview_token: previewToken }),
@@ -284,9 +353,9 @@ export async function applyAppPipelineRepair(
   );
 }
 
-export async function undoAppPipelineRepair(sessionId: number, repairId: number): Promise<void> {
+export async function undoAppRepair(sessionId: number, repairId: number): Promise<void> {
   await unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/repair/${repairId}/undo`, { method: 'POST' }),
+    await fetch(`/api/app-studio/sessions/${sessionId}/repair/${repairId}/undo`, { method: 'POST' }),
   );
 }
 
@@ -330,6 +399,21 @@ export async function rejectAppEvolution(sessionId: number, evolutionId: number)
 export async function deleteAppEvolution(sessionId: number, evolutionId: number): Promise<{ deleted_id: number }> {
   return unwrap(
     await fetch(`/api/app-studio/sessions/${sessionId}/evolutions/${evolutionId}`, { method: 'DELETE' }),
+  );
+}
+
+export async function patchBuildGroup(
+  sessionId: number,
+  groupId: string,
+  action: 'approve' | 'reopen',
+  feedback?: string,
+): Promise<{ groups: AppBuildGroupView[]; tasks: AppBuildTaskEvidenceView[] }> {
+  return unwrap(
+    await fetch(`/api/app-studio/sessions/${sessionId}/build-groups/${encodeURIComponent(groupId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, feedback }),
+    }),
   );
 }
 

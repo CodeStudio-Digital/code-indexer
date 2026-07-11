@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { renderSummaryAsMessage } from '../summary-renderer.js';
-import type { CompactionSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
+import type { CompactionSummaryV2, CompactionSummaryV3 } from '@mcp/code-agent/core/summarizer.js';
 
 const SUMMARY: CompactionSummaryV2 = {
   primary_request: 'build the thing',
@@ -17,6 +17,27 @@ const SUMMARY: CompactionSummaryV2 = {
   pending_tasks: ['ship'],
   current_work: 'writing tests',
   next_step: 'commit',
+};
+
+const SUMMARY_V3: CompactionSummaryV3 = {
+  version: 3,
+  chapter: {
+    title: 'Build the thing',
+    summary: 'Implemented the first half.',
+    user_requests: [],
+    decisions: [],
+    work_completed: [],
+    files: [],
+    open_issues: [],
+    resolved_issues: [],
+  },
+  resume: {
+    objective: 'build the thing',
+    current_focus: 'writing V3 tests',
+    constraints: [],
+    pending_tasks: ['ship'],
+    next_step: 'commit V3',
+  },
 };
 
 describe('renderSummaryAsMessage', () => {
@@ -39,6 +60,15 @@ describe('renderSummaryAsMessage', () => {
     expect(text).toContain('build the thing');
     expect(text).toContain('writing tests');
     expect(text).toContain('commit');
+  });
+
+  it('renders a V3 continuation snapshot with the compatible prefix and tags', () => {
+    const msg = renderSummaryAsMessage(SUMMARY_V3);
+    const text = (msg.content[0] as { type: 'text'; text: string }).text;
+    expect(text).toMatch(/auto-compacted summary/i);
+    expect(text).toContain('<primary_request>');
+    expect(text).toContain('writing V3 tests');
+    expect(text).not.toContain('Implemented the first half.');
   });
 
   it('emits empty content when every section is blank', () => {

@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, Loader2, RotateCcw, ShieldCheck, Wrench } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  FolderCog,
+  ListChecks,
+  Loader2,
+  RotateCcw,
+  ShieldCheck,
+  Wrench,
+} from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import {
   Dialog,
@@ -11,11 +21,18 @@ import {
   DialogTitle,
 } from '../../../components/ui/dialog.js';
 import {
-  applyAppPipelineRepair,
-  previewAppPipelineRepair,
-  undoAppPipelineRepair,
-  type AppPipelineRepairPreview,
+  applyAppRepair,
+  previewAppRepair,
+  undoAppRepair,
+  type AppRepairArea,
+  type AppRepairPreview,
 } from '../app-studio-api.js';
+
+const AREA_ICONS: Record<AppRepairArea['id'], ComponentType<{ className?: string }>> = {
+  workspace: FolderCog,
+  database: Database,
+  pipeline: ListChecks,
+};
 
 export function JourneyRepairDialog({
   sessionId,
@@ -29,7 +46,7 @@ export function JourneyRepairDialog({
   onRepaired: () => void;
 }) {
   const { t } = useTranslation('appStudio');
-  const [preview, setPreview] = useState<AppPipelineRepairPreview | null>(null);
+  const [preview, setPreview] = useState<AppRepairPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repairId, setRepairId] = useState<number | null>(null);
@@ -37,9 +54,10 @@ export function JourneyRepairDialog({
   const check = useCallback(async () => {
     setBusy(true);
     setError(null);
+    setPreview(null);
     setRepairId(null);
     try {
-      setPreview(await previewAppPipelineRepair(sessionId));
+      setPreview(await previewAppRepair(sessionId));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -48,8 +66,7 @@ export function JourneyRepairDialog({
   }, [sessionId]);
 
   useEffect(() => {
-    if (!open) return;
-    void check();
+    if (open) void check();
   }, [open, check]);
 
   const apply = async () => {
@@ -57,7 +74,7 @@ export function JourneyRepairDialog({
     setBusy(true);
     setError(null);
     try {
-      const result = await applyAppPipelineRepair(sessionId, preview.preview_token);
+      const result = await applyAppRepair(sessionId, preview.preview_token);
       setPreview((current) => current ? { ...current, report: result.report } : current);
       setRepairId(result.repair_id);
       onRepaired();
@@ -73,7 +90,7 @@ export function JourneyRepairDialog({
     setBusy(true);
     setError(null);
     try {
-      await undoAppPipelineRepair(sessionId, repairId);
+      await undoAppRepair(sessionId, repairId);
       onRepaired();
       await check();
     } catch (e) {
@@ -83,15 +100,10 @@ export function JourneyRepairDialog({
   };
 
   const report = preview?.report ?? null;
-  const statusLabel = (value: string) => (
-    ['pending', 'active', 'review', 'approved', 'skipped'].includes(value)
-      ? t(`stages.status.${value}`)
-      : t(`pipeline.repairStatus.${value}`)
-  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wrench className="h-4 w-4 text-primary" />
@@ -106,11 +118,6 @@ export function JourneyRepairDialog({
           </div>
         ) : error ? (
           <div className="border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>
-        ) : report && !report.changed ? (
-          <div className="flex items-start gap-2 border border-emerald-300/60 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-100">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-            <div><p className="font-medium">{t('pipeline.repairHealthy')}</p><p className="mt-0.5 text-xs opacity-80">{t('pipeline.repairHealthyHint')}</p></div>
-          </div>
         ) : report ? (
           <div className="space-y-3">
             {repairId ? (
@@ -118,27 +125,56 @@ export function JourneyRepairDialog({
                 <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
                 <div><p className="font-medium">{t('pipeline.repairApplied')}</p><p className="mt-0.5 text-xs opacity-80">{t('pipeline.repairAppliedHint')}</p></div>
               </div>
-            ) : (
+            ) : report.healthy ? (
+              <div className="flex items-start gap-2 border border-emerald-300/60 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-100">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                <div><p className="font-medium">{t('pipeline.repairHealthy')}</p><p className="mt-0.5 text-xs opacity-80">{t('pipeline.repairHealthyHint')}</p></div>
+              </div>
+            ) : report.changed ? (
               <div className="border bg-muted/30 p-3 text-sm">
-                <p className="font-medium">{t('pipeline.repairFound', { count: report.changes.length })}</p>
+                <p className="font-medium">{t('pipeline.repairFound', { count: report.action_count })}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{t('pipeline.repairSafety')}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t('pipeline.repairPreserves')}</p>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-100">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div><p className="font-medium">{t('pipeline.repairNeedsSpecialist')}</p><p className="mt-0.5 text-xs opacity-80">{t('pipeline.repairNeedsSpecialistHint')}</p></div>
               </div>
             )}
 
-            <div className="max-h-72 space-y-1.5 overflow-auto pr-1">
-              {report.changes.map((change, index) => (
-                <div key={`${change.stage_id ?? 'roadmap'}-${index}`} className="border px-3 py-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 font-medium">
-                      {change.stage_id ? t(`stages.${change.stage_id}.name`) : t('pipeline.repairRoadmap')}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {statusLabel(change.before)} → {statusLabel(change.after)}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">{change.reason}</p>
-                </div>
-              ))}
+            <div className="max-h-80 divide-y overflow-auto border">
+              {report.areas.map((area) => {
+                const Icon = AREA_ICONS[area.id];
+                return (
+                  <section key={area.id} className="p-3">
+                    <div className="flex items-center gap-2">
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <h4 className="min-w-0 flex-1 text-sm font-medium">{t(`pipeline.repairAreas.${area.id}`)}</h4>
+                      <span className="text-[11px] font-medium text-muted-foreground">{t(`pipeline.repairAreaStatus.${area.status}`)}</span>
+                    </div>
+                    {area.issues.length === 0 && area.actions.length === 0 ? (
+                      <p className="mt-1.5 pl-6 text-xs text-muted-foreground">{t('pipeline.repairAreaHealthy')}</p>
+                    ) : (
+                      <div className="mt-2 space-y-2 pl-6">
+                        {area.issues.map((issue, index) => (
+                          <div key={`${issue.code}-${index}`} className="text-xs text-muted-foreground">
+                            <p className={issue.repairable ? '' : 'text-amber-700 dark:text-amber-300'}>
+                              {t(`pipeline.repairIssues.${issue.code}`, { defaultValue: issue.message })}
+                            </p>
+                          </div>
+                        ))}
+                        {area.actions.length > 0 && (
+                          <div className="border-l-2 border-primary/40 pl-2 text-xs">
+                            <p className="font-medium">{t('pipeline.repairWillDo')}</p>
+                            {area.actions.map((action, index) => <p key={`${action.title}-${index}`} className="mt-0.5 text-muted-foreground">{action.reason}</p>)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
             </div>
           </div>
         ) : null}

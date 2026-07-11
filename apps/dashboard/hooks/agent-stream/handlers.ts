@@ -14,7 +14,6 @@ import type {
   TaskRunTaskStatus,
   TodoItem,
   ToolCallEvent,
-  ToolLoopIntervention,
   UpdateSession,
   Usage,
 } from './types.js';
@@ -34,10 +33,6 @@ import {
   type OperationPayload,
   type ProviderCallPayload,
 } from './activity-blocks.js';
-import {
-  isNotifiableLoopIntervention,
-  pushNotification,
-} from '../../features/chat/notifications/session-notifications-store.js';
 
 interface HandlerContext {
   sid: number;
@@ -55,11 +50,6 @@ export type EventHandler = (data: Record<string, unknown>, eventName: string) =>
 
 export function createEventHandlers(ctx: HandlerContext): Record<string, EventHandler> {
   const { sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete } = ctx;
-
-  // groupId → jobId for background groups seen this stream, so agents_group_end
-  // (and per-agent failures) can raise a session notification the user may not
-  // be actively watching. Cleared when the group ends.
-  const backgroundJobByGroup = new Map<string, string>();
 
   return {
     text: (data) => {
@@ -510,7 +500,6 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         resumed?: boolean;
         agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string; status?: AgentStatus; attempt?: number }>;
       };
-      if (d.background) backgroundJobByGroup.set(d.groupId, d.jobId ?? '');
       // Upsert by groupId — a resume (resume_agent) or a cross-run re-emit of a
       // still-running background job MERGES into the existing block (rows flip
       // back to running) instead of pushing a duplicate. `message_complete`
@@ -551,25 +540,11 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     agent_progress: (data) => {
       const d = data as AgentProgressPayload;
       if (applyAgentProgress(blocks, d)) flush();
-      // Surface a background/resumed agent failure the user may not be watching.
-      if ((d.event === 'error' || d.event === 'timed_out') && backgroundJobByGroup.has(d.groupId)) {
-        pushNotification(sid, { kind: 'agent-failed', groupId: d.groupId, agentIndex: d.agentIndex, label: d.label, reason: d.event });
-      }
     },
 
     agents_group_end: (data) => {
       const d = data as { groupId: string; totalUsage?: Usage; jobId?: string; status?: string; agentCount?: number; successCount?: number };
       if (applyAgentsGroupEnd(blocks, d)) flush();
-      const jobId = d.jobId ?? backgroundJobByGroup.get(d.groupId);
-      if (jobId != null && backgroundJobByGroup.has(d.groupId)) {
-        pushNotification(sid, {
-          kind: 'background-agents-done',
-          jobId,
-          agentCount: d.agentCount ?? 0,
-          successCount: d.successCount ?? 0,
-        });
-        backgroundJobByGroup.delete(d.groupId);
-      }
     },
 
     auto_continue: (data) => {
@@ -688,17 +663,6 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       }
     },
 
-    tool_loop_intervention: (data) => {
-      // Server-emitted when a loop-detection guard / failure-streak fired.
-      // Routed into the session notification center (banner + history rail).
-      // dup-result-marker INFORMATIONAL tiers are content-delivery hints, not
-      // failures — skip them so they don't pollute the notification history
-      // (matches the old banner's `shouldRenderInBanner` filter).
-      const iv = data as ToolLoopIntervention;
-      if (!isNotifiableLoopIntervention(iv)) return;
-      pushNotification(sid, { kind: 'tool-loop', intervention: iv });
-    },
-
     message_complete: (data) => {
       const u = (data as { usage?: Usage }).usage;
       if (u) {
@@ -753,11 +717,6 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         // No run → no resolvable approvals (abort/interrupt denied them).
         pendingApprovals: [],
       });
-      pushNotification(sid, {
-        kind: 'run-done',
-        reason: String(d.reason ?? 'completed'),
-        ...(d.error ? { error: d.error } : {}),
-      });
     },
 
     error: (data) => {
@@ -766,26 +725,6 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flushNow();
       dispatchAgentPreview(sid, false);
       updateSession(sid, { error: message });
-      pushNotification(sid, { kind: 'run-error', message });
-    },
-
-    quality_watchdog_alert: (data) => {
-      // Fire-and-forget classifier verdict. Emitted for every verdict
-      // (including 'ok'); only surface the non-ok ones as notifications.
-      const d = data as {
-        verdict?: 'ok' | 'warn' | 'flagged' | 'error';
-        suspectTool?: string;
-        reason?: string;
-        turn?: number;
-      };
-      if (!d.verdict || d.verdict === 'ok') return;
-      pushNotification(sid, {
-        kind: 'quality-alert',
-        verdict: d.verdict,
-        suspectTool: String(d.suspectTool ?? ''),
-        reason: String(d.reason ?? ''),
-        turn: Number(d.turn ?? 0),
-      });
     },
   };
 }

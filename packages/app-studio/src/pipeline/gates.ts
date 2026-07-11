@@ -14,6 +14,8 @@ import { readDbStatus, readDeployStatus } from '../status-files.js';
 import { runSecurityAudit } from '../audit/security.js';
 import { auditAppArchitecture } from '../architecture/audit.js';
 import type { AppArchitecturePlan } from '../architecture/types.js';
+import { auditAppUxBrief, auditAppWireframePlan } from '../experience/audit.js';
+import { dataModelFingerprint, type AppUxBrief, type AppWireframePlan } from '../experience/types.js';
 import { readTddCycles } from '../architecture/tdd-cycles.js';
 import type { AppPipelineState, AppStageGateResult, AppStageId } from './stages.js';
 import { roadmapProgress, type AppRecordedKind } from './roadmap.js';
@@ -41,6 +43,14 @@ export interface AppStageGateInput {
   architecture?: AppArchitecturePlan | null;
   /** Revisão aprovada da spec que a arquitetura precisa representar. */
   currentSpecRevisionId?: number | null;
+  currentArchitectureRevisionId?: number | null;
+  currentUxRevisionId?: number | null;
+  ux?: AppUxBrief | null;
+  uxStatus?: 'draft' | 'approved' | 'superseded' | 'rejected' | null;
+  wireframe?: AppWireframePlan | null;
+  wireframeStatus?: 'draft' | 'approved' | 'superseded' | 'rejected' | null;
+  buildGroups?: Array<{ group_id: string; status: 'pending' | 'active' | 'review' | 'approved' }>;
+  buildTasks?: Array<{ task_id: string; status: 'pending' | 'active' | 'done' }>;
   /** false pula spawns de typecheck/build (testes). Default true. */
   runBuild?: boolean;
 }
@@ -68,7 +78,9 @@ async function scriptIssue(
 }
 
 function tddIssues(input: AppStageGateInput, ownerStage: 'database' | 'design' | 'backend' | 'review'): string[] {
-  const cases = (input.architecture?.tdd.cases ?? []).filter((testCase) => testCase.owner_stage === ownerStage);
+  const cases = ownerStage === 'design' && input.wireframe
+    ? input.wireframe.tdd_cases
+    : (input.architecture?.tdd.cases ?? []).filter((testCase) => testCase.owner_stage === ownerStage);
   if (cases.length === 0) return [];
   const issues: string[] = [];
   const testFiles = filesContaining(join(input.workspaceDir, 'tests'), /\.(ts|tsx)$/, /./);
@@ -139,6 +151,9 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
       if (!db?.local_ready) {
         issues.push('Local database not provisioned — run app_provision_db after writing the migrations.');
       } else {
+        if (db.last_error_phase) {
+          issues.push(`Local database ${db.last_error_phase} phase failed: ${db.last_error ?? 'inspect app_get_db_assets and retry safely'}.`);
+        }
         const missing = migrations.filter((name) => !db.applied.includes(name));
         if (missing.length > 0) {
           issues.push(`Migrations not applied locally: ${missing.join(', ')} — run app_provision_db again.`);
@@ -151,13 +166,62 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
       if (tests) issues.push(tests);
       break;
     }
+    case 'ux': {
+      if (!spec) {
+        issues.push('Spec missing — approve discovery first.');
+        break;
+      }
+      const audit = auditAppUxBrief(input.ux ?? null);
+      issues.push(...audit.issues);
+      if (input.ux) {
+        if (input.ux.spec_revision_id !== (input.currentSpecRevisionId ?? null)) issues.push('UX brief is stale against the approved spec revision.');
+        if (input.ux.architecture_revision_id !== (input.currentArchitectureRevisionId ?? null)) issues.push('UX brief is stale against the approved architecture revision.');
+        if (input.ux.data_fingerprint !== dataModelFingerprint(spec)) issues.push('UX brief is stale against the current data model.');
+      }
+      break;
+    }
+    case 'wireframe': {
+      if (!spec) {
+        issues.push('Spec missing — approve discovery first.');
+        break;
+      }
+      if (input.uxStatus !== 'approved') issues.push('UX direction must be approved before wireframes can be submitted.');
+      const audit = auditAppWireframePlan(input.wireframe ?? null, spec, input.architecture ?? null);
+      issues.push(...audit.issues);
+      if (input.wireframe) {
+        if (input.wireframe.spec_revision_id !== (input.currentSpecRevisionId ?? null)) issues.push('Wireframe plan is stale against the approved spec revision.');
+        if (input.wireframe.architecture_revision_id !== (input.currentArchitectureRevisionId ?? null)) issues.push('Wireframe plan is stale against the approved architecture revision.');
+        if (input.wireframe.ux_revision_id !== (input.currentUxRevisionId ?? null)) issues.push('Wireframe plan is stale against the approved UX revision.');
+        if (input.wireframe.data_fingerprint !== dataModelFingerprint(spec)) issues.push('Wireframe plan is stale against the current data model.');
+      }
+      break;
+    }
     case 'design': {
       if (!spec) {
         issues.push('Spec missing — approve discovery first.');
         break;
       }
       const missing = missingRoadmap(input, 'screen');
+      if (input.uxStatus !== 'approved') issues.push('UX direction is not approved.');
+      if (input.wireframeStatus !== 'approved' || !input.wireframe) issues.push('Wireframe plan is not approved.');
       issues.push(...tddIssues(input, 'design'));
+      const groupState = new Map((input.buildGroups ?? []).map((group) => [group.group_id, group.status]));
+      const taskState = new Map((input.buildTasks ?? []).map((task) => [task.task_id, task.status]));
+      const incompleteGroups = (input.wireframe?.build_groups ?? [])
+        .filter((group) => groupState.get(group.id) !== 'approved')
+        .map((group) => group.id);
+      const incompleteTasks = (input.wireframe?.tasks ?? [])
+        .filter((task) => taskState.get(task.id) !== 'done')
+        .map((task) => task.id);
+      if (incompleteGroups.length > 0) issues.push(`Build groups waiting for user approval: ${incompleteGroups.join(', ')}.`);
+      if (incompleteTasks.length > 0) issues.push(`Build tasks without completion evidence: ${incompleteTasks.join(', ')}.`);
+      const tokensCss = readIfExists(join(workspaceDir, 'src', 'styles', 'tokens.css'));
+      if (!tokensCss) issues.push('src/styles/tokens.css not found — materialize the approved UX tokens before building screens.');
+      else if (input.ux) {
+        for (const token of ['background', 'surface', 'primary', 'text', 'font_body'] as const) {
+          if (!tokensCss.includes(input.ux.tokens[token])) issues.push(`Approved UX token '${token}' is not present in src/styles/tokens.css.`);
+        }
+      }
       if (missing.length > 0) {
         issues.push(`Screens not recorded (build + app_record_feature kind:'screen'): ${missing.join(', ')}.`);
       }

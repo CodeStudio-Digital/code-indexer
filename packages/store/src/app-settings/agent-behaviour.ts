@@ -41,12 +41,14 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
   },
   {
     key: 'CODER_MAX_AUTO_CONTINUES',
-    label: 'Max auto-continues per turn',
-    description: 'How many times the runner can auto-continue after a tool result without a user message.',
+    label: 'Max auto-continues per run',
+    description:
+      'How many extra max-turn batches one run may receive without a new user message. ' +
+      'The effective ceiling is maxTurns × (1 + this value); the recommended default is 3 and values above 3 are aggressive.',
     type: 'int',
     category: 'agent',
     default: '3',
-    min: 1,
+    min: 0,
   },
   {
     key: 'CODER_IMPLEMENT_MAX_TURNS',
@@ -119,6 +121,16 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     label: 'Durable compaction',
     description:
       'Persist automatic compaction (summary + recent tail) to the session so the next run starts compacted, reducing token cost across runs. Old messages stay reopenable via "view earlier history".',
+    type: 'bool',
+    category: 'agent',
+    default: '1',
+  },
+  {
+    key: 'CODER_CONVERSATION_CHAPTERS',
+    label: 'Conversation chapters',
+    description:
+      'Persist every durable compaction as an immutable, searchable chapter. ' +
+      'Disable to fall back to the legacy single rolling summary.',
     type: 'bool',
     category: 'agent',
     default: '1',

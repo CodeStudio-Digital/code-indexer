@@ -121,4 +121,32 @@ describe('dispatchTools — permission gate', () => {
     expect(invoked).toBe(1);
     expect(result.results[0].content).toBe('ok');
   });
+
+  it('permission-denied attempts do not increment hazardous repeat state', async () => {
+    let invoked = 0;
+    let checks = 0;
+    const registry = registryWith({
+      name: 'write_file',
+      mutates: true,
+      executionClass: 'write',
+      repeatPolicy: 'mutating',
+    }, () => { invoked++; });
+    const gate = fakeGate(async () => {
+      checks += 1;
+      return checks < 3
+        ? { allowed: false as const, refusalText: '[user-denied: nope]' }
+        : { allowed: true as const };
+    });
+    const result = await dispatchTools(args(registry, gate, {
+      toolUses: [
+        { id: 'u1', name: 'write_file', input: { path: 'a.ts' } },
+        { id: 'u2', name: 'write_file', input: { path: 'a.ts' } },
+        { id: 'u3', name: 'write_file', input: { path: 'a.ts' } },
+      ],
+    }));
+    expect(result.results.slice(0, 2).every((r) => r.refusalKind === 'user_denied')).toBe(true);
+    expect(result.results[2].isError).toBe(false);
+    expect(result.results[2].guardVerdict?.count).not.toBe(3);
+    expect(invoked).toBe(1);
+  });
 });

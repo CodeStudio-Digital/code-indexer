@@ -230,12 +230,14 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // (Phase B) — 0 calls in 12k turns.
   // (Session-scoped notes — distinct from project-wide mcp__save_memory.)
   // WS12: minimal turn-1 memory surface = the durable write+read pair
-  // (`remember` + `recall_memory`), BOTH in NEVER_TRIM so the catalog cap keeps
-  // them on weak models. save_note (session scratchpad) + forget_memory live in
+  // (`remember` + `recall_memory` + `recall_conversation`) live in NEVER_TRIM
+  // so the catalog cap keeps recovery available on weak models. save_note
+  // (session scratchpad) + forget_memory live in
   // navigate — weak models aren't forced to disambiguate ephemeral vs durable
   // (memory also works passively via proactive injection + the run-end distiller).
   'remember',
   'recall_memory',
+  'recall_conversation',
   'recall_investigations',
   'get_tool_output',
   'glob',
@@ -643,6 +645,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   forget_memory: 'Archive a durable memory by title when it becomes wrong or obsolete',
   list_notes: 'List the notes you saved with save_note this session',
   recall_memory: 'Recall durable memory by meaning before re-exploring (decisions/gotchas/recipes)',
+  recall_conversation: 'Recover older chapters or original messages from this compacted conversation',
   recall_investigations: 'Find a past sub-agent exploration before re-running it',
   get_tool_output: 'Retrieve truncated output from a prior tool call',
   glob: 'Find files matching a glob pattern',

@@ -258,6 +258,94 @@ export interface CoderMessageRow {
   selected_skill_ids_json?: string | null;
 }
 
+/** Provenance of an append-only conversation chapter (migration 208). */
+export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild';
+
+/**
+ * Persisted chapter payload. JSON columns intentionally stay opaque strings:
+ * the store must preserve V3 (and future) schemas byte-for-byte without
+ * depending on the summarizer implementation.
+ */
+export interface ConversationChapterRow {
+  id: number;
+  session_id: number;
+  ordinal: number;
+  start_message_id: number;
+  end_message_id: number;
+  source: ConversationChapterSource;
+  trigger: string;
+  title: string;
+  chapter_json: string;
+  chapter_text: string;
+  resume_json: string;
+  resume_text: string;
+  version: number;
+  metrics_json: string | null;
+  created_at: string;
+  superseded_at: string | null;
+}
+
+export interface ConversationChapterSearchResult extends ConversationChapterRow {
+  /** FTS5 BM25 score; lower values are more relevant. */
+  rank: number;
+}
+
+export interface ConversationChapterPage<T> {
+  items: T[];
+  /** Opaque store cursor. Null means the page is complete. */
+  next_cursor: string | null;
+}
+
+export interface CommitConversationChapterInput {
+  sessionId: number;
+  /** Boundary read before summarization; compare-and-set concurrency guard. */
+  expectedBoundaryId: number;
+  startMessageId: number;
+  endMessageId: number;
+  source: Extract<ConversationChapterSource, 'auto' | 'manual'>;
+  trigger: string;
+  title: string;
+  chapterJson: string;
+  chapterText: string;
+  resumeJson: string;
+  resumeText: string;
+  version: number;
+  metricsJson?: string | null;
+}
+
+export type CommitConversationChapterResult =
+  | {
+      status: 'committed';
+      chapter: ConversationChapterRow;
+      boundary_id: number;
+      pruned_count: number;
+    }
+  | {
+      status: 'noop';
+      reason: 'boundary_changed' | 'already_committed' | 'no_messages';
+      chapter?: ConversationChapterRow;
+      boundary_id: number;
+      pruned_count: 0;
+    };
+
+export interface RebuiltConversationChapterInput {
+  startMessageId: number;
+  endMessageId: number;
+  trigger: string;
+  title: string;
+  chapterJson: string;
+  chapterText: string;
+  resumeJson: string;
+  resumeText: string;
+  version: number;
+  metricsJson?: string | null;
+}
+
+export interface InsertRebuiltConversationChaptersResult {
+  items: ConversationChapterRow[];
+  superseded_count: number;
+}
+
 /**
  * Aggregate metrics for a single session, computed in SQLite via a single
  * query (cheaper than recalculating in the front-end on every render).
@@ -301,6 +389,16 @@ export interface CoderToolCallRow {
   result_text: string | null;
   is_error: number;
   duration_ms: number;
+  guard_action: 'allow' | 'reuse' | 'warn' | 'block' | 'shadow' | null;
+  guard_reason: string | null;
+  would_block: number | null;
+  state_epoch: number | null;
+  result_novel: number | null;
+  coverage_novel: number | null;
+  delivered: number | null;
+  repeat_policy: 'stable' | 'volatile' | 'pollable' | 'mutating' | null;
+  execution_class: 'read' | 'write' | 'execute' | 'control' | null;
+  guard_origin_tool_use_id: string | null;
   created_at: string;
 }
 

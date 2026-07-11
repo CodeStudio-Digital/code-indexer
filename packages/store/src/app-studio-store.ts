@@ -22,6 +22,9 @@ export type AppStudioFeatureKind = 'screen' | 'api' | 'feature';
 export type AppStudioSpecRevisionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
 export type AppStudioEvolutionStatus = 'draft' | 'review' | 'approved' | 'applied' | 'rejected';
 export type AppStudioArchitectureRevisionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
+export type AppStudioExperienceRevisionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
+export type AppStudioBuildGroupStatus = 'pending' | 'active' | 'review' | 'approved';
+export type AppStudioBuildTaskStatus = 'pending' | 'active' | 'done';
 
 export interface AppStudioSession {
   id: number;
@@ -96,6 +99,29 @@ export interface AppStudioArchitectureRevision {
   approved_at: string | null;
 }
 
+export interface AppStudioUxRevision {
+  id: number; app_session_id: number; spec_revision_id: number | null; architecture_revision_id: number | null;
+  revision_number: number; status: AppStudioExperienceRevisionStatus; data_fingerprint: string; ux_json: string;
+  created_by: string; coder_session_id: number | null; created_at: string; updated_at: string; approved_at: string | null;
+}
+
+export interface AppStudioWireframeRevision {
+  id: number; app_session_id: number; spec_revision_id: number | null; architecture_revision_id: number | null;
+  ux_revision_id: number | null; revision_number: number; status: AppStudioExperienceRevisionStatus;
+  data_fingerprint: string; wireframe_json: string; created_by: string; coder_session_id: number | null;
+  created_at: string; updated_at: string; approved_at: string | null;
+}
+
+export interface AppStudioBuildGroupState {
+  id: number; app_session_id: number; wireframe_revision_id: number; group_id: string; status: AppStudioBuildGroupStatus;
+  summary: string | null; feedback: string | null; submitted_at: string | null; approved_at: string | null; updated_at: string;
+}
+
+export interface AppStudioBuildTaskEvidence {
+  id: number; app_session_id: number; wireframe_revision_id: number; task_id: string; status: AppStudioBuildTaskStatus;
+  summary: string | null; evidence_json: string | null; completed_at: string | null; updated_at: string;
+}
+
 export interface AppStudioPipelineRepair {
   id: number;
   app_session_id: number;
@@ -158,6 +184,16 @@ export interface SaveAppStudioArchitectureRevisionInput {
   architecture_json: string;
   created_by?: string | null;
   coder_session_id?: number | null;
+}
+
+export interface SaveAppStudioUxRevisionInput {
+  app_session_id: number; spec_revision_id?: number | null; architecture_revision_id?: number | null;
+  data_fingerprint: string; ux_json: string; created_by?: string | null; coder_session_id?: number | null;
+}
+
+export interface SaveAppStudioWireframeRevisionInput {
+  app_session_id: number; spec_revision_id?: number | null; architecture_revision_id?: number | null; ux_revision_id?: number | null;
+  data_fingerprint: string; wireframe_json: string; created_by?: string | null; coder_session_id?: number | null;
 }
 
 interface SessionRow {
@@ -230,6 +266,11 @@ interface ArchitectureRevisionRow {
   updated_at: string;
   approved_at: string | null;
 }
+
+type UxRevisionRow = AppStudioUxRevision;
+type WireframeRevisionRow = AppStudioWireframeRevision;
+type BuildGroupRow = AppStudioBuildGroupState;
+type BuildTaskRow = AppStudioBuildTaskEvidence;
 
 interface PipelineRepairRow {
   id: number;
@@ -833,6 +874,157 @@ export class AppStudioStore {
     });
     tx();
     return this.getArchitectureRevision(revisionId)!;
+  }
+
+  // ── UX and wireframe revisions ──────────────────────────────────
+
+  getLatestUxRevision(sessionId: number): AppStudioUxRevision | null {
+    const row = this.db.prepare(
+      "SELECT * FROM app_studio_ux_revisions WHERE app_session_id = ? AND status <> 'rejected' ORDER BY revision_number DESC LIMIT 1",
+    ).get(sessionId) as UxRevisionRow | undefined;
+    return row ? { ...row, status: row.status as AppStudioExperienceRevisionStatus } : null;
+  }
+
+  getLatestApprovedUxRevision(sessionId: number): AppStudioUxRevision | null {
+    const row = this.db.prepare(
+      "SELECT * FROM app_studio_ux_revisions WHERE app_session_id = ? AND status = 'approved' ORDER BY revision_number DESC LIMIT 1",
+    ).get(sessionId) as UxRevisionRow | undefined;
+    return row ? { ...row, status: row.status as AppStudioExperienceRevisionStatus } : null;
+  }
+
+  saveUxRevision(input: SaveAppStudioUxRevisionInput): AppStudioUxRevision {
+    const tx = this.db.transaction((payload: SaveAppStudioUxRevisionInput) => {
+      const existing = this.db.prepare(
+        `SELECT id FROM app_studio_ux_revisions WHERE app_session_id = ? AND status = 'draft'
+         AND ((spec_revision_id = ?) OR (spec_revision_id IS NULL AND ? IS NULL))
+         AND ((architecture_revision_id = ?) OR (architecture_revision_id IS NULL AND ? IS NULL))
+         ORDER BY revision_number DESC LIMIT 1`,
+      ).get(payload.app_session_id, payload.spec_revision_id ?? null, payload.spec_revision_id ?? null, payload.architecture_revision_id ?? null, payload.architecture_revision_id ?? null) as { id: number } | undefined;
+      if (existing) {
+        this.db.prepare(
+          `UPDATE app_studio_ux_revisions SET ux_json = ?, data_fingerprint = ?, created_by = ?, coder_session_id = ?, updated_at = datetime('now') WHERE id = ?`,
+        ).run(payload.ux_json, payload.data_fingerprint, payload.created_by ?? 'agent', payload.coder_session_id ?? null, existing.id);
+        return existing.id;
+      }
+      const next = this.db.prepare('SELECT COALESCE(MAX(revision_number), 0) + 1 AS n FROM app_studio_ux_revisions WHERE app_session_id = ?').get(payload.app_session_id) as { n: number };
+      const result = this.db.prepare(
+        `INSERT INTO app_studio_ux_revisions (app_session_id, spec_revision_id, architecture_revision_id, revision_number, data_fingerprint, ux_json, created_by, coder_session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(payload.app_session_id, payload.spec_revision_id ?? null, payload.architecture_revision_id ?? null, next.n, payload.data_fingerprint, payload.ux_json, payload.created_by ?? 'agent', payload.coder_session_id ?? null);
+      return Number(result.lastInsertRowid);
+    });
+    const id = tx(input);
+    return this.db.prepare('SELECT * FROM app_studio_ux_revisions WHERE id = ?').get(id) as UxRevisionRow;
+  }
+
+  approveUxRevision(sessionId: number, revisionId: number): AppStudioUxRevision {
+    const tx = this.db.transaction(() => {
+      const row = this.db.prepare('SELECT id FROM app_studio_ux_revisions WHERE id = ? AND app_session_id = ?').get(revisionId, sessionId);
+      if (!row) throw new Error(`UX revision ${revisionId} not found for app session ${sessionId}.`);
+      this.db.prepare("UPDATE app_studio_ux_revisions SET status = 'superseded' WHERE app_session_id = ? AND id <> ? AND status = 'approved'").run(sessionId, revisionId);
+      this.db.prepare("UPDATE app_studio_ux_revisions SET status = 'approved', approved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(revisionId);
+    });
+    tx();
+    return this.db.prepare('SELECT * FROM app_studio_ux_revisions WHERE id = ?').get(revisionId) as UxRevisionRow;
+  }
+
+  deleteDraftUxRevision(sessionId: number, revisionId: number): void {
+    this.db.prepare("DELETE FROM app_studio_ux_revisions WHERE id = ? AND app_session_id = ? AND status = 'draft'").run(revisionId, sessionId);
+  }
+
+  getLatestWireframeRevision(sessionId: number): AppStudioWireframeRevision | null {
+    const row = this.db.prepare(
+      "SELECT * FROM app_studio_wireframe_revisions WHERE app_session_id = ? AND status <> 'rejected' ORDER BY revision_number DESC LIMIT 1",
+    ).get(sessionId) as WireframeRevisionRow | undefined;
+    return row ? { ...row, status: row.status as AppStudioExperienceRevisionStatus } : null;
+  }
+
+  getLatestApprovedWireframeRevision(sessionId: number): AppStudioWireframeRevision | null {
+    const row = this.db.prepare(
+      "SELECT * FROM app_studio_wireframe_revisions WHERE app_session_id = ? AND status = 'approved' ORDER BY revision_number DESC LIMIT 1",
+    ).get(sessionId) as WireframeRevisionRow | undefined;
+    return row ? { ...row, status: row.status as AppStudioExperienceRevisionStatus } : null;
+  }
+
+  saveWireframeRevision(input: SaveAppStudioWireframeRevisionInput): AppStudioWireframeRevision {
+    const tx = this.db.transaction((payload: SaveAppStudioWireframeRevisionInput) => {
+      const existing = this.db.prepare(
+        `SELECT id FROM app_studio_wireframe_revisions WHERE app_session_id = ? AND status = 'draft'
+         AND ((ux_revision_id = ?) OR (ux_revision_id IS NULL AND ? IS NULL)) ORDER BY revision_number DESC LIMIT 1`,
+      ).get(payload.app_session_id, payload.ux_revision_id ?? null, payload.ux_revision_id ?? null) as { id: number } | undefined;
+      if (existing) {
+        this.db.prepare(
+          `UPDATE app_studio_wireframe_revisions SET wireframe_json = ?, data_fingerprint = ?, created_by = ?, coder_session_id = ?, updated_at = datetime('now') WHERE id = ?`,
+        ).run(payload.wireframe_json, payload.data_fingerprint, payload.created_by ?? 'agent', payload.coder_session_id ?? null, existing.id);
+        return existing.id;
+      }
+      const next = this.db.prepare('SELECT COALESCE(MAX(revision_number), 0) + 1 AS n FROM app_studio_wireframe_revisions WHERE app_session_id = ?').get(payload.app_session_id) as { n: number };
+      const result = this.db.prepare(
+        `INSERT INTO app_studio_wireframe_revisions (app_session_id, spec_revision_id, architecture_revision_id, ux_revision_id, revision_number, data_fingerprint, wireframe_json, created_by, coder_session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(payload.app_session_id, payload.spec_revision_id ?? null, payload.architecture_revision_id ?? null, payload.ux_revision_id ?? null, next.n, payload.data_fingerprint, payload.wireframe_json, payload.created_by ?? 'agent', payload.coder_session_id ?? null);
+      return Number(result.lastInsertRowid);
+    });
+    const id = tx(input);
+    return this.db.prepare('SELECT * FROM app_studio_wireframe_revisions WHERE id = ?').get(id) as WireframeRevisionRow;
+  }
+
+  approveWireframeRevision(sessionId: number, revisionId: number, groupIds: string[], taskIds: string[]): AppStudioWireframeRevision {
+    const tx = this.db.transaction(() => {
+      const row = this.db.prepare('SELECT id FROM app_studio_wireframe_revisions WHERE id = ? AND app_session_id = ?').get(revisionId, sessionId);
+      if (!row) throw new Error(`Wireframe revision ${revisionId} not found for app session ${sessionId}.`);
+      this.db.prepare("UPDATE app_studio_wireframe_revisions SET status = 'superseded' WHERE app_session_id = ? AND id <> ? AND status = 'approved'").run(sessionId, revisionId);
+      this.db.prepare("UPDATE app_studio_wireframe_revisions SET status = 'approved', approved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(revisionId);
+      const groupInsert = this.db.prepare('INSERT OR IGNORE INTO app_studio_build_groups (app_session_id, wireframe_revision_id, group_id) VALUES (?, ?, ?)');
+      for (const groupId of groupIds) groupInsert.run(sessionId, revisionId, groupId);
+      const taskInsert = this.db.prepare('INSERT OR IGNORE INTO app_studio_build_task_evidence (app_session_id, wireframe_revision_id, task_id) VALUES (?, ?, ?)');
+      for (const taskId of taskIds) taskInsert.run(sessionId, revisionId, taskId);
+    });
+    tx();
+    return this.db.prepare('SELECT * FROM app_studio_wireframe_revisions WHERE id = ?').get(revisionId) as WireframeRevisionRow;
+  }
+
+  deleteDraftWireframeRevision(sessionId: number, revisionId: number): void {
+    this.db.prepare("DELETE FROM app_studio_wireframe_revisions WHERE id = ? AND app_session_id = ? AND status = 'draft'").run(revisionId, sessionId);
+  }
+
+  listBuildGroups(wireframeRevisionId: number): AppStudioBuildGroupState[] {
+    return this.db.prepare('SELECT * FROM app_studio_build_groups WHERE wireframe_revision_id = ? ORDER BY id').all(wireframeRevisionId) as BuildGroupRow[];
+  }
+
+  listBuildTaskEvidence(wireframeRevisionId: number): AppStudioBuildTaskEvidence[] {
+    return this.db.prepare('SELECT * FROM app_studio_build_task_evidence WHERE wireframe_revision_id = ? ORDER BY id').all(wireframeRevisionId) as BuildTaskRow[];
+  }
+
+  setBuildTaskEvidence(input: { appSessionId: number; wireframeRevisionId: number; taskId: string; status: AppStudioBuildTaskStatus; summary?: string | null; evidenceJson?: string | null }): void {
+    this.db.prepare(
+      `UPDATE app_studio_build_task_evidence SET status = ?, summary = ?, evidence_json = ?, completed_at = CASE WHEN ? = 'done' THEN datetime('now') ELSE NULL END, updated_at = datetime('now')
+       WHERE app_session_id = ? AND wireframe_revision_id = ? AND task_id = ?`,
+    ).run(input.status, input.summary ?? null, input.evidenceJson ?? null, input.status, input.appSessionId, input.wireframeRevisionId, input.taskId);
+  }
+
+  submitBuildGroup(appSessionId: number, wireframeRevisionId: number, groupId: string, summary: string): void {
+    this.db.prepare(
+      `UPDATE app_studio_build_groups SET status = 'review', summary = ?, feedback = NULL, submitted_at = datetime('now'), updated_at = datetime('now')
+       WHERE app_session_id = ? AND wireframe_revision_id = ? AND group_id = ?`,
+    ).run(summary, appSessionId, wireframeRevisionId, groupId);
+  }
+
+  approveBuildGroup(appSessionId: number, wireframeRevisionId: number, groupId: string): void {
+    this.db.prepare(
+      `UPDATE app_studio_build_groups SET status = 'approved', approved_at = datetime('now'), feedback = NULL, updated_at = datetime('now')
+       WHERE app_session_id = ? AND wireframe_revision_id = ? AND group_id = ? AND status = 'review'`,
+    ).run(appSessionId, wireframeRevisionId, groupId);
+  }
+
+  reopenBuildGroup(appSessionId: number, wireframeRevisionId: number, groupIds: string[], taskIds: string[], feedback: string): void {
+    const tx = this.db.transaction(() => {
+      const groupUpdate = this.db.prepare("UPDATE app_studio_build_groups SET status = 'pending', summary = NULL, approved_at = NULL, submitted_at = NULL, feedback = ?, updated_at = datetime('now') WHERE app_session_id = ? AND wireframe_revision_id = ? AND group_id = ?");
+      for (const groupId of groupIds) groupUpdate.run(feedback, appSessionId, wireframeRevisionId, groupId);
+      const taskUpdate = this.db.prepare("UPDATE app_studio_build_task_evidence SET status = 'pending', summary = NULL, evidence_json = NULL, completed_at = NULL, updated_at = datetime('now') WHERE app_session_id = ? AND wireframe_revision_id = ? AND task_id = ?");
+      for (const taskId of taskIds) taskUpdate.run(appSessionId, wireframeRevisionId, taskId);
+    });
+    tx();
   }
 
   // ── Features ──────────────────────────────────────────────────────

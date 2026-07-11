@@ -1,81 +1,228 @@
-/**
- * Insistent-loop enforcement — the tuple-hash guard refuses the 3rd identical
- * call, but the Planning node resets `dupCalls`, so a passive refusal alone
- * never breaks a loop that keeps coming back. The cross-cycle `loopRefusals`
- * counter (NOT reset by Planning) escalates to `loopEnforcement` after enough
- * refused cycles, which the Executing node turns into an active reminder.
- */
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { DupCallEntry } from '../../machine/types.js';
-import { resetDupCalls } from '../../guards/tuple-hash-dedup.js';
+import { NoProgressTracker } from '../../guards/no-progress.js';
+import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { dispatchTools, type DispatchArgs } from '../executing-dispatch.js';
-
-function registryWith(name: string): ToolRegistry {
-  const r = new ToolRegistry();
-  const tool: CoderTool = {
-    name,
-    description: `${name} tool`,
-    parameters: { type: 'object', properties: {} },
-    source: 'native',
-    handler: async () => ({ content: 'ok' }),
-  };
-  r.register(tool);
-  return r;
-}
 
 const toolContext = { cwd: process.cwd(), projectName: 'test' } as ToolContext;
 
-/** One dispatch batch of `n` identical calls → drives dedup allow→reminder→refuse. */
+function registryWith(tool: Partial<CoderTool> & { name: string }, invoked: () => void): ToolRegistry {
+  const registry = new ToolRegistry();
+  const { name, ...metadata } = tool;
+  registry.register({
+    ...metadata,
+    name,
+    description: `${name} tool`,
+    parameters: { type: 'object', properties: { x: { type: 'number' } } },
+    source: 'native',
+    handler: async () => {
+      invoked();
+      return { content: 'ok' };
+    },
+  } as CoderTool);
+  return registry;
+}
+
 function batch(
   registry: ToolRegistry,
   name: string,
-  n: number,
+  inputs: Array<Record<string, unknown>>,
   turn: number,
-  dupCalls: Map<string, DupCallEntry>,
-  loopRefusals: Map<string, number>,
 ): DispatchArgs {
   return {
-    toolUses: Array.from({ length: n }, (_, i) => ({ id: `t${turn}-${i}`, name, input: { x: 1 } })),
+    toolUses: inputs.map((input, i) => ({ id: `t${turn}-${i}`, name, input })),
     registry,
     toolContext,
     turn,
-    dupCalls,
-    loopRefusals,
+    dupCalls: new Map<string, DupCallEntry>(),
   };
 }
 
-describe('dispatchTools — insistent-loop enforcement', () => {
-  it('escalates to loopEnforcement after the 2nd refused planning cycle', async () => {
-    const registry = registryWith('update_todo');
-    const loopRefusals = new Map<string, number>();
+describe('dispatchTools — local repeat protection', () => {
+  it('coalesces stable read calls only inside each batch and never cross-turn-refuses', async () => {
+    let invoked = 0;
+    const registry = registryWith({
+      name: 'read_file',
+      mutates: false,
+      executionClass: 'read',
+      repeatPolicy: 'stable',
+    }, () => { invoked++; });
 
-    // Cycle 1: fresh dupCalls, 3 identical → 3rd refused → loopRefusals=1, no enforce yet.
-    let dupCalls = new Map<string, DupCallEntry>();
-    const r1 = await dispatchTools(batch(registry, 'update_todo', 3, 1, dupCalls, loopRefusals));
-    expect(r1.toolLoopDetected).toBe(true);
-    expect(r1.loopEnforcement).toBeUndefined();
-    // A1 — the refusal carries the offending tool + count for Planning's reminder.
-    expect(r1.loopDetail).toEqual({ toolName: 'update_todo', count: 3 });
+    const first = await dispatchTools(batch(registry, 'read_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 1));
+    const second = await dispatchTools(batch(registry, 'read_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 2));
 
-    // Planning resets the dedup table — but NOT loopRefusals.
-    resetDupCalls(dupCalls);
-    expect(loopRefusals.get('update_todo|{"x":1}')).toBe(1);
-
-    // Cycle 2: clean slate again, 3 identical → refused → loopRefusals=2 → ENFORCE.
-    dupCalls = new Map<string, DupCallEntry>();
-    const r2 = await dispatchTools(batch(registry, 'update_todo', 3, 2, dupCalls, loopRefusals));
-    expect(r2.toolLoopDetected).toBe(true);
-    expect(r2.loopEnforcement).toEqual({ toolName: 'update_todo', count: 2 });
+    expect(invoked).toBe(2);
+    expect(first.toolLoopDetected).toBe(false);
+    expect(second.toolLoopDetected).toBe(false);
+    expect(first.results.map((r) => r.guardVerdict?.action)).toEqual([undefined, 'reuse', 'reuse']);
+    expect(first.results.map((r) => r.guardVerdict?.count)).toEqual([undefined, 2, 3]);
+    expect(second.results.every((r) => !r.isError)).toBe(true);
   });
 
-  it('does NOT enforce on a single refused cycle (legit retry)', async () => {
-    const registry = registryWith('write_file');
-    const loopRefusals = new Map<string, number>();
-    const dupCalls = new Map<string, DupCallEntry>();
-    const r = await dispatchTools(batch(registry, 'write_file', 3, 1, dupCalls, loopRefusals));
-    expect(r.toolLoopDetected).toBe(true);
-    expect(r.loopEnforcement).toBeUndefined();
+  it('warns then blocks the third identical mutation in one batch', async () => {
+    let invoked = 0;
+    const registry = registryWith({
+      name: 'write_file',
+      mutates: true,
+      executionClass: 'write',
+      repeatPolicy: 'mutating',
+    }, () => { invoked++; });
+
+    const result = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 1));
+    expect(invoked).toBe(2);
+    expect(result.results[1].guardVerdict).toMatchObject({ action: 'warn', count: 2 });
+    expect(result.results[2]).toMatchObject({ isError: true, refusalKind: 'dedup' });
+    expect(result.toolLoopDetected).toBe(true);
+    expect(result.loopDetail).toEqual({ toolName: 'write_file', count: 3 });
+  });
+
+  it('does not retain a hard-refusal counter across dispatch batches', async () => {
+    let invoked = 0;
+    const registry = registryWith({
+      name: 'write_file',
+      mutates: true,
+      executionClass: 'write',
+      repeatPolicy: 'mutating',
+    }, () => { invoked++; });
+
+    const first = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 1));
+    const next = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }], 2));
+    expect(first.toolLoopDetected).toBe(true);
+    expect(next.toolLoopDetected).toBe(false);
+    expect(next.results[0].isError).toBe(false);
+  });
+
+  it('executes volatile calls and emits only a post-result shadow candidate', async () => {
+    let invoked = 0;
+    const registry = registryWith({
+      name: 'lsp_diagnostics',
+      mutates: false,
+      executionClass: 'read',
+      repeatPolicy: 'volatile',
+    }, () => { invoked++; });
+    const noProgressTracker = new NoProgressTracker();
+    const ledger = new ToolCallLedger();
+    const context = { ...toolContext, toolCallLedger: ledger } as ToolContext;
+
+    const run = (turn: number) => dispatchTools({
+      ...batch(registry, 'lsp_diagnostics', [{ x: 1 }], turn),
+      toolContext: context,
+      noProgressTracker,
+    });
+    expect((await run(1)).results[0].guardVerdict).toBeUndefined();
+    expect((await run(2)).results[0].guardVerdict).toBeUndefined();
+    expect((await run(3)).results[0].guardVerdict).toMatchObject({
+      action: 'shadow',
+      reason: 'cross-turn-no-progress',
+      wouldBlock: true,
+    });
+    expect(invoked).toBe(3);
+  });
+
+  it('force_reread bypasses same-batch stable result reuse', async () => {
+    let invoked = 0;
+    const registry = registryWith({
+      name: 'read_file',
+      mutates: false,
+      executionClass: 'read',
+      repeatPolicy: 'stable',
+    }, () => { invoked++; });
+    const result = await dispatchTools(batch(registry, 'read_file', [
+      { x: 1, force_reread: true },
+      { x: 1, force_reread: true },
+      { x: 1, force_reread: true },
+    ], 1));
+    expect(invoked).toBe(3);
+    expect(result.results.every((r) => !r.isError && r.guardVerdict?.action !== 'reuse')).toBe(true);
+  });
+
+  it('a successful write invalidates stable read reuse in the same batch', async () => {
+    let reads = 0;
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'read_file',
+      description: 'read',
+      parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      source: 'native',
+      mutates: false,
+      executionClass: 'read',
+      repeatPolicy: 'stable',
+      handler: async () => ({ content: `read-${++reads}` }),
+    });
+    registry.register({
+      name: 'write_file',
+      description: 'write',
+      parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      source: 'native',
+      mutates: true,
+      executionClass: 'write',
+      repeatPolicy: 'mutating',
+      handler: async () => ({ content: 'written' }),
+    });
+    const result = await dispatchTools({
+      registry,
+      toolContext,
+      turn: 1,
+      dupCalls: new Map(),
+      toolUses: [
+        { id: 'r1', name: 'read_file', input: { path: 'a.ts' } },
+        { id: 'w1', name: 'write_file', input: { path: 'a.ts' } },
+        { id: 'r2', name: 'read_file', input: { path: 'a.ts' } },
+      ],
+    });
+    expect(reads).toBe(2);
+    expect(result.results[2].guardVerdict?.action).not.toBe('reuse');
+    expect(result.results[2].stateEpoch).toBe(1);
+  });
+
+  it('normalizes aliases and defaults before same-batch reuse', async () => {
+    let invoked = 0;
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'read_file',
+      description: 'read',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          encoding: { type: 'string', default: 'utf8' },
+        },
+      },
+      source: 'native',
+      mutates: false,
+      executionClass: 'read',
+      repeatPolicy: 'stable',
+      handler: async () => { invoked++; return { content: 'ok' }; },
+    });
+    const noProgressTracker = new NoProgressTracker();
+    const context = { ...toolContext, toolCallLedger: new ToolCallLedger() } as ToolContext;
+    const result = await dispatchTools({
+      registry,
+      toolContext: context,
+      turn: 1,
+      dupCalls: new Map(),
+      noProgressTracker,
+      toolUses: [
+        { id: 'r1', name: 'read_file', input: { file_path: 'a.ts' } },
+        { id: 'r2', name: 'read_file', input: { path: 'a.ts', encoding: 'utf8' } },
+      ],
+    });
+    expect(invoked).toBe(1);
+    expect(result.results[1].guardVerdict).toMatchObject({ action: 'reuse' });
+
+    const runLater = (turn: number, input: Record<string, unknown>) => dispatchTools({
+      registry,
+      toolContext: context,
+      turn,
+      dupCalls: new Map(),
+      noProgressTracker,
+      toolUses: [{ id: `r${turn + 1}`, name: 'read_file', input }],
+    });
+    expect((await runLater(2, { file_path: 'a.ts' })).results[0].guardVerdict).toBeUndefined();
+    expect((await runLater(3, { path: 'a.ts', encoding: 'utf8' })).results[0].guardVerdict)
+      .toMatchObject({ action: 'shadow', reason: 'cross-turn-no-progress' });
+    expect(invoked).toBe(3);
   });
 });

@@ -1,6 +1,6 @@
 import type { AgentId } from './index.js';
 
-export const APP_SPECIALIST_AGENT_IDS = ['app_spec', 'app_db', 'app_architect'] as const;
+export const APP_SPECIALIST_AGENT_IDS = ['app_spec', 'app_db', 'app_architect', 'app_ux', 'app_wireframe'] as const;
 
 export type AppSpecialistAgentId = (typeof APP_SPECIALIST_AGENT_IDS)[number];
 
@@ -32,8 +32,12 @@ export const APP_SPECIALIST_TOOL_ALLOWLISTS: Record<AppSpecialistAgentId, Readon
     'app_spec_audit',
     'app_save_spec',
     'app_propose_spec_revision',
+    'app_get_db_assets',
     'app_save_db_migration',
+    'app_save_db_seed',
     'app_provision_db',
+    'app_save_tdd_test',
+    'app_run_test_cycle',
     'app_submit_stage',
     'db_list',
     'db_schema',
@@ -50,6 +54,26 @@ export const APP_SPECIALIST_TOOL_ALLOWLISTS: Record<AppSpecialistAgentId, Readon
     'app_architecture_audit',
     'app_search_architecture_docs',
     'app_fetch_architecture_doc',
+    'app_submit_stage',
+  ]),
+  app_ux: new Set([
+    ...COMMON_READ_TOOLS,
+    'app_get_architecture',
+    'app_get_db_assets',
+    'app_get_ux',
+    'app_fetch_ux_reference',
+    'app_save_ux',
+    'app_ux_audit',
+    'app_submit_stage',
+  ]),
+  app_wireframe: new Set([
+    ...COMMON_READ_TOOLS,
+    'app_get_architecture',
+    'app_get_db_assets',
+    'app_get_ux',
+    'app_get_wireframe',
+    'app_save_wireframe',
+    'app_wireframe_audit',
     'app_submit_stage',
   ]),
 };

@@ -34,9 +34,15 @@ describe('resolveToolTimeoutMs — orchestrators in the SLOW tier', () => {
     expect(resolveToolTimeoutMs(t({ name: 'read_file' }))).toBe(NORMAL_TIMEOUT_MS);
   });
 
-  it('opts interactive and repeatable tools out of any timeout', () => {
+  it('opts interactive and explicitly unbounded tools out of any timeout', () => {
     expect(resolveToolTimeoutMs(t({ name: 'whatever', interactive: true }))).toBe(Infinity);
-    expect(resolveToolTimeoutMs(t({ name: 'whatever', repeatable: true }))).toBe(Infinity);
+    expect(resolveToolTimeoutMs(t({ name: 'whatever', timeoutMs: Infinity }))).toBe(Infinity);
+  });
+
+  it('separates pollable from volatile timeout semantics', () => {
+    expect(resolveToolTimeoutMs(t({ name: 'poll', repeatPolicy: 'pollable' }))).toBe(NORMAL_TIMEOUT_MS);
+    expect(resolveToolTimeoutMs(t({ name: 'poll', repeatable: true }))).toBe(NORMAL_TIMEOUT_MS);
+    expect(resolveToolTimeoutMs(t({ name: 'status', repeatPolicy: 'volatile' }))).toBe(NORMAL_TIMEOUT_MS);
   });
 });
 
@@ -80,5 +86,12 @@ describe('run_command and code_exec timeout policy', () => {
     // longest nested tool (run_command = 10 min) rather than the 5-min NORMAL.
     expect(resolveToolTimeoutMs(t({ name: 'code_exec' }))).toBe(SLOW_TIMEOUT_MS);
     expect(resolveToolTimeoutMs(t({ name: 'code_exec' }))).not.toBe(NORMAL_TIMEOUT_MS);
+  });
+
+  it('classifies code_exec as volatile execution, never as a reusable read', () => {
+    expect(resolveToolMetadata(t({ name: 'code_exec' }))).toMatchObject({
+      repeatPolicy: 'volatile',
+      executionClass: 'execute',
+    });
   });
 });

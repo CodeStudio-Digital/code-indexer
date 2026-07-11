@@ -18,6 +18,9 @@ export interface AppDbStatusFile {
   seeded?: boolean;
   /** Hash do seed carregado; evita reaplicar INSERTs em retries sem mudanca. */
   seed_hash?: string | null;
+  /** Last failed provisioning phase. Migrations can be ready while seed sync failed. */
+  last_error_phase?: 'migration' | 'seed' | null;
+  last_error?: string | null;
   last_apply_at: string;
 }
 

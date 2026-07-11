@@ -10,6 +10,7 @@ import { Button } from '../../../components/ui/button.js';
 import {
   initAppPipeline,
   patchAppStage,
+  recheckAppStage,
   type AppRoadmapTier,
   type AppStageAction,
   type AppStageId,
@@ -33,6 +34,9 @@ export function JourneyPanel({
   onOpenSpecAgent,
   onOpenDbAgent,
   onOpenArchitectureAgent,
+  onOpenExecutionAgent,
+  onOpenUxAgent,
+  onOpenWireframeAgent,
 }: {
   detail: AppStudioSessionDetail;
   /** Frase de ideia digitada na criação — anexada ao prompt da discovery. */
@@ -42,6 +46,9 @@ export function JourneyPanel({
   onOpenSpecAgent?: (prompt: string) => void;
   onOpenDbAgent?: (prompt: string) => void;
   onOpenArchitectureAgent?: (prompt: string) => void;
+  onOpenExecutionAgent?: (kind: 'design' | 'backend' | 'review', prompt: string) => void;
+  onOpenUxAgent?: (prompt: string) => void;
+  onOpenWireframeAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
   const [busy, setBusy] = useState(false);
@@ -90,6 +97,10 @@ export function JourneyPanel({
     if (items.length === 0) return null;
     return `${items.filter((r) => r.recorded).length}/${items.length}`;
   };
+  const reviewGroup = detail.wireframe?.plan.build_groups.find((group) => detail.build_groups.find((state) => state.group_id === group.id)?.status === 'review');
+  const designProgress = detail.wireframe
+    ? `${t('experience.flowCount', { done: detail.build_groups.filter((group) => group.status === 'approved').length, total: detail.wireframe.plan.build_groups.length })} · ${t('experience.taskCount', { done: detail.build_tasks.filter((task) => task.status === 'done').length, total: detail.wireframe.plan.tasks.length })}${reviewGroup ? ` · ${t('experience.groupWaiting', { name: reviewGroup.name })}` : ''}`
+    : null;
 
   const act = (stage: AppStageId, action: AppStageAction, feedback?: string) =>
     void run(() => patchAppStage(session.id, stage, action, feedback));
@@ -132,9 +143,10 @@ export function JourneyPanel({
               index={index}
               isLast={index === pipeline.stages.length - 1}
               isCurrent={pipeline.current_stage === stage.id}
-              progressLabel={tier ? tierProgress(tier) : null}
+              progressLabel={stage.id === 'design' ? designProgress : tier ? tierProgress(tier) : null}
               busy={busy}
               onAction={(action, feedback) => act(stage.id, action, feedback)}
+              onRecheck={() => void run(() => recheckAppStage(session.id, stage.id))}
               onStart={() => {
                 if (!project || !isPromptableStage(stage.id)) return;
                 const specialist = specialistForStage(stage.id);
@@ -144,6 +156,12 @@ export function JourneyPanel({
                     ? onOpenDbAgent
                     : specialist === 'architecture'
                       ? onOpenArchitectureAgent
+                      : specialist === 'ux'
+                        ? onOpenUxAgent
+                        : specialist === 'wireframe'
+                          ? onOpenWireframeAgent
+                      : (specialist === 'design' || specialist === 'backend' || specialist === 'review') && onOpenExecutionAgent
+                        ? (prompt: string) => onOpenExecutionAgent(specialist, prompt)
                       : null;
                 if (openSpecialist) {
                   void run(async () => {

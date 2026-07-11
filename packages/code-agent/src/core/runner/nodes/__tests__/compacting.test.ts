@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { CompactionSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import { CompactingNode } from '../compacting.js';
+import type { CompactionCheckpoint } from '../../types.js';
 import { makeTestContext } from './test-helpers.js';
 
 function user(text: string): AgentMessage {
@@ -52,6 +53,7 @@ describe('CompactingNode', () => {
       messages.push(user(`u${i}`));
       messages.push(assistant(`a${i}`));
     }
+    const originalLength = messages.length;
     ctx.messages = messages;
 
     const event = await new CompactingNode({
@@ -60,12 +62,48 @@ describe('CompactingNode', () => {
     }).execute(ctx, null);
 
     expect(event.kind).toBe('CompactionDone');
-    expect(ctx.messages.length).toBeLessThan(messages.length);
+    expect(ctx.messages.length).toBeLessThan(originalLength);
     expect(ctx.messages[0].role).toBe('user');
 
     const histEvent = recordedEvents.find((r) => r.event === 'history_compacted');
     expect(histEvent).toBeDefined();
     expect((histEvent!.args[0] as { strategy: string }).strategy).toBe('summarizer');
+  });
+
+  it('hands the single generated summary to the durable checkpoint exactly once', async () => {
+    const { ctx } = makeTestContext();
+    ctx.messages = Array.from({ length: 20 }, (_, index) => (
+      index % 2 === 0 ? user(`u${index}`) : assistant(`a${index}`)
+    ));
+    const checkpoint = vi.fn(async (_value: CompactionCheckpoint) => undefined);
+    ctx.opts.onCompactionCheckpoint = checkpoint;
+
+    const event = await new CompactingNode({
+      protectTokensOverride: 10,
+      summarizeOverride: async () => STUB_SUMMARY,
+    }).execute(ctx, null);
+
+    expect(event.kind).toBe('CompactionDone');
+    expect(checkpoint).toHaveBeenCalledTimes(1);
+    expect(checkpoint.mock.calls[0]?.[0].summary.version).toBe(3);
+    expect(checkpoint.mock.calls[0]?.[0].headMessages.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the in-memory resume when durable persistence fails', async () => {
+    const { ctx } = makeTestContext();
+    ctx.messages = Array.from({ length: 20 }, (_, index) => (
+      index % 2 === 0 ? user(`u${index}`) : assistant(`a${index}`)
+    ));
+    ctx.opts.onCompactionCheckpoint = async () => { throw new Error('db unavailable'); };
+
+    const event = await new CompactingNode({
+      protectTokensOverride: 10,
+      summarizeOverride: async () => STUB_SUMMARY,
+    }).execute(ctx, null);
+
+    expect(event.kind).toBe('CompactionDone');
+    expect(ctx.messages[0].content[0]).toMatchObject({ type: 'text' });
+    expect((ctx.messages[0].content[0] as { text: string }).text).toContain('auto-compacted summary');
   });
 
   it('emits CompactionDone with collapsedFrom=0 when history already fits', async () => {
@@ -110,6 +148,7 @@ describe('CompactingNode', () => {
       messages.push(user(`u${i}`));
       messages.push(assistant(`a${i}`));
     }
+    const originalLength = messages.length;
     ctx.messages = messages;
 
     // First call: 1/1 still under cap → ProviderError (retry).
@@ -126,7 +165,7 @@ describe('CompactingNode', () => {
     }).execute(ctx, null);
     expect(second.kind).toBe('CompactionDone');
     expect(ctx.stopReason).toBe(null);
-    expect(ctx.messages.length).toBeLessThan(messages.length);
+    expect(ctx.messages.length).toBeLessThan(originalLength);
     const marker = ctx.messages[0].content[0] as { text: string };
     expect(marker.text).toContain('[context truncated]');
     // Breaker resets so the NEXT summarizer failure gets fresh retries.

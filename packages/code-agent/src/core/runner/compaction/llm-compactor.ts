@@ -11,7 +11,7 @@
  *      pair; recede the cutoff when necessary.
  *   3. `recedeToPreserveLastNTurns` — Kimi-style "preserve last 2 user turns"
  *      so the tail always retains recent user intent verbatim.
- *   4. `summarizeSpanV2` — ask the aux provider for a structured summary.
+ *   4. `summarizeSpanV3` — produce a chapter + continuation snapshot in one call.
  *   5. `renderSummaryAsMessage` — wrap as a single synthetic user message.
  *   6. Splice: result = [synthetic, ...tail].
  *
@@ -33,8 +33,16 @@ import {
   recedeToPreserveLastNRenderableTurns,
 } from '@mcp/code-agent/core/compaction/cutoff.js';
 import {
-  summarizeSpanV2,
+  COMPACTION_SUMMARY_TIMEOUT_MS,
+  isCompactionSummaryV3,
+  summarizeSpanV3,
+  summaryV2ToV3,
+  type CompactionLiveStateV3,
+  type CompactionResumeV3,
   type CompactionSummaryV2,
+  type CompactionSummaryV3,
+  type SummarizeSpanV3Input,
+  type SummarizeSpanV3Options,
 } from '@mcp/code-agent/core/summarizer.js';
 import { preserveLastNTurns } from '../recovery-config.js';
 import { computeMinTailTurns } from './threshold.js';
@@ -54,13 +62,23 @@ export interface CompactArgs {
   /** Cheap provider used for the summary call. */
   summaryProvider: ChatProvider;
   /**
-   * Optional injection point for tests — when set, replaces the call to
-   * `summarizeSpanV2`. The default uses the real LLM path.
+   * Legacy test/caller injection. Kept source-compatible during the V3
+   * rollout; V2 results are converted losslessly enough for resume use.
    */
   summarize?: (
     head: AgentMessage[],
     provider: ChatProvider,
-  ) => Promise<CompactionSummaryV2 | null>;
+  ) => Promise<CompactionSummaryV2 | CompactionSummaryV3 | null>;
+  /** V3-native injection point with separated prior/span/live state. */
+  summarizeV3?: (
+    input: SummarizeSpanV3Input,
+    provider: ChatProvider,
+    options?: SummarizeSpanV3Options,
+  ) => Promise<CompactionSummaryV3 | null>;
+  previousResume?: CompactionResumeV3 | string | null;
+  liveState?: CompactionLiveStateV3 | null;
+  /** Hard ceiling for both real and injected summarizers. Defaults to 45s. */
+  summaryTimeoutMs?: number;
   /**
    * Optional abort signal. When fired BEFORE / DURING the LLM summary
    * call, the await races against the signal and rejects with an abort
@@ -74,7 +92,7 @@ export interface CompactResult {
   /** New history (may be identical to input on no-op). */
   messages: AgentMessage[];
   /** The structured summary produced (null on no-op or failure). */
-  summary: CompactionSummaryV2 | null;
+  summary: CompactionSummaryV3 | null;
   /** Number of messages collapsed from the head. */
   collapsedFrom: number;
   /** Number of messages produced in their place (currently always 1). */
@@ -121,14 +139,24 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
 
   const head = args.messages.slice(0, cutoff);
   const tail = args.messages.slice(cutoff);
-  const summarize = args.summarize ?? summarizeSpanV2;
 
   try {
     // Race the summary call against the abort signal (A3). If the aux
     // provider stalls and the user aborts, we throw immediately instead
     // of holding the Compacting node hostage.
-    const summary = await raceSummary(summarize(head, args.summaryProvider), args.signal);
-    if (!summary) {
+    const input: SummarizeSpanV3Input = {
+      previousResume: args.previousResume,
+      messages: head,
+      liveState: args.liveState,
+    };
+    const timeoutMs = args.summaryTimeoutMs ?? COMPACTION_SUMMARY_TIMEOUT_MS;
+    const pending = args.summarizeV3
+      ? args.summarizeV3(input, args.summaryProvider, { signal: args.signal, timeoutMs })
+      : args.summarize
+        ? args.summarize(head, args.summaryProvider)
+        : summarizeSpanV3(input, args.summaryProvider, { signal: args.signal, timeoutMs });
+    const produced = await raceSummary(pending, args.signal, timeoutMs);
+    if (!produced) {
       return {
         ok: false,
         messages: args.messages,
@@ -136,9 +164,10 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
         collapsedFrom: 0,
         collapsedTo: 0,
         cutoffApplied: cutoff,
-        error: new Error('summarizeSpanV2 returned null'),
+        error: new Error('summarizeSpanV3 returned null'),
       };
     }
+    const summary = isCompactionSummaryV3(produced) ? produced : summaryV2ToV3(produced);
     const synthetic = renderSummaryAsMessage(summary);
     return {
       ok: true,
@@ -220,17 +249,38 @@ function noOp(messages: AgentMessage[], cutoff = 0): CompactResult {
  * `withAbort` in `nodes/executing-abort.ts` — kept local here to avoid a
  * cross-folder import.
  */
-async function raceSummary<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return p;
-  if (signal.aborted) throw new Error('compactWithLLM aborted by signal');
+async function raceSummary<T>(
+  p: Promise<T>,
+  signal?: AbortSignal,
+  timeoutMs = COMPACTION_SUMMARY_TIMEOUT_MS,
+): Promise<T> {
+  if (signal?.aborted) {
+    const error = new Error('compactWithLLM aborted by signal');
+    error.name = 'AbortError';
+    throw error;
+  }
   let onAbort: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<T>((resolve, reject) => {
-      onAbort = (): void => reject(new Error('compactWithLLM aborted by signal'));
-      signal.addEventListener('abort', onAbort, { once: true });
+      onAbort = (): void => {
+        const error = new Error('compactWithLLM aborted by signal');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          const error = new Error(`compactWithLLM summarizer timed out after ${timeoutMs}ms`);
+          error.name = 'TimeoutError';
+          reject(error);
+        }, timeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+      }
       p.then(resolve, reject);
     });
   } finally {
-    if (onAbort) signal.removeEventListener('abort', onAbort);
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
   }
 }

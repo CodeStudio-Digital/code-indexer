@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { getDbWriter, isDbWriterEnabled, type DbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
+import { coderToolOutputsBaseDir } from '@mcp/shared/utils/data-paths.js';
+import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -13,9 +15,15 @@ import { loadAgentsMd } from '@mcp/code-agent/core/agents-md.js';
 import { formatIdeContext } from '@mcp/code-agent/core/ide-context.js';
 import { buildConfigLock, diffConfigLock, getConfigLock, setConfigLock } from '@mcp/code-agent/sessions/store/session-config.js';
 import { recordSessionEvent } from '@mcp/code-agent/sessions/store/events-recorder.js';
-import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/durable-compaction.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
+import {
+  persistChapterCheckpoint,
+  serializeSessionCompaction,
+} from '@mcp/code-agent/core/runner/compaction/chapter-checkpoint.js';
 import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction/threshold.js';
+import {
+  summaryV3ToV2,
+} from '@mcp/code-agent/core/summarizer.js';
 import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
 import { buildSystemPrompt, normalizeProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
@@ -24,7 +32,7 @@ import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/cor
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import { applyPatchTool } from '@mcp/code-agent/tools/apply-patch.js';
 import { shellTools } from '@mcp/code-agent/tools/shell.js';
-import { gitTools } from '@mcp/code-agent/tools/git.js';
+import { gitToolsForProject } from '@mcp/code-agent/tools/git.js';
 import {
   defaultLocalFilesystemPort,
   defaultLocalShellPort,
@@ -116,6 +124,7 @@ import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
 import { buildSessionDriveTools } from '@mcp/code-agent/tools/session-drive-tools.js';
+import { buildConversationChapterTools } from '@mcp/code-agent/tools/conversation-chapters.js';
 import { buildProjectMemoryTools } from '@mcp/code-agent/tools/project-memory-tools.js';
 import { buildAutoCapture } from '@mcp/code-agent/sessions/auto-capture.js';
 import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
@@ -129,6 +138,7 @@ import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools, createProjectWorktree } from '@mcp/code-agent/tools/worktree.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
+import { resolveActiveWorkspaceSkills } from '@mcp/code-agent/skills/workspace-skills.js';
 import { buildInvokeSkillTool, buildSkillDiscoveryTools } from '@mcp/code-agent/skills/skill-tool-builder.js';
 import { buildCreateSkillTool } from '@mcp/code-agent/tools/create-skill.js';
 import { listInstalledNamespaces } from '@mcp/code-agent/skills/agent-skills-installer.js';
@@ -319,6 +329,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const project = db.getProject(session.project_id);
   if (!project) throw new Error(`Project ${session.project_id} not found`);
   const unionProjectLinks = project.is_synthetic ? db.listUnionProjectIds(project.id) : [];
+  const unionWorkspaceProjects = assignWorkspaceSlugs(unionProjectLinks);
 
   // Memory READ scope. A GLOBAL session's project is a SYNTHETIC union (mig 155)
   // whose own memory is empty/ephemeral; read the memory of every REAL
@@ -387,13 +398,20 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // serve fresh disk data without re-indexing.
   const overlay = new SessionOverlay(resolvePath(project.root_path));
   // Side-file store for truncated tool outputs — enables `get_tool_output`.
-  const toolOutputStore = new ToolOutputStore(resolvePath(project.root_path), session.id);
+  const toolOutputStore = new ToolOutputStore(
+    resolvePath(project.root_path),
+    session.id,
+    project.is_synthetic ? { externalBaseDir: coderToolOutputsBaseDir() } : undefined,
+  );
 
   // Tool registry: native tools + bridged MCP tools
   const registry = new ToolRegistry();
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
-  registry.registerAll(gitTools);
+  // A synthetic union root is not itself a Git repository. Keep the existing
+  // Git tool contracts untouched for ordinary sessions and omit them here;
+  // the global-workspace briefing directs scoped run_command(cwd:<slug>).
+  registry.registerAll(gitToolsForProject(!!project.is_synthetic));
   // apply_patch is registered for ALL providers. For ChatGPT/Codex with
   // `apply_patch_tool_type === 'freeform'`, the chatgpt provider rewrites
   // the wire shape to `type: 'custom'` (raw patch text, no JSON escaping).
@@ -489,6 +507,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (!opts.companyContext) {
     registry.registerAll(buildSessionDriveTools());
   }
+  // Append-only compaction history. Registered for every persisted coder
+  // session; the store-backed port is session-scoped and cannot cross-read.
+  registry.registerAll(buildConversationChapterTools());
   // Project memory read tool (recall_memory) — any session whose host wired
   // the `projectMemory` ports (single sessions today; company keeps the
   // mcp__search_memory path). The per-project memory_enabled gate is applied
@@ -950,10 +971,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ? {
           syntheticProjectName: project.name,
           rootPath: workspace.rootPath,
-          projects: unionProjectLinks.map((p) => ({
+          projects: unionWorkspaceProjects.map((p) => ({
             projectId: p.project_id,
             name: p.name,
-            slug: projectSlug(p.name),
+            slug: p.slug,
             rootPath: resolvePath(p.root_path),
             isPrimary: p.is_primary,
           })),
@@ -1129,6 +1150,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           return [];
         }
       },
+    },
+    conversationHistory: {
+      list: (chapterOpts) => store.listConversationChapters(session.id, chapterOpts),
+      search: (query, chapterOpts) => store.searchConversationChapters(session.id, query, chapterOpts),
+      get: (chapterId) => store.getConversationChapter(session.id, chapterId),
+      source: (chapterId, chapterOpts) => store.listConversationChapterSource(session.id, chapterId, chapterOpts),
     },
     // Durable project memory ports (save_note scope 'project' + recall_memory).
     // Gated on the per-project toggle (any union member for a global session);
@@ -1309,7 +1336,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const skillStore = new SkillStore(db.raw());
   let resolvedSkills: ResolvedSkill[] = [];
   try {
-    resolvedSkills = skillStore.resolveActiveSkills(session.id, session.project_id);
+    const skillProjectIds = project.is_synthetic && unionProjectLinks.length > 0
+      ? unionProjectLinks.map((linked) => linked.project_id)
+      : [session.project_id];
+    resolvedSkills = resolveActiveWorkspaceSkills(skillStore, session.id, skillProjectIds);
   } catch (e) {
     console.warn(`[coder] skill resolution failed: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -1484,6 +1514,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
     projectRoot: project.root_path,
+    globalWorkspace: toolContext.globalWorkspace,
     os: process.platform,
     planMode: opts.planMode,
     providerFamily: normalizeProviderFamily(session.provider),
@@ -1598,6 +1629,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       systemPrompt += '\n' + loadPrompt('app_db');
     } else if (effectiveAgentId === 'app_architect') {
       systemPrompt += '\n' + loadPrompt('app_architect');
+    } else if (effectiveAgentId === 'app_ux') {
+      systemPrompt += '\n' + loadPrompt('app_ux');
+    } else if (effectiveAgentId === 'app_wireframe') {
+      systemPrompt += '\n' + loadPrompt('app_wireframe');
     }
   }
   if (effectiveAgentId === 'app_db' && !(appWorkspace && config.features.appStudioEnabled)) {
@@ -2008,8 +2043,30 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     return Number.isNaN(ms) ? null : ms;
   };
 
+  // Optional cheap provider for compaction/chapter generation. Resolution is
+  // done once per run so the Compacting node stays provider-agnostic and the
+  // tool/system prefix remains stable. A missing/broken binding is a clean
+  // fallback to the active chat provider.
+  let compactionProvider: ChatProvider = provider;
+  try {
+    const resolver = new PipelineProviderResolver(
+      new PipelineProviderBindingsStore(store.getDb()),
+      new ProviderStore(store.getDb()),
+    );
+    const bound = await resolver.resolveOrNull('code-agent', 'compaction', {
+      sessionId: session.id,
+      companySessionId: opts.companyContext?.companySessionId,
+    });
+    if (bound) compactionProvider = await createCoderProvider(bound.provider.id, bound.modelId);
+  } catch (e) {
+    console.warn(
+      `[coder] compaction provider binding unavailable; using session model: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
   const runner = new CoderRunner({
     provider,
+    compactionProvider,
     registry,
     systemPrompt,
     toolContext,
@@ -2117,6 +2174,44 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
               );
             } catch {
               return null;
+            }
+          }
+        : undefined,
+    // Session-scoped conversation chapter table of contents. Titles only;
+    // full bodies/source messages stay behind recall_conversation.
+    getConversationChapterIndex:
+      process.env.CODER_CONVERSATION_CHAPTERS !== '0'
+        ? () => {
+            try {
+              const page = store.listConversationChapters(session.id, { limit: 10 });
+              return {
+                total: store.countConversationChapters(session.id),
+                entries: page.items.map((chapter) => ({
+                  id: chapter.id,
+                  ordinal: chapter.ordinal,
+                  title: chapter.title,
+                  source: chapter.source,
+                })),
+              };
+            } catch {
+              return null;
+            }
+          }
+        : undefined,
+    getRelevantConversationChapters:
+      process.env.CODER_CONVERSATION_CHAPTERS !== '0'
+        ? async (taskText) => {
+            try {
+              return store
+                .searchConversationChapters(session.id, taskText, { limit: 2 })
+                .items.slice(0, 2)
+                .map((chapter) => ({
+                  id: `conversation-chapter:${chapter.id}`,
+                  title: chapter.title,
+                  content: chapter.chapter_text.slice(0, 400),
+                }));
+            } catch {
+              return [];
             }
           }
         : undefined,
@@ -2414,6 +2509,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       subagent_profile?: string | null;
       logical_operation_id?: string | null;
       productive?: boolean | null;
+      guard_action?: 'allow' | 'reuse' | 'warn' | 'block' | 'shadow' | null;
+      guard_reason?: string | null;
+      would_block?: boolean | null;
+      state_epoch?: number | null;
+      result_novel?: boolean | null;
+      coverage_novel?: boolean | null;
+      delivered?: boolean | null;
+      repeat_policy?: 'stable' | 'volatile' | 'pollable' | 'mutating' | null;
+      execution_class?: 'read' | 'write' | 'execute' | 'control' | null;
+      guard_origin_tool_use_id?: string | null;
     }>;
     /**
      * Nested code_exec invocations buffered from `nested_tool_call` events.
@@ -2455,11 +2560,17 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
   };
   let pendingTurn: PendingTurn | null = null;
+  let flushChain: Promise<void> = Promise.resolve();
 
-  const flushPendingTurn = async (): Promise<void> => {
-    if (!pendingTurn) return;
+  const flushPendingTurn = (): Promise<void> => {
+    // Detach the buffer synchronously. EventEmitter callers intentionally do
+    // not await this function; capturing here prevents the next message_complete
+    // from replacing the turn before its queued DB write starts.
+    if (!pendingTurn) return flushChain;
     const turn = pendingTurn;
     pendingTurn = null;
+    const telemetryId = runner.lastTurnTelemetryId;
+    const persist = async (): Promise<void> => {
     // If this turn was checkpointed while awaiting input (see `awaiting_input`),
     // wait for that write to settle and reuse its row id so we COMPLETE (not
     // duplicate) the assistant message. State lives on `turn`, so a later turn's
@@ -2470,7 +2581,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // By now persistTurnTelemetry has run for this turn (runner emits
     // it before turn_start), so lastTurnTelemetryId points at the row we
     // want to JOIN against. Stamp every tool call with it.
-    const telemetryId = runner.lastTurnTelemetryId;
     if (telemetryId != null) {
       for (const tc of turn.toolCalls) tc.turn_telemetry_id = telemetryId;
       for (const tc of turn.nestedToolCalls) tc.turn_telemetry_id = telemetryId;
@@ -2499,6 +2609,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // transcript and can be reconstructed if persistence fails for one turn.
       console.error(`[coder] persistAssistantTurn failed for session ${session.id}:`, err);
     }
+    };
+    // Preserve assistant/tool row order and let a compaction checkpoint await
+    // every earlier fire-and-forget flush before reading the visible DB span.
+    const scheduled = flushChain.then(persist, persist);
+    flushChain = scheduled.catch(() => undefined);
+    return scheduled;
   };
 
   // Interactive tool_use names the RESUME path can restore as a live card on
@@ -2586,7 +2702,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try {
         if (!pendingTurn) return;
         pendingTurn.nestedToolCalls.push({
-          tool_use_id: `${e.parentToolUseId}#${e.seq}`,
+          // Blocking nested calls carry their invocation-order id explicitly.
+          // Prefer it over completion-order `seq` so a propagated parent row
+          // can point at the exact root-cause audit row under concurrency.
+          // Reuse/shadow rows keep a unique completion id and store their
+          // cause separately in guard_origin_tool_use_id.
+          tool_use_id:
+            e.guardVerdict?.action === 'block' && e.guardVerdict.originToolUseId
+              ? e.guardVerdict.originToolUseId
+              : `${e.parentToolUseId}#${e.seq}`,
           tool_name: e.name,
           args: e.args,
           result_text: e.resultPreview,
@@ -2608,6 +2732,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           subagent_profile: null,
           logical_operation_id: e.logicalOperationId ?? null,
           productive: e.productive ?? null,
+          guard_action: e.guardVerdict?.action ?? null,
+          guard_reason: e.guardVerdict?.reason ?? null,
+          would_block: e.guardVerdict?.wouldBlock ?? null,
+          state_epoch: e.stateEpoch ?? e.guardVerdict?.stateEpoch ?? null,
+          result_novel: e.resultNovel ?? null,
+          coverage_novel: e.coverageNovel ?? null,
+          delivered: e.delivered ?? null,
+          repeat_policy: e.repeatPolicy ?? null,
+          execution_class: e.executionClass ?? null,
+          guard_origin_tool_use_id: e.guardVerdict?.originToolUseId ?? null,
         });
       } catch { /* telemetry must never break the run */ }
     });
@@ -2654,6 +2788,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       subagent_profile: null,
       logical_operation_id: result.ledgerEntry?.logicalOperationId ?? null,
       productive: result.ledgerEntry?.productive ?? null,
+      guard_action: result.guardVerdict?.action ?? null,
+      guard_reason: result.guardVerdict?.reason ?? null,
+      would_block: result.guardVerdict?.wouldBlock ?? null,
+      state_epoch: result.stateEpoch ?? result.guardVerdict?.stateEpoch ?? null,
+      result_novel: result.ledgerEntry?.resultNovel ?? null,
+      coverage_novel: result.ledgerEntry?.coverageNovel ?? null,
+      // tool_call_result is emitted only after the block has been appended to
+      // model history; unlike nested siblings, delivery is unambiguous here.
+      delivered: true,
+      repeat_policy: (result.ledgerEntry?.repeatPolicy as PendingTurn['toolCalls'][number]['repeat_policy']) ?? null,
+      execution_class: (result.ledgerEntry?.executionClass as PendingTurn['toolCalls'][number]['execution_class']) ?? null,
+      guard_origin_tool_use_id: result.guardVerdict?.originToolUseId ?? null,
       // Stamped at flushPendingTurn time, when persistTurnTelemetry has
       // already run for this turn and runner.lastTurnTelemetryId is the
       // id of THIS turn's row. Setting it here would point at the prior turn.
@@ -2695,35 +2841,54 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   let lastRunnerError: Error | undefined;
   runner.on('done', (_reason: string, error?: Error) => { lastRunnerError = error; });
 
-  // Durable compaction (off the hot path): when the in-memory compaction fires,
-  // persist a boundary + summary so the NEXT run starts compacted — cross-run
-  // cost reduction. Runs over DB rows in the background; never blocks the run.
-  // The in-flight guard avoids overlapping summary calls during a long run.
-  // The memory harvest chains on success: distillation reuses the summary
-  // that was ALREADY paid for here (replaces the old per-run-end capture).
-  let durableInFlight = false;
-  runner.on('history_compacted', (p) => {
-    if (p.strategy !== 'summarizer') return;
+  // One-call durable compaction. CompactingNode hands us the exact V3 object
+  // it already injected in memory; after flushing the pending assistant/tool
+  // pair we align that summarized head with the visible DB prefix and append
+  // the chapter + boundary atomically. There is no history_compacted-triggered
+  // second summarization anymore.
+  let durableCheckpointHealthy = true;
+  runner.setCompactionCheckpointHandler(async (checkpoint) => {
     if (!durableCompactionEnabled() || runner.isSubagent || session.id == null) return;
-    if (durableInFlight) return;
-    durableInFlight = true;
-    void runDurableCompaction({ store, sessionId: session.id, provider })
-      .then((res) => {
-        if (!res.ok || !res.summary || res.boundaryId == null || !opts.runEndMemory) return;
-        return harvestCompactionMemory({
+    // If a prior checkpoint could not align/commit, this in-memory run already
+    // has a summarized head that the DB does not. Never try to leap over that
+    // gap on a later compaction; the next fresh run will retry from raw rows.
+    if (!durableCheckpointHealthy) return;
+    try {
+      await serializeSessionCompaction(session.id, async () => {
+        await flushPendingTurn();
+        const committed = persistChapterCheckpoint({
+          store,
+          sessionId: session.id,
+          summary: checkpoint.summary,
+          headMessages: checkpoint.headMessages,
+          source: 'auto',
+          trigger: checkpoint.trigger ?? 'context_threshold',
+          chaptersEnabled: process.env.CODER_CONVERSATION_CHAPTERS !== '0',
+          autoContinues: checkpoint.autoContinues,
+        });
+        if (committed.status !== 'committed' && committed.status !== 'compatibility') {
+          durableCheckpointHealthy = false;
+          return;
+        }
+        if (!opts.runEndMemory) return;
+        // Reuse the same paid V3 summary. Harvest is best-effort and does not
+        // delay the model loop after the atomic chapter commit succeeds.
+        void harvestCompactionMemory({
           runEndMemory: opts.runEndMemory,
           store,
           getMemoryEnabled: () => db.getProjectMemoryEnabled(memoryWriteProjectId),
           projectId: project.id,
           projectName: project.name,
           sessionId: session.id,
-          summary: res.summary,
-          boundaryId: res.boundaryId,
+          summary: summaryV3ToV2(checkpoint.summary),
+          boundaryId: committed.boundary_id,
           trigger: 'compaction',
         });
-      })
-      .catch((e) => console.warn(`[coder] durable compaction failed for session ${session.id}:`, e))
-      .finally(() => { durableInFlight = false; });
+      });
+    } catch (error) {
+      durableCheckpointHealthy = false;
+      throw error;
+    }
   });
 
   // Phase-route skip summary handler removed along with PhaseRouter.

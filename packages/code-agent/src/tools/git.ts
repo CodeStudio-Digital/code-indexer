@@ -130,3 +130,8 @@ const gitBranch: CoderTool = {
 };
 
 export const gitTools: CoderTool[] = [gitStatus, gitDiff, gitLog, gitAdd, gitCommit, gitBranch];
+
+/** Synthetic union roots are not repositories; ordinary projects stay unchanged. */
+export function gitToolsForProject(isSynthetic: boolean): CoderTool[] {
+  return isSynthetic ? [] : gitTools;
+}

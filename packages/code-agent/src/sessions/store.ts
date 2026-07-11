@@ -25,6 +25,14 @@ import type {
   SessionWithMessages,
   TaskExecutionMode,
   TasksState,
+  CommitConversationChapterInput,
+  CommitConversationChapterResult,
+  ConversationChapterPage,
+  ConversationChapterRow,
+  ConversationChapterSearchResult,
+  ConversationChapterSource,
+  InsertRebuiltConversationChaptersResult,
+  RebuiltConversationChapterInput,
 } from '@mcp/code-agent/sessions/types.js';
 
 import * as core from './store/sessions-core.js';
@@ -49,6 +57,7 @@ import * as telemetryGlobal from './store/telemetry-global.js';
 import * as telemetryBackfill from './store/telemetry-backfill.js';
 import * as subagentTelemetry from './store/subagent-telemetry.js';
 import * as subagentRecommendations from './store/subagent-recommendations.js';
+import * as chapters from './store/chapters.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -203,6 +212,19 @@ export class SessionStore {
   getMessageById(sessionId: number, messageId: number): { role: string; content: unknown; row: CoderMessageRow } | null {
     return messages.getById(this.db, sessionId, messageId);
   }
+
+  // ─── Append-only conversation chapters (migration 208) ────────
+  commitConversationChapter(input: CommitConversationChapterInput): CommitConversationChapterResult { return chapters.commit(this.db, input); }
+  insertRebuiltConversationChapters(sessionId: number, input: readonly RebuiltConversationChapterInput[]): InsertRebuiltConversationChaptersResult { return chapters.insertRebuilt(this.db, sessionId, input); }
+  listConversationChapters(sessionId: number, opts: { limit?: number; cursor?: string | null; includeSuperseded?: boolean } = {}): ConversationChapterPage<ConversationChapterRow> { return chapters.list(this.db, sessionId, opts); }
+  countConversationChapters(sessionId: number, includeSuperseded = false): number { return chapters.count(this.db, sessionId, includeSuperseded); }
+  searchConversationChapters(sessionId: number, query: string, opts: { limit?: number; cursor?: string | null } = {}): ConversationChapterPage<ConversationChapterSearchResult> { return chapters.search(this.db, sessionId, query, opts); }
+  getConversationChapter(sessionId: number, chapterId: number): ConversationChapterRow | null { return chapters.get(this.db, sessionId, chapterId); }
+  listConversationChapterSource(sessionId: number, chapterId: number, opts: { limit?: number; cursor?: string | null } = {}): ConversationChapterPage<CoderMessageRow> { return chapters.listSource(this.db, sessionId, chapterId, opts); }
+  getConversationChapterMessages(sessionId: number, chapterId: number, opts: { limit?: number; cursor?: string | null } = {}): ConversationChapterPage<CoderMessageRow> { return chapters.listSource(this.db, sessionId, chapterId, opts); }
+  supersedeConversationChapters(sessionId: number, opts: { source?: ConversationChapterSource; throughEndMessageId?: number } = {}): number { return chapters.supersede(this.db, sessionId, opts); }
+  copyConversationChapters(fromSessionId: number, toSessionId: number, idMap?: ReadonlyMap<number, number>): number { return chapters.copy(this.db, fromSessionId, toSessionId, idMap); }
+  rollbackConversationChapters(sessionId: number, fromMessageId: number): number { return chapters.rollback(this.db, sessionId, fromMessageId); }
 
   // ─── Plans ─────────────────────────────────────────────────────
   recordPlan(input: plans.RecordPlanInput): CoderPlanRow { return plans.record(this.db, input); }

@@ -20,10 +20,10 @@ const MEMORY = [
   { title: 'API error envelope', category: 'convention' },
 ];
 const SKILLS = [
-  { id: 'api-collection', description: 'Build or import an HTTP API client collection', namespace: 'builtin' },
-  { id: 'qa-playwright', description: 'Author Playwright E2E tests', namespace: 'builtin' },
-  { id: 'ds-docs', description: 'Generate design-system docs', namespace: 'builtin' },
-  { id: 'init', description: 'Initialize a CLAUDE.md for the repo', namespace: 'builtin' },
+  { id: 'api-collection', description: 'Build or import an HTTP API client collection', namespace: 'builtin', scope: '7' },
+  { id: 'qa-playwright', description: 'Author Playwright E2E tests', namespace: 'builtin', scope: '7' },
+  { id: 'ds-docs', description: 'Generate design-system docs', namespace: 'builtin', scope: '7' },
+  { id: 'init', description: 'Initialize a CLAUDE.md for the repo', namespace: 'builtin', scope: '7' },
 ];
 const PARSE_CTX = {
   toolNames: new Set(CATALOG.map((t) => t.name)),
@@ -161,6 +161,14 @@ describe('parsePreflightOutput', () => {
     expect(seed?.pinTools).toBeUndefined();
   });
 
+  it('rejects a valid skill id when deterministic evidence is absent', () => {
+    const seed = parsePreflightOutput(JSON.stringify({ skills: ['api-collection'] }), {
+      ...PARSE_CTX,
+      skillMetaById: new Map([['api-collection', { evidence: undefined }]]),
+    });
+    expect(seed).toBeNull();
+  });
+
   it('accepts plain-string tool entries and drops unknown memory titles', () => {
     const raw = JSON.stringify({
       tools: ['read_file'],
@@ -278,6 +286,122 @@ describe('TaskPreflightService.run', () => {
     expect(result.status).toBe('ok');
     expect(result.seed?.pinTools).toContain('ext_srv__do_thing');
     expect(result.seed?.suggestedSkills?.[0]?.id).toBe('api-collection');
+    expect(result.seed?.suggestedSkills?.[0]?.evidence).toBe('project_scope');
+  });
+
+  it('filters a global discovery-only skill unless the prompt explicitly names it', async () => {
+    const dsSkill = [{
+      id: 'ds-ctx-ui',
+      name: 'Design System: @corporate/ui',
+      description: 'Components from @corporate/ui',
+      namespace: 'builtin',
+      scope: 'global',
+      packageNames: ['@corporate/ui'],
+      dependencyMatched: false,
+    }];
+    const output = JSON.stringify({
+      profile: 'navigate',
+      skills: [{ id: 'ds-ctx-ui', why: 'UI task' }],
+    });
+    const implicit = await makeService(makeBinding(), { getSkillCatalog: () => dsSkill }).run({
+      ...INPUT,
+      userMessage: 'mostre pagamentos pendentes na intranet',
+      fetchFn: okFetch(output),
+    });
+    expect(implicit.seed?.suggestedSkills).toBeUndefined();
+
+    const explicit = await makeService(makeBinding(), { getSkillCatalog: () => dsSkill }).run({
+      ...INPUT,
+      userMessage: 'use @corporate/ui para mostrar pagamentos pendentes',
+      fetchFn: okFetch(output),
+    });
+    expect(explicit.seed?.suggestedSkills).toEqual([{
+      id: 'ds-ctx-ui',
+      reason: 'UI task',
+      evidence: 'explicit',
+    }]);
+  });
+
+  it('validates target projects and keeps project-scoped skills on the selected member', async () => {
+    const workspaceProjects = [
+      { projectId: 7, name: 'poa-backend', slug: 'poa-backend', rootPath: '/backend', isPrimary: true },
+      { projectId: 11, name: 'poa-intranet-angular', slug: 'poa-intranet-angular', rootPath: '/intranet', isPrimary: false },
+    ];
+    const output = JSON.stringify({
+      profile: 'navigate',
+      projects: [{ slug: 'poa-intranet-angular', why: 'the task names intranet' }],
+      skills: [{ id: 'api-collection', why: 'client work' }],
+    });
+    const service = makeService(makeBinding(), {
+      getSkillCatalog: (_sessionId, projectId) => projectId === 11
+        ? [{ ...SKILLS[0]!, scope: '11' }]
+        : [],
+    });
+    const result = await service.run({
+      ...INPUT,
+      userMessage: 'ajuste a tela na intranet',
+      isGlobalWorkspace: true,
+      workspaceProjects,
+      fetchFn: okFetch(output),
+    });
+    expect(result.seed?.targetProjects).toEqual([{
+      slug: 'poa-intranet-angular',
+      reason: 'the task names intranet',
+    }]);
+    expect(result.seed?.suggestedSkills?.[0]?.id).toBe('api-collection');
+  });
+
+  it('drops project-scoped skills when the selected global target is another project', async () => {
+    const workspaceProjects = [
+      { projectId: 7, name: 'poa-backend', slug: 'poa-backend', rootPath: '/backend', isPrimary: true },
+      { projectId: 11, name: 'poa-intranet-angular', slug: 'poa-intranet-angular', rootPath: '/intranet', isPrimary: false },
+    ];
+    const service = makeService(makeBinding(), {
+      getSkillCatalog: (_sessionId, projectId) => projectId === 7
+        ? [{ ...SKILLS[0]!, scope: '7' }]
+        : [],
+    });
+    const result = await service.run({
+      ...INPUT,
+      userMessage: 'ajuste a tela na intranet',
+      isGlobalWorkspace: true,
+      workspaceProjects,
+      fetchFn: okFetch(JSON.stringify({
+        profile: 'navigate',
+        projects: [{ slug: 'poa-intranet-angular' }],
+        skills: [{ id: 'api-collection' }],
+      })),
+    });
+    expect(result.seed?.suggestedSkills).toBeUndefined();
+  });
+
+  it('changes the cache fingerprint when global workspace membership changes', () => {
+    const service = makeService(makeBinding());
+    const backend = { projectId: 7, name: 'backend', slug: 'backend', rootPath: '/backend', isPrimary: true };
+    const intranet = { projectId: 11, name: 'intranet', slug: 'intranet', rootPath: '/intranet', isPrimary: false };
+    const one = service.getCapabilityFingerprint({ ...INPUT, isGlobalWorkspace: true, workspaceProjects: [backend] });
+    const two = service.getCapabilityFingerprint({ ...INPUT, isGlobalWorkspace: true, workspaceProjects: [backend, intranet] });
+    expect(two).not.toBe(one);
+  });
+
+  it('omits Git capabilities even from a one-member global workspace', async () => {
+    const project = { projectId: 7, name: 'backend', slug: 'backend', rootPath: '/backend', isPrimary: true };
+    let prompt = '';
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
+      prompt = String(init?.body ?? '');
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        profile: 'navigate',
+        tools: [{ name: 'git_commit' }, { name: 'read_file' }],
+      }) } }] }), { status: 200 });
+    }) as typeof fetch;
+    const result = await makeService(makeBinding()).run({
+      ...INPUT,
+      isGlobalWorkspace: true,
+      workspaceProjects: [project],
+      fetchFn,
+    });
+    expect(prompt).not.toContain('git_commit [');
+    expect(result.seed?.pinTools).toEqual(['read_file']);
   });
 
   it('returns provider_error on a non-2xx response', async () => {

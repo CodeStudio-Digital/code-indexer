@@ -107,4 +107,16 @@ describe('notification settings and dedupe keys', () => {
       'mcp.desktop-notification:human_action_required:project:2:9:tool_approval_request:abc',
     );
   });
+
+  it('uses the runtime identity so repeated semantic outcomes remain distinct runs', () => {
+    const base: AppNotificationEvent = {
+      kind: 'session_finished',
+      target: { kind: 'project', route: '/projects/2?session=9', scopeId: 2, sessionId: 9 },
+      id: 'done:completed:',
+      title: 'Finished',
+      body: 'Done.',
+    };
+    expect(buildNotificationKey({ ...base, dedupeKey: 'runtime:1000:1' }))
+      .not.toBe(buildNotificationKey({ ...base, dedupeKey: 'runtime:2000:2' }));
+  });
 });

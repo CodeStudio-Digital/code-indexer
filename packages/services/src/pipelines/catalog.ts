@@ -19,6 +19,7 @@ export type BindingRole =
   | 'scorer_llm'
   | 'hyde'
   | 'compaction_llm'
+  | 'compaction'
   | 'link_extractor'
   | 'rewriter'
   | 'reviewer'
@@ -57,6 +58,7 @@ const ROLE_CAPABILITY = {
   scorer_llm: 'text_llm',
   hyde: 'text_llm',
   compaction_llm: 'text_llm',
+  compaction: 'text_llm',
   link_extractor: 'text_llm',
   rewriter: 'text_llm',
   reviewer: 'text_llm',
@@ -475,6 +477,23 @@ const CATALOG_SEED: CatalogSeed[] = [
       config: { temperature: 0, max_tokens: 700 },
     },
     introducedInPhase: 'task-preflight',
+  },
+
+  // ─── Conversation compaction / chapter summaries ───────────────────────
+  // Optional cheap-model override for the hot-path summary that closes a
+  // conversation chapter. Unset deliberately falls back to the chat model so
+  // existing installs remain zero-config.
+  {
+    pipelineName: 'code-agent',
+    bindingRole: 'compaction',
+    description:
+      'Low-cost deterministic model used to summarize a compacted conversation span into an immutable chapter plus the bounded resume state. Unset = reuse the active chat provider/model.',
+    recommendedDefault: {
+      providerKind: 'openai',
+      modelHint: 'gpt-4o-mini',
+      config: { temperature: 0, max_tokens: 1500, reasoning_effort: 'minimal', timeout_ms: 45000 },
+    },
+    introducedInPhase: 'conversation-chapters',
   },
 
   // ─── Editor inline autocomplete (ghost text) ─────────────────────────────

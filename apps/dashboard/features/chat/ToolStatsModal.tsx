@@ -31,10 +31,21 @@ interface ToolStatsResponse {
   totalCalls: number;
   directCalls?: number;
   nestedCalls?: number;
+  guardOutcomes?: {
+    genuineErrors: number;
+    rootRefusals: number;
+    propagatedParentFailures: number;
+    reusedCalls: number;
+    shadowCandidates: number;
+  };
   byName: Array<{
     name: string;
     count: number;
     errorCount: number;
+    refusedCount?: number;
+    propagatedFailureCount?: number;
+    reuseCount?: number;
+    shadowCount?: number;
     lastAt: string | null;
   }>;
   recent: Array<{
@@ -44,6 +55,9 @@ interface ToolStatsResponse {
     isError: boolean;
     durationMs: number;
     createdAt: string;
+    outcome?: 'success' | 'genuine_error' | 'root_refusal' | 'propagated_parent_failure' | 'reuse' | 'shadow';
+    guardAction?: string | null;
+    guardReason?: string | null;
   }>;
   /**
    * Optional for forward-compat: pre-migration-102 servers don't return
@@ -175,6 +189,30 @@ export function ToolStatsView({
                   )}
                 </div>
 
+                {data.guardOutcomes && (
+                  <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {t('toolStats.guardOutcomes')}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-5">
+                      {([
+                        ['genuineErrors', 'toolStats.genuineErrors', 'text-destructive'],
+                        ['rootRefusals', 'toolStats.rootRefusals', 'text-amber-600 dark:text-amber-400'],
+                        ['propagatedParentFailures', 'toolStats.propagatedFailures', 'text-orange-600 dark:text-orange-400'],
+                        ['reusedCalls', 'toolStats.reusedCalls', 'text-emerald-600 dark:text-emerald-400'],
+                        ['shadowCandidates', 'toolStats.shadowCandidates', 'text-sky-600 dark:text-sky-400'],
+                      ] as const).map(([key, label, color]) => (
+                        <div key={key} className="rounded border bg-background/60 px-2 py-1.5">
+                          <div className={`font-mono text-sm font-semibold tabular-nums ${color}`}>
+                            {data.guardOutcomes?.[key] ?? 0}
+                          </div>
+                          <div className="text-muted-foreground leading-tight">{t(label)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Smart reducer savings — only renders when the server
                     returned a `savings` block AND there was something to
                     save. Pre-migration-102 servers or sessions with zero
@@ -256,7 +294,9 @@ export function ToolStatsView({
                         ? Math.round((b.count / data.totalCalls) * 100)
                         : 0;
                       const widthPct = Math.round((b.count / maxCount) * 100);
-                      const flagged = pct >= 20 || b.errorCount > 0;
+                      const flagged = pct >= 20 || b.errorCount > 0
+                        || (b.refusedCount ?? 0) > 0
+                        || (b.propagatedFailureCount ?? 0) > 0;
                       return (
                         <div key={b.name} className="text-xs">
                           <div className="flex items-baseline gap-2">
@@ -273,6 +313,22 @@ export function ToolStatsView({
                                 className="text-[9px] px-1 py-0 border-destructive/40 text-destructive"
                               >
                                 {t('toolStats.errShort', { count: b.errorCount })}
+                              </Badge>
+                            )}
+                            {(b.refusedCount ?? 0) > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] px-1 py-0 border-amber-500/40 text-amber-600 dark:text-amber-400"
+                              >
+                                {t('toolStats.refusedShort', { count: b.refusedCount })}
+                              </Badge>
+                            )}
+                            {(b.propagatedFailureCount ?? 0) > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] px-1 py-0 border-orange-500/40 text-orange-600 dark:text-orange-400"
+                              >
+                                {t('toolStats.propagatedShort', { count: b.propagatedFailureCount })}
                               </Badge>
                             )}
                           </div>
@@ -307,7 +363,15 @@ export function ToolStatsView({
                         >
                           <div className="flex items-baseline gap-2 min-w-0">
                             <span className="font-mono font-medium truncate">{r.name}</span>
-                            {r.isError && (
+                            {r.outcome && r.outcome !== 'success' ? (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] px-1 py-0 border-amber-500/40 text-amber-600 dark:text-amber-400 shrink-0"
+                                title={r.guardReason ?? undefined}
+                              >
+                                {t(`toolStats.outcome.${r.outcome}`)}
+                              </Badge>
+                            ) : r.isError && (
                               <Badge
                                 variant="outline"
                                 className="text-[9px] px-1 py-0 border-destructive/40 text-destructive shrink-0"

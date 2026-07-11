@@ -19,6 +19,10 @@
  *   - app_submit_stage    — gate determinístico → review → STOP.
  *   - app_record_feature  — registra deliverable (cobertura do roadmap).
  *   - app_list_features   — cobertura registrados × roadmap.
+ *   - app_get_db_assets   — estado real dos assets de migração e seed.
+ *   - app_save_db_migration — uma evolução aditiva e versionada do schema.
+ *   - app_save_db_seed    — substitui o seed canônico com backup.
+ *   - app_save_tdd_test   — testes de banco limitados a tests/worker.
  *   - app_provision_db    — migrations no banco LOCAL + db.json do gate.
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
@@ -40,6 +44,12 @@ import { appFetchArchitectureDoc, appSearchArchitectureDocs } from '@mcp/company
 import { appRunTestCycle } from '@mcp/company/tools/app-studio/app-run-test-cycle.js';
 import { appGetContext } from '@mcp/company/tools/app-studio/app-get-context.js';
 import { appSaveDbMigration } from '@mcp/company/tools/app-studio/app-save-db-migration.js';
+import { appGetDbAssets } from '@mcp/company/tools/app-studio/app-get-db-assets.js';
+import { appSaveDbSeed } from '@mcp/company/tools/app-studio/app-save-db-seed.js';
+import { appSaveTddTest } from '@mcp/company/tools/app-studio/app-save-tdd-test.js';
+import { appGetUx, appGetWireframe, appSaveUx, appSaveWireframe, appUxAudit, appWireframeAudit } from '@mcp/company/tools/app-studio/app-experience.js';
+import { appCompleteBuildTask, appGetBuildPlan, appSubmitBuildGroup } from '@mcp/company/tools/app-studio/app-build-plan.js';
+import { appFetchUxReference } from '@mcp/company/tools/app-studio/app-ux-reference.js';
 
 export { setAppStudioStore, getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 export {
@@ -65,8 +75,21 @@ export function buildAppStudioTools(projectId: number): CoderTool[] {
     appArchitectureAudit(binding),
     appSearchArchitectureDocs,
     appFetchArchitectureDoc,
-    appRunTestCycle,
+    appRunTestCycle(binding),
+    appGetUx(binding),
+    appSaveUx(binding),
+    appUxAudit(binding),
+    appFetchUxReference,
+    appGetWireframe(binding),
+    appSaveWireframe(binding),
+    appWireframeAudit(binding),
+    appGetBuildPlan(binding),
+    appCompleteBuildTask(binding),
+    appSubmitBuildGroup(binding),
+    appGetDbAssets(binding),
     appSaveDbMigration(binding),
+    appSaveDbSeed(binding),
+    appSaveTddTest(binding),
     appSubmitStage(binding),
     appRecordFeature(binding),
     appListFeatures(binding),

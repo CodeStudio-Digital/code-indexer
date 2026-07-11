@@ -64,21 +64,35 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.toolLoopDetected).toBe(false);
   });
 
-  it("enforcePreRead refusal → 'pre-read'; auto-downgrade (isError=false) stays untagged", async () => {
+  it("hybrid ignores legacy pre-read hard refusal; legacy still tags it; pointer stays a reuse", async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool'));
 
-    const refused = await dispatchTools(baseArgs(registry, {
+    const hybrid = await dispatchTools(baseArgs(registry, {
       enforcePreRead: () => 'Refused: `read_file` already read this slice.',
     }));
-    expect(refused.results[0].isError).toBe(true);
-    expect(refused.results[0].refusalKind).toBe('pre-read');
+    expect(hybrid.results[0].isError).toBe(false);
+    expect(hybrid.results[0].content).toBe('ok');
+
+    const previous = process.env.CODER_DEDUP_POLICY;
+    process.env.CODER_DEDUP_POLICY = 'legacy';
+    try {
+      const refused = await dispatchTools(baseArgs(registry, {
+        enforcePreRead: () => 'Refused: `read_file` already read this slice.',
+      }));
+      expect(refused.results[0].isError).toBe(true);
+      expect(refused.results[0].refusalKind).toBe('pre-read');
+    } finally {
+      if (previous === undefined) delete process.env.CODER_DEDUP_POLICY;
+      else process.env.CODER_DEDUP_POLICY = previous;
+    }
 
     const downgraded = await dispatchTools(baseArgs(registry, {
       enforcePreRead: () => ({ content: '[skeleton pointer to prior read]', isError: false }),
     }));
     expect(downgraded.results[0].isError).toBe(false);
     expect(downgraded.results[0].refusalKind).toBeUndefined();
+    expect(downgraded.results[0].guardVerdict?.action).toBe('reuse');
   });
 
   it("enforceTaskMode refusal → 'task-mode'", async () => {
@@ -92,7 +106,7 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
 
   it("tuple-hash dedup refusal → 'dedup' (and only on the refused call)", async () => {
     const registry = new ToolRegistry();
-    registry.register(makeTool('some_tool'));
+    registry.register(makeTool('some_tool', { mutates: true, executionClass: 'write' }));
     const dupCalls = new Map<string, DupCallEntry>();
     const r = await dispatchTools(baseArgs(registry, {
       dupCalls,
@@ -140,6 +154,28 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.results[0].isError).toBe(true);
     expect(r.results[0].refusalKind).toBe('failure-streak');
     expect(r.loopGuard).toBe('failure-streak');
+  });
+
+  it("unchanged poll result → 'polling-stuck' without entering failure streak", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool('some_tool', { repeatPolicy: 'pollable' }));
+    const failureStreakState: FailureStreakState = { streaks: new Map() };
+    const r = await dispatchTools(baseArgs(registry, {
+      failureStreakState,
+      detectPollingStuck: () => 'Refused: unchanged poll result.',
+    }));
+
+    expect(r.results[0]).toMatchObject({
+      isError: true,
+      refusalKind: 'polling-stuck',
+      guardVerdict: {
+        action: 'block',
+        reason: 'polling-stuck',
+        affectsFailureStreak: false,
+      },
+    });
+    expect(failureStreakState.streaks.size).toBe(0);
+    expect(r.toolLoopDetected).toBe(false);
   });
 
   it("per-tool timeout → 'timeout'", async () => {

@@ -26,6 +26,7 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'update_task',
   'expand_toolset',
   'get_tool_output',
+  'recall_conversation',
   'todo_write',
   'invoke_skill',
   // Minimal exploration (structure only, no code reading)

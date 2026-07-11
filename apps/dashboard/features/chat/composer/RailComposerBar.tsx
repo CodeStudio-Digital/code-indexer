@@ -34,7 +34,7 @@ import type { OutputCapLevel } from './output-cap-levels.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'api' | 'diagram' | 'builder';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
 
 interface RailComposerBarProps {
   hasInput: boolean;

@@ -876,8 +876,8 @@ export function createDeps(): ServerDeps {
     resolver: pipelineProviderResolver,
     getFallbackDefault: () => generalDefaultAsFallback(providerStore),
     getToolCatalog: () => buildPreflightToolCatalog(config.dbPath, nativeToolMeta()),
-    getSkillCatalog: (sessionId, projectId) =>
-      buildPreflightSkillCatalog(skillStore, sessionId, projectId),
+    getSkillCatalog: (sessionId, projectId, projectRoot) =>
+      buildPreflightSkillCatalog(skillStore, sessionId, projectId, projectRoot),
     getMemoryIndex: (projectId) => {
       try {
         if (!db.getProjectMemoryEnabled(projectId)) return [];

@@ -15,6 +15,9 @@ import { mountCoderDriveRoutes } from './drive.js';
 import { mountCoderSummarizeClearRoute } from './summarize-clear.js';
 import { mountCoderRollbackRoute } from './rollback.js';
 import { mountCoderTranscribeRoutes } from './transcribe.js';
+import { mountCoderChapterRoutes } from './chapters.js';
+import { rebuildConversationChapters } from './chapter-rebuild.js';
+import { withSessionLock } from './sessionLock.js';
 import { mountApiClientRoutes } from '../api-client/index.js';
 import { mountSshRoutes } from '../ssh/index.js';
 import { mountDbClientRoutes } from '../db-client/index.js';
@@ -36,6 +39,13 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderSummarizeClearRoute(app, deps, runtime);
   mountCoderRollbackRoute(app, deps, runtime);
   mountCoderTranscribeRoutes(app, deps);
+  mountCoderChapterRoutes(app, deps, {
+    rebuild: (sessionId, input) => withSessionLock(sessionId, async () => {
+      const active = runtime.activeRuns.get(sessionId);
+      if (active && !active.ended) throw new Error('a run is active — stop it before rebuilding chapters');
+      return rebuildConversationChapters(deps, sessionId, input);
+    }),
+  });
   mountApiClientRoutes(app, deps);
   mountSshRoutes(app, deps);
   mountDbClientRoutes(app, deps);

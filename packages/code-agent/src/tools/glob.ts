@@ -2,6 +2,7 @@ import { glob as fastGlob } from 'glob';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ignore from 'ignore';
+import { minimatch } from 'minimatch';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { resolveSafe } from '@mcp/code-agent/tools/paths.js';
@@ -103,31 +104,49 @@ export const globTool: CoderTool = {
       searchRoot = resolved;
     }
 
-    let matches: string[];
+    const filtered: Array<{ rel: string; mtime: number }> = [];
     try {
-      matches = await fastGlob(pattern, {
-        cwd: searchRoot,
-        nodir: true,
-        dot: false,
-        absolute: false,
-      });
+      if (!args.path && ctx.globalWorkspace) {
+        // Glob does not follow junctions by default (intentionally). Enumerate
+        // only the DB-derived real roots carried in ToolContext, then restore
+        // the virtual workspace path prefix in the result.
+        for (const project of ctx.globalWorkspace.projects) {
+          const matches = await fastGlob('**/*', {
+            cwd: project.rootPath,
+            nodir: true,
+            dot: false,
+            absolute: false,
+          });
+          const ig = respectIgnore ? loadIgnore(project.rootPath) : null;
+          for (const relToProject of matches) {
+            const sourceRel = relToProject.split('\\').join('/');
+            const projectRel = `${project.slug}/${sourceRel}`;
+            if (!minimatch(projectRel, pattern)) continue;
+            if (ig && ig.ignores(sourceRel)) continue;
+            let mtime = 0;
+            try { mtime = statSync(join(project.rootPath, relToProject)).mtimeMs; } catch { continue; }
+            filtered.push({ rel: projectRel, mtime });
+          }
+        }
+      } else {
+        const matches = await fastGlob(pattern, {
+          cwd: searchRoot,
+          nodir: true,
+          dot: false,
+          absolute: false,
+        });
+        const ig = respectIgnore ? loadIgnore(ctx.cwd) : null;
+        for (const relToRoot of matches) {
+          const absPath = join(searchRoot, relToRoot);
+          const projectRel = relative(ctx.cwd, absPath).split('\\').join('/');
+          if (ig && ig.ignores(projectRel)) continue;
+          let mtime = 0;
+          try { mtime = statSync(absPath).mtimeMs; } catch { continue; }
+          filtered.push({ rel: projectRel, mtime });
+        }
+      }
     } catch (e) {
       return err(`glob failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    const ig = respectIgnore ? loadIgnore(ctx.cwd) : null;
-    const filtered: Array<{ rel: string; mtime: number }> = [];
-    for (const relToRoot of matches) {
-      const absPath = join(searchRoot, relToRoot);
-      const projectRel = relative(ctx.cwd, absPath).split('\\').join('/');
-      if (ig && ig.ignores(projectRel)) continue;
-      let mtime = 0;
-      try {
-        mtime = statSync(absPath).mtimeMs;
-      } catch {
-        continue;
-      }
-      filtered.push({ rel: projectRel, mtime });
     }
 
     filtered.sort((a, b) => b.mtime - a.mtime);

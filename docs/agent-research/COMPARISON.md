@@ -19,14 +19,14 @@ Legend: ✅ present and strong · ⚠️ partial / weaker · ❌ absent
 | 3 | `state.transition` watermark (circuit-breaker) | ❌ | ❌ | ✅ `transition.reason` | ❌ |
 | 4 | Per-recovery-path attempt cap | ⚠️ stream_max_retries | ⚠️ tenacity max=5 | ✅ `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT=3`, `hasAttemptedReactiveCompact` | ⚠️ doom-loop only |
 | 5 | Strict doom-loop guard | ❌ | ❌ | ❌ | ✅ DOOM_LOOP_THRESHOLD=3 |
-| 6 | Result-content hash dedup | ❌ | ❌ | ❌ | ✅ v2 RESULT_DUP_THRESHOLD=1 |
+| 6 | Result-aware no-progress detection | ❌ | ❌ | ❌ | ✅ shadow cross-turn; no pre-result refusal |
 | 7 | Stop-guard nudge before final | ❌ | ❌ | ❌ | ✅ v2 (1 nudge) |
 | 8 | Auto-continue with isMeta=true marker | ❌ | ❌ | ✅ `task_budget` nudge `{ isMeta:true, transition:'token_budget_continuation' }` | ⚠️ recap text only |
 | **Compaction** | | | | | |
 | 9 | Reactive compaction on `prompt_too_long` | ⚠️ pre-sample threshold | ⚠️ ratio only | ✅ explicit catch | ⚠️ size-based |
 | 10 | Tagged-section summary template | ❌ freeform | ✅ `<current_focus>` `<environment>` `<completed_tasks>` `<active_issues>` `<code_state>` `<important_context>` | ⚠️ subtype:'compact_boundary' | ✅ CompactionSummaryV2 (9 JSON fields) |
 | 11 | Preserve last N user/assistant verbatim | ❌ | ✅ last 2 turns | ⚠️ partial | ⚠️ atomic pair only |
-| 12 | Read-slice dedup retire | ❌ | ❌ | ❌ | ✅ buildReadDedupKey |
+| 12 | Mutation/context-aware reread | ❌ | ❌ | ❌ | ✅ fresh in hybrid; coverage pointer when proven |
 | 13 | Pre-compact context carryover for budget | ❌ | ❌ | ✅ `preCompactContext` final-tokens | ❌ |
 | 14 | Live-state overlay post-summary | ❌ | ❌ | ❌ | ✅ overlayLiveState |
 | 15 | Cross-session memory consolidation | ❌ | ❌ | ✅ autoDream → MEMORY.md | ❌ |
@@ -195,10 +195,9 @@ read-after-edit confirmation in some flows.
 ### A3. kimi-cli's `max_steps_per_turn=1000`
 **Appeal**: "never artificially cut off the agent."
 **Why skip**: with our model mix (anthropic, openai, kimi-code, deepseek, glm,
-gemini), failure modes differ. A 1000-step ceiling defangs our doom-loop and
-result-dup guards by giving them too much rope. Our current strict=3 / dup=5
-/ result-dup=1 thresholds are calibrated against observed sessions 609/622 —
-raising the outer bound undoes that calibration.
+gemini), failure modes differ. A 1000-step ceiling defangs the strict/fuzzy,
+dominance, failure-streak, polling-stuck, and local mutation guards by giving
+them too much rope. The outer bound remains a final safety backstop.
 
 ### A4. claude-code's autoDream cross-session memory
 **Appeal**: emergent memory across sessions, MEMORY.md auto-curation.

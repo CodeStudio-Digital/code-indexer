@@ -24,6 +24,12 @@ export function SettingRow({
   const displayValue = dirty ? edit ?? '' : item.value ?? '';
   const label = t(`item.${item.key}.label`, { defaultValue: item.label });
   const description = t(`item.${item.key}.description`, { defaultValue: item.description });
+  const autoContinueValue = item.key === 'CODER_MAX_AUTO_CONTINUES'
+    ? Number(displayValue || item.default || 0)
+    : null;
+  const autoContinueTurns = autoContinueValue != null && Number.isFinite(autoContinueValue)
+    ? 50 * (1 + Math.max(0, Math.trunc(autoContinueValue)))
+    : null;
 
   const copyKey = (): void => {
     void navigator.clipboard?.writeText(item.key);
@@ -62,6 +68,16 @@ export function SettingRow({
         </button>
         {description && (
           <div className="text-[11.5px] text-muted-foreground mt-0.5 leading-snug">{description}</div>
+        )}
+        {autoContinueTurns != null && (
+          <div className={`text-[11.5px] mt-1 leading-snug ${
+            (autoContinueValue ?? 0) > 3 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'
+          }`}>
+            {t('item.CODER_MAX_AUTO_CONTINUES.effective', { turns: autoContinueTurns })}
+            {(autoContinueValue ?? 0) > 3
+              ? ` ${t('item.CODER_MAX_AUTO_CONTINUES.warning')}`
+              : ''}
+          </div>
         )}
       </div>
       <div className="shrink-0 w-[240px] flex items-center gap-2">

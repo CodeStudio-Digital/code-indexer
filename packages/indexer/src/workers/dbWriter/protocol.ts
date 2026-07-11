@@ -40,6 +40,16 @@ export interface PersistAssistantTurnPayload {
     subagent_profile?: string | null;
     logical_operation_id?: string | null;
     productive?: boolean | null;
+    guard_action?: 'allow' | 'reuse' | 'warn' | 'block' | 'shadow' | null;
+    guard_reason?: string | null;
+    would_block?: boolean | null;
+    state_epoch?: number | null;
+    result_novel?: boolean | null;
+    coverage_novel?: boolean | null;
+    delivered?: boolean | null;
+    repeat_policy?: 'stable' | 'volatile' | 'pollable' | 'mutating' | null;
+    execution_class?: 'read' | 'write' | 'execute' | 'control' | null;
+    guard_origin_tool_use_id?: string | null;
   }>;
   /**
    * Nested code_exec invocations. Audit rows ONLY — excluded from the paired

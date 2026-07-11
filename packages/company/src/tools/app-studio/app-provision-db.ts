@@ -50,7 +50,23 @@ export function appProvisionDb(binding: AppToolBinding): CoderTool {
           bindingName: 'DB',
         });
         if (!outcome.ok) {
-          return err(`Local database provisioning failed: ${outcome.error ?? 'unknown error'}`);
+          if (outcome.phase === 'seed') {
+            return err(JSON.stringify({
+              error: 'Local database example-data synchronization failed.',
+              phase: 'seed',
+              schema_ready: outcome.schemaReady ?? false,
+              migrations_applied: outcome.applied,
+              detail: outcome.error ?? 'unknown error',
+              next: 'Call app_get_db_assets, fix the COMPLETE canonical seed with app_save_db_seed, then retry app_provision_db. Do not create another migration for this seed error.',
+            }, null, 2));
+          }
+          return err(JSON.stringify({
+            error: 'Local database migration failed.',
+            phase: outcome.phase ?? 'migration',
+            schema_ready: outcome.schemaReady ?? false,
+            detail: outcome.error ?? 'unknown error',
+            next: 'Inspect app_get_db_assets and the actual schema. Do not create another migration until the failed migration is understood.',
+          }, null, 2));
         }
         const dbStore = getAppStudioDbClientStore();
         const dbFile = findLocalD1File(resolved.path);
@@ -59,7 +75,7 @@ export function appProvisionDb(binding: AppToolBinding): CoderTool {
             ? ensureAppStudioDbConnection(dbStore, session, dbFile)
             : null;
         return ok(
-          `Local database ready — applied ${outcome.applied.length} migration(s): ${outcome.applied.join(', ')}, ` +
+          `Local database ready — ${outcome.applied.length > 0 ? `applied ${outcome.applied.length} pending migration(s): ${outcome.applied.join(', ')}` : 'no pending migrations were required'}, ` +
             'and synchronized seeds/seed.sql without reapplying an unchanged seed. ' +
             (registration
               ? `Registered native database connection '${registration.connection.label}' for db_list/db_schema/db_query/db_command. `
@@ -70,5 +86,6 @@ export function appProvisionDb(binding: AppToolBinding): CoderTool {
         return err(`app_provision_db failed: ${(e as Error).message}`);
       }
     },
+    repeatPolicy: 'volatile',
   };
 }

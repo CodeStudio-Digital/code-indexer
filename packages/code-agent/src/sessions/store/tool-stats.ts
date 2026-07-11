@@ -1,15 +1,38 @@
 import type { Database as DB } from 'better-sqlite3';
+import {
+  GENUINE_ERROR_SQL,
+  PROPAGATED_PARENT_FAILURE_SQL,
+  REUSE_SQL,
+  ROOT_REFUSAL_SQL,
+  SHADOW_CANDIDATE_SQL,
+} from './guard-outcome-sql.js';
 
 export interface ToolCallStats {
   totalCalls: number;
   directCalls: number;
   nestedCalls: number;
+  guardOutcomes: {
+    genuineErrors: number;
+    rootRefusals: number;
+    propagatedParentFailures: number;
+    reusedCalls: number;
+    shadowCandidates: number;
+  };
   /**
-   * `errorCount` = genuine tool failures only; harness refusals (dedup,
-   * failure-streak, timeout, …) are split into `refusedCount` so a guard
-   * doing its job doesn't read as a flaky tool.
+   * `errorCount` = genuine tool failures only; `refusedCount` = root-cause
+   * refusals only. A direct code_exec row that merely propagates its nested
+   * refusal is counted separately in `propagatedFailureCount`.
    */
-  byName: Array<{ name: string; count: number; errorCount: number; refusedCount: number; lastAt: string | null }>;
+  byName: Array<{
+    name: string;
+    count: number;
+    errorCount: number;
+    refusedCount: number;
+    propagatedFailureCount: number;
+    reuseCount: number;
+    shadowCount: number;
+    lastAt: string | null;
+  }>;
   recent: Array<{
     id: number;
     name: string;
@@ -17,6 +40,9 @@ export interface ToolCallStats {
     isError: boolean;
     durationMs: number;
     createdAt: string;
+    outcome: 'success' | 'genuine_error' | 'root_refusal' | 'propagated_parent_failure' | 'reuse' | 'shadow';
+    guardAction: string | null;
+    guardReason: string | null;
   }>;
   savings: {
     totalRawChars: number;
@@ -46,13 +72,19 @@ export interface ToolCallStats {
  * "no data" branch.
  */
 export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): ToolCallStats {
+  // A nested guard refusal produces two audit rows when it escapes code_exec:
+  // the nested root-cause row and the direct parent code_exec result. Keep the
+  // parent visible, but do not count it as a second refusal or genuine error.
   const byNameRows = db
     .prepare(
       `SELECT
           tc.tool_name                  AS name,
           COUNT(*)                      AS count,
-          COALESCE(SUM(CASE WHEN tc.is_error = 1 AND tc.refusal_kind IS NULL THEN 1 ELSE 0 END), 0) AS errorCount,
-          COALESCE(SUM(CASE WHEN tc.refusal_kind IS NOT NULL THEN 1 ELSE 0 END), 0)                 AS refusedCount,
+          COALESCE(SUM(CASE WHEN ${GENUINE_ERROR_SQL} THEN 1 ELSE 0 END), 0) AS errorCount,
+          COALESCE(SUM(CASE WHEN ${ROOT_REFUSAL_SQL} THEN 1 ELSE 0 END), 0) AS refusedCount,
+          COALESCE(SUM(CASE WHEN ${PROPAGATED_PARENT_FAILURE_SQL} THEN 1 ELSE 0 END), 0) AS propagatedFailureCount,
+          COALESCE(SUM(CASE WHEN ${REUSE_SQL} THEN 1 ELSE 0 END), 0) AS reuseCount,
+          COALESCE(SUM(CASE WHEN ${SHADOW_CANDIDATE_SQL} THEN 1 ELSE 0 END), 0) AS shadowCount,
           MAX(tc.created_at)            AS lastAt
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
@@ -60,8 +92,30 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
        GROUP BY tc.tool_name
        ORDER BY count DESC, name ASC`,
     )
-    .all(sessionId) as Array<{ name: string; count: number; errorCount: number; refusedCount: number; lastAt: string | null }>;
+    .all(sessionId) as Array<{
+      name: string;
+      count: number;
+      errorCount: number;
+      refusedCount: number;
+      propagatedFailureCount: number;
+      reuseCount: number;
+      shadowCount: number;
+      lastAt: string | null;
+    }>;
   const totalCalls = byNameRows.reduce((acc, r) => acc + r.count, 0);
+  const guardOutcomes = byNameRows.reduce<ToolCallStats['guardOutcomes']>((totals, row) => ({
+    genuineErrors: totals.genuineErrors + row.errorCount,
+    rootRefusals: totals.rootRefusals + row.refusedCount,
+    propagatedParentFailures: totals.propagatedParentFailures + row.propagatedFailureCount,
+    reusedCalls: totals.reusedCalls + row.reuseCount,
+    shadowCandidates: totals.shadowCandidates + row.shadowCount,
+  }), {
+    genuineErrors: 0,
+    rootRefusals: 0,
+    propagatedParentFailures: 0,
+    reusedCalls: 0,
+    shadowCandidates: 0,
+  });
   const scopeCounts = db.prepare(
     `SELECT
        COALESCE(SUM(CASE WHEN tc.parent_tool_use_id IS NULL THEN 1 ELSE 0 END), 0) AS directCalls,
@@ -79,7 +133,17 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
           tc.args_json   AS args_json,
           tc.is_error    AS isError,
           tc.duration_ms AS durationMs,
-          tc.created_at  AS createdAt
+          tc.created_at  AS createdAt,
+          tc.guard_action AS guardAction,
+          tc.guard_reason AS guardReason,
+          CASE
+            WHEN ${PROPAGATED_PARENT_FAILURE_SQL} THEN 'propagated_parent_failure'
+            WHEN ${ROOT_REFUSAL_SQL} THEN 'root_refusal'
+            WHEN ${GENUINE_ERROR_SQL} THEN 'genuine_error'
+            WHEN ${REUSE_SQL} THEN 'reuse'
+            WHEN ${SHADOW_CANDIDATE_SQL} THEN 'shadow'
+            ELSE 'success'
+          END AS outcome
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
        WHERE m.session_id = ? AND tc.parent_tool_use_id IS NULL
@@ -89,6 +153,8 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
     .all(sessionId, cappedLimit) as Array<{
       id: number; name: string; args_json: string; isError: number;
       durationMs: number; createdAt: string;
+      guardAction: string | null; guardReason: string | null;
+      outcome: ToolCallStats['recent'][number]['outcome'];
     }>;
 
   // Savings aggregation — pairs `output_chars` (raw size from the tool) with
@@ -165,13 +231,26 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
     totalCalls,
     directCalls: scopeCounts.directCalls,
     nestedCalls: scopeCounts.nestedCalls,
-    byName: byNameRows.map((r) => ({ name: r.name, count: r.count, errorCount: r.errorCount, refusedCount: r.refusedCount, lastAt: r.lastAt })),
+    guardOutcomes,
+    byName: byNameRows.map((r) => ({
+      name: r.name,
+      count: r.count,
+      errorCount: r.errorCount,
+      refusedCount: r.refusedCount,
+      propagatedFailureCount: r.propagatedFailureCount,
+      reuseCount: r.reuseCount,
+      shadowCount: r.shadowCount,
+      lastAt: r.lastAt,
+    })),
     recent: recentRows.map((r) => ({
       id: r.id, name: r.name,
       argsPreview: (r.args_json ?? '').slice(0, 200),
       isError: r.isError === 1,
       durationMs: r.durationMs,
       createdAt: r.createdAt,
+      outcome: r.outcome,
+      guardAction: r.guardAction,
+      guardReason: r.guardReason,
     })),
     savings: {
       totalRawChars,

@@ -1,5 +1,6 @@
 import type { Database as DB } from 'better-sqlite3';
 import type {
+  CoderMessageRow,
   CoderSession,
   CoderSessionStats,
 } from '@mcp/code-agent/sessions/types.js';
@@ -11,8 +12,46 @@ import * as plans from './plans.js';
 import * as tasks from './tasks.js';
 import * as goals from './goals.js';
 import * as sessionDrive from './session-drive.js';
+import * as chapters from './chapters.js';
 
 const require = createRequire(import.meta.url);
+
+type RawMessageRow = CoderMessageRow & Record<string, unknown>;
+
+function loadRawMessages(db: DB, sessionId: number): RawMessageRow[] {
+  return db.prepare('SELECT * FROM coder_messages WHERE session_id = ? ORDER BY id')
+    .all(sessionId) as RawMessageRow[];
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+/**
+ * Copy persisted transcript rows and return the exact old->new id mapping used
+ * by append-only chapters. Building the column list from the row keeps newer
+ * message metadata byte-identical too (for example `is_meta`, selected skills
+ * and `created_at`) instead of silently dropping it in session operations.
+ */
+function copyRawMessages(
+  db: DB,
+  targetSessionId: number,
+  rows: readonly RawMessageRow[],
+): Map<number, number> {
+  const idMap = new Map<number, number>();
+  if (rows.length === 0) return idMap;
+
+  const columns = Object.keys(rows[0]).filter((column) => column !== 'id' && column !== 'session_id');
+  const insert = db.prepare(`
+    INSERT INTO coder_messages (session_id, ${columns.map(quoteIdentifier).join(', ')})
+    VALUES (?, ${columns.map(() => '?').join(', ')})
+  `);
+  for (const row of rows) {
+    const result = insert.run(targetSessionId, ...columns.map((column) => row[column]));
+    idMap.set(row.id, Number(result.lastInsertRowid));
+  }
+  return idMap;
+}
 
 /**
  * Aggregate metrics for a single session, computed in one round-trip via a
@@ -167,12 +206,16 @@ export function listMemoryDistillPending(
 export function forkBeforeMessage(
   db: DB, sourceSessionId: number, beforeMessageId: number,
 ): { session: CoderSession; seed_text: string } {
-  const src = messages.loadWithMessages(db, sourceSessionId);
-  if (!src) throw new Error(`source session ${sourceSessionId} not found`);
+  const sourceSession = core.get(db, sourceSessionId);
+  if (!sourceSession) throw new Error(`source session ${sourceSessionId} not found`);
+  // Forking must also work when the target user message is behind the current
+  // summary boundary. The regular session loader intentionally hides that
+  // region, so session operations read the immutable raw transcript directly.
+  const sourceRows = loadRawMessages(db, sourceSessionId);
 
-  const targetIdx = src.message_rows.findIndex((r) => r.id === beforeMessageId);
+  const targetIdx = sourceRows.findIndex((r) => r.id === beforeMessageId);
   if (targetIdx < 0) throw new Error(`message ${beforeMessageId} not in session`);
-  const targetRow = src.message_rows[targetIdx];
+  const targetRow = sourceRows[targetIdx];
   if (targetRow.role !== 'user') {
     throw new Error(`message ${beforeMessageId} is not a user message (role=${targetRow.role})`);
   }
@@ -186,24 +229,30 @@ export function forkBeforeMessage(
 
   const tx = db.transaction(() => {
     const created = core.create(db, {
-      project_id: src.session.project_id,
-      title: `${src.session.title} (fork)`,
-      provider: src.session.provider,
-      model: src.session.model,
+      project_id: sourceSession.project_id,
+      title: `${sourceSession.title} (fork)`,
+      provider: sourceSession.provider,
+      model: sourceSession.model,
     });
-    if (src.session.group_id != null) state.setGroup(db, created.id, src.session.group_id);
-    const copyStmt = db.prepare(`
-      INSERT INTO coder_messages
-        (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (let i = 0; i < targetIdx; i++) {
-      const r = src.message_rows[i];
-      copyStmt.run(
-        created.id, r.role, r.content_json,
-        r.input_tokens ?? 0, r.output_tokens ?? 0,
-        r.cache_read_tokens ?? 0, r.cache_creation_tokens ?? 0,
-      );
+    if (sourceSession.group_id != null) state.setGroup(db, created.id, sourceSession.group_id);
+    const idMap = copyRawMessages(db, created.id, sourceRows.slice(0, targetIdx));
+    // `chapters.copy` only copies chapters whose start AND end ids are mapped.
+    // Therefore a fork inside a chapter keeps the last complete predecessor,
+    // while the partially-covered remainder stays as ordinary visible history.
+    const copiedChapters = chapters.copy(db, sourceSessionId, created.id, idMap);
+    // Feature-flagged/pre-migration compatibility: a durable resume may exist
+    // without chapter rows. Preserve it only when its full boundary is inside
+    // the fork; a fork inside that archived span deliberately exposes raw text.
+    const mappedLegacyBoundary = sourceSession.summary_boundary_id == null
+      ? null
+      : idMap.get(sourceSession.summary_boundary_id) ?? null;
+    if (copiedChapters === 0 && mappedLegacyBoundary != null && sourceSession.compaction_summary) {
+      db.prepare(`
+        UPDATE coder_sessions
+        SET summary_boundary_id = ?, compaction_summary = ?,
+            last_response_id = NULL, last_response_message_count = NULL
+        WHERE id = ?
+      `).run(mappedLegacyBoundary, sourceSession.compaction_summary, created.id);
     }
     return core.get(db, created.id)!;
   });
@@ -242,8 +291,8 @@ export interface RollbackResult {
  *    doesn't skip a region;
  *  - token totals → recomputed from the surviving rows.
  *
- * The summary boundary is intentionally untouched: visible user messages always
- * have id > boundary, so deleting id >= target keeps it valid.
+ * Conversation chapters at/after the target are superseded and the summary
+ * boundary/cache are restored from the latest surviving chapter.
  */
 export function rollbackToMessage(
   db: DB, sessionId: number, messageId: number,
@@ -285,6 +334,10 @@ export function rollbackToMessage(
     // Clear the live todo_write checklist — it's session-scoped (not message-
     // anchored) and would otherwise be re-injected describing deleted work.
     state.setTodos(db, sessionId, null);
+    // Preserve the append-only audit trail: chapters touching the removed
+    // region are superseded, never deleted, and the durable resume rolls back
+    // to the latest chapter wholly before the target message.
+    chapters.rollback(db, sessionId, messageId);
     db.prepare('DELETE FROM coder_messages WHERE session_id = ? AND id >= ?').run(sessionId, messageId);
     // Subqueries below run AFTER the delete, so they see the surviving rows.
     db.prepare(`
@@ -319,36 +372,44 @@ export function rollbackToMessage(
 
 /**
  * Duplicate a session: create a new session with the same provider/model/
- * group, ALL messages copied, AND the Session Drive memory notes copied so the
- * clone keeps the same working memory. Useful for branching experiments
- * without losing the original conversation or its notes.
+ * group, the COMPLETE raw transcript (including archived rows), append-only
+ * chapters and current resume copied, plus Session Drive notes. Useful for
+ * branching experiments without losing the original conversation or context.
  */
 export function duplicate(db: DB, sourceId: number): CoderSession {
-  const src = messages.loadWithMessages(db, sourceId);
-  if (!src) throw new Error(`source session ${sourceId} not found`);
+  const sourceSession = core.get(db, sourceId);
+  if (!sourceSession) throw new Error(`source session ${sourceId} not found`);
+  const sourceRows = loadRawMessages(db, sourceId);
 
   const tx = db.transaction(() => {
     const created = core.create(db, {
-      project_id: src.session.project_id,
-      title: `${src.session.title} (cópia)`,
-      provider: src.session.provider,
-      model: src.session.model,
+      project_id: sourceSession.project_id,
+      title: `${sourceSession.title} (cópia)`,
+      provider: sourceSession.provider,
+      model: sourceSession.model,
     });
-    if (src.session.group_id != null) state.setGroup(db, created.id, src.session.group_id);
+    if (sourceSession.group_id != null) state.setGroup(db, created.id, sourceSession.group_id);
     // Inherit the Drive notes (project-scoped investigations are already shared).
     sessionDrive.copyMemory(db, sourceId, created.id);
-    const copyStmt = db.prepare(`
-      INSERT INTO coder_messages
-        (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const r of src.message_rows) {
-      copyStmt.run(
-        created.id, r.role, r.content_json,
-        r.input_tokens ?? 0, r.output_tokens ?? 0,
-        r.cache_read_tokens ?? 0, r.cache_creation_tokens ?? 0,
-      );
-    }
+    const idMap = copyRawMessages(db, created.id, sourceRows);
+    chapters.copy(db, sourceId, created.id, idMap);
+
+    // Chapters normally restore this cache themselves. Copy the source cache
+    // explicitly as well so feature-flagged/pre-migration sessions that have a
+    // durable resume but no chapter retain exactly the same restart point.
+    const mappedBoundary = sourceSession.summary_boundary_id == null
+      ? null
+      : idMap.get(sourceSession.summary_boundary_id) ?? null;
+    db.prepare(`
+      UPDATE coder_sessions
+      SET summary_boundary_id = ?, compaction_summary = ?,
+          last_response_id = NULL, last_response_message_count = NULL
+      WHERE id = ?
+    `).run(
+      mappedBoundary,
+      mappedBoundary == null ? null : sourceSession.compaction_summary,
+      created.id,
+    );
     return core.get(db, created.id)!;
   });
   return tx();

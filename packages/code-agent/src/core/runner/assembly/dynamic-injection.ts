@@ -70,6 +70,9 @@ export interface DynamicInjectionContext {
   lastInjectedMemoryIds?: ReadonlySet<string>;
   /** Limit on memory items per reminder. Default 3. */
   maxMemoryItems?: number;
+  /** Host-ranked excerpts from immutable chapters in this same conversation. */
+  relevantConversationChapters?: ReadonlyArray<{ id: string; title: string; content: string }>;
+  lastInjectedConversationChapterIds?: ReadonlySet<string>;
   /**
    * True when the session has active (un-kept/un-reverted) file snapshots AND
    * the CODER_SELF_REVIEW toggle is on. Surfaces a one-line `self_review`
@@ -96,6 +99,9 @@ export interface DynamicInjectionContext {
    */
   projectMemoryIndex?: { text: string; hash: string } | null;
   lastInjectedProjectIndexHash?: string | null;
+  /** Session-scoped conversation chapter index (titles only). */
+  conversationChapterIndex?: { text: string; hash: string } | null;
+  lastInjectedConversationChapterIndexHash?: string | null;
   /**
    * Global user-preferences block (migration 145, pre-rendered) — who the user
    * is + how they want the agent to work, applied to EVERY project. Injected on
@@ -137,10 +143,14 @@ export interface DynamicInjectionResult {
   includedFiles: string[];
   /** Memory ids that were included — caller adds to `lastInjectedMemoryIds`. */
   includedMemoryIds: string[];
+  /** Chapter ids included by selective conversation recall. */
+  includedConversationChapterIds: string[];
   /** Hash of the session-state block included — caller stores for dedup. */
   includedSessionStateHash?: string | null;
   /** Hash of the project memory index included — caller stores for dedup. */
   includedProjectIndexHash?: string | null;
+  /** Hash of the conversation chapter index included this turn. */
+  includedConversationChapterIndexHash?: string | null;
   /** Hash of the user-preferences block included — caller stores for dedup. */
   includedUserMemoryHash?: string | null;
   /** Hash of the preflight hint included — caller stores for dedup. */
@@ -152,6 +162,8 @@ export interface DynamicInjectionResult {
 const DEFAULT_MAX_FILES = 6;
 const DEFAULT_MAX_MEMORY = 3;
 const MEMORY_CONTENT_CAP = 300;
+const CONVERSATION_CHAPTER_MAX = 2;
+const CONVERSATION_CHAPTER_CONTENT_CAP = 400;
 
 /**
  * Compute the dynamic injection for the next turn. Returns null when
@@ -191,6 +203,18 @@ export function computeDynamicInjection(
     }
   }
 
+  const lastChapterIds = ctx.lastInjectedConversationChapterIds ?? new Set<string>();
+  const includedConversationChapters: Array<{ id: string; title: string; content: string }> = [];
+  for (const chapter of ctx.relevantConversationChapters ?? []) {
+    if (includedConversationChapters.length >= CONVERSATION_CHAPTER_MAX) break;
+    if (
+      !lastChapterIds.has(chapter.id)
+      && !includedConversationChapters.some((item) => item.id === chapter.id)
+    ) {
+      includedConversationChapters.push(chapter);
+    }
+  }
+
   const recentCompaction = ctx.recentCompactionAt != null && (ctx.turn - ctx.recentCompactionAt) <= 2;
 
   // Session State Block — every turn on short windows; on milestones (turn 1
@@ -205,6 +229,10 @@ export function computeDynamicInjection(
   const showProjectIndex = !!ctx.projectMemoryIndex && (
     driveMilestone ||
     ctx.projectMemoryIndex.hash !== (ctx.lastInjectedProjectIndexHash ?? null)
+  );
+  const showConversationChapterIndex = !!ctx.conversationChapterIndex && (
+    driveMilestone ||
+    ctx.conversationChapterIndex.hash !== (ctx.lastInjectedConversationChapterIndexHash ?? null)
   );
   // User preferences — milestones, or when the block changed. Always-relevant
   // and small, so even minimal windows carry it (budget gated upstream).
@@ -222,8 +250,10 @@ export function computeDynamicInjection(
     includedSkillIds.length === 0 &&
     includedFiles.length === 0 &&
     includedMemory.length === 0 &&
+    includedConversationChapters.length === 0 &&
     !showSessionState &&
     !showProjectIndex &&
+    !showConversationChapterIndex &&
     !showUserMemory &&
     !showPreflight &&
     !recentCompaction &&
@@ -273,11 +303,28 @@ export function computeDynamicInjection(
       .join('\n');
     lines.push(`relevant project memory (retrieved — verify against current code before relying on it):\n${items}`);
   }
+  if (includedConversationChapters.length > 0) {
+    const excerpts = includedConversationChapters
+      .map((chapter) => {
+        const body = chapter.content.length > CONVERSATION_CHAPTER_CONTENT_CAP
+          ? `${chapter.content.slice(0, CONVERSATION_CHAPTER_CONTENT_CAP)}…`
+          : chapter.content;
+        return `- ${chapter.title}: ${body.replace(/\s*\n\s*/g, ' ')}`;
+      })
+      .join('\n');
+    lines.push(
+      'relevant earlier conversation chapters (selective recall; use recall_conversation for full context/source):\n' +
+      excerpts,
+    );
+  }
   if (showUserMemory && ctx.userMemoryIndex) {
     lines.push(ctx.userMemoryIndex.text);
   }
   if (showProjectIndex && ctx.projectMemoryIndex) {
     lines.push(ctx.projectMemoryIndex.text);
+  }
+  if (showConversationChapterIndex && ctx.conversationChapterIndex) {
+    lines.push(ctx.conversationChapterIndex.text);
   }
   if (showSessionState && ctx.sessionState) {
     lines.push(ctx.sessionState.block);
@@ -294,8 +341,12 @@ export function computeDynamicInjection(
     includedSkillIds,
     includedFiles,
     includedMemoryIds: includedMemory.map((m) => m.id),
+    includedConversationChapterIds: includedConversationChapters.map((chapter) => chapter.id),
     includedSessionStateHash: showSessionState ? ctx.sessionState!.hash : null,
     includedProjectIndexHash: showProjectIndex ? ctx.projectMemoryIndex!.hash : null,
+    includedConversationChapterIndexHash: showConversationChapterIndex
+      ? ctx.conversationChapterIndex!.hash
+      : null,
     includedUserMemoryHash: showUserMemory ? ctx.userMemoryIndex!.hash : null,
     includedPreflightHash: showPreflight ? ctx.preflightHint!.hash : null,
     includedCorrectionHint: !!ctx.correctionHint,

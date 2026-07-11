@@ -8,7 +8,9 @@
  *   - installs a bundled plugin only when absent, when the shipped version
  *     changed, or when an older install used a different source (migrates the
  *     legacy `local` demo install to `bundled`);
- *   - NEVER re-enables a plugin the user disabled (a disabled row is left alone);
+ *   - NEVER re-enables a plugin the user disabled. Ordinary version refreshes
+ *     still leave it alone; a required runtime-format migration may refresh
+ *     its files, but restores the disabled flag and prior permissions;
  *   - swallows per-plugin failures (the built-ins remain as the safety net).
  *
  * Must run BEFORE syncPluginProviders so the seeded specs are visible when the
@@ -18,11 +20,68 @@
  */
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installPlugin } from '@mcp/plugin-host';
+import { pluginDir } from '@mcp/plugin-host/paths.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
+
+type RuntimeContributions = {
+  worker?: unknown;
+  providerRuntime?: { entry?: unknown } | null;
+};
+
+function runtimeEntries(contributions: Record<string, unknown> | null): string[] {
+  if (!contributions) return [];
+  const runtime = contributions as RuntimeContributions;
+  const worker = typeof runtime.worker === 'string' ? runtime.worker : null;
+  const providerEntry =
+    runtime.providerRuntime && typeof runtime.providerRuntime.entry === 'string'
+      ? runtime.providerRuntime.entry
+      : runtime.providerRuntime
+        ? (worker ?? './dist/plugin.js')
+        : null;
+  return [...new Set([worker, providerEntry].filter((entry): entry is string => !!entry))];
+}
+
+/** Lowest runtime format across a plugin's executable JS entries. */
+async function bundledRuntimeFormat(
+  rootDir: string,
+  contributions: Record<string, unknown> | null,
+): Promise<number> {
+  const root = resolve(rootDir);
+  const entries = runtimeEntries(contributions);
+  if (entries.length === 0) return 0;
+  let format = Number.POSITIVE_INFINITY;
+
+  for (const entry of entries) {
+    const entryPath = resolve(root, entry);
+    const relativeEntry = relative(root, entryPath);
+    if (
+      relativeEntry === '..' ||
+      relativeEntry.startsWith(`..${sep}`) ||
+      isAbsolute(relativeEntry) ||
+      extname(entryPath).toLowerCase() !== '.js' ||
+      !existsSync(entryPath)
+    ) {
+      return 0;
+    }
+
+    const marker = join(dirname(entryPath), 'package.json');
+    try {
+      const parsed = JSON.parse(await readFile(marker, 'utf8')) as Record<string, unknown>;
+      if (parsed.type !== 'module') return 0;
+      const value = parsed.mcpPluginRuntimeFormat;
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return 0;
+      format = Math.min(format, value);
+    } catch {
+      return 0;
+    }
+  }
+
+  return Number.isFinite(format) ? format : 0;
+}
 
 /** Locate the staged bundled-plugins tree across desktop / cloud / dev layouts. */
 function bundledPluginsRoot(): string | null {
@@ -73,20 +132,52 @@ export async function seedBundledPlugins(): Promise<void> {
       if (!existsSync(join(dir, 'plugin.json'))) continue;
 
       let version = '0.0.0';
+      let stagedContributions: Record<string, unknown> | null = null;
       try {
         version = (JSON.parse(await readFile(join(dir, 'plugin.json'), 'utf8')) as { version?: string }).version ?? '0.0.0';
+        const app = JSON.parse(await readFile(join(dir, '.app.json'), 'utf8')) as unknown;
+        stagedContributions =
+          app && typeof app === 'object' && !Array.isArray(app)
+            ? (app as Record<string, unknown>)
+            : null;
       } catch {
         /* keep default */
       }
 
       const existing = store.get(ns);
-      // Respect a user-disabled plugin: never touch it (no re-enable, no refresh).
-      if (existing && !existing.enabled) continue;
-      const needsInstall = !existing || existing.source !== 'bundled' || existing.version !== version;
+      const stagedFormat = await bundledRuntimeFormat(dir, stagedContributions);
+      const installedFormat =
+        existing?.source === 'bundled'
+          ? await bundledRuntimeFormat(pluginDir(ns), existing.contributions)
+          : 0;
+      // A runtime-format bump is a binary compatibility migration independent
+      // of the plugin's product version (for example: ESM createRequire shim).
+      // Restrict this special same-version refresh to an existing bundled row;
+      // local/market plugins must never be overwritten by the bundled seed.
+      const runtimeUpgrade =
+        existing?.source === 'bundled' &&
+        existing.version === version &&
+        stagedFormat > installedFormat;
+      // Preserve the established rule for ordinary updates: a user-disabled
+      // plugin is left untouched. Runtime compatibility is the sole exception,
+      // and its disabled state is restored immediately after installation.
+      if (existing && !existing.enabled && !runtimeUpgrade) continue;
+      const needsInstall =
+        !existing ||
+        existing.source !== 'bundled' ||
+        existing.version !== version ||
+        runtimeUpgrade;
       if (!needsInstall) continue;
 
       try {
         await installPlugin({ source: { source: 'bundled', path: dir }, overwrite: true });
+        // installPlugin treats a fresh install as enabled. A binary refresh of
+        // an existing bundled plugin must preserve the user's enablement and
+        // permission decisions, including a disabled plugin staying disabled.
+        if (existing) {
+          store.setEnabled(ns, existing.enabled);
+          store.setPermissionsGranted(ns, existing.permissions_granted);
+        }
         changed++;
       } catch (e) {
         console.warn(`[bundled-plugins] seed ${ns} failed: ${e instanceof Error ? e.message : String(e)}`);

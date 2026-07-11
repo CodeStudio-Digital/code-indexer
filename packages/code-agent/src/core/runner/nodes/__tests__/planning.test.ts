@@ -2,10 +2,7 @@
  * Unit tests for PlanningNode.
  *
  * Contract:
- *   - Clears `ctx.dupCalls` so the agent gets a fresh slate — EXCEPT the
- *     signatures that were already refusing (count ≥ DUP_REFUSE_MIN) on a
- *     tuple-hash fire, which are retained for one turn via
- *     `ctx.retainedLoopKeys`.
+ *   - Clears legacy `ctx.dupCalls`; hybrid invocation state is batch-local.
  *   - Pushes a one-shot reflection `<system-reminder>` naming the guard.
  *   - Records the trigger guard in `ctx.transition` for RunResult attribution.
  *   - Yields TurnSucceeded so the orchestrator returns to Executing.
@@ -134,7 +131,7 @@ describe('PlanningNode', () => {
     expect(ctx.messages).toHaveLength(0);
   });
 
-  it('retains refusing signatures (count ≥ 3) for one turn on a tuple-hash fire', async () => {
+  it('does not retain refusing signatures across a tuple-hash planning turn', async () => {
     const { ctx } = makeTestContext();
     ctx.turn = 4;
     ctx.dupCalls.set('grep|{"q":"x"}', { count: 3, firstTurn: 2, lastUseId: 'u3' });
@@ -147,13 +144,7 @@ describe('PlanningNode', () => {
       count: 3,
     });
 
-    // The refusing signature survives the reset; the benign one is cleared.
-    expect(ctx.dupCalls.has('grep|{"q":"x"}')).toBe(true);
-    expect(ctx.dupCalls.has('read|{"f":"a"}')).toBe(false);
-    expect(ctx.retainedLoopKeys).toEqual({
-      keys: ['grep|{"q":"x"}'],
-      expiresAfterTurn: 5,
-    });
+    expect(ctx.dupCalls.size).toBe(0);
   });
 
   it('does a FULL reset (no retention) for non-tuple-hash guards', async () => {
@@ -168,6 +159,5 @@ describe('PlanningNode', () => {
     });
 
     expect(ctx.dupCalls.size).toBe(0);
-    expect(ctx.retainedLoopKeys).toBeNull();
   });
 });

@@ -193,6 +193,20 @@ export async function runBehaviorTree(
       state = nextState(state, event);
       stateEnteredAt = Date.now();
 
+      // A follow-up accepted while the current provider/tool turn was in
+      // flight lives in runner.pendingUserMessages until the NEXT Executing
+      // boundary. CleanFinish used to jump straight to Done here, stranding
+      // that message on the finished runner even though /inject had returned
+      // { injected: true }. Re-enter Executing before terminal cleanup so the
+      // normal top-of-turn flush consumes it. This check and the final `done`
+      // emit below are synchronous in the same event-loop turn: an /inject
+      // arriving after this check observes the bus already ended and the
+      // client safely falls back to a fresh run.
+      if (state === 'Done' && event.kind === 'CleanFinish' && ctx.bridge?.hasPendingMessages?.()) {
+        state = 'Executing';
+        stateEnteredAt = Date.now();
+      }
+
       // Liveness — a CLEAN finish must not end the run while background
       // subagents are still working. Park until a job settles (the bridge
       // injects a completion notice → we resume Executing to react), the user

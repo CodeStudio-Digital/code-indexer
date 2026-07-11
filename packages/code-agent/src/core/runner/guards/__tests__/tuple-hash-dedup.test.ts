@@ -1,171 +1,161 @@
-/**
- * Unit tests for the tuple-hash dedup guard.
- *
- * Contract:
- *   - 1st identical call → allow, count=1, registered in the map.
- *   - 2nd identical call → allow-with-reminder, reminder mentions first turn.
- *   - 3rd+ identical call → refuse with payload citing the count.
- *   - Names alone never bypass the guard; resolved repeat metadata does.
- *   - Different args under the same name → tracked separately.
- *   - resetDupCalls clears state fully.
- */
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import {
   checkDupCall,
+  createInvocationGuardState,
+  dedupPolicyMode,
+  normalizeGuardInput,
   resetDupCalls,
-  type DupVerdict,
 } from '../tuple-hash-dedup.js';
 import type { DupCallEntry } from '../../machine/types.js';
 
-function fresh(): Map<string, DupCallEntry> {
-  return new Map();
+let previousPolicy: string | undefined;
+
+beforeEach(() => {
+  previousPolicy = process.env.CODER_DEDUP_POLICY;
+  delete process.env.CODER_DEDUP_POLICY;
+});
+
+afterEach(() => {
+  if (previousPolicy === undefined) delete process.env.CODER_DEDUP_POLICY;
+  else process.env.CODER_DEDUP_POLICY = previousPolicy;
+});
+
+function call(
+  state: ReturnType<typeof createInvocationGuardState>,
+  over?: Partial<Parameters<typeof checkDupCall>[0]>,
+) {
+  return checkDupCall({
+    name: 'write_file',
+    input: { path: 'a.ts', content: 'x' },
+    repeatPolicy: 'mutating',
+    turn: 1,
+    useId: 'u1',
+    invocationState: state,
+    ...over,
+  });
 }
 
-describe('checkDupCall', () => {
-  it('allows the first call and registers in the table', () => {
-    const dupCalls = fresh();
-    const verdict = checkDupCall({
-      name: 'read_file',
-      input: { path: 'src/foo.ts' },
-      isRepeatable: false,
-      turn: 1,
-      useId: 'u1',
-      dupCalls,
-    });
-    expect(verdict.kind).toBe('allow');
-    expect(verdict.entry.count).toBe(1);
-    expect(dupCalls.size).toBe(1);
+describe('hybrid invocation guard', () => {
+  it('defaults safely to hybrid for missing/invalid values', () => {
+    expect(dedupPolicyMode()).toBe('hybrid');
+    process.env.CODER_DEDUP_POLICY = 'invalid';
+    expect(dedupPolicyMode()).toBe('hybrid');
   });
 
-  it('reminds on the 2nd identical call', () => {
-    const dupCalls = fresh();
-    const base = { name: 'read_file', input: { path: 'src/foo.ts' }, isRepeatable: false, dupCalls };
-    checkDupCall({ ...base, turn: 1, useId: 'u1' });
-    const verdict = checkDupCall({ ...base, turn: 2, useId: 'u2' });
-    expect(verdict.kind).toBe('allow-with-reminder');
-    if (verdict.kind === 'allow-with-reminder') {
-      expect(verdict.entry.count).toBe(2);
-      expect(verdict.reminderText).toMatch(/dedup: 2nd identical call/);
-      expect(verdict.reminderText).toMatch(/1st at turn 1/);
-    }
-  });
-
-  it('refuses on the 3rd identical call', () => {
-    const dupCalls = fresh();
-    const base = { name: 'read_file', input: { path: 'src/foo.ts' }, isRepeatable: false, dupCalls };
-    checkDupCall({ ...base, turn: 1, useId: 'u1' });
-    checkDupCall({ ...base, turn: 2, useId: 'u2' });
-    const verdict = checkDupCall({ ...base, turn: 3, useId: 'u3' });
-    expect(verdict.kind).toBe('refuse');
-    if (verdict.kind === 'refuse') {
-      expect(verdict.entry.count).toBe(3);
-      expect(verdict.refuseText).toMatch(/loop-refused/);
-      expect(verdict.refuseText).toMatch(/call #3/);
-    }
-  });
-
-  it('keeps refusing on subsequent identical calls (idempotent refusal)', () => {
-    const dupCalls = fresh();
-    const base = { name: 'read_file', input: { path: 'src/foo.ts' }, isRepeatable: false, dupCalls };
-    for (let i = 1; i <= 3; i++) checkDupCall({ ...base, turn: i, useId: `u${i}` });
-    const verdict = checkDupCall({ ...base, turn: 4, useId: 'u4' });
-    expect(verdict.kind).toBe('refuse');
-    if (verdict.kind === 'refuse') {
-      expect(verdict.entry.count).toBe(4);
-    }
-  });
-
-  it('treats different args under the same name as separate keys', () => {
-    const dupCalls = fresh();
-    const a = checkDupCall({
+  it('never refuses stable calls based on earlier occurrences', () => {
+    const state = createInvocationGuardState();
+    const verdicts = Array.from({ length: 5 }, (_, i) => call(state, {
       name: 'read_file',
       input: { path: 'a.ts' },
-      isRepeatable: false,
-      turn: 1,
-      useId: 'u1',
-      dupCalls,
-    });
-    const b = checkDupCall({
-      name: 'read_file',
-      input: { path: 'b.ts' },
-      isRepeatable: false,
-      turn: 2,
-      useId: 'u2',
-      dupCalls,
-    });
-    expect(a.kind).toBe('allow');
-    expect(b.kind).toBe('allow');
-    expect(dupCalls.size).toBe(2);
+      repeatPolicy: 'stable',
+      turn: i + 1,
+      useId: `u${i + 1}`,
+    }));
+    expect(verdicts.every((v) => v.action === 'allow')).toBe(true);
+    expect(state.entries.size).toBe(0);
   });
 
-  it('does not infer repeatability from tool names', () => {
-    const dupCalls = fresh();
-    const cases = ['mcp__list_pages', 'wait_for_build', 'task_status', 'poll_artifact'];
-    for (const name of cases) {
-      let verdict: DupVerdict | undefined;
-      for (let i = 0; i < 3; i++) {
-        verdict = checkDupCall({
-          name,
-          input: { x: 1 },
-          isRepeatable: false,
-          turn: i,
-          useId: `u${i}`,
-          dupCalls,
-        });
-      }
-      expect(verdict?.kind, name).toBe('refuse');
-    }
-    expect(dupCalls.size).toBe(cases.length);
+  it.each(['volatile', 'pollable'] as const)('%s calls always execute', (repeatPolicy) => {
+    const state = createInvocationGuardState();
+    const verdicts = Array.from({ length: 5 }, (_, i) => call(state, {
+      name: 'lsp_diagnostics',
+      input: { path: 'a.ts' },
+      repeatPolicy,
+      turn: i + 1,
+      useId: `u${i + 1}`,
+    }));
+    expect(verdicts.every((v) => v.action === 'allow')).toBe(true);
   });
 
-  it('exempts tools whose resolved metadata is repeatable', () => {
-    const dupCalls = fresh();
-    const verdicts: DupVerdict[] = [];
+  it('warns on the second and blocks the third identical mutation at one epoch', () => {
+    const state = createInvocationGuardState();
+    const first = call(state);
+    state.noteStateChange(first.key);
+    const second = call(state, { turn: 2, useId: 'u2' });
+    state.noteStateChange(second.key);
+    const third = call(state, { turn: 3, useId: 'u3' });
+
+    expect(first.action).toBe('allow');
+    expect(second).toMatchObject({ action: 'warn', count: 2 });
+    expect(third).toMatchObject({
+      action: 'block',
+      reason: 'mutating-repeat-blocked',
+      shouldReflect: true,
+      affectsFailureStreak: false,
+      count: 3,
+    });
+  });
+
+  it('a different successful state change invalidates the hazardous repeat count', () => {
+    const state = createInvocationGuardState();
+    const first = call(state);
+    state.noteStateChange(first.key);
+    expect(call(state, { turn: 2, useId: 'u2' }).action).toBe('warn');
+
+    state.noteStateChange('edit_file|{"path":"different.ts"}');
+    expect(call(state, { turn: 3, useId: 'u3' })).toMatchObject({ action: 'allow', count: 1 });
+  });
+
+  it('force_reread bypasses all tuple accounting', () => {
+    const state = createInvocationGuardState();
     for (let i = 0; i < 5; i++) {
-      verdicts.push(
-        checkDupCall({
-          name: 'streaming_query',
-          input: { q: 'same' },
-          isRepeatable: true,
-          turn: i,
-          useId: `u${i}`,
-          dupCalls,
-        }),
-      );
+      expect(call(state, {
+        name: 'read_file',
+        input: { path: 'a.ts', force_reread: true },
+        repeatPolicy: 'stable',
+        useId: `u${i}`,
+      })).toMatchObject({ action: 'allow', reason: 'force-reread' });
     }
-    expect(verdicts.every((v) => v.kind === 'allow')).toBe(true);
-    expect(dupCalls.size).toBe(0);
+    expect(state.entries.size).toBe(0);
   });
 
-  it('treats reordered object keys as the same call (stable args)', () => {
-    const dupCalls = fresh();
-    const v1 = checkDupCall({
-      name: 'read_file',
-      input: { path: 'x.ts', line: 5 },
-      isRepeatable: false,
-      turn: 1,
-      useId: 'u1',
-      dupCalls,
+  it('observe mode records would-block without stopping the third mutation', () => {
+    process.env.CODER_DEDUP_POLICY = 'observe';
+    const state = createInvocationGuardState();
+    const first = call(state);
+    state.noteStateChange(first.key);
+    const second = call(state, { useId: 'u2' });
+    state.noteStateChange(second.key);
+    expect(call(state, { useId: 'u3' })).toMatchObject({
+      action: 'shadow',
+      wouldBlock: true,
+      shouldReflect: false,
+      count: 3,
     });
-    const v2 = checkDupCall({
-      name: 'read_file',
-      input: { line: 5, path: 'x.ts' },
-      isRepeatable: false,
-      turn: 2,
-      useId: 'u2',
-      dupCalls,
-    });
-    expect(v1.kind).toBe('allow');
-    expect(v2.kind).toBe('allow-with-reminder');
   });
 });
 
-describe('resetDupCalls', () => {
-  it('clears all entries', () => {
-    const dupCalls = fresh();
-    checkDupCall({ name: 'x', input: {}, isRepeatable: false, turn: 1, useId: 'u1', dupCalls });
-    checkDupCall({ name: 'y', input: {}, isRepeatable: false, turn: 1, useId: 'u2', dupCalls });
-    expect(dupCalls.size).toBe(2);
+describe('normalization and rollback', () => {
+  it('normalizes aliases and schema defaults before keying', () => {
+    const tool = {
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          encoding: { type: 'string', default: 'utf8' },
+        },
+      },
+    } as Pick<CoderTool, 'parameters'>;
+    expect(normalizeGuardInput(tool, { file_path: 'a.ts' })).toEqual({
+      path: 'a.ts',
+      encoding: 'utf8',
+    });
+  });
+
+  it('legacy mode preserves the old warning/refusal sequence', () => {
+    process.env.CODER_DEDUP_POLICY = 'legacy';
+    const dupCalls = new Map<string, DupCallEntry>();
+    const base = {
+      name: 'read_file',
+      input: { path: 'a.ts' },
+      repeatPolicy: 'stable' as const,
+      dupCalls,
+    };
+    expect(checkDupCall({ ...base, turn: 1, useId: 'u1' }).action).toBe('allow');
+    expect(checkDupCall({ ...base, turn: 2, useId: 'u2' }).action).toBe('warn');
+    expect(checkDupCall({ ...base, turn: 3, useId: 'u3' }).action).toBe('block');
+    expect(dupCalls.size).toBe(1);
     resetDupCalls(dupCalls);
     expect(dupCalls.size).toBe(0);
   });

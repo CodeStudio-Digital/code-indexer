@@ -13,7 +13,9 @@ import { INDEX_TABLES, FEATURE_TABLES } from '../../db-split/manifest.js';
 /** External-content FTS vtabs over CENTRAL base tables — dropped before the base
  *  (DROP on the vtab removes its shadow tables). The KEPT code FTS (files_fts/
  *  symbols_fts/file_contents_fts) are NOT here. */
-export const CENTRAL_FTS_VTABS = ['snapshots_fts', 'doc_chunks_fts'] as const;
+export const CENTRAL_FTS_VTABS = [
+  'snapshots_fts', 'doc_chunks_fts', 'coder_session_chapters_fts',
+] as const;
 
 /**
  * Central tables present in the full schema but never used by a project DB.
@@ -27,7 +29,7 @@ export const CENTRAL_FTS_VTABS = ['snapshots_fts', 'doc_chunks_fts'] as const;
  */
 export const CENTRAL_DROP_TABLES: readonly string[] = [
   // session runtime + telemetry (central per the final scope decision)
-  'coder_sessions', 'coder_messages', 'coder_plans', 'coder_tasks_state', 'coder_tool_calls',
+  'coder_sessions', 'coder_messages', 'coder_session_chapters', 'coder_plans', 'coder_tasks_state', 'coder_tool_calls',
   'coder_turn_telemetry', 'coder_investigations', 'coder_session_inputs', 'coder_session_memory',
   'coder_subagent_runs', 'coder_subagent_tool_calls',
   'coder_phase_profiles', 'coder_session_groups', 'coder_task_runs', 'coder_task_run_items',
@@ -65,6 +67,7 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'installed_plugins', 'plugin_storage', 'verdaccio_configs', 'disabled_tools_global',
   'pending_vector_deletes',
   // guided App Studio lives in the central product DB, never in code-index DBs
+  'app_studio_build_task_evidence', 'app_studio_build_groups', 'app_studio_wireframe_revisions', 'app_studio_ux_revisions',
   'app_studio_pipeline_repairs', 'app_studio_architecture_revisions', 'app_studio_evolutions', 'app_studio_spec_revisions',
   'app_studio_features', 'app_studio_sessions',
   // QA + pipeline global bindings/telemetry (company-scoped)

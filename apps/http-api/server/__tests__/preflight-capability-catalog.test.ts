@@ -10,6 +10,9 @@ import {
   buildPreflightToolCatalog,
   buildPreflightSkillCatalog,
 } from '../preflight-capability-catalog.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const NATIVE = [
   { name: 'read_file', tier: 'bootstrap', description: 'read' },
@@ -79,7 +82,14 @@ describe('buildPreflightSkillCatalog', () => {
       1,
       7,
     );
-    expect(out).toEqual([{ id: 'api-collection', description: 'API client', namespace: 'builtin' }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      id: 'api-collection',
+      name: 'api-collection',
+      description: 'API client',
+      namespace: 'builtin',
+      dependencyMatched: false,
+    });
   });
 
   it('respects CODER_PREFLIGHT_SKILLS_MAX', () => {
@@ -103,5 +113,36 @@ describe('buildPreflightSkillCatalog', () => {
   it('fails open to [] when the store throws', () => {
     const store = { resolveActiveSkills: () => { throw new Error('locked'); } } as unknown as SkillStore;
     expect(buildPreflightSkillCatalog(store, 1, 7)).toEqual([]);
+  });
+
+  it('records package dependency evidence without auto-selecting the skill', () => {
+    const root = mkdtempSync(join(tmpdir(), 'preflight-skill-dep-'));
+    try {
+      writeFileSync(join(root, 'package.json'), JSON.stringify({
+        dependencies: { '@corporate/ui': '3.1.0' },
+      }));
+      const store = {
+        resolveActiveSkills: () => [{
+          id: 'ds-ctx-ui',
+          name: 'Design System: @corporate/ui',
+          description: 'Context for @corporate/ui',
+          source: 'builtin',
+          author: null,
+          triggerPaths: null,
+          triggerRoles: null,
+          triggerTags: null,
+        }],
+        getSkill: () => ({ scope: 'global' }),
+      } as unknown as SkillStore;
+
+      expect(buildPreflightSkillCatalog(store, 1, 7, root)[0]).toMatchObject({
+        id: 'ds-ctx-ui',
+        packageNames: ['@corporate/ui'],
+        dependencyMatched: true,
+        scope: 'global',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

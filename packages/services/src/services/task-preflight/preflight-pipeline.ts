@@ -25,7 +25,12 @@ import {
   type PreflightSeed,
   type PreflightSkillMeta,
   type PreflightToolMeta,
+  type PreflightWorkspaceProject,
 } from './preflight-prompt.js';
+import {
+  preflightCapabilityFingerprint,
+  preparePreflightCatalogs,
+} from './preflight-context.js';
 
 const PIPELINE_NAME = 'code-agent';
 const ROLE = 'preflight';
@@ -53,7 +58,7 @@ export interface TaskPreflightDeps {
   getToolCatalog: () => PreflightToolMeta[];
   getMemoryIndex: (projectId: number) => PreflightMemoryEntry[];
   /** Active skills for the session (id + description + namespace), for task-aware suggestion. */
-  getSkillCatalog?: (sessionId: number, projectId: number) => PreflightSkillMeta[];
+  getSkillCatalog?: (sessionId: number, projectId: number, projectRoot?: string) => PreflightSkillMeta[];
   /**
    * Zero-config fallback model (the general default) used when no
    * `code-agent/preflight` binding is configured. A configured binding always
@@ -67,6 +72,10 @@ export interface TaskPreflightInput {
   sessionId: number;
   projectId?: number | null;
   userMessage: string;
+  /** True for a synthetic union even when it currently has one linked member. */
+  isGlobalWorkspace?: boolean;
+  /** Real project members of the active workspace (one for normal sessions). */
+  workspaceProjects?: PreflightWorkspaceProject[];
   /** Overrides for tests; defaults come from env (settings panel). */
   timeoutMs?: number;
   maxTools?: number;
@@ -80,6 +89,11 @@ function envInt(name: string, fallback: number): number {
 
 export class TaskPreflightService {
   constructor(private readonly deps: TaskPreflightDeps) {}
+
+  /** Cache fingerprint for project membership + the currently eligible capabilities. */
+  getCapabilityFingerprint(input: TaskPreflightInput): string {
+    return preflightCapabilityFingerprint(preparePreflightCatalogs(this.deps, input));
+  }
 
   async run(input: TaskPreflightInput): Promise<PreflightRunResult> {
     const startedAt = performance.now();
@@ -104,11 +118,8 @@ export class TaskPreflightService {
       const problem = bindingProblem(binding, { label: LABEL, codePrefix: 'preflight' });
       if (problem) return done({ status: 'provider_error', ...ids, error: problem.message });
 
-      const toolCatalog = this.deps.getToolCatalog();
-      const memoryIndex = input.projectId != null ? this.deps.getMemoryIndex(input.projectId) : [];
-      const skillCatalog = input.projectId != null && this.deps.getSkillCatalog
-        ? this.deps.getSkillCatalog(input.sessionId, input.projectId)
-        : [];
+      const { toolCatalog, memoryIndex, skillCatalog, workspaceProjects } =
+        preparePreflightCatalogs(this.deps, input);
       const maxTools = input.maxTools ?? envInt('CODER_PREFLIGHT_MAX_TOOLS', DEFAULT_MAX_TOOLS);
       const timeoutMs = input.timeoutMs ?? envInt('CODER_PREFLIGHT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
       const messages = buildPreflightMessages({
@@ -116,6 +127,7 @@ export class TaskPreflightService {
         toolCatalog,
         memoryIndex,
         skillCatalog,
+        workspaceProjects: input.isGlobalWorkspace ? workspaceProjects : undefined,
         maxTools,
         maxMemories: MAX_MEMORIES,
         maxSkills: MAX_SKILLS,
@@ -176,7 +188,13 @@ export class TaskPreflightService {
       const seed = parsePreflightOutput(result.content, {
         toolNames: new Set(toolCatalog.map((t) => t.name)),
         memoryTitles: memoryIndex.map((m) => m.title),
+        memoryEntries: memoryIndex,
         skillIds: new Set(skillCatalog.map((s) => s.id)),
+        skillMetaById: new Map(skillCatalog.map((s) => [s.id, {
+          evidence: s.evidence,
+          projectSlugs: s.projectSlugs,
+        }])),
+        projectSlugs: new Set(input.isGlobalWorkspace ? workspaceProjects.map((p) => p.slug) : []),
         maxTools,
         maxMemories: MAX_MEMORIES,
         maxSkills: MAX_SKILLS,

@@ -103,7 +103,17 @@ beforeEach(() => {
       is_subagent INTEGER NOT NULL DEFAULT 0,
       subagent_profile TEXT,
       logical_operation_id TEXT,
-      productive INTEGER
+      productive INTEGER,
+      guard_action TEXT,
+      guard_reason TEXT,
+      would_block INTEGER,
+      state_epoch INTEGER,
+      result_novel INTEGER,
+      coverage_novel INTEGER,
+      delivered INTEGER,
+      repeat_policy TEXT,
+      execution_class TEXT,
+      guard_origin_tool_use_id TEXT
     );
   `);
   sessionId = mkSession();

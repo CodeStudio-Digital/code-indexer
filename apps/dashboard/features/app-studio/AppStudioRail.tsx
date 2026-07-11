@@ -4,7 +4,7 @@
  * entende primeiro: ver o app e ver a especificação em blocos.
  */
 import { useTranslation } from 'react-i18next';
-import { Boxes, Database, GitBranch, Globe, ListChecks, Monitor, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, Database, GitBranch, Globe, ListChecks, Monitor, Palette, Workflow, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import type { AppStudioSessionDetail } from './app-studio-api.js';
@@ -14,14 +14,16 @@ import { PublishPanel } from './publish/PublishPanel.js';
 import { BlueprintPanel } from './blueprint/BlueprintPanel.js';
 import { VersionsPanel } from './versions/VersionsPanel.js';
 import { ArchitecturePanel } from './architecture/ArchitecturePanel.js';
+import { ExperiencePanel } from './experience/ExperiencePanel.js';
 
-export type AppStudioTab = 'guide' | 'blueprint' | 'versions' | 'architecture' | 'preview' | 'data' | 'publish';
+export type AppStudioTab = 'guide' | 'blueprint' | 'versions' | 'architecture' | 'experience' | 'preview' | 'data' | 'publish';
 
 const TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string; separated?: boolean }> = [
   { id: 'preview', icon: Monitor, labelKey: 'tabs.preview' },
   { id: 'blueprint', icon: Workflow, labelKey: 'tabs.blueprint' },
   { id: 'versions', icon: GitBranch, labelKey: 'tabs.versions' },
   { id: 'architecture', icon: Boxes, labelKey: 'tabs.architecture' },
+  { id: 'experience', icon: Palette, labelKey: 'tabs.experience' },
   { id: 'guide', icon: ListChecks, labelKey: 'tabs.guide', separated: true },
   { id: 'data', icon: Database, labelKey: 'tabs.data' },
   { id: 'publish', icon: Globe, labelKey: 'tabs.publish' },
@@ -48,6 +50,7 @@ export function AppStudioRail({
         const disabled =
           (id === 'data' && !dataTabUnlocked(detail)) ||
           ((id === 'blueprint' || id === 'versions' || id === 'architecture') && !detail?.spec);
+        const experienceLocked = id === 'experience' && !detail?.pipeline?.stages.find((stage) => stage.id === 'database' && (stage.status === 'approved' || stage.status === 'skipped'));
         const label =
           disabled && id === 'data' ? t('data.locked')
           : disabled && id === 'blueprint' ? t('blueprint.locked')
@@ -60,7 +63,7 @@ export function AppStudioRail({
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  disabled={disabled}
+                  disabled={disabled || experienceLocked}
                   onClick={() => onSelect(id)}
                   aria-label={label}
                   aria-current={isActive ? 'page' : undefined}
@@ -69,7 +72,7 @@ export function AppStudioRail({
                     isActive
                       ? 'bg-accent text-accent-foreground shadow-sm'
                       : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                    disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
+                    (disabled || experienceLocked) && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -97,6 +100,9 @@ export function AppStudioTabContent({
   onOpenSpecAgent,
   onOpenDbAgent,
   onOpenArchitectureAgent,
+  onOpenExecutionAgent,
+  onOpenUxAgent,
+  onOpenWireframeAgent,
 }: {
   tab: Exclude<AppStudioTab, 'preview'>;
   detail: AppStudioSessionDetail;
@@ -106,6 +112,9 @@ export function AppStudioTabContent({
   onOpenSpecAgent?: (prompt: string) => void;
   onOpenDbAgent?: (prompt: string) => void;
   onOpenArchitectureAgent?: (prompt: string) => void;
+  onOpenExecutionAgent?: (kind: 'design' | 'backend' | 'review', prompt: string) => void;
+  onOpenUxAgent?: (prompt: string) => void;
+  onOpenWireframeAgent?: (prompt: string) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
@@ -119,11 +128,15 @@ export function AppStudioTabContent({
             onOpenSpecAgent={onOpenSpecAgent}
             onOpenDbAgent={onOpenDbAgent}
             onOpenArchitectureAgent={onOpenArchitectureAgent}
+            onOpenExecutionAgent={onOpenExecutionAgent}
+            onOpenUxAgent={onOpenUxAgent}
+            onOpenWireframeAgent={onOpenWireframeAgent}
           />
         )}
         {tab === 'blueprint' && <BlueprintPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
         {tab === 'versions' && <VersionsPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
         {tab === 'architecture' && <ArchitecturePanel detail={detail} onChanged={onChanged} onOpenAgent={onOpenArchitectureAgent} />}
+        {tab === 'experience' && <ExperiencePanel detail={detail} onChanged={onChanged} onOpenUxAgent={onOpenUxAgent} onOpenWireframeAgent={onOpenWireframeAgent} />}
         {tab === 'data' && <DataPanel detail={detail} onChanged={onChanged} onOpenDbAgent={onOpenDbAgent} />}
         {tab === 'publish' && <PublishPanel detail={detail} onChanged={onChanged} />}
       </div>

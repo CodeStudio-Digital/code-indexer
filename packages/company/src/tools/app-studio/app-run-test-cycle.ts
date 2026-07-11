@@ -2,7 +2,12 @@ import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import { recordTddCycle } from '@mcp/app-studio/architecture/tdd-cycles.js';
+import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
+import { parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
+import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
 import { filesContaining, readIfExists, runWorkspaceScript, summarizeOutput } from '@mcp/app-studio/pipeline/gate-checks.js';
+import type { AppToolBinding } from './binding.js';
+import { getAppStudioStore } from './store-binding.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -14,9 +19,9 @@ const PARAMETERS: JsonSchema = {
   required: ['case_ids', 'phase', 'script'],
 };
 
-export const appRunTestCycle: CoderTool = {
+export function appRunTestCycle(binding: AppToolBinding): CoderTool { return {
   name: 'app_run_test_cycle',
-  description: 'Run and record a deterministic TDD red/green cycle for architecture test case ids. Red succeeds only when tests fail; green succeeds only when tests pass.',
+  description: 'Run and record a deterministic TDD red/green cycle for cases owned by the current architecture or approved wireframe. Red succeeds only when tests fail; green succeeds only when tests pass.',
   parameters: PARAMETERS,
   source: 'native',
   handler: async (args, ctx) => {
@@ -24,6 +29,21 @@ export const appRunTestCycle: CoderTool = {
     const phase = args.phase === 'red' || args.phase === 'green' ? args.phase : null;
     const script = args.script === 'test:worker' || args.script === 'test:e2e' ? args.script : null;
     if (caseIds.length === 0 || !phase || !script) return err('case_ids, phase and script are required.');
+    const store = getAppStudioStore();
+    if (!store) return err('AppStudioStore not wired.');
+    const session = binding.resolveAppSession(store);
+    if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}.`);
+    const state = parsePipelineState(session.pipeline_json);
+    const stage = state ? currentStage(state) : null;
+    if (!stage) return err('The app pipeline is complete, missing, or invalid.');
+    const architecture = parseAppArchitecturePlan(store.getLatestApprovedArchitectureRevision(session.id)?.architecture_json);
+    const architectureCases = (architecture?.tdd.cases ?? []).filter((item) => item.owner_stage === stage.id);
+    const wireframe = parseAppWireframePlan(store.getLatestApprovedWireframeRevision(session.id)?.wireframe_json);
+    const allowedCases = stage.id === 'design' ? (wireframe?.tdd_cases ?? []) : architectureCases;
+    const allowed = new Set(allowedCases.map((item) => item.id));
+    const unknown = caseIds.filter((id) => !allowed.has(id));
+    if (unknown.length > 0) return err(`TDD cases are not owned by the current '${stage.id}' stage: ${unknown.join(', ')}.`);
+    if (stage.id === 'design' && script !== 'test:e2e') return err('Wireframe TDD cases must run with test:e2e.');
     const resolved = resolveHostPath('.', ctx);
     if (resolved.kind === 'no-bind-mount') return err(resolved.message);
     const testFiles = filesContaining(`${resolved.path}/tests`, /\.(ts|tsx)$/, /./);
@@ -39,7 +59,7 @@ export const appRunTestCycle: CoderTool = {
           : `TDD green phase failed. Fix the implementation and rerun.\n${summarizeOutput(result.output)}`,
       );
     }
-    const state = recordTddCycle(resolved.path, { caseIds, script, phase, output: result.output });
-    return ok(JSON.stringify({ phase, script, case_ids: caseIds, recorded: caseIds.map((id) => state.cycles[id]) }, null, 2));
+    const cycleState = recordTddCycle(resolved.path, { caseIds, script, phase, output: result.output });
+    return ok(JSON.stringify({ phase, script, case_ids: caseIds, recorded: caseIds.map((id) => cycleState.cycles[id]) }, null, 2));
   },
-};
+}; }

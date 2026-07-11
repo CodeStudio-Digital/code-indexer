@@ -10,8 +10,8 @@
  *   H1 — JSON corrupted in argsAcc (parse fails → `_raw` fallback).
  *   H2 — content "" / whitespace-only sent with tool_calls (Kimi rejects).
  *   H3 — tool_call_args emitted before tool_call_start (ordering).
- *   H4 — runner doom-loop guards mask root cause (covered by
- *        CODER_DOOM_LOOP_DEBUG in runner.ts).
+ *   H4 — runner doom-loop guards mask root cause (covered by structured
+ *        tool_loop_intervention events and their snapshots).
  *   H5 — model loops independently of our parsing (input arrives intact).
  *
  * Output format: one JSON line per event on stderr prefixed `[kimi-debug]`.

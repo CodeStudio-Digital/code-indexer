@@ -217,4 +217,45 @@ describe('AppStudioStore', () => {
     expect(undone.repair.undone_at).toBeTruthy();
     expect(h.store.getSession(s.id)?.pipeline_json).toBe(before);
   });
+
+  it('versions UX and wireframes and keeps build evidence scoped to the approved revision', () => {
+    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
+    const uxDraft = h.store.saveUxRevision({
+      app_session_id: s.id,
+      spec_revision_id: 10,
+      architecture_revision_id: 20,
+      data_fingerprint: 'data-v1',
+      ux_json: '{"v":1,"summary":"draft"}',
+    });
+    const uxRefined = h.store.saveUxRevision({
+      app_session_id: s.id,
+      spec_revision_id: 10,
+      architecture_revision_id: 20,
+      data_fingerprint: 'data-v1',
+      ux_json: '{"v":1,"summary":"refined"}',
+    });
+    expect(uxRefined.id).toBe(uxDraft.id);
+    expect(h.store.approveUxRevision(s.id, uxRefined.id).status).toBe('approved');
+
+    const wireframe = h.store.saveWireframeRevision({
+      app_session_id: s.id,
+      spec_revision_id: 10,
+      architecture_revision_id: 20,
+      ux_revision_id: uxRefined.id,
+      data_fingerprint: 'data-v1',
+      wireframe_json: '{"v":1,"summary":"flows"}',
+    });
+    h.store.approveWireframeRevision(s.id, wireframe.id, ['core', 'reports'], ['core-red', 'core-preview', 'reports-red']);
+    expect(h.store.listBuildGroups(wireframe.id).map((group) => group.group_id)).toEqual(['core', 'reports']);
+    expect(h.store.listBuildTaskEvidence(wireframe.id)).toHaveLength(3);
+
+    h.store.setBuildTaskEvidence({ appSessionId: s.id, wireframeRevisionId: wireframe.id, taskId: 'core-red', status: 'done', summary: 'red recorded', evidenceJson: '{"command":"test"}' });
+    h.store.submitBuildGroup(s.id, wireframe.id, 'core', 'core ready');
+    h.store.approveBuildGroup(s.id, wireframe.id, 'core');
+    expect(h.store.listBuildGroups(wireframe.id).find((group) => group.group_id === 'core')?.status).toBe('approved');
+
+    h.store.reopenBuildGroup(s.id, wireframe.id, ['core', 'reports'], ['core-red', 'core-preview', 'reports-red'], 'change navigation');
+    expect(h.store.listBuildGroups(wireframe.id).every((group) => group.status === 'pending')).toBe(true);
+    expect(h.store.listBuildTaskEvidence(wireframe.id).every((task) => task.status === 'pending' && task.evidence_json == null)).toBe(true);
+  });
 });

@@ -100,7 +100,7 @@ export interface CoderSession {
    * select reflects the actual session state on reload (hydrated on session
    * load) and live transitions (plan→build) via `coder:session_agent_changed`.
    */
-  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'builder' | 'api' | 'diagram' | null;
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'builder' | 'api' | 'diagram' | null;
   /** Durable compaction summary (mig 128). Rendered as a card above the chat
    *  when set; the older messages it covers are hidden behind the boundary. */
   compaction_summary?: string | null;
@@ -235,6 +235,72 @@ export interface MessagePage {
   messages: PersistedMessage[];
   message_rows: MessageRow[];
   tool_results?: ToolResultFallback[];
+}
+
+export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild';
+
+export interface ConversationChapterFile {
+  path: string;
+  state: string;
+}
+
+export interface ConversationChapterContent {
+  title?: string;
+  summary?: string;
+  user_requests?: string[];
+  decisions?: string[];
+  work_completed?: string[];
+  files?: ConversationChapterFile[];
+  open_issues?: string[];
+  resolved_issues?: string[];
+}
+
+export interface ConversationResumeContent {
+  objective?: string;
+  current_focus?: string;
+  constraints?: string[];
+  pending_tasks?: string[];
+  next_step?: string;
+  active_goal?: string;
+}
+
+/** Append-only chapter row returned by the conversation chapter API. */
+export interface ConversationChapter {
+  id: number;
+  session_id: number;
+  ordinal: number;
+  start_message_id: number;
+  end_message_id: number;
+  source: ConversationChapterSource;
+  trigger: string | null;
+  title: string;
+  chapter_json?: string | ConversationChapterContent | null;
+  chapter_text?: string | null;
+  resume_json?: string | ConversationResumeContent | null;
+  resume_text?: string | null;
+  version: number;
+  metrics_json?: string | Record<string, unknown> | null;
+  created_at: string;
+  superseded_at?: string | null;
+}
+
+export interface ConversationChapterPage {
+  items: ConversationChapter[];
+  next_cursor: string | null;
+}
+
+/** Original transcript row returned for a chapter range. */
+export interface ConversationChapterSourceMessage {
+  id: number;
+  role: 'user' | 'assistant' | 'tool';
+  content?: ContentBlock[] | string;
+  content_json?: string;
+  created_at?: string;
+}
+
+export interface ConversationChapterSourcePage {
+  items: ConversationChapterSourceMessage[];
+  next_cursor: string | null;
 }
 
 export interface EnrichedProviderModel {

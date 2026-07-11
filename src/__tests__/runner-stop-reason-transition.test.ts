@@ -144,7 +144,7 @@ describe('PR-4 StopReason — typed exports', () => {
       'doom-loop-strict',
       'doom-loop-fuzzy',
       'dup-call-cap',
-      'result-dup-cap',
+      'polling-stuck',
       'stop-guard-nudge',
     ];
     expect(kinds).toHaveLength(11);

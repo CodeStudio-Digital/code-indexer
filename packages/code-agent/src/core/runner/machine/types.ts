@@ -17,6 +17,7 @@ import type { RunnerOptions, StopReason, TransitionKind } from '../types.js';
 import type { RunnerEvents } from '../events.js';
 import type { RecoveryKind } from '../recovery-config.js';
 import type { AsyncOperationRegistry } from '../operations.js';
+import type { NoProgressTracker } from '../guards/no-progress.js';
 
 export type NodeState =
   | 'Bootstrap'
@@ -103,31 +104,10 @@ export interface RunContext {
    * over.
    */
   recovery: Map<RecoveryKind, number>;
-  /** Tuple-hash dedup table. Key = `${name}|${stableArgsKey(input)}`. */
+  /** Legacy rollback-only tuple table (`CODER_DEDUP_POLICY=legacy`). */
   dupCalls: Map<string, DupCallEntry>;
-  /**
-   * Cross-cycle loop-refusal counter. Key = same as `dupCalls`
-   * (`${name}|${stableArgsKey(input)}`), value = how many times this exact
-   * call has been HARD-refused by the tuple-hash guard across the whole run.
-   *
-   * Unlike `dupCalls`, this is NEVER cleared by `resetDupCalls` (the Planning
-   * reset). That's the point: it remembers that a refused call keeps coming
-   * back after each clean slate, so the Executing node can escalate from a
-   * passive text refusal to an ACTIVE enforcement <system-reminder> (tool
-   * list + "break out of the loop"). Without this, an insistent loop
-   * (refuse → planning resets → retry → refuse → …) never escalates.
-   */
-  loopRefusals: Map<string, number>;
-  /**
-   * A1 — offending dedup signatures retained across the Planning clean-slate
-   * reset. `resetDupCalls` wipes the whole table so legit re-verify workflows
-   * (re-running `npm test` after a fix) aren't permanently blocked — but a
-   * FULL wipe also lets the exact call that tripped the guard execute 2 more
-   * times before refusing again. Planning re-inserts the refused (count ≥
-   * `DUP_REFUSE_MIN`) entries and records them here; Executing drops them
-   * once `turn > expiresAfterTurn` (1-turn block, then true clean slate).
-   */
-  retainedLoopKeys: { keys: string[]; expiresAfterTurn: number } | null;
+  /** Cross-turn post-result observation + monotonic workspace state epoch. */
+  noProgressTracker: NoProgressTracker;
   autoContinues: number;
   /**
    * Consecutive pre-emit compaction routings since the last turn that
@@ -289,6 +269,8 @@ export interface RunContext {
     lastInjectedSessionStateHash: string | null;
     /** Hash of the last injected project memory index — re-inject on change. */
     lastInjectedProjectIndexHash: string | null;
+    /** Hash of the last injected conversation chapter index. */
+    lastInjectedConversationChapterIndexHash: string | null;
     /** Hash of the last injected user-preferences block — re-inject on change. */
     lastInjectedUserMemoryHash: string | null;
     /** Hash of the last injected `<preflight>` hint — re-inject on milestones only. */
@@ -313,11 +295,15 @@ export interface RunContext {
      * synchronous dynamic injector can include it. Reset each turn.
      */
     pendingMemory?: ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>;
+    /** At most two 400-char excerpts from older chapters for the new task. */
+    pendingConversationChapters?: ReadonlyArray<{ id: string; title: string; content: string }>;
     /** Throttle key for proactive recall: the STABLE pre-synthesis task text
      *  (raw message, or the walk-back for a meta/continuation message) — NOT
      *  the LLM-synthesized query, which is non-deterministic and would defeat
      *  the throttle. */
     lastMemoryQuery?: string;
+    lastConversationChapterQuery?: string;
+    lastInjectedConversationChapterIds: Set<string>;
     /**
      * Correction-nudge throttle (assembly/correction-nudge.ts): at most once
      * per distinct user message (hash) and `count` ≤ 3 per RUN. RunContext
@@ -545,6 +531,18 @@ export interface BridgeCallbacks {
    */
   getProjectMemoryIndex?: () => ReadonlyArray<{ title: string; category: string }> | null;
   /**
+   * Session-scoped conversation chapter index. Only recent titles are injected;
+   * full summaries/source remain available through recall_conversation.
+   */
+  getConversationChapterIndex?: () => {
+    total: number;
+    entries: ReadonlyArray<{ id: number; ordinal: number; title: string; source?: string }>;
+  } | null;
+  getRelevantConversationChapters?: (
+    taskText: string,
+    turn: number,
+  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  /**
    * Global user-preferences index (migration 145) — top-N user/feedback
    * memories (title + excerpt) injected into EVERY project. NOT gated by the
    * project's memory toggle. Unset = off.
@@ -560,6 +558,18 @@ export interface BridgeCallbacks {
    * Implemented in `runner.ts:runViaBehaviorTree`; no-op when unset.
    */
   flushPendingMessages?: () => void;
+  /**
+   * True when `pushUserMessage` accepted a message that has not reached the
+   * live history yet. The orchestrator checks this synchronously before
+   * committing a `CleanFinish` transition to `Done`; if work is pending it
+   * re-enters `Executing`, whose first action is `flushPendingMessages`.
+   *
+   * Keeping the check beside the terminal transition closes the last-turn
+   * race: a message injected while the provider/tool turn is in flight must
+   * either produce another turn or arrive after the runner emitted `done`
+   * (when the HTTP layer falls back to a fresh run).
+   */
+  hasPendingMessages?: () => boolean;
   /**
    * Inject a steering `<system-reminder>` as a user message that lands at
    * the START of the next turn (wraps `runner.pushUserMessage`). Used by the
@@ -580,6 +590,8 @@ export interface BridgeCallbacks {
    */
   persistTurnTelemetry?: (input: {
     turn: number;
+    /** Auto-continue batches consumed by this run at the time of the turn. */
+    autoContinues: number;
     usage: import('@mcp/code-agent/core/messages.js').ChatUsage | null;
     toolUseBlocks: ReadonlyArray<import('@mcp/code-agent/core/messages.js').ToolUseBlock>;
     toolResultBlocks: ReadonlyArray<import('@mcp/code-agent/core/messages.js').ContentBlock>;

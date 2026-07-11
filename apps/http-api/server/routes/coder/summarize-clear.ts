@@ -3,8 +3,8 @@
  *
  * Persistent counterpart to the in-memory auto-compaction. It summarizes the
  * currently-visible transcript with the SAME summarizer the runner uses
- * (`summarizeSpanV2` → `renderSummaryV2`), driven by the session's own
- * provider/model, then commits a durable boundary (`setCompactionBoundary`):
+ * (`summarizeSpanV3`), driven by the optional code-agent/compaction binding
+ * (or the session provider), then atomically appends a chapter + boundary:
  * the summary is stored on the session and prepended on load, while the old
  * rows drop out of the default view (still in the DB, reopenable via "view
  * earlier history"). Same mechanism the automatic durable compaction uses.
@@ -15,7 +15,12 @@
  */
 import type { Hono } from 'hono';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
-import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
+import {
+  renderChapterV3,
+  renderResumeV3,
+  summarizeSpanV3,
+  summaryV3ToV2,
+} from '@mcp/code-agent/core/summarizer.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
@@ -65,7 +70,14 @@ export function mountCoderSummarizeClearRoute(
 
       let provider;
       try {
-        provider = await createCoderProvider(session.provider, session.model);
+        const binding = await deps.pipelineProviderResolver.resolveOrNull(
+          'code-agent',
+          'compaction',
+          { sessionId: id },
+        );
+        provider = binding
+          ? await createCoderProvider(binding.provider.id, binding.modelId)
+          : await createCoderProvider(session.provider, session.model);
       } catch (e) {
         return c.json(
           {
@@ -78,7 +90,26 @@ export function mountCoderSummarizeClearRoute(
 
       let summary;
       try {
-        summary = await summarizeSpanV2(data.messages, provider);
+        let liveState = null;
+        try {
+          const state = sessionStore.getSessionStateData(id);
+          liveState = state ? {
+            goal: state.goal,
+            activePlan: state.activePlan,
+            todos: state.todos.map((todo) => ({
+              content: todo.label,
+              activeForm: todo.label,
+              status: todo.status,
+            })),
+          } : null;
+        } catch {
+          liveState = null;
+        }
+        summary = await summarizeSpanV3({
+          previousResume: data.session.compaction_summary,
+          messages: data.messages,
+          liveState,
+        }, provider);
       } catch (e) {
         return c.json(
           { error: `summarization failed: ${e instanceof Error ? e.message : String(e)}` },
@@ -93,18 +124,35 @@ export function mountCoderSummarizeClearRoute(
         );
       }
 
-      // Anchor the summary to the live plan when the LLM didn't surface a goal.
-      try {
-        const plan = sessionStore.getDriveInjectionPayload(id)?.activePlan;
-        if (plan?.text && !summary.active_goal) summary.active_goal = plan.text;
-      } catch {
-        /* best-effort */
-      }
-
       // Full clear: hide the whole visible transcript, store the summary as the
       // prepended head. boundary = current MAX(id) → no verbatim tail remains.
-      const boundaryId = sessionStore.maxMessageId(id);
-      const result = sessionStore.setCompactionBoundary(id, renderSummaryV2(summary), boundaryId, 'manual');
+      const firstRow = data.message_rows[0]!;
+      const lastRow = data.message_rows[data.message_rows.length - 1]!;
+      const boundaryId = lastRow.id;
+      const result = process.env.CODER_CONVERSATION_CHAPTERS === '0'
+        ? sessionStore.setCompactionBoundary(id, renderResumeV3(summary), boundaryId, 'manual')
+        : sessionStore.commitConversationChapter({
+            sessionId: id,
+            expectedBoundaryId: data.session.summary_boundary_id ?? 0,
+            startMessageId: firstRow.id,
+            endMessageId: boundaryId,
+            source: 'manual',
+            trigger: 'manual_clear',
+            title: summary.chapter.title || 'Manual conversation summary',
+            chapterJson: JSON.stringify(summary.chapter),
+            chapterText: renderChapterV3(summary),
+            resumeJson: JSON.stringify(summary.resume),
+            resumeText: renderResumeV3(summary),
+            version: summary.version,
+            metricsJson: summary.metrics ? JSON.stringify(summary.metrics) : null,
+          });
+      if ('status' in result && result.status === 'noop') {
+        const reason = 'reason' in result ? String(result.reason) : 'boundary_changed';
+        return c.json(
+          { error: `conversation boundary changed (${reason})`, code: 'boundary_changed' },
+          409,
+        );
+      }
 
       // Memory harvest — distill durable project memory from the summary we
       // JUST paid for (same pipeline as the automatic compaction harvest).
@@ -120,7 +168,7 @@ export function mountCoderSummarizeClearRoute(
           projectId: session.project_id,
           projectName: deps.db.getProject(session.project_id)?.name ?? '',
           sessionId: id,
-          summary,
+          summary: summaryV3ToV2(summary),
           boundaryId,
           trigger: 'manual_clear',
         });
@@ -130,7 +178,12 @@ export function mountCoderSummarizeClearRoute(
       // fresh, boundary-aware runner that loads only the summary onward.
       activeRuns.delete(id);
 
-      return c.json({ ok: true, ...result });
+      return c.json({
+        ok: true,
+        boundary_id: result.boundary_id,
+        pruned_count: result.pruned_count,
+        ...('chapter' in result ? { chapter: result.chapter } : {}),
+      });
     });
   });
 }

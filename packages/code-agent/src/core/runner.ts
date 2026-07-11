@@ -103,12 +103,13 @@ import {
 // file under 250 LOC ceiling). Re-exported below so external consumers
 // (`from './runner.js'`) keep their import paths unchanged.
 import type {
+  CompactionCheckpoint,
   RunResult,
   RunnerOptions,
   StopReason,
   TransitionKind,
 } from './runner/types.js';
-export type { RunResult, RunnerOptions, StopReason, TransitionKind };
+export type { CompactionCheckpoint, RunResult, RunnerOptions, StopReason, TransitionKind };
 
 // (RunnerOptions body moved to './runner/types.ts'.)
 
@@ -150,15 +151,12 @@ const SUBAGENT_PUSH_TIME_CAP = positiveEnvNumber('CODER_SUBAGENT_PUSH_TIME_CAP',
  * arrive intact in the turn that produced them.
  */
 // (Tunable constants — UNRESTRICTED_PUSH_TIME_CAP / UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP /
-// TURN_BUDGET_CHARS / DOOM_LOOP_FUZZY_THRESHOLD / DEBUG_DOOM_LOOP / DUP_CALL_* /
-// REPEATABLE_NAME_PATTERN / RESULT_DUP_* / REPEATABLE_*_CAP / POLLING_STUCK_* /
-// DUP_CALL_REMINDER_THRESHOLD / SUMMARIZER_* / RESULT_DUP_LARGE_THRESHOLD /
-// RESULT_DUP_HEAD_CHARS / canRunSummarizer — all moved to './runner/constants.ts'.)
+// TURN_BUDGET_CHARS / DOOM_LOOP_FUZZY_THRESHOLD /
+// POLLING_STUCK_* / SUMMARIZER_* / canRunSummarizer — moved to
+// './runner/constants.ts'.)
 // Post-legacy-removal: only constants actively consumed by the BT
-// bridge / `buildToolResultBlock` / re-exports survive. The dup-call,
-// dup-result, REPEATABLE_*, DOOM_LOOP_FUZZY_THRESHOLD, DEBUG_DOOM_LOOP,
-// TURN_BUDGET_CHARS, RESULT_DUP_* knobs were exclusive to the legacy
-// while-loop's inline guards and have no remaining caller in this file.
+// bridge / `buildToolResultBlock` / re-exports survive. Legacy global
+// duplicate-call/result knobs were removed with their unused consumers.
 import {
   UNRESTRICTED_PUSH_TIME_CAP,
   UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP,
@@ -201,23 +199,12 @@ import { runBehaviorTree } from './runner/orchestrator.js';
 // selection observer) and exposed to the BT via `BridgeCallbacks`.
 import { persistTurnTelemetry as persistTurnTelemetryPure } from './runner/telemetry/persist-turn.js';
 import { checkTaskModeGate } from './runner/guards/task-mode-gate.js';
+import { dedupPolicyMode } from './runner/guards/tuple-hash-dedup.js';
 
-// (RESULT_DUP_ESCALATION_*, REPEATABLE_*, POLLING_STUCK_*, DUP_CALL_REMINDER_*,
-// SUMMARIZER_*, RESULT_DUP_LARGE_THRESHOLD, RESULT_DUP_HEAD_CHARS, canRunSummarizer —
-// all moved to './runner/constants.ts'. Doc-blocks live alongside them in that file.)
-
-// (Dup-result / polling marker builders moved to './runner/markers.ts'.
-// Re-exported below so external imports `from './runner.js'` keep working.)
-import {
-  buildDupLightMarker,
-  buildDupWarnMarker,
-  buildDupCallReminderMarker,
-  buildPollingSoftCapMarker,
-  buildPollingStuckRefusal,
-  buildDupMediumMarker,
-  ordinal,
-} from './runner/markers.js';
-export { buildDupLightMarker, buildDupWarnMarker, buildDupCallReminderMarker, buildPollingSoftCapMarker, buildPollingStuckRefusal, ordinal };
+// Result-dedup markers and polling call-count caps belonged only to the removed
+// legacy loop. The active BT retains result-aware polling-stuck detection.
+import { buildPollingStuckRefusal } from './runner/markers.js';
+export { buildPollingStuckRefusal };
 
 // (previewToolArgs / stableArgsKey / readDupThreshold / readDupWindow /
 // readAutoDowngradeEnabled moved to './runner/dup-utils.ts'.)
@@ -939,7 +926,7 @@ export class CoderRunner extends EventEmitter {
    */
   public readonly runId: string = randomUUID();
   /** PR-6: exposed so subagent factories can propagate the v2 flag onto
-   *  spawned subagents (pre-read cap, result-dup, exp+jitter, framing). */
+   *  spawned subagents (read coverage, recovery, and framing). */
   public get agentLoopV2(): boolean { return this.opts.agentLoopV2 === true; }
 
   /** Public mirrors of opts.sessionId / opts.isSubagent so subagent factories can inherit them. */
@@ -1270,6 +1257,13 @@ export class CoderRunner extends EventEmitter {
     // already replay the previous response.
     this.previousResponseId = opts.previousResponseId ?? null;
     this.previousResponseMessageCount = opts.previousResponseMessageCount ?? null;
+  }
+
+  /** Install the DB-backed compaction sink after the host writer is ready. */
+  setCompactionCheckpointHandler(
+    handler: ((checkpoint: CompactionCheckpoint) => Promise<void>) | undefined,
+  ): void {
+    this.opts.onCompactionCheckpoint = handler;
   }
 
   /**
@@ -1930,6 +1924,8 @@ export class CoderRunner extends EventEmitter {
         // A1 — independent goal-completion verifier (host-built; undefined when off).
         verifyGoalCompletion: this.opts.verifyGoalCompletion,
         getProjectMemoryIndex: this.opts.getProjectMemoryIndex,
+        getConversationChapterIndex: this.opts.getConversationChapterIndex,
+        getRelevantConversationChapters: this.opts.getRelevantConversationChapters,
         // Session-drive "guide files": surface the files this session has
         // edited so the dynamic injector can remind the model (the injector
         // dedups, so each file is announced once). Was a dead hook until now.
@@ -2086,6 +2082,10 @@ export class CoderRunner extends EventEmitter {
         // same boundary; the BT now delegates back here so the queue's
         // ownership stays on the runner class.
         flushPendingMessages: () => this.flushPendingMessages(),
+        // Terminal liveness gate — a CleanFinish must not close the run while
+        // /inject (or another producer) still has a message buffered for the
+        // next Executing boundary.
+        hasPendingMessages: () => this.hasPendingUserMessages(),
         // Loop-enforcement steering — the Executing node calls this when a
         // tool+args got refused across multiple planning cycles. Wraps
         // `pushUserMessage` so the reminder lands at the next turn (after the
@@ -2160,6 +2160,7 @@ export class CoderRunner extends EventEmitter {
    */
   private persistTurnTelemetryWrapper(input: {
     turn: number;
+    autoContinues: number;
     usage: ChatUsage | null;
     toolUseBlocks: ReadonlyArray<ToolUseBlock>;
     toolResultBlocks: ReadonlyArray<ContentBlock>;
@@ -2185,6 +2186,7 @@ export class CoderRunner extends EventEmitter {
       provider: this.opts.provider.name ?? null,
       model: this.opts.provider.model ?? null,
       turn: input.turn,
+      autoContinues: input.autoContinues,
       usage: input.usage,
       toolUseBlocks: input.toolUseBlocks,
       toolResultBlocks: input.toolResultBlocks,
@@ -2337,6 +2339,14 @@ export class CoderRunner extends EventEmitter {
           : undefined;
       if (allPriorReadsElided(prior.slice(0, -1), this.messages, requestedSpan)) {
         this.setTransition('pre-read-allowed-elided');
+        return null;
+      }
+
+      // Hybrid/observe never refuse a stable read because it appeared in a
+      // prior turn. Keep the attempt in the ledger (the real result will be
+      // post-processed normally) and reserve the old behavior for rollback.
+      if (dedupPolicyMode() !== 'legacy') {
+        this.setTransition('pre-read-shadow-allowed');
         return null;
       }
 
@@ -2649,7 +2659,7 @@ export class CoderRunner extends EventEmitter {
     this.pollingResultRun.set(toolName, next);
     if (next.count >= POLLING_STUCK_CAP) {
       this.pollingResultRun.delete(toolName);
-      this.setTransition('dup-call-cap');
+      this.setTransition('polling-stuck');
       console.warn(
         `[coder] polling-stuck refusal (BT): ${toolName} same result ${next.count}× — refused at turn ${turn}`,
       );

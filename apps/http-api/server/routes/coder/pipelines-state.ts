@@ -16,6 +16,7 @@
 import type { ChatPipelineExecutor } from '@mcp/code-agent/pipelines/ChatPipelineExecutor.js';
 import type { ChatPipelineBus, ChatPipelineEvent } from '@mcp/code-agent/pipelines/lib/eventBus.js';
 import { createBus, publish, type CoderRunBus } from '../../../coder-bus.js';
+import { publishNotificationRuntimeEvent } from '../../../sse/notification-event-bus.js';
 
 export interface CoderPipelineEntry {
   executor: ChatPipelineExecutor;
@@ -48,14 +49,21 @@ export class CoderPipelineRegistry {
 
     const bus = createBus(new AbortController());
     const teardown = pipelineBus.subscribe((event: ChatPipelineEvent) => {
-      // Forward as a standard SSE event under the same name; the
-      // dashboard's agent-stream handlers register matching keys.
-      publish(bus, event.name, {
+      const data = {
         coderSessionId: event.coderSessionId,
         executionId: event.executionId,
         pipelineId: event.pipelineId,
         ts: event.ts,
         ...(event.payload ?? {}),
+      };
+      // Forward as a standard SSE event under the same name; the
+      // dashboard's agent-stream handlers register matching keys.
+      publish(bus, event.name, data);
+      publishNotificationRuntimeEvent({
+        kind: 'coder',
+        sessionId,
+        event: event.name,
+        data,
       });
     });
 

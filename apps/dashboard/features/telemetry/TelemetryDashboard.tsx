@@ -61,6 +61,20 @@ interface PhaseRow {
   total_duration_ms: number;
 }
 
+interface GuardRolloutRow {
+  repeat_policy: string;
+  execution_class: string;
+  candidates: number;
+  delivered_candidates: number;
+  confirmed_redundant: number;
+  false_block_signals: number;
+  precision: number;
+  confidence_lower_bound: number;
+  false_block_rate: number;
+  target_candidates: number;
+  eligible_for_enforcement: boolean;
+}
+
 interface GlobalTelemetry {
   overall: {
     session_count: number;
@@ -79,6 +93,7 @@ interface GlobalTelemetry {
   by_model: ModelRow[];
   skills_modes: SkillsModeRow[];
   top_tools: TopToolRow[];
+  guard_rollout?: GuardRolloutRow[];
   phase_breakdown: PhaseRow[];
   top_sessions: TopSession[];
 }
@@ -340,6 +355,58 @@ function TelemetryOverview() {
                         <td className="px-3 py-2 text-right tabular-nums">{r.avg_duration_ms}ms</td>
                         <td className={`px-3 py-2 text-right tabular-nums ${r.truncated_count > 0 ? 'text-amber-600 dark:text-amber-400' : ''}`}>
                           {r.truncated_count}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {data.guard_rollout && data.guard_rollout.length > 0 && (
+            <div className="rounded-md border bg-card/50">
+              <div className="px-3 py-2 border-b">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('telemetry:guardRollout.title')}
+                </div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  {t('telemetry:guardRollout.subtitle')}
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/40">
+                    <tr className="text-left">
+                      <th className="px-3 py-2 font-medium">{t('telemetry:guardRollout.class')}</th>
+                      <th className="px-3 py-2 text-right font-medium">{t('telemetry:guardRollout.candidates')}</th>
+                      <th className="px-3 py-2 text-right font-medium">{t('telemetry:guardRollout.precision')}</th>
+                      <th className="px-3 py-2 text-right font-medium">{t('telemetry:guardRollout.lowerBound')}</th>
+                      <th className="px-3 py-2 text-right font-medium">{t('telemetry:guardRollout.falseBlock')}</th>
+                      <th className="px-3 py-2 text-right font-medium">{t('telemetry:guardRollout.status')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.guard_rollout.map((row) => (
+                      <tr key={`${row.repeat_policy}:${row.execution_class}`} className="border-t hover:bg-muted/20">
+                        <td className="px-3 py-2 font-mono">{row.repeat_policy}/{row.execution_class}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {row.candidates}/{row.target_candidates}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{formatPct(row.precision)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{formatPct(row.confidence_lower_bound)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{formatPct(row.false_block_rate)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <span className={cn(
+                            'rounded px-1.5 py-0.5 text-[10px] font-medium',
+                            row.eligible_for_enforcement
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-sky-500/15 text-sky-700 dark:text-sky-300',
+                          )}>
+                            {t(row.eligible_for_enforcement
+                              ? 'telemetry:guardRollout.eligible'
+                              : 'telemetry:guardRollout.observing')}
+                          </span>
                         </td>
                       </tr>
                     ))}

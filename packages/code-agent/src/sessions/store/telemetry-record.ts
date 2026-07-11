@@ -5,6 +5,8 @@ export interface RecordTurnTelemetryInput {
   session_id: number | null;
   run_id: string;
   turn: number;
+  /** Defaults to zero for older callers/fixtures. */
+  auto_continues?: number;
   is_subagent: boolean;
   parent_run_id?: string | null;
   subagent_profile?: string | null;
@@ -65,7 +67,7 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
     const r = db
       .prepare(
         `INSERT INTO coder_turn_telemetry (
-          session_id, run_id, turn, is_subagent, parent_run_id, subagent_profile,
+          session_id, run_id, turn, is_subagent, parent_run_id, subagent_profile, auto_continues,
           provider, model,
           input_tokens, output_tokens,
           cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens,
@@ -81,12 +83,12 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
           response_retry_after, response_x_should_retry,
           response_rate_limits_json, response_path,
           project_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           (SELECT s.project_id FROM coder_sessions s WHERE s.id = ?))`,
       )
       .run(
         input.session_id, input.run_id, input.turn, input.is_subagent ? 1 : 0,
-        input.parent_run_id ?? null, input.subagent_profile ?? null,
+        input.parent_run_id ?? null, input.subagent_profile ?? null, input.auto_continues ?? 0,
         input.provider, input.model,
         input.input_tokens, input.output_tokens,
         input.cache_read_input_tokens, input.cache_creation_input_tokens, input.thinking_tokens,

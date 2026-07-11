@@ -12,10 +12,14 @@ import type { ProjectIndexSettings, StructuralExecutor, StructuralProgressFrame 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function fakeDb(project: { structural_indexed_at: string | null; last_indexed: string | null }): CodeIndexDB {
+function fakeDb(
+  project: { structural_indexed_at: string | null; last_indexed: string | null },
+  synthetic = false,
+): CodeIndexDB {
   return {
     getProject: () => ({
       id: 1, root_path: 'D:/fake', file_count: 2, symbol_count: 5,
+      is_synthetic: synthetic,
       structural_indexed_at: project.structural_indexed_at,
       last_indexed: project.last_indexed,
     }),
@@ -159,8 +163,12 @@ describe('DirtyQueue', () => {
 });
 
 describe('ProjectIndexService', () => {
-  function makeService(executor: FakeExecutor, db = fakeDb({ structural_indexed_at: null, last_indexed: null })) {
-    return new ProjectIndexService(db, executor, undefined, () => SETTINGS);
+  function makeService(
+    executor: FakeExecutor,
+    db = fakeDb({ structural_indexed_at: null, last_indexed: null }),
+    settings: ProjectIndexSettings = SETTINGS,
+  ) {
+    return new ProjectIndexService(db, executor, undefined, () => settings);
   }
 
   it('ensureFresh runs once; concurrent calls no-op while running', async () => {
@@ -175,6 +183,18 @@ describe('ProjectIndexService', () => {
     await svc.dispose();
   });
 
+  it('marks a deferred synthetic workspace busy before the composer can send', async () => {
+    const exec = new FakeExecutor();
+    const db = fakeDb({ structural_indexed_at: null, last_indexed: null }, true);
+    const svc = makeService(exec, db, { ...SETTINGS, openDelayMs: 10_000 });
+
+    svc.ensureFresh(1, 'session');
+
+    expect(svc.getStatus(1).phase).toBe('scanning');
+    expect(exec.runs).toBe(0);
+    await svc.dispose();
+  });
+
   it('phase transitions: none → scanning/indexing → structural_ready', async () => {
     const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
     const exec = new FakeExecutor();
@@ -185,6 +205,56 @@ describe('ProjectIndexService', () => {
     await sleep(50);
     expect(svc.getStatus(1).phase).toBe('structural_ready');
     expect(svc.getStatus(1).lastStructuralAt).toBeTruthy();
+    await svc.dispose();
+  });
+
+  it('forces a deferred structural run and waits until the index is ready', async () => {
+    const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
+    const exec = new FakeExecutor();
+    exec.delayMs = 15;
+    exec.onRun = () => { projectRow.structural_indexed_at = '2026-07-10T00:00:00Z'; };
+    const svc = makeService(exec, fakeDb(projectRow), { ...SETTINGS, openDelayMs: 10_000 });
+
+    svc.ensureFresh(1, 'session');
+    const result = await svc.ensureStructuralReady(1, 500);
+
+    expect(result.status).toBe('ready');
+    expect(exec.runs).toBe(1);
+    expect(svc.getStatus(1).phase).toBe('structural_ready');
+    await svc.dispose();
+  });
+
+  it('times out the readiness wait without starting a second run', async () => {
+    const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
+    const exec = new FakeExecutor();
+    exec.delayMs = 40;
+    exec.onRun = () => { projectRow.structural_indexed_at = '2026-07-10T00:00:00Z'; };
+    const svc = makeService(exec, fakeDb(projectRow));
+
+    const first = svc.ensureStructuralReady(1, 5);
+    const second = svc.ensureStructuralReady(1, 5);
+    await expect(first).resolves.toMatchObject({ status: 'timeout' });
+    await expect(second).resolves.toMatchObject({ status: 'timeout' });
+    expect(exec.runs).toBe(1);
+    await sleep(60);
+    await svc.dispose();
+  });
+
+  it('does not deadlock when automatic indexing is disabled', async () => {
+    const exec = new FakeExecutor();
+    const svc = makeService(exec, undefined, { ...SETTINGS, autoIndex: false });
+    await expect(svc.ensureStructuralReady(1, 50)).resolves.toMatchObject({ status: 'disabled' });
+    expect(exec.runs).toBe(0);
+    await svc.dispose();
+  });
+
+  it('does not start the index or runner gate after the request is cancelled', async () => {
+    const exec = new FakeExecutor();
+    const svc = makeService(exec);
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(svc.ensureStructuralReady(1, 50, ctrl.signal)).resolves.toMatchObject({ status: 'aborted' });
+    expect(exec.runs).toBe(0);
     await svc.dispose();
   });
 

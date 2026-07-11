@@ -32,6 +32,7 @@ import { mountAdminLshRoutes } from './server/routes/admin/lsh.js';
 import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountSupervisorAdminRoutes } from './server/routes/admin/supervisor.js';
+import { mountNotificationRoutes } from './server/routes/notifications.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { mountLspRoutes } from './server/routes/lsp/lsp.routes.js';
 import { mountEditorRoutes } from './server/routes/editor.js';
@@ -876,6 +877,7 @@ export function createApp() {
   mountWorkersDiagnosticRoute(app);
   mountPerfRoutes(app);
   mountSupervisorAdminRoutes(app, { dbPath: deps.config.dbPath });
+  mountNotificationRoutes(app, deps);
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
   mountLspRoutes(app, deps);

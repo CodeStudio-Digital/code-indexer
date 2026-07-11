@@ -44,9 +44,12 @@ export interface CreateGlobalInput {
 export function createGlobalWorkspaceSession(deps: ServerDeps, input: CreateGlobalInput): CoderSession {
   const wsId = randomUUID();
   const dir = globalWorkspaceDir(wsId);
-  buildGlobalWorkspace(dir, input.projects.map((p) => ({ name: p.name, rootPath: p.root_path })));
+  const projects = [...input.projects].sort(
+    (a, b) => Number(b.isPrimary) - Number(a.isPrimary) || a.id - b.id,
+  );
+  buildGlobalWorkspace(dir, projects.map((p) => ({ name: p.name, rootPath: p.root_path })));
   // Friendly label (shown in the "reuse workspace" picker) = the linked names.
-  const label = input.projects.map((p) => p.name).join(' + ').slice(0, 200) || 'Global workspace';
+  const label = projects.map((p) => p.name).join(' + ').slice(0, 200) || 'Global workspace';
   let syntheticId: number | null = null;
   try {
     const sp = deps.db.createProject(`__global_${wsId}`, dir, label);
@@ -58,7 +61,7 @@ export function createGlobalWorkspaceSession(deps: ServerDeps, input: CreateGlob
       provider: input.provider,
       model: input.model,
       agent: input.agent ?? null,
-      realProjects: input.projects.map((p) => ({ projectId: p.id, isPrimary: p.isPrimary })),
+      realProjects: projects.map((p) => ({ projectId: p.id, isPrimary: p.isPrimary })),
     });
     // Warm the union index now (fire-and-forget, structural-first) so the file
     // tree + search are populated before the first message.

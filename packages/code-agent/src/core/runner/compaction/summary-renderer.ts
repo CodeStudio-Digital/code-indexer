@@ -1,5 +1,5 @@
 /**
- * Render a `CompactionSummaryV2` as the synthetic AgentMessage that replaces
+ * Render a V2/V3 compaction summary as the synthetic AgentMessage that replaces
  * the pruned head of the conversation history.
  *
  * The renderer itself (`renderSummaryV2`) lives in `core/summarizer.ts` and
@@ -15,12 +15,17 @@
  */
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import {
+  isCompactionSummaryV3,
+  renderResumeV3,
   renderSummaryV2,
   type CompactionSummaryV2,
+  type CompactionSummaryV3,
 } from '@mcp/code-agent/core/summarizer.js';
 
-export function renderSummaryAsMessage(summary: CompactionSummaryV2): AgentMessage {
-  const text = renderSummaryV2(summary);
+export function renderSummaryAsMessage(summary: CompactionSummaryV2 | CompactionSummaryV3): AgentMessage {
+  const text = isCompactionSummaryV3(summary)
+    ? renderResumeV3(summary)
+    : renderSummaryV2(summary);
   return {
     role: 'user',
     content: [{ type: 'text', text }],

@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import { runCoder } from '@mcp/code-agent/index.js';
 import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
+import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
@@ -116,6 +117,12 @@ interface SendMessageBody {
  * exceeds this we'd rather fail fast than block the request handler.
  */
 const RUNNER_READY_TIMEOUT_MS = 5_000;
+const DEFAULT_GLOBAL_INDEX_GATE_TIMEOUT_MS = 180_000;
+
+function globalIndexGateTimeoutMs(): number {
+  const parsed = Number.parseInt(process.env.CODER_GLOBAL_INDEX_GATE_TIMEOUT_MS ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GLOBAL_INDEX_GATE_TIMEOUT_MS;
+}
 
 function projectRootForSession(deps: ServerDeps, sessionId: number): string | null {
   const session = deps.sessionStore.getSession(sessionId);
@@ -245,6 +252,36 @@ export function mountCoderStreamRoutes(
         : activeRuns.get(id);
       if (liveBus && !liveBus.ended) return undefined;
 
+      const workspaceProjects = session.is_global
+        ? assignWorkspaceSlugs(deps.db.listUnionProjectIds(session.project_id)).map((p) => ({
+            projectId: p.project_id,
+            name: p.name,
+            slug: p.slug,
+            rootPath: p.root_path,
+            isPrimary: p.is_primary,
+          }))
+        : (() => {
+            const project = deps.db.getProject(session.project_id);
+            return project
+              ? [{
+                  projectId: project.id,
+                  name: project.name,
+                  slug: workspaceSlug(project.name),
+                  rootPath: project.root_path,
+                  isPrimary: true,
+                }]
+              : [];
+          })();
+      const preflightInput = {
+        sessionId: id,
+        projectId: session.project_id,
+        userMessage: body.content,
+        isGlobalWorkspace: session.is_global,
+        workspaceProjects,
+      };
+      const capabilityFingerprint = deps.taskPreflight.getCapabilityFingerprint?.(preflightInput) ?? '';
+      const cacheHash = hashPreflightContent(`${body.content}\0${capabilityFingerprint}`);
+
       // Idempotent reuse (mig 180): a prior fresh POST already computed + cached
       // the seed. Reuse it (no recompute, no new trail — telemetry is
       // intentionally skipped on the cache hit) so the analyzer runs at most once
@@ -257,18 +294,14 @@ export function mountCoderStreamRoutes(
       if (session.preflight_seed_json) {
         try {
           const cached = JSON.parse(session.preflight_seed_json) as { h?: string; seed?: PreflightSeed };
-          if (cached && cached.seed && cached.h === hashPreflightContent(body.content)) {
+          if (cached && cached.seed && cached.h === cacheHash) {
             return cached.seed;
           }
         } catch { /* fall through to clear + recompute */ }
         try { sessionStore.setSessionPreflightSeed(id, null); } catch { /* best-effort */ }
       }
 
-      const result = await deps.taskPreflight.run({
-        sessionId: id,
-        projectId: session.project_id,
-        userMessage: body.content,
-      });
+      const result = await deps.taskPreflight.run(preflightInput);
       if (result.status === 'unconfigured') return undefined;
 
       // Input-tab trail (kind 'preflight') — hint body on success, short
@@ -294,6 +327,7 @@ export function mountCoderStreamRoutes(
             // distinguishes MCP suggestions from native pins in the funnel.
             ext_tools: result.seed?.pinTools?.filter((t) => t.startsWith('ext_')) ?? [],
             skills: result.seed?.suggestedSkills?.map((s) => s.id) ?? [],
+            target_projects: result.seed?.targetProjects?.map((p) => p.slug) ?? [],
             memories: result.seed?.memories?.map((m) => m.title) ?? [],
           },
         });
@@ -305,7 +339,7 @@ export function mountCoderStreamRoutes(
         try {
           sessionStore.setSessionPreflightSeed(
             id,
-            JSON.stringify({ h: hashPreflightContent(body.content), seed: result.seed }),
+            JSON.stringify({ h: cacheHash, seed: result.seed }),
           );
         } catch { /* cache is best-effort */ }
       }
@@ -478,6 +512,35 @@ export function mountCoderStreamRoutes(
         // project whose root spans every linked project via junctions).
         if (session.is_global) ensureGlobalWorkspaceLinks(deps, session);
         deps.projectIndexService.ensureFresh(session.project_id, 'session');
+        const freshGlobal = session.is_global
+          && !body.resume
+          && !session.compaction_summary
+          && sessionStore.getMessageCount(id) === 0;
+        if (freshGlobal) {
+          const readiness = await deps.projectIndexService.ensureStructuralReady(
+            session.project_id,
+            globalIndexGateTimeoutMs(),
+            c.req.raw.signal,
+          );
+          if (readiness.status === 'aborted') {
+            return c.json({ code: 'GLOBAL_INDEX_WAIT_ABORTED', message: 'Envio cancelado durante a indexação.' }, 408);
+          }
+          if (readiness.status === 'timeout') {
+            return c.json({
+              code: 'GLOBAL_INDEX_NOT_READY',
+              message: 'O índice estrutural da sessão global ainda está em processamento. Aguarde a indexação terminar e envie novamente.',
+              phase: readiness.phase,
+            }, 425);
+          }
+          if (readiness.status !== 'ready') {
+            // Auto-index disabled / terminal indexing error: do not deadlock
+            // the chat. Native DB-authorized disk fallbacks remain available.
+            console.warn(
+              `[coder] global index gate bypassed for session ${id}: ${readiness.status}` +
+              `${readiness.error ? ` (${readiness.error})` : ''}`,
+            );
+          }
+        }
       }
     }
 

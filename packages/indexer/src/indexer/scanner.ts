@@ -30,6 +30,7 @@ import { globPrunesForIndexIgnore, normalizeIndexIgnorePatterns } from '@mcp/sha
 import { applyGraphPromotion, classifyPath, isHardExcluded, type FileIndexTier } from '@mcp/indexer/indexer/mapper.js';
 import { buildScannerIgnore, GLOB_PRUNE_DIRS, type ScannerIgnore } from '@mcp/indexer/indexer/scanner-ignore.js';
 import { hashContent, countLines } from '@mcp/indexer/indexer/content-hash.js';
+import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 
 export interface ScanOptions {
   maxFiles?: number;
@@ -51,7 +52,6 @@ function yieldToEventLoop(): Promise<void> {
 
 export class FileScanner {
   private rootPath: string;
-  private ig: ScannerIgnore;
   private ignorePatterns: string[];
   private maxFileSizeBytes: number;
 
@@ -59,42 +59,61 @@ export class FileScanner {
     this.rootPath = resolve(rootPath);
     this.ignorePatterns = normalizeIndexIgnorePatterns(ignorePatterns);
     this.maxFileSizeBytes = maxFileSizeKB * 1024;
-    this.ig = buildScannerIgnore(this.rootPath, this.ignorePatterns, isHardExcluded);
   }
 
   async scan(db: CodeIndexDB, projectId: number, opts: ScanOptions = {}): Promise<ScanResult> {
-    const validFiles: string[] = [];
+    const project = db.getProject(projectId);
+    const sources = project?.is_synthetic
+      ? assignWorkspaceSlugs(db.listUnionProjectIds(projectId)).map((p) => ({
+          rootPath: resolve(p.root_path),
+          prefix: p.slug,
+        }))
+      : [{ rootPath: this.rootPath, prefix: '' }];
+    const validFiles: Array<{ absolutePath: string; relativePath: string }> = [];
     let ignoredCount = 0;
-    for await (const rawRelPath of globIterate('**/*', {
-      cwd: this.rootPath,
-      nodir: true,
-      dot: false,
-      absolute: false,
-      // Prune hard-safe dirs in the walk itself — they were 100% filtered
-      // out afterwards anyway; this skips listing them at all.
-      ignore: [
-        ...GLOB_PRUNE_DIRS.map((d) => `**/${d}/**`),
-        ...globPrunesForIndexIgnore(this.ignorePatterns),
-      ],
-    })) {
-      const relPath = String(rawRelPath).replace(/\\/g, '/');
-      if (this.ig.ignores(relPath)) {
-        ignoredCount++;
-        continue;
-      }
-      validFiles.push(relPath);
-      // Discovery liveness — total unknown (0) until the walk finishes. The
-      // for-await already yields to the loop on each async tick.
-      if (validFiles.length % SCAN_STEP === 0) opts.onScanProgress?.(validFiles.length, 0);
-      if (opts.maxFiles && validFiles.length > opts.maxFiles) {
-        return {
-          toIndex: [],
-          unchanged: [],
-          toRemove: [],
-          totalFiles: validFiles.length,
-          aborted: 'too_large',
-          stats: { statOnly: 0, hashed: 0, skippedTooLarge: 0, ignored: ignoredCount },
-        };
+    for (const source of sources) {
+      const sourceStat = statSync(source.rootPath, { throwIfNoEntry: false });
+      if (!sourceStat?.isDirectory()) continue;
+      // Synthetic projects are scanned as an explicit list of real roots from
+      // the DB. We never ask glob to follow symlinks, so nested/untrusted links
+      // cannot escape the declared workspace.
+      const sourceIgnore: ScannerIgnore = buildScannerIgnore(
+        source.rootPath,
+        this.ignorePatterns,
+        isHardExcluded,
+      );
+      for await (const rawRelPath of globIterate('**/*', {
+        cwd: source.rootPath,
+        nodir: true,
+        dot: false,
+        absolute: false,
+        ignore: [
+          ...GLOB_PRUNE_DIRS.map((d) => `**/${d}/**`),
+          ...globPrunesForIndexIgnore(this.ignorePatterns),
+        ],
+      })) {
+        const sourceRel = String(rawRelPath).replace(/\\/g, '/');
+        if (sourceIgnore.ignores(sourceRel)) {
+          ignoredCount++;
+          continue;
+        }
+        validFiles.push({
+          absolutePath: join(source.rootPath, sourceRel),
+          relativePath: source.prefix ? `${source.prefix}/${sourceRel}` : sourceRel,
+        });
+        // Discovery liveness — total unknown (0) until the walk finishes. The
+        // for-await already yields to the loop on each async tick.
+        if (validFiles.length % SCAN_STEP === 0) opts.onScanProgress?.(validFiles.length, 0);
+        if (opts.maxFiles && validFiles.length > opts.maxFiles) {
+          return {
+            toIndex: [],
+            unchanged: [],
+            toRemove: [],
+            totalFiles: validFiles.length,
+            aborted: 'too_large',
+            stats: { statOnly: 0, hashed: 0, skippedTooLarge: 0, ignored: ignoredCount },
+          };
+        }
       }
     }
 
@@ -112,7 +131,7 @@ export class FileScanner {
     const stats: ScanStats = { statOnly: 0, hashed: 0, skippedTooLarge: 0, ignored: ignoredCount };
 
     let processed = 0;
-    for (const relPath of validFiles) {
+    for (const file of validFiles) {
       // Cooperative yield: this loop is fully synchronous (statSync/readFileSync)
       // and, in the in-process fallback, runs on the Electron MAIN thread — a
       // large project would block it solid (frozen UI that "never recovers").
@@ -124,8 +143,8 @@ export class FileScanner {
       }
       processed++;
 
-      const absPath = join(this.rootPath, relPath);
-      const normalizedPath = relPath.replace(/\\/g, '/');
+      const absPath = file.absolutePath;
+      const normalizedPath = file.relativePath;
 
       const st = statSync(absPath, { throwIfNoEntry: false });
       if (!st?.isFile()) continue;

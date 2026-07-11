@@ -14,6 +14,7 @@ import type {
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import type { SubagentLimits } from '@mcp/code-agent/tools/implement-subagent.js';
 import type { SpawnRetentionAgent } from '@mcp/code-agent/tools/spawn-agent-resume.js';
+import { buildGlobalWorkspaceBriefing } from '@mcp/code-agent/core/global-workspace-context.js';
 
 export interface NormalizedAgent {
   task: string;
@@ -69,26 +70,7 @@ export function limitsForAgent(agent: NormalizedAgent): SubagentLimits {
 }
 
 export function buildSubagentWorkspaceBriefing(ctx: ToolContext): string {
-  const gw = ctx.globalWorkspace;
-  if (!gw) return '';
-
-  const projectLines = gw.projects.length > 0
-    ? gw.projects
-        .map((p) => `- ${p.slug}/ -> ${p.name}${p.isPrimary ? ' (primary)' : ''}`)
-        .join('\n')
-    : '- (no linked projects reported; list the virtual root before giving up)';
-
-  return `<workspace-context>
-This is a GLOBAL session over a virtual union workspace.
-- Virtual root: ${gw.rootPath}
-- Linked project folders:
-${projectLines}
-
-Use paths relative to the virtual root. For example: <project-slug>/src/file.ts.
-Start orientation with native list_directory/glob at the virtual root when the project scope is unclear.
-Do not pass or invent project_name for mcp__* tools; the bridge injects the correct synthetic workspace project.
-If an MCP call says a project was not found, retry with native list_directory/glob at the virtual root before concluding.
-</workspace-context>`;
+  return buildGlobalWorkspaceBriefing(ctx);
 }
 
 export function taskWithWorkspaceBriefing(task: string, ctx: ToolContext): string {

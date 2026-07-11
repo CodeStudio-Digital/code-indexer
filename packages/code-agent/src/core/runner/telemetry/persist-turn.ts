@@ -49,6 +49,8 @@ export interface PersistTurnTelemetryArgs {
   model: string | null;
   /** Turn index (1-based). */
   turn: number;
+  /** Auto-continue batches consumed by this run at this turn. */
+  autoContinues?: number;
   /** Provider-reported usage for the response this turn produced. */
   usage: ChatUsage | null;
   /** tool_use blocks the assistant emitted this turn (post-stream). */
@@ -148,6 +150,7 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
       session_id: args.sessionId,
       run_id: args.runId,
       turn: args.turn,
+      auto_continues: args.autoContinues ?? 0,
       is_subagent: args.isSubagent,
       parent_run_id: args.parentRunId ?? null,
       subagent_profile: args.subagentProfile ?? null,

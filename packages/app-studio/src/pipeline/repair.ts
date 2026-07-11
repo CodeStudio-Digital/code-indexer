@@ -13,10 +13,28 @@ export interface AppPipelineRepairEvidence {
   spec: AppSpec | null;
   approvedSpecRevisionId: number | null;
   architecture: {
+    revisionId: number;
     status: 'draft' | 'approved' | 'superseded' | 'rejected';
     specRevisionId: number | null;
     auditOk: boolean;
   } | null;
+  ux?: {
+    revisionId: number;
+    status: 'draft' | 'approved' | 'superseded' | 'rejected';
+    specRevisionId: number | null;
+    architectureRevisionId: number | null;
+    dataFingerprint: string;
+    auditOk: boolean;
+  } | null;
+  wireframe?: {
+    status: 'draft' | 'approved' | 'superseded' | 'rejected';
+    specRevisionId: number | null;
+    architectureRevisionId: number | null;
+    uxRevisionId: number | null;
+    dataFingerprint: string;
+    auditOk: boolean;
+  } | null;
+  currentDataFingerprint?: string;
   deployHealthy: boolean;
 }
 
@@ -164,6 +182,20 @@ export function repairAppPipeline(
       else target.status = 'skipped';
       continue;
     }
+    const trustedUx = id === 'ux' && evidence.ux?.status === 'approved' && evidence.ux.auditOk
+      && evidence.ux.specRevisionId === evidence.approvedSpecRevisionId
+      && evidence.ux.architectureRevisionId === (evidence.architecture?.revisionId ?? null)
+      && evidence.ux.dataFingerprint === (evidence.currentDataFingerprint ?? evidence.ux.dataFingerprint);
+    const trustedWireframe = id === 'wireframe' && evidence.wireframe?.status === 'approved' && evidence.wireframe.auditOk
+      && evidence.wireframe.specRevisionId === evidence.approvedSpecRevisionId
+      && evidence.wireframe.architectureRevisionId === (evidence.architecture?.revisionId ?? null)
+      && evidence.wireframe.uxRevisionId === (evidence.ux?.revisionId ?? null)
+      && evidence.wireframe.dataFingerprint === (evidence.currentDataFingerprint ?? evidence.wireframe.dataFingerprint);
+    if (trustedUx || trustedWireframe) {
+      if (source) copyStage(target, source, 'approved');
+      else target.status = 'approved';
+      continue;
+    }
     if (source?.status === 'approved') {
       const trusted = id === 'launch' ? evidence.deployHealthy : source.gate?.ok === true;
       if (trusted) {
@@ -188,6 +220,7 @@ export function repairAppPipeline(
       continue;
     }
     if (source) copyStage(target, source, 'pending');
+    else if (id === 'ux') resetAs(target, 'active', 'Complete a direção de experiência antes de revisar as telas existentes.');
   }
 
   let foundIncomplete = false;

@@ -1,6 +1,18 @@
 import type { Database as DB } from 'better-sqlite3';
 import { computeSavings, type SavingsBreakdown, type TurnForSavings } from './telemetry-savings.js';
 import { resolvePricingWithSource } from '@mcp/code-agent/providers/pricing-cache.js';
+import {
+  GENUINE_ERROR_SQL,
+  PROPAGATED_PARENT_FAILURE_SQL,
+  REUSE_SQL,
+  ROOT_REFUSAL_SQL,
+  SHADOW_CANDIDATE_SQL,
+} from './guard-outcome-sql.js';
+
+function columnExists(db: DB, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+    .some((row) => row.name === column);
+}
 
 export interface SessionTelemetrySummary {
   turn_count: number;
@@ -37,6 +49,11 @@ export interface SessionTelemetrySummary {
     total_output_chars: number;
     avg_duration_ms: number;
     truncated_count: number;
+    errors: number;
+    refused: number;
+    propagated_failures: number;
+    reused: number;
+    shadow_candidates: number;
   }>;
   /** Migration 072 — total USD cost for this session (estimated). */
   estimated_cost_usd: number;
@@ -137,7 +154,12 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
           COUNT(*)                                  AS calls,
           COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
           COALESCE(AVG(tc.duration_ms), 0)          AS avg_duration_ms,
-          COALESCE(SUM(tc.truncated), 0)            AS truncated_count
+          COALESCE(SUM(tc.truncated), 0)            AS truncated_count,
+          COALESCE(SUM(CASE WHEN ${GENUINE_ERROR_SQL} THEN 1 ELSE 0 END), 0) AS errors,
+          COALESCE(SUM(CASE WHEN ${ROOT_REFUSAL_SQL} THEN 1 ELSE 0 END), 0) AS refused,
+          COALESCE(SUM(CASE WHEN ${PROPAGATED_PARENT_FAILURE_SQL} THEN 1 ELSE 0 END), 0) AS propagated_failures,
+          COALESCE(SUM(CASE WHEN ${REUSE_SQL} THEN 1 ELSE 0 END), 0) AS reused,
+          COALESCE(SUM(CASE WHEN ${SHADOW_CANDIDATE_SQL} THEN 1 ELSE 0 END), 0) AS shadow_candidates
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
        WHERE m.session_id = ?
@@ -150,6 +172,11 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
       total_output_chars: number;
       avg_duration_ms: number;
       truncated_count: number;
+      errors: number;
+      refused: number;
+      propagated_failures: number;
+      reused: number;
+      shadow_candidates: number;
     }>;
 
   let tools_breakdown: SessionTelemetrySummary['tools_breakdown'];
@@ -175,6 +202,7 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
     tools_breakdown = [...breakdown.entries()]
       .map(([name, calls]) => ({
         name, calls, total_output_chars: 0, avg_duration_ms: 0, truncated_count: 0,
+        errors: 0, refused: 0, propagated_failures: 0, reused: 0, shadow_candidates: 0,
       }))
       .sort((a, b) => b.calls - a.calls);
   }
@@ -215,12 +243,19 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
 
   // "Economia Real" — per-turn rows for cache $ + tier estimate, and the
   // raw-vs-shaped tool-output SUM for shaping savings.
+  // Some installations recorded migration 206 before
+  // `eligible_tools_def_chars` was added to that migration's source. Migration
+  // 209 repairs those files on restart; the read fallback keeps this endpoint
+  // available even while such a database is still open in the old process.
+  const eligibleToolsExpr = columnExists(db, 'coder_turn_telemetry', 'eligible_tools_def_chars')
+    ? 'eligible_tools_def_chars'
+    : 'NULL AS eligible_tools_def_chars';
   const turnRows = db
     .prepare(
       `SELECT provider, model,
               COALESCE(input_tokens, 0)            AS input_tokens,
               COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
-              tools_def_chars, eligible_tools_def_chars
+              tools_def_chars, ${eligibleToolsExpr}
        FROM coder_turn_telemetry WHERE session_id = ?`,
     )
     .all(sessionId) as TurnForSavings[];

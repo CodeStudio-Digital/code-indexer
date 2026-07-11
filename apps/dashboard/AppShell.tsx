@@ -246,7 +246,7 @@ export function AppShell() {
     <div className="h-[100dvh] flex flex-col bg-background text-foreground">
       <header
         className={cn(
-          'drag h-9 shrink-0 border-b bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/40 flex items-center px-2 gap-1 transition-opacity',
+          'drag h-9 min-w-0 shrink-0 overflow-hidden border-b bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/40 flex items-center px-2 gap-1 transition-opacity',
           platform === 'darwin' && 'pl-[72px]',
           !isFocused && 'opacity-60',
         )}
@@ -270,7 +270,7 @@ export function AppShell() {
         )}
         <span className="mx-0.5 h-4 w-px bg-border" />
         {/* Center: primary nav (interactive → carved out of the drag region) */}
-        <nav className="no-drag flex items-center gap-0.5" aria-label={t('nav.primaryAria')}>
+        <nav className="no-drag hidden items-center gap-0.5 md:flex" aria-label={t('nav.primaryAria')}>
           {nav.map((item) => (
             <Fragment key={item.id}>
               {item.id === 'telemetry' && <span className="mx-1 h-4 w-px bg-border" />}

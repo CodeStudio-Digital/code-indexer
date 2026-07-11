@@ -25,10 +25,15 @@ import {
   readdirSync,
   realpathSync,
   rmdirSync,
+  statSync,
   symlinkSync,
   unlinkSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
+import {
+  assignWorkspaceSlugs,
+  workspaceSlug,
+} from '@mcp/shared/utils/workspace-slug.js';
 
 export interface GlobalWorkspaceLink {
   /** Folder name inside the union dir (== how the agent addresses the project). */
@@ -37,10 +42,7 @@ export interface GlobalWorkspaceLink {
   targetPath: string;
 }
 
-/** Deterministic, filesystem-safe folder name for a project. */
-export function workspaceSlug(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase() || 'project';
-}
+export { workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
 
 function isReparsePoint(p: string): boolean {
   try {
@@ -77,8 +79,39 @@ function safeRemoveLink(link: string): boolean {
   }
 }
 
+/** Remove an agent-owned artifact tree without ever traversing a link. */
+function safeRemoveOwnedTree(path: string): boolean {
+  if (isReparsePoint(path)) return safeRemoveLink(path);
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return true;
+  }
+  if (!st.isDirectory()) {
+    try { unlinkSync(path); return true; } catch { return false; }
+  }
+  let entries: string[];
+  try { entries = readdirSync(path); } catch { return false; }
+  for (const name of entries) {
+    if (!safeRemoveOwnedTree(join(path, name))) return false;
+  }
+  try { rmdirSync(path); return true; } catch { return false; }
+}
+
+function existsByLstat(path: string): boolean {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+
 function ensureLink(link: string, target: string): void {
-  if (existsSync(link)) {
+  if (!existsSync(target) || !statSync(target).isDirectory()) {
+    // A dangling link is invisible to existsSync but still occupies its path.
+    // Remove only that reparse point; never create/keep a link to an absent DB
+    // target because it would make the workspace look partially empty.
+    if (existsByLstat(link) && isReparsePoint(link)) safeRemoveLink(link);
+    throw new Error(`linked project target is missing or not a directory: ${target}`);
+  }
+  if (existsByLstat(link)) {
     // Keep it if it already points at the right target.
     if (isReparsePoint(link)) {
       try {
@@ -86,8 +119,10 @@ function ensureLink(link: string, target: string): void {
       } catch {
         /* fall through to recreate */
       }
+      safeRemoveLink(link); // stale/broken link → recreate (never touches target)
+    } else {
+      throw new Error(`refusing to replace non-link workspace entry: ${link}`);
     }
-    safeRemoveLink(link); // stale link → recreate (never touches a real dir target)
   }
   // 'junction' ⇒ Windows directory junction (no admin); ignored on POSIX where a
   // normal directory symlink is created instead (no sudo).
@@ -106,13 +141,10 @@ export function buildGlobalWorkspace(
 ): GlobalWorkspaceLink[] {
   mkdirSync(dir, { recursive: true });
   const out: GlobalWorkspaceLink[] = [];
-  const used = new Set<string>();
-  for (const p of projects) {
-    const base = workspaceSlug(p.name);
-    let slug = base;
-    let n = 2;
-    while (used.has(slug)) slug = `${base}_${n++}`;
-    used.add(slug);
+  const desired = new Set<string>();
+  for (const p of assignWorkspaceSlugs(projects)) {
+    const slug = p.slug;
+    desired.add(slug);
     const link = join(dir, slug);
     const target = resolve(p.rootPath);
     try {
@@ -123,6 +155,18 @@ export function buildGlobalWorkspace(
         `[global-workspace] link ${slug} → ${target} failed: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+  }
+
+  // Reconcile stale project links (renamed/detached projects). Non-link files
+  // remain untouched; only reparse points outside the authoritative slug set
+  // are removed.
+  let existing: string[] = [];
+  try { existing = readdirSync(dir); } catch { /* already handled above */ }
+  for (const name of existing) {
+    if (desired.has(name)) continue;
+    const entry = join(dir, name);
+    if (name === '.mcp-indexer') safeRemoveOwnedTree(entry);
+    else if (isReparsePoint(entry)) safeRemoveLink(entry);
   }
   return out;
 }
@@ -143,6 +187,11 @@ export function cleanupGlobalWorkspace(dir: string): void {
     const p = join(dir, name);
     if (isReparsePoint(p)) {
       safeRemoveLink(p);
+    } else if (name === '.mcp-indexer') {
+      // Legacy ToolOutputStore data created inside old synthetic roots. This
+      // exact agent-owned folder is safe to prune; the recursive helper checks
+      // every level for reparse points before descending.
+      safeRemoveOwnedTree(p);
     } else {
       console.warn(`[global-workspace] refusing to remove non-link entry: ${p}`);
     }

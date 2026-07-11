@@ -30,9 +30,7 @@ import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
 import { buildTools, fingerprintToolsJson } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
-import { filterByTiers } from '@mcp/code-agent/tools/tiers.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
-import { buildLoopEnforcementMarker } from '../markers.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
 // PR-F integration — Codex BodyAfterPrefix (post-response, prefix-cache-aware
 // trigger) + Kimi pre-emit (pre-provider-call estimate so the request that
@@ -50,6 +48,7 @@ import { detectCorrectionSignal, renderCorrectionHint } from '../assembly/correc
 import {
   renderSessionStateBlock,
   renderMemoryIndex,
+  renderConversationChapterIndex,
   renderUserMemoryBlock,
   hashSessionState,
 } from '../assembly/session-state.js';
@@ -64,6 +63,7 @@ import { maybePlanNudge, maybeGoalVerifyNudge } from './executing-plan-gate.js';
 import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
+import { dedupPolicyMode } from '../guards/tuple-hash-dedup.js';
 import { evaluatePerTurnLoops } from './executing-loop-guards.js';
 import { applyVisionFallback } from '../vision-fallback.js';
 import { getGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
@@ -86,32 +86,12 @@ function dbg(...args: unknown[]): void {
  * one-line description. Feeds the loop-enforcement reminder so the agent is
  * reminded what to do INSTEAD of the call it keeps repeating.
  */
-function availableTools(ctx: RunContext): Array<{ name: string; description: string }> {
-  const all = ctx.opts.registry.list();
-  const visible = ctx.activeTiers ? filterByTiers(all, ctx.activeTiers) : all;
-  return visible
-    .map((t) => ({ name: t.name, description: firstLine(t.description) }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function firstLine(desc: string): string {
-  const line = (desc ?? '').split('\n', 1)[0].trim();
-  return line.length > 80 ? `${line.slice(0, 77)}...` : line;
-}
-
 export class ExecutingNode implements BehaviorNode {
   readonly state = 'Executing' as const;
 
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
     ctx.turn++;
     ctx.emit('turn_start', ctx.turn);
-    // A1 — expire the loop signatures Planning retained across its dedup
-    // reset. They block ONLY the immediately-following turn; after that the
-    // agent gets the true clean slate (legit re-verify workflows resume).
-    if (ctx.retainedLoopKeys && ctx.turn > ctx.retainedLoopKeys.expiresAfterTurn) {
-      for (const key of ctx.retainedLoopKeys.keys) ctx.dupCalls.delete(key);
-      ctx.retainedLoopKeys = null;
-    }
     // Drain any messages queued via `runner.pushUserMessage` (master →
     // subordinate forward, SSE-side push from the dashboard, etc.) so
     // they appear in `ctx.messages` BEFORE we build the request. The
@@ -130,6 +110,7 @@ export class ExecutingNode implements BehaviorNode {
     // first turn or when the task text materially changes, so we don't re-query
     // (or re-inject) every turn.
     ctx.injectionState.pendingMemory = undefined;
+    ctx.injectionState.pendingConversationChapters = undefined;
     // Honor an explicit "ignore / don't use memory" instruction this turn — skip
     // proactive recall so no remembered facts are surfaced or applied (CC's
     // ignore-memory rule). EN + PT-BR phrasings.
@@ -175,6 +156,26 @@ export class ExecutingNode implements BehaviorNode {
       }
     }
 
+    // Session-local history uses the same material-task-change throttle as
+    // project memory, but retrieval is independently bounded to two excerpts.
+    if (ctx.bridge?.getRelevantConversationChapters) {
+      const { candidate, shouldRetrieve } = planMemoryRecall(
+        memoryTaskText,
+        ctx.messages,
+        ctx.injectionState.lastConversationChapterQuery,
+        ctx.turn,
+      );
+      if (shouldRetrieve && candidate.trim()) {
+        try {
+          ctx.injectionState.pendingConversationChapters =
+            await ctx.bridge.getRelevantConversationChapters(candidate, ctx.turn);
+          ctx.injectionState.lastConversationChapterQuery = candidate;
+        } catch (e) {
+          dbg('conversation chapter retrieval failed', (e as Error).message);
+        }
+      }
+    }
+
     // Correction nudge — the user's last message looks like a correction or a
     // durable preference: suggest remember() THIS turn. Cheap regex, throttled
     // (once per distinct message hash, ≤3/run — see injectionState docs).
@@ -214,6 +215,7 @@ export class ExecutingNode implements BehaviorNode {
       const signals = ctx.bridge?.collectDynamicInjectionSignals?.() ?? null;
       const recentCompactionAt = ctx.injectionState.recentCompactionAt;
       const pendingMemory = ctx.injectionState.pendingMemory ?? [];
+      const pendingConversationChapters = ctx.injectionState.pendingConversationChapters ?? [];
       // self_review nudge — gated (Fix A) so it fires only for UNREVIEWED
       // pending changes and hard-stops after a cap / explicit user decline,
       // instead of every turn while any snapshot is pending (the doom-loop).
@@ -228,6 +230,7 @@ export class ExecutingNode implements BehaviorNode {
       });
       let sessionState: { block: string; hash: string } | null = null;
       let projectMemoryIndex: { text: string; hash: string } | null = null;
+      let conversationChapterIndex: { text: string; hash: string } | null = null;
       let userMemoryIndex: { text: string; hash: string } | null = null;
       if (policy.enabled) {
         try {
@@ -246,6 +249,21 @@ export class ExecutingNode implements BehaviorNode {
             if (text) projectMemoryIndex = { text, hash: hashSessionState(text) };
           } catch (e) {
             dbg('memory-index render failed', (e as Error).message);
+          }
+        }
+        if (policy.chapterIndexChars > 0) {
+          try {
+            const chapterIndex = ctx.bridge?.getConversationChapterIndex?.() ?? null;
+            const text = chapterIndex
+              ? renderConversationChapterIndex(
+                  chapterIndex.entries,
+                  chapterIndex.total,
+                  policy.chapterIndexChars,
+                )
+              : null;
+            if (text) conversationChapterIndex = { text, hash: hashSessionState(text) };
+          } catch (e) {
+            dbg('conversation-chapter-index render failed', (e as Error).message);
           }
         }
         // Global user preferences (migration 145) — NOT gated by the project's
@@ -271,9 +289,11 @@ export class ExecutingNode implements BehaviorNode {
         !signals &&
         recentCompactionAt == null &&
         pendingMemory.length === 0 &&
+        pendingConversationChapters.length === 0 &&
         !selfReviewNudge &&
         !sessionState &&
         !projectMemoryIndex &&
+        !conversationChapterIndex &&
         !userMemoryIndex &&
         !preflightHint &&
         !correctionHint
@@ -294,12 +314,17 @@ export class ExecutingNode implements BehaviorNode {
         recentCompactionAt,
         relevantMemory: pendingMemory,
         lastInjectedMemoryIds: ctx.injectionState.lastInjectedMemoryIds,
+        relevantConversationChapters: pendingConversationChapters,
+        lastInjectedConversationChapterIds: ctx.injectionState.lastInjectedConversationChapterIds,
         hasReviewableChanges: selfReviewNudge,
         sessionState,
         sessionStateEveryTurn: policy.stateEveryTurn,
         lastInjectedSessionStateHash: ctx.injectionState.lastInjectedSessionStateHash,
         projectMemoryIndex,
         lastInjectedProjectIndexHash: ctx.injectionState.lastInjectedProjectIndexHash,
+        conversationChapterIndex,
+        lastInjectedConversationChapterIndexHash:
+          ctx.injectionState.lastInjectedConversationChapterIndexHash,
         userMemoryIndex,
         lastInjectedUserMemoryHash: ctx.injectionState.lastInjectedUserMemoryHash,
         preflightHint,
@@ -337,11 +362,18 @@ export class ExecutingNode implements BehaviorNode {
       for (const mid of injectionToCommit.includedMemoryIds) {
         ctx.injectionState.lastInjectedMemoryIds.add(mid);
       }
+      for (const chapterId of injectionToCommit.includedConversationChapterIds) {
+        ctx.injectionState.lastInjectedConversationChapterIds.add(chapterId);
+      }
       if (injectionToCommit.includedSessionStateHash) {
         ctx.injectionState.lastInjectedSessionStateHash = injectionToCommit.includedSessionStateHash;
       }
       if (injectionToCommit.includedProjectIndexHash) {
         ctx.injectionState.lastInjectedProjectIndexHash = injectionToCommit.includedProjectIndexHash;
+      }
+      if (injectionToCommit.includedConversationChapterIndexHash) {
+        ctx.injectionState.lastInjectedConversationChapterIndexHash =
+          injectionToCommit.includedConversationChapterIndexHash;
       }
       if (injectionToCommit.includedUserMemoryHash) {
         ctx.injectionState.lastInjectedUserMemoryHash = injectionToCommit.includedUserMemoryHash;
@@ -674,6 +706,7 @@ export class ExecutingNode implements BehaviorNode {
       try {
         const id = ctx.bridge.persistTurnTelemetry({
           turn: ctx.turn,
+          autoContinues: ctx.autoContinues,
           usage: result.usage,
           toolUseBlocks: result.toolUses.map((t) => ({
             type: 'tool_use' as const,
@@ -799,7 +832,7 @@ export class ExecutingNode implements BehaviorNode {
       toolContext: ctx.opts.toolContext,
       turn: ctx.turn,
       dupCalls: ctx.dupCalls,
-      loopRefusals: ctx.loopRefusals,
+      noProgressTracker: ctx.noProgressTracker,
       // Pin mechanism — hidden registered tools execute and join the
       // visible list next turn; disabled tools hard-block at dispatch.
       visibleToolNames: new Set(toolsForModel.map((t) => t.name)),
@@ -836,15 +869,16 @@ export class ExecutingNode implements BehaviorNode {
         ctx.operations.progress(`tool:${id}`, { phase: 'running', ...(note ? { note } : {}) });
         ctx.emit('tool_progress', { id, name, elapsedMs, ...(note ? { note } : {}) });
       },
-      // Nested-call guards (code_exec): one observer per code_exec parent,
-      // closing over the run's OWN dupCalls/failureStreaks so nested calls
-      // count against the same state as direct ones. The telemetry sink
-      // emits `nested_tool_call` for the per-call audit trail.
+      // Nested-call guards (code_exec): one observer per parent. Invocation
+      // dedup is local to that observer; only result-aware failure/no-progress
+      // state is shared with the run. The telemetry sink emits
+      // `nested_tool_call` for the per-call audit trail.
       makeNestedObserver: (parentToolUseId, parentToolName) => {
         if (parentToolName !== 'code_exec' || !nestedGuardsEnabled()) return undefined;
         return buildNestedToolObserver({
           dupCalls: ctx.dupCalls,
           failureStreaks: ctx.failureStreaks,
+          noProgressTracker: ctx.noProgressTracker,
           turn: ctx.turn,
           parentToolUseId,
           onNestedCall: (e) => ctx.emit('nested_tool_call', e),
@@ -924,6 +958,8 @@ export class ExecutingNode implements BehaviorNode {
           reductionReport: r.reductionReport,
           outputId: r.outputId,
           ledgerEntry: r.ledgerEntry,
+          guardVerdict: r.guardVerdict,
+          stateEpoch: r.stateEpoch,
           ...(img ? { image: { mediaType: img.mediaType, base64: img.base64 } } : {}),
         },
         r.durationMs,
@@ -952,33 +988,12 @@ export class ExecutingNode implements BehaviorNode {
     // reads would re-count the whole cached prefix every turn.
     ctx.cumulativeInputTokens += result.usage?.input_tokens ?? estPromptTokens;
 
-    // Insistent-loop enforcement — the same tool+args got hard-refused across
-    // multiple planning cycles. A passive refusal alone never breaks it (the
-    // dedup table resets each cycle), so inject an ACTIVE steering reminder
-    // that re-lists the available tools and orders a strategy change, then let
-    // the normal ToolLoopDetected routing send us to Planning.
-    if (dispatch.loopEnforcement) {
-      const { toolName, count } = dispatch.loopEnforcement;
-      ctx.bridge?.injectSystemReminder?.(
-        buildLoopEnforcementMarker({ toolName, count, tools: availableTools(ctx) }),
-      );
-      ctx.emit('tool_loop_intervention', {
-        kind: 'loop-enforced',
-        turn: ctx.turn,
-        toolName,
-        count,
-        severity: 'enforced',
-        reason:
-          `Tool '${toolName}' was refused ${count}x across planning cycles — ` +
-          `injected an enforcement reminder (available tools + break-the-loop order).`,
-      });
-    }
-
-    // Per-turn loop backstops (P0): doom-loop (same tool signature recurs
-    // across turns — rotating-args / once-per-turn repeats the per-call guards
-    // can't see) + dominance (one tool grinding a long window with zero
-    // assistant text). Polling/`repeatable` tools are exempted inside the
-    // helper. Evaluated only when the per-call guards didn't already flag a
+    // Per-turn loop backstops (P0): legacy rollback may enforce signature
+    // doom-loops; hybrid/observe replace those with result-aware shadow
+    // candidates. Dominance remains active for long zero-text grinds. Only
+    // pollable tools are exempted inside the helper; volatile calls still get
+    // ordinary failure/dominance protection. Evaluated
+    // only when the per-call guards didn't already flag a
     // loop — they're more specific, so they win. On a fire the helper resets
     // both windows; we route to Planning to break the loop.
     if (!dispatch.toolLoopDetected) {
@@ -989,10 +1004,11 @@ export class ExecutingNode implements BehaviorNode {
           ctx.opts.registry.list()
             .filter((t) => {
               const repeatPolicy = resolveToolMetadata(t).repeatPolicy;
-              return repeatPolicy === 'pollable' || repeatPolicy === 'volatile';
+              return repeatPolicy === 'pollable';
             })
             .map((t) => t.name),
         ),
+        signatureLoopsEnabled: dedupPolicyMode() === 'legacy',
         doom: ctx.doomLoop,
         dominance: ctx.dominance,
       });

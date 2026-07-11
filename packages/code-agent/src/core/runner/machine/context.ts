@@ -15,6 +15,7 @@ import type { RunnerOptions } from '../types.js';
 import type { RecoveryKind } from '../recovery-config.js';
 import type { BridgeCallbacks, RunContext } from './types.js';
 import { AsyncOperationRegistry } from '../operations.js';
+import { NoProgressTracker } from '../guards/no-progress.js';
 import { emptyFailureStreakState } from '../guards/failure-streak.js';
 import { createDoomLoopState } from '../guards/doom-loop.js';
 import { createDominanceState } from '../guards/dominance.js';
@@ -72,7 +73,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     terseDescriptionsLock: null,
     recovery: new Map(),
     dupCalls: new Map(),
-    loopRefusals: new Map(),
+    noProgressTracker: new NoProgressTracker(),
     autoContinues: 0,
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
@@ -100,7 +101,6 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     doomLoop: createDoomLoopState(),
     dominance: createDominanceState(),
     // A1 — no retained dedup signatures until a loop guard fires.
-    retainedLoopKeys: null,
     // Fix B — loop-aware compaction signals start at zero; ExecutingNode
     // advances them each turn, CompactingNode checkpoints/resets on collapse.
     consecutiveNoTextTurns: 0,
@@ -116,6 +116,8 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       lastInjectedMemoryIds: new Set<string>(),
       lastInjectedSessionStateHash: null,
       lastInjectedProjectIndexHash: null,
+      lastInjectedConversationChapterIndexHash: null,
+      lastInjectedConversationChapterIds: new Set<string>(),
       lastInjectedUserMemoryHash: null,
       lastInjectedPreflightHash: null,
       // Fix A — self_review nudge gate state (empty = nudge allowed once

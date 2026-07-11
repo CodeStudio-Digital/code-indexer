@@ -28,10 +28,14 @@ describe('App Studio specialist tool contracts', () => {
 
   it('gives the database specialist a persistent, verifiable migration path', () => {
     const tools = APP_SPECIALIST_TOOL_ALLOWLISTS.app_db;
+    expect(tools.has('app_get_db_assets')).toBe(true);
     expect(tools.has('app_save_db_migration')).toBe(true);
+    expect(tools.has('app_save_db_seed')).toBe(true);
     expect(tools.has('app_provision_db')).toBe(true);
     expect(tools.has('db_schema')).toBe(true);
     expect(tools.has('db_query')).toBe(true);
+    expect(tools.has('app_save_tdd_test')).toBe(true);
+    expect(tools.has('app_run_test_cycle')).toBe(true);
   });
 
   it('lets the architecture specialist propose versioned requirement changes', () => {
@@ -41,6 +45,17 @@ describe('App Studio specialist tool contracts', () => {
     expect(tools.has('app_propose_spec_revision')).toBe(true);
     expect(tools.has('app_save_db_migration')).toBe(false);
     expect(tools.has('write_file')).toBe(false);
+  });
+
+  it('keeps UX and wireframe specialists on their versioned planning surfaces', () => {
+    const ux = APP_SPECIALIST_TOOL_ALLOWLISTS.app_ux;
+    expect(ux.has('app_fetch_ux_reference')).toBe(true);
+    expect(ux.has('app_save_ux')).toBe(true);
+    expect(ux.has('app_save_wireframe')).toBe(false);
+    const wireframe = APP_SPECIALIST_TOOL_ALLOWLISTS.app_wireframe;
+    expect(wireframe.has('app_get_ux')).toBe(true);
+    expect(wireframe.has('app_save_wireframe')).toBe(true);
+    expect(wireframe.has('app_complete_build_task')).toBe(false);
   });
 
   it('classifies every reduced App Studio tool explicitly in the tier catalog', () => {

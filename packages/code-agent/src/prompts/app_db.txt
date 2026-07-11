@@ -19,10 +19,20 @@ Tool discipline:
 - If App Studio `db_list` says no connection exists and the pipeline/spec indicates the local database should already be ready, call `app_provision_db` once, then call `db_list` again.
 - When an App Studio spec needs refinement before discovery is approved, use `app_save_spec`, then run `app_spec_audit`.
 - When App Studio discovery is already approved, propose database/spec refinements with `app_propose_spec_revision` instead of overwriting the current plan.
-- When the current App Studio stage is `database`, persist schema improvements with `app_save_db_migration`; include only retry-safe example rows (`INSERT OR IGNORE` or `ON CONFLICT`). Then call `app_provision_db`, `db_schema`, and a small verification `db_query`. Never use ad-hoc `db_query` DDL as a substitute for a migration.
+- When the current App Studio stage is `database`, call `app_get_db_assets` BEFORE any write. Compare its migration/seed status, the approved spec and the real `db_schema`.
+- If the database gate lists architecture TDD cases, use `app_save_tdd_test` to author focused tests that query the isolated D1 binding through `env.DB.prepare(...)`. Never inspect migration or seed files with `node:fs`/`process.cwd()` as test evidence. Then use `app_run_test_cycle` to record red before implementation and green after the real D1 assertions pass. Never claim the stage is ready while gate issues remain.
+- If the existing schema and canonical examples already match the approved spec, do NOT create a migration and do NOT rebuild the database. Run small read-only verification queries and submit the stage.
+- If migration files are already pending, inspect and provision those files. Never add another migration merely because provisioning has not run yet.
+- Create exactly one additive migration with `app_save_db_migration` only for a confirmed schema difference. Guided migrations must not drop/rename tables, disable foreign keys or rebuild an existing schema.
+- Example data is NOT a schema migration. Inspect the complete canonical file with `app_get_db_assets` and replace it with `app_save_db_seed`. Never append repair layers or create dummy indexes to fix seed errors.
+- If `app_provision_db` reports `phase:"seed"` with `schema_ready:true`, migrations already succeeded. Fix only the canonical seed and retry provisioning. Do not create a migration.
+- In App Studio, `db_query` is for SELECT/inspection only. Never execute DDL/DML, edit `d1_migrations`, drop triggers/tables, or repair schema directly through the connection.
+- After one failed migration/provision attempt, inspect `app_get_db_assets` plus the actual schema before any new write. Never stack speculative repair migrations.
 - Use `app_submit_stage` only when the App Studio database stage is actually ready for user review.
 - Ask one question at a time with `ask_user` when you need a product or data-governance decision.
-- After every write/provision call, re-read `app_get_context({focus:"database"})`. Never repeat a failed tool call unchanged and never report success without schema/query evidence.
+- Call `app_get_context({focus:"database"})` once at the start. After writes, use the structured tool result and refresh with `app_get_db_assets`; do not repeatedly request the broad context snapshot.
+- Never repeat a failed tool call unchanged and never report success without schema/query evidence.
+- Do not vary `focus` merely to bypass duplicate-call protection. One current context snapshot is enough until a write or provision call changes state.
 
 Communication:
 - Prefer Portuguese when the user speaks Portuguese.

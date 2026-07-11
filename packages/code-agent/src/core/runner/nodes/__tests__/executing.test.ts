@@ -60,32 +60,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('ExecutingNode', () => {
-  it('expires retained loop keys after exactly one turn (A1)', async () => {
-    const provider = makeStreamingProvider([
-      { type: 'text_delta', text: 'ok' },
-      { type: 'done', stop_reason: 'end_turn' },
-    ]);
-    const { ctx } = makeTestContext({
-      provider,
-      registry: makeRegistry({}),
-      toolContext: emptyToolContext(),
-    });
-    // Simulate Planning's retention after a guard fire at turn 1.
-    ctx.turn = 1;
-    ctx.dupCalls.set('grep|{"q":"x"}', { count: 3, firstTurn: 1, lastUseId: 'u1' });
-    ctx.retainedLoopKeys = { keys: ['grep|{"q":"x"}'], expiresAfterTurn: 2 };
-
-    // Turn 2 — still within the block window: the signature must survive.
-    await new ExecutingNode().execute(ctx, null);
-    expect(ctx.dupCalls.has('grep|{"q":"x"}')).toBe(true);
-    expect(ctx.retainedLoopKeys).not.toBeNull();
-
-    // Turn 3 — past the window: clean slate restored.
-    await new ExecutingNode().execute(ctx, null);
-    expect(ctx.dupCalls.has('grep|{"q":"x"}')).toBe(false);
-    expect(ctx.retainedLoopKeys).toBeNull();
-  });
-
   it('emits CleanFinish when the assistant returns text and no tool_use', async () => {
     const { ctx } = makeTestContext({
       provider: makeStreamingProvider([
@@ -218,21 +192,28 @@ describe('ExecutingNode', () => {
     expect(payload.prompt_tokens).toBeGreaterThan(0);
   });
 
-  it('routes to ToolLoopDetected after 3 identical calls (tuple-hash refuse)', async () => {
+  it('routes to ToolLoopDetected after 3 identical local mutations', async () => {
     const repeatDeltas: ChatDelta[] = [
       { type: 'tool_call_start', id: 'tu1', name: 'echo' },
       { type: 'tool_call_end', id: 'tu1', name: 'echo', input: { msg: 'x' } },
+      { type: 'tool_call_start', id: 'tu2', name: 'echo' },
+      { type: 'tool_call_end', id: 'tu2', name: 'echo', input: { msg: 'x' } },
+      { type: 'tool_call_start', id: 'tu3', name: 'echo' },
+      { type: 'tool_call_end', id: 'tu3', name: 'echo', input: { msg: 'x' } },
       { type: 'usage', usage: { input_tokens: 50, output_tokens: 5 } as ChatUsage },
       { type: 'done', stop_reason: 'tool_use' },
     ];
+    const registry = makeRegistry({ echo: () => 'pong' });
+    Object.assign(registry.get('echo')!, {
+      mutates: true,
+      repeatPolicy: 'mutating',
+      executionClass: 'write',
+    });
     const { ctx } = makeTestContext({
       provider: makeStreamingProvider(repeatDeltas),
-      registry: makeRegistry({ echo: () => 'pong' }),
+      registry,
       toolContext: emptyToolContext(),
     });
-
-    // Pre-seed two prior identical calls so the next is the 3rd.
-    ctx.dupCalls.set('echo|{"msg":"x"}', { count: 2, firstTurn: 1, lastUseId: 'prev' });
 
     const event = await new ExecutingNode().execute(ctx, null);
 
@@ -294,7 +275,7 @@ describe('ExecutingNode', () => {
     expect(payload?.severity).toBe('refused');
   });
 
-  it('routes to ToolLoopDetected{guard:"doom-loop"} when the FUZZY window fills (rotating-args loop)', async () => {
+  it('legacy rollback routes to ToolLoopDetected when the FUZZY signature window fills', async () => {
     // The fuzzy (name-only) guard catches the real-world create_goal×37
     // pattern: args rotate every turn so tuple-hash never sees a repeat and
     // the dup-call cap stays at 1. This is precisely what the unwired guard
@@ -315,7 +296,9 @@ describe('ExecutingNode', () => {
     // fuzzy variant — not strict — that caught the loop.
     ctx.doomLoop.fuzzy = ['create_goal', 'create_goal', 'create_goal', 'create_goal', 'create_goal'];
 
+    vi.stubEnv('CODER_DEDUP_POLICY', 'legacy');
     const event = await new ExecutingNode().execute(ctx, null);
+    vi.unstubAllEnvs();
 
     expect(event.kind).toBe('ToolLoopDetected');
     if (event.kind === 'ToolLoopDetected') expect(event.guard).toBe('doom-loop');
@@ -331,7 +314,7 @@ describe('ExecutingNode', () => {
     expect(ctx.doomLoop.strict).toHaveLength(0);
   });
 
-  it('routes to ToolLoopDetected{guard:"doom-loop"} when the STRICT window repeats (verbatim loop)', async () => {
+  it('legacy rollback routes to ToolLoopDetected when the STRICT signature window repeats', async () => {
     const deltas: ChatDelta[] = [
       { type: 'tool_call_start', id: 'ts', name: 'scan' },
       { type: 'tool_call_end', id: 'ts', name: 'scan', input: { path: 'a.ts' } },
@@ -353,6 +336,7 @@ describe('ExecutingNode', () => {
     // that config. Pin the documented default so the wiring is asserted
     // deterministically regardless of ambient env.
     vi.stubEnv('CODER_DOOM_LOOP_THRESHOLD', '3');
+    vi.stubEnv('CODER_DEDUP_POLICY', 'legacy');
     try {
       const event = await new ExecutingNode().execute(ctx, null);
       expect(event.kind).toBe('ToolLoopDetected');
@@ -364,7 +348,7 @@ describe('ExecutingNode', () => {
   });
 
   it('does NOT trip the doom-loop for a repeatable polling tool (list_* exemption)', async () => {
-    // list_subordinates matches REPEATABLE_NAME_PATTERN — a master polling it
+    // list_subordinates is registered as pollable — a master polling it
     // every turn is the workflow, not a loop. It must be filtered out before
     // the window so a long poll is never derailed into Planning.
     const deltas: ChatDelta[] = [

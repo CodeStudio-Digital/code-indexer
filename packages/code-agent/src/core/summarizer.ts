@@ -1,6 +1,39 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { loadPrompt } from '@mcp/code-agent/prompts/loader.js';
+import {
+  summarizeSpanV3,
+  summaryV3ToLegacy,
+  summaryV3ToV2,
+  type SummarizeSpanV3Options,
+} from './summarizer-v3.js';
+
+export {
+  COMPACTION_SUMMARY_MAX_CHARS,
+  COMPACTION_SUMMARY_MAX_TOKENS,
+  COMPACTION_SUMMARY_TIMEOUT_MS,
+  COMPACTION_SUMMARY_V3_VERSION,
+  capCompactionSummaryV3,
+  formatSpanForPromptV3,
+  isCompactionSummaryV3,
+  overlayLiveStateV3,
+  parseCompactionSummaryV3,
+  renderChapterV3,
+  renderResumeV3,
+  renderSummaryV3,
+  separatePreviousResumeV3,
+  summarizeSpanV3,
+  summaryV2ToV3,
+  summaryV3ToLegacy,
+  summaryV3ToV2,
+  type CompactionChapterV3,
+  type CompactionLiveStateV3,
+  type CompactionResumeV3,
+  type CompactionSummaryMetricsV3,
+  type CompactionSummaryV3,
+  type SummarizeSpanV3Input,
+  type SummarizeSpanV3Options,
+} from './summarizer-v3.js';
 
 /**
  * LLM-driven compaction summarizer.
@@ -262,10 +295,15 @@ function formatSpanForPrompt(messages: AgentMessage[]): string {
 export async function summarizeSpan(
   messages: AgentMessage[],
   provider: ChatProvider,
+  options: SummarizeSpanV3Options = {},
 ): Promise<CompactionSummary | null> {
   if (messages.length === 0) return null;
   try {
     const useV2 = isStructuredSummaryEnabled();
+    if (useV2) {
+      const v3 = await summarizeSpanV3({ messages }, provider, options);
+      return v3 ? summaryV3ToLegacy(v3) : null;
+    }
     const systemPrompt = loadPrompt(useV2 ? 'summarize-v2' : 'summarize');
     const userContent = formatSpanForPrompt(messages);
     console.log(
@@ -302,10 +340,15 @@ export async function summarizeSpan(
 export async function summarizeSpanV2(
   messages: AgentMessage[],
   provider: ChatProvider,
+  options: SummarizeSpanV3Options = {},
 ): Promise<CompactionSummaryV2 | null> {
   if (messages.length === 0) return null;
   try {
     const useV2 = isStructuredSummaryEnabled();
+    if (useV2) {
+      const v3 = await summarizeSpanV3({ messages }, provider, options);
+      return v3 ? summaryV3ToV2(v3) : null;
+    }
     const systemPrompt = loadPrompt(useV2 ? 'summarize-v2' : 'summarize');
     const userContent = formatSpanForPrompt(messages);
     let fullText = '';

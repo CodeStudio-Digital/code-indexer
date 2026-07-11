@@ -41,13 +41,13 @@ import type {
  */
 const BUILTIN_CLASSIFICATION: Record<
   string,
-  Pick<CoderTool, 'mutates' | 'parallelSafe' | 'riskLevel' | 'scopeAware' | 'interactive'>
+  Pick<CoderTool, 'mutates' | 'parallelSafe' | 'riskLevel' | 'scopeAware' | 'interactive' | 'repeatPolicy' | 'executionClass'>
 > = {
   // ─── Filesystem reads ─────────────────────────────────────────
   read_file:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   list_directory:   { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   glob:             { mutates: false, parallelSafe: true,  riskLevel: 'read' },
-  get_diagnostics:  { mutates: false, parallelSafe: true,  riskLevel: 'read' },
+  get_diagnostics:  { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
   get_tool_output:  { mutates: false, parallelSafe: true,  riskLevel: 'read' },
 
   // ─── Filesystem writes (path-scoped) ──────────────────────────
@@ -67,25 +67,26 @@ const BUILTIN_CLASSIFICATION: Record<
   // what the agent needs to explore the workspace before submitting a
   // plan. `parallelSafe: false` because shell side effects make
   // parallel dispatch unsafe regardless of how the gate resolves.
-  run_command:      { mutates: false, parallelSafe: false, riskLevel: 'execute' },
+  run_command:      { mutates: false, parallelSafe: false, riskLevel: 'execute', repeatPolicy: 'volatile', executionClass: 'execute' },
+  code_exec:        { mutates: false, parallelSafe: true,  riskLevel: 'read',    repeatPolicy: 'volatile', executionClass: 'execute' },
 
   // ─── Git ──────────────────────────────────────────────────────
-  git_status:       { mutates: false, parallelSafe: true,  riskLevel: 'read' },
-  git_diff:         { mutates: false, parallelSafe: true,  riskLevel: 'read' },
-  git_log:          { mutates: false, parallelSafe: true,  riskLevel: 'read' },
+  git_status:       { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
+  git_diff:         { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
+  git_log:          { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
   git_add:          { mutates: true,  parallelSafe: false, riskLevel: 'admin' },
   git_commit:       { mutates: true,  parallelSafe: false, riskLevel: 'admin' },
   git_branch:       { mutates: true,  parallelSafe: false, riskLevel: 'admin' },
 
   // ─── Web / external IO (read-only) ────────────────────────────
-  web_fetch:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },
-  web_search:       { mutates: false, parallelSafe: true,  riskLevel: 'read' },
+  web_fetch:        { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
+  web_search:       { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
 
   // ─── LSP (read) ───────────────────────────────────────────────
   lsp_definition:   { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   lsp_references:   { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   lsp_hover:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },
-  lsp_diagnostics:  { mutates: false, parallelSafe: true,  riskLevel: 'read' },
+  lsp_diagnostics:  { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
 
   // ─── Worktree (admin) ─────────────────────────────────────────
   enter_worktree:   { mutates: true, parallelSafe: false, riskLevel: 'admin' },
@@ -177,8 +178,10 @@ export function resolveToolMetadata(tool: CoderTool): ResolvedToolMetadata {
   const scopeAware = tool.scopeAware ?? builtin?.scopeAware ?? false;
   const interactive = tool.interactive ?? builtin?.interactive ?? false;
   const repeatPolicy: ToolRepeatPolicy = tool.repeatPolicy
+    ?? builtin?.repeatPolicy
     ?? (tool.repeatable ? 'pollable' : mutates ? 'mutating' : 'stable');
   const executionClass: ToolExecutionClass = tool.executionClass
+    ?? builtin?.executionClass
     ?? (interactive || riskLevel === 'admin' ? 'control'
       : riskLevel === 'execute' ? 'execute'
         : mutates ? 'write' : 'read');

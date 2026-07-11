@@ -44,6 +44,11 @@ export function globalWorkspaceDir(
   return join(globalWorkspacesBaseDir(env), String(id));
 }
 
+/** Side-file storage for coder tool outputs that must not live in a project. */
+export function coderToolOutputsBaseDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(mcpDataDir(env), 'coder-tool-outputs');
+}
+
 /** Uploaded Design System theme zips. */
 export function designSystemUploadsDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(mcpDataDir(env), 'design-system-uploads');

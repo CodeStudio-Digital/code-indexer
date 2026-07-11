@@ -16,6 +16,11 @@ import {
   type StructuralExecutor,
   type StructuralProgressFrame,
 } from './types.js';
+import {
+  isStructurallyReady,
+  waitForStructuralReadiness,
+  type StructuralReadinessResult,
+} from './structural-readiness.js';
 
 export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch';
 
@@ -95,6 +100,10 @@ export class ProjectIndexService {
       return; // fresh enough — the watcher is keeping it current
     }
     this.lastEnsureAt.set(projectId, Date.now());
+    // Expose global busy state before create-session lets the composer send.
+    if (this.db.getProject(projectId)?.is_synthetic) {
+      this.status.setPhase(projectId, 'scanning');
+    }
     // The cheap .git watcher starts on open so branch switches re-index.
     // The recursive working-tree watcher is delayed until the UI asks for
     // live fs events, keeping project mount off the hot path.
@@ -116,6 +125,32 @@ export class ProjectIndexService {
     }, delay);
     t.unref?.();
     this.pendingOpen.set(projectId, t);
+  }
+
+  /** Force a pending structural pass now and wait for a searchable index. */
+  ensureStructuralReady(projectId: number, timeoutMs: number, signal?: AbortSignal): Promise<StructuralReadinessResult> {
+    const current = this.getStatus(projectId);
+    if (signal?.aborted) {
+      return Promise.resolve({ status: 'aborted', phase: current.phase });
+    }
+    const hasOutstandingRun = this.running.has(projectId) || this.pendingOpen.has(projectId);
+    if (isStructurallyReady(current) && !hasOutstandingRun) {
+      return Promise.resolve({ status: 'ready', phase: current.phase });
+    }
+    const settings = this.settings();
+    return waitForStructuralReadiness({
+      getStatus: () => this.getStatus(projectId),
+      subscribe: (fn) => this.subscribe(projectId, fn),
+      timeoutMs,
+      signal,
+      waitForNextReady: isStructurallyReady(current) && hasOutstandingRun,
+      start: () => {
+        if (this.running.has(projectId)) return true;
+        if (this.disposed || !settings.autoIndex) return false;
+        this.startStructuralRun(projectId, settings, false);
+        return this.running.has(projectId);
+      },
+    });
   }
 
   /** Kick the locked structural run + drain. Cancels any deferred-open timer. */

@@ -8,6 +8,7 @@ import { ListChecks, Play, Rocket } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import type { AppStudioSessionDetail } from './app-studio-api.js';
 import { isPromptableStage, startAppStage } from './stage-prompts.js';
+import { isStageApprovalBlocked } from './stage-review-state.js';
 
 export function GuideBar({
   detail,
@@ -27,6 +28,7 @@ export function GuideBar({
   if (!pipeline) return null;
 
   const current = pipeline.stages.find((s) => s.id === pipeline.current_stage) ?? null;
+  const approvalBlocked = isStageApprovalBlocked(current);
   const index = current ? pipeline.stages.findIndex((s) => s.id === current.id) : pipeline.stages.length;
 
   return (
@@ -64,6 +66,8 @@ export function GuideBar({
           {current.id === 'launch' ? <Rocket className="mr-1 h-3 w-3" /> : <Play className="mr-1 h-3 w-3" />}
           {current.id === 'launch'
             ? t('tabs.publish')
+            : approvalBlocked
+              ? t('pipeline.resolvePending')
             : current.status === 'pending'
               ? t('pipeline.start')
               : t('pipeline.resend')}

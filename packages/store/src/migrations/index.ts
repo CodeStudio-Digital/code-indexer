@@ -220,6 +220,10 @@ import { appStudioArchitecture204 } from './204_app_studio_architecture.js';
 import { appStudioPipelineRepairs205 } from './205_app_studio_pipeline_repairs.js';
 import { codeAgentOptimizationTelemetry206 } from './206_code_agent_optimization_telemetry.js';
 import { appStudioOrphanSpecRevisions207 } from './207_app_studio_orphan_spec_revisions.js';
+import { coderSessionChapters208 } from './208_coder_session_chapters.js';
+import { coderTelemetryEligibleToolsRepair209 } from './209_coder_telemetry_eligible_tools_repair.js';
+import { coderToolCallGuardTelemetry210 } from './210_coder_tool_call_guard_telemetry.js';
+import { appStudioExperience211 } from './211_app_studio_experience.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -456,6 +460,10 @@ export const MIGRATIONS: Migration[] = [
   appStudioPipelineRepairs205,
   codeAgentOptimizationTelemetry206,
   appStudioOrphanSpecRevisions207,
+  coderSessionChapters208,
+  coderTelemetryEligibleToolsRepair209,
+  coderToolCallGuardTelemetry210,
+  appStudioExperience211,
 ];
 
 /**

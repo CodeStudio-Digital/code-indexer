@@ -6,13 +6,10 @@
  *      fired (tool + count when the event carries them) and directing a
  *      strategy change before the next tool batch. Without this the model
  *      re-entered Executing with zero steering and usually replayed the
- *      same call (the cross-cycle enforcement marker only fires after ~2
- *      full refusal cycles — this covers the FIRST one).
- *   2. Reset the dedup table so legit re-verify workflows (re-running
- *      `npm test` after a fix) aren't permanently blocked — but RETAIN the
- *      signatures that were already refusing (count ≥ `DUP_REFUSE_MIN`) for
- *      exactly one turn, so the immediate next turn can't replay the exact
- *      call that tripped the guard. Executing expires the retention.
+ *      same call. This reminder is the complete reflection path; tuple
+ *      refusal counters are no longer retained across planning cycles.
+ *   2. Reset the legacy rollback-only dedup table. Hybrid invocation state is
+ *      local to a batch/code_exec and therefore needs no cross-turn retention.
  *   2b. Reset the failure-streak table too. This is the documented "clears
  *      both together" contract (nested-observer.ts): without it, a tool that
  *      crossed the refuse threshold inside a code_exec script was pre-refused
@@ -24,7 +21,7 @@
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import type { TransitionKind } from '../types.js';
 import { events } from '../machine/events.js';
-import { resetDupCalls, DUP_REFUSE_MIN } from '../guards/tuple-hash-dedup.js';
+import { resetDupCalls } from '../guards/tuple-hash-dedup.js';
 import { resetFailureStreaks } from '../guards/failure-streak.js';
 import { buildLoopGuardReflectionMarker } from '../markers.js';
 
@@ -34,20 +31,9 @@ export class PlanningNode implements BehaviorNode {
   async execute(ctx: RunContext, lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
     const loopEvent = lastEvent?.kind === 'ToolLoopDetected' ? lastEvent : null;
 
-    // Clean slate with 1-turn retention of the offending signatures. Only
-    // the tuple-hash guard keys off `dupCalls`; the other guards' state is
-    // reset inside `evaluatePerTurnLoops` when they fire.
-    const retained = loopEvent?.guard === 'tuple-hash'
-      ? [...ctx.dupCalls].filter(([, entry]) => entry.count >= DUP_REFUSE_MIN)
-      : [];
+    // No offending signature survives Planning. In the hybrid policy the
+    // invocation state was already local; this only clears legacy rollback.
     resetDupCalls(ctx.dupCalls);
-    if (retained.length > 0) {
-      for (const [key, entry] of retained) ctx.dupCalls.set(key, entry);
-      ctx.retainedLoopKeys = {
-        keys: retained.map(([key]) => key),
-        expiresAfterTurn: ctx.turn + 1,
-      };
-    }
     // Clear the per-tool failure streaks too (see nested-observer.ts): a tool
     // that crossed the refuse threshold — especially one hit from inside a
     // code_exec script, where the nested pre-check refuses before dispatch —

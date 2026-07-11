@@ -116,7 +116,17 @@ beforeEach(() => {
       is_subagent INTEGER NOT NULL DEFAULT 0,
       subagent_profile TEXT,
       logical_operation_id TEXT,
-      productive INTEGER
+      productive INTEGER,
+      guard_action TEXT,
+      guard_reason TEXT,
+      would_block INTEGER,
+      state_epoch INTEGER,
+      result_novel INTEGER,
+      coverage_novel INTEGER,
+      delivered INTEGER,
+      repeat_policy TEXT,
+      execution_class TEXT,
+      guard_origin_tool_use_id TEXT
     );
   `);
   sessionId = mkSession();
@@ -275,6 +285,76 @@ describe('persistAssistantTurn — refusal_kind: explicit value wins, classifier
     expect(refusalKindOf('toolu_loop')).toBe('dedup');
     expect(refusalKindOf('toolu_to')).toBe('timeout');
     expect(refusalKindOf('toolu_real')).toBeNull(); // genuine failure stays NULL
+  });
+});
+
+describe('persistAssistantTurn — structured guard telemetry', () => {
+  it('preserves nullable booleans and origin attribution', () => {
+    messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'toolu_guard', name: 'read_file' }]),
+      usage: null,
+      tool_calls: [{
+        tool_use_id: 'toolu_guard',
+        tool_name: 'read_file',
+        args: { path: 'a.md' },
+        result_text: 'cached result',
+        is_error: false,
+        duration_ms: 1,
+        guard_action: 'shadow',
+        guard_reason: 'no-progress',
+        would_block: true,
+        state_epoch: 7,
+        result_novel: false,
+        coverage_novel: true,
+        delivered: true,
+        repeat_policy: 'stable',
+        execution_class: 'read',
+        guard_origin_tool_use_id: 'toolu_origin',
+      }],
+    });
+
+    const row = db.prepare(`
+      SELECT guard_action, guard_reason, would_block, state_epoch,
+             result_novel, coverage_novel, delivered, repeat_policy,
+             execution_class, guard_origin_tool_use_id
+        FROM coder_tool_calls WHERE tool_use_id = 'toolu_guard'
+    `).get() as Record<string, unknown>;
+    expect(row).toEqual({
+      guard_action: 'shadow',
+      guard_reason: 'no-progress',
+      would_block: 1,
+      state_epoch: 7,
+      result_novel: 0,
+      coverage_novel: 1,
+      delivered: 1,
+      repeat_policy: 'stable',
+      execution_class: 'read',
+      guard_origin_tool_use_id: 'toolu_origin',
+    });
+  });
+
+  it('writes the same fields through appendToolCall', () => {
+    const messageId = Number(db.prepare(`
+      INSERT INTO coder_messages (session_id, role, content_json)
+      VALUES (?, 'assistant', '[]')
+    `).run(sessionId).lastInsertRowid);
+    messages.appendToolCall(db, {
+      message_id: messageId,
+      tool_use_id: 'toolu_append_guard',
+      tool_name: 'read_file',
+      args: {},
+      result_text: 'reused',
+      is_error: false,
+      duration_ms: 0,
+      guard_action: 'reuse',
+      delivered: true,
+    });
+
+    expect(db.prepare(`
+      SELECT guard_action, delivered
+        FROM coder_tool_calls WHERE tool_use_id = 'toolu_append_guard'
+    `).get()).toEqual({ guard_action: 'reuse', delivered: 1 });
   });
 });
 

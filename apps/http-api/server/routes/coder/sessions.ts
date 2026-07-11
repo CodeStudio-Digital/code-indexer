@@ -1001,14 +1001,18 @@ export function mountCoderSessionsRoutes(
     const session = sessionStore.getSession(sessionId);
     if (!session) return notFound(c);
 
-    const beforeId = parseIntQuery(c, 'before_id', 0);
+    let beforeId = parseIntQuery(c, 'before_id', 0);
     const limit = Math.max(1, Math.min(100, parseIntQuery(c, 'limit', 40)));
     // Cross a manual "summarize & clear" boundary to reveal the archived
     // (pre-summary) transcript — driven by the dashboard's "view earlier
     // history" button.
     const includeArchived = c.req.query('include_archived') === '1';
 
-    if (!beforeId) return c.json({ error: 'before_id required' }, 400);
+    // A compacted session may have zero visible rows, so the dashboard has no
+    // earliest id to send when the user reveals the archived transcript. Use a
+    // stable exclusive upper bound in that case; ordinary callers can keep
+    // passing `before_id` unchanged.
+    if (!beforeId) beforeId = sessionStore.maxMessageId(sessionId) + 1;
 
     const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit, includeArchived);
     const tool_results = reconstructMissingToolResults(sessionStore, sessionId, data.messages);

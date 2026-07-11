@@ -5,6 +5,7 @@ import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { AgentDecisionGuidance, AgentDecisionTelemetry } from '@mcp/code-agent/agents/decision-types.js';
 import type { CoderTunables } from '@mcp/code-agent/core/tunables.js';
 import type { CoderProfile, ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import type { CompactionSummaryV3 } from '@mcp/code-agent/core/summarizer.js';
 
 /**
  * Recovery transition kinds (PR-4, Row 3 from
@@ -24,10 +25,11 @@ export type TransitionKind =
   | 'doom-loop-fuzzy'
   | 'failure-streak'
   | 'dup-call-cap'
-  | 'result-dup-cap'
+  | 'polling-stuck'
   | 'pre-read-blocked'
   | 'pre-read-allowed-elided'
   | 'pre-read-allowed-mutation'
+  | 'pre-read-shadow-allowed'
   | 'pre-read-auto-downgraded'
   | 'pre-read-coverage-pointer'
   | 'pre-read-coverage-degraded'
@@ -58,8 +60,19 @@ export interface RunResult {
   transition?: TransitionKind | null;
 }
 
+export interface CompactionCheckpoint {
+  /** The one V3 result reused for in-memory resume, persistence and harvest. */
+  summary: CompactionSummaryV3;
+  /** Exact in-memory head summarized before it is replaced. */
+  headMessages: AgentMessage[];
+  trigger?: string;
+  autoContinues: number;
+}
+
 export interface RunnerOptions {
   provider: ChatProvider;
+  /** Optional zero-temperature auxiliary binding; falls back to `provider`. */
+  compactionProvider?: ChatProvider;
   registry: ToolRegistry;
   systemPrompt: string;
   toolContext: ToolContext;
@@ -290,6 +303,18 @@ export interface RunnerOptions {
    * learned (full bodies via the recall_memory tool). Unset = off.
    */
   getProjectMemoryIndex?: () => ReadonlyArray<{ title: string; category: string }> | null;
+  /** Titles-only index of immutable summaries for this coder session. */
+  getConversationChapterIndex?: () => {
+    total: number;
+    entries: ReadonlyArray<{ id: number; ordinal: number; title: string; source?: string }>;
+  } | null;
+  /** Up to two bounded excerpts for a materially new task in this session. */
+  getRelevantConversationChapters?: (
+    taskText: string,
+    turn: number,
+  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  /** Best-effort durable checkpoint for a successfully produced V3 summary. */
+  onCompactionCheckpoint?: (checkpoint: CompactionCheckpoint) => Promise<void>;
   /**
    * Global user-preferences index (migration 145) — top-N user/feedback
    * memories injected into every project, NOT gated by the project toggle.

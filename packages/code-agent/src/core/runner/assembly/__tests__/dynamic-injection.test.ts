@@ -202,6 +202,22 @@ describe('computeDynamicInjection', () => {
     }))).toBeNull();
   });
 
+  it('auto-recalls at most two conversation excerpts capped to 400 chars each', () => {
+    const out = computeDynamicInjection(baseCtx({
+      relevantConversationChapters: [
+        { id: 'c1', title: 'First', content: 'a'.repeat(900) },
+        { id: 'c2', title: 'Second', content: 'b'.repeat(900) },
+        { id: 'c3', title: 'Third', content: 'must not be injected' },
+      ],
+    }))!;
+    expect(out.includedConversationChapterIds).toEqual(['c1', 'c2']);
+    expect(out.reminder).not.toContain('Third');
+    expect(out.reminder).not.toContain('must not be injected');
+    const excerptPayload = out.reminder.slice(out.reminder.indexOf('- First:'));
+    expect((excerptPayload.match(/a/g) ?? []).length).toBeLessThanOrEqual(400);
+    expect((excerptPayload.match(/b/g) ?? []).length).toBeLessThanOrEqual(400);
+  });
+
   it('surfaces the self_review nudge when hasReviewableChanges is set (alone)', () => {
     const out = computeDynamicInjection(baseCtx({ hasReviewableChanges: true }));
     expect(out).not.toBeNull();

@@ -101,23 +101,23 @@ export function impactFromSpecDiff(diff: AppSpecDiff): AppSpecImpact {
   }
 
   if (collectionHasChanges(diff.entities)) {
-    addStages(stages, ['database', 'backend', 'review']);
+    addStages(stages, ['database', 'ux', 'wireframe', 'design', 'backend', 'review']);
     reasons.push('Dados/tabelas mudaram; a estrutura do banco e as regras por tras das telas precisam ser revisitadas.');
   }
   if (collectionHasChanges(diff.screens) || collectionHasChanges(diff.features) || diff.designChanged) {
-    addStages(stages, ['design', 'backend', 'review']);
+    addStages(stages, ['ux', 'wireframe', 'design', 'backend', 'review']);
     reasons.push('Telas, recursos ou direcao visual mudaram; a interface e a ligacao com dados podem precisar de ajuste.');
   }
   if (collectionHasChanges(diff.behaviors)) {
-    addStages(stages, ['backend', 'review']);
+    addStages(stages, ['wireframe', 'design', 'backend', 'review']);
     reasons.push('Acoes do app mudaram; botoes, formularios ou avisos precisam ser conferidos.');
   }
   if (diff.authChanged) {
-    addStages(stages, ['backend', 'review']);
+    addStages(stages, ['ux', 'wireframe', 'design', 'backend', 'review']);
     reasons.push('Login ou telas protegidas mudaram; regras de acesso precisam ser conferidas.');
   }
   if (diff.summaryChanged || diff.audienceChanged || diff.requirementsChanged) {
-    stages.add('review');
+    addStages(stages, ['ux', 'wireframe', 'design', 'review']);
     reasons.push('Objetivo, publico ou criterios de aceite mudaram; a revisao final precisa considerar o novo combinado.');
   }
 
@@ -147,10 +147,12 @@ const STAGE_ORDER: Record<AppStageId, number> = {
   discovery: 0,
   architecture: 1,
   database: 2,
-  design: 3,
-  backend: 4,
-  review: 5,
-  launch: 6,
+  ux: 3,
+  wireframe: 4,
+  design: 5,
+  backend: 6,
+  review: 7,
+  launch: 8,
 };
 
 function emptyCollectionDiff(): AppSpecCollectionDiff {

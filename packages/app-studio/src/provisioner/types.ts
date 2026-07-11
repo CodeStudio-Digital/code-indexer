@@ -35,6 +35,10 @@ export interface ProvisionOutcome {
   /** Migrations aplicadas nesta execução (nomes de arquivo). */
   applied: string[];
   error?: string;
+  /** Distinguishes schema application from example-data synchronization. */
+  phase?: 'migration' | 'seed';
+  /** True when migrations succeeded even if the seed phase failed. */
+  schemaReady?: boolean;
 }
 
 export interface DatabaseProvisioner {

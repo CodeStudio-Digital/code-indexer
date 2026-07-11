@@ -140,6 +140,35 @@ export function renderMemoryIndex(
 }
 
 /**
+ * Render the session-scoped conversation chapter table of contents. Only titles
+ * are injected; full summaries and source messages stay behind the
+ * `recall_conversation` tool so prompt cost remains bounded as the session grows.
+ */
+export function renderConversationChapterIndex(
+  entries: ReadonlyArray<{ id: number; ordinal: number; title: string; source?: string }>,
+  total: number,
+  maxChars: number,
+): string | null {
+  if (maxChars <= 0 || entries.length === 0) return null;
+  const open = '<conversation-chapters>\n';
+  const close = '\n</conversation-chapters>';
+  const innerBudget = Math.max(0, maxChars - open.length - close.length);
+  const header =
+    `conversation chapters (${total} total; titles only — call recall_conversation to search/read/source):`;
+  if (header.length >= innerBudget) return null;
+  const lines: string[] = [header];
+  let used = header.length;
+  for (const entry of entries.slice(0, 10)) {
+    const source = entry.source ? ` · ${entry.source}` : '';
+    const line = `- #${entry.ordinal} [id=${entry.id}${source}] ${excerpt(entry.title, 100)}`;
+    if (used + line.length + 1 > innerBudget) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.length > 1 ? `${open}${lines.join('\n')}${close}` : null;
+}
+
+/**
  * Render the GLOBAL user-preferences block (migration 145): who the user is +
  * how they want the agent to work, applied to EVERY project. Unlike the
  * project index this carries short bodies (the preference itself is the

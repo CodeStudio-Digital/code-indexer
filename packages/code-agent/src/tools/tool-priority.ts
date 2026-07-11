@@ -54,6 +54,9 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   // injection + run-end distiller cover the rest passively, model-independent.)
   'remember',
   'recall_memory',
+  // Session-local append-only history. The chapter index explicitly points
+  // the model here after compaction, so the tool must survive small catalogs.
+  'recall_conversation',
   // self_review — the Executing-node nudge (dynamic-injection.ts) tells the
   // agent to call `self_review` by NAME before declaring done whenever the
   // session has pending changes. As a bootstrap-tier tool that is NOT in

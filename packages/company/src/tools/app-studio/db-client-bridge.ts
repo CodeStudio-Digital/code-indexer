@@ -73,7 +73,9 @@ function connectionInput(session: AppStudioSession, dbFile: string): CreateDbCon
     options: managedOptions(session),
     color: APP_STUDIO_DB_CONNECTION_COLOR,
     group_name: APP_STUDIO_DB_CONNECTION_GROUP,
-    is_read_only: false,
+    // App Studio schema/data writes must go through versioned app_* tools.
+    // The native DB client remains available to specialists for inspection.
+    is_read_only: true,
   };
 }
 

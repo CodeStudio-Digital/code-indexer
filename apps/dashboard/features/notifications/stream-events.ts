@@ -17,11 +17,12 @@ export function notifyCoderStreamEvent(
   if (!context?.target) return;
   const target = context.target;
   const label = target.label ?? `Session #${sessionId}`;
+  const publish = (event: AppNotificationEvent) => emit(event, context.dedupeKey);
 
   if (eventName === 'tool_approval_request') {
     const toolUseId = readString(data, 'toolUseId');
     const toolName = readString(data, 'toolName') ?? 'tool';
-    emit({
+    publish({
       kind: 'human_action_required',
       target,
       id: `tool_approval_request:${toolUseId ?? 'unknown'}`,
@@ -33,28 +34,28 @@ export function notifyCoderStreamEvent(
   }
 
   if (eventName === 'plan') {
-    emit(actionEvent(target, label, `plan:${readString(data, 'id') ?? 'unknown'}`, 'notifications.reviewPlanAction'));
+    publish(actionEvent(target, label, `plan:${readString(data, 'id') ?? 'unknown'}`, 'notifications.reviewPlanAction'));
     return;
   }
 
   if (eventName === 'question') {
-    emit(actionEvent(target, label, `question:${readString(data, 'id') ?? 'unknown'}`, 'notifications.answerQuestionAction'));
+    publish(actionEvent(target, label, `question:${readString(data, 'id') ?? 'unknown'}`, 'notifications.answerQuestionAction'));
     return;
   }
 
   if (eventName === 'tasks_posted') {
-    emit(actionEvent(target, label, `tasks_posted:${readString(data, 'tool_use_id') ?? 'unknown'}`, 'notifications.reviewTasksAction'));
+    publish(actionEvent(target, label, `tasks_posted:${readString(data, 'tool_use_id') ?? 'unknown'}`, 'notifications.reviewTasksAction'));
     return;
   }
 
   if (eventName === 'spec') {
-    emit(actionEvent(target, label, `spec:${readString(data, 'id') ?? 'unknown'}`, 'notifications.reviewSpecAction'));
+    publish(actionEvent(target, label, `spec:${readString(data, 'id') ?? 'unknown'}`, 'notifications.reviewSpecAction'));
     return;
   }
 
   if (eventName === 'done') {
     const error = readString(data, 'error');
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `done:${readString(data, 'reason') ?? 'completed'}:${error ?? ''}`,
@@ -68,7 +69,7 @@ export function notifyCoderStreamEvent(
   }
 
   if (eventName === 'error') {
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `error:${readString(data, 'message') ?? readString(data, 'error') ?? 'unknown'}`,
@@ -89,9 +90,10 @@ export function notifyPipelineStreamEvent(
   const target = context.pipelineTarget ?? context.target;
   const label = target.label ?? context.target.label ?? `Session #${sessionId}`;
   const executionId = readNumber(data, 'executionId') ?? readString(data, 'executionId') ?? 'unknown';
+  const publish = (event: AppNotificationEvent) => emit(event, context.dedupeKey);
 
   if (eventName === 'pipeline_paused' && readBoolean(data, 'awaitingConfirmation')) {
-    emit({
+    publish({
       kind: 'human_action_required',
       target,
       id: `pipeline_paused:${executionId}`,
@@ -103,7 +105,7 @@ export function notifyPipelineStreamEvent(
   }
 
   if (eventName === 'pipeline_completed') {
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `pipeline_completed:${executionId}`,
@@ -115,7 +117,7 @@ export function notifyPipelineStreamEvent(
   }
 
   if (eventName === 'pipeline_aborted') {
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `pipeline_aborted:${executionId}`,
@@ -127,7 +129,7 @@ export function notifyPipelineStreamEvent(
   }
 
   if (eventName === 'pipeline_failed') {
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `pipeline_failed:${executionId}`,
@@ -152,19 +154,20 @@ export function notifyCompanyStreamEvent(
 
   const target = context.target;
   const label = target.label ?? `Company session #${companySessionId}`;
+  const publish = (event: AppNotificationEvent) => emit(event, context.dedupeKey);
 
   if (eventName === 'master_plan_posted') {
-    emit(actionEvent(target, label, `master_plan_posted:${masterPromptId(data)}`, 'notifications.reviewMasterPlanAction'));
+    publish(actionEvent(target, label, `master_plan_posted:${masterPromptId(data)}`, 'notifications.reviewMasterPlanAction'));
     return;
   }
 
   if (eventName === 'master_question_posted') {
-    emit(actionEvent(target, label, `master_question_posted:${masterPromptId(data)}`, 'notifications.answerMasterQuestionAction'));
+    publish(actionEvent(target, label, `master_question_posted:${masterPromptId(data)}`, 'notifications.answerMasterQuestionAction'));
     return;
   }
 
   if (eventName === 'session_idle') {
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `session_idle:${readString(data, 'reason') ?? readString(data, 'endedAt') ?? 'idle'}`,
@@ -176,7 +179,7 @@ export function notifyCompanyStreamEvent(
   }
 
   if (eventName === 'done') {
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `done:${readString(data, 'reason') ?? 'completed'}`,
@@ -188,7 +191,7 @@ export function notifyCompanyStreamEvent(
   }
 
   if (eventName === 'error') {
-    emit({
+    publish({
       kind: 'session_finished',
       target,
       id: `error:${readString(data, 'error') ?? readString(data, 'message') ?? 'unknown'}`,
@@ -215,8 +218,8 @@ function actionEvent(
   };
 }
 
-function emit(event: AppNotificationEvent): void {
-  void emitAppNotification(event);
+function emit(event: AppNotificationEvent, dedupeKey?: string): void {
+  void emitAppNotification(dedupeKey ? { ...event, dedupeKey } : event);
 }
 
 function masterPromptId(data: Payload): string {

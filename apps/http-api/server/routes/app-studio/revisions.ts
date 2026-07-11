@@ -39,6 +39,8 @@ const RESET_FEATURES_FROM_STAGE: Record<AppStageId, AppStudioFeatureKind[]> = {
   discovery: ['screen', 'api', 'feature'],
   architecture: ['screen', 'api', 'feature'],
   database: ['screen', 'api', 'feature'],
+  ux: ['screen', 'api', 'feature'],
+  wireframe: ['screen', 'api', 'feature'],
   design: ['screen', 'api', 'feature'],
   backend: ['api', 'feature'],
   review: [],
@@ -264,10 +266,12 @@ const APP_STAGE_ORDER: Record<AppStageId, number> = {
   discovery: 0,
   architecture: 1,
   database: 2,
-  design: 3,
-  backend: 4,
-  review: 5,
-  launch: 6,
+  ux: 3,
+  wireframe: 4,
+  design: 5,
+  backend: 6,
+  review: 7,
+  launch: 8,
 };
 
 function writeSpecMirrorBestEffort(db: ServerDeps['db'], projectId: number, spec: AppSpec): void {

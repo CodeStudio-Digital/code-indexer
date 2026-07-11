@@ -65,7 +65,7 @@ runner/
 │
 ├── guards/                               ── GUARDAS PUROS
 │   ├── tuple-hash-dedup.ts         (137)  Kimi-style — 2ª call = reminder, 3ª = refuse
-│   ├── doom-loop.ts                (107)  backstop session-level (strict 3 turns, fuzzy 6 turns)
+│   ├── doom-loop.ts                (107)  rollback legacy de assinaturas cross-turn
 │   ├── max-turns.ts                 (42)  limit + auto-continue (default 3)
 │   ├── task-mode-gate.ts            (80)  refuse write tools quando all-subagent + tasks pending
 │   └── __tests__/*.test.ts                9+6+5+9 tests
@@ -132,7 +132,7 @@ Cada item foi 1 task fechada. Tudo entregue com testes verdes ao final.
 `compaction/threshold.ts` (`shouldCompact90`), `summary-renderer.ts` (CompactionSummaryV2 → AgentMessage), `llm-compactor.ts` (cutoff + recede-last-N-turns + snap-pairs + summarize). Reusa `summarizeSpanV2` + `renderSummaryV2` existentes. Compacting chama compactor; Reviewing valida invariantes pós.
 
 ### Commit 5 — Guards + Planning
-`tuple-hash-dedup.ts` (Kimi-style, 137 LOC), `doom-loop.ts` (backstop, 107 LOC), `max-turns.ts` (42 LOC). PlanningNode real — reset `ctx.dupCalls`, registra `ctx.transition`.
+`tuple-hash-dedup.ts` (guard local por invocation/epoch), `no-progress.ts` (shadow pós-resultado), `doom-loop.ts` (rollback legacy) e `max-turns.ts`. PlanningNode real — limpa apenas o estado legacy e registra `ctx.transition`.
 
 ### Commit 6 — Executing real
 `executing-stream.ts` (consumer puro), `executing-dispatch.ts` (dispatch serial + guards), `executing.ts` (orquestra). Cobre happy path + token threshold + tool loop detection. Features avançadas faltantes: documentadas.
@@ -353,9 +353,9 @@ execute_tasks()
 ### Doom-loop / dup-call (legado, ainda relevante)
 | Env | Default | Função |
 |---|---|---|
-| `CODER_DOOM_LOOP_THRESHOLD` | `3` | Strict — N turns idênticos consecutivos |
-| `CODER_DOOM_LOOP_FUZZY_THRESHOLD` | `6` | Fuzzy — N turns com mesmo conjunto de nomes |
-| `CODER_DUP_CALL_THRESHOLD` | `5` | Cap legado dup-call (BT usa tuple-hash em vez) |
+| `CODER_DOOM_LOOP_THRESHOLD` | `3` | Rollback legacy — N turns idênticos consecutivos |
+| `CODER_DOOM_LOOP_FUZZY_THRESHOLD` | `6` | Rollback legacy — N turns com mesmo conjunto de nomes |
+| `CODER_DEDUP_POLICY` | `hybrid` | `hybrid` local seguro, `observe` shadow, `legacy` rollback temporário |
 
 ---
 

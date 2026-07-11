@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildPlugin } from '../build.js';
@@ -17,9 +18,10 @@ const PLUGIN_JSON = JSON.stringify({
 
 // Inline module (no SDK import) keeps the test independent of esbuild's
 // node_modules resolution from a temp dir — it exercises bundle + extract.
-const PLUGIN_TS = `export default {
+const PLUGIN_TS = `import runtimeBuiltin from './runtime.cjs';
+export default {
   tools: [
-    { name: 'echo', description: 'Echo', parameters: { type: 'object', properties: { text: { type: 'string' } } }, mutates: false, handler: async (a) => ({ content: String(a.text ?? '') }) },
+    { name: 'echo', description: 'Echo', parameters: { type: 'object', properties: { text: { type: 'string' } } }, mutates: false, handler: async (a) => ({ content: a.builtin ? runtimeBuiltin() : String(a.text ?? '') }) },
   ],
   toolWindows: [],
   commands: [{ id: 'c', label: 'C' }],
@@ -32,6 +34,13 @@ beforeEach(() => {
   mkdirSync(join(dir, 'src'), { recursive: true });
   writeFileSync(join(dir, 'plugin.json'), PLUGIN_JSON);
   writeFileSync(join(dir, 'src', 'plugin.ts'), PLUGIN_TS);
+  // Defer the builtin require until the handler runs. The bundle can import
+  // successfully without a require shim; invoking the handler is the
+  // regression that used to throw `Dynamic require of "node:stream" is not supported`.
+  writeFileSync(
+    join(dir, 'src', 'runtime.cjs'),
+    `module.exports = () => require('node:stream').Readable.name;\n`,
+  );
 });
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -41,6 +50,10 @@ describe('buildPlugin', () => {
     const r = await buildPlugin(dir);
     expect(existsSync(r.bundle)).toBe(true);
     expect(r.tools).toBe(1);
+    expect(JSON.parse(readFileSync(join(dir, 'dist', 'package.json'), 'utf8'))).toEqual({
+      type: 'module',
+      mcpPluginRuntimeFormat: 4,
+    });
 
     const app = JSON.parse(readFileSync(r.appJson, 'utf8'));
     expect(app.worker).toBe('./dist/plugin.js');
@@ -48,6 +61,26 @@ describe('buildPlugin', () => {
     expect(app.tools[0].mutates).toBe(false);
     expect(app.tools[0].handler).toBeUndefined();
     expect(app.commands[0].id).toBe('c');
+  });
+
+  it('supports deferred CommonJS builtin requires from a clean ESM process', async () => {
+    const r = await buildPlugin(dir);
+    const probe = [
+      `import { pathToFileURL } from 'node:url';`,
+      `const mod = await import(pathToFileURL(process.argv[1]).href);`,
+      `const result = await mod.default.tools[0].handler({ builtin: true }, {});`,
+      `console.log(result.content);`,
+    ].join('\n');
+    const child = spawnSync(process.execPath, ['--input-type=module', '--eval', probe, r.bundle], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      },
+    });
+
+    expect(child.status, child.stderr).toBe(0);
+    expect(child.stdout.trim()).toBe('Readable');
   });
 
   it('validatePlugin passes on the built dir', async () => {

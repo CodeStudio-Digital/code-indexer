@@ -149,6 +149,43 @@ describe('compactWithLLM', () => {
     expect(result.error?.message).toBe('LLM down');
   });
 
+  it('aborts a stalled summarizer without waiting for the provider', async () => {
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      messages.push(user(`u${i}`));
+      messages.push(assistant(`a${i}`));
+    }
+    const controller = new AbortController();
+    const pending = compactWithLLM({
+      messages,
+      protectTokens: 10,
+      summaryProvider: NEVER_CALLED_PROVIDER,
+      summarize: async () => new Promise<never>(() => {}),
+      signal: controller.signal,
+    });
+    controller.abort();
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.error?.name).toBe('AbortError');
+  });
+
+  it('enforces the hard summarizer timeout for injected implementations too', async () => {
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      messages.push(user(`u${i}`));
+      messages.push(assistant(`a${i}`));
+    }
+    const result = await compactWithLLM({
+      messages,
+      protectTokens: 10,
+      summaryProvider: NEVER_CALLED_PROVIDER,
+      summarize: async () => new Promise<never>(() => {}),
+      summaryTimeoutMs: 5,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.name).toBe('TimeoutError');
+  });
+
   it('compacts within a single long user turn when maxTailTokens is set (no-op without it)', async () => {
     // One user message + many assistant turns → only ONE user turn in history.
     // That's what makes recede preserve everything and the compactor no-op.
@@ -179,6 +216,7 @@ describe('compactWithLLM', () => {
     });
     expect(withBudget.collapsedFrom).toBeGreaterThan(0);
     expect(withBudget.collapsedTo).toBe(1);
+    expect(withBudget.summary?.version).toBe(3);
     expect(withBudget.messages[0].role).toBe('user'); // synthetic summary
     expect(withBudget.messages.length).toBeLessThan(messages.length);
   });

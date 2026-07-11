@@ -16,6 +16,8 @@ import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import type { AppStudioSession } from '@mcp/store/app-studio-store.js';
 import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
+import { auditAppUxBrief, auditAppWireframePlan } from '@mcp/app-studio/experience/audit.js';
+import { parseAppUxBrief, parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 
@@ -76,6 +78,10 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
     const architectureRevision = appStudioStore.getLatestArchitectureRevision(id);
     const architecture = parseAppArchitecturePlan(architectureRevision?.architecture_json);
     const spec = parseAppSpec(session.spec_json);
+    const uxRevision = appStudioStore.getLatestUxRevision(id);
+    const ux = parseAppUxBrief(uxRevision?.ux_json);
+    const wireframeRevision = appStudioStore.getLatestWireframeRevision(id);
+    const wireframe = parseAppWireframePlan(wireframeRevision?.wireframe_json);
     return c.json({
       session,
       project: enriched.project,
@@ -93,6 +99,35 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
         plan: architecture,
         audit: auditAppArchitecture(architecture, spec),
       } : null,
+      ux: uxRevision && ux ? {
+        id: uxRevision.id,
+        revision_number: uxRevision.revision_number,
+        spec_revision_id: uxRevision.spec_revision_id,
+        architecture_revision_id: uxRevision.architecture_revision_id,
+        data_fingerprint: uxRevision.data_fingerprint,
+        status: uxRevision.status,
+        created_at: uxRevision.created_at,
+        updated_at: uxRevision.updated_at,
+        approved_at: uxRevision.approved_at,
+        brief: ux,
+        audit: auditAppUxBrief(ux),
+      } : null,
+      wireframe: wireframeRevision && wireframe ? {
+        id: wireframeRevision.id,
+        revision_number: wireframeRevision.revision_number,
+        spec_revision_id: wireframeRevision.spec_revision_id,
+        architecture_revision_id: wireframeRevision.architecture_revision_id,
+        ux_revision_id: wireframeRevision.ux_revision_id,
+        data_fingerprint: wireframeRevision.data_fingerprint,
+        status: wireframeRevision.status,
+        created_at: wireframeRevision.created_at,
+        updated_at: wireframeRevision.updated_at,
+        approved_at: wireframeRevision.approved_at,
+        plan: wireframe,
+        audit: auditAppWireframePlan(wireframe, spec, architecture),
+      } : null,
+      build_groups: wireframeRevision ? appStudioStore.listBuildGroups(wireframeRevision.id) : [],
+      build_tasks: wireframeRevision ? appStudioStore.listBuildTaskEvidence(wireframeRevision.id) : [],
       deploy: parseJsonColumn(session.deploy_json),
       features: appStudioStore.listFeatures(id),
     });

@@ -94,6 +94,8 @@ export async function resolveCreds(
     return def.resolveCredentials({
       config: cfg,
       credentials: providerCredentials(cfg),
+      resolveHostCredentials:
+        def.kind === 'claude-code' ? () => resolveClaudeCodeCreds(cfg) : undefined,
       fetch,
       log: (message) => console.warn(`[provider:${def.kind}] ${message}`),
     });

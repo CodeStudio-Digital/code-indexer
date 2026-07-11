@@ -16,5 +16,8 @@ describe('App Studio migration contract', () => {
     expect(validateAppMigrationSql('-- comment only')).toContain('at least one SQL statement');
     expect(validateAppMigrationSql('INSERT INTO clubes VALUES (1);')).toContain('schema migration');
     expect(validateAppMigrationSql("ATTACH DATABASE 'x' AS external; CREATE TABLE x(id INTEGER);")).toContain('unsafe');
+    expect(validateAppMigrationSql('PRAGMA foreign_keys = OFF; CREATE TABLE x(id INTEGER);')).toContain('destructive');
+    expect(validateAppMigrationSql('DROP TABLE clubes;')).toContain('destructive');
+    expect(validateAppMigrationSql('ALTER TABLE clubes RENAME TO clubes_anterior;')).toContain('destructive');
   });
 });

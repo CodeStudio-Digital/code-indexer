@@ -52,15 +52,31 @@ function makeRunner() {
 
 function setup(
   recentMessageKeys: Pick<RecentMessageKeys, 'lookup' | 'record'> = new RecentMessageKeys(),
-  opts: { sessionAgent?: string | null } = {},
+  opts: {
+    sessionAgent?: string | null;
+    globalFresh?: boolean;
+    ensureStructuralReady?: () => Promise<{
+      status: 'ready' | 'aborted' | 'disabled' | 'timeout' | 'error' | 'too_large';
+      phase: 'none' | 'scanning' | 'structural_indexing' | 'structural_ready' | 'semantic_indexing' | 'semantic_ready' | 'too_large' | 'error';
+      error?: string;
+    }>;
+  } = {},
 ) {
   const appendCalls: unknown[] = [];
+  const projectId = opts.globalFresh ? 99 : null;
   const sessionStore = {
-    getSession: (id: number) => ({ id, project_id: null, status: 'idle', agent: opts.sessionAgent ?? null }),
-    getMessageCount: () => 1,
+    getSession: (id: number) => ({
+      id,
+      project_id: projectId,
+      status: 'idle',
+      agent: opts.sessionAgent ?? null,
+      is_global: !!opts.globalFresh,
+      compaction_summary: null,
+    }),
+    getMessageCount: () => opts.globalFresh ? 0 : 1,
     appendMessage: (_id: number, msg: unknown) => { appendCalls.push(msg); return appendCalls.length; },
     loadSessionWithMessages: (id: number) => ({
-      session: { id, project_id: null, agent: opts.sessionAgent ?? null },
+      session: { id, project_id: projectId, agent: opts.sessionAgent ?? null },
       messages: [{ role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1' }] }],
     }),
   };
@@ -68,7 +84,13 @@ function setup(
     sessionStore,
     providerStore: { getProvider: () => undefined, listModels: () => [] },
     db: { getProject: () => null },
-    projectIndexService: { ensureFresh: () => {} },
+    projectIndexService: {
+      ensureFresh: () => {},
+      ensureStructuralReady: opts.ensureStructuralReady ?? (async () => ({
+        status: 'ready' as const,
+        phase: 'structural_ready' as const,
+      })),
+    },
     taskPreflight: { run: async () => ({ status: 'unconfigured' }) },
     buildAgentDecisionRuntimeOptions: () => ({}),
     buildToolSelectionFilter: () => undefined,
@@ -124,6 +146,35 @@ afterEach(() => {
 });
 
 describe('POST /messages idempotency', () => {
+  it('does not start a fresh global runner before structural indexing is ready', async () => {
+    let release!: (value: { status: 'ready'; phase: 'structural_ready' }) => void;
+    const gate = vi.fn(() => new Promise<{ status: 'ready'; phase: 'structural_ready' }>((resolve) => {
+      release = resolve;
+    }));
+    const h = setup(new RecentMessageKeys(), { globalFresh: true, ensureStructuralReady: gate });
+
+    const pending = h.post('/api/coder/sessions/1/messages', { content: 'inspect global workspace' });
+    await vi.waitFor(() => expect(gate).toHaveBeenCalledTimes(1));
+    expect(runCoderMock).not.toHaveBeenCalled();
+
+    release({ status: 'ready', phase: 'structural_ready' });
+    const response = await pending;
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('returns without starting the agent when the global index gate times out', async () => {
+    const h = setup(new RecentMessageKeys(), {
+      globalFresh: true,
+      ensureStructuralReady: async () => ({ status: 'timeout', phase: 'scanning' }),
+    });
+
+    const response = await h.post('/api/coder/sessions/1/messages', { content: 'inspect global workspace' });
+    expect(response.status).toBe(425);
+    expect(await response.json()).toMatchObject({ code: 'GLOBAL_INDEX_NOT_READY', phase: 'scanning' });
+    expect(runCoderMock).not.toHaveBeenCalled();
+  });
+
   it('a retry with the same client_msg_id does not re-append into a live run', async () => {
     const h = setup();
     const live = seedLiveRun(h.activeRuns, 1);

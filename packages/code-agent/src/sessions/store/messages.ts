@@ -113,6 +113,18 @@ export interface AppendToolCallInput {
   subagent_profile?: string | null;
   logical_operation_id?: string | null;
   productive?: boolean | null;
+  /** Structured invocation/no-progress verdict (migration 210). */
+  guard_action?: 'allow' | 'reuse' | 'warn' | 'block' | 'shadow' | null;
+  guard_reason?: string | null;
+  would_block?: boolean | null;
+  state_epoch?: number | null;
+  result_novel?: boolean | null;
+  coverage_novel?: boolean | null;
+  delivered?: boolean | null;
+  repeat_policy?: 'stable' | 'volatile' | 'pollable' | 'mutating' | null;
+  execution_class?: 'read' | 'write' | 'execute' | 'control' | null;
+  /** Tool-use id where a propagated guard refusal originated. */
+  guard_origin_tool_use_id?: string | null;
 }
 
 // Moved to tool-refusal.ts (dependency-free) so the dbWriter worker mirror
@@ -128,8 +140,12 @@ export function appendToolCall(db: DB, input: AppendToolCallInput): void {
        output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
        parent_tool_use_id, error_class, reduction_kind, reduction_technique,
        reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
-       subagent_profile, logical_operation_id, productive)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       subagent_profile, logical_operation_id, productive,
+       guard_action, guard_reason, would_block, state_epoch, result_novel,
+       coverage_novel, delivered, repeat_policy, execution_class,
+       guard_origin_tool_use_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.message_id, input.tool_use_id, input.tool_name, JSON.stringify(input.args),
     input.result_text, input.is_error ? 1 : 0, input.duration_ms,
@@ -149,6 +165,16 @@ export function appendToolCall(db: DB, input: AppendToolCallInput): void {
     input.subagent_profile ?? null,
     input.logical_operation_id ?? null,
     input.productive == null ? null : input.productive ? 1 : 0,
+    input.guard_action ?? null,
+    input.guard_reason ?? null,
+    input.would_block == null ? null : input.would_block ? 1 : 0,
+    input.state_epoch ?? null,
+    input.result_novel == null ? null : input.result_novel ? 1 : 0,
+    input.coverage_novel == null ? null : input.coverage_novel ? 1 : 0,
+    input.delivered == null ? null : input.delivered ? 1 : 0,
+    input.repeat_policy ?? null,
+    input.execution_class ?? null,
+    input.guard_origin_tool_use_id ?? null,
   );
 }
 
@@ -205,8 +231,12 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
        output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
        parent_tool_use_id, error_class, reduction_kind, reduction_technique,
        reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
-       subagent_profile, logical_operation_id, productive)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       subagent_profile, logical_operation_id, productive,
+       guard_action, guard_reason, would_block, state_epoch, result_novel,
+       coverage_novel, delivered, repeat_policy, execution_class,
+       guard_origin_tool_use_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const bumpStmt = db.prepare(`
     UPDATE coder_sessions
@@ -267,6 +297,16 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
         tc.subagent_profile ?? null,
         tc.logical_operation_id ?? null,
         tc.productive == null ? null : tc.productive ? 1 : 0,
+        tc.guard_action ?? null,
+        tc.guard_reason ?? null,
+        tc.would_block == null ? null : tc.would_block ? 1 : 0,
+        tc.state_epoch ?? null,
+        tc.result_novel == null ? null : tc.result_novel ? 1 : 0,
+        tc.coverage_novel == null ? null : tc.coverage_novel ? 1 : 0,
+        tc.delivered == null ? null : tc.delivered ? 1 : 0,
+        tc.repeat_policy ?? null,
+        tc.execution_class ?? null,
+        tc.guard_origin_tool_use_id ?? null,
       );
     };
     for (const tc of input.tool_calls) runInsertTool(tc);

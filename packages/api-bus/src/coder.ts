@@ -34,6 +34,8 @@ export type AgentPreset =
   | 'app_spec'
   | 'app_db'
   | 'app_architect'
+  | 'app_ux'
+  | 'app_wireframe'
   | 'api'
   | 'diagram'
   | 'builder';
@@ -155,9 +157,56 @@ export interface SessionStateInfo {
 
 export interface ToolCallStats {
   sessionId: number;
-  byTool: Array<{ tool: string; count: number; total_ms: number; total_chars: number }>;
-  recent: Array<{ tool: string; ts: string; duration_ms: number; chars: number }>;
-  savings: { reduced_chars: number; reduced_tokens_est: number };
+  totalCalls: number;
+  directCalls: number;
+  nestedCalls: number;
+  guardOutcomes: {
+    genuineErrors: number;
+    rootRefusals: number;
+    propagatedParentFailures: number;
+    reusedCalls: number;
+    shadowCandidates: number;
+  };
+  byName: Array<{
+    name: string;
+    count: number;
+    errorCount: number;
+    refusedCount: number;
+    propagatedFailureCount: number;
+    reuseCount: number;
+    shadowCount: number;
+    lastAt: string | null;
+  }>;
+  recent: Array<{
+    id: number;
+    name: string;
+    argsPreview: string;
+    isError: boolean;
+    durationMs: number;
+    createdAt: string;
+    outcome: 'success' | 'genuine_error' | 'root_refusal' | 'propagated_parent_failure' | 'reuse' | 'shadow';
+    guardAction: string | null;
+    guardReason: string | null;
+  }>;
+  savings: {
+    totalRawChars: number;
+    totalShapedChars: number;
+    totalSavedChars: number;
+    totalSavedTokensEst: number;
+    byTool: Array<{ name: string; rawChars: number; shapedChars: number; savedChars: number }>;
+    semanticSavedChars: number;
+    jsonCrushSavedChars: number;
+    hardCapSavedChars: number;
+    nestedRawChars: number;
+    byTechnique: Array<{
+      kind: string;
+      technique: string;
+      calls: number;
+      rawChars: number;
+      shapedChars: number;
+      savedChars: number;
+    }>;
+  };
 }
 
 // ─── Sub-namespaces ────────────────────────────────────────

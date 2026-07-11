@@ -32,6 +32,8 @@ export interface RunnerEvents {
     reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;
     outputId?: string;
     ledgerEntry?: import('@mcp/code-agent/core/tool-call-ledger.js').ToolCallLedgerEntry;
+    guardVerdict?: import('@mcp/code-agent/core/tool.js').GuardVerdict;
+    stateEpoch?: number;
   }, durationMs: number) => void;
   /**
    * Periodic heartbeat fired while a tool is in flight, and explicit
@@ -43,9 +45,9 @@ export interface RunnerEvents {
    *   2. Surfaces "still working" feedback to the user — with an optional
    *      substantive `note` ("fetched 3/10 docs") when the tool emits one.
    *
-   * Suppressed for tools whose timeoutMs is `Infinity` (interactive /
-   * repeatable) — there the runner is correctly idle, and a heartbeat
-   * would confuse the UI.
+   * Suppressed for interactive waits, where the runner is correctly idle and
+   * a heartbeat would confuse the UI. Explicitly unbounded execution still
+   * emits heartbeats.
    */
   tool_progress: (payload: { id: string; name: string; elapsedMs: number; note?: string }) => void;
   /**
@@ -482,13 +484,13 @@ export interface RunnerEvents {
     modelId: string;
   }) => void;
   /**
-   * Emitted when one of the four loop-detection guards fires. Lets the
+   * Emitted when an active loop-detection guard fires. Lets the
    * dashboard show a banner instead of just logging to the server
    * terminal — historically the user only learned about a loop by
    * noticing the session was burning tokens with no progress. The
    * snapshot carries the internal state so future debugging can answer
-   * "WHY did this guard fire and the others didn't?" without needing
-   * to enable `CODER_DOOM_LOOP_DEBUG`. Phase 3 of the "living company"
+   * "WHY did this guard fire and the others didn't?" from persisted event
+   * evidence. Phase 3 of the "living company"
    * restructure (Apêndice 3).
    */
   tool_loop_intervention: (payload:
@@ -497,11 +499,11 @@ export interface RunnerEvents {
          * Loop-guard refusal — agent is cycling and the runner stopped
          * (refused) or terminated (aborted) the call.
          */
-        kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
+        kind: 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
         turn: number;
-        /** Tool name (single) for dup-call/dominance; comma-joined for strict/fuzzy. */
+        /** Tool name (single for dominance; comma-joined for strict/fuzzy). */
         toolName: string;
-        /** Count that triggered the guard (e.g. 5 for dup-call, 6 for fuzzy). */
+        /** Count that triggered the guard. */
         count: number;
         /** Threshold the count crossed. */
         threshold: number;
@@ -523,10 +525,9 @@ export interface RunnerEvents {
     | {
         /**
          * PR 5 — failure-streak. A tool's `isError=true` results stacked
-         * past the configured threshold. Distinct from `dup-call-cap`
-         * (same args, irrespective of error) and `dup-result-marker`
-         * (same RESULT content). Only this kind fires on failure
-         * patterns where the args legitimately rotate.
+         * past the configured threshold. It catches failure patterns where
+         * arguments legitimately rotate, which invocation-local tuple guards
+         * cannot identify.
          *
          * `severity: 'informational'` → reminder injected, the call's
          * own error result is STILL delivered (model sees both).
@@ -544,56 +545,6 @@ export interface RunnerEvents {
         lastError: string;
         severity: 'informational' | 'refused';
         reason: string;
-      }
-    | {
-        /**
-         * Dup-result marker — agent re-fetched identical content. The
-         * runner reacts in one of three tiers depending on how many
-         * prior identical hits exist in the window:
-         *
-         *   - `escalationLevel: 'light'`   → light marker prefixed; full content delivered.
-         *   - `escalationLevel: 'medium'`  → warn marker prefixed (sharper language); full content still delivered.
-         *   - `escalationLevel: 'refused'` → hard refuse; content REPLACED with refusal message and `is_error=true`. Dashboard should render this in the banner.
-         *
-         * Distinct from the loop-guard variants both semantically and
-         * in the dashboard's counts. When `severity: 'informational'`
-         * the runner did NOT block the call; when `'refused'`, it did.
-         */
-        kind: 'loop-enforced';
-        turn: number;
-        toolName: string;
-        /**
-         * Cross-cycle hard-refusal count for this exact tool+args. Counts
-         * refusals that survive the per-Planning dedup reset, so it only
-         * fires for genuinely insistent loops (e.g. ≥2 refused cycles).
-         */
-        count: number;
-        /**
-         * `'enforced'` — the runner injected a strong <system-reminder>
-         * (available tools + "break out of the loop"). The supervisor
-         * records a `loop_enforced` incident and may escalate.
-         */
-        severity: 'enforced';
-        reason: string;
-      }
-    | {
-        kind: 'dup-result-marker';
-        severity: 'informational' | 'refused';
-        /** Three-tier escalation indicator — drives dashboard render. */
-        escalationLevel: 'light' | 'medium' | 'refused';
-        /** Human-readable hit number for this content (1 = first fetch,
-         *  marker never emits for 1; 2 = first duplicate; etc). */
-        hitCount: number;
-        toolName: string;
-        /** Turn where the original duplicate content was first seen. */
-        originalTurn: number;
-        currentTurn: number;
-        /** `'light'` = full content delivered, `'medium'` = head excerpt + output_id.
-         *  Only meaningful when `escalationLevel !== 'refused'`. */
-        mode: 'light' | 'medium';
-        /** True when the original tool_result block was elided by
-         *  post-compact cleanup. Drives the marker text variant. */
-        priorIsCompacted: boolean;
       }
   ) => void;
   /**

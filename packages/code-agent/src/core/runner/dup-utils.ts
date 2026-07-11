@@ -34,9 +34,8 @@ export function rowToVerdictSnapshot(
 
 /**
  * Compact preview of a tool call's input — first 80 chars of the
- * JSON-serialised args, with control chars stripped. Embedded in the
- * dup-result marker so the agent can recognise which earlier call
- * this duplicates without scanning the transcript.
+ * JSON-serialised args, with control chars stripped. Embedded in local
+ * invocation-guard reminders so the agent can identify the repeated call.
  */
 export function previewToolArgs(input: unknown): string {
   try {
@@ -52,7 +51,7 @@ export function previewToolArgs(input: unknown): string {
 
 /**
  * Canonical, key-sorted serialisation of a tool's input — used as the
- * args portion of the dup-result hash. Same logical input always
+ * args portion of invocation/coalescing keys. Same logical input always
  * produces identical bytes regardless of JS engine key-iteration
  * order; that matters because the hash IS the equality predicate for
  * "have I seen this call before".
@@ -83,13 +82,10 @@ export function stableArgsKey(input: unknown): string {
 }
 
 /**
- * PR-5 (Row 32 from docs/agent-research/COMPARISON.md): pre-read enforcement.
- * Refuses BEFORE dispatch when a read-family tool (read_file, mcp__read_file,
- * mcp__get_file_skeleton) is called with the SAME
- * path + slice fields seen recently. Tighter than the generic dup-call cap
- * (which fires only on the 5th identical call) and proactive — saves the
- * round-trip the result-dup cap would otherwise burn. Lazy-resolved so tests
- * can override.
+ * Read observation threshold. On the Nth same path/slice this enables
+ * mutation, context-visibility, and coverage checks. Hybrid/observe still
+ * execute a fresh cross-turn read; only the temporary legacy policy may turn
+ * the observation into a refusal. Lazy-resolved so tests can override.
  */
 export function readDupThreshold(): number {
   const v = process.env.CODER_READ_DUP_THRESHOLD;
@@ -97,7 +93,7 @@ export function readDupThreshold(): number {
     const n = Number(v);
     if (Number.isFinite(n) && n >= 0) return n;
   }
-  return 2; // refuse on the SECOND identical (path,slice) read
+  return 2; // observe the second identical (path,slice) read
 }
 export function readDupWindow(): number {
   const v = process.env.CODER_READ_DUP_WINDOW;
@@ -109,10 +105,8 @@ export function readDupWindow(): number {
 }
 
 /**
- * Auto-downgrade toggle. When enabled, the pre-read guard returns a
- * skeleton-style summary instead of a hard refusal. Default off — refusal
- * with rich payload is more pedagogical and avoids masking the "model is
- * stuck re-reading" signal. Set CODER_READ_AUTO_DOWNGRADE=1 to opt in.
+ * Legacy rollback toggle. When enabled under CODER_DEDUP_POLICY=legacy, the
+ * pre-read guard returns a skeleton-style pointer instead of a hard refusal.
  */
 export function readAutoDowngradeEnabled(): boolean {
   return process.env.CODER_READ_AUTO_DOWNGRADE === '1';

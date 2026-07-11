@@ -4,7 +4,7 @@ import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import { apiBaseUrl } from '../../lib/api-client.js';
 import { noteWorkerLogBus, pushWorkerLog } from './worker-log-store.js';
-import { notifyCoderStreamEvent, type NotificationSourceContext } from '../../features/notifications/index.js';
+import type { NotificationSourceContext } from '../../features/notifications/index.js';
 
 /**
  * Derive `{level, category, message}` for the worker-log entry from the
@@ -101,7 +101,7 @@ export async function openStream(
   deps: OpenStreamDeps,
   onMessageComplete?: () => void,
 ): Promise<void> {
-  const { updateSession, abortMap, lastSeenSeqMap, notificationContext } = deps;
+  const { updateSession, abortMap, lastSeenSeqMap } = deps;
 
   updateSession(sid, {
     streaming: true,
@@ -240,7 +240,6 @@ export async function openStream(
       } catch {
         return;
       }
-      notifyCoderStreamEvent(sid, ev.event, data, notificationContext);
       // Capture EVERY event into the worker log BEFORE dispatch. The
       // existing per-event handlers below only fire for events the UI
       // explicitly renders (text, tool_*, plan, etc.) — many events

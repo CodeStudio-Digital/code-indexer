@@ -1,9 +1,8 @@
 /**
  * Per-turn loop backstops evaluated by the Executing node AFTER dispatch:
  *
- *   - doom-loop  — the same tool-call signature recurs across turns (strict
- *     full-sig / fuzzy name-only). Catches rotating-args and once-per-turn
- *     repeats that the per-call tuple-hash / dup-call guards can't see.
+ *   - doom-loop  — legacy rollback for cross-turn signature repetition.
+ *     Hybrid/observe use the post-result NoProgressTracker in shadow mode.
  *   - dominance  — one tool eats a long window of turns with ZERO assistant
  *     text. Catches the silent-grind runaway (the 200–700-turn sessions in
  *     telemetry) when other tools intersperse enough to keep doom-loop quiet.
@@ -12,10 +11,9 @@
  * only when the per-call guards (tuple-hash / failure-streak) didn't already
  * flag a loop — they're more specific, so they win.
  *
- * Polling / volatile tools resolved from ToolMetadata are filtered out first:
- * a string of identical polls is
- * the legitimate workflow, not a loop (mirrors the dup-call / failure-streak
- * exemptions), so a master polling `list_subordinates` is never derailed.
+ * Pollable tools resolved from ToolMetadata are filtered out first: a string
+ * of identical polls can be the legitimate workflow, so result-aware
+ * polling-stuck owns them. Volatile calls remain under these backstops.
  */
 import { checkDoomLoop, resetDoomLoopState, type DoomLoopState } from '../guards/doom-loop.js';
 import { checkDominance, resetDominanceState, type DominanceState } from '../guards/dominance.js';
@@ -48,8 +46,10 @@ export interface PerTurnLoopArgs {
   toolUses: ReadonlyArray<{ name: string; input: Record<string, unknown> }>;
   /** True when the assistant emitted any non-empty text this turn. */
   hadText: boolean;
-  /** Names of tools flagged `repeatable` in the registry (polling primitives). */
+  /** Names resolved to repeatPolicy=pollable in the registry. */
   repeatableNames: ReadonlySet<string>;
+  /** Temporary rollback only: enable the old cross-turn signature guards. */
+  signatureLoopsEnabled: boolean;
   doom: DoomLoopState;
   dominance: DominanceState;
 }
@@ -69,7 +69,7 @@ export function evaluatePerTurnLoops(args: PerTurnLoopArgs): PerTurnLoopVerdict 
   let verdict: Omit<PerTurnLoopVerdict, 'snapshot'> | null = null;
 
   // ── Doom-loop (per-turn signature repeat) ──
-  if (process.env.CODER_DOOM_LOOP !== '0') {
+  if (args.signatureLoopsEnabled && process.env.CODER_DOOM_LOOP !== '0') {
     // The window must HOLD at least `threshold` signatures or the guard can
     // never fire — a silent footgun when env cranks the thresholds above the
     // default 10-entry window. Size it to the larger configured threshold so a
@@ -97,6 +97,10 @@ export function evaluatePerTurnLoops(args: PerTurnLoopArgs): PerTurnLoopVerdict 
           `— forcing a planning turn to break the loop.`,
       };
     }
+  } else {
+    // Hybrid/observe use result-aware NoProgressTracker shadow candidates;
+    // retaining old signatures here could unexpectedly fire if policy flips.
+    resetDoomLoopState(args.doom);
   }
 
   // ── Dominance (long-horizon single-tool grind, zero text) ──

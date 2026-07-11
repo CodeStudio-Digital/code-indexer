@@ -34,6 +34,8 @@ export type AgentId =
   | 'app_spec'
   | 'app_db'
   | 'app_architect'
+  | 'app_ux'
+  | 'app_wireframe'
   | 'builder'
   | 'api'
   | 'diagram';
@@ -150,6 +152,24 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     maxTurns: 100,
     defaultTemperature: 0.2,
   },
+  app_ux: {
+    id: 'app_ux',
+    label: 'App Experience',
+    description: 'App Studio UX specialist. Guides a non-technical user through three contextual visual directions and saves an auditable experience brief.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 80,
+    defaultTemperature: 0.35,
+  },
+  app_wireframe: {
+    id: 'app_wireframe',
+    label: 'App Wireframes',
+    description: 'App Studio flow and wireframe specialist. Converts requirements, architecture, UX and data into traceable screen plans, browser TDD and ordered build groups.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 100,
+    defaultTemperature: 0.2,
+  },
   builder: {
     id: 'builder',
     label: 'UI Builder',
@@ -195,6 +215,8 @@ export function isAgentId(v: string): v is AgentId {
     v === 'app_spec' ||
     v === 'app_db' ||
     v === 'app_architect' ||
+    v === 'app_ux' ||
+    v === 'app_wireframe' ||
     v === 'builder' ||
     v === 'api' ||
     v === 'diagram'

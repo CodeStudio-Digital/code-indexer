@@ -17,6 +17,7 @@ import { decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine
 
 interface RecordedRow {
   session_id: number | null;
+  auto_continues: number;
   tool_count: number;
   tools_called: string[];
   largest_tool_result_chars: number | null;
@@ -88,6 +89,7 @@ describe('persistTurnTelemetry — pure function', () => {
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',
       turn: 7,
+      autoContinues: 15,
       usage: baseUsage,
       toolUseBlocks: [toolUse('grep_code')],
       toolResultBlocks: [toolResult('result body')],
@@ -100,6 +102,7 @@ describe('persistTurnTelemetry — pure function', () => {
     expect(id).toBe(100);
     expect(rows).toHaveLength(1);
     expect(rows[0].session_id).toBe(42);
+    expect(rows[0].auto_continues).toBe(15);
     expect(rows[0].tool_count).toBe(1);
     expect(rows[0].tools_called).toEqual(['grep_code']);
     expect(rows[0].system_prompt_chars).toBe(333);

@@ -14,6 +14,7 @@ import { mountAppStudioSpecRoutes } from './spec.js';
 import { mountAppStudioRevisionRoutes } from './revisions.js';
 import { mountAppStudioArchitectureRoutes } from './architecture.js';
 import { mountAppStudioPipelineRepairRoutes } from './pipeline-repair.js';
+import { mountAppStudioExperienceRoutes } from './experience.js';
 import { requireLocalOrigin } from './origin-guard.js';
 
 export function mountAppStudioRoutes(app: Hono, deps: ServerDeps): void {
@@ -31,4 +32,5 @@ export function mountAppStudioRoutes(app: Hono, deps: ServerDeps): void {
   mountAppStudioRevisionRoutes(app, deps);
   mountAppStudioArchitectureRoutes(app, deps);
   mountAppStudioPipelineRepairRoutes(app, deps);
+  mountAppStudioExperienceRoutes(app, deps);
 }

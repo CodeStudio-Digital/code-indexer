@@ -3,9 +3,11 @@ import { defineProviderAdapterFromSpec } from '@mcp/provider-runtime/plugin-adap
 import { claudeCodeSpec } from './spec.js';
 
 export const providerAdapter = defineProviderAdapterFromSpec(claudeCodeSpec, {
-  resolveCredentials: async ({ config }) => {
-    const { resolveClaudeCodeCreds } = await import('@mcp/services/providers/shared/oauth.js');
-    return resolveClaudeCodeCreds(config as Parameters<typeof resolveClaudeCodeCreds>[0]);
+  resolveCredentials: async ({ resolveHostCredentials }) => {
+    if (!resolveHostCredentials) {
+      throw new Error('Claude Code host credential resolver is unavailable');
+    }
+    return resolveHostCredentials();
   },
 });
 

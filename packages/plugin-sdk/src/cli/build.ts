@@ -34,8 +34,28 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
     format: 'esm',
     platform: 'node',
     target: 'node20',
+    // esbuild wraps bundled CommonJS dependencies with a `__require` shim.
+    // In a real ESM host there is no lexical `require`, so that shim otherwise
+    // throws as soon as (for example) node-fetch asks for the builtin `stream`
+    // module. Provide Node's ESM-safe require before the generated helpers.
+    banner: {
+      js: [
+        `import { createRequire as __mcpCreateRequire } from 'node:module';`,
+        `const require = __mcpCreateRequire(import.meta.url);`,
+      ].join('\n'),
+    },
     logLevel: 'silent',
   });
+
+  // Installed plugins live outside the host repository, so they do not inherit
+  // its root `package.json` (`type: module`). Keep an explicit package scope
+  // beside the generated `.js` bundle; otherwise loaders such as tsx classify
+  // it as CommonJS and Node 24 can fail with ERR_REQUIRE_CYCLE_MODULE while
+  // importing the ESM output.
+  await writeFile(
+    join(root, 'dist', 'package.json'),
+    `${JSON.stringify({ type: 'module', mcpPluginRuntimeFormat: 4 }, null, 2)}\n`,
+  );
 
   const mod = (await import(`${pathToFileURL(bundle).href}?t=${Date.now()}`)) as {
     default?: PluginModule;

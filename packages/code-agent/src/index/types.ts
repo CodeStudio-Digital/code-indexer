@@ -25,9 +25,15 @@ export interface PreflightSeed {
   /** Tool names to pin visible from turn 1 (validated against the catalog). */
   pinTools?: string[];
   /** Project memories the agent should READ (titles only, never content). */
-  memories?: Array<{ title: string; reason: string }>;
+  memories?: Array<{ title: string; reason: string; projectSlug?: string }>;
   /** Skills the agent should consider loading before starting (ids, validated). */
-  suggestedSkills?: Array<{ id: string; reason: string }>;
+  suggestedSkills?: Array<{
+    id: string;
+    reason: string;
+    evidence?: 'explicit' | 'project_scope' | 'trigger' | 'dependency';
+  }>;
+  /** Likely linked projects for a global task; advisory and catalog-validated. */
+  targetProjects?: Array<{ slug: string; reason: string }>;
   taskKind?: string;
   /** Optional Agent Decision Engine guidance, rendered into the tail preflight block. */
   agentDecisionGuidance?: AgentDecisionGuidance;

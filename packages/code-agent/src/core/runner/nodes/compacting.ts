@@ -10,10 +10,10 @@
  *     context window, then snap to preserve tool pairs and recede to keep
  *     the last N user turns verbatim (Kimi-style), capped at `maxTailTokens`
  *     so a single long user turn can't defeat compaction.
- *   - summarize the head via the aux model (same provider for now;
- *     follow-up commit can swap to a dedicated cheap model).
+ *   - summarize the head via the optional code-agent/compaction binding,
+ *     falling back to the active session provider.
  *   - replace head with a single synthetic `user` message rendered from
- *     the CompactionSummaryV2 (tagged blocks).
+ *     the bounded V3 resume (tagged blocks).
  *
  * On failure, the `compact-failure` circuit breaker (`recoveryCap=3` by
  * default) eventually aborts the run with `stopReason='compact_failure'`.
@@ -34,7 +34,7 @@ export interface CompactingNodeOptions {
   protectTokensOverride?: number;
   /**
    * Test-only override for the summarize step. Production code passes
-   * undefined so `compactWithLLM` falls back to the real `summarizeSpanV2`.
+   * undefined so `compactWithLLM` falls back to the real `summarizeSpanV3`.
    */
   summarizeOverride?: Parameters<typeof compactWithLLM>[0]['summarize'];
 }
@@ -49,17 +49,38 @@ export class CompactingNode implements BehaviorNode {
     // context-overflow). Threaded into every history_compacted emission so
     // the dashboard can answer "WHY did this compaction fire?".
     const trigger = lastEvent?.kind === 'TokenThresholdHit' ? lastEvent.trigger : undefined;
-    const summaryProvider = ctx.opts.provider;
+    const contextProvider = ctx.opts.provider;
+    const summaryProvider = ctx.opts.compactionProvider ?? contextProvider;
     const protectTokens = this.nodeOpts.protectTokensOverride
-      ?? computeProtectTokens({ model: summaryProvider.model });
+      ?? computeProtectTokens({ model: contextProvider.model });
     // Ceiling on the preserved tail so a single long user turn (history with
     // < N user messages) can't make recede preserve everything and no-op.
     // Derived from the model window — independent of the protect-tokens override.
     const maxTailTokens = computeProtectTokens({
-      model: summaryProvider.model,
+      model: contextProvider.model,
       protectRatio: resolveRecedeTailRatio(),
     });
     const charsBefore = approxChars(ctx.messages);
+
+    let liveState: Parameters<typeof compactWithLLM>[0]['liveState'];
+    try {
+      const state = ctx.bridge?.getSessionStateData?.() ?? null;
+      if (state) {
+        liveState = {
+          goal: state.goal,
+          activePlan: state.activePlan,
+          // Presence (including an empty list) is intentional: persisted task
+          // state is authoritative over model-inferred pending work.
+          todos: state.todos.map((todo) => ({
+            content: todo.label,
+            activeForm: todo.label,
+            status: todo.status,
+          })),
+        };
+      }
+    } catch {
+      liveState = undefined;
+    }
 
     const result = await compactWithLLM({
       messages: ctx.messages,
@@ -67,6 +88,7 @@ export class CompactingNode implements BehaviorNode {
       maxTailTokens,
       summaryProvider,
       summarize: this.nodeOpts.summarizeOverride,
+      liveState,
       // A3 — pass the abort signal so a hung aux provider (during summary
       // call) can be cancelled instead of stalling the whole Compacting node.
       signal: ctx.opts.toolContext.signal,
@@ -101,7 +123,7 @@ export class CompactingNode implements BehaviorNode {
               maxTailTokens,
             });
         if (fallback && fallback.collapsedFrom > 0) {
-          ctx.messages = fallback.messages;
+          ctx.messages.splice(0, ctx.messages.length, ...fallback.messages);
           ctx.consecutiveNoopCompactions = 0;
           ctx.recovery.set('compact-failure', 0);
           ctx.injectionState.recentCompactionAt = ctx.turn;
@@ -168,7 +190,7 @@ export class CompactingNode implements BehaviorNode {
       // this as a reduction — otherwise a zero-progress spill would keep
       // resetting the no-op streak and starve the pre-emit irreducible bypass.
       if (spill.spilled > 0 && spill.freedChars > 0) {
-        ctx.messages = spill.messages;
+        ctx.messages.splice(0, ctx.messages.length, ...spill.messages);
         // A real reduction freed space — clear the no-op streak and the
         // compact-failure breaker, same as the summarizer path below.
         ctx.consecutiveNoopCompactions = 0;
@@ -205,7 +227,28 @@ export class CompactingNode implements BehaviorNode {
       return events.compactionDone({ collapsedFrom: 0, collapsedTo: 0 });
     }
 
-    ctx.messages = result.messages;
+    // This is the only LLM result for the boundary. Persist the exact object
+    // before replacing the head so the host can align it to durable message
+    // ids. A DB failure is non-fatal: the in-memory resume still keeps this run
+    // alive and the unchanged boundary can be retried later.
+    if (result.summary && ctx.opts.onCompactionCheckpoint) {
+      try {
+        await ctx.opts.onCompactionCheckpoint({
+          summary: result.summary,
+          headMessages: ctx.messages.slice(0, result.cutoffApplied),
+          trigger,
+          autoContinues: ctx.autoContinues,
+        });
+      } catch (error) {
+        console.warn(
+          `[coder] compaction checkpoint failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    // Preserve the shared backing array passed by CoderRunner. Reassignment
+    // would leave host observers holding the pre-compaction transcript.
+    ctx.messages.splice(0, ctx.messages.length, ...result.messages);
     // A real compaction freed space — clear the no-op streak.
     ctx.consecutiveNoopCompactions = 0;
     // Reset the compact-failure counter on a clean run — the circuit
