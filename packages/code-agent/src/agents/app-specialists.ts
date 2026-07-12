@@ -1,6 +1,6 @@
 import type { AgentId } from './index.js';
 
-export const APP_SPECIALIST_AGENT_IDS = ['app_spec', 'app_db', 'app_architect', 'app_ux', 'app_wireframe'] as const;
+export const APP_SPECIALIST_AGENT_IDS = ['app_spec', 'app_product', 'app_db', 'app_architect', 'app_ux', 'app_wireframe'] as const;
 
 export type AppSpecialistAgentId = (typeof APP_SPECIALIST_AGENT_IDS)[number];
 
@@ -16,6 +16,7 @@ const COMMON_READ_TOOLS = [
   'app_get_pipeline',
   'app_get_spec',
   'app_get_spec_history',
+  'app_get_stage_briefing',
 ] as const;
 
 export const APP_SPECIALIST_TOOL_ALLOWLISTS: Record<AppSpecialistAgentId, ReadonlySet<string>> = {
@@ -24,6 +25,18 @@ export const APP_SPECIALIST_TOOL_ALLOWLISTS: Record<AppSpecialistAgentId, Readon
     'app_spec_audit',
     'app_save_spec',
     'app_propose_spec_revision',
+    'app_submit_stage',
+  ]),
+  app_product: new Set([
+    ...COMMON_READ_TOOLS,
+    'app_get_product_model',
+    'app_upsert_product_domain',
+    'app_upsert_product_capability',
+    'app_upsert_product_scenario',
+    'app_upsert_product_research_source',
+    'app_set_product_scope',
+    'app_research_product_domain',
+    'app_product_audit',
     'app_submit_stage',
   ]),
   app_db: new Set([

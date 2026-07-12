@@ -15,7 +15,11 @@
  * `listAssets` are read paths. `process` / `export` are MVP stubs (the agent
  * MVP is Generate → the interactive editor owns process/export today).
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { writeAssetManifest } from '@mcp/sprite-studio/repo/manifest.js';
+import { resolveInsideDir, resolveInsideSpriteDir } from '@mcp/sprite-studio/repo/paths.js';
+import type { SpriteOp } from '@mcp/sprite-studio/processing/types.js';
 import { slugify, uniqueSlug } from '@mcp/sprite-studio/repo/slug.js';
 import { runGenerationJob } from '@mcp/sprite-studio/jobs/job-runner.js';
 import type { SpriteGenerationJobParams } from '@mcp/sprite-studio/jobs/generation-request.js';
@@ -28,6 +32,9 @@ import type {
 import type { ServerDeps } from './deps.js';
 import { buildSpriteJobDeps } from './routes/sprite-studio/job-deps.js';
 import { getSpriteJobQueue } from './routes/sprite-studio/queue-singleton.js';
+import { getSpriteWorkerClient } from '../sse/SpriteWorkerClient.js';
+import { writeEditedVersion } from './routes/sprite-studio/version-write.js';
+import { buildSpriteExport, type ExportRequestV2 } from './routes/sprite-studio/export-plan.js';
 
 /** Get-or-create the asset for an agent generate. Reuse by exact slug/name; else create. */
 function resolveAsset(
@@ -153,16 +160,47 @@ export function createSpriteStudioHostImpl(deps: ServerDeps): ISpriteStudioHost 
       };
     },
 
-    async process() {
-      throw new Error(
-        'sprite_process is not implemented in the MVP — use the Sprites editor to apply ops.',
-      );
+    async process(input) {
+      const project = projects.getByProjectId(input.projectId);
+      const asset = assets.get(input.assetId);
+      const root = project ? deps.db.getProject(project.project_id)?.root_path : null;
+      if (!project || !asset || asset.sprite_project_id !== project.id || !root || asset.current_version_id == null) {
+        throw new Error('Asset/current version not found in this sprite project');
+      }
+      const current = assets.getVersion(asset.current_version_id);
+      if (!current) throw new Error('Current version row is missing');
+      const png = fs.readFileSync(resolveInsideSpriteDir(root, current.file_rel_path));
+      const result = await getSpriteWorkerClient().processPipeline(png.toString('base64'), input.ops as SpriteOp[]);
+      const version = writeEditedVersion(deps, root, asset, Buffer.from(result.pngBase64, 'base64'), {
+        parentVersionId: current.id, source: 'processed', dims: { width: result.width, height: result.height },
+      });
+      return { versionId: version.id };
     },
 
-    async export() {
-      throw new Error(
-        'sprite_export is not implemented in the MVP — use the Sprites Export dialog.',
-      );
+    async export(input) {
+      const project = projects.getByProjectId(input.projectId);
+      if (!project) throw new Error('Sprite Studio is not initialized for this project');
+      const selected = input.assetSlugs?.length
+        ? assets.list(project.id).filter((asset) => input.assetSlugs!.includes(asset.slug)).map((asset) => asset.id)
+        : null;
+      const request: ExportRequestV2 = {
+        version: 2,
+        format: input.format as ExportRequestV2['format'],
+        scope: selected ? { kind: 'asset', assetIds: selected, includeAnimations: true }
+          : { kind: 'approved', includeAnimations: true },
+        target: { kind: 'project' },
+        options: { padding: 2, extrude: 2, scale: 1 },
+      };
+      const built = buildSpriteExport(deps, input.projectId, request);
+      fs.mkdirSync(built.destination, { recursive: true });
+      const written: string[] = [];
+      for (const file of built.files) {
+        const absolute = resolveInsideDir(built.destination, file.relPath);
+        fs.mkdirSync(path.dirname(absolute), { recursive: true });
+        if (file.bytes) fs.writeFileSync(absolute, file.bytes); else fs.writeFileSync(absolute, file.text ?? '', 'utf8');
+        written.push(absolute);
+      }
+      return { files: written };
     },
   };
 }

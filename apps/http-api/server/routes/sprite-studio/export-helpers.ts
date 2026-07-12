@@ -49,19 +49,24 @@ export function resolveAnimationFrames(
   if (columns.length === 0) return null;
   const ref = columns.find((c) => c.image != null)?.image;
   if (!ref) return null;
+  const exportName = typeof ctx.anim.settings.exportName === 'string' && ctx.anim.settings.exportName.trim()
+    ? ctx.anim.settings.exportName.trim()
+    : ctx.anim.name;
   const frames: NamedFrame[] = columns.map((col, i) => ({
-    name: `${slug}_${ctx.anim.name}_${String(i).padStart(3, '0')}`,
+    name: `${slug}_${exportName}_${String(i).padStart(3, '0')}`,
     img: col.image ?? transparentImage(ref.width, ref.height),
   }));
   return {
     frames,
-    name: `${slug}_${ctx.anim.name}`,
+    name: `${slug}_${exportName}`,
     anim: {
       frames: frames.map((f) => f.name),
       fps: ctx.anim.fps,
       loop: ctx.anim.loop_mode !== 'once',
       loopMode: ctx.anim.loop_mode,
       durationsMs: columns.map((c) => c.durationMs),
+      action: typeof ctx.anim.settings.actionKey === 'string' ? ctx.anim.settings.actionKey : ctx.anim.name,
+      direction: typeof ctx.anim.settings.direction === 'string' ? ctx.anim.settings.direction : undefined,
     },
   };
 }

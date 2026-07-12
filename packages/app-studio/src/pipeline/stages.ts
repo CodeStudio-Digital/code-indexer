@@ -1,8 +1,8 @@
 /**
  * Máquina de etapas do App Studio — o estado serializado em
- * `app_studio_sessions.pipeline_json` (schema versionado AQUI, v3).
+ * `app_studio_sessions.pipeline_json` (schema versionado AQUI, v4).
  *
- * 9 etapas fixas: discovery → architecture → database → ux → wireframe →
+ * 10 etapas fixas: discovery → product → architecture → database → ux → wireframe →
  * design → backend → review → launch. Status por etapa: pending → active → review → approved
  * (+ skipped; reopen devolve para active com feedback). `current_stage` é
  * DERIVADO — primeira etapa não aprovada/pulada — nunca armazenado.
@@ -19,8 +19,9 @@
 import type { AppRoadmapItem } from './roadmap.js';
 
 export const APP_STAGE_IDS = [
-  'discovery', 'architecture', 'database', 'ux', 'wireframe', 'design', 'backend', 'review', 'launch',
+  'discovery', 'product', 'architecture', 'database', 'ux', 'wireframe', 'design', 'backend', 'review', 'launch',
 ] as const;
+const APP_STAGE_IDS_V3 = APP_STAGE_IDS.filter((id) => id !== 'product');
 export type AppStageId = (typeof APP_STAGE_IDS)[number];
 
 export type AppStageStatus = 'pending' | 'active' | 'review' | 'approved' | 'skipped';
@@ -45,15 +46,15 @@ export interface AppPipelineStage {
 }
 
 export interface AppPipelineState {
-  /** v2 remains readable so the repair flow can preview/apply an opt-in upgrade. */
-  v: 2 | 3;
+  /** v2/v3 remain readable so Repair app can preview/apply an opt-in upgrade. */
+  v: 2 | 3 | 4;
   stages: AppPipelineStage[];
   roadmap: AppRoadmapItem[];
 }
 
 export function createPipelineState(): AppPipelineState {
   return {
-    v: 3,
+    v: 4,
     stages: APP_STAGE_IDS.map((id) => ({
       id,
       status: 'pending',
@@ -72,9 +73,14 @@ export function parsePipelineState(json: string | null | undefined): AppPipeline
   try {
     const state = JSON.parse(json) as AppPipelineState | (Omit<AppPipelineState, 'v'> & { v: 1 });
     if (!Array.isArray(state?.stages)) return null;
-    if (state.v === 3) {
+    if (state.v === 4) {
       const ids = state.stages.map((stage) => stage?.id);
       if (ids.length !== APP_STAGE_IDS.length || APP_STAGE_IDS.some((id) => ids.filter((item) => item === id).length !== 1)) return null;
+      return state;
+    }
+    if (state.v === 3) {
+      const ids = state.stages.map((stage) => stage?.id);
+      if (ids.length !== APP_STAGE_IDS_V3.length || APP_STAGE_IDS_V3.some((id) => ids.filter((item) => item === id).length !== 1)) return null;
       return state;
     }
     if (state.v === 2) return state;

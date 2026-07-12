@@ -13,6 +13,7 @@
     "@mcp/db-drivers": "workspace:*",
     "@mcp/services": "workspace:*",
     "@mcp/provider-sdk": "workspace:*",
-    "@mcp/candidate-pipeline": "workspace:*"
+    "@mcp/candidate-pipeline": "workspace:*",
+    "chroma-js": "3.2.0"
   }
 }

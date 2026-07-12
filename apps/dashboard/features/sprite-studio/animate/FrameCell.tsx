@@ -35,7 +35,7 @@ export interface FrameCellProps {
   onDuplicate: (i: number) => void;
   onReplace: (i: number, versionId: number) => void;
   /** When absent, the Edit action is hidden (no editor orchestration wired). */
-  onEditVersion?: (versionId: number) => void;
+  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
   onDragStart: (i: number) => void;
   onDropOn: (i: number) => void;
   /** A version row was dropped ON this cell (replace; parent validates asset). */
@@ -124,7 +124,7 @@ export const FrameCell = memo(function FrameCell({
             type="button"
             className={actionCls}
             title={t('animate.timeline.editFrame')}
-            onClick={(e) => { e.stopPropagation(); onEditVersion(frame.versionId); }}
+            onClick={(e) => { e.stopPropagation(); onEditVersion(frame.versionId, index, frame.track); }}
           >
             <Pencil className="h-2.5 w-2.5" />
           </button>

@@ -18,7 +18,7 @@ export interface GenericAtlasJson {
   /** Normalized default pivot (0..1, y-down), e.g. bottom-center {x:.5,y:1}. */
   pivot: { x: number; y: number };
   frames: Array<{ name: string; x: number; y: number; w: number; h: number }>;
-  animations?: Record<string, { frames: string[]; fps?: number; loop?: boolean }>;
+  animations?: ExportMeta['animations'];
 }
 
 export function buildGenericAtlas(

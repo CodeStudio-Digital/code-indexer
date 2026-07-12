@@ -18,6 +18,8 @@ import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { auditAppUxBrief, auditAppWireframePlan } from '@mcp/app-studio/experience/audit.js';
 import { parseAppUxBrief, parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
+import { auditAppProductModel } from '@mcp/app-studio/product/audit.js';
+import { parseAppProductModel, productModelFingerprint } from '@mcp/app-studio/product/types.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 
@@ -78,6 +80,8 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
     const architectureRevision = appStudioStore.getLatestArchitectureRevision(id);
     const architecture = parseAppArchitecturePlan(architectureRevision?.architecture_json);
     const spec = parseAppSpec(session.spec_json);
+    const productRevision = appStudioStore.getLatestProductRevision(id);
+    const product = parseAppProductModel(productRevision?.product_json);
     const uxRevision = appStudioStore.getLatestUxRevision(id);
     const ux = parseAppUxBrief(uxRevision?.ux_json);
     const wireframeRevision = appStudioStore.getLatestWireframeRevision(id);
@@ -88,6 +92,19 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
       builder_port: enriched.builder_port,
       pipeline: pipelineView(session),
       spec,
+      product: productRevision && product ? {
+        id: productRevision.id,
+        revision_number: productRevision.revision_number,
+        base_spec_revision_id: productRevision.base_spec_revision_id,
+        result_spec_revision_id: productRevision.result_spec_revision_id,
+        status: productRevision.status,
+        created_at: productRevision.created_at,
+        updated_at: productRevision.updated_at,
+        approved_at: productRevision.approved_at,
+        fingerprint: productModelFingerprint(product),
+        model: product,
+        audit: auditAppProductModel(product),
+      } : null,
       architecture: architectureRevision && architecture ? {
         id: architectureRevision.id,
         revision_number: architectureRevision.revision_number,
@@ -97,7 +114,7 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
         updated_at: architectureRevision.updated_at,
         approved_at: architectureRevision.approved_at,
         plan: architecture,
-        audit: auditAppArchitecture(architecture, spec),
+        audit: auditAppArchitecture(architecture, spec, product),
       } : null,
       ux: uxRevision && ux ? {
         id: uxRevision.id,
@@ -124,7 +141,7 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
         updated_at: wireframeRevision.updated_at,
         approved_at: wireframeRevision.approved_at,
         plan: wireframe,
-        audit: auditAppWireframePlan(wireframe, spec, architecture),
+        audit: auditAppWireframePlan(wireframe, spec, architecture, product),
       } : null,
       build_groups: wireframeRevision ? appStudioStore.listBuildGroups(wireframeRevision.id) : [],
       build_tasks: wireframeRevision ? appStudioStore.listBuildTaskEvidence(wireframeRevision.id) : [],

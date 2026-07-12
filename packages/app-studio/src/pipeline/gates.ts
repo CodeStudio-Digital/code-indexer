@@ -14,6 +14,8 @@ import { readDbStatus, readDeployStatus } from '../status-files.js';
 import { runSecurityAudit } from '../audit/security.js';
 import { auditAppArchitecture } from '../architecture/audit.js';
 import type { AppArchitecturePlan } from '../architecture/types.js';
+import { auditAppProductModel } from '../product/audit.js';
+import type { AppProductModel } from '../product/types.js';
 import { auditAppUxBrief, auditAppWireframePlan } from '../experience/audit.js';
 import { dataModelFingerprint, type AppUxBrief, type AppWireframePlan } from '../experience/types.js';
 import { readTddCycles } from '../architecture/tdd-cycles.js';
@@ -41,6 +43,8 @@ export interface AppStageGateInput {
   recorded: Array<{ name: string; kind: AppRecordedKind }>;
   /** Plano técnico mais recente, obrigatório na etapa architecture. */
   architecture?: AppArchitecturePlan | null;
+  product?: AppProductModel | null;
+  productStatus?: 'draft' | 'approved' | 'superseded' | 'rejected' | null;
   /** Revisão aprovada da spec que a arquitetura precisa representar. */
   currentSpecRevisionId?: number | null;
   currentArchitectureRevisionId?: number | null;
@@ -108,12 +112,24 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
       issues.push(...validateAppSpec(spec));
       break;
     }
+    case 'product': {
+      if (!spec) {
+        issues.push('Initial spec missing — complete the idea stage first.');
+        break;
+      }
+      issues.push(...auditAppProductModel(input.product ?? null).issues);
+      if (input.product?.base_spec_revision_id !== (input.currentSpecRevisionId ?? null)) {
+        issues.push('Product model is stale against the approved base spec revision.');
+      }
+      break;
+    }
     case 'architecture': {
       if (!spec) {
         issues.push('Spec missing — approve discovery before planning the architecture.');
         break;
       }
-      const audit = auditAppArchitecture(input.architecture ?? null, spec);
+      if (input.productStatus !== 'approved') issues.push('Product model must be approved before architecture.');
+      const audit = auditAppArchitecture(input.architecture ?? null, spec, input.product ?? null);
       issues.push(...audit.issues);
       if (
         input.currentSpecRevisionId != null &&
@@ -186,7 +202,7 @@ export async function runAppStageGate(input: AppStageGateInput): Promise<AppStag
         break;
       }
       if (input.uxStatus !== 'approved') issues.push('UX direction must be approved before wireframes can be submitted.');
-      const audit = auditAppWireframePlan(input.wireframe ?? null, spec, input.architecture ?? null);
+      const audit = auditAppWireframePlan(input.wireframe ?? null, spec, input.architecture ?? null, input.product ?? null);
       issues.push(...audit.issues);
       if (input.wireframe) {
         if (input.wireframe.spec_revision_id !== (input.currentSpecRevisionId ?? null)) issues.push('Wireframe plan is stale against the approved spec revision.');

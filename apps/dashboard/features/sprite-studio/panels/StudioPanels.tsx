@@ -55,7 +55,10 @@ export function StudioPanels({
   inspector: React.ReactNode;
 }) {
   const { t } = useTranslation('spriteStudio');
-  const leftDefs = panelsForSide('left');
+  const allLeftDefs = panelsForSide('left');
+  const leftDefs = mode === 'animate'
+    ? allLeftDefs
+    : allLeftDefs.filter((panel) => panel.id !== 'frames');
 
   const [collapsed, setCollapsed] = useState<Collapsed>(() => {
     const ui = loadSpriteStudioUi(projectId);

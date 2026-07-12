@@ -27,12 +27,13 @@ import {
 
 const TAB_STORAGE_KEY = 'mcp.app-studio.tab';
 const ADVANCED_SEEN_KEY = 'mcp.app-studio.advanced-seen';
-const TAB_IDS: AppStudioTab[] = ['guide', 'blueprint', 'versions', 'architecture', 'experience', 'preview', 'data', 'publish'];
-type StageLaunchKind = 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
+const TAB_IDS: AppStudioTab[] = ['guide', 'product', 'blueprint', 'versions', 'architecture', 'experience', 'preview', 'data', 'publish'];
+type StageLaunchKind = 'product' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
 
 /** Aba sugerida por etapa (auto-switch one-shot em transição de etapa). */
 const STAGE_TAB: Record<AppStageId, AppStudioTab> = {
   discovery: 'guide',
+  product: 'product',
   architecture: 'architecture',
   database: 'data',
   ux: 'experience',
@@ -153,11 +154,13 @@ export function AppStudioView({
     setExecutionLaunch({ kind, prompt });
   }, []);
   const openExecutionAgent = useCallback((kind: 'design' | 'backend' | 'review', prompt: string) => openGuidedStageAgent(kind, prompt), [openGuidedStageAgent]);
+  const openProductAgent = useCallback((prompt: string) => openGuidedStageAgent('product', prompt), [openGuidedStageAgent]);
   const openUxAgent = useCallback((prompt: string) => openGuidedStageAgent('ux', prompt), [openGuidedStageAgent]);
   const openWireframeAgent = useCallback((prompt: string) => openGuidedStageAgent('wireframe', prompt), [openGuidedStageAgent]);
   const openStageSpecialist = useCallback((stage: AppStageId, prompt: string): boolean => {
     const specialist = specialistForStage(stage);
     if (specialist === 'spec') openSpecAgent(prompt);
+    else if (specialist === 'product') openProductAgent(prompt);
     else if (specialist === 'db') openDbAgent(prompt);
     else if (specialist === 'architecture') openArchitectureAgent(prompt);
     else if (specialist === 'ux') openUxAgent(prompt);
@@ -167,7 +170,7 @@ export function AppStudioView({
     }
     else return false;
     return true;
-  }, [openArchitectureAgent, openDbAgent, openExecutionAgent, openSpecAgent, openUxAgent, openWireframeAgent]);
+  }, [openArchitectureAgent, openDbAgent, openExecutionAgent, openProductAgent, openSpecAgent, openUxAgent, openWireframeAgent]);
   const launchSpecAgent = useCallback((config: AppStudioSpecAgentConfig) => {
     if (specLaunchPrompt === null) return;
     setSpecAgentConfig(config);
@@ -342,20 +345,20 @@ export function AppStudioView({
           ? `db-${dbLaunchId}`
           : chatMode === 'architecture'
             ? `architecture-${architectureLaunchId}`
-            : chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review'
+            : chatMode === 'product' || chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review'
               ? `${chatMode}-${executionLaunchId}`
               : 'builder'}
       projectId={project.id}
       projectName={project.name}
       initialSessionId={chatMode === 'builder' ? initialCoderSessionId : undefined}
       mode={chatMode}
-      initialPrompt={chatMode === 'spec' ? pendingSpecPrompt : chatMode === 'db' ? pendingDbPrompt : chatMode === 'architecture' ? pendingArchitecturePrompt : chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review' ? pendingExecutionPrompt : null}
-      initialConfig={chatMode === 'spec' ? specAgentConfig : chatMode === 'db' ? dbAgentConfig : chatMode === 'architecture' ? architectureAgentConfig : chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review' ? executionAgentConfig : null}
+      initialPrompt={chatMode === 'spec' ? pendingSpecPrompt : chatMode === 'db' ? pendingDbPrompt : chatMode === 'architecture' ? pendingArchitecturePrompt : chatMode === 'product' || chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review' ? pendingExecutionPrompt : null}
+      initialConfig={chatMode === 'spec' ? specAgentConfig : chatMode === 'db' ? dbAgentConfig : chatMode === 'architecture' ? architectureAgentConfig : chatMode === 'product' || chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review' ? executionAgentConfig : null}
       onInitialPromptConsumed={() => {
         if (chatMode === 'spec') setPendingSpecPrompt(null);
         if (chatMode === 'db') setPendingDbPrompt(null);
         if (chatMode === 'architecture') setPendingArchitecturePrompt(null);
-        if (chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review') setPendingExecutionPrompt(null);
+        if (chatMode === 'product' || chatMode === 'ux' || chatMode === 'wireframe' || chatMode === 'design' || chatMode === 'backend' || chatMode === 'review') setPendingExecutionPrompt(null);
       }}
       onModeChange={handleChatModeChange}
       onCollapse={() => setChatCollapsed(true)}
@@ -453,6 +456,8 @@ export function AppStudioView({
                       onOpenSpecAgent={openSpecAgent}
                       onOpenDbAgent={openDbAgent}
                       onOpenArchitectureAgent={openArchitectureAgent}
+                      onOpenProductAgent={openProductAgent}
+                      onOpenProductRepair={() => setActiveTab('guide')}
                       onOpenExecutionAgent={openExecutionAgent}
                       onOpenUxAgent={openUxAgent}
                       onOpenWireframeAgent={openWireframeAgent}

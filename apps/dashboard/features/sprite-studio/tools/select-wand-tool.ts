@@ -12,16 +12,18 @@ export function createSelectWandTool(): Tool {
     id: 'select-wand',
     cursor: 'crosshair',
     onDown(e: ToolPointerEvent, ctx: ToolContext) {
-      const img = ctx.doc.activeLayer?.imageData;
+      const img = ctx.options.sampleSource === 'merged' ? ctx.doc.flatten() : ctx.doc.activeLayer?.imageData;
       if (!img) return;
       const x = Math.floor(e.imageX);
       const y = Math.floor(e.imageY);
       if (x < 0 || y < 0 || x >= img.width || y >= img.height) return;
-      const mode: SelectMode = e.shift ? 'add' : e.alt ? 'subtract' : 'replace';
+      const mode: SelectMode = e.shift && e.alt ? 'intersect' : e.shift ? 'add' : e.alt ? 'subtract' : 'replace';
       const before = ctx.selection.snapshot();
       const mask = floodFillMask(img, x, y, {
         tolerance: ctx.options.tolerance,
         contiguous: ctx.options.contiguous,
+        matchMode: ctx.options.matchMode,
+        colorMetric: ctx.options.colorMetric,
       });
       ctx.selection.fromFloodMask(mask, mode);
       const after = ctx.selection.snapshot();

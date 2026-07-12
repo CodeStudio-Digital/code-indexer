@@ -135,6 +135,7 @@
   "tool": {
     "pointer": "Seta (navegar) (V)",
     "brush": "Pincel (B)",
+    "pencil": "Lápis pixel-perfect (P)",
     "eraser": "Borracha (E)",
     "magicEraser": "Borracha mágica (K)",
     "eyedropper": "Conta-gotas (I) — ou segure Alt enquanto pinta",
@@ -144,7 +145,8 @@
     "shapeEllipse": "Elipse (U alterna)",
     "move": "Mover (M)",
     "selectRect": "Seleção retangular (R)",
-    "selectWand": "Varinha mágica (W)"
+    "selectWand": "Varinha mágica (W)",
+    "selectLasso": "Laço livre (Q)"
   },
   "options": {
     "background": "Cor de fundo",
@@ -161,7 +163,23 @@
     "size": "Tamanho",
     "softness": "Suavidade",
     "swapColors": "Trocar cores",
-    "tolerance": "Tolerância"
+    "tolerance": "Tolerância",
+    "sampleSource": "Amostra",
+    "activeLayer": "Camada ativa",
+    "mergedVisible": "Visível combinado",
+    "matchMode": "Comparar",
+    "color": "Cor",
+    "alpha": "Alpha",
+    "colorMetric": "Distância",
+    "perceptual": "Perceptual",
+    "channel": "RGBA"
+  },
+  "selection": {
+    "invert": "Inverter",
+    "grow": "Expandir",
+    "shrink": "Contrair",
+    "fillHoles": "Preencher furos",
+    "removeIslands": "Limpar ilhas"
   },
   "statusBar": {
     "color": "Cor sob o cursor",
@@ -373,6 +391,7 @@
   },
   "export": {
     "title": "Exportar",
+    "description": "Escolha exatamente o que vai para o jogo e revise os arquivos antes de gravar.",
     "action": "Exportar",
     "cancel": "Cancelar",
     "browse": "Procurar…",
@@ -383,22 +402,25 @@
     "formatLabel": "Formato",
     "destination": "Pasta de destino",
     "destinationPlaceholder": "assets/sprites",
+    "destinationHint": "Caminho relativo grava dentro do projeto; use o seletor para uma pasta absoluta.",
     "count": "{{n}} asset(s) no escopo",
     "scope": {
       "label": "Escopo",
+      "animation": "Animação atual: {{name}}",
       "asset": "Asset ativo",
+      "assetAnimations": "Asset + todas as animações",
       "category": "Categoria",
       "approved": "Todos aprovados"
     },
     "format": {
       "pngIndividual": "PNG (arquivos individuais)",
       "spritesheetJson": "Spritesheet + JSON",
-      "unity": "Unity (sheet + JSON TexturePacker)",
+      "unity": "Unity (sheet + importer + clips)",
       "godot": "Godot 4 (SpriteFrames .tres)",
       "babylon": "Babylon.js (sheet + manifest)",
       "defold": "Defold (.atlas + PNGs)",
-      "cocos": "Cocos2d (plist)",
-      "phaser": "Atlas Phaser 3"
+      "cocos": "Cocos2d (atlas plist)",
+      "phaser": "Phaser 3 (atlas + animações)"
     },
     "options": {
       "includeAnimations": "Incluir animações",
@@ -409,6 +431,19 @@
     },
     "preview": {
       "empty": "Sem prévias — os assets do escopo ainda não têm miniaturas."
+    },
+    "plan": {
+      "loading": "Montando plano de exportação…",
+      "empty": "Escolha um escopo válido para visualizar a saída.",
+      "assets": "{{n}} asset(s)",
+      "frames": "{{n}} frame(s)",
+      "animations": "{{n}} animação(ões)"
+    },
+    "warning": {
+      "animations_without_manifest": "Os PNGs não incluem um manifesto de animação.",
+      "babylon_uniform_duration_only": "Babylon usa uma duração uniforme por animação.",
+      "cocos_atlas_only": "Cocos recebe o atlas; os clips devem ser criados no projeto.",
+      "godot_resource_path_assumes_project_export_dir": "Em pasta absoluta, confirme o caminho res:// da textura no Godot."
     }
   },
   "model": {
@@ -437,6 +472,7 @@
     "customNamePlaceholder": "ex.: girar",
     "fps": "FPS",
     "frames": "Frames",
+    "exportName": "Nome no jogo",
     "create": "Criar",
     "createTitle": "Nova animação",
     "creating": "Criando…",
@@ -445,6 +481,7 @@
     "deleteBody": "Excluir \"{{name}}\"? Só a lista de frames é removida — as imagens continuam como versões do asset.",
     "deleteConfirm": "Excluir",
     "exportGif": "GIF",
+    "exportAnimation": "Exportar animação",
     "generate": "Gerar frames",
     "regenerate": "Regerar frames",
     "generating": "Gerando…",
@@ -467,6 +504,10 @@
       "N": "Costas (N)",
       "E": "Direita (E)",
       "W": "Esquerda (W)",
+      "SE": "Diagonal frente-direita (SE)",
+      "SW": "Diagonal frente-esquerda (SW)",
+      "NE": "Diagonal costas-direita (NE)",
+      "NW": "Diagonal costas-esquerda (NW)",
       "side": "Visão lateral"
     },
     "jobStatus": {
@@ -543,7 +584,7 @@
       "frameAlt": "Frame {{n}}",
       "durationMs": "Duração (ms)",
       "deleteFrame": "Remover frame",
-      "editFrame": "Editar imagem do frame — salvar cria uma cópia; use Substituir para apontar o frame à nova versão",
+      "editFrame": "Editar este frame com segurança; ao salvar, uma nova versão substituirá apenas esta célula",
       "replaceFrame": "Substituir frame…",
       "duplicateFrame": "Duplicar frame",
       "reverse": "Inverter ordem",

@@ -18,7 +18,7 @@
  */
 import fs from 'node:fs';
 import type { Hono } from 'hono';
-import { actionSpec } from '@mcp/sprite-studio/jobs/action-catalog.js';
+import { actionSpec, SPRITE_ACTION_CATALOG } from '@mcp/sprite-studio/jobs/action-catalog.js';
 import { buildAnimationIntent } from '@mcp/sprite-studio/jobs/animation-prompt.js';
 import type { SpriteGenerationJobParams } from '@mcp/sprite-studio/jobs/generation-request.js';
 import { runGenerationJob } from '@mcp/sprite-studio/jobs/job-runner.js';
@@ -33,10 +33,16 @@ import {
 import { buildSpriteJobDeps, makeProjectRootResolver, spriteScratchDir } from './job-deps.js';
 import { persistJobSheet } from './sheet-artifact.js';
 import { getSpriteJobQueue } from './queue-singleton.js';
+import { writeEditedVersion } from './version-write.js';
 
 export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
   const store = deps.spriteAnimationsStore;
   const dto = (anim: SpriteAnimationRow) => toAnimDto(anim, store.listFrames(anim.id));
+
+  app.get('/api/sprite-studio/animation-actions', (c) => c.json({
+    actions: SPRITE_ACTION_CATALOG.map(({ phrase: _phrase, ...action }) => action),
+    directions: ['S', 'N', 'E', 'W', 'SE', 'SW', 'NE', 'NW', 'side'],
+  }));
 
   app.get('/api/sprite-studio/projects/:projectId/assets/:assetId/animations', (c) => {
     const assetId = Number(c.req.param('assetId'));
@@ -48,7 +54,8 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
     const assetId = Number(c.req.param('assetId'));
     if (!deps.spriteAssetsStore.get(assetId)) return c.json({ error: 'not_found' }, 404);
     const body = (await c.req.json().catch(() => null)) as
-      | { name?: string; fps?: number; frames?: number }
+      | { name?: string; fps?: number; frames?: number; loopMode?: SpriteLoopMode;
+          actionKey?: string; direction?: string; exportName?: string }
       | null;
     const name = body?.name?.trim().toLowerCase().replace(/\s+/g, '_').slice(0, 40);
     if (!name) return c.json({ error: 'invalid_body' }, 400);
@@ -58,8 +65,14 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
         asset_id: assetId,
         name,
         fps: clampFps(body?.fps, spec?.fps ?? 8),
-        loop_mode: spec?.loopMode ?? 'loop',
-        settings: { frameCount: clampFrames(body?.frames, spec?.frames ?? 4) },
+        loop_mode: body?.loopMode && LOOP_MODES.has(body.loopMode) ? body.loopMode : spec?.loopMode ?? 'loop',
+        settings: {
+          frameCount: clampFrames(body?.frames, spec?.frames ?? 4),
+          actionKey: body?.actionKey?.trim() || spec?.action || name,
+          direction: body?.direction?.trim() || undefined,
+          exportName: body?.exportName?.trim().replace(/\s+/g, '_').slice(0, 60) || name,
+          pivot: { x: 0.5, y: 1 },
+        },
       });
       return c.json(dto(anim));
     } catch {
@@ -73,6 +86,7 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
     const body = (await c.req.json().catch(() => ({}))) as {
       fps?: number; loopMode?: string; frameCount?: number;
       loopStart?: number | null; loopEnd?: number | null;
+      actionKey?: string; direction?: string | null; exportName?: string; pivot?: { x?: number; y?: number };
     };
     // Fold frameCount + loop markers into a single settings_json patch. A
     // null loop marker clears it (undefined key is dropped by JSON.stringify).
@@ -83,6 +97,16 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
     if (body.frameCount !== undefined) { settings.frameCount = clampFrames(body.frameCount, 4); touched = true; }
     if (body.loopStart !== undefined) { settings.loopStart = clampIdx(body.loopStart); touched = true; }
     if (body.loopEnd !== undefined) { settings.loopEnd = clampIdx(body.loopEnd); touched = true; }
+    if (body.actionKey !== undefined) { settings.actionKey = body.actionKey.trim().slice(0, 40); touched = true; }
+    if (body.direction !== undefined) { settings.direction = body.direction?.trim() || undefined; touched = true; }
+    if (body.exportName !== undefined) { settings.exportName = body.exportName.trim().replace(/\s+/g, '_').slice(0, 60); touched = true; }
+    if (body.pivot !== undefined) {
+      settings.pivot = {
+        x: Math.max(0, Math.min(1, Number(body.pivot.x) || 0)),
+        y: Math.max(0, Math.min(1, Number(body.pivot.y) || 0)),
+      };
+      touched = true;
+    }
     store.update(found.anim.id, {
       fps: body.fps !== undefined ? clampFps(body.fps, found.anim.fps) : undefined,
       loop_mode: typeof body.loopMode === 'string' && LOOP_MODES.has(body.loopMode)
@@ -113,7 +137,10 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
       ? clampFrames(body.frameCount, typeof anim.settings.frameCount === 'number' ? anim.settings.frameCount : 4)
       : clampFrames(anim.settings.frameCount, store.listFrames(anim.id).length || 4);
     if (body.frameCount !== undefined) store.mergeSettings(anim.id, { frameCount: n });
-    const direction = typeof body.direction === 'string' ? body.direction : undefined;
+    const direction = typeof body.direction === 'string'
+      ? body.direction
+      : typeof anim.settings.direction === 'string' ? anim.settings.direction : undefined;
+    if (typeof body.direction === 'string') store.mergeSettings(anim.id, { direction: body.direction });
     const intent = buildAnimationIntent(body.intent?.trim() || anim.name, n, direction);
 
     // Character consistency (layer B): the ANCHOR version conditions the pack
@@ -226,6 +253,44 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
     }
     store.replaceTrackFrames(found.anim.id, track, inputs);
     return c.json(dto(store.get(found.anim.id) as SpriteAnimationRow));
+  });
+
+  // Safe frame edit: create an immutable child version, then repoint only the
+  // addressed timeline cell. Other clips/cells sharing the source stay intact.
+  app.post('/api/sprite-studio/animations/:id/frames/:track/:index/version', async (c) => {
+    const found = resolveAnim(deps, Number(c.req.param('id')));
+    if (!found?.root) return c.json({ error: 'not_found' }, 404);
+    const track = Math.max(0, Math.floor(Number(c.req.param('track'))));
+    const index = Math.max(0, Math.floor(Number(c.req.param('index'))));
+    const cells = store.listFrames(found.anim.id, track);
+    const current = cells.find((cell) => cell.frame_index === index);
+    if (!current) return c.json({ error: 'frame_not_found' }, 404);
+    let png: Buffer;
+    try {
+      const form = await c.req.formData();
+      const file = form.get('file');
+      if (!(file instanceof File)) return c.json({ error: 'no_file' }, 400);
+      const expected = Number(form.get('expectedVersionId'));
+      if (Number.isFinite(expected) && expected > 0 && expected !== current.version_id) {
+        return c.json({ error: 'frame_changed' }, 409);
+      }
+      png = Buffer.from(await file.arrayBuffer());
+    } catch {
+      return c.json({ error: 'invalid_multipart' }, 400);
+    }
+    try {
+      const version = writeEditedVersion(deps, found.root, found.asset, png, {
+        setCurrent: false, parentVersionId: current.version_id, source: 'edited',
+      });
+      store.replaceTrackFrames(found.anim.id, track, cells.map((cell) => ({
+        frame_index: cell.frame_index,
+        version_id: cell.frame_index === index ? version.id : cell.version_id,
+        duration_ms: cell.duration_ms,
+      })));
+      return c.json({ animation: dto(store.get(found.anim.id) as SpriteAnimationRow), versionId: version.id });
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 400);
+    }
   });
 
   // GIF preview moved to gif.routes.ts (multi-track composite + LOC ceiling).

@@ -28,7 +28,7 @@ interface SlashCommand {
   context_mode: string;
 }
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
 
 // Visual cue: tints the composer's left border by the active mode so the
 // user sees-at-a-glance which agent is loaded. The functional gates
@@ -44,6 +44,7 @@ const BORDER_TINT: Record<AgentId, string> = {
   app_architect: 'border-l-blue-500',
   app_ux: 'border-l-pink-500',
   app_wireframe: 'border-l-cyan-500',
+  app_product: 'border-l-emerald-500',
   api: 'border-l-cyan-500',
   diagram: 'border-l-violet-500',
   builder: 'border-l-fuchsia-500',

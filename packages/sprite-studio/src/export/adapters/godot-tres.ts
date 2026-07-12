@@ -90,7 +90,7 @@ export function godotTresText(sheet: ComposedSheet, meta: ExportMeta, imageName:
   const lines: string[] = [
     `[gd_resource type="SpriteFrames" load_steps=${used.length + 2} format=3]`,
     '',
-    `[ext_resource type="Texture2D" path="res://${imageName}" id="1"]`,
+    `[ext_resource type="Texture2D" path="${meta.resourcePath ?? `res://${imageName}`}" id="1"]`,
     '',
   ];
   for (const i of used) {

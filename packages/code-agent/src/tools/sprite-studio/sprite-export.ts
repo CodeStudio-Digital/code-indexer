@@ -15,7 +15,7 @@ const PARAMETERS: JsonSchema = {
     format: {
       type: 'string',
       description: 'Export format.',
-      enum: ['png-individual', 'spritesheet-json', 'phaser'],
+      enum: ['png-individual', 'spritesheet-json', 'phaser', 'unity', 'godot', 'babylon', 'defold', 'cocos'],
     },
     asset_slugs: {
       type: 'array',
@@ -31,7 +31,7 @@ export function spriteExport(projectId: number): CoderTool {
     name: 'sprite_export',
     description:
       "Export sprite assets to the project's export directory as individual PNGs, a " +
-      'generic spritesheet + JSON atlas, or a Phaser atlas. Pass `format` and, ' +
+      'generic spritesheet, Phaser, Unity, Godot, Babylon, Defold or Cocos output. Pass `format` and, ' +
       'optionally, `asset_slugs` (defaults to all approved assets).',
     parameters: PARAMETERS,
     source: 'native',

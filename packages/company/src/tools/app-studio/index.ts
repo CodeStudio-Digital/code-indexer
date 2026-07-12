@@ -50,6 +50,10 @@ import { appSaveTddTest } from '@mcp/company/tools/app-studio/app-save-tdd-test.
 import { appGetUx, appGetWireframe, appSaveUx, appSaveWireframe, appUxAudit, appWireframeAudit } from '@mcp/company/tools/app-studio/app-experience.js';
 import { appCompleteBuildTask, appGetBuildPlan, appSubmitBuildGroup } from '@mcp/company/tools/app-studio/app-build-plan.js';
 import { appFetchUxReference } from '@mcp/company/tools/app-studio/app-ux-reference.js';
+import {
+  appGetProductModel, appGetStageBriefing, appProductAudit, appResearchProductDomain, appSetProductScope,
+  appUpsertProductCapability, appUpsertProductDomain, appUpsertProductResearchSource, appUpsertProductScenario,
+} from '@mcp/company/tools/app-studio/app-product.js';
 
 export { setAppStudioStore, getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 export {
@@ -67,6 +71,15 @@ export function buildAppStudioTools(projectId: number): CoderTool[] {
     appGetPipeline(binding),
     appGetSpec(binding),
     appGetSpecHistory(binding),
+    appGetStageBriefing(binding),
+    appGetProductModel(binding),
+    appUpsertProductDomain(binding),
+    appUpsertProductCapability(binding),
+    appUpsertProductScenario(binding),
+    appUpsertProductResearchSource(binding),
+    appSetProductScope(binding),
+    appResearchProductDomain,
+    appProductAudit(binding),
     appSaveSpec(binding),
     appProposeSpecRevision(binding),
     appSpecAudit(binding),

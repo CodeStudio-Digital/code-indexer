@@ -12,6 +12,13 @@ import {
 export interface AppPipelineRepairEvidence {
   spec: AppSpec | null;
   approvedSpecRevisionId: number | null;
+  product?: {
+    revisionId: number;
+    status: 'draft' | 'approved' | 'superseded' | 'rejected';
+    baseSpecRevisionId: number | null;
+    resultSpecRevisionId: number | null;
+    auditOk: boolean;
+  } | null;
   architecture: {
     revisionId: number;
     status: 'draft' | 'approved' | 'superseded' | 'rejected';
@@ -138,17 +145,33 @@ export function repairAppPipeline(
     }
   }
 
+  const oldProduct = old('product');
+  const product = next.stages[1]!;
+  const trustedProduct = evidence.product?.status === 'approved' && evidence.product.auditOk
+    && evidence.product.resultSpecRevisionId === evidence.approvedSpecRevisionId;
+  if (!complete(discovery.status)) {
+    resetAs(product, 'pending');
+  } else if (trustedProduct) {
+    if (oldProduct) copyStage(product, oldProduct, 'approved');
+    else product.status = 'approved';
+  } else if (oldProduct?.status === 'review' && oldProduct.gate?.ok && evidence.product?.auditOk) {
+    copyStage(product, oldProduct, 'review');
+  } else {
+    resetAs(product, 'active', 'Revise a profundidade, os horizontes e as decisões do produto antes de continuar.');
+    if (!oldProduct) issues.push({ code: 'missing-stage', severity: 'error', stage_id: 'product', message: 'A modelagem profunda do produto ainda não foi confirmada.' });
+  }
+
   const oldArchitecture = old('architecture');
-  const architecture = next.stages[1]!;
+  const architecture = next.stages[2]!;
   const architectureMatchesSpec = !!evidence.architecture && (
     evidence.approvedSpecRevisionId == null
       ? evidence.architecture.specRevisionId == null
       : evidence.architecture.specRevisionId === evidence.approvedSpecRevisionId
   );
   const trustedArchitecture = evidence.architecture?.status === 'approved' && evidence.architecture.auditOk && architectureMatchesSpec;
-  const downstreamStarted = APP_STAGE_IDS.slice(2).some((id) => old(id)?.status !== 'pending' && old(id) != null);
+  const downstreamStarted = APP_STAGE_IDS.slice(3).some((id) => old(id)?.status !== 'pending' && old(id) != null);
 
-  if (!complete(discovery.status)) {
+  if (!complete(product.status)) {
     resetAs(architecture, 'pending');
   } else if (trustedArchitecture) {
     if (oldArchitecture) copyStage(architecture, oldArchitecture, 'approved');
@@ -168,7 +191,7 @@ export function repairAppPipeline(
     }
   }
 
-  for (let index = 2; index < APP_STAGE_IDS.length; index += 1) {
+  for (let index = 3; index < APP_STAGE_IDS.length; index += 1) {
     const id = APP_STAGE_IDS[index]!;
     const target = next.stages[index]!;
     const source = old(id);

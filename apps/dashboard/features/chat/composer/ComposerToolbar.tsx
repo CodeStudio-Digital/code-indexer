@@ -13,7 +13,7 @@ import { AgentPicker } from './AgentPicker.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
 
 interface ComposerToolbarProps {
   hasInput: boolean;

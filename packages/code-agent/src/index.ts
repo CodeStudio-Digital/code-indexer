@@ -1629,6 +1629,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       systemPrompt += '\n' + loadPrompt('app_db');
     } else if (effectiveAgentId === 'app_architect') {
       systemPrompt += '\n' + loadPrompt('app_architect');
+    } else if (effectiveAgentId === 'app_product') {
+      systemPrompt += '\n' + loadPrompt('app_product');
     } else if (effectiveAgentId === 'app_ux') {
       systemPrompt += '\n' + loadPrompt('app_ux');
     } else if (effectiveAgentId === 'app_wireframe') {

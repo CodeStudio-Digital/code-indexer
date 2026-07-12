@@ -44,6 +44,7 @@
     "blueprint": "Mapa",
     "versions": "Versões",
     "architecture": "Construção",
+    "product": "Produto",
     "experience": "Experiência",
     "preview": "Seu app",
     "data": "Seus dados",
@@ -66,6 +67,27 @@
     "security": "Segurança",
     "risks": "Riscos e cuidados",
     "sources": "Fontes oficiais consultadas"
+  },
+  "product": {
+    "title": "Mapa do produto",
+    "emptyTitle": "Vamos aprofundar o produto",
+    "emptyBody": "O especialista transforma a ideia em domínios, capacidades e cenários, mostrando o que entra agora e o que pode esperar.",
+    "repairBody": "Este app usa uma jornada anterior. Atualize pelo reparo guiado para inserir a Modelagem do produto sem perder telas, dados, conversas ou código.",
+    "repairAction": "Ir para Reparar app",
+    "openAgent": "Especialista em produto",
+    "domains": "domínios",
+    "capabilities": "capacidades",
+    "scenarios": "cenários",
+    "decisions": "decisões",
+    "allDomains": "Todos os domínios",
+    "search": "Buscar capacidade...",
+    "openDecisions": "{{count}} decisão(ões) ainda precisam de confirmação",
+    "addScope": "Incluir no escopo",
+    "removeScope": "Retirar do escopo",
+    "critical": "crítica",
+    "horizon": { "core": "Núcleo atual", "complete": "Produto completo", "future": "Futuro" },
+    "provenance": { "user": "pedido por você", "inferred": "sugerido pela IA", "researched": "baseado em pesquisa", "existing": "já existente" },
+    "complexity": { "simple": "simples", "standard": "padrão", "complex": "complexo", "very-complex": "muito complexo" }
   },
   "experience": {
     "direction": "Direção",
@@ -202,6 +224,12 @@
       "agent": "Especialista em requisitos",
       "tagline": "A IA conversa com você para entender o que o app precisa fazer.",
       "userAction": "Responda as perguntas no chat e depois aprove o plano."
+    },
+    "product": {
+      "name": "Modelar o produto",
+      "agent": "Especialista em produto",
+      "tagline": "Aprofundamos a ideia em capacidades, cenários e escolhas de escopo antes de construir.",
+      "userAction": "Confira Núcleo, Produto completo e Futuro na aba Produto e confirme as escolhas."
     },
     "architecture": {
       "name": "Planejar a construção",
@@ -535,6 +563,7 @@
     "sessions": "Conversas",
     "assistant": "Assistente",
     "specSessionTitle": "Refinar plano - {{name}}",
+    "productSessionTitle": "Modelar produto - {{name}}",
     "dbSessionTitle": "Analisar dados - {{name}}",
     "architectureSessionTitle": "Planejar construção - {{name}}",
     "uxSessionTitle": "Direção UX - {{name}}",
@@ -544,6 +573,7 @@
     "reviewSessionTitle": "Revisar aplicação - {{name}}",
     "builderMode": "Chat de construção",
     "specMode": "Especialista em spec",
+    "productMode": "Especialista em produto",
     "dbMode": "Especialista em dados",
     "architectureMode": "Especialista em arquitetura",
     "uxMode": "Especialista em UX",
@@ -598,6 +628,14 @@
       "thinking": "Pensar mais",
       "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
       "launch": "Abrir sessão"
+    },
+    "productLaunch": {
+      "title": "Abrir especialista em produto",
+      "description": "Escolha o modelo que vai aprofundar a ideia, propor horizontes de escopo e mapear cenários sem incluir sugestões automaticamente.",
+      "provider": "Provedor", "model": "Modelo", "searchProvider": "Buscar provedor...", "searchModel": "Buscar modelo...",
+      "noProviders": "Nenhum provedor configurado", "noModels": "Nenhum modelo configurado", "modelPlaceholder": "id do modelo",
+      "effort": "Esforço de raciocínio", "effortAuto": "Automático (padrão do modelo)", "thinking": "Pensar mais",
+      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.", "launch": "Abrir sessão"
     },
     "uxLaunch": {
       "title": "Abrir especialista em direção UX",
@@ -690,6 +728,7 @@
     "close": "Fechar pesquisa"
   },
   "stageMessage": {
+    "product": "Aprofunde este produto antes da arquitetura. Leia a ideia e o briefing persistido, apresente claramente o Núcleo atual, o Produto completo e o que pode ficar para o Futuro. Proponha capacidades importantes que o usuário leigo não mencionou, mas não selecione nada inferido ou pesquisado sem confirmação explícita. Modele domínios e cenários críticos com operações incrementais, rode app_product_audit e submeta a etapa product para revisão.",
     "discovery": "Vamos começar! Quero criar um app e preciso da sua ajuda para planejar. Me faça UMA pergunta por vez usando a tool ask_user, em linguagem simples e sem termos técnicos, para entender: o que o app faz, quem vai usar, quais telas ele precisa, que informações ele guarda, se as pessoas fazem login, quais regras importantes existem, como vou saber que ficou pronto e o que fica fora da primeira versão. Sempre que a pergunta tiver alternativas, passe options (2 a 8) com allow_freeform: true — assim eu clico num botão OU digito minha própria resposta. Quando a pergunta permitir escolher VÁRIAS opções (ex.: quais telas, que dados guardar, formas de login), passe multi_select: true. Quando tiver tudo, salve o plano com app_save_spec incluindo requirements, rode app_spec_audit, me mostre um resumo simples e pergunte se eu aprovo. Fale sempre no meu idioma.",
     "architecture": "Planeje como este app será construído. Leia a spec e seu histórico. Se uma decisão de arquitetura exigir mudar comportamento, escopo, dados, acesso ou critérios do produto, confirme comigo e proponha uma revisão versionada da spec antes de continuar. Caso contrário, pesquise somente documentação oficial atual da stack recomendada, registre as fontes e crie uma arquitetura versionada com um plano de testes rastreável. Cada critério de aceite, regra, comportamento, entidade e login deve ter pelo menos um teste. Salve com app_save_architecture, rode app_architecture_audit e entregue a etapa architecture com app_submit_stage. Explique o resultado em linguagem simples.",
     "database": "Vamos conferir os dados do app. Primeiro inspecione as migrations, o seed canônico e o banco real. Se tudo já corresponder ao plano aprovado, reutilize o banco sem recriar nada. Crie apenas uma migration aditiva para uma diferença de estrutura comprovada; exemplos devem ser corrigidos com app_save_db_seed, nunca com migrations extras. Aplique somente o que estiver pendente, valide com consultas de leitura e entregue a etapa com app_submit_stage.",

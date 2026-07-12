@@ -135,6 +135,7 @@
   "tool": {
     "pointer": "Pointer (pan) (V)",
     "brush": "Brush (B)",
+    "pencil": "Pixel-perfect pencil (P)",
     "eraser": "Eraser (E)",
     "magicEraser": "Magic eraser (K)",
     "eyedropper": "Eyedropper (I) — or hold Alt while painting",
@@ -144,7 +145,8 @@
     "shapeEllipse": "Ellipse (U toggles)",
     "move": "Move (M)",
     "selectRect": "Rectangle select (R)",
-    "selectWand": "Magic wand (W)"
+    "selectWand": "Magic wand (W)",
+    "selectLasso": "Free lasso (Q)"
   },
   "options": {
     "background": "Background color",
@@ -161,7 +163,23 @@
     "size": "Size",
     "softness": "Softness",
     "swapColors": "Swap colors",
-    "tolerance": "Tolerance"
+    "tolerance": "Tolerance",
+    "sampleSource": "Sample",
+    "activeLayer": "Active layer",
+    "mergedVisible": "Merged visible",
+    "matchMode": "Match",
+    "color": "Color",
+    "alpha": "Alpha",
+    "colorMetric": "Distance",
+    "perceptual": "Perceptual",
+    "channel": "RGBA"
+  },
+  "selection": {
+    "invert": "Invert",
+    "grow": "Grow",
+    "shrink": "Shrink",
+    "fillHoles": "Fill holes",
+    "removeIslands": "Clean islands"
   },
   "statusBar": {
     "color": "Color under cursor",
@@ -373,6 +391,7 @@
   },
   "export": {
     "title": "Export",
+    "description": "Choose exactly what goes into the game and review the files before writing.",
     "action": "Export",
     "cancel": "Cancel",
     "browse": "Browse…",
@@ -383,22 +402,25 @@
     "formatLabel": "Format",
     "destination": "Destination folder",
     "destinationPlaceholder": "assets/sprites",
+    "destinationHint": "A relative path writes inside the project; use Browse for an absolute folder.",
     "count": "{{n}} asset(s) in scope",
     "scope": {
       "label": "Scope",
+      "animation": "Current animation: {{name}}",
       "asset": "Active asset",
+      "assetAnimations": "Asset + all animations",
       "category": "Category",
       "approved": "All approved"
     },
     "format": {
       "pngIndividual": "PNG (individual files)",
       "spritesheetJson": "Spritesheet + JSON",
-      "unity": "Unity (sheet + TexturePacker JSON)",
+      "unity": "Unity (sheet + importer + clips)",
       "godot": "Godot 4 (SpriteFrames .tres)",
       "babylon": "Babylon.js (sheet + manifest)",
       "defold": "Defold (.atlas + PNGs)",
-      "cocos": "Cocos2d (plist)",
-      "phaser": "Phaser 3 atlas"
+      "cocos": "Cocos2d (plist atlas)",
+      "phaser": "Phaser 3 (atlas + animations)"
     },
     "options": {
       "includeAnimations": "Include animations",
@@ -409,6 +431,19 @@
     },
     "preview": {
       "empty": "No previews — the scoped assets have no thumbnails yet."
+    },
+    "plan": {
+      "loading": "Building export plan…",
+      "empty": "Choose a valid scope to preview the output.",
+      "assets": "{{n}} asset(s)",
+      "frames": "{{n}} frame(s)",
+      "animations": "{{n}} animation(s)"
+    },
+    "warning": {
+      "animations_without_manifest": "PNG files do not include an animation manifest.",
+      "babylon_uniform_duration_only": "Babylon uses one uniform duration per animation.",
+      "cocos_atlas_only": "Cocos receives the atlas; create clips in the game project.",
+      "godot_resource_path_assumes_project_export_dir": "For an absolute folder, verify the texture res:// path in Godot."
     }
   },
   "model": {
@@ -437,6 +472,7 @@
     "customNamePlaceholder": "e.g. spin",
     "fps": "FPS",
     "frames": "Frames",
+    "exportName": "In-game name",
     "create": "Create",
     "createTitle": "New animation",
     "creating": "Creating…",
@@ -445,6 +481,7 @@
     "deleteBody": "Delete \"{{name}}\"? Only the frame list is removed — the frame images stay as asset versions.",
     "deleteConfirm": "Delete",
     "exportGif": "GIF",
+    "exportAnimation": "Export animation",
     "generate": "Generate frames",
     "regenerate": "Regenerate frames",
     "generating": "Generating…",
@@ -467,6 +504,10 @@
       "N": "Back (N)",
       "E": "Right (E)",
       "W": "Left (W)",
+      "SE": "Front-right diagonal (SE)",
+      "SW": "Front-left diagonal (SW)",
+      "NE": "Back-right diagonal (NE)",
+      "NW": "Back-left diagonal (NW)",
       "side": "Side view"
     },
     "jobStatus": {
@@ -543,7 +584,7 @@
       "frameAlt": "Frame {{n}}",
       "durationMs": "Duration (ms)",
       "deleteFrame": "Remove frame",
-      "editFrame": "Edit frame image — saving creates a copy; use Replace to point the frame at the new version",
+      "editFrame": "Edit this frame safely; saving creates a version and repoints only this cell",
       "replaceFrame": "Replace frame…",
       "duplicateFrame": "Duplicate frame",
       "reverse": "Reverse frames",

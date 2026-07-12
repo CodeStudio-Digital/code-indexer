@@ -43,7 +43,7 @@ export function TimelineStrip({
   versionById: Map<number, AssetVersion>;
   onSelect: (track: number, col: number) => void;
   onAlign: (anchorX: AnchorX, anchorY: AnchorY, scope: AlignScope) => void;
-  onEditVersion?: (versionId: number) => void;
+  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
   onReverse?: () => void;
   onCopy?: () => void;
   onPaste?: () => void;

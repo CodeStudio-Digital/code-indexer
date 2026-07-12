@@ -200,6 +200,27 @@ describe('AppStudioStore', () => {
     expect(h.store.getLatestApprovedArchitectureRevision(s.id)?.id).toBe(updated.id);
   });
 
+  it('approves product and materializes its spec in one transaction', () => {
+    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
+    const initialJson = '{"v":1,"summary":"idea","screens":[]}';
+    h.store.setSpecJson(s.id, initialJson);
+    const initial = h.store.ensureInitialSpecRevision(s.id)!;
+    const product = h.store.saveProductRevision({
+      app_session_id: s.id,
+      base_spec_revision_id: initial.id,
+      complexity: 'complex',
+      product_json: '{"v":1,"candidate_spec":{"v":1}}',
+    });
+    const candidate = '{"v":1,"summary":"deep product","screens":[]}';
+    const approved = h.store.approveProductRevision({ sessionId: s.id, revisionId: product.id, candidateSpecJson: candidate, afterPipelineJson: '{"v":4}' });
+    expect(approved.product.status).toBe('approved');
+    expect(approved.product.result_spec_revision_id).toBe(approved.spec.id);
+    expect(approved.spec.status).toBe('approved');
+    expect(approved.session.spec_json).toBe(candidate);
+    expect(approved.session.pipeline_json).toBe('{"v":4}');
+    expect(h.store.getSpecRevision(initial.id)?.status).toBe('superseded');
+  });
+
   it('applies and safely undoes a pipeline repair with optimistic concurrency', () => {
     const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
     const before = '{"v":2,"stages":[],"roadmap":[]}';

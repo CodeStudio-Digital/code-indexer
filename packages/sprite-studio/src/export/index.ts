@@ -13,8 +13,10 @@ import { defoldAtlasText } from './adapters/defold.js';
 import { genericAtlasText } from './adapters/generic-atlas.js';
 import { godotTresText } from './adapters/godot-tres.js';
 import { phaserAtlasText } from './adapters/phaser.js';
+import { phaserAnimationsText } from './adapters/phaser-animations.js';
+import { unityImporterText, unityManifestText } from './adapters/unity.js';
 import type { ExportFile, ExportMeta } from './atlas-types.js';
-import { composeGrid, type NamedFrame } from './spritesheet.js';
+import { composeGrid, composePacked, trimNamedFrames, type NamedFrame } from './spritesheet.js';
 
 export type SpriteExportFormat =
   | 'png-individual'
@@ -37,13 +39,24 @@ export interface ExportAssetInput {
   scale?: number;
   /** Grid columns override (default near-square). */
   cols?: number;
+  /** Packing strategy and optional alpha trim. */
+  packing?: 'grid' | 'packed';
+  trim?: boolean;
   /** Defold only: project-absolute dir the frame PNGs live under (default `/assets/<assetSlug>`). */
   defoldImageDir?: string;
 }
 
 function scaledFrames(frames: NamedFrame[], scale: number): NamedFrame[] {
   if (scale === 1) return frames;
-  return frames.map((f) => ({ name: f.name, img: integerScale(f.img, scale) }));
+  return frames.map((f) => ({
+    ...f,
+    img: integerScale(f.img, scale),
+    sourceSize: f.sourceSize ? { w: f.sourceSize.w * scale, h: f.sourceSize.h * scale } : undefined,
+    spriteSourceSize: f.spriteSourceSize ? {
+      x: f.spriteSourceSize.x * scale, y: f.spriteSourceSize.y * scale,
+      w: f.spriteSourceSize.w * scale, h: f.spriteSourceSize.h * scale,
+    } : undefined,
+  }));
 }
 
 function composeSheetFiles(
@@ -54,11 +67,9 @@ function composeSheetFiles(
   atlasExt = 'json',
 ): ExportFile[] {
   const meta: ExportMeta = { ...input.meta, scale };
-  const sheet = composeGrid(frames, {
-    padding: meta.padding,
-    extrude: meta.extrude,
-    cols: input.cols,
-  });
+  const sheet = input.packing === 'packed'
+    ? composePacked(frames, { padding: meta.padding, extrude: meta.extrude })
+    : composeGrid(frames, { padding: meta.padding, extrude: meta.extrude, cols: input.cols });
   const imageName = `${input.outName}.png`;
   return [
     { relPath: imageName, bytes: encodePng(sheet.rgba) },
@@ -82,16 +93,28 @@ export function exportAsset(input: ExportAssetInput): ExportFile[] {
   if (!Number.isInteger(scale) || scale < 1) {
     throw new Error(`Export scale must be a positive integer, got ${String(scale)}`);
   }
-  const frames = scaledFrames(input.frames, scale);
+  const frames = scaledFrames(input.trim ? trimNamedFrames(input.frames) : input.frames, scale);
 
   switch (input.format) {
     case 'png-individual':
       return frames.map((f) => ({ relPath: `${f.name}.png`, bytes: encodePng(f.img) }));
     case 'spritesheet-json':
       return composeSheetFiles(frames, input, scale, genericAtlasText);
-    case 'phaser':
-    case 'unity': // Unity's TexturePacker importer consumes the same jsonhash atlas.
-      return composeSheetFiles(frames, input, scale, phaserAtlasText);
+    case 'phaser': {
+      const files = composeSheetFiles(frames, input, scale, phaserAtlasText);
+      if (input.meta.animations && Object.keys(input.meta.animations).length > 0) {
+        files.push({ relPath: `${input.outName}.animations.json`, text: phaserAnimationsText(input.meta, input.outName) });
+      }
+      return files;
+    }
+    case 'unity': {
+      const files = composeSheetFiles(frames, input, scale, phaserAtlasText);
+      files.push(
+        { relPath: `${input.outName}.codesprite.json`, text: unityManifestText(files[1].text ?? '{}', input.meta, `${input.outName}.png`) },
+        { relPath: 'Editor/CodeStudioSpriteImporter.cs', text: unityImporterText() },
+      );
+      return files;
+    }
     case 'godot':
       return composeSheetFiles(frames, input, scale, godotTresText, 'tres');
     case 'babylon':
@@ -119,7 +142,7 @@ export function exportAsset(input: ExportAssetInput): ExportFile[] {
 
 export * from './atlas-types.js';
 export * from './gif.js';
-export { composeGrid, type ComposeGridParams, type NamedFrame } from './spritesheet.js';
+export { composeGrid, composePacked, trimNamedFrames, type ComposeGridParams, type ComposePackedParams, type NamedFrame } from './spritesheet.js';
 export { buildGenericAtlas, genericAtlasText, type GenericAtlasJson } from './adapters/generic-atlas.js';
 export { buildPhaserAtlas, phaserAtlasText, type PhaserAtlasJson } from './adapters/phaser.js';
 export { buildBabylonManifest, babylonManifestText, type BabylonSpriteManifest } from './adapters/babylon.js';

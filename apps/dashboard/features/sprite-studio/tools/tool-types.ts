@@ -11,6 +11,7 @@ import type { Viewport } from '../engine/viewport.js';
 export type ToolId =
   | 'pointer'
   | 'brush'
+  | 'pencil'
   | 'eraser'
   | 'magic-eraser'
   | 'fill'
@@ -19,6 +20,7 @@ export type ToolId =
   | 'shape-ellipse'
   | 'select-rect'
   | 'select-wand'
+  | 'select-lasso'
   | 'eyedropper'
   | 'move';
 
@@ -58,6 +60,10 @@ export interface ToolOptions {
   tolerance: number;
   /** Wand/fill contiguity toggle. */
   contiguous: boolean;
+  /** Wand sampling and matching controls. */
+  sampleSource?: 'active' | 'merged';
+  matchMode?: 'color' | 'alpha';
+  colorMetric?: 'channel' | 'perceptual';
   /** Magic eraser edge cleanup radius in pixels (0 = exact flood only). */
   edgeCleanup?: number;
   /** Brush stamp shape. Default 'square' (pixel-art first). */

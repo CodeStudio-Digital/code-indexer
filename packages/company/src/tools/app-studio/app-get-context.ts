@@ -10,6 +10,8 @@ import { auditAppSpec } from '@mcp/app-studio/spec/audit.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { auditAppUxBrief, auditAppWireframePlan } from '@mcp/app-studio/experience/audit.js';
 import { parseAppUxBrief, parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
+import { auditAppProductModel } from '@mcp/app-studio/product/audit.js';
+import { parseAppProductModel, productModelFingerprint } from '@mcp/app-studio/product/types.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
@@ -19,7 +21,7 @@ const PARAMETERS: JsonSchema = {
   properties: {
     focus: {
       type: 'string',
-      enum: ['spec', 'architecture', 'database', 'ux', 'wireframe', 'execution'],
+      enum: ['spec', 'product', 'architecture', 'database', 'ux', 'wireframe', 'execution'],
       description: 'Optional specialist focus used to tailor the recommended next actions.',
     },
   },
@@ -52,6 +54,8 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
         const pendingSpecRevision = store.getPendingSpecRevision(session.id);
         const architectureRevision = store.getLatestArchitectureRevision(session.id);
         const architecture = parseAppArchitecturePlan(architectureRevision?.architecture_json);
+        const productRevision = store.getLatestProductRevision(session.id);
+        const product = parseAppProductModel(productRevision?.product_json);
         const uxRevision = store.getLatestUxRevision(session.id);
         const ux = parseAppUxBrief(uxRevision?.ux_json);
         const wireframeRevision = store.getLatestWireframeRevision(session.id);
@@ -69,6 +73,7 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
 
         const capabilities = {
           save_initial_spec: !!state && discovery?.status !== 'approved',
+          save_product: current?.id === 'product' && current.status !== 'review',
           propose_spec_revision: discovery?.status === 'approved',
           spec_revision_waiting_for_user_approval: !!pendingSpecRevision,
           save_architecture: current?.id === 'architecture' && current.status !== 'review',
@@ -89,6 +94,7 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
         else if (current?.status === 'review') recommendedActions.push(`Stop changing '${current.id}'; summarize it and wait for the user to approve or reopen the stage.`);
         else if (focus === 'spec' && capabilities.propose_spec_revision) recommendedActions.push('Use app_propose_spec_revision; do not overwrite the approved spec.');
         else if (focus === 'spec') recommendedActions.push('Use app_save_spec, run app_spec_audit, then submit discovery when the user confirms.');
+        else if (focus === 'product') recommendedActions.push('Read the stage briefing, present Core/Complete/Future scope, persist domains/capabilities/scenarios incrementally, obtain explicit scope confirmation, audit, then submit product.');
         else if (focus === 'architecture') recommendedActions.push('Research official docs, save the architecture, audit it, then submit architecture.');
         else if (focus === 'ux') recommendedActions.push('Read the approved plan, architecture and data. Guide the user through exactly three directions, save and audit the UX brief, then submit ux.');
         else if (focus === 'wireframe') recommendedActions.push('Read the approved UX direction and model every flow, screen state, data binding, browser test and ordered build group before submitting wireframe.');
@@ -121,9 +127,16 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
             counts: spec ? { features: spec.features.length, screens: spec.screens.length, entities: spec.database.entities.length, behaviors: spec.behaviors?.length ?? 0 } : null,
             audit: spec ? auditAppSpec(spec) : null,
           },
+          product: {
+            revision: productRevision ? { id: productRevision.id, number: productRevision.revision_number, status: productRevision.status, base_spec_revision_id: productRevision.base_spec_revision_id, result_spec_revision_id: productRevision.result_spec_revision_id } : null,
+            counts: product ? { domains: product.domains.length, capabilities: product.capabilities.length, selected: product.capabilities.filter((item) => item.selected).length, scenarios: product.scenarios.length, open_decisions: product.decisions.filter((item) => item.status === 'open').length } : null,
+            complexity: product?.complexity ?? null,
+            fingerprint: product ? productModelFingerprint(product) : null,
+            audit: product ? auditAppProductModel(product) : null,
+          },
           architecture: {
             revision: architectureRevision ? { id: architectureRevision.id, number: architectureRevision.revision_number, status: architectureRevision.status, spec_revision_id: architectureRevision.spec_revision_id } : null,
-            audit: architecture ? auditAppArchitecture(architecture, spec) : null,
+            audit: architecture ? auditAppArchitecture(architecture, spec, product) : null,
           },
           ux: {
             revision: uxRevision ? { id: uxRevision.id, number: uxRevision.revision_number, status: uxRevision.status, spec_revision_id: uxRevision.spec_revision_id, architecture_revision_id: uxRevision.architecture_revision_id } : null,

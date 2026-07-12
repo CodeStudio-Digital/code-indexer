@@ -6,7 +6,7 @@
  */
 import type { Rect } from './engine-types.js';
 
-export type SelectMode = 'replace' | 'add' | 'subtract';
+export type SelectMode = 'replace' | 'add' | 'subtract' | 'intersect';
 
 export class SelectionMask {
   private _width: number;
@@ -81,11 +81,75 @@ export class SelectionMask {
   fromFloodMask(flood: Uint8Array, mode: SelectMode): void {
     const next = mode === 'replace' || !this.mask ? new Uint8Array(this.width * this.height) : new Uint8Array(this.mask);
     for (let i = 0; i < flood.length && i < next.length; i++) {
+      if (mode === 'intersect') { next[i] = next[i] && flood[i] ? 1 : 0; continue; }
       if (!flood[i]) continue;
       next[i] = mode === 'subtract' ? 0 : 1;
     }
     this.mask = next;
     this.markChanged();
+  }
+
+  invert(): void {
+    const next = new Uint8Array(this.width * this.height);
+    for (let i = 0; i < next.length; i++) next[i] = this.mask?.[i] ? 0 : 1;
+    this.mask = next; this.markChanged();
+  }
+
+  /** Pixel-art morphology: positive grows, negative contracts the selection. */
+  resizeBy(radius: number): void {
+    if (!this.mask || radius === 0) return;
+    const steps = Math.min(16, Math.abs(Math.round(radius)));
+    let current = new Uint8Array(this.mask);
+    for (let step = 0; step < steps; step++) {
+      const next = new Uint8Array(current);
+      for (let y = 0; y < this.height; y++) for (let x = 0; x < this.width; x++) {
+        const p = y * this.width + x;
+        const neighbors = [
+          x > 0 ? current[p - 1] : 0, x + 1 < this.width ? current[p + 1] : 0,
+          y > 0 ? current[p - this.width] : 0, y + 1 < this.height ? current[p + this.width] : 0,
+        ];
+        next[p] = radius > 0 ? (current[p] || neighbors.some(Boolean) ? 1 : 0)
+          : (current[p] && neighbors.every(Boolean) ? 1 : 0);
+      }
+      current = next;
+    }
+    this.mask = current; this.markChanged();
+  }
+
+  /** Fill background components that do not touch a document edge. */
+  fillHoles(): void {
+    if (!this.mask) return;
+    const outside = new Uint8Array(this.mask.length);
+    const queue: number[] = [];
+    const push = (p: number) => { if (!this.mask![p] && !outside[p]) { outside[p] = 1; queue.push(p); } };
+    for (let x = 0; x < this.width; x++) { push(x); push((this.height - 1) * this.width + x); }
+    for (let y = 0; y < this.height; y++) { push(y * this.width); push(y * this.width + this.width - 1); }
+    for (let q = 0; q < queue.length; q++) {
+      const p = queue[q], x = p % this.width, y = Math.floor(p / this.width);
+      if (x > 0) push(p - 1); if (x + 1 < this.width) push(p + 1);
+      if (y > 0) push(p - this.width); if (y + 1 < this.height) push(p + this.width);
+    }
+    const next = new Uint8Array(this.mask);
+    for (let i = 0; i < next.length; i++) if (!next[i] && !outside[i]) next[i] = 1;
+    this.mask = next; this.markChanged();
+  }
+
+  removeSmallIslands(minPixels: number): void {
+    if (!this.mask || minPixels <= 1) return;
+    const seen = new Uint8Array(this.mask.length);
+    const next = new Uint8Array(this.mask);
+    for (let start = 0; start < next.length; start++) {
+      if (!next[start] || seen[start]) continue;
+      const component: number[] = [start]; seen[start] = 1;
+      for (let q = 0; q < component.length; q++) {
+        const p = component[q], x = p % this.width, y = Math.floor(p / this.width);
+        const add = (n: number) => { if (next[n] && !seen[n]) { seen[n] = 1; component.push(n); } };
+        if (x > 0) add(p - 1); if (x + 1 < this.width) add(p + 1);
+        if (y > 0) add(p - this.width); if (y + 1 < this.height) add(p + this.width);
+      }
+      if (component.length < minPixels) for (const p of component) next[p] = 0;
+    }
+    this.mask = next; this.markChanged();
   }
 
   translate(dx: number, dy: number): void {

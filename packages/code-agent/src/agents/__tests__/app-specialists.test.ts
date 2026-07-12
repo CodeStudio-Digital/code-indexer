@@ -58,6 +58,17 @@ describe('App Studio specialist tool contracts', () => {
     expect(wireframe.has('app_complete_build_task')).toBe(false);
   });
 
+  it('gives product modeling only incremental scope and scenario tools', () => {
+    const product = APP_SPECIALIST_TOOL_ALLOWLISTS.app_product;
+    expect(product.has('app_get_product_model')).toBe(true);
+    expect(product.has('app_upsert_product_capability')).toBe(true);
+    expect(product.has('app_upsert_product_scenario')).toBe(true);
+    expect(product.has('app_upsert_product_research_source')).toBe(true);
+    expect(product.has('app_set_product_scope')).toBe(true);
+    expect(product.has('app_save_wireframe')).toBe(false);
+    expect(product.has('db_command')).toBe(false);
+  });
+
   it('classifies every reduced App Studio tool explicitly in the tier catalog', () => {
     for (const id of APP_SPECIALIST_AGENT_IDS) {
       for (const tool of APP_SPECIALIST_TOOL_ALLOWLISTS[id]) {

@@ -132,6 +132,19 @@ export interface SpriteReferenceRow {
 
 /** Animation playback mode (sprite_animations.loop_mode). */
 export type SpriteLoopMode = 'loop' | 'once' | 'pingpong';
+export type SpriteDirection = 'S' | 'N' | 'E' | 'W' | 'SE' | 'SW' | 'NE' | 'NW' | 'side' | 'custom';
+
+export interface SpriteAnimationSettings extends Record<string, unknown> {
+  frameCount?: number;
+  actionKey?: string;
+  direction?: SpriteDirection | string;
+  exportName?: string;
+  pivot?: { x: number; y: number };
+  anchorVersionId?: number;
+  lastGenJobId?: number;
+  loopStart?: number;
+  loopEnd?: number;
+}
 
 export interface SpriteAnimationRow {
   id: number;
@@ -142,7 +155,7 @@ export interface SpriteAnimationRow {
   loop_mode: SpriteLoopMode;
   status: string;
   /** Free-form settings (frameCount, direction, …) from settings_json. */
-  settings: Record<string, unknown>;
+  settings: SpriteAnimationSettings;
   created_at: string;
   updated_at: string;
 }

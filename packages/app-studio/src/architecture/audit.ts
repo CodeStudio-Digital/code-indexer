@@ -1,4 +1,5 @@
 import type { AppSpec } from '../spec/types.js';
+import type { AppProductModel } from '../product/types.js';
 import {
   APP_ARCHITECTURE_SOURCE_DOMAINS,
   APP_STACK_PROFILE_ID,
@@ -12,17 +13,20 @@ export interface AppArchitectureAudit {
   covered_source_ids: string[];
 }
 
-export function requiredTestSourceIds(spec: AppSpec): string[] {
+export function requiredTestSourceIds(spec: AppSpec, product?: AppProductModel | null): string[] {
   const ids: string[] = [];
   for (let i = 0; i < (spec.requirements?.acceptance_criteria?.length ?? 0); i += 1) ids.push(`acceptance:${i}`);
   for (let i = 0; i < (spec.requirements?.business_rules?.length ?? 0); i += 1) ids.push(`rule:${i}`);
   for (const behavior of spec.behaviors ?? []) ids.push(`behavior:${behavior.id}`);
   for (const entity of spec.database.entities) ids.push(`entity:${entity.name}`);
   if (spec.auth.enabled) ids.push('auth');
+  for (const capability of product?.capabilities ?? []) {
+    if (capability.selected && capability.horizon !== 'declined') ids.push(`capability:${capability.id}`);
+  }
   return ids;
 }
 
-export function auditAppArchitecture(plan: AppArchitecturePlan | null, spec: AppSpec | null): AppArchitectureAudit {
+export function auditAppArchitecture(plan: AppArchitecturePlan | null, spec: AppSpec | null, product?: AppProductModel | null): AppArchitectureAudit {
   const issues: string[] = [];
   if (!plan) {
     return { ok: false, issues: ['No architecture plan saved.'], required_source_ids: [], covered_source_ids: [] };
@@ -73,7 +77,7 @@ export function auditAppArchitecture(plan: AppArchitecturePlan | null, spec: App
     }
   }
 
-  const required = spec ? requiredTestSourceIds(spec) : [];
+  const required = spec ? requiredTestSourceIds(spec, product) : [];
   const covered = new Set<string>();
   const caseIds = new Set<string>();
   for (const testCase of plan.tdd.cases) {
@@ -83,10 +87,16 @@ export function auditAppArchitecture(plan: AppArchitecturePlan | null, spec: App
       issues.push('Every test case needs id, title and expected result.');
     }
     if (testCase.steps.length === 0) issues.push(`Test case '${testCase.id}' has no steps.`);
+    const capabilitySources = testCase.source_ids.filter((id) => id.startsWith('capability:'));
+    if (capabilitySources.length > 1) issues.push(`Test case '${testCase.id}' compresses unrelated capabilities (${capabilitySources.join(', ')}); split it into capability cases.`);
     for (const sourceId of testCase.source_ids) covered.add(sourceId);
   }
   for (const sourceId of required) {
     if (!covered.has(sourceId)) issues.push(`No test covers spec item '${sourceId}'.`);
+  }
+  for (const capability of product?.capabilities.filter((item) => item.selected && item.critical) ?? []) {
+    const id = `capability:${capability.id}`;
+    if (!plan.tdd.cases.some((testCase) => testCase.source_ids.includes(id))) issues.push(`Critical capability '${capability.id}' needs a dedicated architecture TDD case.`);
   }
 
   return {

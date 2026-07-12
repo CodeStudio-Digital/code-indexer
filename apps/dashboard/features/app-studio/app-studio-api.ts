@@ -5,7 +5,7 @@
  * (start/phase/log/done/error — parse manual, EventSource não faz POST).
  */
 
-export type AppStageId = 'discovery' | 'architecture' | 'database' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review' | 'launch';
+export type AppStageId = 'discovery' | 'product' | 'architecture' | 'database' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review' | 'launch';
 export type AppStageStatus = 'pending' | 'active' | 'review' | 'approved' | 'skipped';
 export type AppStageAction = 'start' | 'approve' | 'reopen' | 'skip';
 export type AppRoadmapTier = 'screen' | 'api';
@@ -103,6 +103,7 @@ export interface AppStudioSessionDetail {
   builder_port: number | null;
   pipeline: AppPipelineView | null;
   spec: AppSpecView | null;
+  product: AppProductView | null;
   architecture: AppArchitectureView | null;
   ux: AppUxView | null;
   wireframe: AppWireframeView | null;
@@ -110,6 +111,31 @@ export interface AppStudioSessionDetail {
   build_tasks: AppBuildTaskEvidenceView[];
   deploy: AppDeployView | null;
   features: Array<{ id: number; name: string; kind: string; summary: string | null; verified_in_preview: boolean }>;
+}
+
+export interface AppProductCapabilityView {
+  id: string; domain_id: string; name: string; description: string;
+  horizon: 'core' | 'complete' | 'future' | 'declined'; provenance: 'user' | 'inferred' | 'researched' | 'existing';
+  selected: boolean; critical: boolean; rationale: string; actor_ids: string[]; rule_ids: string[];
+  entity_names: string[]; screen_ids: string[]; quality_attributes: string[]; research_source_ids: string[];
+}
+
+export interface AppProductView {
+  id: number; revision_number: number; base_spec_revision_id: number | null; result_spec_revision_id: number | null;
+  status: 'draft' | 'approved' | 'superseded' | 'rejected'; created_at: string; updated_at: string; approved_at: string | null;
+  fingerprint: string;
+  audit: { ok: boolean; issues: string[]; warnings: string[]; counts: { domains: number; capabilities: number; selected: number; scenarios: number; open_decisions: number } };
+  model: {
+    v: 1; summary: string; complexity: 'simple' | 'standard' | 'complex' | 'very-complex'; complexity_factors: string[];
+    personas: Array<{ id: string; name: string; goals: string[]; permissions: string[] }>;
+    domains: Array<{ id: string; name: string; description: string; capability_ids: string[] }>;
+    capabilities: AppProductCapabilityView[];
+    scenarios: Array<{ id: string; capability_id: string; kind: string; title: string; given: string[]; when: string; then: string[]; source_ids: string[] }>;
+    journeys: Array<{ id: string; name: string; actor_id: string; capability_ids: string[]; outcome: string }>;
+    non_functional_requirements: string[]; assumptions: string[]; risks: string[];
+    decisions: Array<{ id: string; question: string; status: 'open' | 'decided'; blocking: boolean; decision: string | null }>;
+    research_sources: Array<{ id: string; title: string; url: string; publisher: string; accessed_at: string; supports_capability_ids: string[] }>;
+  };
 }
 
 export interface AppUxView {
@@ -156,7 +182,7 @@ export interface AppWireframeView {
     flows: Array<{ id: string; name: string; actor: string; goal: string; entry_screen_id: string; source_ids: string[]; steps: Array<{ id: string; screen_id: string; action: string; result: string; reads: string[]; writes: string[]; next_step_ids: string[] }> }>;
     screens: Array<{ screen_id: string; route: string; flow_ids: string[]; hierarchy: string[]; regions: Array<{ id: string; purpose: string; components: string[] }>; actions: string[]; data_bindings: Array<{ entity: string; fields: string[]; purpose: string; fixture_scenario: string }>; states: string[]; responsive: string; accessibility: string[] }>;
     tdd_cases: Array<{ id: string; title: string; architecture_case_ids: string[]; source_ids: string[]; flow_ids: string[]; screen_ids: string[]; preconditions: string[]; steps: string[]; expected: string }>;
-    build_groups: Array<{ id: string; name: string; goal: string; sequence: number; complexity: 'small' | 'medium' | 'large'; flow_ids: string[]; screen_ids: string[]; depends_on: string[]; task_ids: string[] }>;
+    build_groups: Array<{ id: string; name: string; goal: string; sequence: number; complexity: 'small' | 'medium' | 'large'; flow_ids: string[]; capability_ids: string[]; screen_ids: string[]; depends_on: string[]; task_ids: string[] }>;
     tasks: Array<{ id: string; group_id: string; screen_id: string | null; kind: string; title: string; sequence: number; complexity: 'small' | 'medium' | 'large'; depends_on: string[]; tdd_case_ids: string[]; entity_names: string[]; source_ids: string[] }>;
   };
 }
@@ -182,7 +208,7 @@ export interface AppRepairReport {
   action_count: number;
   areas: AppRepairArea[];
   pipeline: {
-    v: 2 | 3;
+    v: 2 | 3 | 4;
     stages: AppPipelineStage[];
     roadmap: Array<{ name: string; tier: AppRoadmapTier; feature_id: string | null; source: 'spec' }>;
   };
@@ -305,6 +331,17 @@ export async function listAppStudioSessions(): Promise<AppStudioListEntry[]> {
 
 export async function getAppStudioSession(id: number): Promise<AppStudioSessionDetail> {
   return unwrap(await fetch(`/api/app-studio/sessions/${id}`));
+}
+
+export async function patchAppProductScope(
+  sessionId: number,
+  input: { expected_revision_number: number; selections: Array<{ capability_id: string; selected: boolean; horizon?: AppProductCapabilityView['horizon'] }> },
+): Promise<{ model: AppProductView['model']; audit: AppProductView['audit'] }> {
+  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/product`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }));
 }
 
 export async function patchAppStage(

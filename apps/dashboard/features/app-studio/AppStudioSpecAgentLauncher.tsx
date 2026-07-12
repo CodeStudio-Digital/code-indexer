@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Boxes, Brain, Code2, Database, Gauge, Monitor, Palette, ShieldCheck, Workflow } from 'lucide-react';
+import { Bot, Boxes, Brain, Code2, Database, Gauge, Layers3, Monitor, Palette, ShieldCheck, Workflow } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Combobox, type ComboboxOption } from '../../components/ui/combobox.js';
 import {
@@ -17,10 +17,11 @@ import { useProviders } from '../../hooks/useProviders.js';
 import type { EnrichedProviderModel } from '../chat/types.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../chat/composer/provider-caps.js';
 
-export type AppStudioSpecialistKind = 'spec' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
+export type AppStudioSpecialistKind = 'spec' | 'product' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
 
 const STORAGE_KEYS: Record<AppStudioSpecialistKind, string> = {
   spec: 'mcp.app-studio.spec-agent-config',
+  product: 'mcp.app-studio.product-agent-config',
   db: 'mcp.app-studio.db-agent-config',
   architecture: 'mcp.app-studio.architecture-agent-config',
   ux: 'mcp.app-studio.ux-agent-config',
@@ -99,6 +100,8 @@ export function AppStudioSpecAgentLauncher({
   const [reasoningEffort, setReasoningEffort] = useState('');
   const scope = kind === 'db'
     ? 'dbLaunch'
+    : kind === 'product'
+      ? 'productLaunch'
     : kind === 'architecture'
       ? 'architectureLaunch'
       : kind === 'design'
@@ -114,6 +117,8 @@ export function AppStudioSpecAgentLauncher({
             : 'specLaunch';
   const Icon = kind === 'db'
     ? Database
+    : kind === 'product'
+      ? Layers3
     : kind === 'architecture'
       ? Boxes
       : kind === 'design'

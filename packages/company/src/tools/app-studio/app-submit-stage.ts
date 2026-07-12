@@ -24,6 +24,7 @@ import { runAppStageGate } from '@mcp/app-studio/pipeline/gates.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { parseAppUxBrief, parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
+import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -77,6 +78,7 @@ export function appSubmitStage(binding: AppToolBinding): CoderTool {
         if (resolved.kind === 'no-bind-mount') return err(resolved.message);
 
         const architectureRevision = store.getLatestArchitectureRevision(session.id);
+        const productRevision = store.getLatestProductRevision(session.id);
         const currentSpecRevision = store.getLatestApprovedSpecRevision(session.id);
         const uxRevision = store.getLatestUxRevision(session.id);
         const wireframeRevision = store.getLatestWireframeRevision(session.id);
@@ -87,6 +89,8 @@ export function appSubmitStage(binding: AppToolBinding): CoderTool {
           spec: parseAppSpec(session.spec_json),
           recorded: store.listFeatures(session.id).map((f) => ({ name: f.name, kind: f.kind })),
           architecture: parseAppArchitecturePlan(architectureRevision?.architecture_json),
+          product: parseAppProductModel(productRevision?.product_json),
+          productStatus: productRevision?.status ?? null,
           currentSpecRevisionId: currentSpecRevision?.id ?? null,
           currentArchitectureRevisionId: architectureRevision?.id ?? null,
           currentUxRevisionId: uxRevision?.id ?? null,

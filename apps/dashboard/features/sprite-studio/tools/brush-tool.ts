@@ -138,8 +138,11 @@ function stampSegment(
   }
 }
 
-export function createBrushTool(kind: 'brush' | 'eraser'): Tool {
+export function createBrushTool(kind: 'brush' | 'pencil' | 'eraser'): Tool {
   const erase = kind === 'eraser';
+  const effective = (ctx: ToolContext): ToolContext => kind === 'pencil'
+    ? { ...ctx, options: { ...ctx.options, size: 1, softness: 0, opacity: 100, dither: false, shape: 'square' } }
+    : ctx;
   const state: StrokeState = { lastX: 0, lastY: 0, active: false, soft: null };
   /** Last stamp of the PREVIOUS stroke — shift+click draws a line from here.
    *  Tied to the document it was stamped on so it never bleeds across assets. */
@@ -151,7 +154,8 @@ export function createBrushTool(kind: 'brush' | 'eraser'): Tool {
       const layer = ctx.doc.activeLayer;
       if (!layer) return;
       state.active = true;
-      state.soft = isSoft(ctx) ? beginSoftStroke(layer.imageData) : null;
+      const drawCtx = effective(ctx);
+      state.soft = isSoft(drawCtx) ? beginSoftStroke(layer.imageData) : null;
       const x = Math.floor(e.imageX);
       const y = Math.floor(e.imageY);
       ctx.history.beginStroke(layer.id, erase ? 'Eraser' : 'Brush');
@@ -159,9 +163,9 @@ export function createBrushTool(kind: 'brush' | 'eraser'): Tool {
       // THIS stroke (begin/endStroke bracket it → one undo entry). A normal
       // drag afterwards keeps appending to the same stroke, unchanged.
       if (e.shift && prev && prev.doc === ctx.doc) {
-        stampSegment(prev.x, prev.y, x, y, ctx, erase, state.soft);
+        stampSegment(prev.x, prev.y, x, y, drawCtx, erase, state.soft);
       } else {
-        stampSegment(x, y, x, y, ctx, erase, state.soft);
+        stampSegment(x, y, x, y, drawCtx, erase, state.soft);
       }
       state.lastX = x;
       state.lastY = y;
@@ -171,7 +175,7 @@ export function createBrushTool(kind: 'brush' | 'eraser'): Tool {
       const x = Math.floor(e.imageX);
       const y = Math.floor(e.imageY);
       if (x === state.lastX && y === state.lastY) return;
-      stampSegment(state.lastX, state.lastY, x, y, ctx, erase, state.soft);
+      stampSegment(state.lastX, state.lastY, x, y, effective(ctx), erase, state.soft);
       state.lastX = x;
       state.lastY = y;
     },

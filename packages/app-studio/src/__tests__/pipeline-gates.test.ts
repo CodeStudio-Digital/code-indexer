@@ -65,7 +65,7 @@ function experienceFixtures() {
     flows: [{ id: 'gerir-pedidos', name: 'Gerir pedidos', actor: 'Dona', goal: 'Criar e acompanhar pedidos', entry_screen_id: 'painel', source_ids: ['feature:gestao-pedidos'], steps: [{ id: 'abrir', screen_id: 'painel', action: 'Abrir painel', result: 'Pedidos visíveis', reads: ['pedidos'], writes: [], next_step_ids: [] }] }],
     screens: [{ screen_id: 'painel', route: '/', flow_ids: ['gerir-pedidos'], hierarchy: ['Painel', 'Lista'], regions: [{ id: 'principal', purpose: 'Acompanhar pedidos', components: ['Tabela', 'Botão novo'] }], actions: ['Criar pedido'], data_bindings: [{ entity: 'pedidos', fields: ['cliente', 'total'], purpose: 'Listar pedidos', fixture_scenario: 'Lista preenchida e vazia' }], states: ['loading', 'populated', 'empty', 'error', 'forbidden'], responsive: 'Tabela vira lista no mobile.', accessibility: ['Foco visível', 'Cabeçalhos associados'] }],
     tdd_cases: [{ id: 'wf-painel', title: 'Mostra pedidos', architecture_case_ids: [], source_ids: ['feature:gestao-pedidos'], flow_ids: ['gerir-pedidos'], screen_ids: ['painel'], preconditions: ['Seed carregado'], steps: ['Abrir /'], expected: 'Pedidos aparecem' }],
-    build_groups: [{ id: 'pedidos', name: 'Fluxo de pedidos', goal: 'Entregar gestão de pedidos', sequence: 1, complexity: 'medium', flow_ids: ['gerir-pedidos'], screen_ids: ['painel'], depends_on: [], task_ids: tasks.map((task) => task.id) }], tasks,
+    build_groups: [{ id: 'pedidos', name: 'Fluxo de pedidos', goal: 'Entregar gestão de pedidos', sequence: 1, complexity: 'medium', flow_ids: ['gerir-pedidos'], capability_ids: [], screen_ids: ['painel'], depends_on: [], task_ids: tasks.map((task) => task.id) }], tasks,
   };
   return { spec, ux, wireframe };
 }

@@ -63,7 +63,7 @@ export function InspectorPanel({
   generations?: GenerationGroup[];
   versionById?: Map<number, AssetVersion>;
   refreshVersions?: () => void;
-  onEditVersion?: (versionId: number) => void;
+  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
   /** Versions-list pencil → focused in-place edit session. */
   onEditVersionInPlace?: (versionId: number) => void;
   /** AI-enhance "Aplicar" committed a new version → refresh + focus it. */

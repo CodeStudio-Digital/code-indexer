@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ArrowLeft, Bot, Boxes, ChevronRight, Code2, Database, FolderPlus, Loader2, MessageSquare, Monitor, Palette, Plus, ShieldCheck, Workflow } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Bot, Boxes, ChevronRight, Code2, Database, FolderPlus, Layers3, Loader2, MessageSquare, Monitor, Palette, Plus, ShieldCheck, Workflow } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { confirm, prompt } from '../../components/ui/prompt-dialog.js';
@@ -18,7 +18,7 @@ import { SessionPickerDropdown } from '../project/editor-chat/SessionPickerDropd
 import { useEditorChatSession } from '../project/editor-chat/useEditorChatSession.js';
 import type { AppStudioSpecAgentConfig } from './AppStudioSpecAgentLauncher.js';
 
-export type AppStudioChatMode = 'builder' | 'spec' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
+export type AppStudioChatMode = 'builder' | 'spec' | 'product' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
 
 interface AppStudioChatRailProps {
   projectId: number;
@@ -51,6 +51,8 @@ export function AppStudioChatRail({
   const [specialistStartError, setSpecialistStartError] = useState(false);
   const initialAgent = mode === 'spec'
     ? 'app_spec'
+    : mode === 'product'
+      ? 'app_product'
     : mode === 'db'
       ? 'app_db'
       : mode === 'architecture'
@@ -77,6 +79,8 @@ export function AppStudioChatRail({
     newSessionTitle: sessionTitle ??
       (mode === 'spec'
         ? t('appStudio:chatRail.specSessionTitle', { name: projectName, defaultValue: `Refinar plano - ${projectName}` })
+        : mode === 'product'
+          ? t('appStudio:chatRail.productSessionTitle', { name: projectName, defaultValue: `Modelar produto - ${projectName}` })
         : mode === 'db'
           ? t('appStudio:chatRail.dbSessionTitle', { name: projectName, defaultValue: `Analisar dados - ${projectName}` })
           : mode === 'architecture'
@@ -370,6 +374,8 @@ function RailHeader({
       )}
       {mode === 'spec' ? (
         <Bot className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : mode === 'product' ? (
+        <Layers3 className="h-3.5 w-3.5 shrink-0 text-primary" />
       ) : mode === 'db' ? (
         <Database className="h-3.5 w-3.5 shrink-0 text-primary" />
       ) : mode === 'architecture' ? (

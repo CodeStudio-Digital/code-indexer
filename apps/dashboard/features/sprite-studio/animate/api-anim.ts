@@ -44,6 +44,10 @@ export interface SpriteAnimation {
   /** Playback loop range (frame indices); null = whole clip. */
   loopStart: number | null;
   loopEnd: number | null;
+  actionKey: string;
+  direction: string | null;
+  exportName: string;
+  pivot: { x: number; y: number };
   createdAt: string;
   updatedAt: string;
 }
@@ -64,6 +68,9 @@ export const ACTION_PRESETS: readonly ActionPreset[] = [
   { action: 'jump',   frames: 3, fps: 10, loopMode: 'once' },
   { action: 'cast',   frames: 4, fps: 10, loopMode: 'once' },
 ];
+
+export const listActionPresets = (): Promise<{ actions: ActionPreset[]; directions: string[] }> =>
+  req<{ actions: ActionPreset[]; directions: string[] }>('/api/sprite-studio/animation-actions');
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBaseUrl()}${path}`, {
@@ -89,7 +96,10 @@ export const listAnimations = (p: number, assetId: number): Promise<SpriteAnimat
 export const createAnimation = (
   p: number,
   assetId: number,
-  input: { name: string; fps?: number; frames?: number },
+  input: {
+    name: string; fps?: number; frames?: number; loopMode?: AnimLoopMode;
+    actionKey?: string; direction?: string; exportName?: string;
+  },
 ): Promise<SpriteAnimation> => req<SpriteAnimation>(assetBase(p, assetId), j(input));
 
 export const patchAnimation = (
@@ -97,6 +107,7 @@ export const patchAnimation = (
   patch: {
     fps?: number; loopMode?: AnimLoopMode; frameCount?: number;
     loopStart?: number | null; loopEnd?: number | null;
+    actionKey?: string; direction?: string | null; exportName?: string; pivot?: { x: number; y: number };
   },
 ): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(animBase(animId), { method: 'PATCH', body: JSON.stringify(patch) });
@@ -152,6 +163,28 @@ export const saveFrames = (
   req<SpriteAnimation>(`${animBase(animId)}/frames`, {
     method: 'PATCH', body: JSON.stringify({ frames, track }),
   });
+
+/** Save a frame edit as a child version and repoint only this timeline cell. */
+export const saveFrameVersion = async (
+  animId: number,
+  track: number,
+  frameIndex: number,
+  expectedVersionId: number,
+  blob: Blob,
+): Promise<{ animation: SpriteAnimation; versionId: number }> => {
+  const form = new FormData();
+  form.append('file', blob, 'edited-frame.png');
+  form.append('expectedVersionId', String(expectedVersionId));
+  const res = await fetch(`${apiBaseUrl()}${animBase(animId)}/frames/${track}/${frameIndex}/version`, {
+    method: 'POST', body: form,
+  });
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try { message = (await res.json()).error ?? message; } catch { /* keep status */ }
+    throw new Error(message);
+  }
+  return (await res.json()) as { animation: SpriteAnimation; versionId: number };
+};
 
 // ── Animation layers (tracks) ────────────────────────────────────────────
 export const addTrack = (animId: number, name?: string): Promise<SpriteAnimation> =>

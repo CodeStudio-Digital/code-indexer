@@ -44,6 +44,9 @@ export interface AtlasAnimation {
   durationsMs?: number[];
   /** Playback mode; wins over `loop` when set (`loop` kept for compat). */
   loopMode?: 'loop' | 'once' | 'pingpong';
+  /** Optional semantic metadata used by game importers and neutral manifests. */
+  action?: string;
+  direction?: string;
 }
 
 export interface ExportMeta {
@@ -58,4 +61,6 @@ export interface ExportMeta {
   pivot: { x: number; y: number };
   fps?: number;
   animations?: Record<string, AtlasAnimation>;
+  /** Engine-relative texture path when an adapter needs more than a filename. */
+  resourcePath?: string;
 }

@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import type DatabaseConstructor from 'better-sqlite3';
 import { spriteStudio196 } from '../../migrations/196_sprite_studio.js';
+import { spriteFrameTracks199 } from '../../migrations/199_sprite_frame_tracks.js';
 import { SpriteAssetsStore } from '../sprite-assets-store.js';
 import { SpriteAnimationsStore } from '../sprite-animations-store.js';
 
@@ -20,6 +21,7 @@ let anims: SpriteAnimationsStore;
 beforeEach(() => {
   db = new Database(':memory:');
   spriteStudio196.up(db);
+  spriteFrameTracks199.up(db);
   assets = new SpriteAssetsStore(db);
   anims = new SpriteAnimationsStore(db);
   db.prepare(`INSERT INTO sprite_projects (project_id, name) VALUES (1, 'game')`).run();

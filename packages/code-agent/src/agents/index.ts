@@ -34,6 +34,7 @@ export type AgentId =
   | 'app_spec'
   | 'app_db'
   | 'app_architect'
+  | 'app_product'
   | 'app_ux'
   | 'app_wireframe'
   | 'builder'
@@ -152,6 +153,15 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     maxTurns: 100,
     defaultTemperature: 0.2,
   },
+  app_product: {
+    id: 'app_product',
+    label: 'Product Model',
+    description: 'App Studio product-modeling specialist. Expands a layperson idea into explicit domains, capabilities, scope horizons and executable scenarios without silently adding scope.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 120,
+    defaultTemperature: 0.3,
+  },
   app_ux: {
     id: 'app_ux',
     label: 'App Experience',
@@ -215,6 +225,7 @@ export function isAgentId(v: string): v is AgentId {
     v === 'app_spec' ||
     v === 'app_db' ||
     v === 'app_architect' ||
+    v === 'app_product' ||
     v === 'app_ux' ||
     v === 'app_wireframe' ||
     v === 'builder' ||

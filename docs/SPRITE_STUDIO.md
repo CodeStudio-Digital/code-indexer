@@ -56,18 +56,22 @@ Job scratch (candidates before promotion) lives OUTSIDE the repo, under
   `sprite_process`, `sprite_export`) let the chat agent drive the studio; registered
   when the flag is on and the project has a `.sprite-studio/` dir.
 
-## Consistency (staged, MVP → later)
+## Consistency and animation
 
 Layered per the plan: (A) a compiled style block injected into every prompt,
 (B) reference-image conditioning (edit-capable models), (C) deterministic
 post-checks (palette distance / dimensions / alpha), (D) a manual vision-LLM
-audit, (E) provenance replay. Animation (timeline, onion skin, direction sets)
-and the ComfyUI backend are phase 2/3 — the schema already reserves
-`sprite_animations` / `sprite_frames` (a frame is a version row).
+audit, (E) provenance replay. Animation is a first-class workflow: action and
+direction metadata, multi-track timeline, onion skin, frame registration,
+per-frame duration, GIF preview and engine-aware export. `sprite_animations` /
+`sprite_frames` store references to immutable version rows, so editing one
+timeline cell can create a child version without changing another clip.
 
 ## User flow
 
 Open `/sprites` → pick a project → Initialize studio → create an asset → Generate
 (variants stream in via SSE) → pick a variant (creates a version) → Edit (canvas:
-brush/select/fill + local adjustments) → Export (spritesheet + JSON into the game's
-asset folder). The chat agent can also generate/process/export in the project's style.
+brush/pencil/lasso/wand/fill + local adjustments) → Animate (create a semantic clip,
+generate or arrange frames, preview and register) → Export (preview a write plan and
+emit one selected animation, an asset, or a library scope into the game folder).
+The chat agent uses the same generate/process/export services as the UI.

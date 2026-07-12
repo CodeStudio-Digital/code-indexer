@@ -34,6 +34,7 @@ export function JourneyPanel({
   onOpenSpecAgent,
   onOpenDbAgent,
   onOpenArchitectureAgent,
+  onOpenProductAgent,
   onOpenExecutionAgent,
   onOpenUxAgent,
   onOpenWireframeAgent,
@@ -46,6 +47,7 @@ export function JourneyPanel({
   onOpenSpecAgent?: (prompt: string) => void;
   onOpenDbAgent?: (prompt: string) => void;
   onOpenArchitectureAgent?: (prompt: string) => void;
+  onOpenProductAgent?: (prompt: string) => void;
   onOpenExecutionAgent?: (kind: 'design' | 'backend' | 'review', prompt: string) => void;
   onOpenUxAgent?: (prompt: string) => void;
   onOpenWireframeAgent?: (prompt: string) => void;
@@ -101,6 +103,9 @@ export function JourneyPanel({
   const designProgress = detail.wireframe
     ? `${t('experience.flowCount', { done: detail.build_groups.filter((group) => group.status === 'approved').length, total: detail.wireframe.plan.build_groups.length })} · ${t('experience.taskCount', { done: detail.build_tasks.filter((task) => task.status === 'done').length, total: detail.wireframe.plan.tasks.length })}${reviewGroup ? ` · ${t('experience.groupWaiting', { name: reviewGroup.name })}` : ''}`
     : null;
+  const productProgress = detail.product
+    ? `${detail.product.audit.counts.domains} ${t('product.domains')} · ${detail.product.audit.counts.selected}/${detail.product.audit.counts.capabilities} ${t('product.capabilities')} · ${detail.product.audit.counts.scenarios} ${t('product.scenarios')} · ${detail.product.audit.counts.open_decisions} ${t('product.decisions')}`
+    : null;
 
   const act = (stage: AppStageId, action: AppStageAction, feedback?: string) =>
     void run(() => patchAppStage(session.id, stage, action, feedback));
@@ -143,7 +148,7 @@ export function JourneyPanel({
               index={index}
               isLast={index === pipeline.stages.length - 1}
               isCurrent={pipeline.current_stage === stage.id}
-              progressLabel={stage.id === 'design' ? designProgress : tier ? tierProgress(tier) : null}
+              progressLabel={stage.id === 'product' ? productProgress : stage.id === 'design' ? designProgress : tier ? tierProgress(tier) : null}
               busy={busy}
               onAction={(action, feedback) => act(stage.id, action, feedback)}
               onRecheck={() => void run(() => recheckAppStage(session.id, stage.id))}
@@ -152,6 +157,8 @@ export function JourneyPanel({
                 const specialist = specialistForStage(stage.id);
                 const openSpecialist = specialist === 'spec'
                   ? onOpenSpecAgent
+                  : specialist === 'product'
+                    ? onOpenProductAgent
                   : specialist === 'db'
                     ? onOpenDbAgent
                     : specialist === 'architecture'

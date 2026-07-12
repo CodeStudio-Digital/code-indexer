@@ -1,5 +1,6 @@
 import type { AppArchitecturePlan } from '../architecture/types.js';
 import type { AppSpec } from '../spec/types.js';
+import type { AppProductModel } from '../product/types.js';
 import { architectureDesignCaseIds, type AppUxBrief, type AppWireframePlan } from './types.js';
 
 export interface AppExperienceAudit { ok: boolean; issues: string[] }
@@ -30,6 +31,7 @@ export function auditAppWireframePlan(
   plan: AppWireframePlan | null,
   spec: AppSpec | null,
   architecture: AppArchitecturePlan | null,
+  product?: AppProductModel | null,
 ): AppExperienceAudit {
   const issues: string[] = [];
   if (!plan) return { ok: false, issues: ['No wireframe plan saved.'] };
@@ -43,6 +45,7 @@ export function auditAppWireframePlan(
     ...spec.features.map((feature) => `feature:${feature.id}`),
     ...(spec.behaviors ?? []).map((behavior) => `behavior:${behavior.id}`),
     ...(spec.requirements?.acceptance_criteria ?? []).map((_, index) => `acceptance:${index}`),
+    ...(product?.capabilities ?? []).filter((item) => item.selected && item.horizon !== 'declined').map((item) => `capability:${item.id}`),
   ];
   const plannedScreens = plan.screens.map((screen) => screen.screen_id);
   if (!unique(plannedScreens)) issues.push('Each screen must have exactly one wireframe.');
@@ -80,6 +83,8 @@ export function auditAppWireframePlan(
     if (!testCase.id || !testCase.title || !testCase.expected || testCase.steps.length === 0 || testCase.screen_ids.length === 0 || testCase.flow_ids.length === 0 || testCase.source_ids.length === 0) issues.push(`Wireframe TDD case '${testCase.id || '?'}' is incomplete.`);
     for (const screenId of testCase.screen_ids) if (!screenIds.has(screenId)) issues.push(`Wireframe TDD case '${testCase.id}' references unknown screen '${screenId}'.`);
     for (const flowId of testCase.flow_ids) if (!flowIds.has(flowId)) issues.push(`Wireframe TDD case '${testCase.id}' references unknown flow '${flowId}'.`);
+    const capabilities = testCase.source_ids.filter((id) => id.startsWith('capability:'));
+    if (capabilities.length > 1) issues.push(`Wireframe TDD case '${testCase.id}' compresses unrelated capabilities (${capabilities.join(', ')}); split it.`);
   }
   const groupIds = new Set(plan.build_groups.map((group) => group.id));
   const taskIds = new Set(plan.tasks.map((task) => task.id));
@@ -90,6 +95,7 @@ export function auditAppWireframePlan(
     for (const dep of group.depends_on) if (!groupIds.has(dep)) issues.push(`Build group '${group.id}' depends on unknown group '${dep}'.`);
     for (const taskId of group.task_ids) if (!taskIds.has(taskId)) issues.push(`Build group '${group.id}' references unknown task '${taskId}'.`);
     for (const flowId of group.flow_ids) if (!flowIds.has(flowId)) issues.push(`Build group '${group.id}' references unknown flow '${flowId}'.`);
+    for (const capabilityId of group.capability_ids) if (!product?.capabilities.some((item) => item.id === capabilityId)) issues.push(`Build group '${group.id}' references unknown capability '${capabilityId}'.`);
     for (const screenId of group.screen_ids) if (!screenIds.has(screenId)) issues.push(`Build group '${group.id}' references unknown screen '${screenId}'.`);
     const groupTasks = plan.tasks.filter((task) => task.group_id === group.id);
     const declared = new Set(group.task_ids);
@@ -106,5 +112,11 @@ export function auditAppWireframePlan(
   }
   for (const screenId of screenIds) if (!plan.tasks.some((task) => task.screen_id === screenId && task.kind === 'screen')) issues.push(`Screen '${screenId}' has no implementation task.`);
   for (const flowId of flowIds) if (!plan.build_groups.some((group) => group.flow_ids.includes(flowId))) issues.push(`Flow '${flowId}' is not assigned to a build group.`);
+  for (const capability of product?.capabilities.filter((item) => item.selected && item.horizon !== 'declined') ?? []) {
+    const sourceId = `capability:${capability.id}`;
+    if (!plan.flows.some((flow) => flow.source_ids.includes(sourceId))) issues.push(`Selected capability '${capability.id}' has no user flow.`);
+    if (capability.critical && !plan.tdd_cases.some((testCase) => testCase.source_ids.includes(sourceId))) issues.push(`Critical capability '${capability.id}' has no dedicated interface TDD case.`);
+    if (!plan.build_groups.some((group) => group.capability_ids.includes(capability.id))) issues.push(`Selected capability '${capability.id}' is not assigned to a vertical build group.`);
+  }
   return { ok: issues.length === 0, issues: [...new Set(issues)] };
 }

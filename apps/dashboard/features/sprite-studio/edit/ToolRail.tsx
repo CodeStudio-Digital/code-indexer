@@ -8,7 +8,7 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Brush, Circle, Eraser, MousePointer2, PaintBucket, Pipette, Move,
+  Brush, Circle, Eraser, LassoSelect, MousePointer2, PaintBucket, PencilLine, Pipette, Move,
   Slash, Sparkles, Square, SquareDashedMousePointer, Wand2,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
@@ -18,19 +18,21 @@ import type { ToolId } from '../tools/tool-types.js';
 type IconType = React.ComponentType<{ className?: string }>;
 
 /** Ordered rail entries; the labelKey resolves under the `tool.` namespace. */
-const RAIL: ReadonlyArray<{ id: ToolId; Icon: IconType; labelKey: string }> = [
+const RAIL: ReadonlyArray<{ id: ToolId; Icon: IconType; labelKey: string; separator?: boolean }> = [
   { id: 'pointer', Icon: MousePointer2, labelKey: 'tool.pointer' },
+  { id: 'move', Icon: Move, labelKey: 'tool.move' },
+  { id: 'pencil', Icon: PencilLine, labelKey: 'tool.pencil', separator: true },
   { id: 'brush', Icon: Brush, labelKey: 'tool.brush' },
   { id: 'eraser', Icon: Eraser, labelKey: 'tool.eraser' },
   { id: 'magic-eraser', Icon: Sparkles, labelKey: 'tool.magicEraser' },
   { id: 'fill', Icon: PaintBucket, labelKey: 'tool.fill' },
-  { id: 'line', Icon: Slash, labelKey: 'tool.line' },
+  { id: 'line', Icon: Slash, labelKey: 'tool.line', separator: true },
   { id: 'shape-rect', Icon: Square, labelKey: 'tool.shapeRect' },
   { id: 'shape-ellipse', Icon: Circle, labelKey: 'tool.shapeEllipse' },
-  { id: 'select-rect', Icon: SquareDashedMousePointer, labelKey: 'tool.selectRect' },
+  { id: 'select-rect', Icon: SquareDashedMousePointer, labelKey: 'tool.selectRect', separator: true },
   { id: 'select-wand', Icon: Wand2, labelKey: 'tool.selectWand' },
+  { id: 'select-lasso', Icon: LassoSelect, labelKey: 'tool.selectLasso' },
   { id: 'eyedropper', Icon: Pipette, labelKey: 'tool.eyedropper' },
-  { id: 'move', Icon: Move, labelKey: 'tool.move' },
 ];
 
 export function ToolRail() {
@@ -38,15 +40,11 @@ export function ToolRail() {
   const setActiveTool = useSpriteEditorStore((s) => s.setActiveTool);
   return (
     <div className="flex w-9 shrink-0 flex-col items-center gap-0.5 border-r bg-muted/20 py-1.5">
-      {RAIL.map(({ id, Icon, labelKey }) => (
-        <ToolButton
-          key={id}
-          id={id}
-          Icon={Icon}
-          labelKey={labelKey}
-          active={activeTool === id}
-          onSelect={setActiveTool}
-        />
+      {RAIL.map(({ id, Icon, labelKey, separator }) => (
+        <div key={id} className="contents">
+          {separator && <span className="my-1 h-px w-6 bg-border" />}
+          <ToolButton id={id} Icon={Icon} labelKey={labelKey} active={activeTool === id} onSelect={setActiveTool} />
+        </div>
       ))}
     </div>
   );
@@ -75,13 +73,13 @@ const ToolButton = memo(function ToolButton({
       aria-label={label}
       aria-pressed={active}
       className={cn(
-        'flex h-7 w-7 items-center justify-center rounded transition-colors',
+        'flex h-8 w-8 items-center justify-center rounded transition-colors',
         active
           ? 'bg-primary text-primary-foreground'
           : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="h-4 w-4" />
     </button>
   );
 });

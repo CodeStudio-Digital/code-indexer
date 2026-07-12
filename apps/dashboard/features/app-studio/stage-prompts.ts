@@ -13,10 +13,11 @@ import { requestStudioSend } from '../builder/studio/studio-context-store.js';
 import { patchAppStage, type AppStageId } from './app-studio-api.js';
 
 export type PromptableStage = Exclude<AppStageId, 'launch'>;
-export type AppStudioStageSpecialist = 'spec' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
+export type AppStudioStageSpecialist = 'spec' | 'product' | 'db' | 'architecture' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review';
 
 const STAGE_MESSAGE_KEY: Record<PromptableStage, string> = {
   discovery: 'stageMessage.discovery',
+  product: 'stageMessage.product',
   architecture: 'stageMessage.architecture',
   database: 'stageMessage.database',
   ux: 'stageMessage.ux',
@@ -28,6 +29,7 @@ const STAGE_MESSAGE_KEY: Record<PromptableStage, string> = {
 
 const STAGE_SPECIALIST: Partial<Record<PromptableStage, AppStudioStageSpecialist>> = {
   discovery: 'spec',
+  product: 'product',
   architecture: 'architecture',
   database: 'db',
   ux: 'ux',

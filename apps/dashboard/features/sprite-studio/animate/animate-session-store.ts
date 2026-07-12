@@ -27,6 +27,7 @@ export interface InspectorTrack {
 /** The animation currently loaded in the timeline — context the RIGHT-rail
  *  inspector needs (re-slice target + which asset/animation is loaded). */
 export interface AnimContext {
+  animationId: number;
   assetId: number;
   name: string;
   /** The last generation's job that produced this animation (re-slice source). */
@@ -70,6 +71,10 @@ interface AnimateSessionState {
   onActivateTrack: ((id: number) => void) | null;
   /** Toggle a track's visibility — set by AnimatePanel. */
   onToggleTrackVisible: ((id: number, visible: boolean) => void) | null;
+  timelineCanUndo: boolean;
+  timelineCanRedo: boolean;
+  timelineUndo: (() => void) | null;
+  timelineRedo: (() => void) | null;
 
   setSelectMode: (on: boolean) => void;
   clearSelection: () => void;
@@ -88,7 +93,8 @@ type BridgePatch = Partial<
     'frameVersionIds' | 'selectedFrameVersionId' | 'selectedFrameIndex'
     | 'appendToTimeline' | 'removeFramesUsing' | 'replaceFrameAt' | 'setTimeline'
     | 'inspectorTracks' | 'activeTrack' | 'animContext'
-    | 'onActivateTrack' | 'onToggleTrackVisible'>
+    | 'onActivateTrack' | 'onToggleTrackVisible'
+    | 'timelineCanUndo' | 'timelineCanRedo' | 'timelineUndo' | 'timelineRedo'>
 >;
 
 export const useAnimateSession = create<AnimateSessionState>((set) => ({
@@ -107,6 +113,10 @@ export const useAnimateSession = create<AnimateSessionState>((set) => ({
   animContext: null,
   onActivateTrack: null,
   onToggleTrackVisible: null,
+  timelineCanUndo: false,
+  timelineCanRedo: false,
+  timelineUndo: null,
+  timelineRedo: null,
 
   setSelectMode: (on) => set((s) => ({ selectMode: on, selected: on ? s.selected : new Set() })),
   clearSelection: () => set({ selected: new Set(), anchorId: null }),
@@ -157,5 +167,6 @@ export const useAnimateSession = create<AnimateSessionState>((set) => ({
       appendToTimeline: null, removeFramesUsing: null, replaceFrameAt: null, setTimeline: null,
       inspectorTracks: [], activeTrack: 0, animContext: null,
       onActivateTrack: null, onToggleTrackVisible: null,
+      timelineCanUndo: false, timelineCanRedo: false, timelineUndo: null, timelineRedo: null,
     }),
 }));

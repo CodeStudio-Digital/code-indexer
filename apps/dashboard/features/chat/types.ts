@@ -100,7 +100,7 @@ export interface CoderSession {
    * select reflects the actual session state on reload (hydrated on session
    * load) and live transitions (plan→build) via `coder:session_agent_changed`.
    */
-  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'builder' | 'api' | 'diagram' | null;
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'builder' | 'api' | 'diagram' | null;
   /** Durable compaction summary (mig 128). Rendered as a card above the chat
    *  when set; the older messages it covers are hidden behind the boundary. */
   compaction_summary?: string | null;

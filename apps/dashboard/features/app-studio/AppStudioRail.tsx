@@ -4,7 +4,7 @@
  * entende primeiro: ver o app e ver a especificação em blocos.
  */
 import { useTranslation } from 'react-i18next';
-import { Boxes, Database, GitBranch, Globe, ListChecks, Monitor, Palette, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, Database, GitBranch, Globe, Layers3, ListChecks, Monitor, Palette, Workflow, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import type { AppStudioSessionDetail } from './app-studio-api.js';
@@ -15,13 +15,15 @@ import { BlueprintPanel } from './blueprint/BlueprintPanel.js';
 import { VersionsPanel } from './versions/VersionsPanel.js';
 import { ArchitecturePanel } from './architecture/ArchitecturePanel.js';
 import { ExperiencePanel } from './experience/ExperiencePanel.js';
+import { ProductPanel } from './product/ProductPanel.js';
 
-export type AppStudioTab = 'guide' | 'blueprint' | 'versions' | 'architecture' | 'experience' | 'preview' | 'data' | 'publish';
+export type AppStudioTab = 'guide' | 'product' | 'blueprint' | 'versions' | 'architecture' | 'experience' | 'preview' | 'data' | 'publish';
 
 const TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string; separated?: boolean }> = [
   { id: 'preview', icon: Monitor, labelKey: 'tabs.preview' },
   { id: 'blueprint', icon: Workflow, labelKey: 'tabs.blueprint' },
   { id: 'versions', icon: GitBranch, labelKey: 'tabs.versions' },
+  { id: 'product', icon: Layers3, labelKey: 'tabs.product' },
   { id: 'architecture', icon: Boxes, labelKey: 'tabs.architecture' },
   { id: 'experience', icon: Palette, labelKey: 'tabs.experience' },
   { id: 'guide', icon: ListChecks, labelKey: 'tabs.guide', separated: true },
@@ -49,7 +51,7 @@ export function AppStudioRail({
         const isActive = active === id;
         const disabled =
           (id === 'data' && !dataTabUnlocked(detail)) ||
-          ((id === 'blueprint' || id === 'versions' || id === 'architecture') && !detail?.spec);
+          ((id === 'product' || id === 'blueprint' || id === 'versions' || id === 'architecture') && !detail?.spec);
         const experienceLocked = id === 'experience' && !detail?.pipeline?.stages.find((stage) => stage.id === 'database' && (stage.status === 'approved' || stage.status === 'skipped'));
         const label =
           disabled && id === 'data' ? t('data.locked')
@@ -100,6 +102,8 @@ export function AppStudioTabContent({
   onOpenSpecAgent,
   onOpenDbAgent,
   onOpenArchitectureAgent,
+  onOpenProductAgent,
+  onOpenProductRepair,
   onOpenExecutionAgent,
   onOpenUxAgent,
   onOpenWireframeAgent,
@@ -112,6 +116,8 @@ export function AppStudioTabContent({
   onOpenSpecAgent?: (prompt: string) => void;
   onOpenDbAgent?: (prompt: string) => void;
   onOpenArchitectureAgent?: (prompt: string) => void;
+  onOpenProductAgent?: (prompt: string) => void;
+  onOpenProductRepair?: () => void;
   onOpenExecutionAgent?: (kind: 'design' | 'backend' | 'review', prompt: string) => void;
   onOpenUxAgent?: (prompt: string) => void;
   onOpenWireframeAgent?: (prompt: string) => void;
@@ -128,6 +134,7 @@ export function AppStudioTabContent({
             onOpenSpecAgent={onOpenSpecAgent}
             onOpenDbAgent={onOpenDbAgent}
             onOpenArchitectureAgent={onOpenArchitectureAgent}
+            onOpenProductAgent={onOpenProductAgent}
             onOpenExecutionAgent={onOpenExecutionAgent}
             onOpenUxAgent={onOpenUxAgent}
             onOpenWireframeAgent={onOpenWireframeAgent}
@@ -136,6 +143,7 @@ export function AppStudioTabContent({
         {tab === 'blueprint' && <BlueprintPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
         {tab === 'versions' && <VersionsPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
         {tab === 'architecture' && <ArchitecturePanel detail={detail} onChanged={onChanged} onOpenAgent={onOpenArchitectureAgent} />}
+        {tab === 'product' && <ProductPanel detail={detail} onChanged={onChanged} onOpenAgent={onOpenProductAgent} onOpenRepair={onOpenProductRepair} />}
         {tab === 'experience' && <ExperiencePanel detail={detail} onChanged={onChanged} onOpenUxAgent={onOpenUxAgent} onOpenWireframeAgent={onOpenWireframeAgent} />}
         {tab === 'data' && <DataPanel detail={detail} onChanged={onChanged} onOpenDbAgent={onOpenDbAgent} />}
         {tab === 'publish' && <PublishPanel detail={detail} onChanged={onChanged} />}

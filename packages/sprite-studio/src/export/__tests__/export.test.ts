@@ -5,7 +5,7 @@ import { buildGenericAtlas } from '../adapters/generic-atlas.js';
 import { buildPhaserAtlas } from '../adapters/phaser.js';
 import type { ExportMeta } from '../atlas-types.js';
 import { exportAsset } from '../index.js';
-import { composeGrid } from '../spritesheet.js';
+import { composeGrid, composePacked, trimNamedFrames } from '../spritesheet.js';
 
 /** Solid-color square frame. */
 function solid(size: number, r: number, g: number, b: number): RgbaImage {
@@ -54,6 +54,19 @@ describe('composeGrid', () => {
 
   it('rejects empty frame lists', () => {
     expect(() => composeGrid([], {})).toThrow(/at least one frame/);
+  });
+});
+
+describe('trim + packed sheet', () => {
+  it('trims transparent margins and preserves source metadata', () => {
+    const rgba = new Uint8Array(4 * 4 * 4);
+    rgba.set([255, 0, 0, 255], (1 * 4 + 2) * 4);
+    const [trimmed] = trimNamedFrames([{ name: 'one', img: { rgba, width: 4, height: 4 } }]);
+    expect([trimmed.img.width, trimmed.img.height]).toEqual([1, 1]);
+    expect(trimmed.sourceSize).toEqual({ w: 4, h: 4 });
+    expect(trimmed.spriteSourceSize).toEqual({ x: 2, y: 1, w: 1, h: 1 });
+    const packed = composePacked([trimmed], { padding: 1, extrude: 1 });
+    expect(packed.rects[0]).toMatchObject({ trimmed: true, sourceSize: { w: 4, h: 4 } });
   });
 });
 
@@ -123,6 +136,14 @@ describe('exportAsset', () => {
     };
     expect(json.meta.scale).toBe('2');
     expect(json.frames['goblin_idle_S_000'].frame.w).toBe(8); // frames scaled before packing
+  });
+
+  it('phaser emits ready-to-register animation configs', () => {
+    const animated = { ...meta, animations: { walk: { frames: frames.map((f) => f.name), fps: 8, loopMode: 'pingpong' as const } } };
+    const files = exportAsset({ frames, format: 'phaser', outName: 'goblin', meta: animated });
+    expect(files.map((file) => file.relPath)).toContain('goblin.animations.json');
+    const configs = JSON.parse(files.find((file) => file.relPath.endsWith('.animations.json'))?.text ?? '[]') as Array<{ key: string; yoyo: boolean }>;
+    expect(configs).toEqual([expect.objectContaining({ key: 'walk', yoyo: true })]);
   });
 
   it('rejects non-integer scales', () => {

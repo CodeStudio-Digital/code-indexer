@@ -23,6 +23,7 @@ export type AppStudioSpecRevisionStatus = 'draft' | 'approved' | 'superseded' | 
 export type AppStudioEvolutionStatus = 'draft' | 'review' | 'approved' | 'applied' | 'rejected';
 export type AppStudioArchitectureRevisionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
 export type AppStudioExperienceRevisionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
+export type AppStudioProductRevisionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
 export type AppStudioBuildGroupStatus = 'pending' | 'active' | 'review' | 'approved';
 export type AppStudioBuildTaskStatus = 'pending' | 'active' | 'done';
 
@@ -97,6 +98,13 @@ export interface AppStudioArchitectureRevision {
   created_at: string;
   updated_at: string;
   approved_at: string | null;
+}
+
+export interface AppStudioProductRevision {
+  id: number; app_session_id: number; base_revision_id: number | null; base_spec_revision_id: number | null;
+  result_spec_revision_id: number | null; revision_number: number; status: AppStudioProductRevisionStatus;
+  complexity: 'simple' | 'standard' | 'complex' | 'very-complex'; research_fingerprint: string; product_json: string;
+  created_by: string; coder_session_id: number | null; created_at: string; updated_at: string; approved_at: string | null;
 }
 
 export interface AppStudioUxRevision {
@@ -186,6 +194,12 @@ export interface SaveAppStudioArchitectureRevisionInput {
   coder_session_id?: number | null;
 }
 
+export interface SaveAppStudioProductRevisionInput {
+  app_session_id: number; base_revision_id?: number | null; base_spec_revision_id?: number | null;
+  complexity: AppStudioProductRevision['complexity']; research_fingerprint?: string; product_json: string;
+  created_by?: string | null; coder_session_id?: number | null;
+}
+
 export interface SaveAppStudioUxRevisionInput {
   app_session_id: number; spec_revision_id?: number | null; architecture_revision_id?: number | null;
   data_fingerprint: string; ux_json: string; created_by?: string | null; coder_session_id?: number | null;
@@ -268,6 +282,7 @@ interface ArchitectureRevisionRow {
 }
 
 type UxRevisionRow = AppStudioUxRevision;
+type ProductRevisionRow = AppStudioProductRevision;
 type WireframeRevisionRow = AppStudioWireframeRevision;
 type BuildGroupRow = AppStudioBuildGroupState;
 type BuildTaskRow = AppStudioBuildTaskEvidence;
@@ -443,11 +458,85 @@ export class AppStudioStore {
   deleteSession(id: number): void {
     // FK cascade só dispara com foreign_keys ON — deleta filhos explicitamente.
     this.db.prepare('DELETE FROM app_studio_pipeline_repairs WHERE app_session_id = ?').run(id);
+    this.db.prepare('DELETE FROM app_studio_product_revisions WHERE app_session_id = ?').run(id);
     this.db.prepare('DELETE FROM app_studio_architecture_revisions WHERE app_session_id = ?').run(id);
     this.db.prepare('DELETE FROM app_studio_evolutions WHERE app_session_id = ?').run(id);
     this.db.prepare('DELETE FROM app_studio_spec_revisions WHERE app_session_id = ?').run(id);
     this.db.prepare('DELETE FROM app_studio_features WHERE app_session_id = ?').run(id);
     this.db.prepare('DELETE FROM app_studio_sessions WHERE id = ?').run(id);
+  }
+
+  // ── Product model revisions ─────────────────────────────────────
+
+  getLatestProductRevision(sessionId: number): AppStudioProductRevision | null {
+    const row = this.db.prepare(
+      "SELECT * FROM app_studio_product_revisions WHERE app_session_id = ? AND status <> 'rejected' ORDER BY revision_number DESC LIMIT 1",
+    ).get(sessionId) as ProductRevisionRow | undefined;
+    return row ? { ...row, status: row.status as AppStudioProductRevisionStatus } : null;
+  }
+
+  getLatestApprovedProductRevision(sessionId: number): AppStudioProductRevision | null {
+    const row = this.db.prepare(
+      "SELECT * FROM app_studio_product_revisions WHERE app_session_id = ? AND status = 'approved' ORDER BY revision_number DESC LIMIT 1",
+    ).get(sessionId) as ProductRevisionRow | undefined;
+    return row ? { ...row, status: row.status as AppStudioProductRevisionStatus } : null;
+  }
+
+  saveProductRevision(input: SaveAppStudioProductRevisionInput, expectedRevisionNumber?: number | null): AppStudioProductRevision {
+    const tx = this.db.transaction((payload: SaveAppStudioProductRevisionInput) => {
+      const existing = this.db.prepare(
+        "SELECT id, revision_number FROM app_studio_product_revisions WHERE app_session_id = ? AND status = 'draft' ORDER BY revision_number DESC LIMIT 1",
+      ).get(payload.app_session_id) as { id: number; revision_number: number } | undefined;
+      if (existing) {
+        if (expectedRevisionNumber != null && existing.revision_number !== expectedRevisionNumber) {
+          throw new Error(`Product revision conflict: expected v${expectedRevisionNumber}, current draft is v${existing.revision_number}.`);
+        }
+        this.db.prepare(
+          `UPDATE app_studio_product_revisions SET complexity = ?, research_fingerprint = ?, product_json = ?, created_by = ?, coder_session_id = ?, updated_at = datetime('now') WHERE id = ?`,
+        ).run(payload.complexity, payload.research_fingerprint ?? '', payload.product_json, payload.created_by ?? 'agent', payload.coder_session_id ?? null, existing.id);
+        return existing.id;
+      }
+      if (expectedRevisionNumber != null) throw new Error('Product revision conflict: no editable draft exists. Reload the product model.');
+      const next = this.db.prepare('SELECT COALESCE(MAX(revision_number), 0) + 1 AS n FROM app_studio_product_revisions WHERE app_session_id = ?').get(payload.app_session_id) as { n: number };
+      const result = this.db.prepare(
+        `INSERT INTO app_studio_product_revisions (app_session_id, base_revision_id, base_spec_revision_id, revision_number, complexity, research_fingerprint, product_json, created_by, coder_session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(payload.app_session_id, payload.base_revision_id ?? null, payload.base_spec_revision_id ?? null, next.n, payload.complexity, payload.research_fingerprint ?? '', payload.product_json, payload.created_by ?? 'agent', payload.coder_session_id ?? null);
+      return Number(result.lastInsertRowid);
+    });
+    const id = tx(input);
+    return this.db.prepare('SELECT * FROM app_studio_product_revisions WHERE id = ?').get(id) as ProductRevisionRow;
+  }
+
+  approveProductRevision(input: {
+    sessionId: number; revisionId: number; candidateSpecJson: string; afterPipelineJson: string;
+  }): { product: AppStudioProductRevision; spec: AppStudioSpecRevision; session: AppStudioSession } {
+    const tx = this.db.transaction(() => {
+      const product = this.db.prepare('SELECT * FROM app_studio_product_revisions WHERE id = ? AND app_session_id = ?').get(input.revisionId, input.sessionId) as ProductRevisionRow | undefined;
+      if (!product || product.status !== 'draft') throw new Error('No draft product revision is ready for approval.');
+      const current = this.db.prepare("SELECT id FROM app_studio_spec_revisions WHERE app_session_id = ? AND status = 'approved' ORDER BY revision_number DESC LIMIT 1").get(input.sessionId) as { id: number } | undefined;
+      const next = this.db.prepare('SELECT COALESCE(MAX(revision_number), 0) + 1 AS n FROM app_studio_spec_revisions WHERE app_session_id = ?').get(input.sessionId) as { n: number };
+      this.db.prepare("UPDATE app_studio_spec_revisions SET status = 'superseded' WHERE app_session_id = ? AND status = 'approved'").run(input.sessionId);
+      const specResult = this.db.prepare(
+        `INSERT INTO app_studio_spec_revisions (app_session_id, revision_number, base_revision_id, status, title, summary, change_reason, spec_json, created_by, approved_at)
+         VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, 'user', datetime('now'))`,
+      ).run(input.sessionId, next.n, current?.id ?? null, `Escopo do produto v${product.revision_number}`, 'Spec materializada a partir da modelagem do produto aprovada.', 'Modelagem profunda do produto', input.candidateSpecJson);
+      const specId = Number(specResult.lastInsertRowid);
+      this.db.prepare("UPDATE app_studio_product_revisions SET status = 'superseded' WHERE app_session_id = ? AND id <> ? AND status = 'approved'").run(input.sessionId, input.revisionId);
+      this.db.prepare("UPDATE app_studio_product_revisions SET status = 'approved', result_spec_revision_id = ?, approved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(specId, input.revisionId);
+      this.db.prepare('UPDATE app_studio_sessions SET spec_json = ?, pipeline_json = ? WHERE id = ?').run(input.candidateSpecJson, input.afterPipelineJson, input.sessionId);
+      return specId;
+    });
+    const specId = tx();
+    return {
+      product: this.db.prepare('SELECT * FROM app_studio_product_revisions WHERE id = ?').get(input.revisionId) as ProductRevisionRow,
+      spec: this.getSpecRevision(specId)!,
+      session: this.getSession(input.sessionId)!,
+    };
+  }
+
+  deleteDraftProductRevision(sessionId: number, revisionId: number): void {
+    this.db.prepare("DELETE FROM app_studio_product_revisions WHERE id = ? AND app_session_id = ? AND status = 'draft'").run(revisionId, sessionId);
   }
 
   // ── Pipeline repair history ───────────────────────────────────────

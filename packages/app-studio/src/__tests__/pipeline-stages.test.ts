@@ -18,7 +18,7 @@ const GATE_OK = { ok: true, issues: [] };
 const GATE_FAIL = { ok: false, issues: ['spec missing'] };
 
 describe('pipeline state', () => {
-  it('starts with all 9 stages pending, empty roadmap and discovery current', () => {
+  it('starts with all 10 stages pending, empty roadmap and discovery current', () => {
     const state = createPipelineState();
     expect(state.stages.map((s) => s.id)).toEqual([...APP_STAGE_IDS]);
     expect(state.stages.every((s) => s.status === 'pending')).toBe(true);
@@ -28,7 +28,7 @@ describe('pipeline state', () => {
 
   it('round-trips through serialize/parse and rejects garbage', () => {
     const state = createPipelineState();
-    expect(parsePipelineState(serializePipelineState(state))?.stages).toHaveLength(9);
+    expect(parsePipelineState(serializePipelineState(state))?.stages).toHaveLength(10);
     expect(parsePipelineState('not json')).toBeNull();
     expect(parsePipelineState(JSON.stringify({ v: 3, stages: [] }))).toBeNull();
     expect(parsePipelineState(null)).toBeNull();
@@ -43,7 +43,7 @@ describe('stage transitions', () => {
     expect(currentStage(state)?.id).toBe('discovery');
     state = applyStageAction(state, 'discovery', 'approve');
     expect(state.stages[0].status).toBe('approved');
-    expect(currentStage(state)?.id).toBe('architecture');
+    expect(currentStage(state)?.id).toBe('product');
   });
 
   it('failed gate keeps the stage active for re-submit', () => {
@@ -66,7 +66,7 @@ describe('stage transitions', () => {
     expect(state.stages[0].feedback).toBe('faltou a tela de clientes');
 
     state = applyStageAction(state, 'discovery', 'skip');
-    expect(currentStage(state)?.id).toBe('architecture');
+    expect(currentStage(state)?.id).toBe('product');
   });
 
   it('upgrades v1 pipelines without blocking apps that already started building', () => {
@@ -83,6 +83,8 @@ describe('stage transitions', () => {
     let state = createPipelineState();
     state = applyStageSubmit(state, 'discovery', 'spec v1', GATE_OK);
     state = applyStageAction(state, 'discovery', 'approve');
+    state = applyStageSubmit(state, 'product', 'product v1', GATE_OK);
+    state = applyStageAction(state, 'product', 'approve');
     state = applyStageSubmit(state, 'architecture', 'architecture v1', GATE_OK);
     state = applyStageAction(state, 'architecture', 'approve');
     state = applyStageSubmit(state, 'database', 'db v1', GATE_OK);
@@ -103,7 +105,7 @@ describe('stage transitions', () => {
       approved_at: null,
     });
     expect(state.stages[1]).toMatchObject({
-      id: 'architecture',
+      id: 'product',
       status: 'pending',
       summary: null,
       gate: null,
@@ -138,6 +140,8 @@ describe('stage transitions', () => {
     let state = createPipelineState();
     state = applyStageSubmit(state, 'discovery', 'spec v1', GATE_OK);
     state = applyStageAction(state, 'discovery', 'approve');
+    state = applyStageSubmit(state, 'product', 'product v1', GATE_OK);
+    state = applyStageAction(state, 'product', 'approve');
     state = applyStageSubmit(state, 'architecture', 'architecture v1', GATE_OK);
     state = applyStageAction(state, 'architecture', 'approve');
     state = applyStageSubmit(state, 'database', 'db v1', GATE_OK);

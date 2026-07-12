@@ -10,6 +10,7 @@ import {
 } from '@mcp/app-studio/architecture/types.js';
 import { parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
+import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
 
@@ -84,7 +85,8 @@ export function appSaveArchitecture(binding: AppToolBinding): CoderTool {
         if (!specRevision) return err('No approved spec revision found. Approve discovery first.');
         const raw = args.plan && typeof args.plan === 'object' ? args.plan as Record<string, unknown> : {};
         const plan = normalizeAppArchitecturePlan(raw, specRevision.id);
-        const audit = auditAppArchitecture(plan, spec);
+        const product = parseAppProductModel(store.getLatestApprovedProductRevision(session.id)?.product_json);
+        const audit = auditAppArchitecture(plan, spec, product);
         if (!audit.ok) {
           return err(['Architecture audit failed:', ...audit.issues.map((issue) => `  - ${issue}`)].join('\n'));
         }

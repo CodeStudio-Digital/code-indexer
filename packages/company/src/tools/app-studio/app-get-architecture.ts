@@ -3,6 +3,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
+import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
 
@@ -23,7 +24,8 @@ export function appGetArchitecture(binding: AppToolBinding): CoderTool {
         const revision = store.getLatestArchitectureRevision(session.id);
         const plan = parseAppArchitecturePlan(revision?.architecture_json);
         if (!revision || !plan) return ok('No architecture plan saved yet.');
-        return ok(JSON.stringify({ revision: { ...revision, architecture_json: undefined }, plan, audit: auditAppArchitecture(plan, parseAppSpec(session.spec_json)) }, null, 2));
+        const product = parseAppProductModel(store.getLatestApprovedProductRevision(session.id)?.product_json);
+        return ok(JSON.stringify({ revision: { ...revision, architecture_json: undefined }, plan, audit: auditAppArchitecture(plan, parseAppSpec(session.spec_json), product) }, null, 2));
       } catch (e) {
         return err(`app_get_architecture failed: ${(e as Error).message}`);
       }

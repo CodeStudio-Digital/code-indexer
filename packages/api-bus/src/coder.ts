@@ -34,6 +34,7 @@ export type AgentPreset =
   | 'app_spec'
   | 'app_db'
   | 'app_architect'
+  | 'app_product'
   | 'app_ux'
   | 'app_wireframe'
   | 'api'

@@ -20,8 +20,8 @@ import { spriteEditorActions } from '../store/editor-store.js';
 import type { ToolId } from '../tools/tool-types.js';
 
 const TOOL_KEYS: Record<string, ToolId> = {
-  v: 'pointer', b: 'brush', e: 'eraser', k: 'magic-eraser', g: 'fill', l: 'line',
-  m: 'move', r: 'select-rect', w: 'select-wand', i: 'eyedropper',
+  v: 'pointer', b: 'brush', p: 'pencil', e: 'eraser', k: 'magic-eraser', g: 'fill', l: 'line',
+  m: 'move', r: 'select-rect', w: 'select-wand', q: 'select-lasso', i: 'eyedropper',
 };
 
 /** Bracket family — with Shift some layouts report `{`/`}` as e.key, so match

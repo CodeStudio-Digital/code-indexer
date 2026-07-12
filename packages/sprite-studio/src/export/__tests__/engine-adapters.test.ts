@@ -184,11 +184,16 @@ describe('determinism', () => {
 });
 
 describe('exportAsset engine formats', () => {
-  it("'unity' aliases the phaser builder into <outName>.json", () => {
-    const unity = exportAsset({ frames, format: 'unity', outName: 'goblin', meta: baseMeta });
+  it("'unity' emits atlas, semantic manifest and an idempotent editor importer", () => {
+    const unity = exportAsset({ frames, format: 'unity', outName: 'goblin', meta: withAnim({ loopMode: 'loop' }) });
     const phaser = exportAsset({ frames, format: 'phaser', outName: 'goblin', meta: baseMeta });
-    expect(unity.map((f) => f.relPath)).toEqual(['goblin.png', 'goblin.json']);
+    expect(unity.map((f) => f.relPath)).toEqual([
+      'goblin.png', 'goblin.json', 'goblin.codesprite.json', 'Editor/CodeStudioSpriteImporter.cs',
+    ]);
     expect(unity[1].text).toBe(phaser[1].text);
+    expect(unity[2].text).toContain('codestudio-unity-sprite-v1');
+    expect(unity[2].text).toContain('goblin_idle_000');
+    expect(unity[3].text).toContain('AnimationUtility.SetObjectReferenceCurve');
   });
 
   it("'godot'/'babylon'/'cocos' write sheet PNG + engine atlas text", () => {

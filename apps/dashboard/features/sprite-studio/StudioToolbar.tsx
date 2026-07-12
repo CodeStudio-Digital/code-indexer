@@ -13,6 +13,7 @@ export function StudioToolbar({
   mode,
   onMode,
   assetName,
+  contextLabel,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -23,6 +24,8 @@ export function StudioToolbar({
   onMode: (mode: StudioMode) => void;
   /** Active asset's name for the crumb; null → placeholder text. */
   assetName: string | null;
+  /** Animation/frame breadcrumb appended after the active asset. */
+  contextLabel?: string | null;
   canUndo?: boolean;
   canRedo?: boolean;
   onUndo?: () => void;
@@ -49,7 +52,10 @@ export function StudioToolbar({
       <div className="flex min-w-0 flex-1 items-center gap-1 text-muted-foreground">
         <ChevronRight className="h-3 w-3 shrink-0" />
         {assetName ? (
-          <span className="truncate font-medium text-foreground">{assetName}</span>
+          <>
+            <span className="truncate font-medium text-foreground">{assetName}</span>
+            {contextLabel && <><ChevronRight className="h-3 w-3 shrink-0" /><span className="truncate text-foreground">{contextLabel}</span></>}
+          </>
         ) : (
           <span className="truncate">{t('toolbar.noAsset')}</span>
         )}

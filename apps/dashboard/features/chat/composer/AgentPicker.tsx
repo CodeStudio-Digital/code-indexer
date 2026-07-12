@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Boxes, Compass, ClipboardList, Database, Hammer, Palette, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
+import { Bot, Boxes, Compass, ClipboardList, Database, Hammer, Layers3, Palette, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 
 /**
@@ -17,7 +17,7 @@ import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.j
  */
 
 interface AgentDef {
-  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
   label?: string;
   description: string;
   profile: string;
@@ -35,6 +35,7 @@ const AGENT_LABEL: Record<AgentId, string> = {
   app_spec: 'App Plan',
   app_db: 'Data Model',
   app_architect: 'App Architecture',
+  app_product: 'Product Model',
   app_ux: 'App UX',
   app_wireframe: 'App Wireframes',
   api: 'API Test',
@@ -51,6 +52,7 @@ const AGENT_PROMISE: Record<AgentId, string> = {
   app_spec: 'Refines App Studio requirements',
   app_db: 'Analyzes App Studio data',
   app_architect: 'Plans the App Studio architecture and test contract',
+  app_product: 'Maps domains, capabilities, scope horizons, and scenarios',
   app_ux: 'Defines the App Studio visual direction and accessibility contract',
   app_wireframe: 'Plans user flows, wireframes, UI tests, and build groups',
   api: 'Tests the API, fixes the spec',
@@ -67,6 +69,7 @@ const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
   app_spec: Bot,
   app_db: Database,
   app_architect: Boxes,
+  app_product: Layers3,
   app_ux: Palette,
   app_wireframe: Workflow,
   api: Webhook,
@@ -85,6 +88,7 @@ const MODE_TINT: Record<AgentId, string> = {
   app_spec: 'text-indigo-500',
   app_db: 'text-teal-500',
   app_architect: 'text-blue-500',
+  app_product: 'text-emerald-500',
   app_ux: 'text-pink-500',
   app_wireframe: 'text-violet-500',
   api: 'text-cyan-500',
@@ -172,6 +176,7 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
         { id: 'app_spec', label: AGENT_LABEL.app_spec, description: agentPromise('app_spec'), profile: 'bootstrap', planMode: false },
         { id: 'app_db', label: AGENT_LABEL.app_db, description: agentPromise('app_db'), profile: 'bootstrap', planMode: false },
         { id: 'app_architect', label: AGENT_LABEL.app_architect, description: agentPromise('app_architect'), profile: 'bootstrap', planMode: false },
+        { id: 'app_product', label: AGENT_LABEL.app_product, description: agentPromise('app_product'), profile: 'bootstrap', planMode: false },
         { id: 'app_ux', label: AGENT_LABEL.app_ux, description: agentPromise('app_ux'), profile: 'bootstrap', planMode: false },
         { id: 'app_wireframe', label: AGENT_LABEL.app_wireframe, description: agentPromise('app_wireframe'), profile: 'bootstrap', planMode: false },
         { id: 'builder', label: AGENT_LABEL.builder, description: agentPromise('builder'), profile: 'navigate', planMode: false },

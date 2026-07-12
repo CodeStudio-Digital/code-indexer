@@ -56,7 +56,7 @@ export function recoveredWireframeDraft(
   }));
   const buildGroups = spec.screens.map((screen, index) => ({
     id: `group-${screen.id}`, name: screen.label, goal: screen.purpose, sequence: index + 1, complexity: 'medium' as const,
-    flow_ids: [`flow-${screen.id}`], screen_ids: [screen.id], depends_on: index === 0 ? [] : [`group-${spec.screens[index - 1]!.id}`],
+    flow_ids: [`flow-${screen.id}`], capability_ids: [], screen_ids: [screen.id], depends_on: index === 0 ? [] : [`group-${spec.screens[index - 1]!.id}`],
     task_ids: ['test-red', 'mock-contract', 'screen', 'responsive', 'accessibility', 'test-green', 'preview'].map((kind) => `${screen.id}-${kind}`),
   }));
   const tasks: AppBuildTask[] = [];

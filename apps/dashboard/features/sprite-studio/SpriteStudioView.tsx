@@ -30,6 +30,7 @@ import { StudioPanels } from './panels/StudioPanels.js';
 import { ExportDialog } from './export/ExportDialog.js';
 import { ModelSelector } from './ModelSelector.js';
 import { useAssetVersions } from './animate/useAssetVersions.js';
+import { saveFrameVersion } from './animate/api-anim.js';
 import { useAnimateSession } from './animate/animate-session-store.js';
 import { FramesBrowserPanel } from './animate/frames/FramesBrowserPanel.js';
 import { ImportSheetDialog } from './animate/frames/ImportSheetDialog.js';
@@ -68,11 +69,20 @@ export function SpriteStudioView() {
   const [importOpen, setImportOpen] = useState(false);
   // Focused edit session: "Editar frame"/pencil opens the editor locked onto
   // ONE version — primary save OVERWRITES it in place ("Salvar Sprite").
-  const [editSession, setEditSession] = useState<{ versionId: number; origin: 'frame' | 'version' } | null>(null);
+  const [editSession, setEditSession] = useState<{
+    versionId: number; origin: 'frame' | 'version';
+    animationId?: number; frameIndex?: number; track?: number;
+  } | null>(null);
 
   // Single lifted version+generation fetch shared by all three animate rails
   // (center provenance, LEFT Frames browser, RIGHT FrameInspector).
   const av = useAssetVersions(projectId ?? 0, state.activeAssetId ?? 0);
+  const activeAnimation = useAnimateSession((s) => s.animContext);
+  const timelineCanUndo = useAnimateSession((s) => s.timelineCanUndo);
+  const timelineCanRedo = useAnimateSession((s) => s.timelineCanRedo);
+  const timelineUndo = useAnimateSession((s) => s.timelineUndo);
+  const timelineRedo = useAnimateSession((s) => s.timelineRedo);
+  const selectedAnimationFrame = useAnimateSession((s) => s.selectedFrameIndex);
 
   // Reset the cross-rail selection/bridge whenever the focused asset changes.
   useEffect(() => {
@@ -221,9 +231,11 @@ export function SpriteStudioView() {
 
   // Timeline "edit frame": open that exact version in a FOCUSED session —
   // the primary save overwrites it in place, so the frame updates visually.
-  const onEditVersion = (_assetId: number, versionId: number) => {
+  const onEditVersion = (_assetId: number, versionId: number, frameIndex: number, track: number) => {
     c.selectVersion(versionId);
-    setEditSession({ versionId, origin: 'frame' });
+    setEditSession({
+      versionId, origin: 'frame', animationId: activeAnimation?.animationId, frameIndex, track,
+    });
     c.setMode('edit');
   };
 
@@ -243,6 +255,17 @@ export function SpriteStudioView() {
     const targetId = session?.versionId ?? activeVersion?.id ?? null;
     const assetId = state.activeAssetId;
     if (projectId == null || targetId == null || assetId == null) return;
+    if (session?.origin === 'frame' && session.animationId != null && session.frameIndex != null) {
+      await saveFrameVersion(
+        session.animationId, session.track ?? 0, session.frameIndex, session.versionId, blob,
+      );
+      setEditSession(null);
+      av.refresh();
+      await c.refreshAssets();
+      await c.selectAsset(assetId);
+      c.setMode('animate');
+      return;
+    }
     const seq = ++focusSeqRef.current;
     await api.overwriteVersion(projectId, targetId, blob);
     setEditSession((current) => (current === session ? null : current));
@@ -343,6 +366,13 @@ export function SpriteStudioView() {
             mode={state.mode}
             onMode={c.setMode}
             assetName={c.activeAsset?.name ?? null}
+            contextLabel={state.mode === 'animate' && activeAnimation
+              ? `${activeAnimation.name}${selectedAnimationFrame != null ? ` › Frame ${selectedAnimationFrame + 1}` : ''}`
+              : null}
+            canUndo={state.mode === 'animate' && timelineCanUndo}
+            canRedo={state.mode === 'animate' && timelineCanRedo}
+            onUndo={state.mode === 'animate' ? timelineUndo ?? undefined : undefined}
+            onRedo={state.mode === 'animate' ? timelineRedo ?? undefined : undefined}
             onExport={() => setExportOpen(true)}
           />
           <StudioPanels
@@ -392,6 +422,7 @@ export function SpriteStudioView() {
                 iterateRef={pendingIterate}
                 onIterateConsumed={() => setPendingIterate(null)}
                 onEditVersion={onEditVersion}
+                onExportAnimation={() => setExportOpen(true)}
                 onFocusTab={onFocusTab}
                 onCloseTab={(tab) => void onCloseTab(tab)}
               />
@@ -414,7 +445,8 @@ export function SpriteStudioView() {
                 generations={av.generations}
                 versionById={av.versionById}
                 refreshVersions={av.refresh}
-                onEditVersion={(vid) => onEditVersion(state.activeAssetId ?? 0, vid)}
+                onEditVersion={(versionId, frameIndex, track) =>
+                  onEditVersion(state.activeAssetId ?? 0, versionId, frameIndex, track)}
                 onEditVersionInPlace={onEditVersionInPlace}
                 onEnhanceApplied={onEnhanceApplied}
                 editSession={editSession}
@@ -428,6 +460,9 @@ export function SpriteStudioView() {
             projectId={projectId}
             assets={state.assets}
             activeAsset={c.activeAsset}
+            activeAnimation={state.mode === 'animate' && activeAnimation
+              ? { id: activeAnimation.animationId, name: activeAnimation.name }
+              : null}
           />
           {state.activeAssetId != null && (
             <ImportSheetDialog
@@ -467,4 +502,3 @@ function CenterCard({
     </div>
   );
 }
-

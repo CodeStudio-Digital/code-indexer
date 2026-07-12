@@ -96,8 +96,8 @@ export function impactFromSpecDiff(diff: AppSpecDiff): AppSpecImpact {
   const reasons: string[] = [];
 
   if (specDiffHasChanges(diff)) {
-    stages.add('architecture');
-    reasons.push('O plano mudou; arquitetura e garantias de teste precisam ser confirmadas novamente.');
+    stages.add('product');
+    reasons.push('O plano mudou; profundidade, horizontes e cenarios do produto precisam ser confirmados novamente antes da arquitetura.');
   }
 
   if (collectionHasChanges(diff.entities)) {
@@ -145,14 +145,15 @@ export function summarizeSpecDiff(diff: AppSpecDiff): string[] {
 
 const STAGE_ORDER: Record<AppStageId, number> = {
   discovery: 0,
-  architecture: 1,
-  database: 2,
-  ux: 3,
-  wireframe: 4,
-  design: 5,
-  backend: 6,
-  review: 7,
-  launch: 8,
+  product: 1,
+  architecture: 2,
+  database: 3,
+  ux: 4,
+  wireframe: 5,
+  design: 6,
+  backend: 7,
+  review: 8,
+  launch: 9,
 };
 
 function emptyCollectionDiff(): AppSpecCollectionDiff {

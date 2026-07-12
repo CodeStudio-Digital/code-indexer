@@ -44,6 +44,10 @@ export function toAnimDto(anim: SpriteAnimationRow, frames: SpriteFrameRow[]): R
     // Playback loop range (scrubber markers, frame indices) — null = whole clip.
     loopStart: num(anim.settings.loopStart),
     loopEnd: num(anim.settings.loopEnd),
+    actionKey: typeof anim.settings.actionKey === 'string' ? anim.settings.actionKey : anim.name,
+    direction: typeof anim.settings.direction === 'string' ? anim.settings.direction : null,
+    exportName: typeof anim.settings.exportName === 'string' ? anim.settings.exportName : anim.name,
+    pivot: anim.settings.pivot && typeof anim.settings.pivot === 'object' ? anim.settings.pivot : { x: 0.5, y: 1 },
     createdAt: anim.created_at, updatedAt: anim.updated_at,
   };
 }

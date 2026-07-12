@@ -9,6 +9,9 @@ import { auditAppUxBrief, auditAppWireframePlan } from '@mcp/app-studio/experien
 import { dataModelFingerprint, parseAppUxBrief, parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
 import { recoveredUxDraft, recoveredWireframeDraft } from '@mcp/app-studio/experience/recover.js';
 import { serializeExperienceArtifact } from '@mcp/app-studio/experience/types.js';
+import { auditAppProductModel } from '@mcp/app-studio/product/audit.js';
+import { recoverProductModel } from '@mcp/app-studio/product/recover.js';
+import { parseAppProductModel, productModelFingerprint, serializeAppProductModel } from '@mcp/app-studio/product/types.js';
 import {
   analyzeAppWorkspaceRepair,
   applyAppWorkspaceRepair,
@@ -86,14 +89,23 @@ export function mountAppStudioPipelineRepairRoutes(app: Hono, deps: ServerDeps):
     const ux = parseAppUxBrief(uxRevision?.ux_json);
     const wireframeRevision = deps.appStudioStore.getLatestWireframeRevision(sessionId);
     const wireframe = parseAppWireframePlan(wireframeRevision?.wireframe_json);
+    const productRevision = deps.appStudioStore.getLatestProductRevision(sessionId);
+    const product = parseAppProductModel(productRevision?.product_json);
     const pipelineReport = repairAppPipeline(parsePipelineState(session.pipeline_json), {
       spec,
       approvedSpecRevisionId: approvedSpec?.id ?? null,
+      product: productRevision && product ? {
+        revisionId: productRevision.id,
+        status: productRevision.status,
+        baseSpecRevisionId: productRevision.base_spec_revision_id,
+        resultSpecRevisionId: productRevision.result_spec_revision_id,
+        auditOk: auditAppProductModel(product).ok,
+      } : null,
       architecture: architectureRevision && architecture ? {
         revisionId: architectureRevision.id,
         status: architectureRevision.status,
         specRevisionId: architectureRevision.spec_revision_id,
-        auditOk: auditAppArchitecture(architecture, spec).ok,
+        auditOk: auditAppArchitecture(architecture, spec, product).ok,
       } : null,
       ux: uxRevision && ux ? {
         revisionId: uxRevision.id,
@@ -109,7 +121,7 @@ export function mountAppStudioPipelineRepairRoutes(app: Hono, deps: ServerDeps):
         architectureRevisionId: wireframeRevision.architecture_revision_id,
         uxRevisionId: wireframeRevision.ux_revision_id,
         dataFingerprint: wireframeRevision.data_fingerprint,
-        auditOk: auditAppWireframePlan(wireframe, spec, architecture).ok,
+        auditOk: auditAppWireframePlan(wireframe, spec, architecture, product).ok,
       } : null,
       currentDataFingerprint: dataModelFingerprint(spec),
       deployHealthy: deployHealthy(session.deploy_json),
@@ -150,7 +162,7 @@ export function mountAppStudioPipelineRepairRoutes(app: Hono, deps: ServerDeps):
       session,
       workspaceInput,
       report,
-      previewToken: token({ pipeline: session.pipeline_json, workspace: workspace.fingerprint }),
+      previewToken: token({ pipeline: session.pipeline_json, workspace: workspace.fingerprint, product: productRevision ? { id: productRevision.id, updated_at: productRevision.updated_at } : null }),
     };
   };
 
@@ -178,13 +190,25 @@ export function mountAppStudioPipelineRepairRoutes(app: Hono, deps: ServerDeps):
       }
 
       let application: AppWorkspaceRepairApplication | null = null;
-      let experience: { uxRevisionId?: number; wireframeRevisionId?: number } = {};
+      let experience: { productRevisionId?: number; uxRevisionId?: number; wireframeRevisionId?: number } = {};
       try {
         if (analysis.report.workspace.changed) {
           application = await applyAppWorkspaceRepair(analysis.workspaceInput, analysis.report.workspace);
         }
         const spec = parseAppSpec(analysis.session.spec_json);
         const approvedSpec = deps.appStudioStore.getLatestApprovedSpecRevision(id);
+        if (spec && !deps.appStudioStore.getLatestProductRevision(id)) {
+          const model = recoverProductModel(spec, approvedSpec?.id ?? null);
+          const revision = deps.appStudioStore.saveProductRevision({
+            app_session_id: id,
+            base_spec_revision_id: approvedSpec?.id ?? null,
+            complexity: model.complexity,
+            research_fingerprint: productModelFingerprint(model),
+            product_json: serializeAppProductModel(model),
+            created_by: 'repair',
+          });
+          experience.productRevisionId = revision.id;
+        }
         const architectureRevision = deps.appStudioStore.getLatestApprovedArchitectureRevision(id);
         const architecture = parseAppArchitecturePlan(architectureRevision?.architecture_json);
         if (spec && architectureRevision && !deps.appStudioStore.getLatestUxRevision(id)) {
@@ -208,6 +232,7 @@ export function mountAppStudioPipelineRepairRoutes(app: Hono, deps: ServerDeps):
       } catch (e) {
         if (experience.wireframeRevisionId) deps.appStudioStore.deleteDraftWireframeRevision(id, experience.wireframeRevisionId);
         if (experience.uxRevisionId) deps.appStudioStore.deleteDraftUxRevision(id, experience.uxRevisionId);
+        if (experience.productRevisionId) deps.appStudioStore.deleteDraftProductRevision(id, experience.productRevisionId);
         if (application) restoreAppWorkspaceRepair(analysis.workspaceInput.workspaceDir, application);
         throw e;
       }
@@ -227,11 +252,12 @@ export function mountAppStudioPipelineRepairRoutes(app: Hono, deps: ServerDeps):
     try {
       const project = deps.db.getProject(session.project_id);
       if (!project?.root_path) throw new Error('O workspace deste app nao foi encontrado.');
-      const stored = JSON.parse(repair.report_json) as { application?: AppWorkspaceRepairApplication | null; experience?: { uxRevisionId?: number; wireframeRevisionId?: number } };
+      const stored = JSON.parse(repair.report_json) as { application?: AppWorkspaceRepairApplication | null; experience?: { productRevisionId?: number; uxRevisionId?: number; wireframeRevisionId?: number } };
       if (stored.application) validateAppWorkspaceRepairUndo(project.root_path, stored.application);
       const result = deps.appStudioStore.undoPipelineRepair(id, repairId);
       if (stored.experience?.wireframeRevisionId) deps.appStudioStore.deleteDraftWireframeRevision(id, stored.experience.wireframeRevisionId);
       if (stored.experience?.uxRevisionId) deps.appStudioStore.deleteDraftUxRevision(id, stored.experience.uxRevisionId);
+      if (stored.experience?.productRevisionId) deps.appStudioStore.deleteDraftProductRevision(id, stored.experience.productRevisionId);
       if (stored.application) restoreAppWorkspaceRepair(project.root_path, stored.application);
       return c.json({ repair: result.repair, session: result.session });
     } catch (e) {

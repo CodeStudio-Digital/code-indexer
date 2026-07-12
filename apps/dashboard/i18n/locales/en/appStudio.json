@@ -44,6 +44,7 @@
     "blueprint": "Map",
     "versions": "Versions",
     "architecture": "Construction",
+    "product": "Product",
     "experience": "Experience",
     "preview": "Your app",
     "data": "Your data",
@@ -66,6 +67,20 @@
     "security": "Security",
     "risks": "Risks and safeguards",
     "sources": "Official sources consulted"
+  },
+  "product": {
+    "title": "Product map",
+    "emptyTitle": "Let's deepen the product",
+    "emptyBody": "The specialist turns the idea into domains, capabilities and scenarios, showing what belongs now and what can wait.",
+    "repairBody": "This app uses an earlier journey. Use guided repair to insert Product modeling without losing screens, data, conversations, or code.",
+    "repairAction": "Go to Repair app",
+    "openAgent": "Product specialist",
+    "domains": "domains", "capabilities": "capabilities", "scenarios": "scenarios", "decisions": "decisions",
+    "allDomains": "All domains", "search": "Search capability...",
+    "openDecisions": "{{count}} decision(s) still need confirmation", "addScope": "Include in scope", "removeScope": "Remove from scope", "critical": "critical",
+    "horizon": { "core": "Current core", "complete": "Complete product", "future": "Future" },
+    "provenance": { "user": "requested by you", "inferred": "suggested by AI", "researched": "based on research", "existing": "already exists" },
+    "complexity": { "simple": "simple", "standard": "standard", "complex": "complex", "very-complex": "very complex" }
   },
   "experience": {
     "direction": "Direction",
@@ -202,6 +217,12 @@
       "agent": "Requirements specialist",
       "tagline": "The AI chats with you to understand what the app needs to do.",
       "userAction": "Answer the questions in the chat, then approve the plan."
+    },
+    "product": {
+      "name": "Model the product",
+      "agent": "Product specialist",
+      "tagline": "We deepen the idea into capabilities, scenarios and scope choices before construction.",
+      "userAction": "Review Core, Complete product and Future in the Product tab and confirm the choices."
     },
     "architecture": {
       "name": "Plan the construction",
@@ -535,6 +556,7 @@
     "sessions": "Conversations",
     "assistant": "Assistant",
     "specSessionTitle": "Refine plan - {{name}}",
+    "productSessionTitle": "Model product - {{name}}",
     "dbSessionTitle": "Analyze data - {{name}}",
     "architectureSessionTitle": "Plan construction - {{name}}",
     "uxSessionTitle": "UX direction - {{name}}",
@@ -544,6 +566,7 @@
     "reviewSessionTitle": "Review application - {{name}}",
     "builderMode": "Build chat",
     "specMode": "Spec specialist",
+    "productMode": "Product specialist",
     "dbMode": "Data specialist",
     "architectureMode": "Architecture specialist",
     "uxMode": "UX specialist",
@@ -598,6 +621,14 @@
       "thinking": "Think more",
       "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
       "launch": "Open session"
+    },
+    "productLaunch": {
+      "title": "Open product specialist",
+      "description": "Choose the model that will deepen the idea, propose scope horizons and map scenarios without automatically including suggestions.",
+      "provider": "Provider", "model": "Model", "searchProvider": "Search provider...", "searchModel": "Search model...",
+      "noProviders": "No provider configured", "noModels": "No model configured", "modelPlaceholder": "model id",
+      "effort": "Reasoning effort", "effortAuto": "Automatic (model default)", "thinking": "Think more",
+      "thinkingHint": "Uses thinking mode when supported by the provider/model.", "launch": "Open session"
     },
     "uxLaunch": {
       "title": "Open UX direction specialist",
@@ -690,6 +721,7 @@
     "close": "Close search"
   },
   "stageMessage": {
+    "product": "Deepen this product before architecture. Read the idea and persisted briefing, clearly present the current Core, Complete product, and what can wait for the Future. Propose important capabilities a lay user did not mention, but never select inferred or researched scope without explicit confirmation. Model domains and critical scenarios incrementally, run app_product_audit, and submit the product stage for review.",
     "discovery": "Let's start! I want to create an app and need your help planning it. Ask me ONE question at a time using the ask_user tool, in plain language with no technical terms, to understand: what the app does, who uses it, which screens it needs, what information it stores, whether people log in, which important rules exist, how I will know it is ready, and what stays out of the first version. Whenever the question has choices, pass options (2 to 8) with allow_freeform: true — so I can click a button OR type my own answer. When the question allows picking SEVERAL options (e.g. which screens, what data to store, login methods), pass multi_select: true. When you have everything, save the plan with app_save_spec including requirements, run app_spec_audit, show me a simple summary and ask if I approve. Always speak my language.",
     "architecture": "Plan how this app will be built. Read the spec and its history. If an architecture decision requires changing product behavior, scope, data, access, or acceptance criteria, confirm it with me and propose a versioned spec revision before continuing. Otherwise, research only current official documentation for the recommended stack, record the sources, and create a versioned architecture with a traceable test plan. Every acceptance criterion, rule, behavior, entity and login requirement must have at least one test. Save with app_save_architecture, run app_architecture_audit, and submit the architecture stage with app_submit_stage. Explain the result in plain language.",
     "database": "Let's verify the app data. First inspect migrations, the canonical seed, and the real database. If everything already matches the approved plan, reuse the database without rebuilding anything. Create only one additive migration for a confirmed schema difference; fix examples with app_save_db_seed, never extra migrations. Apply only pending work, validate with read-only queries, and submit with app_submit_stage.",

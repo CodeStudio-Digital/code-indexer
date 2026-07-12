@@ -100,7 +100,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
-  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder'>('explore');
+  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder'>('explore');
 
   // SSE-driven agent transitions (Plan→Build after submit_plan approval,
   // Spec→Build after submit_spec, manual server-side switches). Backend
@@ -119,7 +119,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         && next !== agent
         && (
           next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' ||
-          next === 'spec' || next === 'app_spec' || next === 'app_db' || next === 'app_architect' || next === 'app_ux' || next === 'app_wireframe' || next === 'api' || next === 'diagram' || next === 'builder'
+          next === 'spec' || next === 'app_spec' || next === 'app_db' || next === 'app_architect' || next === 'app_product' || next === 'app_ux' || next === 'app_wireframe' || next === 'api' || next === 'diagram' || next === 'builder'
         )
       ) {
         setAgent(next);
@@ -848,7 +848,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (
       a && (
         a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' ||
-        a === 'spec' || a === 'app_spec' || a === 'app_db' || a === 'app_architect' || a === 'app_ux' || a === 'app_wireframe' || a === 'api' || a === 'diagram' || a === 'builder'
+        a === 'spec' || a === 'app_spec' || a === 'app_db' || a === 'app_architect' || a === 'app_product' || a === 'app_ux' || a === 'app_wireframe' || a === 'api' || a === 'diagram' || a === 'builder'
       )
     ) {
       setAgent(a);
@@ -859,7 +859,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Persist a manual dropdown pick immediately so leaving WITHOUT sending still
   // remembers it. Applies to the NEXT run (agent identity is baked into the
   // runner at construction; mid-run transitions are runner-driven).
-  const handleAgentChange = useCallback((next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder') => {
+  const handleAgentChange = useCallback((next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder') => {
     setAgent(next);
     if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
   }, [selectedId]);
@@ -1211,7 +1211,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 && s.agent !== agent
                 && (
                   s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'app_ux' || s.agent === 'app_wireframe' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'app_product' || s.agent === 'app_ux' || s.agent === 'app_wireframe' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
                 )
               ) {
                 setAgent(s.agent);
@@ -1238,7 +1238,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 && s.agent !== agent
                 && (
                   s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'app_ux' || s.agent === 'app_wireframe' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'app_product' || s.agent === 'app_ux' || s.agent === 'app_wireframe' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
                 )
               ) {
                 setAgent(s.agent);

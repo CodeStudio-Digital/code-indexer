@@ -35,6 +35,7 @@ export function AnimatePanel({
   refreshVersions,
   onSaved,
   onEditVersion,
+  onExportAnimation,
 }: {
   projectId: number;
   asset: SpriteAsset;
@@ -47,7 +48,8 @@ export function AnimatePanel({
   refreshVersions: () => void;
   onSaved: (assetId: number, versionId: number) => void;
   /** Open a frame's version in the editor (wired by CenterSurface/StudioView). */
-  onEditVersion?: (versionId: number) => void;
+  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
+  onExportAnimation?: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const { jobs } = useSpriteJobs(projectId);
@@ -73,7 +75,10 @@ export function AnimatePanel({
     setAnimations((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
   }, []);
 
-  const { frames, frameIdx, setFrameIdx, applyFlat, resetForAnimation, flushPendingSave } =
+  const {
+    frames, frameIdx, setFrameIdx, applyFlat, resetForAnimation, flushPendingSave,
+    canUndo, canRedo, undo, redo,
+  } =
     useFrameDraft(current, applyServer, setError);
   const tracks = useMemo(
     () => current?.tracks ?? [{ id: 0, name: 'Base', visible: true }],
@@ -114,6 +119,7 @@ export function AnimatePanel({
   useEffect(() => { resetForAnimation(current?.frames ?? []); setActiveTrack(0); }, [selectedId, current?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setAnchorId(current?.anchorVersionId ?? null); }, [selectedId, current == null]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setFrameCount(current?.frameCount ?? 4); }, [selectedId, current == null]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setDirection(current?.direction ?? ''); }, [selectedId, current == null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Registration: flush pending edits, then bake newly aligned BASE-frame versions.
   const alignFrames = useCallback(async (
@@ -213,6 +219,7 @@ export function AnimatePanel({
   );
   const animContext = useMemo<AnimContext | null>(
     () => (current ? {
+      animationId: current.id,
       assetId: asset.id,
       name: current.name,
       jobId: lastGenGroup?.jobId ?? null,
@@ -237,18 +244,25 @@ export function AnimatePanel({
     if (s.activeTrack !== activeTrack) patch.activeTrack = activeTrack;
     const a = s.animContext;
     const b = animContext;
-    const sameCtx = a === b || (!!a && !!b && a.assetId === b.assetId && a.name === b.name
+    const sameCtx = a === b || (!!a && !!b && a.animationId === b.animationId
+      && a.assetId === b.assetId && a.name === b.name
       && a.jobId === b.jobId && a.frameCount === b.frameCount && a.hasSheet === b.hasSheet);
     if (!sameCtx) patch.animContext = animContext;
     if (s.onActivateTrack !== setActiveTrack) patch.onActivateTrack = setActiveTrack;
     if (s.onToggleTrackVisible !== toggleTrackVisible) patch.onToggleTrackVisible = toggleTrackVisible;
     if (Object.keys(patch).length > 0) s.publishBridge(patch);
   }, [inspectorTracks, activeTrack, animContext, toggleTrackVisible]);
+  useEffect(() => {
+    useAnimateSession.getState().publishBridge({
+      timelineCanUndo: canUndo, timelineCanRedo: canRedo, timelineUndo: undo, timelineRedo: redo,
+    });
+  }, [canUndo, canRedo, undo, redo]);
   // Unmount: drop the published callbacks/context so the module-level store
   // doesn't retain closures over an unmounted panel.
   useEffect(() => () => {
     useAnimateSession.getState().publishBridge({
       inspectorTracks: [], animContext: null, onActivateTrack: null, onToggleTrackVisible: null,
+      timelineCanUndo: false, timelineCanRedo: false, timelineUndo: null, timelineRedo: null,
     });
   }, []);
 
@@ -275,6 +289,7 @@ export function AnimatePanel({
           setAnimations((prev) => prev.filter((a) => a.id !== id));
           if (selectedId === id) setSelectedId(null);
         }}
+        onExport={onExportAnimation}
       />
       {current ? (
         <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">

@@ -38,7 +38,7 @@ export interface TrackRowProps {
   onColumnDrag: (from: number, to: number) => void;
   onCellDrag: (track: number, from: number, to: number) => void;
   onDuplicateColumn: (col: number) => void;
-  onEditVersion?: (versionId: number) => void;
+  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
   dragFrom: React.MutableRefObject<{ track: number; col: number } | null>;
 }
 

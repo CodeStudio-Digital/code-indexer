@@ -130,6 +130,7 @@ export interface AppBuildGroup {
   sequence: number;
   complexity: AppBuildComplexity;
   flow_ids: string[];
+  capability_ids: string[];
   screen_ids: string[];
   depends_on: string[];
   task_ids: string[];
@@ -282,7 +283,7 @@ export function normalizeAppWireframePlan(
     }),
     build_groups: (Array.isArray(raw.build_groups) ? raw.build_groups : []).map((item) => {
       const group = record(item);
-      return { id: text(group.id), name: text(group.name), goal: text(group.goal), sequence: Number(group.sequence) || 0, complexity: oneOf(group.complexity, ['small', 'medium', 'large'] as const, 'medium'), flow_ids: strings(group.flow_ids), screen_ids: strings(group.screen_ids), depends_on: strings(group.depends_on), task_ids: strings(group.task_ids) };
+      return { id: text(group.id), name: text(group.name), goal: text(group.goal), sequence: Number(group.sequence) || 0, complexity: oneOf(group.complexity, ['small', 'medium', 'large'] as const, 'medium'), flow_ids: strings(group.flow_ids), capability_ids: strings(group.capability_ids), screen_ids: strings(group.screen_ids), depends_on: strings(group.depends_on), task_ids: strings(group.task_ids) };
     }),
     tasks: (Array.isArray(raw.tasks) ? raw.tasks : []).map((item) => {
       const task = record(item);

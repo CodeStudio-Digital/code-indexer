@@ -47,13 +47,14 @@ export function FrameInspector({
   versionById: Map<number, AssetVersion>;
   generations: GenerationGroup[];
   refresh: () => void;
-  onEditVersion: (versionId: number) => void;
+  onEditVersion: (versionId: number, frameIndex: number, track: number) => void;
   onSelectVersion: (versionId: number) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const selId = useAnimateSession((s) => s.selectedFrameVersionId);
   const tracks = useAnimateSession((s) => s.inspectorTracks);
   const activeTrack = useAnimateSession((s) => s.activeTrack);
+  const selectedFrameIndex = useAnimateSession((s) => s.selectedFrameIndex);
   const animContext = useAnimateSession((s) => s.animContext);
   const onActivateTrack = useAnimateSession((s) => s.onActivateTrack);
   const onToggleTrackVisible = useAnimateSession((s) => s.onToggleTrackVisible);
@@ -127,7 +128,8 @@ export function FrameInspector({
                 {sel.jobId != null ? ` · job#${sel.jobId}` : ''}
               </div>
               <div className="flex items-center gap-1">
-                <Button size="sm" variant="outline" className="h-6 gap-1 px-1.5 text-[10px]" title={t('animate.timeline.editFrame')} onClick={() => onEditVersion(sel.id)}>
+                <Button size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" title={t('animate.timeline.editFrame')}
+                  onClick={() => onEditVersion(sel.id, selectedFrameIndex ?? 0, activeTrack)}>
                   <Pencil className="h-3 w-3" /> {t('frames.edit')}
                 </Button>
                 <FrameRerollPopover projectId={projectId} assetId={sel.assetId} versionId={sel.id} prompt={sel.prompt} refresh={refresh}>

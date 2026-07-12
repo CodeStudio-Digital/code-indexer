@@ -24,6 +24,51 @@ export interface ComposeGridParams {
 export interface NamedFrame {
   name: string;
   img: RgbaImage;
+  /** Original dimensions/offset when `img` was alpha-trimmed before packing. */
+  sourceSize?: { w: number; h: number };
+  spriteSourceSize?: { x: number; y: number; w: number; h: number };
+}
+
+export interface ComposePackedParams {
+  padding?: number;
+  extrude?: number;
+}
+
+/** Alpha-trim frames without losing the source rectangle required by engines. */
+export function trimNamedFrames(frames: NamedFrame[]): NamedFrame[] {
+  return frames.map((frame) => {
+    const { img } = frame;
+    let minX = img.width, minY = img.height, maxX = -1, maxY = -1;
+    for (let y = 0; y < img.height; y++) {
+      for (let x = 0; x < img.width; x++) {
+        if (img.rgba[(y * img.width + x) * 4 + 3] === 0) continue;
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+      }
+    }
+    const sourceSize = { w: img.width, h: img.height };
+    if (maxX < minX || maxY < minY) {
+      return {
+        ...frame,
+        img: { rgba: new Uint8Array(4), width: 1, height: 1 },
+        sourceSize,
+        spriteSourceSize: { x: 0, y: 0, w: 1, h: 1 },
+      };
+    }
+    const w = maxX - minX + 1, h = maxY - minY + 1;
+    if (w === img.width && h === img.height) return { ...frame, sourceSize };
+    const rgba = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      const srcStart = ((minY + y) * img.width + minX) * 4;
+      rgba.set(img.rgba.subarray(srcStart, srcStart + w * 4), y * w * 4);
+    }
+    return {
+      ...frame,
+      img: { rgba, width: w, height: h },
+      sourceSize,
+      spriteSourceSize: { x: minX, y: minY, w, h },
+    };
+  });
 }
 
 /**
@@ -98,10 +143,51 @@ export function composeGrid(frames: NamedFrame[], params: ComposeGridParams = {}
       y: by + extrude,
       w: cellW,
       h: cellH,
-      trimmed: false,
-      sourceSize: { w: cellW, h: cellH },
-      spriteSourceSize: { x: 0, y: 0, w: cellW, h: cellH },
+      trimmed: !!frames[i].spriteSourceSize,
+      sourceSize: frames[i].sourceSize ?? { w: cellW, h: cellH },
+      spriteSourceSize: frames[i].spriteSourceSize ?? { x: 0, y: 0, w: cellW, h: cellH },
     });
   }
+  return { rgba: sheet, rects };
+}
+
+/** Deterministic shelf packer for trimmed/variable-size frames. Input order is
+ * preserved so animation runs remain contiguous in engines that need ranges. */
+export function composePacked(frames: NamedFrame[], params: ComposePackedParams = {}): ComposedSheet {
+  if (frames.length === 0) throw new Error('composePacked needs at least one frame');
+  const padding = params.padding ?? 0;
+  const extrude = params.extrude ?? 0;
+  if (padding < 0 || extrude < 0 || !Number.isInteger(padding) || !Number.isInteger(extrude)) {
+    throw new Error(`padding/extrude must be non-negative integers, got ${padding}/${extrude}`);
+  }
+  const blocks = frames.map((f) => ({ w: f.img.width + extrude * 2, h: f.img.height + extrude * 2 }));
+  const totalArea = blocks.reduce((sum, b) => sum + (b.w + padding) * (b.h + padding), 0);
+  const targetW = Math.max(...blocks.map((b) => b.w + padding), Math.ceil(Math.sqrt(totalArea)));
+  const pos: Array<{ x: number; y: number }> = [];
+  let x = padding, y = padding, rowH = 0, usedW = padding;
+  for (const b of blocks) {
+    if (x > padding && x + b.w + padding > targetW) { x = padding; y += rowH + padding; rowH = 0; }
+    pos.push({ x, y });
+    x += b.w + padding;
+    rowH = Math.max(rowH, b.h);
+    usedW = Math.max(usedW, x);
+  }
+  const sheet: RgbaImage = {
+    rgba: new Uint8Array(Math.max(1, usedW) * Math.max(1, y + rowH + padding) * 4),
+    width: Math.max(1, usedW), height: Math.max(1, y + rowH + padding),
+  };
+  const rects: FrameRect[] = [];
+  frames.forEach((frame, i) => {
+    const p = pos[i];
+    blitExtruded(sheet, frame.img, p.x, p.y, frame.img.width, frame.img.height, extrude);
+    rects.push({
+      name: frame.name,
+      x: p.x + extrude, y: p.y + extrude,
+      w: frame.img.width, h: frame.img.height,
+      trimmed: !!frame.spriteSourceSize,
+      sourceSize: frame.sourceSize ?? { w: frame.img.width, h: frame.img.height },
+      spriteSourceSize: frame.spriteSourceSize ?? { x: 0, y: 0, w: frame.img.width, h: frame.img.height },
+    });
+  });
   return { rgba: sheet, rects };
 }

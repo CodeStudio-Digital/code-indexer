@@ -37,6 +37,7 @@ import type { ServerDeps } from '../../deps.js';
 
 const RESET_FEATURES_FROM_STAGE: Record<AppStageId, AppStudioFeatureKind[]> = {
   discovery: ['screen', 'api', 'feature'],
+  product: ['screen', 'api', 'feature'],
   architecture: ['screen', 'api', 'feature'],
   database: ['screen', 'api', 'feature'],
   ux: ['screen', 'api', 'feature'],
@@ -264,14 +265,15 @@ function deleteRecordedFeaturesFromImpact(
 
 const APP_STAGE_ORDER: Record<AppStageId, number> = {
   discovery: 0,
-  architecture: 1,
-  database: 2,
-  ux: 3,
-  wireframe: 4,
-  design: 5,
-  backend: 6,
-  review: 7,
-  launch: 8,
+  product: 1,
+  architecture: 2,
+  database: 3,
+  ux: 4,
+  wireframe: 5,
+  design: 6,
+  backend: 7,
+  review: 8,
+  launch: 9,
 };
 
 function writeSpecMirrorBestEffort(db: ServerDeps['db'], projectId: number, spec: AppSpec): void {

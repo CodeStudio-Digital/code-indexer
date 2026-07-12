@@ -27,11 +27,18 @@ export function useFrameDraft(
   editTrackCells: (track: number, cells: anim.AnimFrame[]) => void;
   resetForAnimation: (serverFrames: anim.AnimFrame[]) => void;
   flushPendingSave: () => Promise<void>;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
 } {
   const [frames, setFrames] = useState<anim.AnimFrame[]>([]);
   const [frameIdx, setFrameIdx] = useState(0);
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const latest = useRef<anim.AnimFrame[]>([]);
+  const undoStack = useRef<anim.AnimFrame[][]>([]);
+  const redoStack = useRef<anim.AnimFrame[][]>([]);
+  const [, bumpHistory] = useState(0);
   latest.current = frames;
 
   useEffect(() => () => {
@@ -64,21 +71,44 @@ export function useFrameDraft(
     }
   }, [current, persistTrack]);
 
+  const changedTracks = useCallback((prev: anim.AnimFrame[], next: anim.AnimFrame[]): number[] => {
+    const sig = (list: anim.AnimFrame[], track: number): string =>
+      list.filter((f) => f.track === track).sort((a, b) => a.frameIndex - b.frameIndex)
+        .map((f) => `${f.frameIndex}:${f.versionId}:${f.durationMs ?? ''}`).join('|');
+    const all = new Set([...tracksWithCells(prev), ...tracksWithCells(next)]);
+    return [...all].filter((track) => sig(prev, track) !== sig(next, track));
+  }, []);
+
   const applyFlat = useCallback((next: anim.AnimFrame[]) => {
     const prev = latest.current;
+    if (changedTracks(prev, next).length === 0) return;
+    undoStack.current.push(prev.map((frame) => ({ ...frame })));
+    if (undoStack.current.length > 100) undoStack.current.shift();
+    redoStack.current = [];
     setFrames(next);
     latest.current = next;
-    // A track changed when its cell multiset differs (cheap string diff).
-    const sig = (list: anim.AnimFrame[], track: number): string =>
-      list
-        .filter((f) => f.track === track)
-        .sort((a, b) => a.frameIndex - b.frameIndex)
-        .map((f) => `${f.frameIndex}:${f.versionId}:${f.durationMs ?? ''}`)
-        .join('|');
-    const all = new Set([...tracksWithCells(prev), ...tracksWithCells(next)]);
-    const changed = [...all].filter((t) => sig(prev, t) !== sig(next, t));
+    const changed = changedTracks(prev, next);
     if (changed.length > 0) schedule(changed);
-  }, [schedule]);
+    bumpHistory((value) => value + 1);
+  }, [schedule, changedTracks]);
+
+  const restoreFromHistory = useCallback((next: anim.AnimFrame[]) => {
+    const prev = latest.current;
+    setFrames(next); latest.current = next;
+    schedule(changedTracks(prev, next));
+    bumpHistory((value) => value + 1);
+  }, [schedule, changedTracks]);
+
+  const undo = useCallback(() => {
+    const next = undoStack.current.pop(); if (!next) return;
+    redoStack.current.push(latest.current.map((frame) => ({ ...frame })));
+    restoreFromHistory(next);
+  }, [restoreFromHistory]);
+  const redo = useCallback(() => {
+    const next = redoStack.current.pop(); if (!next) return;
+    undoStack.current.push(latest.current.map((frame) => ({ ...frame })));
+    restoreFromHistory(next);
+  }, [restoreFromHistory]);
 
   const editTrackCells = useCallback((track: number, cells: anim.AnimFrame[]) => {
     const rest = latest.current.filter((f) => f.track !== track);
@@ -90,6 +120,9 @@ export function useFrameDraft(
     timers.current.clear();
     setFrames(serverFrames);
     latest.current = serverFrames;
+    undoStack.current = [];
+    redoStack.current = [];
+    bumpHistory((value) => value + 1);
     setFrameIdx(0);
   }, []);
 
@@ -101,5 +134,8 @@ export function useFrameDraft(
     for (const track of pending) await persistTrack(track);
   }, [persistTrack]);
 
-  return { frames, frameIdx, setFrameIdx, applyFlat, editTrackCells, resetForAnimation, flushPendingSave };
+  return {
+    frames, frameIdx, setFrameIdx, applyFlat, editTrackCells, resetForAnimation, flushPendingSave,
+    canUndo: undoStack.current.length > 0, canRedo: redoStack.current.length > 0, undo, redo,
+  };
 }

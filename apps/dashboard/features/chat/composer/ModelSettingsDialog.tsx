@@ -20,7 +20,7 @@ import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
 
 /**
  * Build the trigger label: "Provider · model", or the empty-state text when no

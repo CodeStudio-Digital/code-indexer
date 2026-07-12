@@ -94,7 +94,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       extras?: {
         attachments?: AgentAttachment[];
         /** Agent preset selected for this run. Undefined keeps the session preset. */
-        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
         /** Tool tier profile override (takes precedence over agent). */
         profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
         /** Override max turns for this run. null/undefined = use default. */
@@ -355,7 +355,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       spec_path: string,
       requested_changes?: string,
       onMessageComplete?: () => void,
-      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_ux' | 'app_wireframe' },
+      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/spec-response`,

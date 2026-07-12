@@ -237,17 +237,36 @@ export const streamUrl = (p: number): string =>
   `${apiBaseUrl()}${root(p)}/stream`;
 
 // ─── Export ─────────────────────────────────────────────────────────────
+export type ExportScopeV2 =
+  | { kind: 'asset'; assetIds: number[]; includeAnimations?: boolean }
+  | { kind: 'animation'; assetId: number; animationIds: number[] }
+  | { kind: 'category'; category: SpriteCategory; includeAnimations?: boolean }
+  | { kind: 'approved'; includeAnimations?: boolean };
+
+export type ExportTargetV2 =
+  | { kind: 'project'; relativeDir?: string }
+  | { kind: 'absolute'; path: string };
+
 export interface ExportRequest {
-  scope: 'asset' | 'category' | 'approved' | 'animation';
+  version: 2;
+  scope: ExportScopeV2;
+  target?: ExportTargetV2;
   format: string;
-  assetId?: number;
-  category?: SpriteCategory;
-  animationIds?: number[];
-  includeAnimations?: boolean;
-  destDir?: string;
   options: Record<string, unknown>;
 }
 
+export interface ExportPlan {
+  destination: string;
+  assetCount: number;
+  frameCount: number;
+  animationCount: number;
+  files: Array<{ path: string; kind: 'binary' | 'text'; bytes: number }>;
+  warnings: string[];
+}
+
+export const planExport = (p: number, body: ExportRequest): Promise<ExportPlan> =>
+  req<ExportPlan>(`${root(p)}/export/plan`, j(body));
+
 /** Synchronous export — returns the absolute paths written. */
-export const exportAssets = (p: number, body: ExportRequest): Promise<{ files: string[] }> =>
-  req<{ files: string[] }>(`${root(p)}/export`, j(body));
+export const exportAssets = (p: number, body: ExportRequest): Promise<{ files: string[]; plan: ExportPlan }> =>
+  req<{ files: string[]; plan: ExportPlan }>(`${root(p)}/export`, j(body));

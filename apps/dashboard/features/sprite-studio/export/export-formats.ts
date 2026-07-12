@@ -30,10 +30,7 @@ const SHEET_OPTIONS: ExportOption[] = [
   { key: 'scale', type: 'number', labelKey: 'scale', default: 1, min: 1, max: 8 },
 ];
 
-/** Engine formats all support "include animations" (composited multi-track). */
-const INCLUDE_ANIMATIONS: ExportOption = {
-  key: 'includeAnimations', type: 'boolean', labelKey: 'includeAnimations', default: true,
-};
+const TRIM: ExportOption = { key: 'trim', type: 'boolean', labelKey: 'trim', default: false };
 
 export const EXPORT_FORMATS: readonly ExportFormat[] = [
   {
@@ -46,25 +43,24 @@ export const EXPORT_FORMATS: readonly ExportFormat[] = [
     labelKey: 'spritesheetJson',
     options: [
       ...SHEET_OPTIONS,
-      { key: 'trim', type: 'boolean', labelKey: 'trim', default: false },
+      TRIM,
     ],
   },
-  { id: 'unity', labelKey: 'unity', options: [...SHEET_OPTIONS, INCLUDE_ANIMATIONS] },
-  { id: 'godot', labelKey: 'godot', options: [...SHEET_OPTIONS, INCLUDE_ANIMATIONS] },
-  { id: 'babylon', labelKey: 'babylon', options: [...SHEET_OPTIONS, INCLUDE_ANIMATIONS] },
+  { id: 'unity', labelKey: 'unity', options: [...SHEET_OPTIONS, TRIM] },
+  { id: 'godot', labelKey: 'godot', options: [...SHEET_OPTIONS, TRIM] },
+  { id: 'babylon', labelKey: 'babylon', options: [...SHEET_OPTIONS, TRIM] },
   { id: 'defold', labelKey: 'defold', options: [
     { key: 'extrude', type: 'number', labelKey: 'extrude', default: 2, min: 0, max: 8 },
     { key: 'scale', type: 'number', labelKey: 'scale', default: 1, min: 1, max: 8 },
-    INCLUDE_ANIMATIONS,
+    TRIM,
   ] },
-  { id: 'cocos', labelKey: 'cocos', options: [...SHEET_OPTIONS, INCLUDE_ANIMATIONS] },
+  { id: 'cocos', labelKey: 'cocos', options: [...SHEET_OPTIONS, TRIM] },
   {
     id: 'phaser',
     labelKey: 'phaser',
     options: [
       ...SHEET_OPTIONS,
-      { key: 'trim', type: 'boolean', labelKey: 'trim', default: true },
-      INCLUDE_ANIMATIONS,
+      { ...TRIM, default: true },
     ],
   },
 ];

@@ -26,6 +26,7 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
   const setFgColor = useSpriteEditorStore((s) => s.setFgColor);
   const setBgColor = useSpriteEditorStore((s) => s.setBgColor);
   const swapColors = useSpriteEditorStore((s) => s.swapColors);
+  const hasSelection = useSpriteEditorStore((s) => s.hasSelection);
 
   const patch = (p: Partial<ToolOptions>) => {
     setToolOptions(p);
@@ -36,6 +37,10 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
   const isMagicEraser = activeTool === 'magic-eraser';
   const isWand = activeTool === 'select-wand' || activeTool === 'fill' || isMagicEraser;
   const isShape = activeTool === 'line' || activeTool === 'shape-rect' || activeTool === 'shape-ellipse';
+  const selectionCommand = (label: string, command: () => void) => {
+    const before = engine.selection.snapshot(); command(); const after = engine.selection.snapshot();
+    engine.history.pushSelection(before, after, label); engine.invalidate(); engine.emitSummary();
+  };
 
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-b bg-muted/10 px-2 text-[11px]">
@@ -91,10 +96,33 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
               onChange={(v) => patch({ edgeCleanup: v })} suffix="px"
             />
           )}
+          {activeTool === 'select-wand' && (
+            <>
+              <SelectField label={t('options.sampleSource')} value={options.sampleSource ?? 'active'}
+                onChange={(value) => patch({ sampleSource: value as ToolOptions['sampleSource'] })}
+                options={[['active', t('options.activeLayer')], ['merged', t('options.mergedVisible')]]} />
+              <SelectField label={t('options.matchMode')} value={options.matchMode ?? 'color'}
+                onChange={(value) => patch({ matchMode: value as ToolOptions['matchMode'] })}
+                options={[['color', t('options.color')], ['alpha', t('options.alpha')]]} />
+              {options.matchMode !== 'alpha' && <SelectField label={t('options.colorMetric')} value={options.colorMetric ?? 'channel'}
+                onChange={(value) => patch({ colorMetric: value as ToolOptions['colorMetric'] })}
+                options={[['perceptual', t('options.perceptual')], ['channel', t('options.channel')]]} />}
+            </>
+          )}
         </>
       )}
       {!isBrush && !isWand && !isShape && (
         <span className="text-muted-foreground">{t('options.none')}</span>
+      )}
+
+      {hasSelection && (
+        <div className="flex items-center gap-0.5 border-l pl-2">
+          <Toggle label={t('selection.invert')} active={false} onClick={() => selectionCommand('Invert selection', () => engine.selection.invert())} />
+          <Toggle label={t('selection.grow')} active={false} onClick={() => selectionCommand('Grow selection', () => engine.selection.resizeBy(1))} />
+          <Toggle label={t('selection.shrink')} active={false} onClick={() => selectionCommand('Shrink selection', () => engine.selection.resizeBy(-1))} />
+          <Toggle label={t('selection.fillHoles')} active={false} onClick={() => selectionCommand('Fill selection holes', () => engine.selection.fillHoles())} />
+          <Toggle label={t('selection.removeIslands')} active={false} onClick={() => selectionCommand('Remove small islands', () => engine.selection.removeSmallIslands(4))} />
+        </div>
       )}
 
       <div className="ml-auto flex items-center gap-1">
@@ -114,6 +142,21 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
         )}
       </div>
     </div>
+  );
+}
+
+function SelectField({
+  label, value, options, onChange,
+}: {
+  label: string; value: string; options: Array<[string, string]>; onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1 text-muted-foreground">
+      <span>{label}</span>
+      <select className="h-6 rounded border bg-background px-1 text-[11px]" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map(([key, text]) => <option key={key} value={key}>{text}</option>)}
+      </select>
+    </label>
   );
 }
 

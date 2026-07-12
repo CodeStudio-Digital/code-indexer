@@ -39,6 +39,7 @@ export function CenterSurface({
   iterateRef,
   onIterateConsumed,
   onEditVersion,
+  onExportAnimation,
   onFocusTab,
   onCloseTab,
 }: {
@@ -66,7 +67,9 @@ export function CenterSurface({
   iterateRef?: IterateRef | null;
   onIterateConsumed?: () => void;
   /** Timeline "edit frame": select that version + jump to edit mode. */
-  onEditVersion?: (assetId: number, versionId: number) => void;
+  onEditVersion?: (assetId: number, versionId: number, frameIndex: number, track: number) => void;
+  /** Contextual animation export opens the shared export dialog pre-scoped. */
+  onExportAnimation?: () => void;
   /** Multi-tab editor: focus / close an open image tab. */
   onFocusTab?: (tab: EditorTab) => void;
   onCloseTab?: (tab: EditorTab) => void;
@@ -138,7 +141,10 @@ export function CenterSurface({
           generations={generations}
           refreshVersions={refreshVersions}
           onSaved={onSaved}
-          onEditVersion={onEditVersion ? (vid) => onEditVersion(activeAsset.id, vid) : undefined}
+          onEditVersion={onEditVersion
+            ? (versionId, frameIndex, track) => onEditVersion(activeAsset.id, versionId, frameIndex, track)
+            : undefined}
+          onExportAnimation={onExportAnimation}
         />
       </Suspense>
     );

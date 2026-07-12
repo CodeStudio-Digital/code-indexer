@@ -24,6 +24,7 @@ import { buildFeatureRoadmap } from '@mcp/app-studio/pipeline/roadmap.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { parseAppUxBrief, parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
+import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
 import type { AppStudioFeatureKind } from '@mcp/store/app-studio-store.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
@@ -31,6 +32,7 @@ import type { ServerDeps } from '../../deps.js';
 const ACTIONS: ReadonlySet<string> = new Set(['start', 'approve', 'reopen', 'skip']);
 const RESET_FEATURES_ON_REOPEN: Record<AppStageId, AppStudioFeatureKind[]> = {
   discovery: ['screen', 'api', 'feature'],
+  product: ['screen', 'api', 'feature'],
   architecture: ['screen', 'api', 'feature'],
   database: ['screen', 'api', 'feature'],
   ux: ['screen', 'api', 'feature'],
@@ -68,6 +70,11 @@ export function mountAppStudioPipelineRoutes(app: Hono, deps: ServerDeps): void 
           return c.json({ error: 'No architecture revision is ready for approval.' }, 409);
         }
       }
+      if (action === 'approve' && stageId === 'product') {
+        const revision = appStudioStore.getLatestProductRevision(id);
+        const model = parseAppProductModel(revision?.product_json);
+        if (!revision || revision.status !== 'draft' || !model) return c.json({ error: 'No product revision is ready for approval.' }, 409);
+      }
       if (action === 'approve' && stageId === 'ux') {
         const revision = appStudioStore.getLatestUxRevision(id);
         if (!revision || revision.status !== 'draft') return c.json({ error: 'No UX revision is ready for approval.' }, 409);
@@ -77,7 +84,19 @@ export function mountAppStudioPipelineRoutes(app: Hono, deps: ServerDeps): void 
         if (!revision || revision.status !== 'draft') return c.json({ error: 'No wireframe revision is ready for approval.' }, 409);
       }
       const next = applyStageAction(state, stageId, action, body.feedback ?? null);
-      const updated = appStudioStore.setPipelineJson(id, serializePipelineState(next));
+      let updated;
+      if (action === 'approve' && stageId === 'product') {
+        const revision = appStudioStore.getLatestProductRevision(id)!;
+        const model = parseAppProductModel(revision.product_json)!;
+        updated = appStudioStore.approveProductRevision({
+          sessionId: id,
+          revisionId: revision.id,
+          candidateSpecJson: JSON.stringify(model.candidate_spec, null, 2),
+          afterPipelineJson: serializePipelineState(next),
+        }).session;
+      } else {
+        updated = appStudioStore.setPipelineJson(id, serializePipelineState(next));
+      }
       if (action === 'approve' && stageId === 'discovery') {
         appStudioStore.ensureInitialSpecRevision(id, {
           title: 'Versão inicial',
@@ -125,6 +144,7 @@ export function mountAppStudioPipelineRoutes(app: Hono, deps: ServerDeps): void 
     const project = deps.db.getProject(session.project_id);
     if (!project?.root_path) return c.json({ error: 'The app workspace was not found.' }, 409);
     const architectureRevision = appStudioStore.getLatestArchitectureRevision(id);
+    const productRevision = appStudioStore.getLatestProductRevision(id);
     const currentSpecRevision = appStudioStore.getLatestApprovedSpecRevision(id);
     const uxRevision = appStudioStore.getLatestUxRevision(id);
     const wireframeRevision = appStudioStore.getLatestWireframeRevision(id);
@@ -135,6 +155,8 @@ export function mountAppStudioPipelineRoutes(app: Hono, deps: ServerDeps): void 
       spec: parseAppSpec(session.spec_json),
       recorded: appStudioStore.listFeatures(id).map((feature) => ({ name: feature.name, kind: feature.kind })),
       architecture: parseAppArchitecturePlan(architectureRevision?.architecture_json),
+      product: parseAppProductModel(productRevision?.product_json),
+      productStatus: productRevision?.status ?? null,
       currentSpecRevisionId: currentSpecRevision?.id ?? null,
       currentArchitectureRevisionId: architectureRevision?.id ?? null,
       currentUxRevisionId: uxRevision?.id ?? null,
