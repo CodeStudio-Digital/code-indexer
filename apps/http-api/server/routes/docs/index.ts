@@ -30,6 +30,12 @@ import { attachHeartbeat } from '../../../sse/SSEHeartbeat.js';
 import {
   DocError,
   docErrorStatus,
+  chunkMarkdown,
+  heuristicAccepts,
+  readFolderEntry,
+  scanFolderFiles,
+  availableDocExtractionWorkers,
+  resolveDocWorkerCount,
   type DocIngestProgress,
 } from '@mcp/services/services/docs/index.js';
 import { coerceDocType } from '@mcp/store/doc-store.js';
@@ -105,6 +111,7 @@ interface CreateFolderSourceBody {
   title?: string;
   /** Documentation type (migration 149); coerced to a valid DocType server-side. */
   doc_type?: string;
+  enrichment_mode?: 'selective' | 'all' | 'off';
   folder?: {
     /** Default `**\/*.{html,htm,md,markdown,pdf,txt}`. */
     include_glob?: string | null;
@@ -114,6 +121,8 @@ interface CreateFolderSourceBody {
     max_files?: number | null;
     /** Default true — pula LLM gate (docs locais geralmente curadas). */
     bypass_relevance_gate?: boolean;
+    performance_profile?: 'economy' | 'balanced' | 'maximum' | 'custom';
+    worker_count?: number | null;
   };
   /** Igual url/pdf: cria a row sem indexar (deferred). */
   defer_indexing?: boolean;
@@ -390,6 +399,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
           doc_type: coerceDocType(body.doc_type),
           folder_root_path: rawPath,
           folder: body.folder,
+          enrichment_mode: body.enrichment_mode,
         });
         return c.json(source, 201);
       } catch (err) {
@@ -416,6 +426,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
               rootPath: rawPath,
               title,
               docType: coerceDocType(body.doc_type),
+              enrichmentMode: body.enrichment_mode,
               folder: body.folder,
             },
             {
@@ -444,6 +455,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
         rootPath: rawPath,
         title,
         docType: coerceDocType(body.doc_type),
+        enrichmentMode: body.enrichment_mode,
         folder: body.folder,
       });
       return c.json(result, 201);
@@ -502,6 +514,8 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
               collectionId: src.collection_id,
               rootPath,
               title: src.title ?? undefined,
+              docType: src.doc_type,
+              enrichmentMode: src.enrichment_mode,
               // Sem passar `folder` aqui — `ensureSource` vai achar a
               // row existente e os campos folder_* persistidos serão
               // lidos automaticamente.
@@ -705,8 +719,124 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
     const src = docStore.getSource(srcId);
     if (!src) return notFound(c);
     const snapshot = docProgressTracker.get(srcId);
-    const active = src.status === 'fetching' || src.status === 'indexing';
-    return c.json({ active, status: src.status, snapshot });
+    const activeRun = docStore.getActiveIngestRun(srcId);
+    const active = !!activeRun || src.status === 'fetching' || src.status === 'indexing';
+    return c.json({ active, status: src.status, run: activeRun, snapshot });
+  });
+
+  app.post('/api/docs/sources/dry-run/folder', async (c) => {
+    const body = await parseJsonBody<CreateFolderSourceBody>(c);
+    const rootPath = body.path?.trim();
+    if (!rootPath || !path.isAbsolute(rootPath)) return c.json({ error: 'absolute path is required' }, 400);
+    try {
+      const stat = statSync(rootPath);
+      if (!stat.isDirectory()) return c.json({ error: 'path is not a directory' }, 400);
+      const scan = await scanFolderFiles({
+        rootPath,
+        includeGlob: body.folder?.include_glob,
+        excludeGlob: body.folder?.exclude_glob,
+        maxFiles: body.folder?.max_files,
+      });
+      const samples = scan.entries.slice(0, 8);
+      let samplePages = 0;
+      let sampleChunks = 0;
+      let accepted = 0;
+      let extractor: 'generic' | 'unity-script-reference' = /[\\/]ScriptReference(?:[\\/]|$)/i.test(rootPath)
+        ? 'unity-script-reference'
+        : 'generic';
+      for (const entry of samples) {
+        const read = await readFolderEntry(entry, rootPath, 0);
+        if (typeof read === 'string') continue;
+        for (const page of read) {
+          samplePages++;
+          if (page.extractor) extractor = page.extractor;
+          if (!heuristicAccepts(page).accept) continue;
+          accepted++;
+          sampleChunks += chunkMarkdown(page.markdown, { defaultRootTitle: page.title ?? 'Document' }).length;
+        }
+      }
+      const avgChunks = accepted > 0 ? sampleChunks / accepted : 0;
+      const estimatedChunks = Math.round(avgChunks * scan.entries.length);
+      const detectedType = extractor === 'unity-script-reference' ? 'api_reference' : coerceDocType(body.doc_type);
+      const mode = body.enrichment_mode ?? 'selective';
+      return c.json({
+        files_found: scan.totalMatches,
+        files_to_process: scan.entries.length,
+        cap: scan.cap,
+        sample_pages: samplePages,
+        sample_pages_accepted: accepted,
+        estimated_chunks: estimatedChunks,
+        extractor,
+        detected_doc_type: detectedType,
+        estimated_llm_calls: mode === 'off' || detectedType === 'api_reference' ? 0 : Math.ceil(estimatedChunks / 8),
+        available_workers: availableDocExtractionWorkers(),
+        configured_workers: resolveDocWorkerCount(body.folder?.performance_profile, body.folder?.worker_count),
+        progressive: true,
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.get('/api/docs/sources/:srcId/runs', (c) => {
+    const srcId = parseIdParam(c, 'srcId');
+    if (!docStore.getSource(srcId)) return notFound(c);
+    const limit = Number(c.req.query('limit') ?? 20);
+    return c.json(docStore.listIngestRuns(srcId, Number.isFinite(limit) ? limit : 20));
+  });
+
+  app.post('/api/docs/sources/:srcId/index/cancel', (c) => {
+    const srcId = parseIdParam(c, 'srcId');
+    if (!docStore.getSource(srcId)) return notFound(c);
+    const requested = docStore.requestIngestCancel(srcId);
+    return c.json({ source_id: srcId, cancel_requested: requested }, requested ? 202 : 409);
+  });
+
+  app.post('/api/docs/sources/:srcId/index/pause', (c) => {
+    const srcId = parseIdParam(c, 'srcId');
+    if (!docStore.getSource(srcId)) return notFound(c);
+    const requested = docStore.requestIngestPause(srcId);
+    return c.json({ source_id: srcId, pause_requested: requested }, requested ? 202 : 409);
+  });
+
+  app.post('/api/docs/sources/:srcId/index/performance', async (c) => {
+    const srcId = parseIdParam(c, 'srcId');
+    const src = docStore.getSource(srcId);
+    if (!src) return notFound(c);
+    if (src.type !== 'folder') return c.json({ error: 'performance profiles apply only to folder sources' }, 400);
+    const body = await parseJsonBody<{ profile?: string; worker_count?: number | null }>(c);
+    const profile = body.profile === 'economy' || body.profile === 'maximum' || body.profile === 'custom'
+      ? body.profile
+      : 'balanced';
+    const workers = resolveDocWorkerCount(profile, body.worker_count);
+    const activeRunUpdated = docStore.updateIngestPerformance(srcId, profile, workers);
+    return c.json({ source_id: srcId, profile, worker_count: workers, active_run_updated: activeRunUpdated });
+  });
+
+  app.post('/api/docs/sources/:srcId/index/resume', (c) => {
+    const srcId = parseIdParam(c, 'srcId');
+    const src = docStore.getSource(srcId);
+    if (!src) return notFound(c);
+    if (src.type !== 'folder') {
+      return c.json({ error: 'resume currently applies to incremental folder sources; use reindex for URL/PDF' }, 400);
+    }
+    const resumable = docStore.listIngestRuns(srcId, 20).find((candidate) =>
+      candidate.state === 'paused' || candidate.state === 'paused_limit');
+    if (!resumable) return c.json({ error: 'no paused run is available to resume' }, 409);
+    const rootPath = src.folder_root_path ?? src.uri.replace(/^folder:\/\//, '');
+    const promise = indexDocsUseCase.indexFolder({
+      collectionId: src.collection_id,
+      rootPath,
+      title: src.title ?? undefined,
+      docType: src.doc_type,
+      enrichmentMode: src.enrichment_mode,
+      resumeRunId: resumable.id,
+    });
+    void promise.catch((error) => {
+      console.error(`[doc-indexer] resume source=${srcId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    const run = docStore.getActiveIngestRun(srcId);
+    return c.json({ source_id: srcId, accepted: true, run_id: run?.id ?? resumable.id }, 202);
   });
 
   // ─── Health snapshot (post-completion stats) ────────────────────

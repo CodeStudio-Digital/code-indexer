@@ -7,6 +7,7 @@
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { KanbanColumn } from '@mcp/company/types.js';
 import { KANBAN_COLUMNS } from '@mcp/company/types.js';
@@ -372,7 +373,7 @@ function kanbanListCards(orchestrator: CompanyOrchestrator): CoderTool {
           const cards = column
             ? orchestrator.kanbanListCardsFull().filter(c => c.column === column)
             : orchestrator.kanbanListCardsFull();
-          return ok(JSON.stringify(cards, null, 2));
+          return okStructured(cards);
         }
         const cards = orchestrator.kanbanListCards({ column });
         const summary = cards.map(c => `#${c.id} [${c.column}] ${c.title}${c.tag ? ` (${c.tag})` : ''}`);
@@ -403,7 +404,7 @@ function kanbanGetCard(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const card = orchestrator.kanbanGetCard(args.card_id as number);
-        return card ? ok(JSON.stringify(card, null, 2)) : err(`Card #${args.card_id} not found. Use kanban_list_cards to see available cards.`);
+        return card ? okStructured(card) : err(`Card #${args.card_id} not found. Use kanban_list_cards to see available cards.`);
       } catch (e) {
         return err(`Failed to get card: ${(e as Error).message}`);
       }

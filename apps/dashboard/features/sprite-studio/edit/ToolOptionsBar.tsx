@@ -43,7 +43,12 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
   };
 
   return (
-    <div className="flex h-8 shrink-0 items-center gap-3 border-b bg-muted/10 px-2 text-[11px]">
+    <div
+      className={cn(
+        'flex min-h-8 max-h-20 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 overflow-y-auto',
+        'border-b bg-muted/10 px-2 py-1 text-[11px] [scrollbar-gutter:stable]',
+      )}
+    >
       {(isBrush || isShape) && (
         <Range
           label={t('options.size')} min={1} max={32} value={options.size}
@@ -116,7 +121,7 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
       )}
 
       {hasSelection && (
-        <div className="flex items-center gap-0.5 border-l pl-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-0.5 border-l pl-2">
           <Toggle label={t('selection.invert')} active={false} onClick={() => selectionCommand('Invert selection', () => engine.selection.invert())} />
           <Toggle label={t('selection.grow')} active={false} onClick={() => selectionCommand('Grow selection', () => engine.selection.resizeBy(1))} />
           <Toggle label={t('selection.shrink')} active={false} onClick={() => selectionCommand('Shrink selection', () => engine.selection.resizeBy(-1))} />
@@ -125,7 +130,7 @@ export function ToolOptionsBar({ engine }: { engine: EditorEngine }) {
         </div>
       )}
 
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-1">
         <Swatch label={t('options.foreground')} color={fgColor} onChange={(v) => { setFgColor(v); engine.setColors({ fg: v }); }} />
         <button
           type="button" onClick={swapColors} title={t('options.swapColors')} aria-label={t('options.swapColors')}
@@ -151,9 +156,9 @@ function SelectField({
   label: string; value: string; options: Array<[string, string]>; onChange: (value: string) => void;
 }) {
   return (
-    <label className="flex items-center gap-1 text-muted-foreground">
-      <span>{label}</span>
-      <select className="h-6 rounded border bg-background px-1 text-[11px]" value={value} onChange={(e) => onChange(e.target.value)}>
+    <label className="flex min-w-0 shrink-0 items-center gap-1 text-muted-foreground">
+      <span className="shrink-0">{label}</span>
+      <select className="h-6 max-w-40 rounded border bg-background px-1 text-[11px]" value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map(([key, text]) => <option key={key} value={key}>{text}</option>)}
       </select>
     </label>
@@ -190,7 +195,8 @@ function Range({
   return (
     <RangeInput
       label={label} min={min} max={max} value={value} onChange={onChange} suffix={suffix}
-      className="text-muted-foreground"
+      className="shrink-0 text-muted-foreground"
+      sliderClassName="w-16 min-[1500px]:w-24"
     />
   );
 }

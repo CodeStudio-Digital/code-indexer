@@ -18,6 +18,8 @@ import * as vectorMapping from './doc/vector-mapping.js';
 import * as fts from './doc/fts.js';
 import * as suggestions from './doc/suggestions.js';
 import * as projectLinks from './doc/project-links.js';
+import * as ingestRuns from './doc/ingest-runs.js';
+import * as ragTelemetry from './doc/rag-telemetry.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -52,6 +54,11 @@ export type {
   DocSourceSuggestion,
   DocProjectLinkOrigin,
   DocProjectLink,
+  DocEnrichmentMode,
+  DocIngestPerformanceProfile,
+  DocIngestRun,
+  DocIngestRunState,
+  DocSourceItem,
 } from './doc/types.js';
 
 import type {
@@ -73,6 +80,10 @@ import type {
   DocSuggestionStatus,
   DocVectorRef,
   DocVectorTombstoneRow,
+  DocEnrichmentMode,
+  DocIngestPerformanceProfile,
+  DocIngestRun,
+  DocSourceItem,
 } from './doc/types.js';
 
 export class DocStore {
@@ -97,6 +108,7 @@ export class DocStore {
   updateSourceCrawlConfig(id: number, crawl: DocCrawlConfig): void { sources.updateCrawlConfig(this.db, id, crawl); }
   updateSourceDocType(id: number, docType: string): void { sources.updateDocType(this.db, id, docType); }
   updateSourceFolderConfig(id: number, folder: DocFolderConfig): void { sources.updateFolderConfig(this.db, id, folder); }
+  updateSourceEnrichmentMode(id: number, mode: DocEnrichmentMode): void { sources.updateEnrichmentMode(this.db, id, mode); }
   getSourceHealth(sourceId: number): DocSourceHealth | null { return sources.getHealth(this.db, sourceId); }
   tryAcquireSource(id: number, staleAfterMs: number = 5 * 60 * 1000): boolean { return sources.tryAcquire(this.db, id, staleAfterMs); }
   recoverStaleSources(): { recovered: number } { return sources.recoverStale(this.db); }
@@ -110,9 +122,25 @@ export class DocStore {
   listChunksBySource(sourceId: number): DocChunk[] { return chunks.listBySource(this.db, sourceId); }
   listChunksBySourceHeading(sourceId: number, headingPath: string | null, sourceUri: string | null): DocChunk[] { return chunks.listBySourceHeading(this.db, sourceId, headingPath, sourceUri); }
   clearEmbeddingsForSource(sourceId: number): { cleared: number } { return chunks.clearEmbeddingsForSource(this.db, sourceId); }
-  listChunksMissingEmbedding(opts: { sourceId?: number; collectionId?: number; limit?: number } = {}): DocChunk[] { return chunks.listMissingEmbedding(this.db, opts); }
+  listChunksMissingEmbedding(opts: { sourceId?: number; collectionId?: number; limit?: number; fingerprint?: string } = {}): DocChunk[] { return chunks.listMissingEmbedding(this.db, opts); }
   updateChunkEmbedding(chunkId: number, embeddingHash: string, providerId: string): void { chunks.updateEmbedding(this.db, chunkId, embeddingHash, providerId); }
+  updateChunkEmbeddingState(chunkId: number, embeddingHash: string, fingerprint: string): void { chunks.updateEmbeddingState(this.db, chunkId, embeddingHash, fingerprint); }
+  listChunksPendingEnrichment(sourceId: number, limit?: number): DocChunk[] { return chunks.listPendingEnrichment(this.db, sourceId, limit); }
+  updateChunkEnrichment(chunkId: number, summary: string | null, concepts: readonly string[], fingerprint: string): void {
+    chunks.updateEnrichment(this.db, chunkId, summary, concepts, fingerprint);
+  }
   countChunksByCollection(collectionId: number): number { return chunks.countByCollection(this.db, collectionId); }
+  countChunksBySource(sourceId: number): number { return chunks.countBySource(this.db, sourceId); }
+  countChunksMissingEmbeddingBySource(sourceId: number): number { return chunks.countMissingEmbeddingBySource(this.db, sourceId); }
+  countChunksMissingEmbedding(opts: { sourceId?: number; collectionId?: number; fingerprint?: string } = {}): number { return chunks.countMissingEmbedding(this.db, opts); }
+  upsertChunksForItem(sourceId: number, itemKey: string, runId: number, inputs: DocChunkInput[]): chunks.UpsertItemChunksResult {
+    return chunks.upsertForItem(this.db, sourceId, itemKey, runId, inputs);
+  }
+  upsertChunksForItems(sourceId: number, runId: number, items: ReadonlyArray<{ itemKey: string; inputs: DocChunkInput[] }>): chunks.UpsertItemChunksResult[] {
+    return chunks.upsertForItems(this.db, sourceId, runId, items);
+  }
+  removeChunksForItems(sourceId: number, itemKeys: readonly string[]): DocVectorRef[] { return chunks.removeForItems(this.db, sourceId, itemKeys); }
+  removeLegacyChunks(sourceId: number): DocVectorRef[] { return chunks.removeLegacy(this.db, sourceId); }
 
   // ─── Vector mapping ───────────────────────────────────────────
   listVectorIdsForSource(sourceId: number): DocVectorRef[] { return vectorMapping.listForSource(this.db, sourceId); }
@@ -129,6 +157,35 @@ export class DocStore {
   deleteTombstone(id: number): void { vectorMapping.deleteTombstone(this.db, id); }
   dropExhaustedTombstones(maxRetries: number): { dropped: number } { return vectorMapping.dropExhaustedTombstones(this.db, maxRetries); }
   countPendingTombstones(): number { return vectorMapping.countPendingTombstones(this.db); }
+
+  // ─── Incremental ingest runs + source manifest ───────────────
+  createIngestRun(sourceId: number, options: unknown, performanceProfile?: string, workerCount?: number): DocIngestRun {
+    return ingestRuns.createRun(this.db, sourceId, options, performanceProfile, workerCount);
+  }
+  resumeIngestRun(runId: number): DocIngestRun | null { return ingestRuns.resumeRun(this.db, runId); }
+  getIngestRun(id: number): DocIngestRun | null { return ingestRuns.getRun(this.db, id); }
+  getActiveIngestRun(sourceId: number): DocIngestRun | null { return ingestRuns.getActiveRun(this.db, sourceId); }
+  listIngestRuns(sourceId: number, limit?: number): DocIngestRun[] { return ingestRuns.listRuns(this.db, sourceId, limit); }
+  updateIngestRun(id: number, patch: ingestRuns.RunCountersPatch): void { ingestRuns.updateRun(this.db, id, patch); }
+  requestIngestCancel(sourceId: number): boolean { return ingestRuns.requestCancel(this.db, sourceId); }
+  requestIngestPause(sourceId: number): boolean { return ingestRuns.requestPause(this.db, sourceId); }
+  isIngestCancelRequested(runId: number): boolean { return ingestRuns.isCancelRequested(this.db, runId); }
+  isIngestPauseRequested(runId: number): boolean { return ingestRuns.isPauseRequested(this.db, runId); }
+  updateIngestPerformance(sourceId: number, profile: string, workerCount: number): boolean {
+    return ingestRuns.updatePerformance(this.db, sourceId, profile, workerCount);
+  }
+  getSourceItem(sourceId: number, itemKey: string): DocSourceItem | null { return ingestRuns.getItem(this.db, sourceId, itemKey); }
+  upsertSourceItem(input: Parameters<typeof ingestRuns.upsertItem>[1]): DocSourceItem { return ingestRuns.upsertItem(this.db, input); }
+  upsertSourceItems(inputs: ReadonlyArray<Parameters<typeof ingestRuns.upsertItem>[1]>): void { ingestRuns.upsertItems(this.db, inputs); }
+  listSourceItemsNotSeen(sourceId: number, runId: number): DocSourceItem[] { return ingestRuns.listItemsNotSeen(this.db, sourceId, runId); }
+  deleteSourceItems(ids: readonly number[]): void { ingestRuns.deleteItems(this.db, ids); }
+  getDocEnrichmentCache(contentHash: string, fingerprint: string): ragTelemetry.EnrichmentCacheValue | null {
+    return ragTelemetry.getEnrichmentCache(this.db, contentHash, fingerprint);
+  }
+  putDocEnrichmentCache(contentHash: string, fingerprint: string, value: ragTelemetry.EnrichmentCacheValue): void {
+    ragTelemetry.putEnrichmentCache(this.db, contentHash, fingerprint, value);
+  }
+  recordDocSearchEvent(input: ragTelemetry.DocSearchEventInput): void { ragTelemetry.recordSearchEvent(this.db, input); }
 
   // ─── FTS5 search ──────────────────────────────────────────────
   searchChunksFts(query: string, opts: { collectionId?: number; collectionIds?: readonly number[]; limit?: number } = {}): DocFtsHit[] { return fts.searchChunks(this.db, query, opts); }

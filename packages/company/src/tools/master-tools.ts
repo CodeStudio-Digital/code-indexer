@@ -6,6 +6,7 @@
  */
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { buildPipelineMasterTools } from '@mcp/company/tools/pipeline-tools.js';
@@ -227,7 +228,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           });
         }
 
-        return ok(JSON.stringify(result, null, 2));
+        return okStructured(result);
       } catch (e) {
         return err(`Failed to spawn subordinate: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -764,7 +765,7 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
           args.message as string | undefined,
           args.thinking as boolean | undefined,
         );
-        return ok(JSON.stringify(result, null, 2));
+        return okStructured(result);
       } catch (e) {
         return err(`Failed to resume subordinate: ${e instanceof Error ? e.message : String(e)}`);
       }

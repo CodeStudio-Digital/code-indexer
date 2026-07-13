@@ -216,22 +216,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
 };
 
 export function isAgentId(v: string): v is AgentId {
-  return (
-    v === 'explore' ||
-    v === 'plan' ||
-    v === 'build' ||
-    v === 'admin' ||
-    v === 'spec' ||
-    v === 'app_spec' ||
-    v === 'app_db' ||
-    v === 'app_architect' ||
-    v === 'app_product' ||
-    v === 'app_ux' ||
-    v === 'app_wireframe' ||
-    v === 'builder' ||
-    v === 'api' ||
-    v === 'diagram'
-  );
+  return Object.prototype.hasOwnProperty.call(AGENTS, v);
 }
 
 export function getAgent(id: AgentId): AgentDefinition {

@@ -6,8 +6,16 @@ import { readTddCycles } from '@mcp/app-studio/architecture/tdd-cycles.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult, PAGE_PROPERTIES, pageItems, viewArg } from './model-output.js';
 
-const EMPTY: JsonSchema = { type: 'object', properties: {}, additionalProperties: false };
+const GET_PARAMETERS: JsonSchema = {
+  type: 'object',
+  properties: {
+    view: { type: 'string', enum: ['summary', 'current_group', 'groups', 'tasks', 'evidence', 'full'], description: "Default: 'summary'." },
+    ...PAGE_PROPERTIES,
+  },
+  additionalProperties: false,
+};
 
 function load(binding: AppToolBinding) {
   const store = getAppStudioStore(); if (!store) throw new Error('AppStudioStore not wired.');
@@ -18,8 +26,42 @@ function load(binding: AppToolBinding) {
 }
 
 export function appGetBuildPlan(binding: AppToolBinding): CoderTool {
-  return { name: 'app_get_build_plan', description: 'Read the approved flow groups, ordered screen tasks, dependencies and completion evidence. Work only on the first unapproved group.', parameters: EMPTY, source: 'native', handler: async () => {
-    try { const c = load(binding); return ok(JSON.stringify({ groups: c.plan.build_groups, tasks: c.plan.tasks, group_states: c.store.listBuildGroups(c.revision.id), task_evidence: c.store.listBuildTaskEvidence(c.revision.id) }, null, 2)); }
+  return { name: 'app_get_build_plan', description: 'Read the current flow group by default, or request a paged projection of groups, tasks and evidence.', parameters: GET_PARAMETERS, source: 'native', handler: async (args) => {
+    try {
+      const c = load(binding);
+      const groupStates = c.store.listBuildGroups(c.revision.id);
+      const taskEvidence = c.store.listBuildTaskEvidence(c.revision.id);
+      const currentGroup = [...c.plan.build_groups]
+        .sort((a, b) => a.sequence - b.sequence)
+        .find((group) => groupStates.find((state) => state.group_id === group.id)?.status !== 'approved') ?? null;
+      const currentTasks = currentGroup
+        ? c.plan.tasks.filter((task) => task.group_id === currentGroup.id)
+          .filter((task) => taskEvidence.find((item) => item.task_id === task.id)?.status !== 'done')
+        : [];
+      const view = viewArg(args, ['summary', 'current_group', 'groups', 'tasks', 'evidence', 'full'], 'summary');
+      const base = {
+        view,
+        revision_id: c.revision.id,
+        counts: {
+          groups: c.plan.build_groups.length,
+          tasks: c.plan.tasks.length,
+          completed_tasks: taskEvidence.filter((item) => item.status === 'done').length,
+        },
+        current_group_id: currentGroup?.id ?? null,
+      };
+      if (view === 'full') return appResult('App build plan — full', { ...base, groups: c.plan.build_groups, tasks: c.plan.tasks, group_states: groupStates, task_evidence: taskEvidence });
+      if (view === 'groups') {
+        const page = pageItems(c.plan.build_groups, args, (item) => item.id);
+        return appResult('App build plan — groups', { ...base, ...page, group_states: groupStates.filter((state) => page.items.some((group) => group.id === state.group_id)) });
+      }
+      if (view === 'tasks') {
+        const page = pageItems(c.plan.tasks, args, (item) => item.id);
+        return appResult('App build plan — tasks', { ...base, ...page, task_evidence: taskEvidence.filter((evidence) => page.items.some((task) => task.id === evidence.task_id)) });
+      }
+      if (view === 'evidence') return appResult('App build plan — evidence', { ...base, ...pageItems(taskEvidence, args, (item) => item.task_id) });
+      const current = { ...base, current_group: currentGroup, tasks: currentTasks, task_evidence: taskEvidence.filter((item) => currentTasks.some((task) => task.id === item.task_id)) };
+      return appResult(view === 'current_group' ? 'App build plan — current group' : 'App build plan — summary', current);
+    }
     catch (e) { return err(`app_get_build_plan failed: ${(e as Error).message}`); }
   } };
 }

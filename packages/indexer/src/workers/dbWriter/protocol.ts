@@ -20,6 +20,8 @@ export interface PersistAssistantTurnPayload {
     output_chars?: number;
     /** Size the LLM actually saw (post reduce+cap). NULL = not recorded. */
     output_chars_shaped?: number | null;
+    output_format?: 'text' | 'markdown' | 'json' | null;
+    structured_output_chars?: number | null;
     /** 1 if the bridge clamped the output. Cheap "is this tool noisy?" signal. */
     truncated?: boolean;
     /** Phase detected by PhaseRouter (Camada 2). NULL until that lands. */

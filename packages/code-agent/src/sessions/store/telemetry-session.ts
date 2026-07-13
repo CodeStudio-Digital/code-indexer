@@ -72,6 +72,14 @@ export interface SessionTelemetrySummary {
   }>;
   /** Fase 3 — "Economia Real" per-technique savings (cache exact, shaping fwd, tiers estimate). */
   savings: SavingsBreakdown;
+  /** Migration 213 — compact canonical JSON versus the Markdown/text actually delivered. */
+  structured_output: {
+    calls: number;
+    structured_chars: number;
+    delivered_chars: number;
+    saved_chars: number;
+    reduction_ratio: number | null;
+  };
 }
 
 /**
@@ -115,6 +123,7 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
       | 'messages_all'
       | 'messages_conversation'
       | 'messages_user'
+      | 'structured_output'
     >;
 
   // Migration 130: lifetime message counts straight from `coder_messages`. NOT
@@ -275,6 +284,25 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
     resolvePricing: (p, m) => resolvePricingWithSource(p, m).pricing,
   });
 
+  const structuredOutput = columnExists(db, 'coder_tool_calls', 'structured_output_chars')
+    ? db.prepare(
+      `SELECT COUNT(*) AS calls,
+              COALESCE(SUM(tc.structured_output_chars), 0) AS structured_chars,
+              COALESCE(SUM(COALESCE(tc.output_chars_shaped, tc.output_chars)), 0) AS delivered_chars
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+        WHERE m.session_id = ?
+          AND tc.parent_tool_use_id IS NULL
+          AND tc.structured_output_chars IS NOT NULL`,
+    ).get(sessionId) as { calls: number; structured_chars: number; delivered_chars: number }
+    : { calls: 0, structured_chars: 0, delivered_chars: 0 };
+  const savedChars = structuredOutput.structured_chars - structuredOutput.delivered_chars;
+  const structured_output: SessionTelemetrySummary['structured_output'] = {
+    ...structuredOutput,
+    saved_chars: savedChars,
+    reduction_ratio: structuredOutput.structured_chars > 0 ? savedChars / structuredOutput.structured_chars : null,
+  };
+
   return {
     ...totals,
     messages_all: msgCounts.messages_all,
@@ -287,5 +315,6 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
     phase_breakdown: phaseRows,
     truncation_rate,
     savings,
+    structured_output,
   };
 }

@@ -9,6 +9,7 @@ import type { AppToolBinding } from '@mcp/company/tools/app-studio/binding.js';
 import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { auditAppSpec } from '@mcp/app-studio/spec/audit.js';
+import { appResult } from './model-output.js';
 
 const PARAMETERS: JsonSchema = { type: 'object', properties: {} };
 
@@ -29,7 +30,7 @@ export function appSpecAudit(binding: AppToolBinding): CoderTool {
         if (!spec) return ok('No spec saved yet — run discovery and call app_save_spec first.');
         const report = auditAppSpec(spec);
         const topIssues = report.issues.slice(0, 12);
-        return ok(JSON.stringify({ ...report, issues: topIssues }, null, 2));
+        return appResult('App spec audit', { ...report, issues: topIssues });
       } catch (e) {
         return err(`app_spec_audit failed: ${(e as Error).message}`);
       }

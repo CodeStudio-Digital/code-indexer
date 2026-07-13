@@ -14,7 +14,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import { AGENTS, type AgentId } from '@mcp/code-agent/agents/index.js';
-import { buildSystemPrompt, type PromptContext } from '@mcp/code-agent/core/system-prompt.js';
+import {
+  appendStaticPromptSection,
+  buildSystemPrompt,
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+  type PromptContext,
+} from '@mcp/code-agent/core/system-prompt.js';
 import { loadPrompt } from '../loader.js';
 
 describe('agent mode prompts', () => {
@@ -91,6 +96,9 @@ describe('base.txt interpolation contract', () => {
     'os',
     'tierHint',
     'mcpSection',
+    'nativeToolsSection',
+    'overlaySection',
+    'subagentsSection',
     'visionSection',
     'memorySection',
   ]);
@@ -103,5 +111,39 @@ describe('base.txt interpolation contract', () => {
       unknown,
       `base.txt has {{placeholders}} not interpolated by buildSystemPrompt: ${unknown.join(', ')}`,
     ).toEqual([]);
+  });
+});
+
+describe('capability-aligned composition', () => {
+  const BASE_CTX: PromptContext = {
+    projectName: 'PromptTestProj',
+    projectRoot: 'D:/nonexistent-prompt-test',
+    os: 'win32',
+    providerFamily: 'zai',
+    profile: 'bootstrap',
+    agentId: 'app_spec',
+    availableTools: new Set(['ask_user', 'app_get_context', 'app_get_spec', 'app_save_spec']),
+  };
+
+  it('does not advertise capabilities removed by a specialist allowlist', () => {
+    const prompt = buildSystemPrompt(BASE_CTX);
+    expect(prompt).toContain('# App Studio Spec Specialist mode is ACTIVE');
+    expect(prompt).toContain('`ask_user`');
+    expect(prompt).not.toContain('# Native tools available to this session');
+    expect(prompt).not.toContain('# Subagents (isolated delegation)');
+    expect(prompt).not.toContain('`task_list`');
+    expect(prompt).not.toContain('# Memory');
+  });
+
+  it('loads each specialist identity exactly once', () => {
+    const prompt = buildSystemPrompt(BASE_CTX);
+    expect(prompt.split('# App Studio Spec Specialist mode is ACTIVE')).toHaveLength(2);
+  });
+
+  it('inserts session-fixed extensions before the dynamic boundary', () => {
+    const prompt = appendStaticPromptSection(buildSystemPrompt(BASE_CTX), '# Fixed extension');
+    const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
+    expect(prefix).toContain('# Fixed extension');
+    expect(suffix).not.toContain('# Fixed extension');
   });
 });

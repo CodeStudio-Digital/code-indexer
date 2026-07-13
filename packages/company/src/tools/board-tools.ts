@@ -6,6 +6,7 @@
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 
 export function buildBoardTools(
@@ -390,7 +391,7 @@ function kanbanReadMyCard(
         const card = orchestrator.kanbanGetCard(cardId);
         if (!card) return err(`Card #${cardId} not found`);
 
-        return ok(JSON.stringify(card, null, 2));
+        return okStructured(card);
       } catch (e) {
         return err(`Failed to read card: ${(e as Error).message}`);
       }

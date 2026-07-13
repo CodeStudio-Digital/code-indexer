@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, Boxes, Compass, ClipboardList, Database, Hammer, Layers3, Palette, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
+import type { AgentPreset } from '@mcp/api-bus';
 
 /**
  * AgentPicker — compact combobox that selects one of the built-in agent
@@ -17,14 +18,14 @@ import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.j
  */
 
 interface AgentDef {
-  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+  id: AgentPreset;
   label?: string;
   description: string;
   profile: string;
   planMode: boolean;
 }
 
-type AgentId = AgentDef['id'];
+type AgentId = AgentPreset;
 
 const AGENT_LABEL: Record<AgentId, string> = {
   explore: 'Explore',

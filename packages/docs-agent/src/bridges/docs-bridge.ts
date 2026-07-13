@@ -118,7 +118,7 @@ export const docsDeepResearchTool: CoderTool = {
       },
       max_turns: {
         type: 'number',
-        description: 'Optional cap on agent turns. Default 5; clamped to [1, 8].',
+        description: 'Optional cap on agent turns. Default 6; clamped to [1, 6].',
       },
     },
     required: ['query'],
@@ -146,7 +146,7 @@ export const docsDeepResearchTool: CoderTool = {
     const collections = rawCollections.filter((c): c is string => typeof c === 'string');
     const rawMaxTurns = Number(args.max_turns);
     const maxTurns = Number.isFinite(rawMaxTurns) && rawMaxTurns > 0
-      ? Math.min(8, Math.max(1, Math.floor(rawMaxTurns)))
+      ? Math.min(6, Math.max(1, Math.floor(rawMaxTurns)))
       : undefined;
 
     let result: DocsResearchResult;

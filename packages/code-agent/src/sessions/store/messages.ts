@@ -86,6 +86,9 @@ export interface AppendToolCallInput {
    * to `output_chars` (savings=0).
    */
   output_chars_shaped?: number | null;
+  /** Model-facing representation and compact JSON size of hidden structured data (mig 213). */
+  output_format?: 'text' | 'markdown' | 'json' | null;
+  structured_output_chars?: number | null;
   truncated?: boolean;
   phase?: string | null;
   turn_telemetry_id?: number | null;
@@ -137,20 +140,23 @@ export function appendToolCall(db: DB, input: AppendToolCallInput): void {
   db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
+       output_chars, output_chars_shaped, output_format, structured_output_chars,
+       truncated, phase, turn_telemetry_id, refusal_kind,
        parent_tool_use_id, error_class, reduction_kind, reduction_technique,
        reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
        subagent_profile, logical_operation_id, productive,
        guard_action, guard_reason, would_block, state_epoch, result_novel,
        coverage_novel, delivered, repeat_policy, execution_class,
        guard_origin_tool_use_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.message_id, input.tool_use_id, input.tool_name, JSON.stringify(input.args),
     input.result_text, input.is_error ? 1 : 0, input.duration_ms,
     input.output_chars ?? (input.result_text?.length ?? 0),
     input.output_chars_shaped ?? null,
+    input.output_format ?? null,
+    input.structured_output_chars ?? null,
     input.truncated ? 1 : 0, input.phase ?? null, input.turn_telemetry_id ?? null,
     input.refusal_kind ?? classifyToolRefusal(input.result_text, input.is_error),
     input.parent_tool_use_id ?? null,
@@ -228,14 +234,15 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
   const insertTool = db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
+       output_chars, output_chars_shaped, output_format, structured_output_chars,
+       truncated, phase, turn_telemetry_id, refusal_kind,
        parent_tool_use_id, error_class, reduction_kind, reduction_technique,
        reduction_meta_json, output_id, run_id, parent_run_id, is_subagent,
        subagent_profile, logical_operation_id, productive,
        guard_action, guard_reason, would_block, state_epoch, result_novel,
        coverage_novel, delivered, repeat_policy, execution_class,
        guard_origin_tool_use_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const bumpStmt = db.prepare(`
@@ -283,6 +290,8 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
         tc.result_text, tc.is_error ? 1 : 0, tc.duration_ms,
         tc.output_chars ?? (tc.result_text?.length ?? 0),
         tc.output_chars_shaped ?? null,
+        tc.output_format ?? null,
+        tc.structured_output_chars ?? null,
         tc.truncated ? 1 : 0, tc.phase ?? null, tc.turn_telemetry_id ?? null,
         tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
         tc.parent_tool_use_id ?? null,

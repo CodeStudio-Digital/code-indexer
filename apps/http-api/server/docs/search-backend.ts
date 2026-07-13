@@ -16,6 +16,7 @@ import { DEFAULT_MIN_RELEVANCE } from '@mcp/services/services/docs/index.js';
 import type { DocChunk, DocStore } from '@mcp/store/doc-store.js';
 import type { DocsHintCollection, DocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
 import { buildDocNavVerbs } from './doc-nav-backend.js';
+import { createHash } from 'node:crypto';
 
 /** What the `rag_search_docs` tool sends — superset of DocSearchInput. */
 export interface BackendSearchInput {
@@ -100,13 +101,32 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
         // calibrated scores; a caller-supplied value still wins.
         min_relevance: DEFAULT_MIN_RELEVANCE,
         ...rest,
-        enhancements: { rewrite: docsRagRewrite, rerank: docsRagRerank },
+        enhancements: { rewrite: docsRagRewrite && shouldRewrite(input.query), rerank: docsRagRerank },
       };
       if (scoped.length > 0) forward.collection_ids = scoped.map((c) => c.id);
 
+      const started = Date.now();
       const out = await docHybridSearch.search(forward);
       out.diag.scope = scoped.length > 0 ? 'project' : 'all';
       if (scoped.length > 0) out.diag.scoped_collections = scoped.map((c) => c.name);
+      const explicitCollectionId = input.collection ? docStore.getCollectionByName(input.collection)?.id : undefined;
+      try {
+        docStore.recordDocSearchEvent({
+          project_id: project_id,
+          query_hash: createHash('sha256').update(input.query).digest('hex'),
+          scope: out.diag.scope,
+          collection_ids: explicitCollectionId != null ? [explicitCollectionId] : scoped.map((c) => c.id),
+          mode: out.diag.mode,
+          duration_ms: Date.now() - started,
+          fts_hits: out.diag.fts_hits,
+          vector_hits: out.diag.vector_hits,
+          stale_vector_hits: out.diag.stale_vector_hits,
+          vector_coverage: out.diag.vector_coverage,
+          top_relevance: out.diag.top_relevance,
+          no_good_match: out.diag.no_good_match,
+          result_count: out.results.length,
+        });
+      } catch { /* telemetry must never break retrieval */ }
       return out;
     },
 
@@ -180,12 +200,19 @@ export function buildDocsHintProvider(docStore: DocStore): DocsHintProvider {
           const docTypes = Array.from(
             new Set(sources.map((s) => s.doc_type).filter((t) => t && t !== 'mixed')),
           );
+          const health = sources.map((source) => docStore.getSourceHealth(source.id)).filter((h) => h != null);
+          const persisted = health.reduce((sum, h) => sum + h.chunks_persisted, 0);
+          const embedded = health.reduce((sum, h) => sum + h.chunks_embedded, 0);
           return {
             name: c.name,
             description: c.description,
             chunk_count: c.chunk_count,
             last_indexed_at: lastIndexed,
             doc_types: docTypes,
+            lexical_ready: persisted > 0,
+            vector_coverage: persisted > 0 ? embedded / persisted : 0,
+            enrichment_ready: health.length > 0 && health.every((h) => h.enrichment_ready),
+            updating: sources.some((source) => source.status === 'fetching' || source.status === 'indexing'),
           };
         });
       } catch {
@@ -197,4 +224,15 @@ export function buildDocsHintProvider(docStore: DocStore): DocsHintProvider {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function shouldRewrite(query: string): boolean {
+  const q = query.trim();
+  if (!q) return false;
+  // Exact API/symbol lookups already have excellent FTS recall; rewriting
+  // adds latency and can dilute literal identifiers/version strings.
+  if (/\b[A-Za-z_$][\w$]*(?:[.#:][\w$]+)+(?:\([^)]*\))?\b/.test(q)) return false;
+  if (/\b[A-Za-z_$][\w$]*\([^)]*\)/.test(q)) return false;
+  if (/^[A-Za-z_$][\w$]{2,}$/.test(q)) return false;
+  return q.split(/\s+/).length >= 4 || /\b(como|por que|quando|diferença|padrão|how|why|when|difference|pattern)\b/i.test(q);
 }

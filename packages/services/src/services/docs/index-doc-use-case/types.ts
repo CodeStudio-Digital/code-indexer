@@ -1,6 +1,8 @@
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import type { DocCrawlConfig, DocStore, DocType } from '@mcp/store/doc-store.js';
+import type { DocEnrichmentMode } from '@mcp/store/doc-store.js';
+import type { DocIngestPerformanceProfile } from '@mcp/store/doc-store.js';
 import type { PipelineProviderResolver } from '../../../pipelines/index.js';
 import type {
   DocIngestEstimate,
@@ -101,13 +103,18 @@ export interface IndexFolderInput {
   title?: string;
   /** Kind of documentation (migration 149). Defaults to 'mixed' downstream. */
   docType?: DocType;
+  enrichmentMode?: DocEnrichmentMode;
   folder?: {
     include_glob?: string | null;
     exclude_glob?: string | null;
     max_files?: number | null;
     /** Default true: pula o LLM gate (docs locais geralmente curados). */
     bypass_relevance_gate?: boolean;
+    performance_profile?: DocIngestPerformanceProfile;
+    worker_count?: number | null;
   };
+  /** Internal: continue a paused/limit-paused persisted run. */
+  resumeRunId?: number;
 }
 
 export type { DocIngestEstimate, DocIngestProgress, DocIngestResult } from '../types.js';

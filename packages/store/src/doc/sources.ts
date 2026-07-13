@@ -30,8 +30,9 @@ export function create(db: DB, input: DocSourceInput): DocSource {
       crawl_llm_extract_links, crawl_force_browser, crawl_browser_seed_only,
       pdf_size_bytes,
       folder_root_path, folder_include_glob, folder_exclude_glob,
-      folder_max_files, folder_bypass_relevance_gate
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      folder_max_files, folder_bypass_relevance_gate, enrichment_mode,
+      folder_performance_profile, folder_worker_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const result = stmt.run(
     input.collection_id,
@@ -56,6 +57,9 @@ export function create(db: DB, input: DocSourceInput): DocSource {
     folder.max_files ?? null,
     // Default TRUE — docs locais geralmente já vêm curadas.
     folder.bypass_relevance_gate === false ? 0 : 1,
+    input.enrichment_mode ?? 'selective',
+    folder.performance_profile ?? 'balanced',
+    folder.worker_count ?? null,
   );
   collections.refreshCounts(db, input.collection_id);
   return get(db, result.lastInsertRowid as number)!;
@@ -94,6 +98,8 @@ export type SourceStatsPatch = Partial<{
   pages_rejected: number;
   cost_usd: number;
   last_indexed_at: string | null;
+  embedding_fingerprint: string | null;
+  last_ingest_run_id: number | null;
 }>;
 
 /**
@@ -177,6 +183,8 @@ export function updateFolderConfig(db: DB, id: number, folder: DocFolderConfig):
               folder_exclude_glob          = @exclude_glob,
               folder_max_files             = @max_files,
               folder_bypass_relevance_gate = @bypass_relevance_gate,
+              folder_performance_profile   = @performance_profile,
+              folder_worker_count          = @worker_count,
               updated_at                   = datetime('now')
         WHERE id = @id`,
     )
@@ -186,7 +194,15 @@ export function updateFolderConfig(db: DB, id: number, folder: DocFolderConfig):
       exclude_glob: folder.exclude_glob ?? null,
       max_files: folder.max_files ?? null,
       bypass_relevance_gate: folder.bypass_relevance_gate === false ? 0 : 1,
+      performance_profile: folder.performance_profile ?? 'balanced',
+      worker_count: folder.worker_count ?? null,
     });
+}
+
+export function updateEnrichmentMode(db: DB, id: number, mode: string): void {
+  const normalized = mode === 'all' || mode === 'off' ? mode : 'selective';
+  db.prepare(`UPDATE doc_sources SET enrichment_mode=?, updated_at=datetime('now') WHERE id=?`)
+    .run(normalized, id);
 }
 
 /**
@@ -200,11 +216,17 @@ export function updateFolderConfig(db: DB, id: number, folder: DocFolderConfig):
 export function getHealth(db: DB, sourceId: number): DocSourceHealth | null {
   const row = db
     .prepare(
-      `SELECT s.id AS source_id, s.status, s.last_indexed_at,
+      `SELECT s.id AS source_id, s.status, s.last_indexed_at, s.embedding_fingerprint,
               (SELECT COUNT(*) FROM doc_chunks WHERE source_id = s.id) AS chunks_persisted,
               (SELECT COUNT(*) FROM doc_chunk_vectors v
                  JOIN doc_chunks c ON c.id = v.chunk_id
-                WHERE c.source_id = s.id) AS chunks_embedded
+                WHERE c.source_id = s.id) AS chunks_embedded,
+              (SELECT COUNT(*) FROM doc_chunks c
+                WHERE c.source_id=s.id AND c.enrichment_fingerprint='pending:llm') AS chunks_unenriched,
+              (SELECT id FROM doc_ingest_runs r WHERE r.source_id=s.id AND r.state='running'
+                ORDER BY id DESC LIMIT 1) AS active_run_id,
+              (SELECT heartbeat_at FROM doc_ingest_runs r WHERE r.source_id=s.id
+                ORDER BY id DESC LIMIT 1) AS last_checkpoint_at
          FROM doc_sources s
         WHERE s.id = ?`,
     )
@@ -220,6 +242,12 @@ export function getHealth(db: DB, sourceId: number): DocSourceHealth | null {
     embedding_complete: persisted > 0 && persisted === embedded,
     missing_count: Math.max(0, persisted - embedded),
     last_indexed_at: (row.last_indexed_at as string | null) ?? null,
+    lexical_ready: persisted > 0,
+    vector_ready: persisted > 0 && persisted === embedded,
+    enrichment_ready: persisted > 0 && Number(row.chunks_unenriched ?? 0) === 0,
+    embedding_fingerprint: (row.embedding_fingerprint as string | null) ?? null,
+    last_checkpoint_at: (row.last_checkpoint_at as string | null) ?? null,
+    active_run_id: (row.active_run_id as number | null) ?? null,
   };
 }
 
@@ -241,7 +269,14 @@ export function tryAcquire(db: DB, id: number, staleAfterMs: number = 5 * 60 * 1
         WHERE id = @id
           AND (
             status NOT IN ('fetching','indexing')
-            OR (julianday('now') - julianday(updated_at)) * 86400 * 1000 > @staleMs
+            OR (
+              (julianday('now') - julianday(updated_at)) * 86400 * 1000 > @staleMs
+              AND NOT EXISTS (
+                SELECT 1 FROM doc_ingest_runs r
+                 WHERE r.source_id=doc_sources.id AND r.state='running'
+                   AND (julianday('now') - julianday(r.heartbeat_at)) * 86400 * 1000 <= @staleMs
+              )
+            )
           )`,
     )
     .run({ id, staleMs: staleAfterMs });
@@ -254,14 +289,21 @@ export function tryAcquire(db: DB, id: number, staleAfterMs: number = 5 * 60 * 1
  * Run at server boot from `createApp()`.
  */
 export function recoverStale(db: DB): { recovered: number } {
-  const result = db
-    .prepare(
+  const tx = db.transaction(() => {
+    db.prepare(
+      `UPDATE doc_ingest_runs SET state='failed', phase='error',
+          error_message=COALESCE(error_message,'Indexação interrompida (servidor reiniciado)'),
+          completed_at=datetime('now'), heartbeat_at=datetime('now')
+        WHERE state='running'`,
+    ).run();
+    return db.prepare(
       `UPDATE doc_sources
           SET status = 'error',
               error_message = COALESCE(error_message, 'Indexação interrompida (servidor reiniciado)'),
               updated_at = datetime('now')
         WHERE status IN ('fetching','indexing')`,
-    )
-    .run();
+    ).run();
+  });
+  const result = tx();
   return { recovered: result.changes };
 }

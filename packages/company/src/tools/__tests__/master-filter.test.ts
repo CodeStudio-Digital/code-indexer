@@ -16,6 +16,9 @@ const native = (name: string): CoderTool =>
     handler: async () => ({ content: '' }),
   }) as CoderTool;
 
+const external = (name: string, metadata: Partial<CoderTool> = {}): CoderTool =>
+  ({ ...native(name), source: 'mcp_external', ...metadata }) as CoderTool;
+
 describe('isMasterAllowed — service tools (B5)', () => {
   it.each(['service_logs', 'service_restart', 'service_start', 'service_stop'])(
     'keeps %s via the service_ company prefix',
@@ -44,5 +47,23 @@ describe('isMasterAllowed — C4 batch/graph tools survive the filter', () => {
 
   it('keeps kanban_plan_graph via the kanban_ prefix', () => {
     expect(isMasterAllowed(native('kanban_plan_graph'))).toBe(true);
+  });
+});
+
+describe('isMasterAllowed — external MCP is default-deny', () => {
+  it('rejects unclassified and mutating external tools', () => {
+    expect(isMasterAllowed(external('ext_repo__read_file'))).toBe(false);
+    expect(isMasterAllowed(external('ext_cloud__publish', {
+      mutates: true,
+      riskLevel: 'admin',
+    }))).toBe(false);
+  });
+
+  it('keeps an explicitly declared read-only connector tool', () => {
+    expect(isMasterAllowed(external('ext_observability__get_status', {
+      mutates: false,
+      riskLevel: 'read',
+      parallelSafe: true,
+    }))).toBe(true);
   });
 });

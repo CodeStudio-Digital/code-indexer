@@ -14,8 +14,10 @@
 
 import { packSections } from './chunk-packer.js';
 
-/** Approximate cap per chunk — ~1500 tokens × 4 chars/token. */
-export const MAX_CHUNK_CHARS = 6_000;
+/** Approximate hard cap per chunk — ~1200 tokens × 4 chars/token. */
+export const MAX_CHUNK_CHARS = 4_800;
+/** Preferred size used by diagnostics/adapters; packer may exceed it to preserve a block. */
+export const TARGET_CHUNK_CHARS = 3_200;
 /** Don't emit chunks shorter than this — they're almost never useful retrieval units. */
 export const MIN_CHUNK_CHARS = 60;
 

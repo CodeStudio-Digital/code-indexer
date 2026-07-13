@@ -12,15 +12,17 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { DocStore, DocChunk } from '@mcp/store/doc-store.js';
+import type { DocsEvidenceLedger } from './evidence-ledger.js';
 
 export interface DocsReadChunkToolDeps {
   docStore: DocStore;
   /** Increment-on-call counter the DocsAgent uses for telemetry. */
   onCall?: () => void;
+  ledger?: DocsEvidenceLedger;
 }
 
 /** Hard cap on neighbors to prevent the agent from blowing context. */
-const MAX_NEIGHBOR_WINDOW = 3;
+const MAX_NEIGHBOR_WINDOW = 1;
 
 export function makeDocsReadChunkTool(deps: DocsReadChunkToolDeps): CoderTool {
   return {
@@ -50,6 +52,9 @@ export function makeDocsReadChunkTool(deps: DocsReadChunkToolDeps): CoderTool {
     parallelSafe: true,
     riskLevel: 'read',
     handler: async (args): Promise<ToolResult> => {
+      if (deps.ledger && !deps.ledger.canRead()) {
+        return err(`read budget exhausted (${deps.ledger.maxReads}); synthesize from the evidence already read.`);
+      }
       deps.onCall?.();
       const chunkId = Number(args.chunk_id);
       if (!Number.isFinite(chunkId) || chunkId <= 0) {
@@ -75,6 +80,7 @@ export function makeDocsReadChunkTool(deps: DocsReadChunkToolDeps): CoderTool {
       if (chunks.length === 0) {
         return err(`chunk_id=${chunkId} not found — verify it came from a recent docs_search result.`);
       }
+      deps.ledger?.recordRead(chunks.map((chunk) => chunk.id));
 
       const seed = chunks.find((c) => c.id === chunkId) ?? chunks[0]!;
       const collection = deps.docStore.getCollection(seed.collection_id);
@@ -86,7 +92,7 @@ export function makeDocsReadChunkTool(deps: DocsReadChunkToolDeps): CoderTool {
         if (c.summary) lines.push(`Summary: ${c.summary}`);
         if (c.concepts.length > 0) lines.push(`Concepts: ${c.concepts.join(', ')}`);
         lines.push('');
-        lines.push(c.content);
+        lines.push(c.content.slice(0, 6_000));
         return lines.join('\n');
       });
 

@@ -13,6 +13,7 @@
  */
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import { formatAskUserResult } from '@mcp/code-agent/tools/interaction.js';
 import { formatPlanResult } from '@mcp/code-agent/tools/plan.js';
 import { validateTasksInput } from '@mcp/code-agent/tools/tasks.js';
@@ -573,7 +574,7 @@ export const readMyInbox: CoderTool = {
       preview: m.body.slice(0, 160),
       created_at: m.created_at,
     }));
-    return ok(JSON.stringify(compact, null, 2));
+    return okStructured(compact);
   },
 };
 

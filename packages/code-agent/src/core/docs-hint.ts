@@ -22,6 +22,10 @@ export interface DocsHintCollection {
   last_indexed_at?: string | null;
   /** Distinct non-`mixed` documentation types present in the collection. */
   doc_types?: string[];
+  lexical_ready?: boolean;
+  vector_coverage?: number;
+  enrichment_ready?: boolean;
+  updating?: boolean;
 }
 
 export interface DocsHintProvider {
@@ -76,7 +80,11 @@ function render(collections: DocsHintCollection[]): string | null {
     // signatures vs prose) and FRESHNESS so it can flag stale-version risk.
     const types = c.doc_types && c.doc_types.length > 0 ? `, ${c.doc_types.join('/')}` : '';
     const fresh = c.last_indexed_at ? `, updated ${relativeAge(c.last_indexed_at)}` : '';
-    return `- ${c.name}${desc} (${c.chunk_count} sections${types}${fresh})`;
+    const lexical = c.lexical_ready ? ', lexical ready' : '';
+    const vectors = c.vector_coverage != null ? `, vectors ${Math.round(c.vector_coverage * 100)}%` : '';
+    const enriching = c.enrichment_ready === false ? ', enrichment pending' : '';
+    const updating = c.updating ? ', updating now' : '';
+    return `- ${c.name}${desc} (${c.chunk_count} sections${types}${fresh}${lexical}${vectors}${enriching}${updating})`;
   });
   const overflow =
     collections.length > shown.length
@@ -92,6 +100,7 @@ function render(collections: DocsHintCollection[]): string | null {
     'How to use them: search with rag_search_docs BEFORE answering from memory about these ' +
       'libraries; trust the calibrated Relevance (0-1) over snippet order; read any promising hit ' +
       'in FULL with rag_read_doc({chunk_id}) before you rely on it, and cite the Source it prints. ' +
+      'For a simple question, use one search and at most three full reads. ' +
       "If the search reports no good match, tell the user it isn't covered — don't guess. For broad " +
       "multi-section questions, docs_deep_research (unlock via expand_toolset('navigate')) runs a cited pass." +
       overflow,

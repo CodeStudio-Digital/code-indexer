@@ -8,14 +8,16 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link2, Loader2, X } from 'lucide-react';
+import { Link2, Loader2, Sparkles, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { useNotify } from '../../components/ui/dialog-provider.js';
 import {
   linkCollectionToProject,
+  listCollectionProjectSuggestions,
   listCollectionProjects,
   unlinkCollectionFromProject,
   type DocProjectLink,
+  type DocProjectSuggestion,
 } from './docs-api.js';
 
 interface ProjectOption {
@@ -34,12 +36,18 @@ export function ProjectLinks({ collectionId }: Props) {
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [pickedId, setPickedId] = useState<number | ''>('');
   const [busy, setBusy] = useState(false);
+  const [suggestions, setSuggestions] = useState<DocProjectSuggestion[]>([]);
 
   async function reload() {
     try {
       setLinks(await listCollectionProjects(collectionId));
     } catch {
       setLinks([]);
+    }
+    try {
+      setSuggestions(await listCollectionProjectSuggestions(collectionId));
+    } catch {
+      setSuggestions([]);
     }
   }
 
@@ -96,6 +104,18 @@ export function ProjectLinks({ collectionId }: Props) {
     }
   }
 
+  async function onAcceptSuggestion(suggestion: DocProjectSuggestion) {
+    setBusy(true);
+    try {
+      await linkCollectionToProject(collectionId, suggestion.project_id, 'auto');
+      await reload();
+    } catch (error) {
+      void notify({ title: t('projectLinks.linkFailed'), description: (error as Error).message, variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const linkedIds = new Set((links ?? []).map((l) => l.project_id));
   const available = projects.filter((p) => !linkedIds.has(p.id));
 
@@ -132,6 +152,20 @@ export function ProjectLinks({ collectionId }: Props) {
                 <X className="h-3 w-3" />
               </button>
             </span>
+          ))}
+        </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <div className="rounded-md border border-violet-500/30 bg-violet-500/5 p-2 space-y-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium"><Sparkles className="h-3 w-3" />{t('projectLinks.suggestions')}</div>
+          {suggestions.map((suggestion) => (
+            <div key={suggestion.project_id} className="flex items-center justify-between gap-2 text-xs">
+              <span><strong>{suggestion.project_name}</strong> · {suggestion.reason}</span>
+              <Button size="sm" variant="outline" className="h-6 text-xs" disabled={busy} onClick={() => void onAcceptSuggestion(suggestion)}>
+                {t('projectLinks.confirmSuggestion')}
+              </Button>
+            </div>
           ))}
         </div>
       )}

@@ -27,6 +27,8 @@ export interface RunnerEvents {
     isError?: boolean;
     subUsage?: ChatUsage;
     rawChars?: number;
+    contentFormat?: 'text' | 'markdown' | 'json';
+    structuredOutputChars?: number | null;
     input?: Record<string, unknown>;
     refusalKind?: string;
     reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;

@@ -19,8 +19,9 @@ import { FallbackPicker } from '../../../components/FallbackPicker.js';
 import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
+import type { AgentPreset } from '@mcp/api-bus';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = AgentPreset;
 
 /**
  * Build the trigger label: "Provider · model", or the empty-state text when no

@@ -63,6 +63,11 @@ export function mapSource(row: Record<string, unknown>): DocSource {
     folder_bypass_relevance_gate: boolFromInt(
       (row.folder_bypass_relevance_gate as number | boolean | undefined) ?? 1,
     ),
+    folder_performance_profile: ((row.folder_performance_profile as string | undefined) ?? 'balanced') as DocSource['folder_performance_profile'],
+    folder_worker_count: (row.folder_worker_count as number | null) ?? null,
+    enrichment_mode: ((row.enrichment_mode as string | undefined) ?? 'selective') as DocSource['enrichment_mode'],
+    embedding_fingerprint: (row.embedding_fingerprint as string | null) ?? null,
+    last_ingest_run_id: (row.last_ingest_run_id as number | null) ?? null,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -98,6 +103,13 @@ export function mapChunk(row: Record<string, unknown>): DocChunk {
     anchor: (row.anchor as string | null) ?? null,
     api_symbol: (row.api_symbol as string | null) ?? null,
     api_signature: (row.api_signature as string | null) ?? null,
+    stable_key: (row.stable_key as string | null) ?? null,
+    item_key: (row.item_key as string | null) ?? null,
+    ingest_run_id: (row.ingest_run_id as number | null) ?? null,
+    embedding_input_hash: (row.embedding_input_hash as string | null) ?? null,
+    embedding_fingerprint: (row.embedding_fingerprint as string | null) ?? null,
+    enrichment_fingerprint: (row.enrichment_fingerprint as string | null) ?? null,
+    updated_at: (row.updated_at as string | null) ?? null,
     created_at: row.created_at as string,
   };
 }

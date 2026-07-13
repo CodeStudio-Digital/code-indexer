@@ -49,6 +49,8 @@ beforeEach(() => {
       tool_name TEXT NOT NULL,
       output_chars INTEGER,
       output_chars_shaped INTEGER,
+      output_format TEXT,
+      structured_output_chars INTEGER,
       duration_ms INTEGER,
       truncated INTEGER NOT NULL DEFAULT 0,
       phase TEXT,
@@ -107,6 +109,26 @@ describe('getSessionTelemetrySummary', () => {
     });
     expect(summary.tools_breakdown.find((row) => row.name === 'git_status')).toMatchObject({
       shadow_candidates: 1,
+    });
+  });
+
+  it('compares canonical structured size with model-delivered Markdown size', () => {
+    db.exec(`
+      INSERT INTO coder_messages (id, session_id, role) VALUES (1, 1221, 'assistant');
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_name, output_chars, output_chars_shaped, output_format, structured_output_chars)
+      VALUES
+        (1, 1, 'app_get_context', 700, 600, 'markdown', 1000),
+        (2, 1, 'app_get_spec', 450, 400, 'markdown', 800),
+        (3, 1, 'plain_text', 50, 50, 'text', NULL);
+    `);
+
+    expect(getSessionTelemetrySummary(db, 1221).structured_output).toEqual({
+      calls: 2,
+      structured_chars: 1800,
+      delivered_chars: 1000,
+      saved_chars: 800,
+      reduction_ratio: 800 / 1800,
     });
   });
 });

@@ -1,5 +1,5 @@
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
@@ -15,6 +15,7 @@ import { parseAppProductModel, productModelFingerprint } from '@mcp/app-studio/p
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult, compactAudit } from './model-output.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -112,7 +113,7 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
         else if (focus === 'database') recommendedActions.push('Analyze with db_schema/db_query. If the plan must change, propose a spec revision; database writes are unavailable until the database stage is current.');
         else if (current) recommendedActions.push(`Work only on the current '${current.id}' stage and submit it when its deterministic gate passes.`);
 
-        return ok(JSON.stringify({
+        return appResult('App Studio context', {
           app: { id: session.id, name: session.name, slug: session.app_slug, project_id: session.project_id, db_engine: session.db_engine },
           pipeline: {
             current: current ? { id: current.id, status: current.status, feedback: current.feedback, gate: current.gate } : null,
@@ -125,27 +126,27 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
             latest_revision: specRevisions[0] ? { id: specRevisions[0].id, status: specRevisions[0].status, number: specRevisions[0].revision_number } : null,
             summary: spec?.summary ?? null,
             counts: spec ? { features: spec.features.length, screens: spec.screens.length, entities: spec.database.entities.length, behaviors: spec.behaviors?.length ?? 0 } : null,
-            audit: spec ? auditAppSpec(spec) : null,
+            audit: spec ? compactAudit(auditAppSpec(spec)) : null,
           },
           product: {
             revision: productRevision ? { id: productRevision.id, number: productRevision.revision_number, status: productRevision.status, base_spec_revision_id: productRevision.base_spec_revision_id, result_spec_revision_id: productRevision.result_spec_revision_id } : null,
             counts: product ? { domains: product.domains.length, capabilities: product.capabilities.length, selected: product.capabilities.filter((item) => item.selected).length, scenarios: product.scenarios.length, open_decisions: product.decisions.filter((item) => item.status === 'open').length } : null,
             complexity: product?.complexity ?? null,
             fingerprint: product ? productModelFingerprint(product) : null,
-            audit: product ? auditAppProductModel(product) : null,
+            audit: product ? compactAudit(auditAppProductModel(product)) : null,
           },
           architecture: {
             revision: architectureRevision ? { id: architectureRevision.id, number: architectureRevision.revision_number, status: architectureRevision.status, spec_revision_id: architectureRevision.spec_revision_id } : null,
-            audit: architecture ? auditAppArchitecture(architecture, spec, product) : null,
+            audit: architecture ? compactAudit(auditAppArchitecture(architecture, spec, product)) : null,
           },
           ux: {
             revision: uxRevision ? { id: uxRevision.id, number: uxRevision.revision_number, status: uxRevision.status, spec_revision_id: uxRevision.spec_revision_id, architecture_revision_id: uxRevision.architecture_revision_id } : null,
-            audit: ux ? auditAppUxBrief(ux) : null,
+            audit: ux ? compactAudit(auditAppUxBrief(ux)) : null,
           },
           wireframe: {
             revision: wireframeRevision ? { id: wireframeRevision.id, number: wireframeRevision.revision_number, status: wireframeRevision.status, ux_revision_id: wireframeRevision.ux_revision_id } : null,
             counts: wireframe ? { flows: wireframe.flows.length, screens: wireframe.screens.length, groups: wireframe.build_groups.length, tasks: wireframe.tasks.length, tests: wireframe.tdd_cases.length } : null,
-            audit: wireframe ? auditAppWireframePlan(wireframe, spec, architecture) : null,
+            audit: wireframe ? compactAudit(auditAppWireframePlan(wireframe, spec, architecture)) : null,
           },
           database: {
             workspace_available: !!workspaceDir,
@@ -158,7 +159,7 @@ export function appGetContext(binding: AppToolBinding): CoderTool {
           },
           capabilities,
           recommended_actions: recommendedActions,
-        }, null, 2));
+        });
       } catch (e) {
         return err(`app_get_context failed: ${(e as Error).message}`);
       }

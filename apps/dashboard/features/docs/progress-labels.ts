@@ -17,6 +17,9 @@ export const PHASE_LABEL: Record<DocIngestPhase, string> = {
   chunking: 'progress.phase.chunking',
   enriching: 'progress.phase.enriching',
   embedding: 'progress.phase.embedding',
+  paused: 'progress.phase.paused',
+  paused_limit: 'progress.phase.paused_limit',
+  cancelled: 'progress.phase.cancelled',
   done: 'progress.phase.done',
   error: 'progress.phase.error',
 };

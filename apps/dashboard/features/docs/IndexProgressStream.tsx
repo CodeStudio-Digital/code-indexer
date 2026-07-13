@@ -166,6 +166,21 @@ export function IndexProgressStream({ start, onClose, onFinished }: Props) {
               {progress.chunks_indexed != null && (
                 <Stat label={t('progress.stat.chunks')} value={String(progress.chunks_indexed)} />
               )}
+              {progress.files_changed != null && (
+                <Stat label={t('progress.stat.filesChangedUnchanged')} value={`${progress.files_changed} / ${progress.files_unchanged ?? 0}`} />
+              )}
+              {progress.workers_configured != null && (
+                <Stat label={t('progress.stat.workers')} value={`${progress.workers_active ?? 0}/${progress.workers_configured}`} />
+              )}
+              {progress.embeddings_completed != null && (
+                <Stat label={t('progress.stat.embeddings')} value={`${progress.embeddings_completed} / ${(progress.embeddings_completed ?? 0) + (progress.embeddings_pending ?? 0)}`} />
+              )}
+              {progress.enrichments_completed != null && (
+                <Stat label={t('progress.stat.enrichments')} value={`${progress.enrichments_completed} / ${(progress.enrichments_completed ?? 0) + (progress.enrichments_pending ?? 0)}`} />
+              )}
+              {progress.searchable && (
+                <Stat label={t('progress.stat.availability')} value={t('progress.stat.searchable')} />
+              )}
             </div>
             {progress.label && (
               <div className="text-xs text-muted-foreground truncate">{progress.label}</div>
@@ -187,6 +202,12 @@ export function IndexProgressStream({ start, onClose, onFinished }: Props) {
               />
             )}
             <Stat label={t('progress.stat.time')} value={`${(done.elapsed_ms / 1000).toFixed(1)}s`} />
+            {done.state === 'paused_limit' && (
+              <Stat label={t('progress.stat.state')} value={t('progress.phase.paused_limit')} />
+            )}
+            {done.state === 'paused' && (
+              <Stat label={t('progress.stat.state')} value={t('progress.phase.paused')} />
+            )}
             {done.cost_usd > 0 && (
               <Stat label={t('progress.stat.cost')} value={`$${done.cost_usd.toFixed(4)}`} />
             )}

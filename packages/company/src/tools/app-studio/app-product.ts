@@ -1,5 +1,5 @@
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { webSearch } from '@mcp/code-agent/tools/web.js';
 import { auditAppProductModel } from '@mcp/app-studio/product/audit.js';
 import { recoverProductModel } from '@mcp/app-studio/product/recover.js';
@@ -18,8 +18,21 @@ import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stage
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult, compactAudit, PAGE_PROPERTIES, pageItems, viewArg } from './model-output.js';
 
 const EMPTY: JsonSchema = { type: 'object', properties: {}, additionalProperties: false };
+const GET_PARAMETERS: JsonSchema = {
+  type: 'object',
+  properties: {
+    view: {
+      type: 'string',
+      enum: ['summary', 'domains', 'capabilities', 'scenarios', 'decisions', 'research', 'candidate_spec', 'full'],
+      description: "Projection to return. Default: 'summary'.",
+    },
+    ...PAGE_PROPERTIES,
+  },
+  additionalProperties: false,
+};
 const EXPECTED = { expected_revision_number: { type: 'number', description: 'Revision number returned by app_get_product_model. Required when editing an existing draft.' } };
 
 function context(binding: AppToolBinding) {
@@ -57,13 +70,48 @@ function save(c: ReturnType<typeof context>, model: AppProductModel, expected: u
   }, c.revision?.status === 'draft' ? expectedRevision : null);
 }
 
-function response(c: ReturnType<typeof context>, model: AppProductModel, persisted: boolean) {
-  return JSON.stringify({ revision: c.revision, persisted, model, audit: auditAppProductModel(model), fingerprint: productModelFingerprint(model) }, null, 2);
+function revisionMeta(revision: ReturnType<typeof context>['revision']) {
+  if (!revision) return null;
+  const { product_json: _productJson, ...meta } = revision;
+  return meta;
+}
+
+function response(c: ReturnType<typeof context>, model: AppProductModel, persisted: boolean, args: Record<string, unknown>) {
+  const view = viewArg(args, ['summary', 'domains', 'capabilities', 'scenarios', 'decisions', 'research', 'candidate_spec', 'full'], 'summary');
+  const audit = auditAppProductModel(model);
+  const base = {
+    view,
+    revision: revisionMeta(c.revision),
+    persisted,
+    fingerprint: productModelFingerprint(model),
+    summary: model.summary,
+    complexity: model.complexity,
+    complexity_factors: model.complexity_factors,
+    counts: {
+      personas: model.personas.length,
+      domains: model.domains.length,
+      capabilities: model.capabilities.length,
+      selected_capabilities: model.capabilities.filter((item) => item.selected).length,
+      scenarios: model.scenarios.length,
+      decisions: model.decisions.length,
+      open_decisions: model.decisions.filter((item) => item.status === 'open').length,
+      research_sources: model.research_sources.length,
+    },
+    audit: compactAudit(audit),
+  };
+  if (view === 'full') return appResult('Product model — full', { ...base, model, audit });
+  if (view === 'summary') return appResult('Product model — summary', { ...base, personas: model.personas });
+  if (view === 'domains') return appResult('Product model — domains', { ...base, ...pageItems(model.domains, args, (item) => item.id) });
+  if (view === 'capabilities') return appResult('Product model — capabilities', { ...base, ...pageItems(model.capabilities, args, (item) => item.id) });
+  if (view === 'scenarios') return appResult('Product model — scenarios', { ...base, ...pageItems(model.scenarios, args, (item) => item.id) });
+  if (view === 'decisions') return appResult('Product model — decisions', { ...base, ...pageItems(model.decisions, args, (item) => item.id) });
+  if (view === 'research') return appResult('Product model — research', { ...base, ...pageItems(model.research_sources, args, (item) => item.id) });
+  return appResult('Product model — candidate spec', { ...base, candidate_spec: model.candidate_spec });
 }
 
 export function appGetProductModel(binding: AppToolBinding): CoderTool {
-  return { name: 'app_get_product_model', description: 'Read the authoritative product map, scope horizons, scenarios, decisions and semantic audit. Call before every edit.', parameters: EMPTY, source: 'native', handler: async () => {
-    try { const c = context(binding); return ok(response(c, c.model, !!c.revision)); }
+  return { name: 'app_get_product_model', description: 'Read a progressive projection of the authoritative product map. The summary includes the revision number required by edits; request only the section you need.', parameters: GET_PARAMETERS, source: 'native', handler: async (args) => {
+    try { const c = context(binding); return response(c, c.model, !!c.revision, args); }
     catch (e) { return err(`app_get_product_model failed: ${(e as Error).message}`); }
   } };
 }
@@ -76,7 +124,7 @@ export function appUpsertProductDomain(binding: AppToolBinding): CoderTool {
       if (!domain?.id) return err('domain.id is required and must remain stable.');
       const next = structuredClone(c.model); const index = next.domains.findIndex((item) => item.id === domain.id);
       if (index >= 0) next.domains[index] = domain; else next.domains.push(domain);
-      const revision = save(c, next, args.expected_revision_number); return ok(JSON.stringify({ revision, domain_id: domain.id, next: 'Reload the product model before the next edit.' }, null, 2));
+      const revision = save(c, next, args.expected_revision_number); return appResult('Product domain saved', { revision: revisionMeta(revision), domain_id: domain.id, next: 'Reload the product model before the next edit.' });
     } catch (e) { return err(`app_upsert_product_domain failed: ${(e as Error).message}`); }
   } };
 }
@@ -91,7 +139,7 @@ export function appUpsertProductCapability(binding: AppToolBinding): CoderTool {
       if (index >= 0) next.capabilities[index] = capability; else next.capabilities.push(capability);
       const domain = next.domains.find((item) => item.id === capability.domain_id);
       if (domain && !domain.capability_ids.includes(capability.id)) domain.capability_ids.push(capability.id);
-      const revision = save(c, next, args.expected_revision_number); return ok(JSON.stringify({ revision, capability_id: capability.id, next: 'Reload the product model before the next edit.' }, null, 2));
+      const revision = save(c, next, args.expected_revision_number); return appResult('Product capability saved', { revision: revisionMeta(revision), capability_id: capability.id, next: 'Reload the product model before the next edit.' });
     } catch (e) { return err(`app_upsert_product_capability failed: ${(e as Error).message}`); }
   } };
 }
@@ -104,7 +152,7 @@ export function appUpsertProductScenario(binding: AppToolBinding): CoderTool {
       if (!scenario?.id || !scenario.capability_id) return err('scenario.id and scenario.capability_id are required.');
       const next = structuredClone(c.model); const index = next.scenarios.findIndex((item) => item.id === scenario.id);
       if (index >= 0) next.scenarios[index] = scenario; else next.scenarios.push(scenario);
-      const revision = save(c, next, args.expected_revision_number); return ok(JSON.stringify({ revision, scenario_id: scenario.id, next: 'Reload the product model before the next edit.' }, null, 2));
+      const revision = save(c, next, args.expected_revision_number); return appResult('Product scenario saved', { revision: revisionMeta(revision), scenario_id: scenario.id, next: 'Reload the product model before the next edit.' });
     } catch (e) { return err(`app_upsert_product_scenario failed: ${(e as Error).message}`); }
   } };
 }
@@ -120,7 +168,7 @@ export function appUpsertProductResearchSource(binding: AppToolBinding): CoderTo
       const audit = auditAppProductModel(next);
       const sourceIssues = audit.issues.filter((issue) => issue.includes(`source '${source.id}'`));
       if (sourceIssues.length) return err(sourceIssues.join('\n'));
-      const revision = save(c, next, args.expected_revision_number); return ok(JSON.stringify({ revision, source_id: source.id, next: 'Reload the product model before linking this source to capabilities.' }, null, 2));
+      const revision = save(c, next, args.expected_revision_number); return appResult('Product research source saved', { revision: revisionMeta(revision), source_id: source.id, next: 'Reload the product model before linking this source to capabilities.' });
     } catch (e) { return err(`app_upsert_product_research_source failed: ${(e as Error).message}`); }
   } };
 }
@@ -147,14 +195,14 @@ export function appSetProductScope(binding: AppToolBinding): CoderTool {
       next.candidate_spec = args.candidate_spec as AppProductModel['candidate_spec'];
       const revision = save(c, next, args.expected_revision_number);
       const audit = auditAppProductModel(next);
-      return ok(JSON.stringify({ revision, audit, next: audit.ok ? "Submit stage 'product' for user review." : 'Resolve the semantic audit issues.' }, null, 2));
+      return appResult('Product scope saved', { revision: revisionMeta(revision), audit, next: audit.ok ? "Submit stage 'product' for user review." : 'Resolve the semantic audit issues.' });
     } catch (e) { return err(`app_set_product_scope failed: ${(e as Error).message}`); }
   } };
 }
 
 export function appProductAudit(binding: AppToolBinding): CoderTool {
   return { name: 'app_product_audit', description: 'Audit product depth, explicit scope, research provenance, scenarios and candidate spec.', parameters: EMPTY, source: 'native', handler: async () => {
-    try { const c = context(binding); return ok(JSON.stringify(auditAppProductModel(c.model), null, 2)); }
+    try { const c = context(binding); return appResult('Product audit', auditAppProductModel(c.model)); }
     catch (e) { return err(`app_product_audit failed: ${(e as Error).message}`); }
   } };
 }
@@ -165,14 +213,23 @@ export const appResearchProductDomain: CoderTool = {
   handler: (args, ctx) => webSearch.handler({ query: String(args.query ?? '') }, ctx),
 };
 
-const BRIEFING_SCHEMA: JsonSchema = { type: 'object', properties: { capability_ids: { type: 'array', items: { type: 'string' }, description: 'Optional focused stable capability ids.' } }, additionalProperties: false };
+const BRIEFING_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    view: { type: 'string', enum: ['summary', 'capabilities', 'scenarios', 'full'], description: "Default: 'summary'." },
+    capability_ids: { type: 'array', items: { type: 'string' }, description: 'Optional focused stable capability ids.' },
+    offset: PAGE_PROPERTIES.offset,
+    limit: PAGE_PROPERTIES.limit,
+  },
+  additionalProperties: false,
+};
 export function appGetStageBriefing(binding: AppToolBinding): CoderTool {
   return { name: 'app_get_stage_briefing', description: 'Return a deterministic, revision-pinned briefing for new, resumed or compacted specialist sessions. This is operational context; stage summaries are not.', parameters: BRIEFING_SCHEMA, source: 'native', handler: async (args) => {
     try {
       const c = context(binding); const focus = new Set(Array.isArray(args.capability_ids) ? args.capability_ids.map(String) : []);
       const capabilities = focus.size ? c.model.capabilities.filter((item) => focus.has(item.id)) : c.model.capabilities.filter((item) => item.selected);
       const ids = new Set(capabilities.map((item) => item.id));
-      return ok(JSON.stringify({
+      const full = {
         briefing_version: 1,
         app: { id: c.session.id, name: c.session.name },
         revisions: { spec: c.specRevision?.id ?? null, product: c.revision?.id ?? null, product_number: c.revision?.revision_number ?? null },
@@ -181,7 +238,30 @@ export function appGetStageBriefing(binding: AppToolBinding): CoderTool {
         capabilities, scenarios: c.model.scenarios.filter((item) => ids.has(item.capability_id)),
         open_decisions: c.model.decisions.filter((item) => item.status === 'open'),
         next_valid_operation: currentStage(parsePipelineState(c.session.pipeline_json)!)?.id ?? null,
-      }, null, 2));
+      };
+      const view = viewArg(args, ['summary', 'capabilities', 'scenarios', 'full'], 'summary');
+      const base = {
+        briefing_version: full.briefing_version,
+        view,
+        app: full.app,
+        revisions: full.revisions,
+        fingerprint: full.fingerprint,
+        complexity: full.complexity,
+        complexity_factors: full.complexity_factors,
+        summary: full.summary,
+        next_valid_operation: full.next_valid_operation,
+        counts: {
+          personas: full.personas.length,
+          domains: full.domains.length,
+          capabilities: full.capabilities.length,
+          scenarios: full.scenarios.length,
+          open_decisions: full.open_decisions.length,
+        },
+      };
+      if (view === 'full') return appResult('Stage briefing — full', full);
+      if (view === 'capabilities') return appResult('Stage briefing — capabilities', { ...base, ...pageItems(full.capabilities, args, (item) => item.id) });
+      if (view === 'scenarios') return appResult('Stage briefing — scenarios', { ...base, ...pageItems(full.scenarios, args, (item) => item.id) });
+      return appResult('Stage briefing — summary', { ...base, personas: full.personas, domains: full.domains, open_decisions: full.open_decisions.slice(0, 10) });
     } catch (e) { return err(`app_get_stage_briefing failed: ${(e as Error).message}`); }
   } };
 }

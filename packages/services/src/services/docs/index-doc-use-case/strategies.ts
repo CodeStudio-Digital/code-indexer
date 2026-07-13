@@ -1,15 +1,9 @@
 import { PDF_MAX_BYTES, parsePdf } from '../pdf-parser.js';
 import { crawlUrl } from '../crawler.js';
-import {
-  readFolder,
-  FOLDER_HARD_MAX_FILES,
-  FOLDER_DEFAULT_INCLUDE_GLOB,
-  FOLDER_DEFAULT_EXCLUDE_GLOB,
-  type FolderReaderEvent,
-} from '../folder-reader.js';
 import { DocError } from '../errors.js';
 import { ensureSource, estimateFromPages, requireCollection } from './source-helpers.js';
 import { runIngest } from './run-ingest.js';
+import { runIncrementalFolderIngest } from './incremental-folder.js';
 import { defaultCrawlConfig, normalizeSeedUrl, sanitizeFileName, stripExtension } from './utils.js';
 import {
   type IndexDocStreamCallbacks,
@@ -139,71 +133,11 @@ export async function indexFolder(
     doc_type: input.docType,
     folder_root_path: rootPath,
     folder: input.folder,
+    enrichment_mode: input.enrichmentMode,
   });
-  const skipGate = source.folder_bypass_relevance_gate;
-  return runIngest(
-    deps,
-    collection,
-    source,
-    async () => {
-      // Fase "reading" — análoga ao "fetching" do URL, distinta para a UI.
-      await callbacks?.onProgress?.({
-        phase: 'reading',
-        current: 0,
-        total: 0,
-        label: rootPath,
-      });
-      const result = await readFolder({
-        rootPath,
-        includeGlob: source.folder_include_glob ?? FOLDER_DEFAULT_INCLUDE_GLOB,
-        excludeGlob: source.folder_exclude_glob ?? FOLDER_DEFAULT_EXCLUDE_GLOB,
-        maxFiles: source.folder_max_files ?? undefined,
-        sourceId: source.id,
-        onEvent: (ev: FolderReaderEvent) => handleFolderEvent(deps, source.id, ev, callbacks),
-      });
-      console.log(
-        `[doc-indexer] folder read done source=${source.id} scanned=${result.filesScanned} ` +
-          `processed=${result.filesProcessed} skipped=${result.filesSkipped} errored=${result.filesErrored} ` +
-          `pages=${result.pages.length} (cap=${FOLDER_HARD_MAX_FILES})`,
-      );
-      return result.pages;
-    },
-    callbacks,
-    { skipGate },
-  );
-}
-
-function handleFolderEvent(
-  deps: IndexDocUseCaseDeps,
-  sourceId: number,
-  ev: FolderReaderEvent,
-  callbacks: IndexDocStreamCallbacks | undefined,
-): void {
-  if (ev.kind === 'file') {
-    deps.progressTracker?.put(sourceId, {
-      phase: 'reading', current: ev.index, total: ev.total, label: ev.filePath, pages_fetched: ev.index,
-    });
-    void callbacks?.onProgress?.({
-      phase: 'reading', current: ev.index, total: ev.total, label: ev.filePath, pages_fetched: ev.index,
-    });
-    return;
+  if (source.doc_type === 'mixed' && /[\\/]ScriptReference(?:[\\/]|$)/i.test(rootPath)) {
+    deps.docStore.updateSourceDocType(source.id, 'api_reference');
+    source.doc_type = 'api_reference';
   }
-  if (ev.kind === 'scan') {
-    // Pre-flight one-shot — UI mostra "Encontrados N · vou processar M (cap K)".
-    console.log(
-      `[doc-indexer] folder scan source=${sourceId} totalMatches=${ev.totalMatches} ` +
-        `willProcess=${ev.willProcess} cap=${ev.cap}` +
-        (ev.totalMatches > ev.willProcess
-          ? ` ⚠ cap atingido — ${ev.totalMatches - ev.willProcess} arquivo(s) descartado(s); aumente em Avançado`
-          : ''),
-    );
-    void callbacks?.onScan?.({ totalMatches: ev.totalMatches, willProcess: ev.willProcess, cap: ev.cap });
-    return;
-  }
-  // skip | error — log only, sem contagem visual.
-  console.log(
-    `[doc-indexer] folder ${ev.kind}: ${ev.filePath}` +
-      ('reason' in ev ? ` (${ev.reason})` : '') +
-      ('message' in ev ? ` — ${ev.message}` : ''),
-  );
+  return runIncrementalFolderIngest(deps, collection, source, callbacks, input.resumeRunId);
 }

@@ -1,0 +1,104 @@
+import { describe, expect, it } from 'vitest';
+import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { withCompanyToolMetadata } from '../metadata.js';
+
+function tool(name: string, overrides: Partial<CoderTool> = {}): CoderTool {
+  return {
+    name,
+    description: name,
+    parameters: { type: 'object', properties: {} },
+    source: 'native',
+    handler: async () => ({ content: 'ok' }),
+    ...overrides,
+  };
+}
+
+describe('company tool metadata normalization', () => {
+  it('classifies persisted data changes as serialized mutations', () => {
+    for (const name of ['env_set', 'write_shared_file', 'app_save_spec']) {
+      expect(resolveToolMetadata(withCompanyToolMetadata(tool(name)))).toMatchObject({
+        mutates: true,
+        parallelSafe: false,
+        riskLevel: 'write',
+        repeatPolicy: 'mutating',
+        executionClass: 'write',
+      });
+    }
+  });
+
+  it('keeps live reads parallel-safe but volatile', () => {
+    for (const name of [
+      'app_get_context',
+      'docs_read',
+      'list_pipelines',
+      'app_list_features',
+      'app_spec_audit',
+      'ds_analyze_import',
+    ]) {
+      expect(resolveToolMetadata(withCompanyToolMetadata(tool(name))), name).toMatchObject({
+        mutates: false,
+        parallelSafe: true,
+        riskLevel: 'read',
+        repeatPolicy: 'volatile',
+        executionClass: 'read',
+      });
+    }
+  });
+
+  it('marks workflows and runtime actions as execute-risk mutations', () => {
+    for (const name of ['app_provision_db', 'app_run_test_cycle', 'review_subordinate_work', 'start_pipeline']) {
+      expect(resolveToolMetadata(withCompanyToolMetadata(tool(name))), name).toMatchObject({
+        mutates: true,
+        parallelSafe: false,
+        riskLevel: 'execute',
+        repeatPolicy: 'mutating',
+        executionClass: 'execute',
+      });
+    }
+  });
+
+  it('serializes orchestration without blocking plan-mode communication', () => {
+    expect(resolveToolMetadata(withCompanyToolMetadata(tool('spawn_subordinate_agent')))).toMatchObject({
+      mutates: false,
+      parallelSafe: false,
+      riskLevel: 'read',
+      repeatPolicy: 'volatile',
+      executionClass: 'control',
+    });
+  });
+
+  it('treats kanban writes as mutations while keeping kanban reads read-only', () => {
+    expect(withCompanyToolMetadata(tool('kanban_create_card'))).toMatchObject({
+      mutates: true,
+      parallelSafe: false,
+      riskLevel: 'write',
+      repeatPolicy: 'mutating',
+      executionClass: 'write',
+    });
+    expect(withCompanyToolMetadata(tool('kanban_read_my_card'))).toMatchObject({
+      mutates: false,
+      parallelSafe: true,
+      riskLevel: 'read',
+      repeatPolicy: 'volatile',
+      executionClass: 'read',
+    });
+  });
+
+  it('preserves explicit tool metadata', () => {
+    const normalized = withCompanyToolMetadata(tool('custom', {
+      mutates: false,
+      parallelSafe: true,
+      riskLevel: 'read',
+      repeatPolicy: 'stable',
+      executionClass: 'read',
+    }));
+    expect(normalized).toMatchObject({
+      mutates: false,
+      parallelSafe: true,
+      riskLevel: 'read',
+      repeatPolicy: 'stable',
+      executionClass: 'read',
+    });
+  });
+});

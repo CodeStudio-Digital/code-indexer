@@ -68,6 +68,8 @@ function setup(): Handle {
   const embeddingService: EmbeddingService = {
     embed,
     embedQuery: async () => ({ vector: [0], tokens: 0 }),
+    fingerprint: () => 'default',
+    maxConcurrency: () => 4,
   };
   const vectorStore: VectorStore = {
     upsert,
@@ -200,7 +202,7 @@ describe('retryEmbeddings — parallel + scope', () => {
     // Reproduces the 2026-05-20 incident: Cloudflare Vectorize accepted
     // the request but persisted nothing. Local mapping was wrongly set
     // and the badge said "✓ embedded" while remote search returned 0.
-    h.upsert.mockResolvedValueOnce(0);
+    h.upsert.mockResolvedValue(0);
     const c = h.store.createCollection({ name: 'col' });
     const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://x.example' });
     seedPendingChunks(h.store, c.id, s.id, 3);
@@ -213,6 +215,22 @@ describe('retryEmbeddings — parallel + scope', () => {
     // No vector mapping rows registered.
     const refs = h.store.listVectorIdsForSource(s.id);
     expect(refs.length).toBe(0);
+  });
+
+  it('resolves partial upserts down to the exact accepted records', async () => {
+    const c = h.store.createCollection({ name: 'partial' });
+    const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://partial.example' });
+    seedPendingChunks(h.store, c.id, s.id, 4);
+    // The first aggregate request is only partially acknowledged. Subsequent
+    // split batches are confirmed, so every id can be checkpointed exactly.
+    h.upsert.mockResolvedValueOnce(2);
+
+    const result = await h.uc.retryEmbeddings({ sourceId: s.id });
+
+    expect(result.embedded).toBe(4);
+    expect(h.upsert.mock.calls.length).toBeGreaterThan(1);
+    expect(h.store.listChunksMissingEmbedding({ sourceId: s.id })).toHaveLength(0);
+    expect(h.store.listVectorIdsForSource(s.id)).toHaveLength(4);
   });
 
   it('force=true wipes existing mapping before retrying', async () => {

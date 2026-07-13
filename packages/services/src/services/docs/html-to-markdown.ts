@@ -35,6 +35,16 @@ const STRIP_SELECTORS = [
   '#nav', '#header', '#footer', '#sidebar', '#search',
 ];
 
+const UNITY_STRIP_SELECTORS = [
+  '.scrollToFeedback',
+  '.suggest',
+  '.switch-link',
+  '.feedback',
+  '.toolbar',
+  '.footer-wrapper',
+  '#DocsAnalyticsData',
+];
+
 const turndown = new TurndownService({
   headingStyle: 'atx',
   codeBlockStyle: 'fenced',
@@ -94,6 +104,8 @@ export interface ConvertedPage {
   links: string[];
   /** Meta robots `noindex` was set on the page. */
   noindex: boolean;
+  canonicalUrl: string | null;
+  adapter: 'generic' | 'unity-script-reference';
 }
 
 export interface ConvertHtmlOptions {
@@ -101,6 +113,9 @@ export interface ConvertHtmlOptions {
   baseUrl: string;
   /** Restrict link extraction to the same origin. Default true. */
   sameOriginOnly?: boolean;
+  /** Optional operator/site adapter overrides. */
+  contentSelectors?: string[];
+  excludeSelectors?: string[];
 }
 
 /**
@@ -114,6 +129,9 @@ export function convertHtmlToMarkdown(html: string, opts: ConvertHtmlOptions): C
   const $ = cheerio.load(html);
 
   const noindex = $('meta[name="robots"][content*="noindex" i]').length > 0;
+  const canonicalUrl = ($('link[rel="canonical"]').first().attr('href') ?? '').trim() || null;
+  const unityScriptReference = /[\\/]ScriptReference[\\/]/i.test(opts.baseUrl)
+    || /\/Documentation\/ScriptReference\//i.test(canonicalUrl ?? '');
 
   // Title: <title> tag if non-empty, else first <h1>.
   const titleFromTag = $('title').first().text().trim();
@@ -151,19 +169,28 @@ export function convertHtmlToMarkdown(html: string, opts: ConvertHtmlOptions): C
   for (const sel of STRIP_SELECTORS) {
     $(sel).remove();
   }
+  if (unityScriptReference) {
+    for (const sel of UNITY_STRIP_SELECTORS) $(sel).remove();
+  }
+  for (const sel of opts.excludeSelectors ?? []) $(sel).remove();
 
   // Pick the main content container. Falls through to '*:first' so we
   // always have an Element-scoped Cheerio (`$.root()` is Document and
   // breaks `.find(...).each(...)` typing in cheerio v1).
-  const rootSelector = $('main').first().length > 0
-    ? 'main'
-    : $('article').first().length > 0
-      ? 'article'
-      : $('body').first().length > 0
-        ? 'body'
-        : '*';
+  const configured = (opts.contentSelectors ?? []).find((sel) => $(sel).first().length > 0);
+  const root = configured
+    ? $(configured).first()
+    : unityScriptReference && $('#content-wrap .content').first().length > 0
+      ? $('#content-wrap .content').first()
+      : $('main').first().length > 0
+        ? $('main').first()
+        : $('article').first().length > 0
+          ? $('article').first()
+          : $('[role="main"]').first().length > 0
+            ? $('[role="main"]').first()
+            : largestContentDiv($);
 
-  const rootHtml = $(rootSelector).first().html() ?? '';
+  const rootHtml = root.html() ?? '';
   const markdown = turndown.turndown(rootHtml).trim();
 
   return {
@@ -171,7 +198,25 @@ export function convertHtmlToMarkdown(html: string, opts: ConvertHtmlOptions): C
     markdown,
     links: dedupe(links),
     noindex,
+    canonicalUrl,
+    adapter: unityScriptReference ? 'unity-script-reference' : 'generic',
   };
+}
+
+function largestContentDiv($: cheerio.CheerioAPI) {
+  let best = $('body').first();
+  let bestScore = best.text().trim().length;
+  $('body div').each((_, el) => {
+    const node = $(el);
+    const textLen = node.text().trim().length;
+    const linkLen = node.find('a').text().trim().length;
+    const score = textLen - Math.floor(linkLen * 0.7);
+    if (score > bestScore) {
+      best = node;
+      bestScore = score;
+    }
+  });
+  return best;
 }
 
 function dedupe(items: string[]): string[] {

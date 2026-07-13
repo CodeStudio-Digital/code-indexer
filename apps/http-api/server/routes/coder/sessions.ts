@@ -2,7 +2,8 @@ import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import { TOOL_OUTPUT_CAP_LEVELS, parseToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import { AGENTS, type AgentId } from '@mcp/code-agent/agents/index.js';
-import { getAllKnownToolsMeta, getToolTier, inferProfileFromMessage, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
+import { decide } from '@mcp/code-agent/agents/decision-engine.js';
+import { getAllKnownToolsMeta, getToolTier, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
 import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
 import { enumerateExternalTools } from '../../../admin/mcp-servers.routes.js';
@@ -474,22 +475,17 @@ export function mountCoderSessionsRoutes(
     if (!message) {
       return c.json({ agent: 'explore', profile: 'bootstrap', confidence: 'default' });
     }
-    const profile = inferProfileFromMessage(message);
-    // Map profile → recommended agent. navigate without plan mode = build;
-    // full = admin (but requires explicit user intent for git commits).
-    let agent: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
-    switch (profile) {
-      case 'bootstrap':
-        agent = 'explore';
-        break;
-      case 'navigate':
-        agent = 'build';
-        break;
-      case 'full':
-        agent = 'admin';
-        break;
-    }
-    return c.json({ agent, profile, confidence: 'heuristic' });
+    const decision = decide(message);
+    const agent = decision.recommendedAgent;
+    const profile = AGENTS[agent].profile;
+    return c.json({
+      agent,
+      profile,
+      confidence: 'heuristic',
+      confidence_score: decision.confidence,
+      intent: decision.intent,
+      requires_explicit_user_intent: decision.requiresExplicitUserIntent,
+    });
   });
 
   app.get('/api/coder/sessions', (c) => {

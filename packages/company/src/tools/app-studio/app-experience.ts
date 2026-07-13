@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { auditAppUxBrief, auditAppWireframePlan } from '@mcp/app-studio/experience/audit.js';
 import {
   dataModelFingerprint,
@@ -18,6 +18,7 @@ import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult, compactAudit, PAGE_PROPERTIES, pageItems, viewArg } from './model-output.js';
 
 const EMPTY: JsonSchema = { type: 'object', properties: {}, additionalProperties: false };
 const WRAPPED = (name: 'brief' | 'plan'): JsonSchema => ({
@@ -51,12 +52,37 @@ function writeArtifact(ctx: Parameters<CoderTool['handler']>[1], relative: strin
 }
 
 export function appGetUx(binding: AppToolBinding): CoderTool {
-  return { name: 'app_get_ux', description: 'Read the latest versioned UX direction and its audit.', parameters: EMPTY, source: 'native', handler: async () => {
+  const parameters: JsonSchema = {
+    type: 'object',
+    properties: {
+      view: { type: 'string', enum: ['summary', 'directions', 'tokens', 'references', 'full'], description: "Default: 'summary'." },
+      ...PAGE_PROPERTIES,
+    },
+    additionalProperties: false,
+  };
+  return { name: 'app_get_ux', description: 'Read a progressive projection of the latest UX direction and audit.', parameters, source: 'native', handler: async (args) => {
     try {
       const { store, session } = context(binding);
       const revision = store.getLatestUxRevision(session.id);
       const brief = parseAppUxBrief(revision?.ux_json);
-      return ok(JSON.stringify({ revision, brief, audit: auditAppUxBrief(brief) }, null, 2));
+      const audit = auditAppUxBrief(brief);
+      if (!brief) return appResult('App UX — summary', { revision: null, brief: null, audit: compactAudit(audit) });
+      const { ux_json: _uxJson, ...revisionMeta } = revision!;
+      const view = viewArg(args, ['summary', 'directions', 'tokens', 'references', 'full'], 'summary');
+      const base = {
+        view,
+        revision: revisionMeta,
+        summary: brief.summary,
+        selected_direction_id: brief.selected_direction_id,
+        navigation: brief.navigation,
+        counts: { directions: brief.directions.length, references: brief.references.length },
+        audit: compactAudit(audit),
+      };
+      if (view === 'full') return appResult('App UX — full', { ...base, brief, audit });
+      if (view === 'directions') return appResult('App UX — directions', { ...base, ...pageItems(brief.directions, args, (item) => item.id) });
+      if (view === 'tokens') return appResult('App UX — tokens', { ...base, tokens: brief.tokens, accessibility: brief.accessibility });
+      if (view === 'references') return appResult('App UX — references', { ...base, ...pageItems(brief.references, args, (item) => item.value) });
+      return appResult('App UX — summary', { ...base, principles: brief.principles, constraints: brief.constraints });
     } catch (e) { return err(`app_get_ux failed: ${(e as Error).message}`); }
   } };
 }
@@ -75,23 +101,62 @@ export function appSaveUx(binding: AppToolBinding): CoderTool {
       const json = serializeExperienceArtifact(brief);
       const revision = c.store.saveUxRevision({ app_session_id: c.session.id, spec_revision_id: c.specRevision?.id ?? null, architecture_revision_id: c.architectureRevision.id, data_fingerprint: brief.data_fingerprint, ux_json: json });
       writeArtifact(ctx, 'spec/app-ux.json', json);
-      return ok(JSON.stringify({ revision, audit, next: "Submit stage 'ux' for user review." }, null, 2));
+      return appResult('App UX saved', { revision, audit, next: "Submit stage 'ux' for user review." });
     } catch (e) { return err(`app_save_ux failed: ${(e as Error).message}`); }
   } };
 }
 
 export function appUxAudit(binding: AppToolBinding): CoderTool {
   return { name: 'app_ux_audit', description: 'Audit the latest UX brief.', parameters: EMPTY, source: 'native', handler: async () => {
-    try { const c = context(binding); const revision = c.store.getLatestUxRevision(c.session.id); return ok(JSON.stringify(auditAppUxBrief(parseAppUxBrief(revision?.ux_json)), null, 2)); }
+    try { const c = context(binding); const revision = c.store.getLatestUxRevision(c.session.id); return appResult('App UX audit', auditAppUxBrief(parseAppUxBrief(revision?.ux_json))); }
     catch (e) { return err(`app_ux_audit failed: ${(e as Error).message}`); }
   } };
 }
 
 export function appGetWireframe(binding: AppToolBinding): CoderTool {
-  return { name: 'app_get_wireframe', description: 'Read the latest flows, wireframes, UI TDD cases and ordered build plan.', parameters: EMPTY, source: 'native', handler: async () => {
+  const parameters: JsonSchema = {
+    type: 'object',
+    properties: {
+      view: { type: 'string', enum: ['summary', 'flows', 'screens', 'tests', 'groups', 'tasks', 'full'], description: "Default: 'summary'." },
+      ...PAGE_PROPERTIES,
+    },
+    additionalProperties: false,
+  };
+  return { name: 'app_get_wireframe', description: 'Read a progressive projection of flows, screens, tests and the ordered build plan.', parameters, source: 'native', handler: async (args) => {
     try {
       const c = context(binding); const revision = c.store.getLatestWireframeRevision(c.session.id); const plan = parseAppWireframePlan(revision?.wireframe_json);
-      return ok(JSON.stringify({ revision, plan, audit: auditAppWireframePlan(plan, c.spec, c.architecture, c.product), groups: revision ? c.store.listBuildGroups(revision.id) : [], tasks: revision ? c.store.listBuildTaskEvidence(revision.id) : [] }, null, 2));
+      const audit = auditAppWireframePlan(plan, c.spec, c.architecture, c.product);
+      if (!revision || !plan) return appResult('App wireframe — summary', { revision: null, plan: null, audit: compactAudit(audit) });
+      const { wireframe_json: _wireframeJson, ...revisionMeta } = revision;
+      const view = viewArg(args, ['summary', 'flows', 'screens', 'tests', 'groups', 'tasks', 'full'], 'summary');
+      const groupStates = c.store.listBuildGroups(revision.id);
+      const taskEvidence = c.store.listBuildTaskEvidence(revision.id);
+      const base = {
+        view,
+        revision: revisionMeta,
+        summary: plan.summary,
+        counts: {
+          flows: plan.flows.length,
+          screens: plan.screens.length,
+          tests: plan.tdd_cases.length,
+          groups: plan.build_groups.length,
+          tasks: plan.tasks.length,
+        },
+        audit: compactAudit(audit),
+      };
+      if (view === 'full') return appResult('App wireframe — full', { ...base, plan, audit, group_states: groupStates, task_evidence: taskEvidence });
+      if (view === 'flows') return appResult('App wireframe — flows', { ...base, ...pageItems(plan.flows, args, (item) => item.id) });
+      if (view === 'screens') return appResult('App wireframe — screens', { ...base, ...pageItems(plan.screens, args, (item) => item.screen_id) });
+      if (view === 'tests') return appResult('App wireframe — tests', { ...base, ...pageItems(plan.tdd_cases, args, (item) => item.id) });
+      if (view === 'groups') {
+        const page = pageItems(plan.build_groups, args, (item) => item.id);
+        return appResult('App wireframe — groups', { ...base, ...page, group_states: groupStates.filter((state) => page.items.some((group) => group.id === state.group_id)) });
+      }
+      if (view === 'tasks') {
+        const page = pageItems(plan.tasks, args, (item) => item.id);
+        return appResult('App wireframe — tasks', { ...base, ...page, task_evidence: taskEvidence.filter((evidence) => page.items.some((task) => task.id === evidence.task_id)) });
+      }
+      return appResult('App wireframe — summary', { ...base, group_states: groupStates, completed_tasks: taskEvidence.filter((item) => item.status === 'done').length });
     } catch (e) { return err(`app_get_wireframe failed: ${(e as Error).message}`); }
   } };
 }
@@ -110,14 +175,14 @@ export function appSaveWireframe(binding: AppToolBinding): CoderTool {
       const json = serializeExperienceArtifact(plan);
       const revision = c.store.saveWireframeRevision({ app_session_id: c.session.id, spec_revision_id: c.specRevision?.id ?? null, architecture_revision_id: c.architectureRevision?.id ?? null, ux_revision_id: uxRevision.id, data_fingerprint: plan.data_fingerprint, wireframe_json: json });
       writeArtifact(ctx, 'spec/app-wireframes.json', json);
-      return ok(JSON.stringify({ revision, audit, groups: plan.build_groups.length, tasks: plan.tasks.length, next: "Submit stage 'wireframe' for user review." }, null, 2));
+      return appResult('App wireframe saved', { revision, audit, groups: plan.build_groups.length, tasks: plan.tasks.length, next: "Submit stage 'wireframe' for user review." });
     } catch (e) { return err(`app_save_wireframe failed: ${(e as Error).message}`); }
   } };
 }
 
 export function appWireframeAudit(binding: AppToolBinding): CoderTool {
   return { name: 'app_wireframe_audit', description: 'Audit coverage, data bindings, UI TDD traceability and build-plan dependencies.', parameters: EMPTY, source: 'native', handler: async () => {
-    try { const c = context(binding); const revision = c.store.getLatestWireframeRevision(c.session.id); return ok(JSON.stringify(auditAppWireframePlan(parseAppWireframePlan(revision?.wireframe_json), c.spec, c.architecture, c.product), null, 2)); }
+    try { const c = context(binding); const revision = c.store.getLatestWireframeRevision(c.session.id); return appResult('App wireframe audit', auditAppWireframePlan(parseAppWireframePlan(revision?.wireframe_json), c.spec, c.architecture, c.product)); }
     catch (e) { return err(`app_wireframe_audit failed: ${(e as Error).message}`); }
   } };
 }

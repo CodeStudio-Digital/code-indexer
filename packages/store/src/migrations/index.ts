@@ -225,6 +225,10 @@ import { coderTelemetryEligibleToolsRepair209 } from './209_coder_telemetry_elig
 import { coderToolCallGuardTelemetry210 } from './210_coder_tool_call_guard_telemetry.js';
 import { appStudioExperience211 } from './211_app_studio_experience.js';
 import { appStudioProductModel212 } from './212_app_studio_product_model.js';
+import { coderToolOutputFormat213 } from './213_coder_tool_output_format.js';
+import { docIngestGenerations214 } from './214_doc_ingest_generations.js';
+import { docRagTelemetryCache215 } from './215_doc_rag_telemetry_cache.js';
+import { docIngestPauseWorkers216 } from './216_doc_ingest_pause_workers.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -466,6 +470,10 @@ export const MIGRATIONS: Migration[] = [
   coderToolCallGuardTelemetry210,
   appStudioExperience211,
   appStudioProductModel212,
+  coderToolOutputFormat213,
+  docIngestGenerations214,
+  docRagTelemetryCache215,
+  docIngestPauseWorkers216,
 ];
 
 /**

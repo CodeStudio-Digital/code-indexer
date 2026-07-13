@@ -7,6 +7,7 @@
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 
 export function buildPipelineMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
@@ -56,7 +57,7 @@ function listPipelines(orchestrator: CompanyOrchestrator): CoderTool {
       if (summary.length === 0) {
         return ok('No pipelines available. Create one via the dashboard Pipelines tab, then call start_pipeline.');
       }
-      return ok(JSON.stringify(summary, null, 2));
+      return okStructured(summary);
     },
   };
 }
@@ -97,12 +98,12 @@ function startPipeline(orchestrator: CompanyOrchestrator): CoderTool {
         }
 
         const exec = await orchestrator.pipelineStart(pipelineId, initialInput, 'master');
-        return ok(JSON.stringify({
+        return okStructured({
           execution_id: exec.id,
           pipeline_id: exec.pipeline_id,
           status: exec.status,
           start_node: exec.current_node_id,
-        }, null, 2));
+        });
       } catch (e) {
         return err(`Failed to start pipeline: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -155,7 +156,7 @@ function getPipelineStatus(orchestrator: CompanyOrchestrator): CoderTool {
           finished_at: n.finished_at,
         })),
       };
-      return ok(JSON.stringify(compact, null, 2));
+      return okStructured(compact);
     },
   };
 }

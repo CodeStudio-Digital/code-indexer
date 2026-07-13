@@ -12,6 +12,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { DocHybridSearch } from '@mcp/services/services/docs/index.js';
 import { classifyConfidence } from '@mcp/services/services/docs/index.js';
 import type { ResolveContext } from '@mcp/services/pipelines/index.js';
+import type { DocsEvidenceLedger } from './evidence-ledger.js';
 
 export interface DocsSearchToolDeps {
   docHybridSearch: DocHybridSearch;
@@ -21,6 +22,8 @@ export interface DocsSearchToolDeps {
   scopedCollections?: string[];
   /** Increment-on-call counter the DocsAgent uses for telemetry. */
   onCall?: () => void;
+  ledger?: DocsEvidenceLedger;
+  subQuestionCount?: () => number;
 }
 
 export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
@@ -57,6 +60,10 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
           type: 'boolean',
           description: 'Re-rank top-K via LLM before truncating. Default false.',
         },
+        sub_question_index: {
+          type: 'number',
+          description: 'Zero-based index from docs_plan that this search is answering.',
+        },
       },
       required: ['query'],
       additionalProperties: false,
@@ -65,11 +72,19 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
     parallelSafe: true,
     riskLevel: 'read',
     handler: async (args): Promise<ToolResult> => {
+      if (deps.ledger && !deps.ledger.canSearch()) {
+        return err(`search budget exhausted (${deps.ledger.maxSearches}); use the evidence already collected and finish.`);
+      }
       deps.onCall?.();
       const query = String(args.query ?? '').trim();
       if (!query) return err('query cannot be empty');
       const rawLimit = Number(args.limit);
-      const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(20, rawLimit)) : 8;
+      const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(8, rawLimit)) : 6;
+      const subQuestionCount = Math.max(1, deps.subQuestionCount?.() ?? 1);
+      const requestedSubQuestion = Number(args.sub_question_index);
+      const subQuestion = Number.isFinite(requestedSubQuestion)
+        ? Math.max(0, Math.min(subQuestionCount - 1, Math.trunc(requestedSubQuestion)))
+        : 0;
       const requestedCollection =
         typeof args.collection === 'string' ? args.collection.trim() : undefined;
       const collection =
@@ -97,6 +112,7 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
       }
 
       const { results, diag } = response;
+      deps.ledger?.recordSearch(subQuestion, results.map((r) => r.chunk_id));
       if (results.length === 0) {
         const hint = !diag.embedding_available
           ? ' (no embedder configured — FTS5 only)'

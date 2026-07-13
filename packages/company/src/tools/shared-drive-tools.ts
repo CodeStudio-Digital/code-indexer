@@ -15,6 +15,7 @@
 
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import { DOCS_MIRROR_PREFIX, isDocsMirrorPath } from './file-path-core.js';
 
 const WRITE_DESC =
@@ -180,7 +181,7 @@ export const listSharedFiles: CoderTool = {
         owner_role: f.ownerRole,
         updated_at: f.updatedAt,
       }));
-      return ok(JSON.stringify({ scope: scopeKey, files: compact }, null, 2));
+      return okStructured({ scope: scopeKey, files: compact });
     } catch (e) {
       return err(`list_shared_files failed: ${e instanceof Error ? e.message : String(e)}`);
     }

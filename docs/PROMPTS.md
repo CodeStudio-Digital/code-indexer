@@ -50,13 +50,13 @@ Concatenation order (one `return` at the end of `buildSystemPrompt`):
 ┌─ STATIC PREFIX (cache-stable) ────────────────────────────────┐
 │  preamble          providerPreamble(family)                   │
 │  base              prompts/base.txt  + {{interpolation}}       │
-│                    ({{tierHint}} {{mcpSection}} {{visionSection}}│
-│                     {{memorySection}} inlined into base)       │
+│                    (tier/MCP + capability-derived native tools │
+│                     + vision/memory/overlay/subagents inline)  │
 │  planSection       prompts/plan.txt  (planMode && !spec)       │
 │  planDepthSection  buildPlanDepthBlock() (planMode && !spec)   │
-│  agentSection      prompts/<agentId>.txt (explore|build|admin| │
-│                     spec|builder|api|diagram; NOT plan)        │
-│  interactionSection  inline (ask_user / submit_* / tasks)      │
+│  agentSection      prompts/<agentId>.txt (all registered modes │
+│                     except plan, which is loaded above)        │
+│  interactionSection  inline, derived from registered tools     │
 │  agentLoopBlock    buildAgentLoopBlock() (agentLoopV2)         │
 │  languageBlock     languageSection() (responseLanguage set)    │
 │  outputStyleBlock  outputStyleSection() (explanatory|learning) │
@@ -64,7 +64,7 @@ Concatenation order (one `return` at the end of `buildSystemPrompt`):
 │  agentlessHint     inline (CODER_AGENTLESS_MODE=1)             │
 ├─ SYSTEM_PROMPT_DYNAMIC_BOUNDARY ──────────────────────────────┤
 │  dynamicSuffix     toolCapBlock + customTiersBlock             │
-│                    + project hook + repoMap                    │
+│                    + project hook + repoMap + skill awareness  │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,25 +81,32 @@ Fragment sources:
 - **base body** — [`prompts/base.txt`](../packages/code-agent/src/prompts/base.txt)
   via `loadPrompt` + `interpolate`. Placeholders: `{{projectName}}`,
   `{{projectRoot}}`, `{{os}}`, `{{tierHint}}`, `{{mcpSection}}`,
+  `{{nativeToolsSection}}`, `{{overlaySection}}`, `{{subagentsSection}}`,
   `{{visionSection}}`, `{{memorySection}}`.
 - **mode identity** — [`prompts/<agentId>.txt`](../packages/code-agent/src/prompts/)
-  for `explore` / `build` / `admin` / `spec` / `builder` / `api` / `diagram`.
+  for `explore` / `build` / `admin` / `spec`, the six `app_*` specialists,
+  `builder` / `api` / `diagram`.
   `plan` is loaded separately via `planSection`; `spec` deliberately does **not**
   also load `plan.txt` (it has its own `submit_spec` gate).
-- **tier hint** — `tierHint(profile)`: `bootstrap` / `navigate` text; `full`
-  emits nothing. Explains hidden tiers and how to unlock more.
-- **MCP section** — `mcpSection(mcpAvailable, isIndexed)`: three variants
-  (full semantic-nav guide / project-not-indexed fallbacks / native-only).
-- **memory / vision sections** — `memorySection(ctx.sessionDrive)` and
-  `visionSection(ctx.modelCanSeeImages)` are injected into `base.txt`; gate them
-  in code, never by pasting single-session-only tool names into the shared body.
+- **tier hint** — `tierHint(profile)`: rendered only when `expand_toolset`
+  survives the final role/specialist filter. Explains hidden tiers and how to
+  unlock more.
+- **MCP section** — `mcpSection(mcpAvailable, isIndexed)`: rendered only when
+  the final registry still exposes code-navigation tools.
+- **tool-dependent sections** — native tools, interactive tools, MCP guidance,
+  memory, vision, overlay and subagent guidance are derived from
+  `ctx.availableTools`, the final registry after agent filtering. This prevents
+  a restricted specialist from being instructed to call tools it cannot see.
 - **session-fixed directives** — `languageSection`, `outputStyleSection`, and
   `autonomousSection` render above the boundary when configured.
 - **dynamic suffix** — `toolCapBlock(toolCap)`, `customTiersBlock(customTiers)`,
-  the `.mcp-indexer/hooks/system-prompt.js` project hook, and the repo map.
+  the `.mcp-indexer/hooks/system-prompt.js` project hook, repo map and skill
+  awareness.
 
-Then for **company sessions** the master/subordinate block is appended (§4), and
-the **operational rules** are appended last as a mandatory, verbatim block.
+Session-fixed company, Design System, App Studio and diagram blocks are inserted
+with `appendStaticPromptSection(...)` immediately before the boundary. Anthropic
+turns that marker into two system blocks and applies its cache breakpoint only
+to the stable prefix; the marker itself is never sent to the provider.
 
 ---
 
@@ -182,6 +189,7 @@ lists or rationale in the prompt.
 | --- | --- | --- | --- | --- |
 | base body | `code-agent/src/prompts/base.txt` | Core coding-agent identity + tools | EN | No (carries `{{vars}}`) |
 | mode: explore/plan/build/admin/spec/builder/api/diagram | `code-agent/src/prompts/{explore,plan,build,admin,spec,builder,api,diagram}.txt` | Per-mode behavior & gates | EN | No |
+| App Studio specialists | `code-agent/src/prompts/{app_spec,app_db,app_architect,app_product,app_ux,app_wireframe}.txt` | Requirements, data, architecture, product, UX and wireframe roles | EN | No |
 | DS Studio / DS consumer | `code-agent/src/prompts/{ds-studio,ds-consumer}.txt` | Design-system workspace and linked-design-system Builder guidance | EN | No (carries `{{vars}}`) |
 | diagram guidance | `code-agent/src/prompts/diagram-guidance.ts` | Draw.io mxGraph authoring guide appended when the diagram tier is active | EN | No |
 | master recovery | `code-agent/src/prompts/master-recovery.txt` | Master crash-recovery briefing | EN | No |
@@ -236,6 +244,24 @@ Canonical vocabulary the prompts share:
   old `kanban_my_*` / `kanban_add_comment` / `kanban_update_checklist` /
   `kanban_update_card` aliases were removed — never reference them.
 
+### Model-facing tool results
+
+Native tools that return structured domain data should use `structuredResult`,
+`okStructured`, or `errStructured` from `core/model-output.ts`:
+
+- `content` is the compact Markdown projection delivered to providers.
+- `structuredData` keeps the canonical object inside the runner and is never
+  appended to model context or persisted as a payload.
+- `contentFormat` and the compact structured character count are telemetry only.
+- `code_exec` deliberately exposes compact JSON when `structuredData` exists so
+  existing scripts using `JSON.parse` keep working.
+- `MCP_TOOL_RESULT_MARKDOWN=0` immediately restores pretty JSON in `content`.
+
+Do not convert strict parser contracts, API transport bodies, tool arguments,
+plugin-owned outputs, or persistence formats to Markdown. Large App Studio
+getters default to summary views; specialist prompts should request focused
+sections with ids/offset/limit and use `view:"full"` only when necessary.
+
 ---
 
 ## 7. Conventions for editing prompts safely
@@ -249,12 +275,9 @@ Canonical vocabulary the prompts share:
   / `suggested_fix`. Each matches its own parser. Do **not** harmonize them.
 - **Keep the boundary in place.** Don't move `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` and
   don't add session-varying text above it.
-- **Gate non-company-only tools.** Tools registered only for single sessions
-  (e.g. the Session Drive tools, via `if (!opts.companyContext)`) must be surfaced
-  through a section gated on the *same* condition (`ctx.sessionDrive`) — never via
-  the shared `base.txt` or `tierHint`, which company subordinates also receive.
-  Keying the prompt gate off the same flag as the registration keeps the prompt
-  and the real tool surface from drifting.
+- **Derive tool claims from the final registry.** Pass `availableTools` only
+  after role/specialist filtering. New conditional guidance must use that set,
+  not a parallel role flag that can drift from registration.
 - **Bump `SYSTEM_PROMPT_VERSION`** in
   [`core/runner/assembly/system-prompt.ts`](../packages/code-agent/src/core/runner/assembly/system-prompt.ts)
   whenever you change the static prefix or the tool surface. Format `YYYYMMDD.NN`.

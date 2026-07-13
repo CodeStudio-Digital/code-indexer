@@ -4,6 +4,7 @@ import type {
   DocSource,
   DocStore,
   DocType,
+  DocEnrichmentMode,
 } from '@mcp/store/doc-store.js';
 import { chunkMarkdown } from '../section-chunker.js';
 import { DocError } from '../errors.js';
@@ -31,6 +32,7 @@ export interface EnsureSourceInput {
   pdf_size_bytes?: number;
   folder_root_path?: string | null;
   folder?: IndexFolderInput['folder'];
+  enrichment_mode?: DocEnrichmentMode;
 }
 
 /**
@@ -50,12 +52,13 @@ export function ensureSource(docStore: DocStore, input: EnsureSourceInput): DocS
   if (existing) {
     if (input.crawl) docStore.updateSourceCrawlConfig(existing.id, input.crawl);
     if (input.folder) docStore.updateSourceFolderConfig(existing.id, input.folder);
+    if (input.enrichment_mode) docStore.updateSourceEnrichmentMode(existing.id, input.enrichment_mode);
     // Re-adding the same URI with a new type re-tags the source (the select
     // box is the operator's latest intent). Re-index reads the row, not a
     // request body, so it keeps whatever type was last set.
     const reType = input.doc_type != null && input.doc_type !== existing.doc_type;
     if (reType) docStore.updateSourceDocType(existing.id, input.doc_type!);
-    return input.crawl || input.folder || reType
+    return input.crawl || input.folder || input.enrichment_mode || reType
       ? (docStore.getSource(existing.id) ?? existing)
       : existing;
   }

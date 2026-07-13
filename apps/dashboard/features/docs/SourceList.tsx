@@ -10,13 +10,17 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, Folder, Globe, Loader2, RefreshCcw, Trash2 } from 'lucide-react';
+import { FileText, Folder, Globe, Loader2, PauseCircle, Play, RefreshCcw, StopCircle, Trash2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm, useNotify } from '../../components/ui/dialog-provider.js';
 import {
   deleteSource,
+  cancelSourceIndex,
+  pauseSourceIndex,
   reindexSourceStream,
+  resumeSourceIndex,
+  updateSourceIndexPerformance,
   retrySourceEmbeddingsStream,
   type DocCollection,
   type DocSource,
@@ -47,6 +51,20 @@ export function SourceList({ collection, sources, onChanged }: Props) {
   const [activeStream, setActiveStream] = useState<
     { sourceId: number; kind: 'reindex' | 'retry-embed'; force?: boolean } | null
   >(null);
+
+  async function refreshWhenStopped(sourceId: number) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      try {
+        const response = await fetch(`/api/docs/sources/${sourceId}/progress`);
+        if (response.ok && !((await response.json()) as { active: boolean }).active) {
+          await onChanged();
+          return;
+        }
+      } catch { /* the next poll retries */ }
+    }
+    await onChanged();
+  }
 
   async function onDelete(src: DocSource) {
     const ok = await confirm({
@@ -94,6 +112,44 @@ export function SourceList({ collection, sources, onChanged }: Props) {
       return;
     }
     setActiveStream({ sourceId: src.id, kind: 'reindex' });
+  }
+
+  async function onCancel(sourceId: number) {
+    try {
+      await cancelSourceIndex(sourceId);
+      void notify({ title: t('sources.cancelRequestedTitle'), description: t('sources.cancelRequestedDescription') });
+      void refreshWhenStopped(sourceId);
+    } catch (error) {
+      void notify({ title: t('sources.cancelFailedTitle'), description: (error as Error).message, variant: 'destructive' });
+    }
+  }
+
+  async function onPause(sourceId: number) {
+    try {
+      await pauseSourceIndex(sourceId);
+      void notify({ title: t('sources.pauseRequestedTitle'), description: t('sources.pauseRequestedDescription') });
+      void refreshWhenStopped(sourceId);
+    } catch (error) {
+      void notify({ title: t('sources.pauseFailedTitle'), description: (error as Error).message, variant: 'destructive' });
+    }
+  }
+
+  async function onPerformance(source: DocSource, profile: DocSource['folder_performance_profile']) {
+    try {
+      await updateSourceIndexPerformance(source.id, profile, profile === 'custom' ? source.folder_worker_count ?? 6 : undefined);
+      await onChanged();
+    } catch (error) {
+      void notify({ title: t('sources.performanceFailedTitle'), description: (error as Error).message, variant: 'destructive' });
+    }
+  }
+
+  async function onResume(sourceId: number) {
+    try {
+      await resumeSourceIndex(sourceId);
+      await onChanged();
+    } catch (error) {
+      void notify({ title: t('sources.resumeFailedTitle'), description: (error as Error).message, variant: 'destructive' });
+    }
   }
 
   if (sources === null) {
@@ -147,6 +203,21 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                         <div className="text-xs text-destructive mt-0.5">{s.error_message}</div>
                       )}
                       <SourceLiveProgress source={s} />
+                      {s.type === 'folder' && (
+                        <label className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                          {t('sources.performanceLabel')}
+                          <select
+                            className="h-5 rounded border bg-background px-1 text-[10px]"
+                            value={s.folder_performance_profile ?? 'balanced'}
+                            onChange={(event) => void onPerformance(s, event.target.value as DocSource['folder_performance_profile'])}
+                          >
+                            <option value="economy">{t('addSource.performanceProfiles.economy')}</option>
+                            <option value="balanced">{t('addSource.performanceProfiles.balanced')}</option>
+                            <option value="maximum">{t('addSource.performanceProfiles.maximum')}</option>
+                            <option value="custom">{t('addSource.performanceProfiles.custom')}</option>
+                          </select>
+                        </label>
+                      )}
                       <SourceHealthBadge
                         source={s}
                         onStartRetry={(sourceId) =>
@@ -188,6 +259,21 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                         ) : (
                           <RefreshCcw className="h-3 w-3" />
                         )}
+                      </Button>
+                    )}
+                    {(s.status === 'fetching' || s.status === 'indexing') && s.type === 'folder' && (
+                      <>
+                        <Button size="sm" variant="ghost" title={t('sources.actionsPauseTitle')} onClick={() => void onPause(s.id)}>
+                          <PauseCircle className="h-3 w-3 text-amber-600" />
+                        </Button>
+                        <Button size="sm" variant="ghost" title={t('sources.actionsCancelTitle')} onClick={() => void onCancel(s.id)}>
+                          <StopCircle className="h-3 w-3 text-red-600" />
+                        </Button>
+                      </>
+                    )}
+                    {s.type === 'folder' && (s.status === 'done' || s.status === 'queued') && /paus|limit/i.test(s.error_message ?? '') && (
+                      <Button size="sm" variant="ghost" title={t('sources.actionsResumeTitle')} onClick={() => void onResume(s.id)}>
+                        <Play className="h-3 w-3 text-emerald-600" />
                       </Button>
                     )}
                     <Button size="sm" variant="ghost" title={t('sources.actionsDeleteTitle')} onClick={() => void onDelete(s)}>
@@ -284,7 +370,10 @@ function SourceHealthBadge({
   if (active || !health || health.chunks_persisted === 0) return null;
   if (health.embedding_complete) {
     return (
-      <div className="flex items-center gap-1.5 mt-1">
+      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+        <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600">
+          {t('sources.lexicalReady')}
+        </Badge>
         <Badge
           variant="outline"
           className="text-[10px] border-emerald-500 text-emerald-600"
@@ -300,11 +389,19 @@ function SourceHealthBadge({
         >
           {t('sources.forceReembedAction')}
         </Button>
+        {!health.enrichment_ready && (
+          <Badge variant="outline" className="text-[10px] border-sky-500 text-sky-600">
+            {t('sources.enrichmentPending')}
+          </Badge>
+        )}
       </div>
     );
   }
   return (
-    <div className="flex items-center gap-1.5 mt-1">
+    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+      <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600">
+        {t('sources.lexicalReady')}
+      </Badge>
       <Badge
         variant="outline"
         className="text-[10px] border-amber-500 text-amber-600"

@@ -49,6 +49,8 @@ describe('coder_tool_calls INSERT parity (store vs dbWriter mirror)', () => {
     const reference = insertColumnSets(storeUrl)[0];
     expect(reference).toContain('refusal_kind');
     expect(reference).toContain('output_chars_shaped');
+    expect(reference).toContain('output_format');
+    expect(reference).toContain('structured_output_chars');
     expect(reference).toContain('guard_action');
     expect(reference).toContain('guard_origin_tool_use_id');
     expect(reference).toContain('delivered');

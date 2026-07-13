@@ -1,5 +1,5 @@
 /**
- * Onda 1 (Codex-parity): the `# Permissions & sandbox` block and the
+ * Onda 1 (Codex-parity): the permissions/execution-boundary block and the
  * `# Project instructions (AGENTS.md)` block. Contract:
  *   - both render ABOVE SYSTEM_PROMPT_DYNAMIC_BOUNDARY (session-fixed →
  *     cache-stable)
@@ -21,7 +21,7 @@ function baseCtx(overrides?: Partial<PromptContext>): PromptContext {
 describe('permissionsSection', () => {
   it('renders the writable root and approval mode', () => {
     const out = permissionsSection({ writableRoots: ['D:/proj'], approvalMode: 'ask' });
-    expect(out).toContain('# Permissions & sandbox');
+    expect(out).toContain('# Permissions & execution boundary');
     expect(out).toContain('Writable root: `D:/proj`');
     expect(out).toContain('Tool approval mode: **ask**');
     expect(out).toContain('PAUSE for');
@@ -46,14 +46,14 @@ describe('system prompt — permissions + AGENTS.md placement', () => {
       agentsMd: 'Always run pnpm lint before committing.',
     }));
     const [prefix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
-    expect(prefix).toContain('# Permissions & sandbox');
+    expect(prefix).toContain('# Permissions & execution boundary');
     expect(prefix).toContain('# Project instructions (AGENTS.md)');
     expect(prefix).toContain('Always run pnpm lint before committing.');
   });
 
   it('omits both when not supplied (prefix stays clean)', () => {
     const prompt = buildSystemPrompt(baseCtx());
-    expect(prompt).not.toContain('# Permissions & sandbox');
+    expect(prompt).not.toContain('# Permissions & execution boundary');
     expect(prompt).not.toContain('# Project instructions (AGENTS.md)');
   });
 });

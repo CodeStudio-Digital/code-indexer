@@ -1,7 +1,8 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
+import { appResult } from './model-output.js';
 
 const MAX_BYTES = 400_000;
 const MAX_REDIRECTS = 3;
@@ -69,8 +70,7 @@ export const appFetchUxReference: CoderTool = {
   parameters: PARAMETERS,
   source: 'native',
   handler: async (args) => {
-    try { return ok(JSON.stringify(await fetchReference(String(args.url ?? '')), null, 2)); }
+    try { return appResult('UX reference', await fetchReference(String(args.url ?? ''))); }
     catch (error) { return err(`app_fetch_ux_reference failed: ${(error as Error).message}`); }
   },
 };
-

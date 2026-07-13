@@ -101,6 +101,8 @@ beforeEach(() => {
       duration_ms INTEGER NOT NULL DEFAULT 0,
       output_chars INTEGER,
       output_chars_shaped INTEGER,
+      output_format TEXT,
+      structured_output_chars INTEGER,
       truncated INTEGER NOT NULL DEFAULT 0,
       phase TEXT,
       turn_telemetry_id INTEGER,
@@ -347,14 +349,16 @@ describe('persistAssistantTurn — structured guard telemetry', () => {
       result_text: 'reused',
       is_error: false,
       duration_ms: 0,
+      output_format: 'markdown',
+      structured_output_chars: 123,
       guard_action: 'reuse',
       delivered: true,
     });
 
     expect(db.prepare(`
-      SELECT guard_action, delivered
+      SELECT output_format, structured_output_chars, guard_action, delivered
         FROM coder_tool_calls WHERE tool_use_id = 'toolu_append_guard'
-    `).get()).toEqual({ guard_action: 'reuse', delivered: 1 });
+    `).get()).toEqual({ output_format: 'markdown', structured_output_chars: 123, guard_action: 'reuse', delivered: 1 });
   });
 });
 

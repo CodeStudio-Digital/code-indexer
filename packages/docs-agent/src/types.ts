@@ -32,7 +32,7 @@ export interface RunDocsAgentOptions {
    * calling chat. Null/undefined for `triggeredBy='user'`.
    */
   parentCoderSessionId?: number | null;
-  /** Maximum turns the runner will execute before aborting. Default 5. */
+  /** Maximum turns the runner will execute before aborting. Default 6. */
   maxTurns?: number;
   /** Optional abort signal — surfaces through to the underlying CoderRunner. */
   signal?: AbortSignal;

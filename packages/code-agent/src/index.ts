@@ -25,7 +25,11 @@ import {
   summaryV3ToV2,
 } from '@mcp/code-agent/core/summarizer.js';
 import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
-import { buildSystemPrompt, normalizeProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
+import {
+  appendStaticPromptSection,
+  buildSystemPrompt,
+  normalizeProviderFamily,
+} from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
@@ -89,6 +93,7 @@ import { docsTools } from '@mcp/company/tools/docs-tools.js';
 import { envTools } from '@mcp/company/tools/env-tools.js';
 import { buildSubordinateKanbanTools } from '@mcp/company/tools/subordinate-kanban-tools.js';
 import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
+import { withCompanyToolsMetadata } from '@mcp/company/tools/metadata.js';
 import { RuntimeHookRegistry } from '@mcp/code-agent/core/hook-registry.js';
 import { registerCompanyHooks } from '@mcp/code-agent/core/company-hooks.js';
 import { profileToTiers, getToolTier, type CoderProfile, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
@@ -155,7 +160,7 @@ import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bind
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
-import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import {
   APP_SPECIALIST_PRESERVE_OUTPUT_TOOLS,
   APP_SPECIALIST_TOOL_ALLOWLISTS,
@@ -406,6 +411,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Tool registry: native tools + bridged MCP tools
   const registry = new ToolRegistry();
+  const registerCompanyTools = (tools: readonly CoderTool[]): void => {
+    registry.registerAll(withCompanyToolsMetadata(tools));
+  };
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
   // A synthetic union root is not itself a Git repository. Keep the existing
@@ -426,7 +434,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // the human-facing ask_user / submit_plan / submit_tasks. The replacement
   // tools emit the same runner events so orchestrator interception is unchanged.
   if (opts.companyContext && !opts.companyContext.isMaster) {
-    registry.registerAll(buildSubordinateTools());
+    registerCompanyTools(buildSubordinateTools());
     registry.register(listTasks);
     registry.register(cancelTasks);
     registry.register(deleteTasks);
@@ -452,23 +460,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // filter (`filterInPlace(isMasterAllowed)` below) trims the master to the
   // read-only trio (env_list/env_read/env_validate); subordinates keep all 5.
   if (opts.companyContext) {
-    registry.registerAll(envTools);
+    registerCompanyTools(envTools);
   }
   // Sandbox-bound tools: offered to agents whose company session has a
   // live container binding (service-bound subordinates). Tools that
   // actually need a live container (sandboxTools, docsTools) fail with
   // clear errors when called while it is down.
   if (opts.companyContext?.sandbox) {
-    registry.registerAll(sandboxTools);
+    registerCompanyTools(sandboxTools);
     // service_* tools (B5): structured log history + container lifecycle
     // control. Same STABLE per-profile gate as sandboxTools (nothing
     // per-request); authorization (master / own-service / devops skill)
     // is enforced inside each handler.
-    registry.registerAll(serviceTools);
+    registerCompanyTools(serviceTools);
     // Docs tools write into `<workdir>/docs/` inside the container.
     // Registered for all builder sessions; fail gracefully when the
     // container is down so the agent gets a useful error message.
-    registry.registerAll(docsTools);
+    registerCompanyTools(docsTools);
   }
   // expand_toolset registered AFTER external MCP servers (see below) so its
   // tier enum can include custom tiers dynamically.
@@ -524,7 +532,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // registration below; the feature flag gates the whole surface.
   const dsWorkspace = !opts.companyContext ? parseDsWorkspace(project.builder_json) : null;
   if (dsWorkspace && config.features.designSystemEnabled) {
-    registry.registerAll(buildDesignSystemStudioTools(project.id));
+    registerCompanyTools(buildDesignSystemStudioTools(project.id));
   }
   // DS CONSUMER — a builder project linked to a PUBLISHED design system
   // (`builder_json.designSystem`, written by the link flow) gets read-only
@@ -533,7 +541,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // workspace above (parseDsConsumer returns null when kind==='ds').
   const dsConsumer = !opts.companyContext && !dsWorkspace ? parseDsConsumer(project.builder_json) : null;
   if (dsConsumer && config.features.designSystemEnabled) {
-    registry.registerAll(buildDesignSystemConsumerTools(dsConsumer));
+    registerCompanyTools(buildDesignSystemConsumerTools(dsConsumer));
   }
   // App Studio — single sessions on a `kind:'app'` workspace project
   // (Code Studio para leigos) get the app_* tools (pipeline/spec/interview/
@@ -543,7 +551,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const appWorkspace =
     !opts.companyContext && !dsWorkspace ? parseAppWorkspace(project.builder_json) : null;
   if (appWorkspace && config.features.appStudioEnabled) {
-    registry.registerAll(buildAppStudioTools(project.id));
+    registerCompanyTools(buildAppStudioTools(project.id));
   }
   // Sprite Studio — single sessions on a project that has a `.sprite-studio/`
   // directory get the sprite_* tools (get_project/list_assets/generate/
@@ -792,11 +800,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Company tools — registered when this runner is part of a company session.
   if (opts.companyContext) {
     const { orchestrator, agentRole, isMaster, agentRunId } = opts.companyContext;
-    registry.registerAll(buildBoardTools(orchestrator, agentRole, agentRunId));
+    registerCompanyTools(buildBoardTools(orchestrator, agentRole, agentRunId));
     // Shared drive: persistent file pool scoped to the company template,
     // visible to master and every subordinate. Lets agents exchange large
     // documents without inflating board posts or inbox messages.
-    registry.registerAll(buildSharedDriveTools());
+    registerCompanyTools(buildSharedDriveTools());
     // Cross-agent comm tools — available to master AND subordinates. Moved
     // here from the unconditional native batch (P1): each errors or returns
     // just-self without a company session, so registering them in solo
@@ -808,11 +816,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.registerAll(followupTaskTools);
     // Subordinate kanban tools: self-service card updates (comment, checklist, move-to-review)
     if (!isMaster && agentRunId != null) {
-      registry.registerAll(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
+      registerCompanyTools(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
       // QA tools: gated by skill (qa-playwright) via the skill's allowed-tools.
       // The tool is harmless when not used, so we register unconditionally for
       // subordinates and let the prompt-injector instructions discipline usage.
-      registry.registerAll(buildQaTools(orchestrator, agentRole, agentRunId));
+      registerCompanyTools(buildQaTools(orchestrator, agentRole, agentRunId));
       // ds_* tools são exclusivas do DS Studio (sessão single) — o pipeline
       // company de Design System foi aposentado e sessões legacy são
       // read-only, então subordinados não recebem mais esse surface.
@@ -821,13 +829,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // review_subordinate_work needs in-process DB access to run the review
       // pipeline over a subordinate's snapshots — supply the shared handle and
       // a project-root resolver (same db/store already in scope here).
-      registry.registerAll(
+      registerCompanyTools(
         buildMasterTools(orchestrator, {
           dbHandle: store.getDb(),
           getProjectRoot: (projectId: number) => db.getProject(projectId)?.root_path ?? null,
         }),
       );
-      registry.registerAll(buildKanbanTools(orchestrator));
+      registerCompanyTools(buildKanbanTools(orchestrator));
       // Strip code-level tools from Master — it should only orchestrate, not read code
       registry.filterInPlace(isMasterAllowed);
       console.log(`[coder] Master: filtered to ${registry.list().length} tools (orchestration-only)`);
@@ -1511,6 +1519,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     console.warn(`[coder] config-lock check failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  const availableTools = new Set(registry.list().map((tool) => tool.name));
+  const effectiveMcpAvailable = [...availableTools].some((name) => name.startsWith('mcp__'));
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
     projectRoot: project.root_path,
@@ -1527,7 +1537,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           toolCount: info.toolCount,
         }))
       : undefined,
-    mcpAvailable: mcpBridgeOk,
+    mcpAvailable: effectiveMcpAvailable,
     isIndexed,
     repoMap,
     verifyCommands,
@@ -1560,7 +1570,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // unsupervised, and the autonomous "no human is watching, don't ask" framing
     // would contradict their escalation model.
     unsupervised: opts.unsupervised ?? false,
-    sessionDrive: !opts.companyContext,
+    sessionDrive: availableTools.has('save_note') || availableTools.has('read_plan'),
     // "Images & vision" section is only rendered when the model can't see
     // images natively (or the composer forces the describe-images path).
     modelCanSeeImages: opts.describeImages ? false : opts.modelSupportsVision,
@@ -1582,11 +1592,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     },
     // AGENTS.md project instructions (loaded above). '' when none → block omitted.
     agentsMd,
+    availableTools,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
   if (opts.companyPromptBlock) {
-    systemPrompt += '\n' + opts.companyPromptBlock;
+    systemPrompt = appendStaticPromptSection(systemPrompt, opts.companyPromptBlock);
   }
 
   // DS Studio block — appended (not replacing the agent prompt) so the
@@ -1594,51 +1605,35 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // cache-stable: every value comes from builder_json, fixed at scaffold
   // time, no DB query per turn.
   if (dsWorkspace) {
-    systemPrompt += '\n' + interpolate(loadPrompt('ds-studio'), {
+    systemPrompt = appendStaticPromptSection(systemPrompt, interpolate(loadPrompt('ds-studio'), {
       packageName: dsWorkspace.packageName ?? '(see ds_get_session_info)',
       stack: dsWorkspace.stack,
       publishExtra: dsWorkspace.stack === 'angular'
         ? '4. Angular only: run `ng build pkg` first and publish the BUILT output (`ds_publish_version({ pkg_dir: "dist/pkg" })`).'
         : '',
-    });
+    }));
     // Mode block (fidelity/creative) — same cache-stability contract:
     // `mode` is immutable in builder_json. Pre-mode workspaces get none.
     if (dsWorkspace.mode) {
-      systemPrompt += '\n' + interpolate(loadPrompt(`ds-studio-${dsWorkspace.mode}`), {
+      systemPrompt = appendStaticPromptSection(systemPrompt, interpolate(loadPrompt(`ds-studio-${dsWorkspace.mode}`), {
         stack: dsWorkspace.stack,
-      });
+      }));
     }
   } else if (dsConsumer && config.features.designSystemEnabled) {
     // DS consumer block — derives from the pinned published version
     // (immutable rows), so the prefix stays byte-stable across turns.
-    systemPrompt += '\n' + buildDsConsumerBlock(dsConsumer);
+    systemPrompt = appendStaticPromptSection(systemPrompt, buildDsConsumerBlock(dsConsumer));
   } else if (appWorkspace && config.features.appStudioEnabled) {
     // App Studio block — appended (not replacing the agent prompt) so the
     // `builder` agent identity stays intact and the prefix remains
     // cache-stable: every value comes from builder_json, fixed at scaffold
     // time, no DB query per turn (spec/auth details reach the agent via
     // the app_* tools at runtime, never via the prompt).
-    systemPrompt += '\n' + interpolate(loadPrompt('app-studio'), {
+    systemPrompt = appendStaticPromptSection(systemPrompt, interpolate(loadPrompt('app-studio'), {
       appName: appWorkspace.appName ?? '(see app_get_pipeline)',
       appSlug: appWorkspace.appSlug ?? '',
       dbEngine: appWorkspace.dbEngine,
-    });
-    if (effectiveAgentId === 'app_spec') {
-      systemPrompt += '\n' + loadPrompt('app_spec');
-    } else if (effectiveAgentId === 'app_db') {
-      systemPrompt += '\n' + loadPrompt('app_db');
-    } else if (effectiveAgentId === 'app_architect') {
-      systemPrompt += '\n' + loadPrompt('app_architect');
-    } else if (effectiveAgentId === 'app_product') {
-      systemPrompt += '\n' + loadPrompt('app_product');
-    } else if (effectiveAgentId === 'app_ux') {
-      systemPrompt += '\n' + loadPrompt('app_ux');
-    } else if (effectiveAgentId === 'app_wireframe') {
-      systemPrompt += '\n' + loadPrompt('app_wireframe');
-    }
-  }
-  if (effectiveAgentId === 'app_db' && !(appWorkspace && config.features.appStudioEnabled)) {
-    systemPrompt += '\n' + loadPrompt('app_db');
+    }));
   }
 
   // Draw.io diagram guidance — appended only when the `diagram` tier will be
@@ -1648,7 +1643,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     effectiveAgentId === 'diagram' ||
     (persistedToolset?.extraTiers?.includes('diagram') ?? false);
   if (diagramTierActive) {
-    systemPrompt += '\n' + buildDiagramGuidance();
+    systemPrompt = appendStaticPromptSection(systemPrompt, buildDiagramGuidance());
   }
 
   // Append skill awareness block. Mode resolution priority:
@@ -2490,6 +2485,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
        * output_chars (raw) to compute savings.
        */
       output_chars_shaped: number | null;
+      output_format?: 'text' | 'markdown' | 'json' | null;
+      structured_output_chars?: number | null;
       truncated: boolean;
       /**
        * Harness refusal tag (gate/pre-read/task-mode/dedup/user_denied/
@@ -2720,6 +2717,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           duration_ms: e.durationMs,
           output_chars: e.resultChars,
           output_chars_shaped: null,
+          output_format: 'text',
+          structured_output_chars: null,
           truncated: false,
           refusal_kind: e.refusalKind ?? null,
           turn_telemetry_id: null,
@@ -2778,6 +2777,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // event (the old tool_call_finalized stamp raced and never landed).
       output_chars: result.rawChars ?? content.length,
       output_chars_shaped: content.length,
+      output_format: result.contentFormat ?? 'text',
+      structured_output_chars: result.structuredOutputChars ?? null,
       truncated: isTruncatedOutput(content),
       refusal_kind: result.refusalKind ?? null,
       reduction_kind: result.reductionReport?.kind ?? null,

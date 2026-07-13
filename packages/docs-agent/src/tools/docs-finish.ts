@@ -16,6 +16,8 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ResearchConfidence } from '../types.js';
+import type { DocsEvidenceLedger } from './evidence-ledger.js';
+import type { PlanSlot } from './docs-plan.js';
 
 export interface DocsFinishPayload {
   markdown: string;
@@ -31,6 +33,8 @@ export interface DocsFinishSlot {
 export interface DocsFinishToolDeps {
   /** Mutable slot the wrapper inspects after the runner exits. */
   slot: DocsFinishSlot;
+  ledger?: DocsEvidenceLedger;
+  planSlot?: PlanSlot;
 }
 
 const CONFIDENCE_VALUES: ReadonlySet<ResearchConfidence> = new Set(['high', 'medium', 'low']);
@@ -88,6 +92,13 @@ export function makeDocsFinishTool(deps: DocsFinishToolDeps): CoderTool {
         return err(`confidence must be one of: high, medium, low. Got: "${rawConfidence}"`);
       }
       const confidence = rawConfidence as ResearchConfidence;
+      if (chunks_cited.length > (deps.ledger?.maxCitations ?? 12)) {
+        return err(`chunks_cited exceeds the evidence cap (${deps.ledger?.maxCitations ?? 12}).`);
+      }
+      if (confidence === 'high' && deps.ledger) {
+        const problem = deps.ledger.validateHighConfidence(deps.planSlot?.subQuestions?.length ?? 1, chunks_cited);
+        if (problem) return err(`high confidence rejected: ${problem}. Use medium confidence or gather the missing evidence.`);
+      }
       const notes = typeof args.notes === 'string' ? args.notes.trim().slice(0, 1000) : undefined;
 
       // Already finished? Refuse the duplicate call — keeps the slot stable

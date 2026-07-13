@@ -86,6 +86,9 @@ export interface DispatchedToolResult {
   extraUserBlocks?: ContentBlock[];
   /** Raw tool output size (chars) BEFORE any reduce/cap — for savings telemetry. */
   rawChars?: number;
+  /** Declared model-facing representation and hidden structured payload size. */
+  contentFormat?: 'text' | 'markdown' | 'json';
+  structuredOutputChars?: number | null;
   /** Set by the live finalize hook when the fail-safe cap truncated content. */
   truncated?: boolean;
   originalSize?: number;
@@ -562,6 +565,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     const t0 = Date.now();
     let invocationContent: string;
     let invocationIsError = false;
+    let invocationContentFormat: 'text' | 'markdown' | 'json' = 'text';
+    let invocationStructuredChars: number | null = null;
     let invocationExtraBlocks: ContentBlock[] | undefined;
     let invocationGuardVerdict: GuardVerdict | undefined;
     let refusalKind: RefusalKind | undefined;
@@ -642,6 +647,14 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       );
       invocationContent = typeof result.content === 'string' ? result.content : String(result.content);
       invocationIsError = !!result.isError;
+      invocationContentFormat = result.contentFormat ?? 'text';
+      if (result.structuredData !== undefined) {
+        try {
+          invocationStructuredChars = JSON.stringify(result.structuredData)?.length ?? null;
+        } catch {
+          invocationStructuredChars = null;
+        }
+      }
       invocationExtraBlocks = result.extraUserBlocks;
       invocationGuardVerdict = result.guardVerdict;
       if (invocationGuardVerdict?.action === 'block') {
@@ -892,6 +905,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       name: tu.name,
       content: finalShaped,
       rawChars: invocationContent.length,
+      contentFormat: invocationContentFormat,
+      structuredOutputChars: invocationStructuredChars,
       isError: finalIsError,
       durationMs,
       wasRefusedByDedup: false,

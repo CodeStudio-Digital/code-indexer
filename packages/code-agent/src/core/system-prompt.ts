@@ -253,6 +253,13 @@ export interface PromptContext {
    * cache-stable; changes only when the file changes.
    */
   agentsMd?: string;
+  /**
+   * Final registry membership after role/specialist filtering. When supplied,
+   * the composer advertises only capabilities the session can actually call.
+   * Omitted by lightweight tests/legacy callers to preserve the full generic
+   * coding surface.
+   */
+  availableTools?: ReadonlySet<string>;
 }
 
 /**
@@ -333,6 +340,83 @@ You are a coding agent.
   }
 }
 
+function toolAvailable(available: ReadonlySet<string> | undefined, name: string): boolean {
+  return available === undefined || available.has(name);
+}
+
+function anyToolAvailable(available: ReadonlySet<string> | undefined, names: readonly string[]): boolean {
+  return available === undefined || names.some((name) => available.has(name));
+}
+
+function nativeToolsSection(available?: ReadonlySet<string>): string {
+  const lines: string[] = [];
+  const writes = ['write_file', 'edit_file', 'multi_edit', 'create_file', 'apply_patch']
+    .filter((name) => toolAvailable(available, name));
+  const git = ['git_status', 'git_diff', 'git_log', 'git_add', 'git_commit', 'git_branch']
+    .filter((name) => toolAvailable(available, name));
+  const reads = ['read_file', 'list_directory', 'glob']
+    .filter((name) => toolAvailable(available, name));
+
+  if (writes.length > 0) lines.push(`- ${writes.map((n) => `\`${n}\``).join(', ')} — file modifications.`);
+  if (toolAvailable(available, 'manage_path')) {
+    lines.push('- `manage_path` — create directories, move/rename, safe delete. Prefer it over shell filesystem commands.');
+  }
+  if (anyToolAvailable(available, ['run_command', 'exec_command'])) {
+    const shell = ['run_command', 'exec_command'].filter((name) => toolAvailable(available, name));
+    lines.push(`- ${shell.map((n) => `\`${n}\``).join(', ')} — shell execution for tests, builds and diagnostics.`);
+  }
+  if (git.length > 0) lines.push(`- ${git.map((n) => `\`${n}\``).join(', ')} — git operations.`);
+  if (reads.length > 0) lines.push(`- ${reads.map((n) => `\`${n}\``).join(', ')} — direct disk reads.`);
+  if (toolAvailable(available, 'expand_toolset')) {
+    lines.push('- Some capabilities may require `expand_toolset` in bootstrap.');
+  }
+  if (toolAvailable(available, 'find_tools')) {
+    lines.push('- Never invent tool names — `find_tools("<capability>")` locates the registered tool.');
+  }
+  if (lines.length === 0) return '';
+
+  const mustRead = writes.length > 0 && anyToolAvailable(available, ['mcp__read_file', 'mcp__get_symbol_body', 'read_file'])
+    ? '\nYou MUST read a file with an available read tool before editing it.'
+    : '';
+  return `# Native tools available to this session\n${lines.join('\n')}${mustRead}\n`;
+}
+
+function overlaySection(available?: ReadonlySet<string>): string {
+  const canWrite = anyToolAvailable(available, ['write_file', 'edit_file', 'multi_edit', 'create_file', 'apply_patch']);
+  const canReadOverlay = anyToolAvailable(available, [
+    'mcp__read_file',
+    'mcp__get_file_skeleton',
+    'mcp__get_symbol_body',
+    'mcp__list_directory',
+    'mcp__grep_code',
+  ]);
+  if (!canWrite || !canReadOverlay) return '';
+  return `# Session overlay (automatic freshness)
+After a file mutation, MCP read tools automatically serve its fresh disk version, tagged \`[session overlay]\`. Keep using them on touched files; do not re-index merely to see your own edits.
+
+`;
+}
+
+function subagentsSection(available?: ReadonlySet<string>): string {
+  if (!toolAvailable(available, 'spawn_agent')) return '';
+  return `# Subagents (isolated delegation)
+\`spawn_agent({ agents: [...] })\` delegates isolated work — one agent runs sequentially, two or more run in parallel. Each has its own context window; only final summaries return, while token cost still belongs to this session.
+Profiles: \`investigator\` (read-only), \`implementer\` (scoped writes; pass \`files\`), \`verifier\` (checks, no writes), \`reviewer\` (read-only review), and \`full\` (inherits this toolset). Delegate independent or broad investigations; work directly when one or two calls suffice or raw content is needed for an edit.
+
+`;
+}
+
+/** Insert a session-fixed extension immediately before the cache boundary. */
+export function appendStaticPromptSection(prompt: string, section: string): string {
+  const trimmed = section.trim();
+  if (!trimmed) return prompt;
+  const at = prompt.indexOf(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
+  if (at < 0) return `${prompt.trimEnd()}\n\n${trimmed}`;
+  const prefix = prompt.slice(0, at).trimEnd();
+  const suffix = prompt.slice(at);
+  return `${prefix}\n\n${trimmed}\n\n${suffix}`;
+}
+
 export function buildSystemPrompt(ctx: PromptContext): string {
   // ─── STATIC PREFIX ─────────────────────────────────────────────────
   // Everything in this block is determined entirely by inputs that are
@@ -350,6 +434,23 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // boundary because the registered MCP-server tier set is volatile.
   const displayName = ctx.workspace?.displayName ?? ctx.projectName;
   const rootPath = ctx.workspace?.rootPath ?? ctx.projectRoot;
+  const hasCodeNavigation = anyToolAvailable(ctx.availableTools, [
+    'mcp__get_project_pulse',
+    'mcp__search',
+    'mcp__grep_code',
+    'mcp__read_file',
+    'read_file',
+    'list_directory',
+    'glob',
+  ]);
+  const hasMemory = anyToolAvailable(ctx.availableTools, [
+    'remember',
+    'recall_memory',
+    'forget_memory',
+    'save_note',
+    'recall_conversation',
+    'recall_investigations',
+  ]);
   const base = interpolate(loadPrompt('base'), {
     projectName: displayName,
     projectRoot: rootPath,
@@ -357,10 +458,13 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     // model the real shell (cmd.exe vs bash) + what NOT to reach for. Cuts the
     // ~69% run_command failure rate from Unix idioms on Windows.
     os: describeShell(ctx.os),
-    tierHint: tierHint(ctx.profile),
-    mcpSection: mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive),
-    visionSection: visionSection(ctx.modelCanSeeImages),
-    memorySection: memorySection(ctx.sessionDrive),
+    tierHint: toolAvailable(ctx.availableTools, 'expand_toolset') ? tierHint(ctx.profile) : '',
+    mcpSection: hasCodeNavigation ? mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive) : '',
+    nativeToolsSection: nativeToolsSection(ctx.availableTools),
+    overlaySection: overlaySection(ctx.availableTools),
+    subagentsSection: subagentsSection(ctx.availableTools),
+    visionSection: toolAvailable(ctx.availableTools, 'view_image') ? visionSection(ctx.modelCanSeeImages) : '',
+    memorySection: hasMemory ? memorySection(ctx.sessionDrive) : '',
   });
 
   // Plan section — optional, only when planMode is true AND the active agent
@@ -392,16 +496,32 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // that mention submit_plan/submit_tasks depend on planMode so they'd need
   // a second placeholder dance in the txt file for no real benefit.
   const isSpec = ctx.agentId === 'spec';
-  const interactionSection = `
-
-# Interactive tools
-- \`ask_user\`: when you need a decision/preference/choice from the user, call this. Provide \`options\` for multiple choice (rendered as buttons) or omit them for free-form. Do NOT use for things you can verify yourself.${isSpec ? `
-- \`submit_spec\`: REQUIRED before any mutating tool (see Spec mode above). Pass \`{ name, body, parent_id? }\`. The runner writes the spec to \`.mcp/specs/<slug>-<unix>.md\` and blocks until a human approves or requests changes.` : ''}
-- \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec IS the plan.' : ctx.planMode ? 'REQUIRED before mutating tools when the work is linear/informational (see Plan mode above).' : 'Optional — call when the user explicitly asks for a plan.'}
-- \`task_list\`: the ONE task/checklist tool (no separate todo tool). \`gate:'track'\` (default) = no-pause checklist (\`items\`/\`updates\`). \`gate:'approve'\` = ${isSpec ? 'BLOCKED until spec approval' : ctx.planMode ? 'REQUIRED over submit_plan for 2+ tasks' : 'gated multi-item work worth approval'}; pauses and is the ONLY thing that arms \`execute_tasks\` (\`submit_tasks\` = legacy alias). ONE list/session.
-- \`execute_tasks\` / \`task_complete\` / \`list_tasks\`: run an approved \`task_list\`. Ids are backend \`tsk_...\`; \`execute_tasks\` ONCE dispatches the list in dependency waves; \`task_complete\` closes an inline scope (never a subagent task).
-- \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: abandon/remove/clear task rounds. Never reuse ids like \`task_1\`.
-`;
+  const interactionLines: string[] = [];
+  if (toolAvailable(ctx.availableTools, 'ask_user')) {
+    interactionLines.push('- `ask_user`: request a genuine user decision. Provide options for multiple choice; do not ask what you can verify.');
+  }
+  if (toolAvailable(ctx.availableTools, 'submit_spec')) {
+    interactionLines.push(`- \`submit_spec\`: ${isSpec ? 'REQUIRED before mutation; wait for human approval.' : 'available for an explicitly requested specification.'}`);
+  }
+  if (toolAvailable(ctx.availableTools, 'submit_plan')) {
+    interactionLines.push(`- \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec is the plan.' : ctx.planMode ? 'REQUIRED before mutating tools for one coherent change.' : 'optional when the user explicitly asks for a plan.'}`);
+  }
+  if (toolAvailable(ctx.availableTools, 'task_list')) {
+    interactionLines.push(`- \`task_list\`: the single checklist/task tool. \`gate:'track'\` does not pause; \`gate:'approve'\` ${isSpec ? 'is blocked until spec approval' : 'pauses for multi-item approval'} and arms \`execute_tasks\`.`);
+  }
+  const taskRuntime = ['execute_tasks', 'task_complete', 'list_tasks']
+    .filter((name) => toolAvailable(ctx.availableTools, name));
+  if (taskRuntime.length > 0) {
+    interactionLines.push(`- ${taskRuntime.map((n) => `\`${n}\``).join(' / ')}: execute or inspect an approved task list; backend ids use \`tsk_...\`.`);
+  }
+  const taskCleanup = ['cancel_tasks', 'delete_tasks', 'archive_task_list']
+    .filter((name) => toolAvailable(ctx.availableTools, name));
+  if (taskCleanup.length > 0) {
+    interactionLines.push(`- ${taskCleanup.map((n) => `\`${n}\``).join(' / ')}: abandon, remove or archive task rounds.`);
+  }
+  const interactionSection = interactionLines.length > 0
+    ? `\n\n# Interactive tools\n${interactionLines.join('\n')}`
+    : '';
 
   // Static "agent loop" + "do not re-read" + "active context pointer". The
   // dynamic payload (live goal / todos / active task scope) is injected as

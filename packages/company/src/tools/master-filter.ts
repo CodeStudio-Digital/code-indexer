@@ -16,6 +16,7 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   // Interaction / orchestration
   'ask_user',
   'submit_plan',
+  'task_list',
   'submit_tasks',
   'list_tasks',
   'cancel_tasks',
@@ -176,8 +177,13 @@ export function isMasterAllowed(tool: CoderTool): boolean {
     return MASTER_ALLOWED_NATIVE_TOOLS.has(name);
   }
 
-  // External MCP tools (mcp_external) — keep for now, they may be admin/management tools
-  if (source === 'mcp_external') return true;
+  // External MCP/plugin tools are denied by default. The Master is an
+  // orchestration role and must not regain code/data mutation capabilities
+  // through a dynamically installed server. A connector may opt into this
+  // narrow read lane only by declaring its metadata explicitly.
+  if (source === 'mcp_external') {
+    return tool.mutates === false && tool.riskLevel === 'read';
+  }
 
   // Default: strip
   return false;

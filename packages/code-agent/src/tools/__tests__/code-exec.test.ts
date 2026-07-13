@@ -119,6 +119,34 @@ describe('code_exec timeout (codex-faithful)', () => {
   });
 });
 
+describe('code_exec structured tool compatibility', () => {
+  it('returns compact JSON from structuredData while direct callers receive markdown', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'structured_read',
+      description: 'structured',
+      source: 'native',
+      mutates: false,
+      parallelSafe: true,
+      parameters: { type: 'object', properties: {} },
+      handler: async () => ({
+        content: '# Result\n\n- id: 7',
+        contentFormat: 'markdown',
+        structuredData: { id: 7, status: 'ok' },
+      }),
+    });
+    const direct = await registry.invoke('structured_read', {}, makeCtx());
+    expect(direct.content).toContain('# Result');
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: 'const raw = await tools.structured_read({}); const parsed = JSON.parse(raw); return parsed;',
+    }, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('"id": 7');
+    expect(result.content).toContain('"status": "ok"');
+  });
+});
+
 describe('code_exec ReferenceError hints', () => {
   it('steers a sandbox-excluded control tool to a top-level call', async () => {
     const registry = new ToolRegistry();

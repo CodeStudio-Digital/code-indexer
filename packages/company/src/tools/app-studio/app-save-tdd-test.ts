@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { readTddCycles } from '@mcp/app-studio/architecture/tdd-cycles.js';
 import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
@@ -10,6 +10,7 @@ import { appWorkerTestHarnessIssues } from '@mcp/services/app-studio/index.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult } from './model-output.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -92,14 +93,14 @@ export function appSaveTddTest(binding: AppToolBinding): CoderTool {
         writeFileSync(absolute, `${contents}\n`, 'utf8');
         const cycles = readTddCycles(resolved.path).cycles;
         const needsRed = caseIds.filter((id) => !cycles[id]?.red_at);
-        return ok(JSON.stringify({
+        return appResult('App TDD test saved', {
           path,
           case_ids: caseIds,
           backup_path: backupPath,
           next: needsRed.length > 0
             ? `Call app_run_test_cycle with phase red for: ${needsRed.join(', ')}.`
             : 'Run app_run_test_cycle with phase green after the database implementation passes these tests.',
-        }, null, 2));
+        });
       } catch (e) {
         return err(`app_save_tdd_test failed: ${(e as Error).message}`);
       }

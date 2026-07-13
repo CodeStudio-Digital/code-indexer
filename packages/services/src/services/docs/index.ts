@@ -21,6 +21,8 @@ export type {
 
 export {
   readFolder,
+  readFolderEntry,
+  scanFolderFiles,
   FOLDER_HARD_MAX_FILES,
   FOLDER_DEFAULT_MAX_FILES,
   FOLDER_FILE_SIZE_CAP_BYTES,
@@ -31,6 +33,7 @@ export type {
   ReadFolderOptions,
   ReadFolderResult,
   FolderReaderEvent,
+  FolderFileEntry,
 } from './folder-reader.js';
 
 export { DocHybridSearch, vectorIdForChunk } from './search.js';
@@ -94,9 +97,9 @@ export type { DocIngestEstimate, DocIngestProgress, DocIngestResult, RawPage } f
 export { PDF_MAX_BYTES, parsePdf } from './pdf-parser.js';
 export { UrlFetcher } from './url-fetcher.js';
 export { crawlUrl } from './crawler.js';
-export { chunkMarkdown, MAX_CHUNK_CHARS, MIN_CHUNK_CHARS, estimateTokens } from './section-chunker.js';
+export { chunkMarkdown, MAX_CHUNK_CHARS, TARGET_CHUNK_CHARS, MIN_CHUNK_CHARS, estimateTokens } from './section-chunker.js';
 export { gatePages, heuristicAccepts } from './relevance-gate.js';
-export { enrichChunks } from './enricher.js';
+export { enrichChunks, enrichChunksBatched } from './enricher.js';
 export { extractLinksWithLLM } from './link-extractor.js';
 export type { ExtractedLink, LinkExtractorOptions } from './link-extractor.js';
 
@@ -120,3 +123,4 @@ export type {
   RenderResult,
 } from './render-backend.js';
 export { detectBlocked } from './bot-detection.js';
+export { availableDocExtractionWorkers, resolveDocWorkerCount } from './index-doc-use-case/extraction-pool.js';

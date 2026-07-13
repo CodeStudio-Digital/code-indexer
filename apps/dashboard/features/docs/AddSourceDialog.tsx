@@ -12,7 +12,7 @@
  */
 import { useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { FileText, Folder, Globe, Plus, Upload } from 'lucide-react';
+import { FileText, Folder, Globe, Loader2, Plus, Upload } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -28,10 +28,12 @@ import { Switch } from '../../components/ui/switch.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import {
   indexFolderStream,
+  dryRunFolder,
   indexPdfStream,
   indexUrlStream,
   type DocCollection,
   type DocType,
+  type DocFolderPreview,
 } from './docs-api.js';
 import { DocTypeSelect } from './DocTypeSelect.js';
 import { IndexProgressStream } from './IndexProgressStream.js';
@@ -133,11 +135,20 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   // server-side é 500.000 (input `max` reflete isso).
   const [folderMaxFiles, setFolderMaxFiles] = useState(50000);
   const [folderBypassGate, setFolderBypassGate] = useState(true);
+  const [folderEnrichmentMode, setFolderEnrichmentMode] = useState<'selective' | 'all' | 'off'>('selective');
+  const [folderPerformanceProfile, setFolderPerformanceProfile] = useState<'economy' | 'balanced' | 'maximum' | 'custom'>('balanced');
+  const [folderWorkerCount, setFolderWorkerCount] = useState(6);
   const [folderAdvancedOpen, setFolderAdvancedOpen] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
+  const [folderPreview, setFolderPreview] = useState<DocFolderPreview | null>(null);
+  const [folderPreviewing, setFolderPreviewing] = useState(false);
 
   function reset() {
     setDocType('mixed');
+    setFolderEnrichmentMode('selective');
+    setFolderPerformanceProfile('balanced');
+    setFolderWorkerCount(6);
+    setFolderPreview(null);
     setUrl('');
     setCrawlEnabled(false);
     setMaxPages(50);
@@ -165,6 +176,31 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
     setFolderError(null);
     setRunning(null);
     setStreamFinished(false);
+  }
+
+  async function previewFolder() {
+    if (!folderPath.trim()) return;
+    setFolderPreviewing(true);
+    setFolderError(null);
+    try {
+      setFolderPreview(await dryRunFolder({
+        path: folderPath.trim(),
+        doc_type: docType,
+        enrichment_mode: folderEnrichmentMode,
+        folder: {
+          include_glob: folderIncludeGlob.trim() || undefined,
+          exclude_glob: folderExcludeGlob.trim() || undefined,
+          max_files: folderMaxFiles,
+          bypass_relevance_gate: folderBypassGate,
+          performance_profile: folderPerformanceProfile,
+          worker_count: folderPerformanceProfile === 'custom' ? folderWorkerCount : undefined,
+        },
+      }));
+    } catch (error) {
+      setFolderError((error as Error).message);
+    } finally {
+      setFolderPreviewing(false);
+    }
   }
 
   function handleOpenChange(next: boolean) {
@@ -560,13 +596,65 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                         onCheckedChange={setFolderBypassGate}
                       />
                     </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="docs-folder-performance">{t('addSource.performanceProfile')}</Label>
+                      <select
+                        id="docs-folder-performance"
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                        value={folderPerformanceProfile}
+                        onChange={(event) => setFolderPerformanceProfile(event.target.value as typeof folderPerformanceProfile)}
+                      >
+                        <option value="economy">{t('addSource.performanceProfiles.economy')}</option>
+                        <option value="balanced">{t('addSource.performanceProfiles.balanced')}</option>
+                        <option value="maximum">{t('addSource.performanceProfiles.maximum')}</option>
+                        <option value="custom">{t('addSource.performanceProfiles.custom')}</option>
+                      </select>
+                      {folderPerformanceProfile === 'custom' && (
+                        <Input
+                          type="number"
+                          min={1}
+                          max={16}
+                          value={folderWorkerCount}
+                          onChange={(event) => setFolderWorkerCount(Number(event.target.value))}
+                        />
+                      )}
+                      <p className="text-[11px] text-muted-foreground">{t('addSource.performanceProfileHelp')}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="docs-folder-enrichment">{t('addSource.enrichmentMode')}</Label>
+                      <select
+                        id="docs-folder-enrichment"
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                        value={folderEnrichmentMode}
+                        onChange={(event) => setFolderEnrichmentMode(event.target.value as 'selective' | 'all' | 'off')}
+                      >
+                        <option value="selective">{t('addSource.enrichmentModes.selective')}</option>
+                        <option value="all">{t('addSource.enrichmentModes.all')}</option>
+                        <option value="off">{t('addSource.enrichmentModes.off')}</option>
+                      </select>
+                      <p className="text-[11px] text-muted-foreground">{t('addSource.enrichmentModeHelp')}</p>
+                    </div>
                   </div>
                 )}
               </div>
 
               {folderError && <div className="text-xs text-destructive">{folderError}</div>}
 
+              {folderPreview && (
+                <div className="rounded-md border bg-muted/20 p-3 text-xs grid grid-cols-2 gap-1">
+                  <span>{t('addSource.previewExtractor')}</span><strong>{folderPreview.extractor}</strong>
+                  <span>{t('addSource.previewFiles')}</span><strong>{folderPreview.files_to_process}/{folderPreview.files_found}</strong>
+                  <span>{t('addSource.previewChunks')}</span><strong>~{folderPreview.estimated_chunks}</strong>
+                  <span>{t('addSource.previewDocType')}</span><strong>{folderPreview.detected_doc_type}</strong>
+                  <span>{t('addSource.previewLlmCalls')}</span><strong>{folderPreview.estimated_llm_calls}</strong>
+                  <span>{t('addSource.previewWorkers')}</span><strong>{folderPreview.configured_workers}/{folderPreview.available_workers}</strong>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => void previewFolder()} disabled={!folderPath.trim() || folderPreviewing}>
+                  {folderPreviewing ? <Loader2 className="h-3 w-3 animate-spin" /> : t('addSource.preview')}
+                </Button>
                 <Button variant="ghost" onClick={() => handleOpenChange(false)}>
                   {t('addSource.cancel')}
                 </Button>
@@ -626,11 +714,14 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                   path: folderPath.trim(),
                   title: folderTitle.trim() || undefined,
                   doc_type: docType,
+                  enrichment_mode: folderEnrichmentMode,
                   folder: {
                     include_glob: folderIncludeGlob.trim() || undefined,
                     exclude_glob: folderExcludeGlob.trim() || undefined,
                     max_files: folderMaxFiles,
                     bypass_relevance_gate: folderBypassGate,
+                    performance_profile: folderPerformanceProfile,
+                    worker_count: folderPerformanceProfile === 'custom' ? folderWorkerCount : undefined,
                   },
                 },
                 cb,

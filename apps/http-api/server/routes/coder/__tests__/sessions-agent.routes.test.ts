@@ -71,3 +71,41 @@ describe('coder PATCH /sessions/:id/agent', () => {
     expect(r.status).toBe(404);
   });
 });
+
+describe('coder POST /classify-intent', () => {
+  it('uses the Decision Engine specialized routing instead of the legacy tier mapper', async () => {
+    const { app } = setup();
+    const response = await app.request('/api/coder/classify-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Create a C4 diagram of the architecture' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      agent: 'diagram',
+      profile: 'navigate',
+      confidence: 'heuristic',
+      intent: 'diagram',
+      requires_explicit_user_intent: false,
+    });
+  });
+
+  it('exposes the destructive-intent guard signal for admin recommendations', async () => {
+    const { app } = setup();
+    const response = await app.request('/api/coder/classify-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Commit the fix and push it' }),
+    });
+    const body = (await response.json()) as {
+      agent: string;
+      confidence_score: number;
+      requires_explicit_user_intent: boolean;
+    };
+
+    expect(body.agent).toBe('admin');
+    expect(body.confidence_score).toBeGreaterThan(0);
+    expect(body.requires_explicit_user_intent).toBe(true);
+  });
+});

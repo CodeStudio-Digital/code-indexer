@@ -18,6 +18,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';
 import { ok } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 interface AgentLine {
@@ -122,7 +123,7 @@ export const listAgents: CoderTool = {
       // 'all' falls through
     }
     if (asJson) {
-      return ok(JSON.stringify({ total: all.length, shown: lines.length, agents: lines }));
+      return okStructured({ total: all.length, shown: lines.length, agents: lines });
     }
     if (lines.length === 0) return ok('(no agents match filter)');
     const rendered = lines.map((l) => {

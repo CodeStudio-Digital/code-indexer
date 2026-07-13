@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { capToolContent, finalizeToolOutput } from '../pure-helpers.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import { dispatchTools, toToolResultBlock, type DispatchArgs } from '../nodes/executing-dispatch.js';
+import { buildToolMessage, dispatchTools, toToolResultBlock, type DispatchArgs } from '../nodes/executing-dispatch.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 
 describe('capToolContent', () => {
@@ -149,6 +149,22 @@ function registryWith(content: string): ToolRegistry {
   return r;
 }
 
+function registryWithStructuredResult(): ToolRegistry {
+  const r = new ToolRegistry();
+  r.register({
+    name: 'foo',
+    description: 'mock structured tool',
+    parameters: { type: 'object', properties: {} },
+    source: 'native',
+    handler: async () => ({
+      content: '# Visible\n\nid | status\n--- | ---\na | ready',
+      contentFormat: 'markdown',
+      structuredData: { id: 'a', status: 'ready', secret: 'hidden-object-only' },
+    }),
+  });
+  return r;
+}
+
 const toolContext = { cwd: process.cwd(), projectName: 'test' } as ToolContext;
 
 function baseArgs(registry: ToolRegistry): DispatchArgs {
@@ -184,6 +200,18 @@ describe('dispatchTools — finalize hook', () => {
     });
     expect(res.results[0].content).toBe('RAWBODY-reduced');
     expect(res.results[0].truncated).toBeUndefined();
+  });
+
+  it('delivers only content to the provider message and keeps structured data out', async () => {
+    const res = await dispatchTools(baseArgs(registryWithStructuredResult()));
+    expect(res.results[0]).toMatchObject({
+      contentFormat: 'markdown',
+      structuredOutputChars: JSON.stringify({ id: 'a', status: 'ready', secret: 'hidden-object-only' }).length,
+    });
+    expect(res.results[0]).not.toHaveProperty('structuredData');
+    const providerMessage = buildToolMessage(res.results);
+    expect(JSON.stringify(providerMessage)).toContain('# Visible');
+    expect(JSON.stringify(providerMessage)).not.toContain('hidden-object-only');
   });
 
   it('records early direct refusals in the shared ledger', async () => {

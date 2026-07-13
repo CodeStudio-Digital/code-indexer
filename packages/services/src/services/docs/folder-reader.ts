@@ -113,6 +113,66 @@ export interface ReadFolderResult {
   filesErrored: number;
 }
 
+export interface FolderFileEntry {
+  absPath: string;
+  relPath: string;
+  size: number;
+  mtimeMs: number;
+  index: number;
+  total: number;
+}
+
+export async function scanFolderFiles(opts: Omit<ReadFolderOptions, 'onEvent' | 'sourceId'>): Promise<{
+  entries: FolderFileEntry[];
+  totalMatches: number;
+  cap: number;
+}> {
+  const includePattern = (opts.includeGlob ?? FOLDER_DEFAULT_INCLUDE_GLOB).trim() || FOLDER_DEFAULT_INCLUDE_GLOB;
+  const excludePattern = (opts.excludeGlob ?? FOLDER_DEFAULT_EXCLUDE_GLOB).trim() || FOLDER_DEFAULT_EXCLUDE_GLOB;
+  const cap = clamp(opts.maxFiles ?? FOLDER_DEFAULT_MAX_FILES, 1, FOLDER_HARD_MAX_FILES);
+  const matches = (await glob(includePattern, {
+    cwd: opts.rootPath,
+    absolute: true,
+    nodir: true,
+    dot: false,
+    follow: false,
+    ignore: [excludePattern],
+  })).slice().sort();
+  const selected = matches.slice(0, cap);
+  const entries: FolderFileEntry[] = new Array(selected.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < selected.length) {
+      const index = cursor++;
+      const absPath = selected[index]!;
+      const stat = await fs.stat(absPath);
+      entries[index] = {
+        absPath,
+        relPath: path.relative(opts.rootPath, absPath).split(path.sep).join('/'),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        index: index + 1,
+        total: selected.length,
+      };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(32, Math.max(1, selected.length)) }, () => worker()));
+  return { entries, totalMatches: matches.length, cap };
+}
+
+export async function readFolderEntry(
+  entry: FolderFileEntry,
+  rootPath: string,
+  sourceId: number,
+): Promise<ReadFileResult> {
+  return readSingleFile({
+    absPath: entry.absPath,
+    relPath: entry.relPath,
+    rootPath,
+    sourceId,
+  });
+}
+
 export async function readFolder(opts: ReadFolderOptions): Promise<ReadFolderResult> {
   const rootPath = opts.rootPath;
   const includePattern = (opts.includeGlob ?? FOLDER_DEFAULT_INCLUDE_GLOB).trim() ||
@@ -241,7 +301,7 @@ interface ReadSingleFileInput {
   sourceId: number;
 }
 
-type ReadFileResult =
+export type ReadFileResult =
   | RawPage[]
   | 'skipped-binary'
   | 'skipped-too-large'
@@ -290,6 +350,8 @@ async function readHtmlFile(input: ReadSingleFileInput, size: number): Promise<R
       markdown: converted.markdown,
       source: 'folder',
       bytes: size,
+      canonical_uri: converted.canonicalUrl,
+      extractor: converted.adapter,
     },
   ];
 }

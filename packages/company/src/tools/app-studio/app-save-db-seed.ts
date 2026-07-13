@@ -1,10 +1,11 @@
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { replaceAppSeedFile, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
 import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult } from './model-output.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -42,7 +43,7 @@ export function appSaveDbSeed(binding: AppToolBinding): CoderTool {
         const resolved = resolveHostPath('.', ctx);
         if (resolved.kind === 'no-bind-mount') return err(resolved.message);
         const result = replaceAppSeedFile(resolved.path, sql);
-        return ok(JSON.stringify({
+        return appResult('App database seed saved', {
           changed: result.changed,
           seed_path: 'seeds/seed.sql',
           backup_path: result.backup_path,
@@ -51,7 +52,7 @@ export function appSaveDbSeed(binding: AppToolBinding): CoderTool {
           next: result.changed
             ? 'Run app_provision_db once, then verify with db_schema and read-only db_query.'
             : 'The canonical seed is unchanged. Do not create a migration; inspect the actual database state.',
-        }, null, 2));
+        });
       } catch (e) {
         return err(`app_save_db_seed failed: ${(e as Error).message}`);
       }

@@ -59,7 +59,14 @@ export interface DocSource {
   cost_usd: number;
   created_at: string;
   updated_at: string;
+  enrichment_mode: 'selective' | 'all' | 'off';
+  embedding_fingerprint: string | null;
+  last_ingest_run_id: number | null;
+  folder_performance_profile: DocPerformanceProfile;
+  folder_worker_count: number | null;
 }
+
+export type DocPerformanceProfile = 'economy' | 'balanced' | 'maximum' | 'custom';
 
 export interface DocCrawlConfig {
   enabled?: boolean;
@@ -131,6 +138,8 @@ export interface DocSearchDiagnostics {
   mode: 'hybrid' | 'fts' | 'vector';
   embedding_available: boolean;
   vector_available: boolean;
+  stale_vector_hits?: number;
+  vector_coverage?: number;
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -200,11 +209,12 @@ export async function listCollectionProjects(collectionId: number): Promise<DocP
 export async function linkCollectionToProject(
   collectionId: number,
   projectId: number,
+  origin: 'manual' | 'auto' = 'manual',
 ): Promise<{ linked: boolean; created: boolean }> {
   return jsonFetch(`/api/docs/collections/${collectionId}/projects/${projectId}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ origin }),
   });
 }
 
@@ -241,6 +251,23 @@ export interface DocSourceHealth {
   embedding_complete: boolean;
   missing_count: number;
   last_indexed_at: string | null;
+  lexical_ready: boolean;
+  vector_ready: boolean;
+  enrichment_ready: boolean;
+  embedding_fingerprint: string | null;
+  last_checkpoint_at: string | null;
+  active_run_id: number | null;
+}
+
+export interface DocProjectSuggestion {
+  project_id: number;
+  project_name: string;
+  confidence: number;
+  reason: string;
+}
+
+export async function listCollectionProjectSuggestions(collectionId: number): Promise<DocProjectSuggestion[]> {
+  return jsonFetch(`/api/docs/collections/${collectionId}/project-suggestions`);
 }
 
 export async function fetchSourceHealth(sourceId: number): Promise<DocSourceHealth> {
@@ -373,6 +400,8 @@ export interface DocFolderConfig {
   max_files?: number | null;
   /** Default true — pula LLM gate (docs locais geralmente curadas). */
   bypass_relevance_gate?: boolean;
+  performance_profile?: DocPerformanceProfile;
+  worker_count?: number | null;
 }
 
 /**
@@ -383,7 +412,7 @@ export interface DocFolderConfig {
  */
 export async function indexFolderStream(
   collectionId: number,
-  input: { path: string; title?: string; doc_type?: DocType; folder?: DocFolderConfig },
+  input: { path: string; title?: string; doc_type?: DocType; enrichment_mode?: 'selective' | 'all' | 'off'; folder?: DocFolderConfig },
   callbacks: {
     onStart?: (p: unknown) => void;
     onScan?: (p: DocIngestScanFrame) => void;
@@ -420,6 +449,53 @@ export async function reindexSourceStream(
     headers: { accept: 'text/event-stream' },
   });
   return consumeEventStream(r, callbacks);
+}
+
+export async function cancelSourceIndex(sourceId: number): Promise<{ cancel_requested: boolean }> {
+  return jsonFetch(`/api/docs/sources/${sourceId}/index/cancel`, { method: 'POST' });
+}
+
+export async function pauseSourceIndex(sourceId: number): Promise<{ pause_requested: boolean }> {
+  return jsonFetch(`/api/docs/sources/${sourceId}/index/pause`, { method: 'POST' });
+}
+
+export async function updateSourceIndexPerformance(
+  sourceId: number,
+  profile: DocPerformanceProfile,
+  workerCount?: number | null,
+): Promise<{ profile: DocPerformanceProfile; worker_count: number; active_run_updated: boolean }> {
+  return jsonFetch(`/api/docs/sources/${sourceId}/index/performance`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ profile, worker_count: workerCount }),
+  });
+}
+
+export async function resumeSourceIndex(sourceId: number): Promise<{ accepted: boolean; run_id: number | null }> {
+  return jsonFetch(`/api/docs/sources/${sourceId}/index/resume`, { method: 'POST' });
+}
+
+export interface DocIngestRun {
+  id: number;
+  source_id: number;
+  state: 'running' | 'paused' | 'paused_limit' | 'cancelled' | 'completed' | 'failed';
+  phase: string;
+  total_items: number;
+  processed_items: number;
+  changed_items: number;
+  unchanged_items: number;
+  chunks_persisted: number;
+  embeddings_completed: number;
+  enrichments_completed: number;
+  pause_requested: boolean;
+  performance_profile: DocPerformanceProfile;
+  worker_count: number;
+  heartbeat_at: string;
+  error_message: string | null;
+}
+
+export async function listSourceRuns(sourceId: number): Promise<DocIngestRun[]> {
+  return jsonFetch(`/api/docs/sources/${sourceId}/runs`);
 }
 
 // ─── Dry-run ────────────────────────────────────────────────────────
@@ -470,6 +546,9 @@ export type DocIngestPhase =
   | 'chunking'
   | 'enriching'
   | 'embedding'
+  | 'paused'
+  | 'paused_limit'
+  | 'cancelled'
   | 'done'
   | 'error';
 
@@ -485,6 +564,22 @@ export interface DocIngestProgressFrame {
   chunks_indexed?: number;
   cost_usd?: number;
   elapsed_ms?: number;
+  run_id?: number;
+  state?: DocIngestRun['state'];
+  files_changed?: number;
+  files_unchanged?: number;
+  files_skipped?: number;
+  chunks_persisted?: number;
+  embeddings_completed?: number;
+  embeddings_pending?: number;
+  enrichments_completed?: number;
+  enrichments_pending?: number;
+  searchable?: boolean;
+  rate_per_sec?: number;
+  eta_ms?: number | null;
+  workers_active?: number;
+  workers_configured?: number;
+  extraction_ms?: number;
 }
 
 export interface DocIngestDoneFrame {
@@ -496,6 +591,37 @@ export interface DocIngestDoneFrame {
   pages_via_browser: number;
   cost_usd: number;
   elapsed_ms: number;
+  run_id?: number;
+  state?: 'paused' | 'paused_limit' | 'cancelled' | 'completed';
+  searchable?: boolean;
+}
+
+export interface DocFolderPreview {
+  files_found: number;
+  files_to_process: number;
+  cap: number;
+  sample_pages: number;
+  sample_pages_accepted: number;
+  estimated_chunks: number;
+  extractor: 'generic' | 'unity-script-reference';
+  detected_doc_type: DocType;
+  estimated_llm_calls: number;
+  available_workers: number;
+  configured_workers: number;
+  progressive: boolean;
+}
+
+export async function dryRunFolder(input: {
+  path: string;
+  doc_type?: DocType;
+  enrichment_mode?: 'selective' | 'all' | 'off';
+  folder?: DocFolderConfig;
+}): Promise<DocFolderPreview> {
+  return jsonFetch('/api/docs/sources/dry-run/folder', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
 }
 
 /**

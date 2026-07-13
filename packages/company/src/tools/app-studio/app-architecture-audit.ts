@@ -1,11 +1,13 @@
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult } from './model-output.js';
+import { errStructured } from '@mcp/code-agent/core/model-output.js';
 
 const PARAMETERS: JsonSchema = { type: 'object', properties: {} };
 
@@ -24,7 +26,7 @@ export function appArchitectureAudit(binding: AppToolBinding): CoderTool {
         const revision = store.getLatestArchitectureRevision(session.id);
         const product = parseAppProductModel(store.getLatestApprovedProductRevision(session.id)?.product_json);
         const report = auditAppArchitecture(parseAppArchitecturePlan(revision?.architecture_json), parseAppSpec(session.spec_json), product);
-        return report.ok ? ok(JSON.stringify(report, null, 2)) : err(JSON.stringify(report, null, 2));
+        return report.ok ? appResult('App architecture audit', report) : errStructured(report);
       } catch (e) {
         return err(`app_architecture_audit failed: ${(e as Error).message}`);
       }

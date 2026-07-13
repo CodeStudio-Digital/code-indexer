@@ -636,8 +636,17 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                   });
                   throw e;
                 }
+                let nestedContent = result.content;
+                if (result.structuredData !== undefined) {
+                  try {
+                    nestedContent = JSON.stringify(result.structuredData) ?? result.content;
+                  } catch {
+                    // Keep the model-facing text when a third-party tool
+                    // violates the JSON-serializable structured-data contract.
+                  }
+                }
                 recordNestedOutcome({
-                  content: result.content,
+                  content: nestedContent,
                   isError: !!result.isError,
                   durationMs: Date.now() - started,
                   guardVerdict: guardVerdict ?? undefined,
@@ -652,7 +661,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                 ) {
                   stateEpoch += 1;
                 }
-                return result.content;
+                return nestedContent;
               } finally {
                 if (toolTimer) clearTimeout(toolTimer);
                 if (releaseLane && !laneReleaseOwnedByInvocation) releaseLane();

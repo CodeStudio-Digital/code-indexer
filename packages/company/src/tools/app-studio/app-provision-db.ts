@@ -9,6 +9,7 @@
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { errStructured } from '@mcp/code-agent/core/model-output.js';
 import type { AppToolBinding } from '@mcp/company/tools/app-studio/binding.js';
 import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 import {
@@ -51,22 +52,22 @@ export function appProvisionDb(binding: AppToolBinding): CoderTool {
         });
         if (!outcome.ok) {
           if (outcome.phase === 'seed') {
-            return err(JSON.stringify({
+            return errStructured({
               error: 'Local database example-data synchronization failed.',
               phase: 'seed',
               schema_ready: outcome.schemaReady ?? false,
               migrations_applied: outcome.applied,
               detail: outcome.error ?? 'unknown error',
               next: 'Call app_get_db_assets, fix the COMPLETE canonical seed with app_save_db_seed, then retry app_provision_db. Do not create another migration for this seed error.',
-            }, null, 2));
+            });
           }
-          return err(JSON.stringify({
+          return errStructured({
             error: 'Local database migration failed.',
             phase: outcome.phase ?? 'migration',
             schema_ready: outcome.schemaReady ?? false,
             detail: outcome.error ?? 'unknown error',
             next: 'Inspect app_get_db_assets and the actual schema. Do not create another migration until the failed migration is understood.',
-          }, null, 2));
+          });
         }
         const dbStore = getAppStudioDbClientStore();
         const dbFile = findLocalD1File(resolved.path);

@@ -12,6 +12,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { appResult } from './model-output.js';
 import type { AppToolBinding } from '@mcp/company/tools/app-studio/binding.js';
 import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
@@ -270,13 +271,13 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
             impact_json: JSON.stringify(impact),
             submitted_at: evolution.submitted_at ?? new Date().toISOString(),
           });
-          return ok(JSON.stringify({
+          return appResult('App spec revision proposed', {
             mode: 'versioned_revision',
             revision: { id: revision.id, number: revision.revision_number, status: revision.status },
             impact,
             summary,
             next: 'The approved spec was not overwritten. Explain the changes and ask the user to review them in Versoes/Mudancas.',
-          }, null, 2));
+          });
         }
 
         store.setSpecJson(session.id, prepared.specJson);

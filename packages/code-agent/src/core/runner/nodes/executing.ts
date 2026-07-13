@@ -953,6 +953,8 @@ export class ExecutingNode implements BehaviorNode {
           content: r.content,
           isError: r.isError,
           rawChars: r.rawChars,
+          contentFormat: r.contentFormat,
+          structuredOutputChars: r.structuredOutputChars,
           input: inputByUseId.get(r.toolUseId),
           refusalKind: r.refusalKind,
           reductionReport: r.reductionReport,

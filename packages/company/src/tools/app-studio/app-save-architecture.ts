@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
 import {
@@ -12,6 +12,7 @@ import { parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
 import type { AppToolBinding } from './binding.js';
+import { appResult } from './model-output.js';
 import { getAppStudioStore } from './store-binding.js';
 
 const PARAMETERS: JsonSchema = {
@@ -103,7 +104,7 @@ export function appSaveArchitecture(binding: AppToolBinding): CoderTool {
           mkdirSync(dirname(target), { recursive: true });
           writeFileSync(target, json, 'utf8');
         }
-        return ok(JSON.stringify({ revision: { id: revision.id, revision_number: revision.revision_number, status: revision.status }, audit, next: "Submit with app_submit_stage({ stage: 'architecture', summary }) when the user-facing plan is ready." }, null, 2));
+        return appResult('App architecture saved', { revision: { id: revision.id, revision_number: revision.revision_number, status: revision.status }, audit, next: "Submit with app_submit_stage({ stage: 'architecture', summary }) when the user-facing plan is ready." });
       } catch (e) {
         return err(`app_save_architecture failed: ${(e as Error).message}`);
       }

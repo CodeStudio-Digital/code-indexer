@@ -6,13 +6,14 @@
  * applies the change from the Versions panel.
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import type { AppToolBinding } from '@mcp/company/tools/app-studio/binding.js';
 import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 import { APP_SPEC_TOOL_SCHEMA } from '@mcp/company/tools/app-studio/app-save-spec.js';
 import { prepareSpecSave } from '@mcp/app-studio/spec/save-core.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { diffAppSpecs, impactFromSpecDiff, summarizeSpecDiff } from '@mcp/app-studio/spec/revisions.js';
+import { appResult } from './model-output.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -79,25 +80,19 @@ export function appProposeSpecRevision(binding: AppToolBinding): CoderTool {
           impact_json: JSON.stringify(impact),
           submitted_at: evolution.submitted_at ?? now,
         });
-        return ok(
-          JSON.stringify(
-            {
-              evolution: updatedEvolution,
-              revision: {
-                id: revision.id,
-                revision_number: revision.revision_number,
-                status: revision.status,
-                title: revision.title,
-                summary: revision.summary,
-              },
-              impact,
-              summary: summaryLines,
-              next: 'Tell the user this is ready for review in the Versoes/Mudancas panel. Do not call app_save_spec for this approved plan.',
-            },
-            null,
-            2,
-          ),
-        );
+        return appResult('Proposed spec revision', {
+          evolution: updatedEvolution,
+          revision: {
+            id: revision.id,
+            revision_number: revision.revision_number,
+            status: revision.status,
+            title: revision.title,
+            summary: revision.summary,
+          },
+          impact,
+          summary: summaryLines,
+          next: 'Tell the user this is ready for review in the Versoes/Mudancas panel. Do not call app_save_spec for this approved plan.',
+        });
       } catch (e) {
         return err(`app_propose_spec_revision failed: ${(e as Error).message}`);
       }

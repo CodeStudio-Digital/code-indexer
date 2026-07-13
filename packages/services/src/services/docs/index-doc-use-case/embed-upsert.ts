@@ -1,16 +1,14 @@
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
-import type { DocCollection, DocStore } from '@mcp/store/doc-store.js';
+import type { DocChunk, DocCollection, DocStore } from '@mcp/store/doc-store.js';
 import type { VectorRecord } from '@mcp/shared/types.js';
 import { docNamespace } from '@mcp/shared/vector-namespace.js';
 import { vectorIdForChunk } from '../search.js';
 import { buildEmbeddingText, hashEmbeddingInput } from './utils.js';
-import {
-  EMBED_BATCH_SIZE,
-  EMBED_CONCURRENCY,
-  type IndexDocStreamCallbacks,
-  type IndexDocUseCaseDeps,
-} from './types.js';
+import { EMBED_BATCH_SIZE, EMBED_CONCURRENCY, type IndexDocStreamCallbacks, type IndexDocUseCaseDeps } from './types.js';
+
+const PAGE_SIZE = 2_048;
+const UPSERT_RETRIES = 3;
 
 export interface EmbedAndUpsertDeps {
   docStore: DocStore;
@@ -18,101 +16,34 @@ export interface EmbedAndUpsertDeps {
   vectorStore: VectorStore;
 }
 
-/**
- * Worker-pool embed+upsert for a single source. Sequential I/O wins when one
- * round-trip dominates wall-clock; here each batch is embed-then-upsert-then-
- * SQLite which the network dominates. Sequential was ~5-7 chunks/s; 4 workers
- * give ~4× throughput while staying well inside Cloudflare free-tier rate
- * limits (~8 req/s vs the 50/s cap).
- *
- * SQLite writes inside `recordChunkVector` / `updateChunkEmbedding` are
- * synchronous (better-sqlite3) — the engine serializes them for us.
- */
+export type RetryEmbeddingsScope = { sourceId?: number; collectionId?: number; force?: boolean };
+export interface RetryEmbeddingsResult {
+  embedded: number;
+  tokens: number;
+  total: number;
+  stopped?: 'paused' | 'cancelled';
+}
+export interface RetryEmbeddingsCallbacks {
+  onProgress?: (p: { current: number; total: number; phase: 'embedding' }) => void | Promise<void>;
+  shouldStop?: () => 'paused' | 'cancelled' | null;
+}
+
+/** Legacy URL/PDF entrypoint; incremental folders use retryEmbeddings directly. */
 export async function embedAndUpsert(
   deps: EmbedAndUpsertDeps,
-  collection: DocCollection,
+  _collection: DocCollection,
   sourceId: number,
   callbacks?: IndexDocStreamCallbacks,
 ): Promise<number> {
-  const { docStore, embeddingService, vectorStore } = deps;
-  const allChunks = docStore.listChunksBySource(sourceId);
-  if (allChunks.length === 0) return 0;
-
-  const total = allChunks.length;
-  let totalTokens = 0;
-  let done = 0;
-  let cursor = 0;
-
-  const runWorker = async (): Promise<void> => {
-    while (true) {
-      const start = cursor;
-      if (start >= allChunks.length) return;
-      cursor = start + EMBED_BATCH_SIZE;
-      const batch = allChunks.slice(start, start + EMBED_BATCH_SIZE);
-      const texts = batch.map((c) => buildEmbeddingText(c.heading_path, c.summary, c.content));
-      const { vectors, tokens } = await embeddingService.embed(texts);
-      totalTokens += tokens;
-      const records: VectorRecord[] = batch.map((chunk, j) => ({
-        id: vectorIdForChunk(chunk.id),
-        values: vectors[j] ?? [],
-        metadata: {
-          corpus: 'docs',
-          type: 'doc_chunk',
-          collection: collection.name,
-          chunk_id: String(chunk.id),
-          source_id: String(chunk.source_id),
-          heading_path: chunk.heading_path ?? '',
-        },
-      })).filter((r) => r.values.length > 0);
-      // Validate that the remote store actually accepted the vectors. If it
-      // returns 0 (silent rejection — invalid metadata schema, quota, etc.),
-      // we MUST NOT register the mapping in `doc_chunk_vectors` — otherwise
-      // the badge says "✓ embedded" while remote search returns 0 forever.
-      // Leaving `embedding_hash=NULL` lets `retryEmbeddings` pick these up.
-      // All chunks here belong to ONE collection → one namespace.
-      let upserted = 0;
-      if (records.length > 0) upserted = await vectorStore.upsert(records, docNamespace(collection.id));
-      if (upserted < records.length) {
-        console.warn(
-          `[doc-indexer] vector upsert returned ${upserted}/${records.length} — leaving these chunks pending for retry`,
-        );
-      }
-      if (upserted > 0) {
-        for (let j = 0; j < batch.length; j++) {
-          const chunk = batch[j]!;
-          if (!vectors[j]) continue;
-          docStore.recordChunkVector(chunk.id, vectorIdForChunk(chunk.id), 'default');
-          docStore.updateChunkEmbedding(chunk.id, hashEmbeddingInput(texts[j]!), 'default');
-        }
-      }
-      done += batch.length;
-      await callbacks?.onProgress?.({
-        phase: 'embedding',
-        current: Math.min(done, total),
-        total,
-        chunks_indexed: total,
-      });
-    }
-  };
-
-  const workerCount = Math.min(EMBED_CONCURRENCY, Math.max(1, Math.ceil(allChunks.length / EMBED_BATCH_SIZE)));
-  const workers = Array.from({ length: workerCount }, () => runWorker());
-  await Promise.all(workers);
-  return totalTokens;
-}
-
-export type RetryEmbeddingsScope = { sourceId?: number; collectionId?: number; force?: boolean };
-export interface RetryEmbeddingsResult { embedded: number; tokens: number; total: number; }
-
-export interface RetryEmbeddingsCallbacks {
-  onProgress?: (p: { current: number; total: number; phase: 'embedding' }) => void | Promise<void>;
+  const result = await embedPending(deps, { sourceId }, async (current, total) => {
+    await callbacks?.onProgress?.({ phase: 'embedding', current, total, chunks_indexed: total });
+  }, undefined);
+  return result.tokens;
 }
 
 /**
- * Re-embed chunks whose `embedding_hash IS NULL`. Scope is explicit:
- * `sourceId` (preferred for "source got stuck halfway" recovery),
- * `collectionId`, or nothing (entire corpus). `force` wipes existing
- * embedding state before re-running — source-scoped only to avoid foot-gun.
+ * Embed only missing/stale chunks. Work is paged so a 50k-chunk corpus never
+ * needs to hydrate all chunk bodies into memory at once.
  */
 export async function retryEmbeddings(
   deps: IndexDocUseCaseDeps,
@@ -120,106 +51,160 @@ export async function retryEmbeddings(
   callbacks?: RetryEmbeddingsCallbacks,
 ): Promise<RetryEmbeddingsResult> {
   const { docStore, embeddingService, vectorStore, progressTracker } = deps;
-  if (!embeddingService || !vectorStore) return { embedded: 0, tokens: 0, total: 0 };
-
-  if (scope.force && scope.sourceId != null) {
-    const { cleared } = docStore.clearEmbeddingsForSource(scope.sourceId);
-    console.log(`[doc-indexer] force re-embed source=${scope.sourceId} → cleared ${cleared} chunk(s)`);
+  if (!embeddingService || !vectorStore || embeddingService.fingerprint?.() === 'null') {
+    return { embedded: 0, tokens: 0, total: 0 };
   }
-  // Snapshot the missing set up-front. Doing this incrementally would race
-  // with the writes we make as we go.
-  const allPending = docStore.listChunksMissingEmbedding({ ...scope, limit: 100_000 });
-  const total = allPending.length;
+  if (scope.force && scope.sourceId != null) docStore.clearEmbeddingsForSource(scope.sourceId);
+  return embedPending({ docStore, embeddingService, vectorStore }, scope, async (current, total) => {
+    await callbacks?.onProgress?.({ phase: 'embedding', current, total });
+    if (scope.sourceId != null) {
+      progressTracker?.put(scope.sourceId, {
+        phase: 'embedding', current, total, chunks_indexed: total,
+        embeddings_completed: current, embeddings_pending: Math.max(0, total - current),
+        searchable: docStore.countChunksBySource(scope.sourceId) > 0,
+      });
+    }
+  }, callbacks?.shouldStop);
+}
+
+async function embedPending(
+  deps: EmbedAndUpsertDeps,
+  scope: RetryEmbeddingsScope,
+  onProgress: (current: number, total: number) => Promise<void>,
+  shouldStop?: () => 'paused' | 'cancelled' | null,
+): Promise<RetryEmbeddingsResult> {
+  const { docStore, embeddingService, vectorStore } = deps;
+  const fingerprint = embeddingService.fingerprint?.() ?? 'embedding:unknown';
+  const pendingScope = { ...scope, fingerprint };
+  const total = docStore.countChunksMissingEmbedding(pendingScope);
   if (total === 0) return { embedded: 0, tokens: 0, total: 0 };
-
-  // Resolve collection objects once — used for vector metadata.
-  const collectionsById = new Map<number, DocCollection | null>();
-  const getCollection = (id: number): DocCollection | null => {
-    let c = collectionsById.get(id);
-    if (c === undefined) {
-      c = docStore.getCollection(id);
-      collectionsById.set(id, c);
-    }
-    return c;
-  };
-
+  const concurrency = Math.max(1, Math.min(
+    EMBED_CONCURRENCY,
+    embeddingService.maxConcurrency?.() ?? 1,
+  ));
   let embedded = 0;
-  let totalTokens = 0;
-  let cursor = 0;
+  let tokens = 0;
+  let stopped: 'paused' | 'cancelled' | undefined;
 
-  const runWorker = async (): Promise<void> => {
-    while (true) {
-      const start = cursor;
-      if (start >= allPending.length) return;
-      cursor = start + EMBED_BATCH_SIZE;
-      const batch = allPending.slice(start, start + EMBED_BATCH_SIZE);
-      const texts = batch.map((c) => buildEmbeddingText(c.heading_path, c.summary, c.content));
-      const { vectors, tokens } = await embeddingService.embed(texts);
-      totalTokens += tokens;
-      // A retry batch can span MULTIPLE collections → group by collection so
-      // each upsert targets exactly one namespace (docs are isolated per
-      // collection). Registration is per-group: only register a group's chunks
-      // when that group's remote upsert actually accepted them.
-      type Entry = { chunkId: number; text: string; record: VectorRecord };
-      const byCollection = new Map<number, Entry[]>();
-      for (let i = 0; i < batch.length; i++) {
-        const chunk = batch[i]!;
-        const collection = getCollection(chunk.collection_id);
-        if (!collection) continue;
-        const vec = vectors[i];
-        if (!vec) continue;
-        const entry: Entry = {
-          chunkId: chunk.id,
-          text: texts[i]!,
-          record: {
-            id: vectorIdForChunk(chunk.id),
-            values: vec,
-            metadata: {
-              corpus: 'docs',
-              type: 'doc_chunk',
-              collection: collection.name,
-              chunk_id: String(chunk.id),
-              source_id: String(chunk.source_id),
-              heading_path: chunk.heading_path ?? '',
-            },
-          },
-        };
-        const arr = byCollection.get(collection.id) ?? [];
-        arr.push(entry);
-        byCollection.set(collection.id, arr);
-      }
-      for (const [collectionId, entries] of byCollection) {
-        const recs = entries.map((e) => e.record);
-        const upserted = recs.length > 0 ? await vectorStore.upsert(recs, docNamespace(collectionId)) : 0;
-        if (upserted < recs.length) {
-          console.warn(
-            `[doc-indexer] retry vector upsert returned ${upserted}/${recs.length} (collection ${collectionId}) — leaving these chunks pending`,
-          );
+  while (embedded < total) {
+    stopped = shouldStop?.() ?? undefined;
+    if (stopped) break;
+    const pending = docStore.listChunksMissingEmbedding({ ...pendingScope, limit: PAGE_SIZE });
+    if (pending.length === 0) break;
+    let cursor = 0;
+    let pageConfirmed = 0;
+    const worker = async () => {
+      while (cursor < pending.length) {
+        const requestedStop = shouldStop?.() ?? undefined;
+        if (requestedStop) {
+          stopped = requestedStop;
+          return;
         }
-        if (upserted > 0) {
-          for (const e of entries) {
-            docStore.recordChunkVector(e.chunkId, vectorIdForChunk(e.chunkId), 'default');
-            docStore.updateChunkEmbedding(e.chunkId, hashEmbeddingInput(e.text), 'default');
-          }
-        }
+        const start = cursor;
+        cursor += EMBED_BATCH_SIZE;
+        const batch = pending.slice(start, start + EMBED_BATCH_SIZE);
+        const result = await embedBatch(deps, batch, fingerprint);
+        tokens += result.tokens;
+        embedded += result.confirmed;
+        pageConfirmed += result.confirmed;
+        await onProgress(Math.min(embedded, total), total);
       }
-      embedded += batch.length;
-      await callbacks?.onProgress?.({ phase: 'embedding', current: Math.min(embedded, total), total });
-      // Push into the progress tracker for THIS source too, so the source-list
-      // live bar lights up during retry. Only meaningful when scope.sourceId set.
-      if (scope.sourceId != null) {
-        progressTracker?.put(scope.sourceId, {
-          phase: 'embedding',
-          current: Math.min(embedded, total),
-          total,
-          chunks_indexed: total,
-        });
-      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, Math.ceil(pending.length / EMBED_BATCH_SIZE)) }, () => worker()));
+    // A backend that repeatedly acknowledges zero records must leave chunks
+    // pending for a later retry, not spin forever in this run.
+    if (pageConfirmed === 0) break;
+  }
+  return { embedded, tokens, total, ...(stopped ? { stopped } : {}) };
+}
+
+async function embedBatch(
+  deps: EmbedAndUpsertDeps,
+  chunks: DocChunk[],
+  fingerprint: string,
+): Promise<{ confirmed: number; tokens: number }> {
+  if (chunks.length === 0) return { confirmed: 0, tokens: 0 };
+  const texts = chunks.map((chunk) => buildEmbeddingText(
+    chunk.heading_path,
+    null,
+    chunk.content,
+    chunk.api_signature,
+  ));
+  const { vectors, tokens } = await deps.embeddingService.embed(texts);
+  const byCollection = new Map<number, Array<{
+    chunk: DocChunk;
+    text: string;
+    record: VectorRecord;
+  }>>();
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]!;
+    const vector = vectors[i];
+    if (!vector?.length) continue;
+    const inputHash = hashEmbeddingInput(texts[i]!);
+    const list = byCollection.get(chunk.collection_id) ?? [];
+    list.push({
+      chunk,
+      text: texts[i]!,
+      record: {
+        id: vectorIdForChunk(chunk.id),
+        values: vector,
+        metadata: {
+          corpus: 'docs',
+          type: 'doc_chunk',
+          chunk_id: String(chunk.id),
+          source_id: String(chunk.source_id),
+          heading_path: chunk.heading_path ?? '',
+          embedding_hash: inputHash,
+          embedding_fingerprint: fingerprint,
+        },
+      },
+    });
+    byCollection.set(chunk.collection_id, list);
+  }
+
+  let confirmed = 0;
+  for (const [collectionId, entries] of byCollection) {
+    const accepted = await upsertExactly(deps.vectorStore, entries.map((e) => e.record), docNamespace(collectionId));
+    for (const entry of entries) {
+      if (!accepted.has(entry.record.id)) continue;
+      const hash = hashEmbeddingInput(entry.text);
+      deps.docStore.recordChunkVector(entry.chunk.id, entry.record.id, fingerprint);
+      deps.docStore.updateChunkEmbeddingState(entry.chunk.id, hash, fingerprint);
+      confirmed++;
     }
-  };
+  }
+  return { confirmed, tokens };
+}
 
-  const workerCount = Math.min(EMBED_CONCURRENCY, Math.max(1, Math.ceil(allPending.length / EMBED_BATCH_SIZE)));
-  const workers = Array.from({ length: workerCount }, () => runWorker());
-  await Promise.all(workers);
-  return { embedded, tokens: totalTokens, total };
+/** Resolve count-only partial acknowledgements down to exact record ids. */
+async function upsertExactly(
+  store: VectorStore,
+  records: VectorRecord[],
+  namespace: string,
+): Promise<Set<string>> {
+  if (records.length === 0) return new Set();
+  const count = await withRetry(() => store.upsert(records, namespace));
+  if (count >= records.length) return new Set(records.map((r) => r.id));
+  if (records.length === 1) return count === 1 ? new Set([records[0]!.id]) : new Set();
+  const middle = Math.floor(records.length / 2);
+  const [left, right] = await Promise.all([
+    upsertExactly(store, records.slice(0, middle), namespace),
+    upsertExactly(store, records.slice(middle), namespace),
+  ]);
+  return new Set([...left, ...right]);
+}
+
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt <= UPSERT_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      last = error;
+      if (attempt === UPSERT_RETRIES) break;
+      const delay = Math.min(500 * 2 ** attempt, 4_000) + Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw last;
 }

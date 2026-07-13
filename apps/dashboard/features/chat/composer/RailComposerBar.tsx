@@ -33,8 +33,9 @@ import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.j
 import type { OutputCapLevel } from './output-cap-levels.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
+import type { AgentPreset } from '@mcp/api-bus';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = AgentPreset;
 
 interface RailComposerBarProps {
   hasInput: boolean;

@@ -6,11 +6,12 @@
  * agents can call `app_get_spec` for the current full spec.
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import type { AppToolBinding } from '@mcp/company/tools/app-studio/binding.js';
 import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import type { AppStudioSpecRevision } from '@mcp/store/app-studio-store.js';
+import { appResult } from './model-output.js';
 
 const PARAMETERS: JsonSchema = { type: 'object', properties: {} };
 
@@ -41,7 +42,7 @@ export function appGetSpecHistory(binding: AppToolBinding): CoderTool {
           submitted_at: e.submitted_at,
           applied_at: e.applied_at,
         }));
-        return ok(JSON.stringify({ current_revision_id: current?.id ?? null, revisions, evolutions }, null, 2));
+        return appResult('App spec history', { current_revision_id: current?.id ?? null, revisions, evolutions });
       } catch (e) {
         return err(`app_get_spec_history failed: ${(e as Error).message}`);
       }

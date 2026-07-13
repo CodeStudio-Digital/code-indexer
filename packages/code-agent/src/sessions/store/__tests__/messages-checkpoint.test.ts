@@ -88,6 +88,8 @@ beforeEach(() => {
       duration_ms INTEGER NOT NULL DEFAULT 0,
       output_chars INTEGER,
       output_chars_shaped INTEGER,
+      output_format TEXT,
+      structured_output_chars INTEGER,
       truncated INTEGER NOT NULL DEFAULT 0,
       phase TEXT,
       turn_telemetry_id INTEGER,

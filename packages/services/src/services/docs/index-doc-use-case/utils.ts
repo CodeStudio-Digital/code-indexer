@@ -17,10 +17,17 @@ export function stripExtension(name: string): string {
   return name.replace(/\.[a-z0-9]+$/i, '');
 }
 
-export function buildEmbeddingText(headingPath: string | null, summary: string | null, content: string): string {
+export function buildEmbeddingText(
+  headingPath: string | null,
+  _summary: string | null,
+  content: string,
+  apiSignature?: string | null,
+): string {
   const head = headingPath ? `# ${headingPath}\n\n` : '';
-  const intro = summary ? `${summary}\n\n` : '';
-  return `${head}${intro}${content}`;
+  const signature = apiSignature ? `Signature: ${apiSignature}\n\n` : '';
+  // LLM summaries are deliberately excluded: enrichment can finish later
+  // without invalidating an already-correct vector.
+  return `${head}${signature}${content}`;
 }
 
 /**

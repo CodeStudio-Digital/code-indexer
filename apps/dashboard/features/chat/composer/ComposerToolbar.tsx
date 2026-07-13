@@ -12,8 +12,9 @@ import { Button } from '../../../components/ui/button.js';
 import { AgentPicker } from './AgentPicker.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
+import type { AgentPreset } from '@mcp/api-bus';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = AgentPreset;
 
 interface ComposerToolbarProps {
   hasInput: boolean;

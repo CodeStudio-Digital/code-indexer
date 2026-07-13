@@ -523,6 +523,13 @@ export interface ToolContext {
 export interface ToolResult {
   content: string;
   isError?: boolean;
+  /** Model-facing representation. Providers receive only `content`. */
+  contentFormat?: 'text' | 'markdown' | 'json';
+  /**
+   * Optional canonical payload retained for internal consumers such as
+   * `code_exec` and size telemetry. It is never appended to model history.
+   */
+  structuredData?: unknown;
   /** Structured guard metadata, including observe-mode would-block signals. */
   guardVerdict?: GuardVerdict;
   /**

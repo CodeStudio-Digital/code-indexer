@@ -17,6 +17,7 @@ import { makeDocsListSourcesTool } from './docs-list-sources.js';
 import { makeDocsSynthesizeTool } from './docs-synthesize.js';
 import { makeDocsFinishTool, type DocsFinishSlot } from './docs-finish.js';
 import { makeDocsPlanTool, type PlanSlot } from './docs-plan.js';
+import { DocsEvidenceLedger } from './evidence-ledger.js';
 
 export type { DocsFinishPayload, DocsFinishSlot } from './docs-finish.js';
 export type { PlanSlot } from './docs-plan.js';
@@ -46,6 +47,7 @@ export interface BuildDocsToolsetInput {
 }
 
 export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
+  const ledger = new DocsEvidenceLedger();
   return [
     makeDocsPlanTool({ slot: input.planSlot }),
     makeDocsListSourcesTool({ docStore: input.docStore }),
@@ -53,12 +55,15 @@ export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
       docHybridSearch: input.docHybridSearch,
       resolveContext: input.resolveContext,
       scopedCollections: input.scopedCollections,
+      ledger,
+      subQuestionCount: () => input.planSlot.subQuestions?.length ?? 1,
       onCall: () => {
         input.counters.searches++;
       },
     }),
     makeDocsReadChunkTool({
       docStore: input.docStore,
+      ledger,
       onCall: () => {
         input.counters.chunks_read++;
       },
@@ -76,6 +81,6 @@ export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
         if (usage.cost_usd != null) input.counters.cost_usd += usage.cost_usd;
       },
     }),
-    makeDocsFinishTool({ slot: input.finishSlot }),
+    makeDocsFinishTool({ slot: input.finishSlot, ledger, planSlot: input.planSlot }),
   ];
 }

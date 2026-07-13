@@ -1,5 +1,5 @@
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import { recordTddCycle } from '@mcp/app-studio/architecture/tdd-cycles.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
@@ -8,6 +8,7 @@ import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stage
 import { filesContaining, readIfExists, runWorkspaceScript, summarizeOutput } from '@mcp/app-studio/pipeline/gate-checks.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult } from './model-output.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -60,6 +61,6 @@ export function appRunTestCycle(binding: AppToolBinding): CoderTool { return {
       );
     }
     const cycleState = recordTddCycle(resolved.path, { caseIds, script, phase, output: result.output });
-    return ok(JSON.stringify({ phase, script, case_ids: caseIds, recorded: caseIds.map((id) => cycleState.cycles[id]) }, null, 2));
+    return appResult('App test cycle recorded', { phase, script, case_ids: caseIds, recorded: caseIds.map((id) => cycleState.cycles[id]) });
   },
 }; }

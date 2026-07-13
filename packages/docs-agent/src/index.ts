@@ -49,13 +49,11 @@ import type {
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
-// Raised from 5/8 — the structured loop (plan → search per sub-question →
-// read → synthesize → finish) needs headroom so a multi-part query doesn't
-// hit the cap mid-coverage. The fidelity review gate is a post-run step, not
-// a turn, so it doesn't consume this budget.
-const DEFAULT_MAX_TURNS = 8;
+// Hard behavioral budget: evidence tools enforce four searches/eight reads;
+// six runner rounds are enough to plan, retrieve, synthesize and finish.
+const DEFAULT_MAX_TURNS = 6;
 /** Hard cap so a misconfigured caller can't trigger arbitrarily long runs. */
-const MAX_MAX_TURNS = 12;
+const MAX_MAX_TURNS = 6;
 
 export interface RunDocsAgentDeps {
   /** SQLite handle — used to persist research sessions + reranker cache. */

@@ -316,13 +316,20 @@ async function raceWithTimeoutAndSignal<T>(
           reject(new AbortError('consumeStream aborted by signal'));
           return;
         }
-        onAbort = (): void => reject(new AbortError('consumeStream aborted by signal'));
-        signal.addEventListener('abort', onAbort, { once: true });
+        // Signals crossing MessageBridge/worker boundaries can retain the
+        // `aborted` flag but lose EventTarget prototype methods. Treat those
+        // as poll-only signals instead of crashing the provider stream.
+        if (typeof signal.addEventListener === 'function') {
+          onAbort = (): void => reject(new AbortError('consumeStream aborted by signal'));
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
       }
       p.then(resolve, reject);
     });
   } finally {
     if (timer) clearTimeout(timer);
-    if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+    if (onAbort && signal && typeof signal.removeEventListener === 'function') {
+      signal.removeEventListener('abort', onAbort);
+    }
   }
 }

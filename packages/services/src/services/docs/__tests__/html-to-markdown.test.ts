@@ -101,4 +101,30 @@ describe('convertHtmlToMarkdown — link extraction scope', () => {
     // No id → GitHub-style slug fallback.
     expect(result.markdown).toContain('## Manual Setup Guide {#manual-setup-guide}');
   });
+
+  it('uses only the Unity ScriptReference documentation body and canonical URL', () => {
+    const html = `
+      <html><head><title>Rigidbody.AddForce - Unity</title>
+        <link rel="canonical" href="https://docs.unity3d.com/6000.3/Documentation/ScriptReference/Rigidbody.AddForce.html">
+      </head><body>
+        <div id="content-wrap"><div class="content">
+          <h1>Rigidbody.AddForce</h1>
+          <div class="switch-link">Version: 6000.3</div>
+          <h2>Declaration</h2><pre><code>public void AddForce(Vector3 force);</code></pre>
+          <h2>Description</h2><p>Adds a force to the Rigidbody.</p>
+          <div class="suggest">Was this page helpful? Send feedback.</div>
+        </div></div>
+        <div class="search">Search all documentation</div>
+      </body></html>`;
+    const result = convertHtmlToMarkdown(html, {
+      baseUrl: 'file:///C:/Unity/Documentation/en/ScriptReference/Rigidbody.AddForce.html',
+    });
+    expect(result.adapter).toBe('unity-script-reference');
+    expect(result.canonicalUrl).toContain('/6000.3/Documentation/ScriptReference/Rigidbody.AddForce.html');
+    expect(result.markdown).toContain('public void AddForce');
+    expect(result.markdown).toContain('Adds a force');
+    expect(result.markdown).not.toContain('Version: 6000.3');
+    expect(result.markdown).not.toContain('Was this page helpful');
+    expect(result.markdown).not.toContain('Search all documentation');
+  });
 });

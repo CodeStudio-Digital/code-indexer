@@ -19,6 +19,9 @@ export type DocIngestPhase =
   | 'chunking'      // section chunker materializing chunks
   | 'enriching'     // per-chunk LLM enrichment
   | 'embedding'     // embedding model batched calls
+  | 'paused'
+  | 'paused_limit'
+  | 'cancelled'
   | 'done'
   | 'error';
 
@@ -37,6 +40,22 @@ export interface DocIngestProgress {
   chunks_indexed?: number;
   cost_usd?: number;
   elapsed_ms?: number;
+  run_id?: number;
+  state?: 'running' | 'paused' | 'paused_limit' | 'cancelled' | 'completed' | 'failed';
+  files_changed?: number;
+  files_unchanged?: number;
+  files_skipped?: number;
+  chunks_persisted?: number;
+  embeddings_completed?: number;
+  embeddings_pending?: number;
+  enrichments_completed?: number;
+  enrichments_pending?: number;
+  searchable?: boolean;
+  rate_per_sec?: number;
+  eta_ms?: number | null;
+  workers_active?: number;
+  workers_configured?: number;
+  extraction_ms?: number;
 }
 
 /** Final result returned by `IndexDocumentationUseCase.run()`. */
@@ -50,6 +69,9 @@ export interface DocIngestResult {
   pages_via_browser: number;
   cost_usd: number;
   elapsed_ms: number;
+  run_id?: number;
+  state?: 'paused' | 'paused_limit' | 'cancelled' | 'completed';
+  searchable?: boolean;
 }
 
 /** Pre-flight estimate returned by `dryRun()` — chunks + projected cost. */
@@ -103,6 +125,10 @@ export interface RawPage extends PipelineCandidate {
   is_documentation?: boolean;
   /** Diagnostic reason from the gate or pre-filter. */
   gate_reason?: string;
+  /** Canonical public URL extracted from local/static HTML. */
+  canonical_uri?: string | null;
+  /** Extraction adapter used for diagnostics and doc-type inference. */
+  extractor?: 'generic' | 'unity-script-reference';
 }
 
 /** Query passed through the ingest pipeline. */

@@ -102,7 +102,14 @@
 // instructions (AGENTS.md)` block (hierarchical AGENTS.md, finally read back).
 // Both above the dynamic boundary → static prefix changed → invalidate stale
 // fingerprints.
-export const SYSTEM_PROMPT_VERSION = '20260702.5';
+// 2026-07-11.1 bump — capability-aligned prompt composition, truthful local
+// shell boundary, single-load App Studio specialist prompts, static extension
+// insertion before the cache boundary, and Company tool metadata hardening.
+// Static prefix + tool behavior changed → invalidate stale fingerprints.
+// 2026-07-12.1 bump — progressive App Studio reads and Markdown-first native
+// tool results with a hidden structured channel. Specialist prompt behavior and
+// the tool surface changed → invalidate stale fingerprints.
+export const SYSTEM_PROMPT_VERSION = '20260712.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

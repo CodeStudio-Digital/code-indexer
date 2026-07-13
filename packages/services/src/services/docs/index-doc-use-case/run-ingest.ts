@@ -2,7 +2,7 @@ import type { DocChunkInput, DocCollection, DocSource } from '@mcp/store/doc-sto
 import { chunkMarkdown } from '../section-chunker.js';
 import { extractApiSignature } from '../api-signature.js';
 import { enrichChunks } from '../enricher.js';
-import { gatePages } from '../relevance-gate.js';
+import { gatePages, heuristicAccepts } from '../relevance-gate.js';
 import { DocError } from '../errors.js';
 import type { RawPage } from '../types.js';
 import { embedAndUpsert } from './embed-upsert.js';
@@ -105,7 +105,7 @@ export async function runIngest(
     console.log(`[doc-indexer] phase=embedding source=${source.id}`);
     if (embeddingService && vectorStore) {
       const embedTokens = await embedAndUpsert(
-        { docStore, embeddingService, vectorStore }, collection, source.id, callbacks,
+        { docStore, embeddingService, vectorStore }, collection, source.id, tracked,
       );
       console.log(`[doc-indexer] embedded ${embedTokens} tokens source=${source.id}`);
     }
@@ -168,24 +168,28 @@ async function runGate(
   skipGate: boolean,
 ): Promise<{ accepted: RawPage[]; rejected: number }> {
   if (skipGate) {
-    // Folder bypass path: trata cada page como aceita sem chamar o LLM. Marca
-    // o `gate_reason` pra telemetria diferenciar "passou sem ser avaliada".
-    const accepted = rawPages.map((page) => {
-      page.is_documentation = true;
-      page.gate_reason = 'gate_skipped';
-      return page;
-    });
+    // Bypass means "skip the LLM", not "accept junk". Deterministic filters
+    // remain mandatory for search pages, empty stubs and error/login shells.
+    const accepted: RawPage[] = [];
+    let rejected = 0;
+    for (const page of rawPages) {
+      const verdict = heuristicAccepts(page);
+      page.is_documentation = verdict.accept;
+      page.gate_reason = verdict.accept ? 'llm_gate_skipped' : verdict.reason;
+      if (verdict.accept) accepted.push(page);
+      else rejected++;
+    }
     await tracked.onProgress?.({
       phase: 'gating',
       current: rawPages.length,
       total: rawPages.length,
       pages_accepted: accepted.length,
-      pages_rejected: 0,
+      pages_rejected: rejected,
     });
     console.log(
-      `[doc-indexer] gate SKIPPED source=${source.id} (folder source w/ bypass=true) — all ${rawPages.length} pages accepted`,
+      `[doc-indexer] LLM gate skipped source=${source.id}; deterministic filter accepted=${accepted.length} rejected=${rejected}`,
     );
-    return { accepted, rejected: 0 };
+    return { accepted, rejected };
   }
 
   await tracked.onProgress?.({ phase: 'gating', current: 0, total: rawPages.length });

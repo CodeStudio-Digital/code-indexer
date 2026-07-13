@@ -127,6 +127,10 @@ export interface DocSearchDiagnostics {
   scope?: 'project' | 'all';
   /** Names of the collections searched when scope === 'project'. */
   scoped_collections?: string[];
+  /** Remote hits rejected because the local chunk is pending/stale. */
+  stale_vector_hits?: number;
+  /** Fraction of persisted chunks with a confirmed vector in searched collections. */
+  vector_coverage?: number;
 }
 
 export interface DocHybridSearchEnhancementDeps {
@@ -204,6 +208,7 @@ export class DocHybridSearch {
     const useFts = forcedMode !== 'vector';
     const useVector =
       forcedMode !== 'fts' && this.embeddingService != null && this.vectorStore != null;
+    let staleVectorHits = 0;
 
     // ─── Stage 1: query rewrite (optional) ────────────────────────
     // Produces N variants (incl. original) that each get a hybrid search.
@@ -228,7 +233,7 @@ export class DocHybridSearch {
       queries.map(async (q) => {
         const [fts, vec] = await Promise.all([
           useFts ? this.runFts(q, collectionIds, ftsBudget) : Promise.resolve([] as RankedHit[]),
-          useVector ? this.runVector(q, collectionIds, vectorBudget) : Promise.resolve([] as RankedHit[]),
+          useVector ? this.runVector(q, collectionIds, vectorBudget, (n) => { staleVectorHits += n; }) : Promise.resolve([] as RankedHit[]),
         ]);
         return { fts, vec };
       }),
@@ -353,6 +358,8 @@ export class DocHybridSearch {
         rerank_dropped: rerankDropped,
         no_good_match: noGoodMatch,
         top_relevance: topRelevance,
+        stale_vector_hits: staleVectorHits,
+        vector_coverage: this.vectorCoverage(collectionIds),
       },
     };
   }
@@ -366,7 +373,12 @@ export class DocHybridSearch {
     return hits.map((h) => ({ candidateId: String(h.chunk_id), score: -h.rank }));
   }
 
-  private async runVector(query: string, collectionIds: number[] | undefined, budget: number): Promise<RankedHit[]> {
+  private async runVector(
+    query: string,
+    collectionIds: number[] | undefined,
+    budget: number,
+    onStale: (count: number) => void,
+  ): Promise<RankedHit[]> {
     if (!this.embeddingService || !this.vectorStore) return [];
     let queryVec: number[];
     try {
@@ -385,10 +397,10 @@ export class DocHybridSearch {
     // memory" hack that existed only because code+docs shared one index.
     const ids = collectionIds ?? this.docStore.listCollections().map((c) => c.id);
     if (ids.length === 1) {
-      return this.searchNamespace(queryVec, docNamespace(ids[0]), budget);
+      return this.searchNamespace(queryVec, docNamespace(ids[0]), budget, onStale);
     }
     const perCollection = await Promise.all(
-      ids.map((id) => this.searchNamespace(queryVec, docNamespace(id), budget)),
+      ids.map((id) => this.searchNamespace(queryVec, docNamespace(id), budget, onStale)),
     );
     return perCollection
       .flat()
@@ -397,23 +409,62 @@ export class DocHybridSearch {
   }
 
   /** One namespaced vector query → ranked chunk hits. */
-  private async searchNamespace(queryVec: number[], namespace: string, budget: number): Promise<RankedHit[]> {
+  private async searchNamespace(
+    queryVec: number[],
+    namespace: string,
+    budget: number,
+    onStale: (count: number) => void,
+  ): Promise<RankedHit[]> {
     let matches: Awaited<ReturnType<VectorStore['search']>>;
     try {
       matches = await this.vectorStore!.search(queryVec, { topK: budget, namespace });
     } catch {
       return [];
     }
+    const parsed = matches.map((m) => ({
+      match: m,
+      chunkId: Number(m.metadata?.chunk_id ?? extractChunkIdFromVectorId(m.id)),
+    })).filter((x) => Number.isFinite(x.chunkId));
+    const chunks = this.docStore.getChunksByIds(parsed.map((x) => x.chunkId));
+    const byId = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const currentFingerprint = this.embeddingService?.fingerprint?.() ?? null;
     const hits: RankedHit[] = [];
-    for (const m of matches) {
+    let stale = 0;
+    for (const { match: m, chunkId } of parsed) {
       // Vector ids encode the chunk id; metadata carries it as a fallback in
       // case the id format ever rotates.
-      const chunkIdStr = m.metadata?.chunk_id ?? extractChunkIdFromVectorId(m.id);
-      const chunkId = chunkIdStr ? Number(chunkIdStr) : NaN;
-      if (!Number.isFinite(chunkId)) continue;
+      const chunk = byId.get(chunkId);
+      const remoteHash = m.metadata?.embedding_hash;
+      const remoteFingerprint = m.metadata?.embedding_fingerprint;
+      if (!chunk?.embedding_hash
+        || (remoteHash && remoteHash !== chunk.embedding_hash)
+        || (remoteFingerprint && currentFingerprint && remoteFingerprint !== currentFingerprint)
+        || (chunk.embedding_fingerprint && currentFingerprint && chunk.embedding_fingerprint !== currentFingerprint)) {
+        stale++;
+        continue;
+      }
       hits.push({ candidateId: String(chunkId), score: m.score });
     }
+    if (stale > 0) onStale(stale);
     return hits;
+  }
+
+  private vectorCoverage(collectionIds: number[] | undefined): number {
+    // Some embedders/search callers intentionally provide a read-only store
+    // facade (and older plugins may not yet expose the coverage counters).
+    // Diagnostics must degrade to unknown/zero, never fail the actual search.
+    const store = this.docStore as Partial<DocStore>;
+    if (typeof store.countChunksByCollection !== 'function'
+      || typeof store.countChunksMissingEmbedding !== 'function') return 0;
+    if (!collectionIds && typeof store.listCollections !== 'function') return 0;
+    const ids = collectionIds ?? store.listCollections!.call(this.docStore).map((c) => c.id);
+    let total = 0;
+    let missing = 0;
+    for (const id of ids) {
+      total += store.countChunksByCollection.call(this.docStore, id);
+      missing += store.countChunksMissingEmbedding.call(this.docStore, { collectionId: id });
+    }
+    return total > 0 ? Math.max(0, Math.min(1, (total - missing) / total)) : 0;
   }
 }
 

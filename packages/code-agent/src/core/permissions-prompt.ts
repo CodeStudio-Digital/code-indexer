@@ -51,7 +51,8 @@ export function permissionsSection(p?: PromptPermissions): string {
   const rootLabel = p.writableRoots.length === 1 ? 'Writable root' : 'Writable roots';
   return `
 
-# Permissions & sandbox
-- Filesystem and shell tools are sandboxed. ${rootLabel}: ${roots}. You cannot read or write outside it.
+# Permissions & execution boundary
+- Native filesystem tools enforce the authorized root. ${rootLabel}: ${roots}.
+- Local shell commands start inside that root but execute on the host unless a container sandbox is attached. Never read or write an outside path, even when the shell could resolve it.
 - Tool approval mode: **${p.approvalMode}**. ${approvalLine(p.approvalMode)}`;
 }

@@ -7,6 +7,7 @@ import type {
   ChatProviderResponseMeta,
   ContentBlock,
 } from '@mcp/code-agent/core/messages.js';
+import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@mcp/code-agent/core/system-prompt.js';
 
 type AnthropicResolvedRequestModel = {
   apiModel: string;
@@ -51,6 +52,43 @@ type AnthropicRawStreamResult = {
   response: AnthropicResponseLike | null;
   requestId: string | null | undefined;
 };
+
+/** Build the provider system array while honoring the composer's cache split. */
+export function buildAnthropicSystemBlocks(
+  defaultPrefix: readonly Anthropic.TextBlockParam[] | undefined,
+  system: string | undefined,
+): Anthropic.TextBlockParam[] {
+  const blocks: Anthropic.TextBlockParam[] = defaultPrefix ? [...defaultPrefix] : [];
+  let boundaryFound = false;
+  let stableBoundaryIndex = -1;
+  if (system) {
+    const boundaryAt = system.indexOf(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
+    if (boundaryAt >= 0) {
+      boundaryFound = true;
+      const stable = system.slice(0, boundaryAt).trimEnd();
+      const dynamic = system.slice(boundaryAt + SYSTEM_PROMPT_DYNAMIC_BOUNDARY.length).trimStart();
+      if (stable) {
+        blocks.push({ type: 'text', text: stable });
+        stableBoundaryIndex = blocks.length - 1;
+      } else if (blocks.length > 0) {
+        stableBoundaryIndex = blocks.length - 1;
+      }
+      if (dynamic) blocks.push({ type: 'text', text: dynamic });
+    } else {
+      blocks.push({ type: 'text', text: system });
+    }
+  }
+  if (blocks.length > 0) {
+    const cacheIdx = boundaryFound ? stableBoundaryIndex : blocks.length - 1;
+    if (cacheIdx >= 0) {
+      blocks[cacheIdx] = {
+        ...blocks[cacheIdx],
+        cache_control: { type: 'ephemeral' as const },
+      };
+    }
+  }
+  return blocks;
+}
 
 /**
  * Anthropic chat adapter with tool use and streaming.
@@ -138,22 +176,9 @@ export class AnthropicChatProvider implements ChatProvider {
 
     // Claude Code OAuth requires the canonical billing+identity prefix at the
     // start of the system array (mirrors Og8/Mg8 in the upstream bundle).
-    // Cache the whole system on the LAST block — that breakpoint covers every
-    // preceding block, identical across every turn.
-    const systemBlocks: Anthropic.TextBlockParam[] = [];
-    if (this.defaultSystemPrefixBlocks?.length) {
-      systemBlocks.push(...this.defaultSystemPrefixBlocks);
-    }
-    if (req.system) {
-      systemBlocks.push({ type: 'text', text: req.system });
-    }
-    if (systemBlocks.length > 0) {
-      const lastIdx = systemBlocks.length - 1;
-      systemBlocks[lastIdx] = {
-        ...systemBlocks[lastIdx],
-        cache_control: { type: 'ephemeral' as const },
-      };
-    }
+    // When the composer provides a cache boundary, cache only the stable prefix
+    // and keep repo-map/tool-cap/skill variability in an uncached tail block.
+    const systemBlocks = buildAnthropicSystemBlocks(this.defaultSystemPrefixBlocks, req.system);
 
     const resolvedModel = this.resolveModel?.(this.model, req);
     let thinking = resolvedModel?.thinking ?? (req.thinking ? this.defaultThinking : undefined);

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { appMigrationHazards } from '@mcp/app-studio/database/migration.js';
 import { appSeedHash, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
 import { listSqlMigrations } from '@mcp/app-studio/pipeline/gate-checks.js';
@@ -9,12 +9,13 @@ import { readDbStatus } from '@mcp/app-studio/status-files.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { markdownCode, renderStructuredMarkdown, structuredResult } from '@mcp/code-agent/core/model-output.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
   properties: {
     migration: { type: 'string', description: 'Optional exact migration filename whose SQL should be returned.' },
-    include_seed: { type: 'boolean', description: 'Return the canonical seeds/seed.sql contents. Defaults to true.' },
+    include_seed: { type: 'boolean', description: 'Return canonical seeds/seed.sql contents. Default: false; request only when editing seed data.' },
   },
   additionalProperties: false,
 };
@@ -26,7 +27,7 @@ function readOptional(path: string): string | null {
 export function appGetDbAssets(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_get_db_assets',
-    description: 'Inspect migration files, canonical seed contents, pending synchronization and the last provisioning phase. Use this before creating or repairing database assets.',
+    description: 'Inspect migration metadata, pending synchronization and the last provisioning phase. Seed or selected migration SQL is returned only when explicitly requested.',
     parameters: PARAMETERS,
     source: 'native',
     riskLevel: 'read',
@@ -66,21 +67,32 @@ export function appGetDbAssets(binding: AppToolBinding): CoderTool {
           recommendedAction = 'Inspect the real schema and approved spec before deciding whether a migration is needed.';
         }
 
-        return ok(JSON.stringify({
+        const selectedMigration = requested ? { name: requested, sql: readOptional(join(resolved.path, 'migrations', requested)) } : null;
+        const includeSeed = args.include_seed === true;
+        const data = {
           app_session_id: session.id,
           migrations: migrationDetails,
           pending_migrations: pending,
-          selected_migration: requested ? { name: requested, sql: readOptional(join(resolved.path, 'migrations', requested)) } : null,
+          selected_migration: selectedMigration,
           seed: {
             exists: seedSql != null,
             hash: seedHash,
             issue: seedIssue,
             needs_sync: seedNeedsSync,
-            sql: args.include_seed === false ? undefined : seedSql,
+            sql: includeSeed ? seedSql : undefined,
           },
           local_status: status,
           recommended_action: recommendedAction,
-        }, null, 2));
+        };
+        const summary = {
+          ...data,
+          selected_migration: selectedMigration ? { name: selectedMigration.name, sql_chars: selectedMigration.sql?.length ?? 0 } : null,
+          seed: { ...data.seed, sql: undefined, sql_chars: includeSeed ? seedSql?.length ?? 0 : 0 },
+        };
+        const blocks = [renderStructuredMarkdown(summary, 'App database assets')];
+        if (selectedMigration?.sql != null) blocks.push(`## Migration SQL — ${selectedMigration.name}\n\n${markdownCode(selectedMigration.sql, 'sql')}`);
+        if (includeSeed && seedSql != null) blocks.push(`## Canonical seed SQL\n\n${markdownCode(seedSql, 'sql')}`);
+        return structuredResult(data, blocks.join('\n\n'));
       } catch (e) {
         return err(`app_get_db_assets failed: ${(e as Error).message}`);
       }

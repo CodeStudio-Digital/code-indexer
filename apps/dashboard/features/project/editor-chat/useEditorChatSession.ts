@@ -33,6 +33,7 @@ import {
 import { readActiveSelection } from '../../workspace/editor/chat-actions.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
 import type { NotificationSourceContext } from '../../notifications/index.js';
+import type { AgentPreset } from '@mcp/api-bus';
 import {
   consumePendingAttachments,
   consumeSelectionPrefix,
@@ -40,7 +41,7 @@ import {
   usePublishAgentBusy,
 } from '../../builder/studio/studio-context-store.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = AgentPreset;
 
 interface EditorChatSessionOptions {
   initialSessionId?: number;

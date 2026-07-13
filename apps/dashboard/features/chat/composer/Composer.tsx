@@ -19,6 +19,7 @@ import { DropOverlay } from './DropOverlay.js';
 import { useMarkdownShortcuts } from './useMarkdownShortcuts.js';
 import { useComposerDraft } from './useComposerDraft.js';
 import type { QueueMode } from './useMessageQueue.js';
+import type { AgentPreset } from '@mcp/api-bus';
 
 interface SlashCommand {
   id: string;
@@ -28,7 +29,7 @@ interface SlashCommand {
   context_mode: string;
 }
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_spec' | 'app_db' | 'app_architect' | 'app_product' | 'app_ux' | 'app_wireframe' | 'api' | 'diagram' | 'builder';
+type AgentId = AgentPreset;
 
 // Visual cue: tints the composer's left border by the active mode so the
 // user sees-at-a-glance which agent is loaded. The functional gates

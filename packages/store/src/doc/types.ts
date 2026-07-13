@@ -8,6 +8,9 @@ export type DocCollectionStatus = 'idle' | 'indexing' | 'error';
  */
 export type DocSourceType = 'pdf' | 'url' | 'folder';
 export type DocSourceStatus = 'queued' | 'fetching' | 'indexing' | 'done' | 'error';
+export type DocEnrichmentMode = 'selective' | 'all' | 'off';
+export type DocIngestPerformanceProfile = 'economy' | 'balanced' | 'maximum' | 'custom';
+export type DocIngestRunState = 'running' | 'paused' | 'paused_limit' | 'cancelled' | 'completed' | 'failed';
 
 export interface DocCollection {
   id: number;
@@ -98,6 +101,11 @@ export interface DocSource {
   folder_exclude_glob: string | null;
   folder_max_files: number | null;
   folder_bypass_relevance_gate: boolean;
+  folder_performance_profile: DocIngestPerformanceProfile;
+  folder_worker_count: number | null;
+  enrichment_mode: DocEnrichmentMode;
+  embedding_fingerprint: string | null;
+  last_ingest_run_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -118,6 +126,8 @@ export interface DocFolderConfig {
    * curadas. Operador liga via switch "Avançado" pra pastas mistas.
    */
   bypass_relevance_gate?: boolean;
+  performance_profile?: DocIngestPerformanceProfile;
+  worker_count?: number | null;
 }
 
 export interface DocSourceInput {
@@ -132,6 +142,8 @@ export interface DocSourceInput {
   folder_root_path?: string | null;
   /** Config folder (só relevante quando type='folder'). */
   folder?: DocFolderConfig;
+  /** LLM enrichment policy. Default `selective`. */
+  enrichment_mode?: DocEnrichmentMode;
   pdf_size_bytes?: number | null;
 }
 
@@ -154,6 +166,14 @@ export interface DocChunkInput {
   api_symbol?: string | null;
   /** Extracted signature (e.g. `AddForce(Vector3, ForceMode)`) for api_reference sections. */
   api_signature?: string | null;
+  /** Stable within a source across re-indexes. */
+  stable_key?: string | null;
+  /** Canonical page/file key from doc_source_items. */
+  item_key?: string | null;
+  ingest_run_id?: number | null;
+  embedding_input_hash?: string | null;
+  embedding_fingerprint?: string | null;
+  enrichment_fingerprint?: string | null;
 }
 
 export interface DocChunk {
@@ -174,6 +194,13 @@ export interface DocChunk {
   anchor: string | null;
   api_symbol: string | null;
   api_signature: string | null;
+  stable_key?: string | null;
+  item_key?: string | null;
+  ingest_run_id?: number | null;
+  embedding_input_hash?: string | null;
+  embedding_fingerprint?: string | null;
+  enrichment_fingerprint?: string | null;
+  updated_at?: string | null;
   created_at: string;
 }
 
@@ -195,6 +222,53 @@ export interface DocSourceHealth {
   embedding_complete: boolean;
   missing_count: number;
   last_indexed_at: string | null;
+  lexical_ready: boolean;
+  vector_ready: boolean;
+  enrichment_ready: boolean;
+  embedding_fingerprint: string | null;
+  last_checkpoint_at: string | null;
+  active_run_id: number | null;
+}
+
+export interface DocIngestRun {
+  id: number;
+  source_id: number;
+  state: DocIngestRunState;
+  phase: string;
+  options_json: string | null;
+  total_items: number;
+  processed_items: number;
+  changed_items: number;
+  unchanged_items: number;
+  skipped_items: number;
+  errored_items: number;
+  chunks_persisted: number;
+  embeddings_completed: number;
+  enrichments_completed: number;
+  cancel_requested: boolean;
+  pause_requested: boolean;
+  performance_profile: DocIngestPerformanceProfile;
+  worker_count: number;
+  error_message: string | null;
+  started_at: string;
+  heartbeat_at: string;
+  completed_at: string | null;
+}
+
+export interface DocSourceItem {
+  id: number;
+  source_id: number;
+  item_key: string;
+  source_uri: string | null;
+  size_bytes: number | null;
+  mtime_ms: number | null;
+  content_hash: string | null;
+  status: string;
+  last_seen_run_id: number | null;
+  chunk_count: number;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /** (vector_id, provider) pair — used as input to remote delete + row shape for tombstones. */

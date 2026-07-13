@@ -531,6 +531,16 @@ describe('ExecutingNode', () => {
     expect(r.textBlocks.join('')).toBe('hi');
   });
 
+  it('accepts a serialized signal-like object without EventTarget methods', async () => {
+    async function* immediate(): AsyncIterable<ChatDelta> {
+      yield { type: 'text_delta', text: 'ok' };
+      yield { type: 'done', stop_reason: 'stop' };
+    }
+    const signalLike = { aborted: false } as AbortSignal;
+    const result = await consumeStream({ stream: immediate(), signal: signalLike });
+    expect(result.textBlocks.join('')).toBe('ok');
+  });
+
   it('still times out a mid-stream stall AFTER the first byte (idle budget)', async () => {
     async function* stallAfterFirst(): AsyncIterable<ChatDelta> {
       yield { type: 'text_delta', text: 'hi' }; // first byte is fast

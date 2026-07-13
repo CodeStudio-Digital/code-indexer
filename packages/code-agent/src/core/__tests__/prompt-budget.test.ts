@@ -43,7 +43,7 @@ const BASE_CTX: PromptContext = {
 };
 
 /** First line of base.txt — everything before it is the provider preamble. */
-const BASE_INTRO_MARK = 'You work inside MCP IDE';
+const BASE_INTRO_MARK = 'You work inside CodeStudio';
 
 interface Section { header: string; text: string }
 
@@ -77,12 +77,12 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Tool strategy — token economy': 1150,
   '# Tool strategy — project NOT indexed': 1010,
   '# Tool strategy — native only (MCP bridge unavailable)': 770,
-  '# Native tools (edits, execution, git)': 870, // 2026-07-02: + no-invented-tool-names rule (measured 791)
+  '# Native tools available to this session': 800, // capability-derived catalog (2026-07-11; measured 700)
   '# Images & vision': 500,
   '# Session overlay (automatic freshness)': 730,
   '# Subagents (isolated delegation)': 1450, // 2026-07-02: subagent guidance grew in the parallel prompt-audit batch (measured 1327)
-  '# Memory': 1450, // company/no-Session-Drive long-term memory block (+concrete save example, 2026-07)
-  "# Memory (three distinct layers — don't conflate them)": 2150, // migration 181 overhaul + concrete examples (2026-07)
+  '# Memory': 1600, // company/no-Session-Drive long-term memory block (measured 1455)
+  "# Memory (four distinct layers — don't conflate them)": 2600, // session/durable/project/history guidance (measured 2333)
   '# Style': 560, // 2026-07-02: + parallel-batching + result-honesty bullets (measured 511)
   // Session-fixed directives (only rendered when configured): language (G1),
   // output style (G8), unsupervised framing (G3).

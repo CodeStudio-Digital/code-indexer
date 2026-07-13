@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
 import { listSqlMigrations } from '@mcp/app-studio/pipeline/gate-checks.js';
 import { nextMigrationFilename, normalizeMigrationSlug, validateAppMigrationSql } from '@mcp/app-studio/database/migration.js';
@@ -10,6 +10,7 @@ import { readDbStatus } from '@mcp/app-studio/status-files.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
+import { appResult } from './model-output.js';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
@@ -91,13 +92,13 @@ export function appSaveDbMigration(binding: AppToolBinding): CoderTool {
 
         const seedResult = seedSql ? replaceAppSeedFile(resolved.path, seedSql) : null;
 
-        return ok(JSON.stringify({
+        return appResult('App database migration saved', {
           migration: filename,
           created,
           seed_replaced: seedResult?.changed ?? false,
           seed_backup: seedResult?.backup_path ?? null,
           next: 'Call app_provision_db. Then call db_schema and a small db_query to verify the real local database before submitting the database stage.',
-        }, null, 2));
+        });
       } catch (e) {
         return err(`app_save_db_migration failed: ${(e as Error).message}`);
       }
