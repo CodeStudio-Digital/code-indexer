@@ -12,6 +12,7 @@ import { useWorkspaceLayout } from '../../../state/workspace-layout.js';
 import { ProjectPreview } from '../builder/ProjectPreview.js';
 import type { PreviewFramework } from '../builder/useSelectorMode.js';
 import AgentChat from '../../chat/index.js';
+import type { AgentChatWorkbenchSlots } from '../../chat/types.js';
 import { markRouteEvent } from '../../../lib/perf/route-startup-metrics.js';
 
 export interface ChatSurfaceProps {
@@ -21,9 +22,10 @@ export interface ChatSurfaceProps {
   builderJson: { stack: string; port: number } | null;
   previewEnabled: boolean;
   framework?: PreviewFramework;
+  workbenchSlots?: AgentChatWorkbenchSlots;
 }
 
-export function ChatSurface({ projectId, projectName, initialSessionId, builderJson, previewEnabled, framework }: ChatSurfaceProps) {
+export function ChatSurface({ projectId, projectName, initialSessionId, builderJson, previewEnabled, framework, workbenchSlots }: ChatSurfaceProps) {
   const previewVisible = useWorkspaceLayout((s) => s.previewVisible);
   const togglePreview = useWorkspaceLayout((s) => s.togglePreview);
   useEffect(() => {
@@ -31,7 +33,7 @@ export function ChatSurface({ projectId, projectName, initialSessionId, builderJ
   }, [projectId]);
 
   if (!previewEnabled) {
-    return <AgentChat projectId={projectId} projectName={projectName} initialSessionId={initialSessionId} />;
+    return <AgentChat projectId={projectId} projectName={projectName} initialSessionId={initialSessionId} workbenchSlots={workbenchSlots} />;
   }
 
   const chat = (
@@ -40,6 +42,7 @@ export function ChatSurface({ projectId, projectName, initialSessionId, builderJ
       projectName={projectName}
       initialSessionId={initialSessionId}
       selectionPrefixSessionId={projectId}
+      workbenchSlots={workbenchSlots}
     />
   );
 

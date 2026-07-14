@@ -27,7 +27,7 @@ const PARAMETERS: JsonSchema = {
     spec: {
       ...APP_SPEC_TOOL_SCHEMA,
       description:
-        'The COMPLETE refined AppSpec v1. Preserve valid existing screens/entities unless the user explicitly changed them.',
+        'The COMPLETE refined AppSpec v2. Preserve valid existing screens/entities unless the user explicitly changed them.',
     },
   },
   required: ['spec'],
@@ -37,7 +37,7 @@ export function appProposeSpecRevision(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_propose_spec_revision',
     description:
-      'Create a reviewable draft spec revision for an App Studio evolution. Use this after discovery is already approved or when refining a versioned app plan. It does not apply the change.',
+      'Create a reviewable draft AppSpec revision after Scope approval. It preserves the current contract until the revised Scope is approved asynchronously.',
     parameters: PARAMETERS,
     source: 'native',
     handler: async (args) => {

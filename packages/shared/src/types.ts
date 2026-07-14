@@ -1,3 +1,5 @@
+import type { EditorSettingsOverride } from './editor-settings.js';
+
 // ─── Provider Types ───────────────────────────────────────────────
 
 export type ProviderName =
@@ -77,6 +79,8 @@ export interface Project {
   node_version: string | null;
   /** Shell id the runner launches commands with (e.g. 'git-bash'); null = system default. */
   runner_shell: string | null;
+  /** Project-local overrides stored in the routed project DB (migration 223). */
+  editor_settings?: EditorSettingsOverride | null;
   /**
    * Builder-project config — JSON `{"stack":"react-ts","port":5180}`. When
    * set, this project was scaffolded as a V0-style builder (instrumented for

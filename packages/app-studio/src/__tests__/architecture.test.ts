@@ -5,8 +5,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { auditAppArchitecture } from '../architecture/audit.js';
 import { readTddCycles, recordTddCycle } from '../architecture/tdd-cycles.js';
 import { normalizeAppArchitecturePlan, type AppArchitecturePlan } from '../architecture/types.js';
-import { runAppStageGate } from '../pipeline/gates.js';
-import { createPipelineState } from '../pipeline/stages.js';
 import { makeSpec } from './fixtures.js';
 
 const roots: string[] = [];
@@ -38,7 +36,7 @@ function plan(): AppArchitecturePlan {
         id: 'db-orders',
         title: 'Orders are stored',
         layer: 'database',
-        owner_stage: 'database',
+        owner_profile: 'data',
         priority: 'critical',
         source_ids: ['entity:pedidos'],
         preconditions: ['Empty local D1 database'],
@@ -60,7 +58,7 @@ describe('architecture audit', () => {
     }, 9);
     expect(normalized.modules[0]).toMatchObject({ layer: 'cross-cutting', depends_on: [] });
     expect(normalized.decisions[0]?.source_urls).toEqual([]);
-    expect(normalized.tdd.cases[0]).toMatchObject({ layer: 'worker', owner_stage: 'backend', source_ids: [], steps: [] });
+    expect(normalized.tdd.cases[0]).toMatchObject({ layer: 'worker', owner_profile: 'api', source_ids: [], steps: [] });
     expect(() => auditAppArchitecture(normalized, makeSpec())).not.toThrow();
   });
 
@@ -79,21 +77,6 @@ describe('architecture audit', () => {
     expect(report.issues.join('\n')).toContain("No test covers spec item 'entity:pedidos'");
   });
 
-  it('is enforced by the architecture stage gate and detects stale specs', async () => {
-    const value = plan();
-    const result = await runAppStageGate({
-      stage: 'architecture',
-      workspaceDir: '.',
-      state: createPipelineState(),
-      spec: makeSpec(),
-      recorded: [],
-      architecture: value,
-      currentSpecRevisionId: 99,
-      runBuild: false,
-    });
-    expect(result.ok).toBe(false);
-    expect(result.issues.join('\n')).toContain('Architecture is stale');
-  });
 });
 
 describe('TDD cycle evidence', () => {

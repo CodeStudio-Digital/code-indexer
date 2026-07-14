@@ -9,6 +9,7 @@
  * user away from empty commits.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { GitCommit as GitCommitIcon } from 'lucide-react';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
@@ -29,6 +30,7 @@ export interface CommitDialogProps {
 }
 
 export function CommitDialog({ projectId, stagedCount, onClose, onCommitted }: CommitDialogProps) {
+  const { t } = useTranslation('workspace');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -52,32 +54,32 @@ export function CommitDialog({ projectId, stagedCount, onClose, onCommitted }: C
           <DialogTitle className="text-[14px] flex items-center gap-2">
             <GitCommitIcon className="h-4 w-4 text-primary" />
             {stagedCount > 0
-              ? `Commit ${stagedCount} file${stagedCount === 1 ? '' : 's'}`
-              : 'Commit'}
+              ? t('git.commitFiles', { count: stagedCount })
+              : t('git.commit')}
           </DialogTitle>
         </DialogHeader>
         {stagedCount === 0 && (
           <div className="text-[11.5px] text-muted-foreground">
-            Nothing staged. Open the Git tool window to stage changes first.
+            {t('git.nothingStaged')}
           </div>
         )}
         <textarea
           autoFocus
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Commit message…"
+          placeholder={t('git.commitMessagePlaceholder')}
           className="w-full min-h-[140px] rounded-md border bg-card px-3 py-2 text-[12.5px] font-mono focus:outline-none focus:ring-2 focus:ring-ring/40"
         />
         {err && <div className="text-[11px] text-destructive">{err}</div>}
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('git.cancel')}
           </Button>
           <Button
             onClick={() => void commit()}
             disabled={busy || !message.trim() || stagedCount === 0}
           >
-            {busy ? 'Committing…' : 'Commit'}
+            {busy ? t('git.committing') : t('git.commit')}
           </Button>
         </DialogFooter>
       </DialogContent>

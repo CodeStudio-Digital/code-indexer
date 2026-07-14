@@ -1,5 +1,12 @@
 {
   "title": "Databases",
+  "rail": {
+    "label": "Database tools",
+    "connections": "Connections",
+    "history": "History",
+    "saved": "Saved queries",
+    "specialist": "Database specialist"
+  },
   "connections": {
     "title": "Connections",
     "add": "New connection",
@@ -106,6 +113,8 @@
     "copy": "Copy SQL",
     "open": "Open in a new query",
     "clearConfirm": "Clear all history for this connection?",
+    "deleteHistoryConfirm": "Delete this history entry?",
+    "deleteSavedConfirm": "Delete saved query “{{name}}”?",
     "panel": "History & saved queries"
   },
   "tree": {
@@ -262,6 +271,7 @@
     "editElement": "Edit",
     "applyEdit": "Apply",
     "removeElement": "Remove",
+    "removeElementConfirm": "Remove this element from the key?",
     "console": "Command console",
     "consolePlaceholder": "RESP command, e.g. GET key",
     "badTtl": "TTL must be a number (seconds)"
@@ -287,12 +297,18 @@
     "empty": "No rows on this page"
   },
   "edit": {
+    "editRow": "Edit row",
+    "rowTitle": "Edit row",
+    "newRowTitle": "New row",
+    "saveRow": "Save changes",
     "pending": "{{n}} pending change(s)",
     "preview": "Preview SQL",
     "apply": "Apply",
     "revert": "Revert",
     "addRow": "Add row",
     "deleteRow": "Delete row",
+    "deleteApplyConfirmTitle": "Delete {{count}} row(s)?",
+    "deleteApplyConfirmBody": "When executed, the marked rows will be permanently removed from the database.",
     "restoreRow": "Restore row",
     "setNull": "Set NULL",
     "noPk": "This table has no primary key — rows are read-only (use the SQL bar above).",

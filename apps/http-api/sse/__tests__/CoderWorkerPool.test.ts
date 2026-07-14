@@ -198,4 +198,21 @@ describe('CoderWorkerPool', () => {
     expect(bus2.ended).toBe(false);
     expect(mockWorker.state.hosts[0].bridge.requests).toHaveLength(2);
   });
+
+  it('forwards the persisted round message id to an active worker follow-up', async () => {
+    const p = createPool();
+    await p.runFresh(10, { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+
+    await p.pushUserMessage(10, 'follow-up', ['skill-a'], 42);
+
+    expect(host.bridge.requests.at(-1)).toMatchObject({
+      type: 'pushUserMessage',
+      payload: {
+        content: 'follow-up',
+        selectedSkillIds: ['skill-a'],
+        roundMessageId: 42,
+      },
+    });
+  });
 });

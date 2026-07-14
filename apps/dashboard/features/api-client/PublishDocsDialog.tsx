@@ -16,6 +16,7 @@ import { UpgradeNotice } from '../../components/UpgradeNotice.js';
 import { useEntitlements } from '../account/useEntitlements.js';
 import { cloudCall } from '../../lib/cloud/cloud-client.js';
 import { useCloudAction } from '../../lib/cloud/use-cloud-action.js';
+import { ApiClientSelect } from './ApiClientSelect.js';
 import * as api from './api.js';
 
 interface DocSummary {
@@ -110,17 +111,27 @@ export function PublishDocsDialog({ collectionId, collectionName, projectId, ope
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs space-y-1">
             <span className="text-muted-foreground">{t('hostedDocs.visibility')}</span>
-            <select className="w-full text-xs bg-background border rounded px-2 py-1.5" value={visibility} onChange={(e) => setVisibility(e.target.value as 'unlisted' | 'public')}>
-              <option value="unlisted">{t('hostedDocs.visibilityUnlisted')}</option>
-              <option value="public">{t('hostedDocs.visibilityPublic')}</option>
-            </select>
+            <ApiClientSelect
+              value={visibility}
+              onValueChange={(value) => setVisibility(value as 'unlisted' | 'public')}
+              options={[
+                { value: 'unlisted', label: t('hostedDocs.visibilityUnlisted') },
+                { value: 'public', label: t('hostedDocs.visibilityPublic') },
+              ]}
+              ariaLabel={t('hostedDocs.visibility')}
+            />
           </label>
           <label className="text-xs space-y-1">
             <span className="text-muted-foreground">{t('hostedDocs.tryIt')}</span>
-            <select className="w-full text-xs bg-background border rounded px-2 py-1.5" value={tryItMode} onChange={(e) => setTryItMode(e.target.value as 'off' | 'local')}>
-              <option value="off">{t('hostedDocs.tryItOff')}</option>
-              <option value="local">{t('hostedDocs.tryItLocal')}</option>
-            </select>
+            <ApiClientSelect
+              value={tryItMode}
+              onValueChange={(value) => setTryItMode(value as 'off' | 'local')}
+              options={[
+                { value: 'off', label: t('hostedDocs.tryItOff') },
+                { value: 'local', label: t('hostedDocs.tryItLocal') },
+              ]}
+              ariaLabel={t('hostedDocs.tryIt')}
+            />
           </label>
         </div>
 

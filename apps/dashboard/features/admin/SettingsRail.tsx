@@ -55,10 +55,10 @@ export function SettingsRail({ sections, groups, activeId, onSelect }: SettingsR
         aria-current={isActive ? 'page' : undefined}
         title={def.hint}
         className={cn(
-          'relative text-left rounded-sm px-2 py-1.5 transition-colors flex items-center gap-2',
+          'relative flex h-7 items-center gap-2 rounded-sm px-2 text-left transition-colors',
           isActive
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+            ? 'bg-[var(--workbench-active)] text-foreground'
+            : 'text-muted-foreground hover:bg-[var(--workbench-hover)] hover:text-foreground',
         )}
       >
         {/* Active accent bar — flush against the rail edge. */}
@@ -89,19 +89,19 @@ export function SettingsRail({ sections, groups, activeId, onSelect }: SettingsR
   const filtered = searching ? sections.filter(matches) : [];
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-1">
       {/* Search — filters sections by label/hint; flattens the tree. */}
-      <div className="relative px-1 pt-1">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
+      <div className="relative px-1.5 pt-1.5">
+        <Search className="pointer-events-none absolute left-3.5 top-[18px] h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t('admin:rail.searchPlaceholder')}
-          className="w-full h-8 rounded-md border border-input bg-background pl-8 pr-2 text-[12.5px] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="h-7 w-full rounded border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] pl-7 pr-2 text-[11px] placeholder:text-muted-foreground focus-visible:border-[var(--workbench-focus)] focus-visible:outline-none"
         />
       </div>
 
-      <nav aria-label={t('admin:rail.sectionsLabel')} className="flex flex-col gap-0.5 px-1 pb-1">
+      <nav aria-label={t('admin:rail.sectionsLabel')} className="flex flex-col gap-0.5 px-1.5 pb-1.5">
         {searching ? (
           filtered.length === 0 ? (
             <div className="px-2 py-3 text-[11.5px] text-muted-foreground">
@@ -119,7 +119,7 @@ export function SettingsRail({ sections, groups, activeId, onSelect }: SettingsR
                   type="button"
                   onClick={() => toggleGroup(g.id)}
                   aria-expanded={expanded}
-                  className="mt-1 first:mt-0 flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                  className="mt-1 flex h-6 items-center gap-1 px-1.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-colors first:mt-0 hover:text-muted-foreground"
                 >
                   {expanded ? (
                     <ChevronDown className="h-3 w-3 shrink-0" />

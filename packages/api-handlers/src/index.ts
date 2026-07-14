@@ -92,6 +92,7 @@ export { createSnapshotsHandlers } from './snapshots/index.js';
 export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
+export { PROJECT_GIT_RPC_METHODS, type ProjectGitRpcMethod } from './projectGit/guard.js';
 export { createPluginsHandlers } from './plugins/index.js';
 export { createSystemHandlers } from './system/index.js';
 export { generateAiPipeline, type GeneratePipelineResult } from './projectPipeline/generate.js';

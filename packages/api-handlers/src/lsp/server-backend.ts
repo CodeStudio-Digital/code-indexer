@@ -9,6 +9,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type {
   CodeActionDTO,
   CompletionItem,
+  LspCompletionList,
   DocChange,
   HoverInfo,
   LspLocation,
@@ -93,20 +94,26 @@ export function mapServerWorkspaceEdit(edit: LspWorkspaceEdit | undefined): Work
   return Object.keys(changes).length > 0 ? { changes } : undefined;
 }
 
-export function mapServerCodeActions(raw: unknown): CodeActionDTO[] {
+export function mapServerCodeActions(raw: unknown, originServerId?: string): CodeActionDTO[] {
   const arr = Array.isArray(raw) ? raw : [];
   const out: CodeActionDTO[] = [];
   for (const entry of arr) {
     if (!entry || typeof entry !== 'object') continue;
     const action = entry as LspCodeAction;
     if (typeof action.title !== 'string' || !action.title.trim()) continue;
+    if (action.disabled) continue;
     const edit = mapServerWorkspaceEdit(action.edit);
-    if (!edit) continue;
+    const command = action.command?.command ? { command: action.command.command, arguments: action.command.arguments } : undefined;
+    if (!edit && !command && action.data === undefined) continue;
     out.push({
       title: action.title,
       kind: action.kind ?? 'quickfix',
       isPreferred: action.isPreferred || undefined,
       edit,
+      command,
+      originServerId,
+      raw: action,
+      needsResolve: !edit && action.data !== undefined,
     });
   }
   return out;
@@ -253,6 +260,12 @@ export function mapServerCompletionItem(i: LspCompletionItem): CompletionItem {
     labelDetails,
     commitCharacters: i.commitCharacters,
     textEdit: editRange ? { range: rangeFrom(editRange), newText: te?.newText ?? i.label } : undefined,
+    insertReplaceEdit: te?.insert && te.replace ? {
+      insert: rangeFrom(te.insert), replace: rangeFrom(te.replace), newText: te.newText,
+    } : undefined,
+    deprecated: i.deprecated,
+    tags: i.tags,
+    origin: 'lsp',
     // Echoed back by resolveCompletion — servers defer the auto-import
     // edits to `completionItem/resolve` and need the original item.
     raw: i,
@@ -263,7 +276,7 @@ export async function serverCompletion(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
   position: { line: number; column: number },
   context?: { triggerKind: number; triggerCharacter?: string },
-): Promise<CompletionItem[] | null> {
+): Promise<LspCompletionList | null> {
   const acq = await ensureLspManager(db).acquire(projectId, languageId);
   if (!acq) return null;
   const abs = relToAbs(root, file);
@@ -276,7 +289,12 @@ export async function serverCompletion(
     const items: LspCompletionItem[] = Array.isArray(raw)
       ? raw as LspCompletionItem[]
       : ((raw as { items?: LspCompletionItem[] })?.items ?? []);
-    return items.slice(0, 120).map(mapServerCompletionItem);
+    return {
+      items: items.slice(0, 120).map(mapServerCompletionItem),
+      isIncomplete:
+        items.length > 120
+        || (!Array.isArray(raw) && (raw as { isIncomplete?: boolean })?.isIncomplete === true),
+    };
   } catch (err) {
     // Fase 0 — superfície o erro de protocolo do server (gated por MCP_LSP_DEBUG=1)
     // com a cauda do stderr, p/ o doctor diagnosticar P2.
@@ -413,10 +431,34 @@ export async function serverCodeActions(
   const liveDoc = getDoc(projectId, file);
   if (liveDoc) acq.handle.ensureOpen(abs, liveDoc.languageId, liveDoc.version, liveDoc.content);
   try {
-    return mapServerCodeActions(await acq.handle.codeActions(abs, range));
+    return mapServerCodeActions(await acq.handle.codeActions(abs, range), acq.def.id);
   } catch {
     return null;
   }
+}
+
+export async function serverResolveCodeAction(
+  db: CodeIndexDB, projectId: number, action: CodeActionDTO,
+): Promise<CodeActionDTO | null> {
+  if (!action.originServerId || !action.raw || !action.needsResolve) return action;
+  const acq = await ensureLspManager(db).acquireById(projectId, action.originServerId);
+  if (!acq || !acq.handle.supportsCodeActionResolve()) return action;
+  try {
+    const resolved = await acq.handle.resolveCodeAction(action.raw);
+    return mapServerCodeActions([resolved], acq.def.id)[0] ?? null;
+  } catch { return null; }
+}
+
+export async function serverExecuteCodeAction(
+  db: CodeIndexDB, projectId: number, action: CodeActionDTO,
+): Promise<{ ok: true }> {
+  const command = action.command;
+  if (!action.originServerId || !command?.command || command.command.length > 256) throw new Error('invalid LSP command');
+  if (JSON.stringify(command.arguments ?? []).length > 64_000) throw new Error('LSP command arguments too large');
+  const acq = await ensureLspManager(db).acquireById(projectId, action.originServerId);
+  if (!acq) throw new Error('origin LSP server unavailable');
+  await acq.handle.executeCommand(command.command, command.arguments);
+  return { ok: true };
 }
 
 /** Language status for the editor CTA / StatusBar chip. */

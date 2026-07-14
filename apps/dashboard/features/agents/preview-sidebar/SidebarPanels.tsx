@@ -5,12 +5,11 @@
  *
  * Inbox / Env reuse the existing tab bodies; mounting them here instead
  * of as central tabs lets the user peek at them alongside whatever
- * central tab is open. Databases is a read-only projection of the linked
- * projects' connections (session-scoped DB CRUD was retired).
+ * central tab is open. Databases receives the project-scoped navigator slot
+ * from CompanySessionView and opens its work items in the Company center.
  */
 import { InboxPanel } from '../InboxPanel.js';
 import EnvTab from '../EnvTab.js';
-import CompanyDbConnectionsPanel from '../CompanyDbConnectionsPanel.js';
 import { SupervisorPanel } from '../../admin/SupervisorPanel.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
@@ -29,11 +28,13 @@ interface SidebarPanelsProps {
    * caller.
    */
   companyConfigSlot?: React.ReactNode;
+  /** Project-scoped database navigator supplied by CompanySessionView. */
+  databaseSlot?: React.ReactNode;
   /** Contributed tool windows — render the matching one's webview. */
   pluginWindows?: ContribToolWindow[];
 }
 
-export function SidebarPanels({ sessionId, active, companyConfigSlot, pluginWindows = [] }: SidebarPanelsProps) {
+export function SidebarPanels({ sessionId, active, companyConfigSlot, databaseSlot, pluginWindows = [] }: SidebarPanelsProps) {
   // Plugin-contributed tool window → its sandboxed webview fills the drawer.
   if (active.startsWith('plugin:')) {
     const win = pluginWindows.find((w) => `plugin:${w.pluginNs}:${w.id}` === active);
@@ -64,7 +65,7 @@ export function SidebarPanels({ sessionId, active, companyConfigSlot, pluginWind
     return <SupervisorPanel sessionId={sessionId} />;
   }
 
-  // 'databases' — read-only projection of the linked projects' connections
-  // (session-scoped DB CRUD retired; manage them in each project's Databases tab).
-  return <CompanyDbConnectionsPanel companySessionId={sessionId} />;
+  // 'databases' — the regular project database navigator, scoped by the
+  // project selector owned by CompanySessionView.
+  return <>{databaseSlot ?? null}</>;
 }

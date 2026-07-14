@@ -10,9 +10,9 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, Plus } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
-import { Card, CardContent } from '../../components/ui/card.js';
 import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
+import { WorkbenchPanelHeader } from '../../components/workbench/index.js';
 import { cn } from '../../lib/utils.js';
 import { createCollection, type DocCollection } from './docs-api.js';
 
@@ -50,19 +50,24 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
   }
 
   return (
-    <aside className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          {t('collections.heading')}
-        </h2>
-        <Button size="sm" variant="ghost" onClick={() => setShowForm((v) => !v)}>
-          <Plus className="h-3 w-3 mr-1" /> {t('collections.new')}
-        </Button>
-      </div>
+    <aside className="flex h-full min-h-0 flex-col">
+      <WorkbenchPanelHeader
+        title={t('collections.heading')}
+        actions={(
+          <button
+            type="button"
+            onClick={() => setShowForm((value) => !value)}
+            className="flex h-6 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
+          >
+            <Plus className="h-3 w-3" />
+            {t('collections.new')}
+          </button>
+        )}
+      />
 
       {showForm && (
-        <Card>
-          <form className="p-3 space-y-2" onSubmit={onCreate}>
+        <div className="border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] p-2">
+          <form className="space-y-2" onSubmit={onCreate}>
             <Input
               autoFocus
               placeholder={t('collections.namePlaceholder')}
@@ -95,15 +100,15 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
               </Button>
             </div>
           </form>
-        </Card>
+        </div>
       )}
 
-      <div className="space-y-1.5">
+      <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-1.5">
         {collections === null && (
-          <div className="text-xs text-muted-foreground italic px-2">{t('collections.loading')}</div>
+          <div className="px-2 py-3 text-xs italic text-muted-foreground">{t('collections.loading')}</div>
         )}
         {collections?.length === 0 && (
-          <div className="text-xs text-muted-foreground italic px-2">
+          <div className="px-2 py-3 text-xs italic text-muted-foreground">
             {t('collections.empty')}
           </div>
         )}
@@ -113,20 +118,23 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
             type="button"
             onClick={() => onSelect(c.id)}
             className={cn(
-              'w-full text-left rounded-md border px-3 py-2 transition-colors',
+              'relative w-full rounded-md border border-transparent px-2 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--workbench-focus)]',
               selectedId === c.id
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:bg-muted/50',
+                ? 'bg-[var(--workbench-active)]'
+                : 'hover:bg-[var(--workbench-hover)]',
             )}
           >
+            {selectedId === c.id && (
+              <span className="absolute bottom-1.5 left-0 top-1.5 w-0.5 rounded-r bg-[var(--workbench-focus)]" />
+            )}
             <div className="flex items-center justify-between gap-2">
-              <div className="font-medium text-sm truncate">{c.name}</div>
+              <div className="truncate text-xs font-semibold">{c.name}</div>
               <StatusBadge status={c.status} />
             </div>
             {c.description && (
-              <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{c.description}</div>
+              <div className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{c.description}</div>
             )}
-            <div className="flex items-center gap-3 text-[11px] text-muted-foreground mt-1">
+            <div className="mt-1 flex items-center gap-3 font-mono text-[10px] text-muted-foreground">
               <span>{t('collections.sourcesCount', { count: c.source_count })}</span>
               <span>{t('collections.chunksCount', { count: c.chunk_count })}</span>
             </div>

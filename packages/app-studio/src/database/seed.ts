@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { APP_STUDIO_DIRNAME } from '../status-files.js';
-import { sqlHasStatements } from '../pipeline/gate-checks.js';
+import { sqlHasStatements } from '../verification/workspace-checks.js';
 
 function withoutLeadingComments(statement: string): string {
   return statement.replace(/^(?:\s*--[^\n]*(?:\n|$)|\s*\/\*[\s\S]*?\*\/\s*)+/, '').trim();

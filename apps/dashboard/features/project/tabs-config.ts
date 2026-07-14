@@ -1,52 +1,86 @@
-/**
- * Configuração das abas do ProjectView (extraído — W4 decompose). Compartilhado
- * entre o shell (ProjectView), o rail (ProjectRail) e o roteador de conteúdo, evitando
- * import circular.
- */
+/** Workbench surface registry for the project route. */
 import {
   BookOpen,
   Brain,
+  Code2,
   Database,
   FileCode2,
   GitBranch,
   MessageSquareCode,
+  Monitor,
+  PanelRightOpen,
   Server,
   Webhook,
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
 
-// Built-in tab ids (chat/files/search/git/snapshots + analytics) plus any
-// plugin-contributed tool-window id — so widened to `string`.
 export type ProjectTabId = string;
+export type ProjectSurfaceKind = 'left' | 'right' | 'primary';
 
 export interface TabDef {
   id: ProjectTabId;
   label: string;
   icon: LucideIcon;
-  /** Group separates the IDE-core tools (top) from the analytics-style
-   *  tools (bottom). Visually rendered as a divider in the rail. */
+  kind: ProjectSurfaceKind;
   group: 'core' | 'analytics' | 'plugins';
+  separatorBefore?: boolean;
 }
 
-export const TABS: TabDef[] = [
-  { id: 'chat',         label: 'Sessões',       icon: MessageSquareCode, group: 'core' },
-  { id: 'files',        label: 'Files',         icon: FileCode2,         group: 'core' },
-  { id: 'git',          label: 'Git',           icon: GitBranch,         group: 'core' },
-  // 'runners' migrou para o BottomPanel (aba ao lado de Terminal/Problems/
-  // Output/Find) — rodar scripts e ver saída de PTY são a mesma atividade.
-  { id: 'api',          label: 'API',           icon: Webhook,           group: 'core' },
-  { id: 'databases',    label: 'Databases',     icon: Server,            group: 'core' },
-  // Docs Studio is NOT a rail tab — it lives inside the API tab (Client / Docs
-  // toggle) to keep everything API-related in one place.
-  { id: 'diagrams',     label: 'Diagrams',      icon: Workflow,          group: 'core' },
-  // Index — aba unificada: busca (hybrid/FTS/vector), controle do indexer (run +
-  // embeddings + histórico), arquivos indexados, dependências, arquitetura, diff
-  // entre runs e custos. Tudo é faceta do MESMO índice, então vive sob um ícone
-  // só (antes eram 7). O painel real fica em tabs/index-workspace/IndexWorkspace.tsx.
-  { id: 'index',        label: 'Index',         icon: Database,          group: 'analytics' },
-  // Snapshots + Memória — artefatos de contexto, logo abaixo do índice. Memória
-  // é GLOBAL do usuário (não do projeto), por isso fora do Index.
-  { id: 'snapshots',    label: 'Snapshots',     icon: BookOpen,          group: 'analytics' },
-  { id: 'memory',       label: 'Memória',       icon: Brain,             group: 'analytics' },
+export const LEFT_TOOL_TABS: TabDef[] = [
+  { id: 'files', label: 'Files', icon: FileCode2, kind: 'left', group: 'core' },
+  { id: 'git', label: 'Git', icon: GitBranch, kind: 'left', group: 'core' },
+  { id: 'sessions', label: 'Sessions', icon: MessageSquareCode, kind: 'left', group: 'core', separatorBefore: true },
+  { id: 'api-navigation', label: 'API', icon: Webhook, kind: 'left', group: 'core' },
+  { id: 'databases', label: 'Databases', icon: Database, kind: 'left', group: 'core' },
 ];
+
+export const RIGHT_TOOL_TABS: TabDef[] = [
+  { id: 'chat', label: 'AI Chat', icon: MessageSquareCode, kind: 'right', group: 'core' },
+  { id: 'snapshots', label: 'Snapshots', icon: BookOpen, kind: 'right', group: 'analytics' },
+  { id: 'memory', label: 'Memory', icon: Brain, kind: 'right', group: 'analytics' },
+];
+
+/** Context-only tool shown on the right rail while the API surface is active. */
+export const API_RIGHT_TOOL: TabDef = {
+  id: 'api-inspector',
+  label: 'API response',
+  icon: PanelRightOpen,
+  kind: 'right',
+  group: 'core',
+};
+
+export const PRIMARY_SURFACES: TabDef[] = [
+  { id: 'editor', label: 'Code', icon: Code2, kind: 'primary', group: 'core' },
+  { id: 'sessions', label: 'Session', icon: MessageSquareCode, kind: 'primary', group: 'core' },
+  { id: 'api', label: 'API', icon: Webhook, kind: 'primary', group: 'core' },
+  { id: 'ssh', label: 'SSH', icon: Server, kind: 'primary', group: 'core' },
+  { id: 'diagrams', label: 'Diagrams', icon: Workflow, kind: 'primary', group: 'core' },
+  { id: 'index', label: 'Index', icon: Database, kind: 'primary', group: 'analytics' },
+  { id: 'preview', label: 'Preview', icon: Monitor, kind: 'primary', group: 'core' },
+];
+
+/**
+ * Compatibility catalog consumed by pins and deep links. `editor` is omitted
+ * from old rail pin affordances by their callers, but remains discoverable.
+ */
+export const TABS: TabDef[] = [
+  ...LEFT_TOOL_TABS,
+  ...RIGHT_TOOL_TABS,
+  API_RIGHT_TOOL,
+  ...PRIMARY_SURFACES,
+];
+
+export function projectSurface(id: string): TabDef | undefined {
+  return TABS.find((surface) => surface.id === id);
+}
+
+export function projectSurfacesFor(kind: ProjectSurfaceKind): TabDef[] {
+  return TABS.filter((surface) => surface.kind === kind);
+}
+
+/** Context-owned docks must never survive after their primary surface closes. */
+export function projectToolAvailableInContext(toolId: string | null, primarySurface: string): boolean {
+  if (toolId === 'api-navigation' || toolId === 'api-inspector') return primarySurface === 'api';
+  return true;
+}

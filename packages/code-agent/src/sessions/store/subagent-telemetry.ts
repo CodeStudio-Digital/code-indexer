@@ -2,6 +2,7 @@ import type { Database as DB } from 'better-sqlite3';
 
 /** Additive persisted contract; older rows naturally expose null/default fields. */
 export interface SubagentRunTelemetry {
+  id: number;
   session_id: number | null;
   run_id: string;
   parent_run_id: string | null;
@@ -30,6 +31,24 @@ export interface SubagentRunTelemetry {
   cache_creation_input_tokens: number | null;
   has_summary: 0 | 1;
   output_id: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface SubagentToolCallTelemetry {
+  id: number;
+  session_id: number | null;
+  run_id: string;
+  seq: number;
+  turn: number | null;
+  tool_name: string;
+  logical_operation_id: string | null;
+  productive: 0 | 1;
+  is_error: 0 | 1;
+  refusal_kind: string | null;
+  duration_ms: number;
+  result_chars: number;
+  created_at: string;
 }
 
 export interface StartSubagentRunInput {
@@ -129,4 +148,22 @@ export function complete(db: DB, input: CompleteSubagentRunInput): void {
     input.cache_creation_input_tokens ?? 0, input.has_summary ? 1 : 0,
     input.output_id ?? null, input.run_id,
   );
+}
+
+export function listRuns(db: DB, sessionId: number, limit = 50): SubagentRunTelemetry[] {
+  return db.prepare(`
+    SELECT * FROM coder_subagent_runs
+    WHERE session_id = ?
+    ORDER BY started_at DESC, id DESC
+    LIMIT ?
+  `).all(sessionId, Math.max(1, Math.min(200, limit))) as SubagentRunTelemetry[];
+}
+
+export function listToolCalls(db: DB, runId: string, limit = 100): SubagentToolCallTelemetry[] {
+  return db.prepare(`
+    SELECT * FROM coder_subagent_tool_calls
+    WHERE run_id = ?
+    ORDER BY seq DESC
+    LIMIT ?
+  `).all(runId, Math.max(1, Math.min(500, limit))) as SubagentToolCallTelemetry[];
 }

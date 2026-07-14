@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Copy, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Button } from '../../components/ui/button.js';
+import { ApiClientSelect } from './ApiClientSelect.js';
 import { LazyMonaco } from './LazyMonaco.js';
 import * as api from './api.js';
 
@@ -53,9 +54,12 @@ export function CodeDialog({ projectId, requestId, envId, open, onOpenChange }: 
       <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{t('code.generateCode')}</DialogTitle></DialogHeader>
         <div className="flex items-center gap-3 text-xs">
-          <select className="text-xs bg-background border rounded px-2 py-1" value={target} onChange={(e) => setTarget(e.target.value)}>
-            {TARGETS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
+          <ApiClientSelect
+            value={target}
+            onValueChange={setTarget}
+            options={TARGETS}
+            triggerClassName="w-48"
+          />
           <label className="flex items-center gap-1.5">
             <input type="checkbox" checked={resolve} onChange={(e) => setResolve(e.target.checked)} className="h-3.5 w-3.5" />
             {t('code.resolveVariables')}

@@ -26,6 +26,7 @@ const COALESCE_LINES = 2;
 // Module-level (Electron dual-factory + engine both see the same state).
 const edits = new Map<number, EditEntry[]>();
 const tabTouch = new Map<number, Map<string, number>>();
+const revisions = new Map<number, number>();
 let subscribed = false;
 
 function countLines(text: string): number {
@@ -48,6 +49,7 @@ function touchTab(projectId: number, file: string): void {
 /** Exported for tests — the doc-event handler body. */
 export const handleEvent: DocListener = (e) => {
   try {
+    revisions.set(e.projectId, (revisions.get(e.projectId) ?? 0) + 1);
     if (e.kind === 'open') {
       touchTab(e.projectId, e.file);
       return;
@@ -118,14 +120,21 @@ export function tabRecency(projectId: number): Map<string, number> {
   return tabTouch.get(projectId) ?? new Map();
 }
 
+/** Monotonic revision for tab/recent-edit context and completion cache keys. */
+export function contextRevision(projectId: number): number {
+  return revisions.get(projectId) ?? 0;
+}
+
 /** Drop a project's tracked state (project delete/unload — avoids slow leak). */
 export function clearProjectEdits(projectId: number): void {
   edits.delete(projectId);
   tabTouch.delete(projectId);
+  revisions.delete(projectId);
 }
 
 /** Test hook — module state reset. */
 export function __resetEditTrackerForTests(): void {
   edits.clear();
   tabTouch.clear();
+  revisions.clear();
 }

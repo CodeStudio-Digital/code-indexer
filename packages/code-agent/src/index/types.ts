@@ -335,7 +335,13 @@ export interface RunCoderOptions {
    * appends to) a baseline for a file the agent just mutated. Lets the HTTP
    * layer publish a `session_snapshot_changed` SSE event.
    */
-  onSnapshotRecorded?: (info: { baselineId: number; filePath: string }) => void;
+  onSnapshotRecorded?: (info: {
+    baselineId: number;
+    globalBaselineId: number;
+    roundMessageId: number | null;
+    roundSnapshotId: number | null;
+    filePath: string;
+  }) => void;
   /**
    * Resolve the per-project runtime PATH/env (PHP/Python bin dirs + PHPRC) to
    * inject into the agent's shell tools, so `php`/`composer`/`python`/`pip`

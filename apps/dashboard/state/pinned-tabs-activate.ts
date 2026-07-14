@@ -39,7 +39,7 @@ function railTabOf(live: LiveView): string {
   if (view.projectId != null && activeProjectTab && activeProjectTab.projectId === view.projectId) {
     return activeProjectTab.tab;
   }
-  return new URLSearchParams(search).get('tab') || 'chat';
+  return new URLSearchParams(search).get('tab') || 'editor';
 }
 
 function isPinActive(pin: Pin, live: LiveView): boolean {
@@ -50,7 +50,7 @@ function isPinActive(pin: Pin, live: LiveView): boolean {
         view.page === 'project' &&
         view.projectId === pin.projectId &&
         view.sessionId == null &&
-        railTabOf(live) === 'chat'
+        (railTabOf(live) === 'editor' || railTabOf(live) === 'chat')
       );
     case 'rail':
       return view.page === 'project' && view.projectId === pin.projectId && railTabOf(live) === pin.tabId;

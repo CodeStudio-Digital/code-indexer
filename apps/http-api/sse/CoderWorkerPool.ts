@@ -322,6 +322,7 @@ export class CoderWorkerPool {
     sessionId: number,
     content: string,
     selectedSkillIds?: string[],
+    roundMessageId?: number,
   ): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) throw new Error(`coder-pool: no active run for session ${sessionId}`);
@@ -330,7 +331,11 @@ export class CoderWorkerPool {
     // (B) — re-engaging the worker mid-linger restarts the in-flight
     // semantics. Cleared again when the next `bus.end` arrives.
     entry.runInProgress = true;
-    await entry.host.requireBridge().request('pushUserMessage', { content, selectedSkillIds });
+    await entry.host.requireBridge().request('pushUserMessage', {
+      content,
+      selectedSkillIds,
+      roundMessageId,
+    });
   }
 
   /**

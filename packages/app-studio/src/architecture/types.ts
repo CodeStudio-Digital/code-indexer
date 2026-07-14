@@ -1,4 +1,3 @@
-import type { AppStageId } from '../pipeline/stages.js';
 import { APP_STACK_PROFILE_ID } from './stack-profile.js';
 
 export { APP_STACK_PROFILE_ID } from './stack-profile.js';
@@ -15,7 +14,7 @@ export const APP_ARCHITECTURE_SOURCE_DOMAINS = [
 
 export type AppArchitectureLayer = 'ui' | 'worker' | 'data' | 'cross-cutting';
 export type AppTestLayer = 'database' | 'worker' | 'browser' | 'e2e';
-export type AppTestOwnerStage = Extract<AppStageId, 'database' | 'design' | 'backend' | 'review'>;
+export type AppTestOwnerProfile = 'data' | 'ui' | 'api' | 'verify';
 
 export interface AppArchitectureSource {
   title: string;
@@ -51,7 +50,7 @@ export interface AppTddCase {
   id: string;
   title: string;
   layer: AppTestLayer;
-  owner_stage: AppTestOwnerStage;
+  owner_profile: AppTestOwnerProfile;
   priority: 'critical' | 'important' | 'supporting';
   source_ids: string[];
   preconditions: string[];
@@ -157,7 +156,11 @@ export function normalizeAppArchitecturePlan(value: unknown, specRevisionId: num
           id: text(testCase.id),
           title: text(testCase.title),
           layer: oneOf(testCase.layer, ['database', 'worker', 'browser', 'e2e'] as const, 'worker'),
-          owner_stage: oneOf(testCase.owner_stage, ['database', 'design', 'backend', 'review'] as const, 'backend'),
+          owner_profile: oneOf(
+            testCase.owner_profile ?? ({ database: 'data', design: 'ui', backend: 'api', review: 'verify' } as const)[text(testCase.owner_stage) as 'database' | 'design' | 'backend' | 'review'],
+            ['data', 'ui', 'api', 'verify'] as const,
+            'api',
+          ),
           priority: oneOf(testCase.priority, ['critical', 'important', 'supporting'] as const, 'important'),
           source_ids: strings(testCase.source_ids),
           preconditions: strings(testCase.preconditions),

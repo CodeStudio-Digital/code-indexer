@@ -321,10 +321,8 @@ export const fuguSpec: ProviderSpec = {
 /**
  * Mistral / Codestral — OpenAI-compatible chat plus a NATIVE FIM endpoint
  * (`/v1/fim/completions`, body `{model, prompt, suffix}`) that powers the
- * editor's ghost-text autocomplete. Free-tier Codestral keys only work on
- * `https://codestral.mistral.ai/v1` (paid keys on the default host) — that is
- * a per-provider `base_url` decision, not a config field; the autocomplete
- * setup flow creates the provider with the free-tier host preset.
+ * editor's ghost-text autocomplete. Free and paid Studio keys use the current
+ * public API host (`https://api.mistral.ai/v1`).
  */
 export const mistralSpec: ProviderSpec = {
   kind: 'mistral',

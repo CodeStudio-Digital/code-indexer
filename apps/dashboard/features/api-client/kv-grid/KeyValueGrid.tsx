@@ -19,6 +19,7 @@ import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { cn } from '../../../lib/utils.js';
+import { ApiClientSelect } from '../ApiClientSelect.js';
 import type { KvRow } from '../types.js';
 import { rowsToBulk, bulkToRows } from './bulk-edit.js';
 
@@ -108,14 +109,16 @@ export function KeyValueGrid({ rows, onChange, onCommit, placeholderKey = 'key',
               />
               <div className="flex items-center border-l border-border/40">
                 {fileRows && !isBlank && (
-                  <select
-                    className="h-8 text-[10px] bg-transparent border-0 pl-1 pr-0.5 text-muted-foreground focus:outline-none"
+                  <ApiClientSelect
                     value={row.src != null ? 'file' : 'text'}
-                    onChange={(e) => commitRows(rows.map((r, j) => (j === i ? { ...r, src: e.target.value === 'file' ? '' : undefined, value: e.target.value === 'file' ? '' : r.value } : r)))}
-                  >
-                    <option value="text">{t('grid.srcText')}</option>
-                    <option value="file">{t('grid.srcFile')}</option>
-                  </select>
+                    onValueChange={(value) => commitRows(rows.map((r, j) => (j === i ? { ...r, src: value === 'file' ? '' : undefined, value: value === 'file' ? '' : r.value } : r)))}
+                    options={[
+                      { value: 'text', label: t('grid.srcText') },
+                      { value: 'file', label: t('grid.srcFile') },
+                    ]}
+                    triggerClassName="h-8 w-[76px] rounded-none border-0 bg-transparent px-1 text-[10px] text-muted-foreground shadow-none focus:ring-0 focus:ring-offset-0"
+                    contentClassName="min-w-[8rem]"
+                  />
                 )}
                 <Input
                   value={row.src != null ? row.src : row.value}

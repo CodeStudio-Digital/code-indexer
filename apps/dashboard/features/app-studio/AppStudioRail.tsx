@@ -1,12 +1,8 @@
-/**
- * Rail vertical do App Studio — ferramentas de palco à esquerda. Preview e
- * Mapa ficam no topo porque são as duas superfícies que um usuário leigo
- * entende primeiro: ver o app e ver a especificação em blocos.
- */
+/** Navegação das superfícies persistentes da jornada App Studio. */
+import { Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Boxes, Database, GitBranch, Globe, Layers3, ListChecks, Monitor, Palette, Workflow, type LucideIcon } from 'lucide-react';
-import { cn } from '../../lib/utils.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
+import { RailButton, RailContainer, RailSeparator } from '../../components/chrome/index.js';
 import type { AppStudioSessionDetail } from './app-studio-api.js';
 import { JourneyPanel } from './guide/JourneyPanel.js';
 import { DataPanel, dataTabUnlocked } from './data/DataPanel.js';
@@ -19,16 +15,19 @@ import { ProductPanel } from './product/ProductPanel.js';
 
 export type AppStudioTab = 'guide' | 'product' | 'blueprint' | 'versions' | 'architecture' | 'experience' | 'preview' | 'data' | 'publish';
 
-const TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string; separated?: boolean }> = [
-  { id: 'preview', icon: Monitor, labelKey: 'tabs.preview' },
-  { id: 'blueprint', icon: Workflow, labelKey: 'tabs.blueprint' },
-  { id: 'versions', icon: GitBranch, labelKey: 'tabs.versions' },
+export const APP_STUDIO_RAIL_TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string; separated?: boolean }> = [
+  // Definição: acompanha a ordem natural da jornada, do geral ao específico.
+  { id: 'guide', icon: ListChecks, labelKey: 'tabs.guide' },
   { id: 'product', icon: Layers3, labelKey: 'tabs.product' },
+  { id: 'blueprint', icon: Workflow, labelKey: 'tabs.blueprint' },
   { id: 'architecture', icon: Boxes, labelKey: 'tabs.architecture' },
   { id: 'experience', icon: Palette, labelKey: 'tabs.experience' },
-  { id: 'guide', icon: ListChecks, labelKey: 'tabs.guide', separated: true },
+  { id: 'versions', icon: GitBranch, labelKey: 'tabs.versions' },
+  // Execução: o app em funcionamento e os dados que o sustentam.
+  { id: 'preview', icon: Monitor, labelKey: 'tabs.preview', separated: true },
   { id: 'data', icon: Database, labelKey: 'tabs.data' },
-  { id: 'publish', icon: Globe, labelKey: 'tabs.publish' },
+  // Entrega: ação final, visualmente isolada das ferramentas de construção.
+  { id: 'publish', icon: Globe, labelKey: 'tabs.publish', separated: true },
 ];
 
 export function AppStudioRail({
@@ -43,16 +42,13 @@ export function AppStudioRail({
 }) {
   const { t } = useTranslation('appStudio');
   return (
-    <nav
-      className="flex w-11 shrink-0 flex-col items-center gap-0.5 border-r bg-card/45 py-1.5"
-      aria-label={t('tabs.guide')}
-    >
-      {TABS.map(({ id, icon: Icon, labelKey, separated }) => {
+    <RailContainer side="left" aria-label="App Studio tool windows">
+      {APP_STUDIO_RAIL_TABS.map(({ id, icon: Icon, labelKey, separated }) => {
         const isActive = active === id;
         const disabled =
           (id === 'data' && !dataTabUnlocked(detail)) ||
           ((id === 'product' || id === 'blueprint' || id === 'versions' || id === 'architecture') && !detail?.spec);
-        const experienceLocked = id === 'experience' && !detail?.pipeline?.stages.find((stage) => stage.id === 'database' && (stage.status === 'approved' || stage.status === 'skipped'));
+        const experienceLocked = id === 'experience' && !detail?.workflow.state.phases.find((phase) => phase.id === 'blueprint' && phase.status !== 'locked');
         const label =
           disabled && id === 'data' ? t('data.locked')
           : disabled && id === 'blueprint' ? t('blueprint.locked')
@@ -60,35 +56,20 @@ export function AppStudioRail({
           : disabled && id === 'architecture' ? t('architecture.locked')
           : t(labelKey);
         return (
-          <div key={id} className={cn('flex flex-col items-center', separated && 'mt-2 border-t pt-2')}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  disabled={disabled || experienceLocked}
-                  onClick={() => onSelect(id)}
-                  aria-label={label}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={cn(
-                    'relative grid h-8 w-8 place-items-center rounded-md transition-colors',
-                    isActive
-                      ? 'bg-accent text-accent-foreground shadow-sm'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                    (disabled || experienceLocked) && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
-                  )}
-                >
-                  <Icon className="h-4 w-4" />
-                  {isActive && (
-                    <span aria-hidden className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right">{label}</TooltipContent>
-            </Tooltip>
-          </div>
+          <Fragment key={id}>
+            {separated && <RailSeparator />}
+            <RailButton
+              icon={Icon}
+              label={label}
+              role="toggle"
+              active={isActive}
+              disabled={disabled || experienceLocked}
+              onClick={() => onSelect(id)}
+            />
+          </Fragment>
         );
       })}
-    </nav>
+    </RailContainer>
   );
 }
 
@@ -96,56 +77,24 @@ export function AppStudioRail({
 export function AppStudioTabContent({
   tab,
   detail,
-  discoveryExtra,
   onChanged,
-  onOpenPublish,
-  onOpenSpecAgent,
-  onOpenDbAgent,
-  onOpenArchitectureAgent,
-  onOpenProductAgent,
-  onOpenProductRepair,
-  onOpenExecutionAgent,
-  onOpenUxAgent,
-  onOpenWireframeAgent,
 }: {
   tab: Exclude<AppStudioTab, 'preview'>;
   detail: AppStudioSessionDetail;
-  discoveryExtra?: string | null;
   onChanged: () => void;
-  onOpenPublish: () => void;
-  onOpenSpecAgent?: (prompt: string) => void;
-  onOpenDbAgent?: (prompt: string) => void;
-  onOpenArchitectureAgent?: (prompt: string) => void;
-  onOpenProductAgent?: (prompt: string) => void;
-  onOpenProductRepair?: () => void;
-  onOpenExecutionAgent?: (kind: 'design' | 'backend' | 'review', prompt: string) => void;
-  onOpenUxAgent?: (prompt: string) => void;
-  onOpenWireframeAgent?: (prompt: string) => void;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-card">
-      <div className="min-h-0 flex-1 overflow-auto">
+    <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
+      <div className={`min-h-0 flex-1 ${tab === 'guide' ? 'overflow-hidden' : 'overflow-auto'}`}>
         {tab === 'guide' && (
-          <JourneyPanel
-            detail={detail}
-            discoveryExtra={discoveryExtra}
-            onChanged={onChanged}
-            onOpenPublish={onOpenPublish}
-            onOpenSpecAgent={onOpenSpecAgent}
-            onOpenDbAgent={onOpenDbAgent}
-            onOpenArchitectureAgent={onOpenArchitectureAgent}
-            onOpenProductAgent={onOpenProductAgent}
-            onOpenExecutionAgent={onOpenExecutionAgent}
-            onOpenUxAgent={onOpenUxAgent}
-            onOpenWireframeAgent={onOpenWireframeAgent}
-          />
+          <JourneyPanel detail={detail} onChanged={onChanged} />
         )}
-        {tab === 'blueprint' && <BlueprintPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
-        {tab === 'versions' && <VersionsPanel detail={detail} onChanged={onChanged} onOpenSpecAgent={onOpenSpecAgent} />}
-        {tab === 'architecture' && <ArchitecturePanel detail={detail} onChanged={onChanged} onOpenAgent={onOpenArchitectureAgent} />}
-        {tab === 'product' && <ProductPanel detail={detail} onChanged={onChanged} onOpenAgent={onOpenProductAgent} onOpenRepair={onOpenProductRepair} />}
-        {tab === 'experience' && <ExperiencePanel detail={detail} onChanged={onChanged} onOpenUxAgent={onOpenUxAgent} onOpenWireframeAgent={onOpenWireframeAgent} />}
-        {tab === 'data' && <DataPanel detail={detail} onChanged={onChanged} onOpenDbAgent={onOpenDbAgent} />}
+        {tab === 'blueprint' && <BlueprintPanel detail={detail} onChanged={onChanged} />}
+        {tab === 'versions' && <VersionsPanel detail={detail} onChanged={onChanged} />}
+        {tab === 'architecture' && <ArchitecturePanel detail={detail} onChanged={onChanged} />}
+        {tab === 'product' && <ProductPanel detail={detail} onChanged={onChanged} />}
+        {tab === 'experience' && <ExperiencePanel detail={detail} onChanged={onChanged} />}
+        {tab === 'data' && <DataPanel detail={detail} onChanged={onChanged} />}
         {tab === 'publish' && <PublishPanel detail={detail} onChanged={onChanged} />}
       </div>
     </div>

@@ -12,6 +12,7 @@ import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWin
 import { ProjectPreview } from '../builder/ProjectPreview.js';
 import type { PreviewFramework } from '../builder/useSelectorMode.js';
 import { UserMemoryPanel } from '../../user-memory/UserMemoryPanel.js';
+import type { ApiClientWorkbenchSlots } from '../../api-client/workbench-slots.js';
 
 // Abas pesadas → chunks LAZY (W2/P3): só baixam quando a aba é clicada.
 const SnapshotEditor = lazy(() => import('../../snapshots/index.js'));
@@ -20,6 +21,7 @@ const IndexWorkspace = lazy(() => import('./index-workspace/IndexWorkspace.js').
 const ApiClientTab = lazy(() => import('../../api-client/ApiClientTab.js').then((m) => ({ default: m.ApiClientTab })));
 const DbClientTab = lazy(() => import('../../db-client/DbClientTab.js').then((m) => ({ default: m.DbClientTab })));
 const DiagramsView = lazy(() => import('../diagrams/DiagramsView.js').then((m) => ({ default: m.DiagramsView })));
+const SshPanel = lazy(() => import('../../ssh/SshPanel.js').then((m) => ({ default: m.SshPanel })));
 
 /** Fallback dos chunks lazy de aba. */
 function TabSpinner() {
@@ -37,9 +39,10 @@ export interface TransientSurfaceProps {
   contribWindows: ContribToolWindow[];
   builderJson: { stack: string; port: number } | null;
   framework?: PreviewFramework;
+  apiWorkbenchSlots?: ApiClientWorkbenchSlots;
 }
 
-export function TransientSurface({ tab, projectId, projectName, contribWindows, builderJson, framework }: TransientSurfaceProps) {
+export function TransientSurface({ tab, projectId, projectName, contribWindows, builderJson, framework, apiWorkbenchSlots }: TransientSurfaceProps) {
   // Snapshots owns its own master/detail layout (full height, inner scroll).
   // key={projectId} → remount per project (matches ProjectPreview/DiagramsView)
   // so an open create/edit SnapshotForm can't carry the previous project's
@@ -51,13 +54,20 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
   // API client owns a full-height 3-pane layout. `docsAccess` adds the in-tab
   // Client / Docs toggle (the Docs Studio lives here, not as its own rail tab).
   if (tab === 'api') {
-    return <Suspense fallback={<TabSpinner />}><ApiClientTab projectId={projectId} docsAccess /></Suspense>;
+    return <Suspense fallback={<TabSpinner />}><ApiClientTab projectId={projectId} docsAccess workbenchSlots={apiWorkbenchSlots} /></Suspense>;
   }
 
   // Database client — DataGrip × phpMyAdmin. key={projectId} → remount per
   // project so a live connection session never bleeds across projects.
   if (tab === 'databases') {
     return <Suspense fallback={<TabSpinner />}><DbClientTab key={projectId} projectId={projectId} projectName={projectName} /></Suspense>;
+  }
+
+  if (tab === 'ssh') {
+    // The primary workbench keeps this surface mounted while navigating so
+    // shells, SFTP directories and in-flight transfers survive tab switches.
+    // The key still hard-isolates that live state when the project changes.
+    return <Suspense fallback={<TabSpinner />}><SshPanel key={projectId} projectId={projectId} /></Suspense>;
   }
 
   // Preview tab — the live dev-server preview, full-width.

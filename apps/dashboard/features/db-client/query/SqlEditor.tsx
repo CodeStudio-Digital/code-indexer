@@ -10,6 +10,7 @@
 import { useRef } from 'react';
 import type { editor } from 'monaco-editor';
 import { LazyMonaco } from '../../api-client/LazyMonaco.js';
+import { registerCommandHandlers } from '../../../keymap/commands.js';
 import type { DbEngine } from '../types.js';
 
 const KEYWORDS = [
@@ -94,21 +95,32 @@ export function SqlEditor({
       },
     });
 
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-      const sel = ed.getSelection();
-      const selected = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) : null;
-      runRef.current(selected || ed.getValue());
-    });
-    // Cmd/Ctrl+Shift+Enter → run the whole buffer (all statements).
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
-      (runAllRef.current ?? runRef.current)(ed.getValue());
-    });
-    // Cmd/Ctrl+Alt+L → format the buffer.
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => {
-      formatRef.current?.();
-    });
+    const unregisterCommands = registerCommandHandlers([
+      {
+        id: 'database.runQuery',
+        when: () => ed.hasTextFocus(),
+        run: () => {
+          const sel = ed.getSelection();
+          const selected = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) : null;
+          runRef.current(selected || ed.getValue());
+        },
+      },
+      {
+        id: 'database.runAllQueries',
+        when: () => ed.hasTextFocus(),
+        run: () => (runAllRef.current ?? runRef.current)(ed.getValue()),
+      },
+      {
+        id: 'database.formatQuery',
+        when: () => ed.hasTextFocus() && Boolean(formatRef.current),
+        run: () => formatRef.current?.(),
+      },
+    ]);
 
-    ed.onDidDispose(() => provider.dispose());
+    ed.onDidDispose(() => {
+      provider.dispose();
+      unregisterCommands();
+    });
   }
 
   return <LazyMonaco value={value} language="sql" onChange={onChange} onMount={onMount} height={height} />;

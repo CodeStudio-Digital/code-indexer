@@ -19,12 +19,12 @@ import { AppStudioCreateDialog } from './AppStudioCreateDialog.js';
 
 function cardStatus(entry: AppStudioListEntry, t: (k: string, o?: object) => string): { label: string; cls: string } {
   if (entry.live_url) return { label: t('home.status.live'), cls: 'bg-green-500/15 text-green-600' };
-  if (!entry.current_stage) return { label: t('home.status.done'), cls: 'bg-green-500/15 text-green-600' };
-  if (entry.current_stage_status === 'review') {
+  if (!entry.current_phase) return { label: t('home.status.done'), cls: 'bg-green-500/15 text-green-600' };
+  if (entry.current_phase_status === 'attention') {
     return { label: t('home.status.review'), cls: 'bg-amber-500/15 text-amber-600' };
   }
   return {
-    label: t('home.status.building', { n: entry.stage_done + 1, total: entry.stage_total }),
+    label: t('home.status.building', { n: entry.phase_done + 1, total: entry.phase_total }),
     cls: 'bg-primary/10 text-primary',
   };
 }

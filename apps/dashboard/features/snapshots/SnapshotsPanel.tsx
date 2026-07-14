@@ -63,10 +63,19 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
   // that no longer has snapshots.
   const [projectFilter, setProjectFilter] = useState<number | null>(null);
 
+  useEffect(() => {
+    setSelectedBaselineId(initialBaselineId ?? null);
+    setShowClosed(false);
+    setProjectFilter(null);
+  }, [sessionId, initialBaselineId]);
+
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetchSnapshotList(scope, sessionId, { includeClosed: showClosed });
+      // Keep closed global baselines loaded (but hidden by the list toggle) so
+      // an approved original remains discoverable and restorable for the full
+      // lifetime of the session.
+      const r = await fetchSnapshotList(scope, sessionId, { includeClosed: true });
       setFiles(r.files);
       setError(null);
     } catch (e) {
@@ -74,7 +83,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
     } finally {
       setLoading(false);
     }
-  }, [scope, sessionId, showClosed]);
+  }, [scope, sessionId]);
 
   const reloadReviews = useCallback(async () => {
     try {
@@ -89,6 +98,20 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
     void reload();
     void reloadReviews();
   }, [reload, reloadReviews]);
+
+  // A chat round can deep-link to a global baseline that was already approved.
+  // Keep the global modal as the durable rollback surface by automatically
+  // revealing closed baselines instead of silently selecting another file.
+  useEffect(() => {
+    if (
+      initialBaselineId != null
+      && !loading
+      && !showClosed
+      && files.find((file) => file.baselineId === initialBaselineId)?.status !== 'active'
+    ) {
+      setShowClosed(true);
+    }
+  }, [initialBaselineId, loading, showClosed, files]);
 
   const { diff, diffLoading, reloadDiff } = useSelectedDiff({
     scope,
@@ -109,9 +132,12 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
       setSelectedBaselineId(initialBaselineId);
       return;
     }
+    // Wait for the include-closed reload before falling back; otherwise an
+    // active file wins the race and the requested original baseline is hidden.
+    if (initialBaselineId != null && !showClosed) return;
     const firstActive = files.find((f) => f.status === 'active');
     if (firstActive) setSelectedBaselineId(firstActive.baselineId);
-  }, [files, selectedBaselineId, initialBaselineId]);
+  }, [files, selectedBaselineId, initialBaselineId, showClosed]);
 
   const handleSelect = useCallback((baselineId: number) => {
     setSelectedBaselineId(baselineId);

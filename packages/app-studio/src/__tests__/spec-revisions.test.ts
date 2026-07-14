@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { diffAppSpecs, impactFromSpecDiff, summarizeSpecDiff } from '../spec/revisions.js';
+import { diffAppSpecs, impactFromSpecDiff, parseAppSpecImpact, summarizeSpecDiff } from '../spec/revisions.js';
 import { makeSpec } from './fixtures.js';
+import { upgradeAppSpecToV2 } from '../spec/stable-ids.js';
 
 describe('spec revision diff and impact', () => {
   it('detects database changes as high impact from database onward', () => {
@@ -24,7 +25,9 @@ describe('spec revision diff and impact', () => {
 
     expect(diff.entities.added).toEqual(['Clientes']);
     expect(impact.level).toBe('high');
-    expect(impact.stage_ids).toEqual(['architecture', 'database', 'backend', 'review']);
+    expect(impact.affected_phases).toEqual(['define', 'blueprint', 'build', 'deliver']);
+    expect(impact.source_ids).toContain('entity:clientes');
+    expect(impact.source_ids).not.toContain('entity:pedidos');
   });
 
   it('detects screen changes as design/backend/review impact', () => {
@@ -44,7 +47,9 @@ describe('spec revision diff and impact', () => {
     const impact = impactFromSpecDiff(diffAppSpecs(base, next));
 
     expect(impact.level).toBe('medium');
-    expect(impact.stage_ids).toEqual(['architecture', 'design', 'backend', 'review']);
+    expect(impact.affected_phases).toEqual(['define', 'blueprint', 'build', 'deliver']);
+    expect(impact.source_ids).toContain('screen:relatorios');
+    expect(impact.source_ids).not.toContain('screen:painel');
   });
 
   it('summarizes requirements-only changes without forcing rebuild stages', () => {
@@ -58,7 +63,37 @@ describe('spec revision diff and impact', () => {
 
     const diff = diffAppSpecs(base, next);
 
-    expect(impactFromSpecDiff(diff)).toMatchObject({ level: 'low', stage_ids: ['architecture', 'review'] });
+    expect(impactFromSpecDiff(diff)).toMatchObject({ level: 'medium', affected_phases: ['define', 'blueprint', 'build', 'deliver'] });
     expect(summarizeSpecDiff(diff)).toContain('Requisitos, regras ou criterios de aceite atualizados.');
+  });
+
+  it('invalidates the exact stable requirement source instead of every requirement', () => {
+    const base = upgradeAppSpecToV2(makeSpec({ requirements: {
+      goals: ['Track orders'],
+      acceptance_criteria: ['Order can be saved', 'Order can be listed'],
+    } }));
+    const next = { ...base, requirements: { ...base.requirements, acceptance_criteria: ['Order saves with a customer', 'Order can be listed'] } };
+    const ids = base.requirement_ids?.acceptance ?? [];
+    const impact = impactFromSpecDiff(diffAppSpecs(base, next));
+    expect(impact.source_ids).toContain(ids[0]);
+    expect(impact.source_ids).not.toContain(ids[1]);
+  });
+
+  it('normalizes canonical persisted impacts and rejects malformed payloads', () => {
+    expect(parseAppSpecImpact(JSON.stringify({
+      level: 'high',
+      affected_phases: ['deliver', 'blueprint', 'invalid', 'blueprint'],
+      source_ids: ['screen:home', 'screen:home', null],
+      reasons: ['Changed scope'],
+    }))).toEqual({
+      level: 'high',
+      affected_phases: ['blueprint', 'deliver'],
+      source_ids: ['screen:home'],
+      reasons: ['Changed scope'],
+    });
+    expect(parseAppSpecImpact('{not-json')).toBeNull();
+    expect(parseAppSpecImpact({ level: 'high', stage_ids: ['architecture'] })).toEqual({
+      level: 'high', affected_phases: [], source_ids: [], reasons: [],
+    });
   });
 });

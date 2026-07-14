@@ -22,6 +22,7 @@ import type { SshConnectSpec, SshHostKeyInfo } from '@mcp/api-bus';
 import { ExponentialBackoff, sleep } from '@mcp/shared/sse/BackoffStrategy.js';
 import { apiCall, electronApi } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import { SingleTerminal, TERMINAL_SURFACE_BG } from '../shared/terminal/SingleTerminal.js';
 import { useIsDark } from '../builder/preview/files/viewer/useIsDark.js';
 import { useSshSessions, type SshShell } from './ssh-sessions.js';
@@ -193,7 +194,12 @@ export function SshPanel({ projectId }: SshPanelProps) {
   const removeHost = useCallback(
     async (h: SshHost) => {
       const msg = h.is_shared ? t('panel.deleteSharedConfirm', { label: h.label }) : t('panel.deleteConfirm', { label: h.label });
-      if (!window.confirm(msg)) return;
+      if (!(await confirm({
+        title: t('panel.deleteTitle', { label: h.label }),
+        description: msg,
+        confirmLabel: t('panel.delete'),
+        tone: 'destructive',
+      }))) return;
       await deleteHost(projectId, h).catch(() => {});
       reload();
     },

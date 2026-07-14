@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from './api.js';
 import { loadApiClientUi, saveApiClientUi } from './api-client-ui-state.js';
+import { parseRequestAssertion, requestRestoreCreateInput, requestRestorePatch } from './request-delete-undo.js';
 import type { ApiCollection, ApiEnvironment, ApiRequest, SendResponse } from './types.js';
 
 export interface ApiClientState {
@@ -93,6 +94,11 @@ function makeDraft(): ApiRequest {
 
 export function useApiClient(projectId: number) {
   const [s, set] = useState<ApiClientState>(INITIAL_STATE);
+  const [lastDeletedRequest, setLastDeletedRequest] = useState<{
+    request: ApiRequest;
+    wasOpen: boolean;
+    wasActive: boolean;
+  } | null>(null);
   const patch = useCallback((p: Partial<ApiClientState>) => set((prev) => ({ ...prev, ...p })), []);
   // The collection whose persisted tabs are currently loaded — gates the save
   // effect so a collection switch can't persist the OLD collection's tabs under
@@ -111,6 +117,7 @@ export function useApiClient(projectId: number) {
   if (trackedProject !== projectId) {
     setTrackedProject(projectId);
     set(INITIAL_STATE);
+    setLastDeletedRequest(null);
   }
 
   const refreshCollections = useCallback(async () => {
@@ -339,6 +346,9 @@ export function useApiClient(projectId: number) {
   }, [projectId, s.activeCollectionId, refreshRequests]);
 
   const bulkDelete = useCallback(async (ids: number[]) => {
+    // Bulk deletion has its own explicit "cannot be undone" confirmation.
+    // Do not leave an older single-delete undo looking like it applies here.
+    setLastDeletedRequest(null);
     await Promise.all(ids.map((id) => api.deleteRequest(projectId, id)));
     set((prev) => {
       const gone = new Set(ids);
@@ -363,10 +373,72 @@ export function useApiClient(projectId: number) {
   }, [projectId]);
 
   const removeRequest = useCallback(async (rid: number) => {
+    const request = s.requests.find((candidate) => candidate.id === rid) ?? null;
     await api.deleteRequest(projectId, rid);
-    set((prev) => closeTabState(prev, rid)); // drop its tab + activate neighbor
-    if (s.activeCollectionId != null) await refreshRequests(s.activeCollectionId);
-  }, [projectId, s.activeCollectionId, refreshRequests]);
+    if (request) {
+      setLastDeletedRequest({
+        request,
+        wasOpen: s.openTabIds.includes(rid),
+        wasActive: s.activeRequestId === rid,
+      });
+    }
+    // Reflect the successful delete immediately. A refetch failure must not leave
+    // the deleted row visible or turn a completed delete into an error toast.
+    set((prev) => closeTabState({
+      ...prev,
+      requests: prev.requests.filter((candidate) => candidate.id !== rid),
+    }, rid));
+    if (s.activeCollectionId != null) await refreshRequests(s.activeCollectionId).catch(() => undefined);
+  }, [projectId, s.requests, s.openTabIds, s.activeRequestId, s.activeCollectionId, refreshRequests]);
+
+  const undoLastRequestDelete = useCallback(async (): Promise<ApiRequest | null> => {
+    const deleted = lastDeletedRequest;
+    if (!deleted) return null;
+
+    let restored: ApiRequest | null = null;
+    try {
+      restored = await api.createRequest(
+        projectId,
+        deleted.request.collection_id,
+        requestRestoreCreateInput(deleted.request),
+      );
+      await api.patchRequest(projectId, restored.id, requestRestorePatch(deleted.request));
+      if (deleted.request.verified && deleted.request.expected_status != null) {
+        await api.verifyRequest(
+          projectId,
+          restored.id,
+          deleted.request.expected_status,
+          parseRequestAssertion(deleted.request.assert_json),
+        );
+      }
+    } catch (error) {
+      // Keep the undo snapshot retryable and compensate a partial recreation so
+      // a second Ctrl+Z cannot produce duplicate requests.
+      if (restored) await api.deleteRequest(projectId, restored.id).catch(() => undefined);
+      throw error;
+    }
+
+    setLastDeletedRequest(null);
+    if (s.activeCollectionId === deleted.request.collection_id) {
+      await refreshRequests(deleted.request.collection_id).catch(() => undefined);
+      set((prev) => {
+        const requests = prev.requests.some((candidate) => candidate.id === restored.id)
+          ? prev.requests
+          : [...prev.requests, restored];
+        const openTabIds = deleted.wasOpen && !prev.openTabIds.includes(restored.id)
+          ? [...prev.openTabIds, restored.id]
+          : prev.openTabIds;
+        return {
+          ...prev,
+          requests,
+          openTabIds,
+          activeRequestId: deleted.wasActive ? restored.id : prev.activeRequestId,
+          ...(deleted.wasActive ? { response: null } : {}),
+        };
+      });
+    }
+    return restored;
+  }, [lastDeletedRequest, projectId, s.activeCollectionId, refreshRequests]);
 
   const send = useCallback(async (rid: number) => {
     patch({ sending: true, error: null, response: null });
@@ -437,6 +509,8 @@ export function useApiClient(projectId: number) {
     closeOtherTabs, closeTabsToRight, closeTabsToLeft, closeAllTabs,
     addCollection, renameCollection, removeCollection,
     addRequest, saveRequest, removeRequest, verifyRequest,
+    canUndoRequestDelete: lastDeletedRequest != null,
+    undoLastRequestDelete,
     addFolder, renameFolder, removeFolder, moveRequest,
     duplicateRequest, reorderRequests, bulkMove, bulkDelete,
     newDraft, updateDraft, discardDraft, sendDraft, saveDraft,

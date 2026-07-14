@@ -14,7 +14,7 @@ import {
   type AppProductResearchSource,
   type AppProductScenario,
 } from '@mcp/app-studio/product/types.js';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
@@ -49,10 +49,10 @@ function context(binding: AppToolBinding) {
 }
 
 function assertEditable(c: ReturnType<typeof context>): void {
-  const state = parsePipelineState(c.session.pipeline_json);
-  if (!state) throw new Error('The app pipeline is missing or invalid. Use Repair app first.');
-  const current = currentStage(state);
-  if (current?.id !== 'product' || current.status === 'review') throw new Error(`Product modeling is locked while current stage is '${current?.id ?? 'none'}'.`);
+  const state = parseAppWorkflowState(c.session.pipeline_json);
+  if (!state) throw new Error('The App Studio v5 workflow is missing. Open the journey once to migrate it.');
+  const define = state.phases.find((phase) => phase.id === 'define');
+  if (define?.status === 'locked' || define?.status === 'complete') throw new Error(`Product modeling is locked while Define is '${define?.status ?? 'missing'}'. Request a scoped change first.`);
 }
 
 function save(c: ReturnType<typeof context>, model: AppProductModel, expected: unknown) {
@@ -195,7 +195,7 @@ export function appSetProductScope(binding: AppToolBinding): CoderTool {
       next.candidate_spec = args.candidate_spec as AppProductModel['candidate_spec'];
       const revision = save(c, next, args.expected_revision_number);
       const audit = auditAppProductModel(next);
-      return appResult('Product scope saved', { revision: revisionMeta(revision), audit, next: audit.ok ? "Submit stage 'product' for user review." : 'Resolve the semantic audit issues.' });
+      return appResult('Product scope saved', { revision: revisionMeta(revision), audit, next: audit.ok ? 'Save the candidate spec, update the Define cards and request Scope approval.' : 'Resolve the semantic audit issues.' });
     } catch (e) { return err(`app_set_product_scope failed: ${(e as Error).message}`); }
   } };
 }
@@ -212,56 +212,3 @@ export const appResearchProductDomain: CoderTool = {
   name: 'app_research_product_domain', description: 'Search current public sources for one focused product-domain question. Record selected sources and access dates in the product model.', parameters: RESEARCH_SCHEMA, source: 'native',
   handler: (args, ctx) => webSearch.handler({ query: String(args.query ?? '') }, ctx),
 };
-
-const BRIEFING_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    view: { type: 'string', enum: ['summary', 'capabilities', 'scenarios', 'full'], description: "Default: 'summary'." },
-    capability_ids: { type: 'array', items: { type: 'string' }, description: 'Optional focused stable capability ids.' },
-    offset: PAGE_PROPERTIES.offset,
-    limit: PAGE_PROPERTIES.limit,
-  },
-  additionalProperties: false,
-};
-export function appGetStageBriefing(binding: AppToolBinding): CoderTool {
-  return { name: 'app_get_stage_briefing', description: 'Return a deterministic, revision-pinned briefing for new, resumed or compacted specialist sessions. This is operational context; stage summaries are not.', parameters: BRIEFING_SCHEMA, source: 'native', handler: async (args) => {
-    try {
-      const c = context(binding); const focus = new Set(Array.isArray(args.capability_ids) ? args.capability_ids.map(String) : []);
-      const capabilities = focus.size ? c.model.capabilities.filter((item) => focus.has(item.id)) : c.model.capabilities.filter((item) => item.selected);
-      const ids = new Set(capabilities.map((item) => item.id));
-      const full = {
-        briefing_version: 1,
-        app: { id: c.session.id, name: c.session.name },
-        revisions: { spec: c.specRevision?.id ?? null, product: c.revision?.id ?? null, product_number: c.revision?.revision_number ?? null },
-        fingerprint: productModelFingerprint(c.model), complexity: c.model.complexity, complexity_factors: c.model.complexity_factors,
-        summary: c.model.summary, personas: c.model.personas, domains: c.model.domains.filter((item) => item.capability_ids.some((id) => ids.has(id))),
-        capabilities, scenarios: c.model.scenarios.filter((item) => ids.has(item.capability_id)),
-        open_decisions: c.model.decisions.filter((item) => item.status === 'open'),
-        next_valid_operation: currentStage(parsePipelineState(c.session.pipeline_json)!)?.id ?? null,
-      };
-      const view = viewArg(args, ['summary', 'capabilities', 'scenarios', 'full'], 'summary');
-      const base = {
-        briefing_version: full.briefing_version,
-        view,
-        app: full.app,
-        revisions: full.revisions,
-        fingerprint: full.fingerprint,
-        complexity: full.complexity,
-        complexity_factors: full.complexity_factors,
-        summary: full.summary,
-        next_valid_operation: full.next_valid_operation,
-        counts: {
-          personas: full.personas.length,
-          domains: full.domains.length,
-          capabilities: full.capabilities.length,
-          scenarios: full.scenarios.length,
-          open_decisions: full.open_decisions.length,
-        },
-      };
-      if (view === 'full') return appResult('Stage briefing — full', full);
-      if (view === 'capabilities') return appResult('Stage briefing — capabilities', { ...base, ...pageItems(full.capabilities, args, (item) => item.id) });
-      if (view === 'scenarios') return appResult('Stage briefing — scenarios', { ...base, ...pageItems(full.scenarios, args, (item) => item.id) });
-      return appResult('Stage briefing — summary', { ...base, personas: full.personas, domains: full.domains, open_decisions: full.open_decisions.slice(0, 10) });
-    } catch (e) { return err(`app_get_stage_briefing failed: ${(e as Error).message}`); }
-  } };
-}

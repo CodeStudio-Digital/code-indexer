@@ -5,7 +5,7 @@
  * dialog in M6 — the buttons reserve the layout so nothing shifts later.
  */
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, Download, Redo2, Undo2 } from 'lucide-react';
+import { Brush, ChevronRight, Download, Film, Redo2, Sparkles, Undo2, type LucideIcon } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import type { StudioMode } from './types.js';
 
@@ -36,19 +36,19 @@ export function StudioToolbar({
   const { t } = useTranslation('spriteStudio');
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b px-2 text-xs">
-      <div className="flex items-center gap-1 rounded bg-muted/40 p-0.5">
-        <ModeBtn active={mode === 'generate'} onClick={() => onMode('generate')}>
+    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-1.5 text-xs">
+      <div className="flex h-full items-stretch" role="tablist" aria-label={t('title')}>
+        <ModeBtn icon={Sparkles} active={mode === 'generate'} onClick={() => onMode('generate')}>
           {t('toolbar.generate')}
         </ModeBtn>
-        <ModeBtn active={mode === 'edit'} onClick={() => onMode('edit')}>
+        <ModeBtn icon={Brush} active={mode === 'edit'} onClick={() => onMode('edit')}>
           {t('toolbar.edit')}
         </ModeBtn>
-        <ModeBtn active={mode === 'animate'} onClick={() => onMode('animate')}>
+        <ModeBtn icon={Film} active={mode === 'animate'} onClick={() => onMode('animate')}>
           {t('toolbar.animate')}
         </ModeBtn>
       </div>
-      <span className="h-4 w-px bg-border" />
+      <span className="h-4 w-px bg-[var(--workbench-border)]" />
       <div className="flex min-w-0 flex-1 items-center gap-1 text-muted-foreground">
         <ChevronRight className="h-3 w-3 shrink-0" />
         {assetName ? (
@@ -84,11 +84,11 @@ export function StudioToolbar({
           <Redo2 className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <span className="h-4 w-px bg-border" />
+      <span className="h-4 w-px bg-[var(--workbench-border)]" />
       <Button
         size="sm"
         variant="outline"
-        className="h-7 gap-1"
+        className="h-6 gap-1 border-[var(--workbench-border)] bg-[var(--workbench-surface)]"
         disabled={!onExport}
         onClick={onExport}
         title={t('toolbar.exportSoon')}
@@ -100,13 +100,26 @@ export function StudioToolbar({
 }
 
 /** Segmented mode switch button (pattern: ApiClientTab's ModeBtn). */
-function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function ModeBtn({
+  icon: Icon,
+  active,
+  onClick,
+  children,
+}: {
+  icon: LucideIcon;
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
-      className={`px-2 py-0.5 rounded transition-colors ${active ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+      className={`relative flex h-full items-center gap-1.5 px-2.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${active ? 'bg-[var(--workbench-surface)] font-medium text-foreground after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:bg-violet-400' : 'text-muted-foreground hover:bg-[var(--workbench-hover)] hover:text-foreground'}`}
     >
+      <Icon className={`h-3.5 w-3.5 ${active ? 'text-violet-400' : ''}`} />
       {children}
     </button>
   );

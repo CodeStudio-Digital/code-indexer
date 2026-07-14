@@ -17,6 +17,7 @@
 
 import { create } from 'zustand';
 import type { SshConnectSpec } from '@mcp/api-bus';
+import type { DbEngine, WorkTab } from '../features/db-client/types.js';
 
 export interface OpenFile {
   /** Discriminator — regular editable file. */
@@ -71,6 +72,16 @@ export interface OpenGitLog {
    *  = main. The Git window decouples into this editor-pane tab, so the selection
    *  must ride along or log/cherry-pick/revert/reset would hit the main repo. */
   repoPath?: string;
+  /** Ephemeral navigation state retained while this virtual tab stays open.
+   * GitLogView is unmounted when a commit diff takes focus, so this state must
+   * live with the tab rather than inside the view component. */
+  viewState?: GitLogViewState;
+}
+
+export interface GitLogViewState {
+  selectedSha: string | null;
+  scrollOffset: number;
+  limit: number;
 }
 
 export interface OpenGitStash {
@@ -125,15 +136,27 @@ export interface OpenSftpFile {
   dirty: boolean;
 }
 
-export type OpenTab = OpenFile | OpenDiff | OpenGitLog | OpenGitStash | OpenMerge | OpenSftpFile;
+/** Database object/query opened as a first-class editor tab. */
+export interface OpenDatabaseTab {
+  kind: 'database';
+  projectId: number;
+  /** Synthetic identity, stable for tables and unique for ad-hoc queries. */
+  path: string;
+  title: string;
+  workTab: WorkTab;
+  engine?: DbEngine;
+  suggestions: string[];
+}
+
+export type OpenTab = OpenFile | OpenDiff | OpenGitLog | OpenGitStash | OpenMerge | OpenSftpFile | OpenDatabaseTab;
 
 /**
  * Virtual tabs (diff / git-log / git-stash / merge) carry a `title` and
  * have no on-disk identity — they never go dirty and render with their own
  * glyph rather than a file-type icon.
  */
-export function isVirtualTab(f: OpenTab): f is OpenDiff | OpenGitLog | OpenGitStash | OpenMerge {
-  return f.kind === 'diff' || f.kind === 'git-log' || f.kind === 'git-stash' || f.kind === 'merge';
+export function isVirtualTab(f: OpenTab): f is OpenDiff | OpenGitLog | OpenGitStash | OpenMerge | OpenDatabaseTab {
+  return f.kind === 'diff' || f.kind === 'git-log' || f.kind === 'git-stash' || f.kind === 'merge' || f.kind === 'database';
 }
 
 /**
@@ -190,8 +213,11 @@ interface WorkspaceState {
   openFile: (file: OpenFile) => void;
   openDiff: (diff: OpenDiff) => void;
   openGitLog: (tab: OpenGitLog) => void;
+  setGitLogViewState: (projectId: number, path: string, viewState: GitLogViewState) => void;
   openGitStash: (tab: OpenGitStash) => void;
   openMerge: (tab: OpenMerge) => void;
+  /** Open a database table/query/result in the normal editor tab strip. */
+  openDatabaseTab: (tab: OpenDatabaseTab) => void;
   /** Open (or focus, if already open) a remote file from SFTP for in-editor editing. */
   openSftpFile: (tab: OpenSftpFile) => void;
   /** Flip the unsaved-edits dot on an open SFTP tab. */
@@ -281,13 +307,37 @@ const placePath = (
  */
 const upsertVirtualTab = (
   s: WorkspaceState,
-  tab: OpenDiff | OpenGitLog | OpenGitStash | OpenMerge,
+  tab: OpenDiff | OpenGitLog | OpenGitStash | OpenMerge | OpenDatabaseTab,
 ): Partial<WorkspaceState> => {
   const existing = s.openFiles.findIndex((f) => sameTab(f, tab));
-  const openFiles =
-    existing >= 0 ? s.openFiles.map((f, i) => (i === existing ? tab : f)) : [...s.openFiles, tab];
+  const openFiles = existing >= 0
+    ? s.openFiles.map((f, i) => {
+        if (i !== existing) return f;
+        // Re-opening a branch log refreshes its descriptor without throwing
+        // away the user's position inside that already-open virtual tab.
+        if (f.kind === 'git-log' && tab.kind === 'git-log' && f.viewState) {
+          return { ...tab, viewState: f.viewState };
+        }
+        return tab;
+      })
+    : [...s.openFiles, tab];
   const { panes, activePaneId } = placePath(s.panes, s.activePaneId, tab.path);
   return { openFiles, panes, activePaneId, activeFilePath: tab.path };
+};
+
+/**
+ * Virtual Git tabs live in the editor area. The project workbench keeps that
+ * area mounted while API/Database/Sessions are active, so updating the store
+ * alone is no longer enough to make a newly-opened diff or log visible.
+ *
+ * Reuse the existing cross-pane request consumed by ProjectView. Dispatching
+ * after every open (including an in-place refresh of the same synthetic path)
+ * is intentional: the user may have left the editor surface since the tab was
+ * first opened.
+ */
+const requestEditorSurface = (projectId: number) => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('mcp:open-files-tab', { detail: { projectId } }));
 };
 
 /**
@@ -485,6 +535,7 @@ export function savePersistedTabs(
       f.kind !== 'git-log' &&
       f.kind !== 'git-stash' &&
       f.kind !== 'merge' &&
+      f.kind !== 'database' && // reconnect/introspection state is session-scoped
       f.kind !== 'sftp' && // remote edits are in-memory only — never persist/restore
       !isIndexerInternalPath(f.path) &&
       f.projectId === projectId,
@@ -568,13 +619,39 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       };
     }),
 
-  openDiff: (diff) => set((s) => upsertVirtualTab(s, diff)),
+  openDiff: (diff) => {
+    set((s) => upsertVirtualTab(s, diff));
+    requestEditorSurface(diff.projectId);
+  },
 
-  openGitLog: (tab) => set((s) => upsertVirtualTab(s, tab)),
+  openGitLog: (tab) => {
+    set((s) => upsertVirtualTab(s, tab));
+    requestEditorSurface(tab.projectId);
+  },
 
-  openGitStash: (tab) => set((s) => upsertVirtualTab(s, tab)),
+  setGitLogViewState: (projectId, path, viewState) =>
+    set((s) => ({
+      openFiles: s.openFiles.map((f) =>
+        f.kind === 'git-log' && sameTab(f, { projectId, path })
+          ? { ...f, viewState }
+          : f,
+      ),
+    })),
 
-  openMerge: (tab) => set((s) => upsertVirtualTab(s, tab)),
+  openGitStash: (tab) => {
+    set((s) => upsertVirtualTab(s, tab));
+    requestEditorSurface(tab.projectId);
+  },
+
+  openMerge: (tab) => {
+    set((s) => upsertVirtualTab(s, tab));
+    requestEditorSurface(tab.projectId);
+  },
+
+  openDatabaseTab: (tab) => {
+    set((s) => upsertVirtualTab(s, tab));
+    requestEditorSurface(tab.projectId);
+  },
 
   openSftpFile: (tab) =>
     set((s) => {

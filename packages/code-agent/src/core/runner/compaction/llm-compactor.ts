@@ -61,6 +61,10 @@ export interface CompactArgs {
   maxTailTokens?: number;
   /** Cheap provider used for the summary call. */
   summaryProvider: ChatProvider;
+  /** Session provider used once when the auxiliary binding fails. */
+  fallbackProvider?: ChatProvider;
+  /** Resolved pipeline binding config applied to every summary request. */
+  summaryOptions?: Omit<SummarizeSpanV3Options, 'signal'>;
   /**
    * Legacy test/caller injection. Kept source-compatible during the V3
    * rollout; V2 results are converted losslessly enough for resume use.
@@ -101,6 +105,11 @@ export interface CompactResult {
   cutoffApplied: number;
   /** Carries the underlying error when `ok === false`. */
   error?: Error;
+  /** Provider that produced the accepted V3 object. */
+  summaryProviderName?: string;
+  summaryModel?: string;
+  /** Sanitized failures from providers tried before the final outcome. */
+  attemptErrors?: string[];
 }
 
 /**
@@ -149,14 +158,39 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
       messages: head,
       liveState: args.liveState,
     };
-    const timeoutMs = args.summaryTimeoutMs ?? COMPACTION_SUMMARY_TIMEOUT_MS;
-    const pending = args.summarizeV3
-      ? args.summarizeV3(input, args.summaryProvider, { signal: args.signal, timeoutMs })
-      : args.summarize
-        ? args.summarize(head, args.summaryProvider)
-        : summarizeSpanV3(input, args.summaryProvider, { signal: args.signal, timeoutMs });
-    const produced = await raceSummary(pending, args.signal, timeoutMs);
-    if (!produced) {
+    const timeoutMs = args.summaryTimeoutMs ?? args.summaryOptions?.timeoutMs ?? COMPACTION_SUMMARY_TIMEOUT_MS;
+    const providers = [args.summaryProvider];
+    const fallback = args.fallbackProvider;
+    if (fallback && (fallback !== args.summaryProvider
+      || fallback.name !== args.summaryProvider.name
+      || fallback.model !== args.summaryProvider.model)) {
+      providers.push(fallback);
+    }
+    const attemptErrors: string[] = [];
+    let lastAttemptError: Error | null = null;
+    let produced: CompactionSummaryV2 | CompactionSummaryV3 | null = null;
+    let usedProvider: ChatProvider | null = null;
+    for (const candidate of providers) {
+      try {
+        const options = { ...args.summaryOptions, signal: args.signal, timeoutMs };
+        const pending = args.summarizeV3
+          ? args.summarizeV3(input, candidate, options)
+          : args.summarize
+            ? args.summarize(head, candidate)
+            : summarizeSpanV3(input, candidate, options);
+        produced = await raceSummary(pending, args.signal, timeoutMs);
+        if (produced) {
+          usedProvider = candidate;
+          break;
+        }
+        attemptErrors.push(`${candidate.name}/${candidate.model}: summarizer returned no valid V3 JSON`);
+      } catch (error) {
+        if (args.signal?.aborted) throw error;
+        lastAttemptError = error instanceof Error ? error : new Error(String(error));
+        attemptErrors.push(`${candidate.name}/${candidate.model}: ${lastAttemptError.message}`);
+      }
+    }
+    if (!produced || !usedProvider) {
       return {
         ok: false,
         messages: args.messages,
@@ -164,7 +198,10 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
         collapsedFrom: 0,
         collapsedTo: 0,
         cutoffApplied: cutoff,
-        error: new Error('summarizeSpanV3 returned null'),
+        error: providers.length === 1 && lastAttemptError
+          ? lastAttemptError
+          : new Error(attemptErrors.join(' | ') || 'summarizeSpanV3 returned null'),
+        attemptErrors,
       };
     }
     const summary = isCompactionSummaryV3(produced) ? produced : summaryV2ToV3(produced);
@@ -176,6 +213,9 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
       collapsedFrom: head.length,
       collapsedTo: 1,
       cutoffApplied: cutoff,
+      summaryProviderName: usedProvider.name,
+      summaryModel: usedProvider.model,
+      attemptErrors,
     };
   } catch (e) {
     return {
@@ -186,6 +226,7 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
       collapsedTo: 0,
       cutoffApplied: cutoff,
       error: e instanceof Error ? e : new Error(String(e)),
+      attemptErrors: [e instanceof Error ? e.message : String(e)],
     };
   }
 }

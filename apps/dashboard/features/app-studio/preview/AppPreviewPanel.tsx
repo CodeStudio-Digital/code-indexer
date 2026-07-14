@@ -22,7 +22,7 @@ export function AppPreviewPanel({
 
   if (status !== 'running' || !url) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 bg-card p-6 text-center">
+      <div className="flex h-full flex-col items-center justify-center gap-4 bg-[var(--workbench-surface)] p-6 text-center">
         <div className="w-full max-w-md space-y-2 rounded-lg border p-3">
           <div className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full bg-muted" />
@@ -42,7 +42,7 @@ export function AppPreviewPanel({
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-1.5 border-b bg-muted/20 px-2 text-[11px] text-muted-foreground">
+      <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2 text-[11px] text-muted-foreground">
         <MousePointerClick className="h-3 w-3" /> {t('preview.hint')}
       </div>
       <div className="min-h-0 flex-1">

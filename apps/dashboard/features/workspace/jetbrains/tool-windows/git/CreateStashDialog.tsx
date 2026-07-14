@@ -14,6 +14,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Archive } from 'lucide-react';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
@@ -41,6 +42,7 @@ export interface CreateStashDialogProps {
 }
 
 export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: CreateStashDialogProps) {
+  const { t } = useTranslation('workspace');
   const [message, setMessage] = useState('');
   const [includeUntracked, setIncludeUntracked] = useState(true);
   const [keepIndex, setKeepIndex] = useState(false);
@@ -60,10 +62,10 @@ export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: C
       });
       if (r.ok) {
         if (/no local changes to save/i.test(r.stdout)) {
-          toast.message('Nothing to stash', { description: 'Working tree is clean.' });
+          toast.message(t('git.stash.nothing'), { description: t('git.cleanTree') });
         } else {
-          toast.success('Stashed', {
-            description: r.stdout.trim().slice(0, 200) || 'Working tree saved.',
+          toast.success(t('git.stash.saved'), {
+            description: r.stdout.trim().slice(0, 200) || t('git.stash.savedBody'),
           });
         }
         onCreated();
@@ -83,7 +85,7 @@ export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: C
         <DialogHeader>
           <DialogTitle className="text-[14px] flex items-center gap-2">
             <Archive className="h-4 w-4 text-amber-500" />
-            Stash changes
+            {t('git.stash.changes')}
           </DialogTitle>
         </DialogHeader>
         <input
@@ -91,7 +93,7 @@ export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: C
           type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Message (optional)"
+          placeholder={t('git.stash.messagePlaceholder')}
           className="w-full rounded-md border bg-card px-3 py-2 text-[12.5px] focus:outline-none focus:ring-2 focus:ring-ring/40"
         />
         <label className="flex items-center gap-2 text-[12px]">
@@ -100,7 +102,7 @@ export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: C
             checked={includeUntracked}
             onChange={(e) => setIncludeUntracked(e.target.checked)}
           />
-          <span>Include untracked files</span>
+          <span>{t('git.stash.includeUntracked')}</span>
           <span className="text-muted-foreground/70 text-[10.5px]">(--include-untracked)</span>
         </label>
         <label className="flex items-center gap-2 text-[12px]">
@@ -109,16 +111,16 @@ export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: C
             checked={keepIndex}
             onChange={(e) => setKeepIndex(e.target.checked)}
           />
-          <span>Keep staged changes</span>
+          <span>{t('git.stash.keepStaged')}</span>
           <span className="text-muted-foreground/70 text-[10.5px]">(--keep-index)</span>
         </label>
         {err && <div className="text-[11px] text-destructive">{err}</div>}
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('git.cancel')}
           </Button>
           <Button onClick={() => void create()} disabled={busy}>
-            {busy ? 'Stashing…' : 'Stash'}
+            {busy ? t('git.stash.saving') : t('git.stash.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

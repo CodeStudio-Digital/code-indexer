@@ -7,7 +7,7 @@
  * write is an explicit user action, and all of it is reversible.
  */
 
-import type { ProjectGitApi, GitOptimizations } from '@mcp/api-bus';
+import { ApiError, type ProjectGitApi, type GitOptimizations } from '@mcp/api-bus';
 
 interface GitResult {
   code: number;
@@ -22,22 +22,7 @@ export interface GitOptDeps {
   resolveCwd(projectId: number, repoPath?: string): Promise<string>;
 }
 
-type GitOptApi = Pick<ProjectGitApi, 'gitOptimizations' | 'configureGitOptimizations'> & {
-  /**
-   * Fire-and-forget: enable `core.fsmonitor` + `core.untrackedCache` the first
-   * time a repo is seen, so cold `git status` (10-20s on a large/Defender repo)
-   * drops to <1s once the daemon warms. Idempotent — a `codestudio.gitautooptimized`
-   * sentinel + an in-process Set make it run exactly once per repo, and a prior
-   * sentinel means a later manual GitPerfPanel toggle is never re-fought.
-   * Opt out with `MCP_GIT_AUTO_OPTIMIZE=0`. NOT part of the IPC surface.
-   */
-  ensureAutoOptimized(repoRoot: string): Promise<void>;
-};
-
-function autoOptimizeDisabled(): boolean {
-  const v = (process.env.MCP_GIT_AUTO_OPTIMIZE ?? '').toLowerCase();
-  return v === '0' || v === 'false' || v === 'no' || v === 'off';
-}
+type GitOptApi = Pick<ProjectGitApi, 'gitOptimizations' | 'configureGitOptimizations'>;
 
 /** "git version 2.45.1.windows.1" → [2, 45]. */
 function parseVersion(s: string): [number, number] {
@@ -79,12 +64,21 @@ export function createGitOptimizationHandlers(deps: GitOptDeps): GitOptApi {
   ): Promise<void> {
     const { untrackedCache, fsmonitor, startDaemon = true } = opts;
     if (untrackedCache !== undefined) {
-      await deps.runGit(
+      if (untrackedCache) {
+        const test = await deps.runGit(root, ['update-index', '--test-untracked-cache']);
+        if (test.code !== 0) {
+          throw new ApiError('git_untracked_cache_unsupported', 412, test.stderr.trim() || 'untracked cache is not supported by this filesystem');
+        }
+      }
+      const result = await deps.runGit(
         root,
         untrackedCache
           ? ['config', 'core.untrackedCache', 'true']
           : ['config', '--unset', 'core.untrackedCache'], // exit 5 if unset — harmless
       );
+      if (result.code !== 0 && !(untrackedCache === false && result.code === 5)) {
+        throw new ApiError('git_config_failed', 500, result.stderr.trim() || 'failed to configure core.untrackedCache');
+      }
     }
     if (fsmonitor === true) {
       // Refuse to enable on git < 2.37: there `core.fsmonitor=true` is read as
@@ -92,33 +86,25 @@ export function createGitOptimizationHandlers(deps: GitOptDeps): GitOptApi {
       // The UI gates this, but the backend must not trust the caller. When
       // unsupported we skip silently — read() returns fsmonitorSupported:false
       // so the UI shows why it stayed off.
-      if ((await gitVersion(root)).supported) {
-        await deps.runGit(root, ['config', 'core.fsmonitor', 'true']);
+      if (!(await gitVersion(root)).supported) {
+        throw new ApiError('git_fsmonitor_unsupported', 412, 'built-in fsmonitor requires Git 2.37 or newer');
+      }
+      {
+        const configured = await deps.runGit(root, ['config', 'core.fsmonitor', 'true']);
+        if (configured.code !== 0) throw new ApiError('git_config_failed', 500, configured.stderr.trim() || 'failed to configure core.fsmonitor');
         // The manual toggle eager-starts the daemon (snappy now). The auto-
         // enabler passes startDaemon:false and lets git lazily start it on the
         // next status — avoids spawning a persistent daemon for every repo the
         // user merely visits.
-        if (startDaemon) await deps.runGit(root, ['fsmonitor--daemon', 'start']);
+        if (startDaemon) {
+          const started = await deps.runGit(root, ['fsmonitor--daemon', 'start']);
+          if (started.code !== 0) throw new ApiError('git_fsmonitor_start_failed', 500, started.stderr.trim() || 'failed to start fsmonitor daemon');
+        }
       }
     } else if (fsmonitor === false) {
-      await deps.runGit(root, ['config', '--unset', 'core.fsmonitor']);
+      const unset = await deps.runGit(root, ['config', '--unset', 'core.fsmonitor']);
+      if (unset.code !== 0 && unset.code !== 5) throw new ApiError('git_config_failed', 500, unset.stderr.trim() || 'failed to disable core.fsmonitor');
       await deps.runGit(root, ['fsmonitor--daemon', 'stop']); // non-fatal if not running
-    }
-  }
-
-  const autoOptimized = new Set<string>();
-  async function ensureAutoOptimized(repoRoot: string): Promise<void> {
-    if (!repoRoot || autoOptimizeDisabled() || autoOptimized.has(repoRoot)) return;
-    autoOptimized.add(repoRoot); // claim now to avoid concurrent re-entry within a process
-    try {
-      // A sentinel means we already auto-configured this repo once — never
-      // re-fight a later manual GitPerfPanel toggle.
-      const sentinel = await deps.runGit(repoRoot, ['config', '--get', 'codestudio.gitautooptimized']);
-      if (sentinel.code === 0 && sentinel.stdout.trim() === 'true') return;
-      await configure(repoRoot, { untrackedCache: true, fsmonitor: true, startDaemon: false });
-      await deps.runGit(repoRoot, ['config', 'codestudio.gitautooptimized', 'true']);
-    } catch {
-      autoOptimized.delete(repoRoot); // transient failure — allow a retry next open
     }
   }
 
@@ -129,10 +115,25 @@ export function createGitOptimizationHandlers(deps: GitOptDeps): GitOptApi {
 
     async configureGitOptimizations({ projectId, untrackedCache, fsmonitor, repoPath }) {
       const root = await deps.resolveCwd(projectId, repoPath);
-      await configure(root, { untrackedCache, fsmonitor });
-      return read(root);
+      const before = await read(root);
+      try {
+        await configure(root, { untrackedCache, fsmonitor });
+        const after = await read(root);
+        if (untrackedCache !== undefined && after.untrackedCache !== untrackedCache) throw new ApiError('git_config_verify_failed', 500, 'core.untrackedCache did not retain the requested value');
+        if (fsmonitor !== undefined && after.fsmonitor !== fsmonitor) throw new ApiError('git_config_verify_failed', 500, 'core.fsmonitor did not retain the requested value');
+        return after;
+      } catch (error) {
+        // Best-effort rollback: never leave one half of a two-toggle update
+        // applied after the other half failed.
+        try {
+          await configure(root, {
+            ...(untrackedCache !== undefined ? { untrackedCache: before.untrackedCache } : {}),
+            ...(fsmonitor !== undefined ? { fsmonitor: before.fsmonitor } : {}),
+            startDaemon: before.fsmonitor,
+          });
+        } catch { /* preserve the original actionable error */ }
+        throw error;
+      }
     },
-
-    ensureAutoOptimized,
   };
 }

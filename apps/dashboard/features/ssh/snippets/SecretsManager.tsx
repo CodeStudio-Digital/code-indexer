@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { Plus, Pencil, Trash2, Loader2, KeyRound } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
+import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { createSecret, patchSecret, deleteSecret } from '../api.js';
 import type { SshSecret } from '../types.js';
 
@@ -133,7 +134,16 @@ export function SecretsManager({ projectId, secrets, onChange }: Props) {
                 type="button"
                 aria-label={t('panel.delete')}
                 title={t('panel.delete')}
-                onClick={() => void deleteSecret(projectId, s.id).then(onChange)}
+                onClick={async () => {
+                  if (!(await confirm({
+                    title: t('secrets.deleteConfirm', { name: s.name }),
+                    description: t('secrets.deleteConfirmBody'),
+                    confirmLabel: t('panel.delete'),
+                    tone: 'destructive',
+                  }))) return;
+                  await deleteSecret(projectId, s.id);
+                  onChange();
+                }}
                 className="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted-foreground hover:text-red-500 p-0.5"
               >
                 <Trash2 className="h-3 w-3" />

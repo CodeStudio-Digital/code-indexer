@@ -204,7 +204,7 @@ export function AppStudioCreateDialog({
 
         <footer className="flex justify-end gap-2 border-t px-4 py-3">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
-            {t('pipeline.cancel')}
+            {t('create.cancel')}
           </Button>
           <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
             {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}

@@ -1,6 +1,6 @@
 /**
  * Tool: `app_get_spec`. A AppSpec corrente (aprovada ou em rascunho) —
- * o agente relê em qualquer etapa para ancorar telas/entities/auth no que
+ * o coordenador relê em qualquer macrofase para ancorar telas/entities/auth no que
  * o usuário aprovou.
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
@@ -38,7 +38,7 @@ export function appGetSpec(binding: AppToolBinding): CoderTool {
         if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}.`);
         const spec = parseAppSpec(session.spec_json);
         if (!spec) {
-          return ok('No spec saved yet — run the interview (discovery stage) and call app_save_spec.');
+          return ok('No spec saved yet — complete the Define interview and call app_save_spec.');
         }
         const view = viewArg(args, ['summary', 'requirements', 'features', 'screens', 'database', 'behaviors', 'full'], 'summary');
         if (view === 'full') return appResult('App spec — full', spec);

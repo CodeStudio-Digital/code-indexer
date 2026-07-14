@@ -104,7 +104,7 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
     // preventing the row from wrapping into two lines (which is what
     // produced the "tokens widget on top of avatar" stack reported in
     // the bug screenshot).
-    <div className="border-b px-3 sm:px-5 py-3 flex items-center gap-2 sm:gap-3 bg-card/80 backdrop-blur min-w-0 shrink-0">
+    <div className="border-b border-[var(--workbench-border)] px-3 sm:px-5 py-3 flex items-center gap-2 sm:gap-3 bg-[var(--workbench-raised)] min-w-0 shrink-0">
       {onOpenSidebar && (
         <button
           type="button"

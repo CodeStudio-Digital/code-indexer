@@ -2,9 +2,9 @@
  * Tool: `app_save_spec`. Materializa a entrevista em uma AppSpec validada:
  * issues do validador voltam para o agente corrigir (o leigo nunca vê
  * JSON); sucesso grava spec_json + espelho legível `spec/app-spec.json`
- * no workspace e (re)constrói o roadmap do pipeline.
+ * no workspace e atualiza as fontes rastreáveis do workflow.
  *
- * Depois que discovery é aprovada, a mesma chamada degrada com segurança para
+ * Depois que o Escopo é aprovado, a mesma chamada degrada com segurança para
  * uma revisão versionada: nunca sobrescreve o contrato vigente e o usuário
  * continua aprovando a mudança no painel de versões.
  */
@@ -17,7 +17,6 @@ import type { AppToolBinding } from '@mcp/company/tools/app-studio/binding.js';
 import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import { prepareSpecSave } from '@mcp/app-studio/spec/save-core.js';
-import { parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { diffAppSpecs, impactFromSpecDiff, specDiffHasChanges, summarizeSpecDiff } from '@mcp/app-studio/spec/revisions.js';
 
@@ -28,7 +27,7 @@ import { diffAppSpecs, impactFromSpecDiff, specDiffHasChanges, summarizeSpecDiff
 export const APP_SPEC_TOOL_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
-    v: { type: 'number', enum: [1] },
+    v: { type: 'number', enum: [2] },
     summary: { type: 'string', description: 'One sentence: what the app does.' },
     audience: { type: 'string', description: 'Who uses it.' },
     locale: { type: 'string', description: "The user's language tag, e.g. 'pt-BR'." },
@@ -130,7 +129,7 @@ export const APP_SPEC_TOOL_SCHEMA: JsonSchema = {
     behaviors: {
       type: 'array',
       description:
-        'OPTIONAL flow rules ("ao enviar o formulário → salvar em pedidos → mostrar aviso"). Each is implemented by you in the backend stage.',
+        'OPTIONAL flow rules ("ao enviar o formulário → salvar em pedidos → mostrar aviso"). Each is implemented and verified inside its vertical slice.',
       items: {
         type: 'object',
         properties: {
@@ -161,7 +160,7 @@ export const APP_SPEC_TOOL_SCHEMA: JsonSchema = {
 };
 
 const SPEC_EXAMPLE = `{
-  "v": 1,
+  "v": 2,
   "summary": "Gerencia os pedidos da lanchonete",
   "audience": "dona de lanchonete",
   "locale": "pt-BR",
@@ -204,7 +203,7 @@ const PARAMETERS: JsonSchema = {
     spec: {
       ...APP_SPEC_TOOL_SCHEMA,
       description:
-        'The complete AppSpec v1 object. CRITICAL SHAPE (the tool rejects wrong shapes): `features` and `database.entities[].fields` are ARRAYS OF OBJECTS, never strings. Every screen needs `id` (kebab-case) + `purpose`, and EXACTLY ONE screen has `primary:true`. `auth.methods` uses ONLY "password" | "oauth-google" | "oauth-github". Example:\n' +
+        'The complete AppSpec v2 object. CRITICAL SHAPE (the tool rejects wrong shapes): `features` and `database.entities[].fields` are ARRAYS OF OBJECTS, never strings. Every screen needs `id` (kebab-case) + `purpose`, and EXACTLY ONE screen has `primary:true`. `auth.methods` uses ONLY "password" | "oauth-google" | "oauth-github". Example:\n' +
         'Text quality: use valid UTF-8 text in the user language. Never send replacement characters (U+FFFD) or mojibake like "Ã§", "Ã£", "â€™"; rewrite the affected sentence before saving. Example:\n' +
         SPEC_EXAMPLE,
     },
@@ -216,7 +215,7 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_save_spec',
     description:
-      'Validate and save the app spec. During discovery it updates the draft and roadmap. After discovery is approved it safely creates a reviewable versioned revision instead of overwriting the approved plan.',
+      'Validate and save AppSpec v2. During Define it updates the draft and stable source ids. After Scope approval it creates a reviewable versioned revision without overwriting the approved contract.',
     parameters: PARAMETERS,
     source: 'native',
     handler: async (args, ctx) => {
@@ -226,9 +225,10 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
         const session = binding.resolveAppSession(store);
         if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}.`);
 
-        const state = parsePipelineState(session.pipeline_json);
-        const discovery = state?.stages.find((s) => s.id === 'discovery');
-        // Core compartilhado (normalize→validate→serialize→roadmap) — a rota
+        const latestScopeApproval = store.listApprovals(session.id)
+          .filter((approval) => approval.type === 'scope' && approval.status !== 'superseded')
+          .sort((a, b) => b.bundle_revision - a.bundle_revision)[0] ?? null;
+        // Core compartilhado (normalize→ids estáveis→validate→serialize) — a rota
         // PUT spec do modo Blueprint usa o MESMO caminho.
         const prepared = prepareSpecSave(args.spec, session.pipeline_json);
         if (!prepared.ok) {
@@ -238,9 +238,9 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
         }
         const { spec } = prepared;
 
-        if (discovery?.status === 'approved') {
+        if (latestScopeApproval?.status === 'approved') {
           const baseRevision = store.getLatestApprovedSpecRevision(session.id) ?? store.ensureInitialSpecRevision(session.id);
-          if (!baseRevision) return err('Approved discovery has no base spec revision. Reopen and approve discovery once to repair the version history.');
+          if (!baseRevision) return err('Approved Scope has no base spec revision. Reload the app once so the idempotent v5 migration can reconstruct its version history.');
           const diff = diffAppSpecs(parseAppSpec(baseRevision.spec_json), spec);
           if (!specDiffHasChanges(diff)) {
             return ok('The submitted spec is identical to the approved version. No revision was created.');
@@ -250,7 +250,7 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
           const evolution = store.findOpenEvolution(session.id) ?? store.createEvolution({
             app_session_id: session.id,
             title: 'Refinamento do plano',
-            description: 'Mudanca proposta pelo especialista de requisitos.',
+            description: 'Mudanca proposta pelo coordenador persistente.',
             base_revision_id: baseRevision.id,
           });
           const revision = store.createSpecRevision({
@@ -276,12 +276,12 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
             revision: { id: revision.id, number: revision.revision_number, status: revision.status },
             impact,
             summary,
-            next: 'The approved spec was not overwritten. Explain the changes and ask the user to review them in Versoes/Mudancas.',
+            next: 'The approved spec was not overwritten. Link the affected source ids to change cards and request a new Scope approval when ready.',
           });
         }
 
         store.setSpecJson(session.id, prepared.specJson);
-        if (prepared.pipelineJson) store.setPipelineJson(session.id, prepared.pipelineJson);
+        if (prepared.workflowJson) store.setWorkflowStateJson(session.id, prepared.workflowJson);
 
         // Espelho legível no workspace (o leigo pode abrir; o agente relê).
         const resolved = resolveHostPath('spec/app-spec.json', ctx);
@@ -293,9 +293,8 @@ export function appSaveSpec(binding: AppToolBinding): CoderTool {
         return ok(
           `Spec saved: ${spec.screens.length} screen(s), ` +
             `${spec.database.required ? `${spec.database.entities.length} entity(ies)` : 'no database'}, ` +
-            `auth ${spec.auth.enabled ? 'ON' : 'off'}, ${spec.behaviors?.length ?? 0} behavior(s). Roadmap rebuilt. ` +
-            'Recap the plan to the user in THEIR language; iterate with more app_save_spec calls until they confirm, ' +
-            "then submit with app_submit_stage({ stage: 'discovery', ... }).",
+            `auth ${spec.auth.enabled ? 'ON' : 'off'}, ${spec.behaviors?.length ?? 0} behavior(s). ` +
+            'Recap the plan in the user language, finish the product model and request the single Scope approval.',
         );
       } catch (e) {
         return err(`app_save_spec failed: ${(e as Error).message}`);

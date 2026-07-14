@@ -45,6 +45,16 @@ export interface PipelineProviderBindingInput {
   priority?: number;
 }
 
+export interface PipelineBindingActivationInput {
+  pipeline_name: string;
+  binding_role: string;
+  provider_id: string;
+  model_id: string;
+  model_mode?: string;
+  config?: Record<string, unknown>;
+  priority?: number;
+}
+
 /**
  * One row for {@link PipelineProviderBindingsStore.bulkApplyProfile} — a
  * single (pipeline, role) target the guided-setup wizard wants bound at
@@ -294,6 +304,47 @@ export class PipelineProviderBindingsStore {
       )
       .run(enabled ? 1 : 0, id);
     return Number(result.changes) > 0;
+  }
+
+  /**
+   * Make one GLOBAL binding the sole active route for a pipeline role while
+   * preserving every previous row for audit/manual recovery. Template and
+   * session overrides are deliberately outside this operation.
+   */
+  activateGlobal(input: PipelineBindingActivationInput): { id: number; disabledIds: number[] } {
+    const selectOthers = this.db.prepare(
+      `SELECT id FROM pipeline_provider_bindings
+        WHERE pipeline_name = @pipeline_name
+          AND binding_role = @binding_role
+          AND scope_type = 'global'
+          AND enabled = 1
+          AND id <> @selected_id
+        ORDER BY id`,
+    );
+    const disableOthers = this.db.prepare(
+      `UPDATE pipeline_provider_bindings
+          SET enabled = 0, updated_at = datetime('now')
+        WHERE pipeline_name = @pipeline_name
+          AND binding_role = @binding_role
+          AND scope_type = 'global'
+          AND enabled = 1
+          AND id <> @selected_id`,
+    );
+    const run = this.db.transaction((value: PipelineBindingActivationInput) => {
+      const id = this.upsert({
+        ...value, scope_type: 'global', scope_id: null,
+        enabled: true, priority: value.priority ?? 0,
+      });
+      const params = {
+        pipeline_name: value.pipeline_name,
+        binding_role: value.binding_role,
+        selected_id: id,
+      };
+      const disabledIds = (selectOthers.all(params) as Array<{ id: number }>).map((row) => row.id);
+      disableOthers.run(params);
+      return { id, disabledIds };
+    });
+    return run(input);
   }
 
   delete(id: number): boolean {

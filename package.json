@@ -31,6 +31,8 @@
     "start:api": "node --max-old-space-size=8192 dist/apps/http-api/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:visual": "playwright test --config apps/dashboard/playwright.config.ts",
+    "test:visual:update": "playwright test --config apps/dashboard/playwright.config.ts --update-snapshots",
     "check:loc": "tsx scripts/check-loc-cap.ts",
     "check:cycles": "tsx scripts/check-circular-imports.ts",
     "check:deadcode": "knip",
@@ -128,6 +130,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
+    "@playwright/test": "1.61.1",
     "@tailwindcss/typography": "^0.5.19",
     "@types/adm-zip": "^0.5.8",
     "@types/better-sqlite3": "^7.6.13",

@@ -5,6 +5,8 @@ import type {
   SnapshotFileSummary,
   SnapshotReviewComment,
   SnapshotReviewsResponse,
+  RoundSnapshotFileSummary,
+  RoundSnapshotReviewFinding,
 } from './types.js';
 
 /**
@@ -52,6 +54,84 @@ export async function fetchFileDiff(
   if (!r.ok) throw await readError(r, 'Could not load diff');
   return (await r.json()) as SnapshotFileDiff;
 }
+
+export async function fetchRoundSnapshotList(
+  scope: SessionScope,
+  sessionId: number,
+  roundMessageId: number,
+): Promise<{
+  roundMessageId: number;
+  files: RoundSnapshotFileSummary[];
+  reviews: RoundSnapshotReviewFinding[];
+}> {
+  const r = await fetch(`/api${base(scope, sessionId)}/round/${roundMessageId}`);
+  if (!r.ok) throw await readError(r, 'Could not load round snapshots');
+  return await r.json() as {
+    roundMessageId: number;
+    files: RoundSnapshotFileSummary[];
+    reviews: RoundSnapshotReviewFinding[];
+  };
+}
+
+export async function fetchRoundFileDiff(
+  scope: SessionScope,
+  sessionId: number,
+  roundMessageId: number,
+  roundSnapshotId: number,
+  opts: { context?: number; contextBefore?: number; contextAfter?: number } = {},
+): Promise<SnapshotFileDiff> {
+  const qs = new URLSearchParams();
+  if (opts.context != null) qs.set('context', String(opts.context));
+  if (opts.contextBefore != null) qs.set('contextBefore', String(opts.contextBefore));
+  if (opts.contextAfter != null) qs.set('contextAfter', String(opts.contextAfter));
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
+  const r = await fetch(
+    `/api${base(scope, sessionId)}/round/${roundMessageId}/file/${roundSnapshotId}/diff${suffix}`,
+  );
+  if (!r.ok) throw await readError(r, 'Could not load round diff');
+  return await r.json() as SnapshotFileDiff;
+}
+
+export const acceptRoundHunk = (
+  scope: SessionScope,
+  sessionId: number,
+  roundMessageId: number,
+  roundSnapshotId: number,
+  fingerprint: string,
+) => apiPost<{ ok: boolean; closed: boolean; reason?: string }>(
+  `${base(scope, sessionId)}/round/${roundMessageId}/file/${roundSnapshotId}/accept-hunk`,
+  { fingerprint },
+);
+
+export const revertRoundHunk = (
+  scope: SessionScope,
+  sessionId: number,
+  roundMessageId: number,
+  roundSnapshotId: number,
+  fingerprint: string,
+) => apiPost<{ ok: boolean; closed: boolean; reason?: string }>(
+  `${base(scope, sessionId)}/round/${roundMessageId}/file/${roundSnapshotId}/revert-hunk`,
+  { fingerprint },
+);
+
+export const revertRoundAll = (
+  scope: SessionScope,
+  sessionId: number,
+  roundMessageId: number,
+) => apiPost<{
+  ok: boolean;
+  reverted: number;
+  conflicts: Array<{ filePath: string; reason: string }>;
+}>(`${base(scope, sessionId)}/round/${roundMessageId}/revert-all`, { confirm: true });
+
+export const runRoundAutoReview = (
+  scope: SessionScope,
+  sessionId: number,
+  roundMessageId: number,
+) => apiPost<{ reviews: RoundSnapshotReviewFinding[]; message?: string }>(
+  `${base(scope, sessionId)}/round/${roundMessageId}/review`,
+  {},
+);
 
 export const acceptHunk = (
   scope: SessionScope,

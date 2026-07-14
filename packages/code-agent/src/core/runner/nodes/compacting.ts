@@ -32,6 +32,8 @@ export interface CompactingNodeOptions {
    * sets this — `computeProtectTokens(model)` is the source of truth.
    */
   protectTokensOverride?: number;
+  /** Test-only override for the maximum preserved tail. */
+  maxTailTokensOverride?: number;
   /**
    * Test-only override for the summarize step. Production code passes
    * undefined so `compactWithLLM` falls back to the real `summarizeSpanV3`.
@@ -51,16 +53,52 @@ export class CompactingNode implements BehaviorNode {
     const trigger = lastEvent?.kind === 'TokenThresholdHit' ? lastEvent.trigger : undefined;
     const contextProvider = ctx.opts.provider;
     const summaryProvider = ctx.opts.compactionProvider ?? contextProvider;
+    const charsBefore = approxChars(ctx.messages);
+    const isMilestone = trigger?.startsWith('milestone:') === true;
+    const defaultProtectTokens = computeProtectTokens({
+      model: contextProvider.model,
+      contextWindow: ctx.opts.contextWindow,
+    });
+    // Milestones can be requested well before context pressure reaches 90%.
+    // Preserve a proportional recent tail in that case, otherwise the normal
+    // wide-window protect budget would make every milestone a permanent no-op.
+    const estimatedHistoryTokens = Math.max(1, Math.ceil(charsBefore / 4));
+    const milestoneProtectTokens = Math.min(
+      defaultProtectTokens,
+      Math.max(4_000, Math.floor(estimatedHistoryTokens * 0.4)),
+    );
     const protectTokens = this.nodeOpts.protectTokensOverride
-      ?? computeProtectTokens({ model: contextProvider.model });
+      ?? (isMilestone ? milestoneProtectTokens : defaultProtectTokens);
     // Ceiling on the preserved tail so a single long user turn (history with
     // < N user messages) can't make recede preserve everything and no-op.
     // Derived from the model window — independent of the protect-tokens override.
-    const maxTailTokens = computeProtectTokens({
-      model: contextProvider.model,
-      protectRatio: resolveRecedeTailRatio(),
-    });
-    const charsBefore = approxChars(ctx.messages);
+    const maxTailTokens = this.nodeOpts.maxTailTokensOverride ?? computeProtectTokens({
+        model: contextProvider.model,
+        contextWindow: ctx.opts.contextWindow,
+        protectRatio: resolveRecedeTailRatio(),
+      });
+    const effectiveMaxTailTokens = isMilestone
+      ? Math.min(maxTailTokens, Math.max(protectTokens, Math.floor(estimatedHistoryTokens * 0.55)))
+      : maxTailTokens;
+    const attemptId = ctx.opts.sessionStore && ctx.opts.sessionId != null
+      ? ctx.opts.sessionStore.startCompactionAttempt({
+          session_id: ctx.opts.sessionId,
+          run_id: ctx.runId,
+          turn: ctx.turn,
+          turn_telemetry_id: ctx.lastTurnTelemetryId,
+          trigger: trigger ?? 'context_threshold',
+          provider_chain: [summaryProvider, contextProvider]
+            .filter((candidate, index, all) => all.findIndex(
+              (other) => other.name === candidate.name && other.model === candidate.model,
+            ) === index)
+            .map((candidate) => ({ provider: candidate.name, model: candidate.model })),
+          prompt_tokens_before: estimatedHistoryTokens,
+          history_chars_before: charsBefore,
+        })
+      : null;
+    const finishAttempt = (input: Parameters<NonNullable<typeof ctx.opts.sessionStore>['finishCompactionAttempt']>[1]): void => {
+      ctx.opts.sessionStore?.finishCompactionAttempt(attemptId, input);
+    };
 
     let liveState: Parameters<typeof compactWithLLM>[0]['liveState'];
     try {
@@ -85,8 +123,10 @@ export class CompactingNode implements BehaviorNode {
     const result = await compactWithLLM({
       messages: ctx.messages,
       protectTokens,
-      maxTailTokens,
+      maxTailTokens: effectiveMaxTailTokens,
       summaryProvider,
+      fallbackProvider: contextProvider,
+      summaryOptions: ctx.opts.compactionSummaryOptions,
       summarize: this.nodeOpts.summarizeOverride,
       liveState,
       // A3 — pass the abort signal so a hung aux provider (during summary
@@ -120,7 +160,7 @@ export class CompactingNode implements BehaviorNode {
           : truncateHeadMechanically({
               messages: ctx.messages,
               protectTokens,
-              maxTailTokens,
+              maxTailTokens: effectiveMaxTailTokens,
             });
         if (fallback && fallback.collapsedFrom > 0) {
           ctx.messages.splice(0, ctx.messages.length, ...fallback.messages);
@@ -141,6 +181,15 @@ export class CompactingNode implements BehaviorNode {
             auto_continue: ctx.autoContinues,
             trigger,
           });
+          finishAttempt({
+            status: 'deterministic_fallback',
+            strategy: 'deterministic',
+            summarizer_ran: true,
+            history_chars_after: charsAfter,
+            pruned_messages: Math.max(0, fallback.collapsedFrom - fallback.collapsedTo),
+            error_message: result.error?.message ?? null,
+          });
+          if (isMilestone) ctx.bridge?.clearMilestoneCompaction?.();
           return events.compactionDone({
             collapsedFrom: fallback.collapsedFrom,
             collapsedTo: fallback.collapsedTo,
@@ -156,12 +205,26 @@ export class CompactingNode implements BehaviorNode {
         ctx.stopReason = 'compact_failure';
         ctx.transition = 'compact-pre-turn';
         ctx.error = result.error ?? new Error('Compaction failed');
+        finishAttempt({
+          status: 'noop',
+          strategy: 'none',
+          summarizer_ran: true,
+          history_chars_after: charsBefore,
+          error_message: result.error?.message ?? 'compaction aborted',
+        });
         return events.aborted();
       }
 
       // Below cap — surface as a retryable provider error so Recovering
       // applies backoff and the loop tries another turn (which may or may
       // not re-cross the token threshold).
+      finishAttempt({
+        status: 'noop',
+        strategy: 'none',
+        summarizer_ran: true,
+        history_chars_after: charsBefore,
+        error_message: result.error?.message ?? 'summary providers failed',
+      });
       return events.providerError({ retryable: true, status: 500 });
     }
 
@@ -206,6 +269,14 @@ export class CompactingNode implements BehaviorNode {
           auto_continue: ctx.autoContinues,
           trigger,
         });
+        finishAttempt({
+          status: 'deterministic_fallback',
+          strategy: 'deterministic',
+          summarizer_ran: false,
+          history_chars_after: charsAfter,
+          pruned_messages: 0,
+          error_message: 'oversized tool result spilled without an LLM summary',
+        });
         return events.compactionDone({ collapsedFrom: 0, collapsedTo: 0 });
       }
       // Nothing collapsed AND nothing to spill — either history already fits, or
@@ -224,6 +295,12 @@ export class CompactingNode implements BehaviorNode {
         auto_continue: ctx.autoContinues,
         trigger,
       });
+      finishAttempt({
+        status: 'noop',
+        strategy: 'none',
+        summarizer_ran: false,
+        history_chars_after: charsBefore,
+      });
       return events.compactionDone({ collapsedFrom: 0, collapsedTo: 0 });
     }
 
@@ -231,15 +308,27 @@ export class CompactingNode implements BehaviorNode {
     // before replacing the head so the host can align it to durable message
     // ids. A DB failure is non-fatal: the in-memory resume still keeps this run
     // alive and the unchanged boundary can be retried later.
+    let checkpointStatus: 'summarized' | 'checkpoint_failed' = 'summarized';
+    let checkpointChapterId: number | null = null;
+    let checkpointBoundaryId: number | null = null;
+    let checkpointError: string | null = null;
     if (result.summary && ctx.opts.onCompactionCheckpoint) {
       try {
-        await ctx.opts.onCompactionCheckpoint({
+        const checkpoint = await ctx.opts.onCompactionCheckpoint({
           summary: result.summary,
           headMessages: ctx.messages.slice(0, result.cutoffApplied),
           trigger,
           autoContinues: ctx.autoContinues,
         });
+        checkpointChapterId = checkpoint.chapterId ?? null;
+        checkpointBoundaryId = checkpoint.boundaryId ?? null;
+        if (checkpoint.status === 'failed' || checkpoint.status === 'noop') {
+          checkpointStatus = 'checkpoint_failed';
+          checkpointError = checkpoint.reason ?? `checkpoint ${checkpoint.status}`;
+        }
       } catch (error) {
+        checkpointStatus = 'checkpoint_failed';
+        checkpointError = error instanceof Error ? error.message : String(error);
         console.warn(
           `[coder] compaction checkpoint failed: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -269,6 +358,19 @@ export class CompactingNode implements BehaviorNode {
       auto_continue: ctx.autoContinues,
       trigger,
     });
+    finishAttempt({
+      status: checkpointStatus,
+      strategy: 'summarizer',
+      summarizer_ran: true,
+      summary_provider: result.summaryProviderName ?? summaryProvider.name,
+      summary_model: result.summaryModel ?? summaryProvider.model,
+      history_chars_after: charsAfter,
+      pruned_messages: Math.max(0, result.collapsedFrom - result.collapsedTo),
+      chapter_id: checkpointChapterId,
+      boundary_id: checkpointBoundaryId,
+      error_message: checkpointError ?? (result.attemptErrors?.join(' | ') || null),
+    });
+    if (isMilestone) ctx.bridge?.clearMilestoneCompaction?.();
 
     return events.compactionDone({
       collapsedFrom: result.collapsedFrom,

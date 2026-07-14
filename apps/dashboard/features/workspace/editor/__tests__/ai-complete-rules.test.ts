@@ -1,33 +1,33 @@
-import { describe, it, expect } from 'vitest';
-import { AI_COMPLETE_RULES, buildAiCompleteRules } from '../ai-complete-commands.js';
+import { beforeEach, describe, it, expect } from 'vitest';
+import { COMMAND_CATALOG } from '../../../../keymap/commands.js';
+import { useKeymapStore } from '../../../../keymap/keymap-store.js';
+import { bindingToMonaco, buildManagedMonacoRules } from '../monaco-keymap.js';
 
 const fakeMonaco = {
   KeyCode: { RightArrow: 17 },
-  KeyMod: { CtrlCmd: 2048, Shift: 1024, Alt: 512 },
+  KeyMod: { CtrlCmd: 2048, Shift: 1024, Alt: 512, chord: (a: number, b: number) => a * 10_000 + b },
 } as never;
 
-describe('AI_COMPLETE_RULES', () => {
+describe('AI completion catalogue binding', () => {
+  beforeEach(() => useKeymapStore.setState({ preset: 'intellij', overrides: {} }));
+
   it('never binds Ctrl+Alt+Right — the IntelliJ preset owns it (navigate.forward, capture-phase dispatcher wins over Monaco)', () => {
-    for (const rule of AI_COMPLETE_RULES) {
-      const mods = [...rule.mods].sort().join('+');
-      expect(`${mods}+${rule.key}`).not.toBe('Alt+Ctrl+RightArrow');
-    }
+    const command = COMMAND_CATALOG.find((item) => item.id === 'editor.aiComplete.acceptNextLine')!;
+    expect(command.defaultKeys?.intellij).not.toContain('Ctrl+Alt+Right');
   });
 
-  it('every rule is gated to visible ghost text in the editor', () => {
-    for (const rule of AI_COMPLETE_RULES) {
-      expect(rule.when).toContain('inlineSuggestionVisible');
-      expect(rule.when).toContain('editorTextFocus');
-    }
+  it('is visible in the single catalogue and gated to visible ghost text', () => {
+    const command = COMMAND_CATALOG.find((item) => item.id === 'editor.aiComplete.acceptNextLine')!;
+    expect(command.context).toContain('inlineSuggestionVisible');
+    expect(command.context).toContain('editorTextFocus');
   });
 
-  it('composes keybindings against the runtime enums, skipping unknown keys', () => {
-    const rules = buildAiCompleteRules(fakeMonaco);
+  it('is emitted by the shared Monaco generator and skips unknown keys', () => {
+    const rules = buildManagedMonacoRules(fakeMonaco)
+      .filter((rule) => rule.command === 'editor.action.inlineSuggest.acceptNextLine');
     expect(rules).toHaveLength(1);
     expect(rules[0]!.keybinding).toBe(17 | 2048 | 1024); // Ctrl+Shift+Right
-    expect(rules[0]!.command).toBe('editor.action.inlineSuggest.acceptNextLine');
 
-    const missing = buildAiCompleteRules({ KeyCode: {}, KeyMod: { CtrlCmd: 0, Shift: 0, Alt: 0 } } as never);
-    expect(missing).toHaveLength(0); // unknown KeyCode name skips, not crashes
+    expect(bindingToMonaco({ KeyCode: {}, KeyMod: { CtrlCmd: 0, Shift: 0, Alt: 0 } } as never, 'Ctrl+Shift+Right')).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus } from 'lucide-react';
+import { WorkBoardColumn } from '../../components/work-board/index.js';
 import { KanbanCardItem } from './KanbanCardItem.js';
 import type { KanbanCardFull, KanbanColumn as KanbanColumnType } from '@mcp/company/types.js';
 
@@ -64,7 +64,6 @@ export const KanbanColumn = React.memo(function KanbanColumn({
   titleForCard,
 }: KanbanColumnProps) {
   const { t } = useTranslation('agents');
-  const [dragOver, setDragOver] = useState(false);
   const [limitDraft, setLimitDraft] = useState<string | null>(null);
   // When priority scores are present, sort by score desc (tiebreak: position).
   const sorted = priorityScores && priorityScores.size > 0
@@ -87,31 +86,7 @@ export const KanbanColumn = React.memo(function KanbanColumn({
     setLimitDraft(null);
   };
 
-  return (
-    <div
-      className={`
-        flex flex-col min-w-[260px] max-w-[300px] flex-1
-        rounded-lg bg-muted/30 border border-t-2 ${COLUMN_COLORS[column]}
-        ${dragOver ? 'ring-2 ring-primary/40 bg-primary/5' : ''}
-      `}
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        const cardId = parseInt(e.dataTransfer.getData('text/plain'), 10);
-        if (!isNaN(cardId)) onDrop(cardId, column);
-      }}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border/50">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold">{columnLabel}</h3>
-          {limitDraft != null ? (
+  const headerBadge = limitDraft != null ? (
             <input
               autoFocus
               type="number"
@@ -147,21 +122,17 @@ export const KanbanColumn = React.memo(function KanbanColumn({
             >
               {hasLimit ? `${cards.length}/${wipLimit}` : cards.length}
             </button>
-          )}
-        </div>
-        {onCreateCard && (
-          <button
-            onClick={() => onCreateCard(column)}
-            className="p-1 rounded hover:bg-muted transition-colors"
-            title={t('kanban.addCardTo', { column: columnLabel })}
-          >
-            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
-          </button>
-        )}
-      </div>
-
-      {/* Cards */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[100px]">
+          );
+  return (
+    <WorkBoardColumn
+      title={columnLabel}
+      count={cards.length}
+      accentClass={COLUMN_COLORS[column]}
+      headerBadge={headerBadge}
+      emptyLabel={t('kanban.dropHere')}
+      onAdd={onCreateCard ? () => onCreateCard(column) : undefined}
+      onDropItem={(rawId) => { const cardId = Number(rawId); if (Number.isInteger(cardId)) onDrop(cardId, column); }}
+    >
         {sorted.map((card) => {
           const suggestedRole = roleSuggestions?.get(card.id);
           return (
@@ -183,12 +154,6 @@ export const KanbanColumn = React.memo(function KanbanColumn({
           );
         })}
 
-        {cards.length === 0 && (
-          <div className="flex items-center justify-center h-16 text-xs text-muted-foreground/60">
-            {t('kanban.dropHere')}
-          </div>
-        )}
-      </div>
-    </div>
+    </WorkBoardColumn>
   );
 });

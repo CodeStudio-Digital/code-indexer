@@ -75,6 +75,34 @@ async function setupDivergingRepo(): Promise<string> {
 }
 
 describe('branch ops', () => {
+  it('log pagina commits com limit + skip sem repetir a pagina anterior', async () => {
+    const dir = await setupDivergingRepo();
+    const h = makeHandlers(dir);
+
+    const first = await h.log({ projectId: 1, branch: 'feature', limit: 1, skip: 0 }, {} as never);
+    const second = await h.log({ projectId: 1, branch: 'feature', limit: 1, skip: 1 }, {} as never);
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(second[0].sha).not.toBe(first[0].sha);
+    expect(first[0].parents).toHaveLength(1);
+    expect(first[0].refs).toContain('HEAD -> feature');
+  });
+
+  it('log --all exposes diverged refs and topology without increasing the page size', async () => {
+    const dir = await setupDivergingRepo();
+    const h = makeHandlers(dir);
+
+    const page = await h.log({ projectId: 1, all: true, limit: 3 }, {} as never);
+
+    expect(page).toHaveLength(3);
+    expect(page.map((entry) => entry.subject)).toEqual(
+      expect.arrayContaining(['feature change', 'main change', 'base']),
+    );
+    expect(page.find((entry) => entry.subject === 'feature change')?.parents).toHaveLength(1);
+    expect(page.find((entry) => entry.subject === 'main change')?.refs).toContain('main');
+  });
+
   it('rebase onto a diverged branch conflicts → mergeState kind=rebase → abort cleans up', async () => {
     const dir = await setupDivergingRepo();
     const h = makeHandlers(dir);

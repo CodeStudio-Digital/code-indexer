@@ -133,6 +133,21 @@ export async function upsertBinding(input: UpsertBindingInput): Promise<{ id: nu
   return (await r.json()) as { id: number; binding: PipelineBinding | null };
 }
 
+export async function activateBinding(
+  input: Omit<UpsertBindingInput, 'scope_type' | 'scope_id' | 'enabled'>,
+): Promise<{ id: number; binding: PipelineBinding | null; disabledIds: number[] }> {
+  const r = await fetch('/api/admin/pipeline-bindings/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, scope_type: 'global' }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string; details?: string[] };
+    throw new Error(err.details?.join(', ') ?? err.error ?? `HTTP ${r.status}`);
+  }
+  return (await r.json()) as { id: number; binding: PipelineBinding | null; disabledIds: number[] };
+}
+
 export type PatchBindingInput = Partial<UpsertBindingInput>;
 
 export async function patchBinding(id: number, patch: PatchBindingInput): Promise<{ binding: PipelineBinding | null }> {

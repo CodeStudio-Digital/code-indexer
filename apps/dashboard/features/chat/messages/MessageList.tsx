@@ -18,12 +18,19 @@ import { filesFromEditToolCall, type EditFileRef } from './edit-tools.js';
 import type { SnapshotFileSummary } from '../../snapshots/types.js';
 import {
   ConversationChapterDivider,
-  ConversationChaptersTimeline,
   useConversationChapters,
 } from './ConversationChapters.js';
 import { loadedChapterMarkers } from './chapter-markers.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
+const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
+
+/** Direct scroll fallback for environments where IntersectionObserver does
+ * not re-fire after the conversation moves between retained workbench
+ * surfaces. Negative values cover elastic overscroll on touch devices. */
+export function shouldLoadEarlierAtScrollTop(scrollTop: number): boolean {
+  return scrollTop <= LOAD_EARLIER_SCROLL_THRESHOLD;
+}
 
 interface MessageListProps {
   sessionData: SessionData | null;
@@ -65,6 +72,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
   scrollContainerRef,
   streaming,
   onLoadEarlier,
+  onChapterNavigate,
 }: {
   sessionData: SessionData;
   handlers: PromptHandlers;
@@ -72,6 +80,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   streaming: boolean;
   onLoadEarlier?: (beforeId: number | undefined, limit?: number, includeArchived?: boolean) => Promise<number>;
+  onChapterNavigate?: () => void;
 }) {
   // Build tool-result map once per sessionData change. Tool-produced images
   // (preview_screenshot / view_image) are rendered as their own image bubble
@@ -163,6 +172,69 @@ const PersistedMessages = React.memo(function PersistedMessages({
     : groups;
 
   const chapterIndex = useConversationChapters(sessionData.session.id);
+  const [activeChapterId, setActiveChapterId] = useState<number | null>(null);
+  useEffect(() => {
+    let pendingMarkerObserver: MutationObserver | null = null;
+    let pendingMarkerTimeout: number | null = null;
+    const cancelPendingMarkerWait = () => {
+      pendingMarkerObserver?.disconnect();
+      pendingMarkerObserver = null;
+      if (pendingMarkerTimeout != null) window.clearTimeout(pendingMarkerTimeout);
+      pendingMarkerTimeout = null;
+    };
+    const navigate = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        sessionId: number;
+        chapterId: number;
+        endMessageId: number;
+      }>).detail;
+      if (!detail || detail.sessionId !== sessionData.session.id) return;
+      onChapterNavigate?.();
+      setActiveChapterId(detail.chapterId);
+      const selector = `[data-chapter-id="${detail.chapterId}"]`;
+      const scrollToMarker = (): boolean => {
+        const marker = document
+          .querySelector<HTMLElement>(selector);
+        if (marker) {
+          marker.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return true;
+        }
+        return false;
+      };
+      cancelPendingMarkerWait();
+      if (scrollToMarker()) return;
+      if (onLoadEarlier) {
+        // The fetch can resolve before a large prepended transcript finishes
+        // reconciling. Observe the chat container and scroll one paint after
+        // the marker mounts, after React's scroll-preservation layout effect.
+        const root = scrollContainerRef.current ?? document.body;
+        pendingMarkerObserver = new MutationObserver(() => {
+          if (!document.querySelector(selector)) return;
+          cancelPendingMarkerWait();
+          requestAnimationFrame(scrollToMarker);
+        });
+        pendingMarkerObserver.observe(root, { childList: true, subtree: true });
+        pendingMarkerTimeout = window.setTimeout(cancelPendingMarkerWait, 8_000);
+        void onLoadEarlier(detail.endMessageId + 1, 160, true)
+          .then(() => {
+            if (scrollToMarker()) cancelPendingMarkerWait();
+          });
+      }
+    };
+    const activate = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: number; chapterId: number }>).detail;
+      if (!detail || detail.sessionId !== sessionData.session.id) return;
+      setActiveChapterId(detail.chapterId);
+    };
+    window.addEventListener('coder:chapter-source', navigate);
+    window.addEventListener('coder:chapter-active', activate);
+    return () => {
+      cancelPendingMarkerWait();
+      window.removeEventListener('coder:chapter-source', navigate);
+      window.removeEventListener('coder:chapter-active', activate);
+    };
+  }, [onChapterNavigate, onLoadEarlier, scrollContainerRef, sessionData.session.id]);
+  useEffect(() => setActiveChapterId(null), [sessionData.session.id]);
   const chapterMarkers = useMemo(
     () => loadedChapterMarkers(chapterIndex.chapters, displayGroups),
     [chapterIndex.chapters, displayGroups],
@@ -261,17 +333,26 @@ const PersistedMessages = React.memo(function PersistedMessages({
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel || !hasEarlier || !onLoadEarlier || exhaustedRef.current) return;
+    const root = scrollContainerRef.current;
+    if (!sentinel || !root || !hasEarlier || !onLoadEarlier || exhaustedRef.current) return;
+    const requestEarlier = () => {
+      if (!loadingRef.current && !exhaustedRef.current) void handleRef.current();
+    };
+    const onScroll = () => {
+      if (shouldLoadEarlierAtScrollTop(root.scrollTop)) requestEarlier();
+    };
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting && !loadingRef.current && !exhaustedRef.current) {
-          void handleRef.current();
-        }
+        if (entries[0]?.isIntersecting) requestEarlier();
       },
-      { root: scrollContainerRef.current, rootMargin: '200px 0px 0px 0px' },
+      { root, rootMargin: `${LOAD_EARLIER_SCROLL_THRESHOLD}px 0px 0px 0px` },
     );
     io.observe(sentinel);
-    return () => io.disconnect();
+    root.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      io.disconnect();
+      root.removeEventListener('scroll', onScroll);
+    };
   }, [hasEarlier, exhausted, onLoadEarlier, scrollContainerRef]);
 
   const providerId = sessionData.session.provider;
@@ -316,12 +397,6 @@ const PersistedMessages = React.memo(function PersistedMessages({
           {t('messages.allAvailableLoaded')}
         </div>
       )}
-      <ConversationChaptersTimeline
-        key={sessionData.session.id}
-        sessionId={sessionData.session.id}
-        fallbackSummary={sessionData.session.compaction_summary}
-        {...chapterIndex}
-      />
       {displayGroups.map((g, gi) => {
         const groupKey = g.kind === 'user'
           ? `u-${g.messageId ?? gi}`
@@ -388,13 +463,25 @@ const PersistedMessages = React.memo(function PersistedMessages({
         // assistant group. For the very last group, only once the turn has
         // ended (not streaming) — the in-flight turn gets a live summary below.
         const dividers = chapterMarkers.get(gi) ?? [];
-        const summaryRefs = turnSummaries.get(gi);
-        const showSummary = !!summaryRefs && (gi < displayGroups.length - 1 || !streaming);
+        const summary = turnSummaries.get(gi);
+        const showSummary = !!summary && (gi < displayGroups.length - 1 || !streaming);
         return (
           <React.Fragment key={`grp-${groupKey}`}>
-            {dividers.map((chapter) => <ConversationChapterDivider key={chapter.id} chapter={chapter} />)}
+            {dividers.map((chapter) => (
+              <ConversationChapterDivider
+                key={chapter.id}
+                chapter={chapter}
+                active={activeChapterId === chapter.id}
+                onActivate={setActiveChapterId}
+              />
+            ))}
             {el}
-            {showSummary && <TurnFilesSummary paths={summaryRefs!} />}
+            {showSummary && (
+              <TurnFilesSummary
+                paths={summary!.paths}
+                roundMessageId={summary!.roundMessageId}
+              />
+            )}
           </React.Fragment>
         );
       })}
@@ -581,6 +668,22 @@ export function MessageList({
     return [...byPath.values()];
   }, [currentTurn]);
   const showLiveSummary = !streaming && !!doneReason && !liveTurnDuplicatedInHistory && liveEditRefs.length > 0;
+  const liveRoundMessageId = useMemo(() => {
+    if (!sessionData) return undefined;
+    for (let index = sessionData.messages.length - 1; index >= 0; index--) {
+      const message = sessionData.messages[index];
+      if (message.role === 'user' && !message.isMeta) {
+        return sessionData.message_rows[index]?.id;
+      }
+    }
+    return undefined;
+  }, [sessionData]);
+  const handleChapterNavigate = useCallback(() => {
+    // A chapter jump is an explicit request to leave the live tail. Prevent
+    // the normal sessionData-change effect from immediately snapping back to
+    // the bottom when archived messages are prepended.
+    stickToBottomRef.current = false;
+  }, []);
 
   return (
     <div
@@ -596,6 +699,7 @@ export function MessageList({
             scrollContainerRef={scrollRef}
             streaming={streaming}
             onLoadEarlier={onLoadEarlier}
+            onChapterNavigate={handleChapterNavigate}
           />
         )}
 
@@ -610,7 +714,9 @@ export function MessageList({
           persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
         />
 
-        {showLiveSummary && <TurnFilesSummary paths={liveEditRefs} />}
+        {showLiveSummary && (
+          <TurnFilesSummary paths={liveEditRefs} roundMessageId={liveRoundMessageId} />
+        )}
 
         {error && (
           <Alert variant="destructive">

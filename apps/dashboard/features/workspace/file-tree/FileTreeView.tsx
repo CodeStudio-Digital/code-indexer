@@ -23,6 +23,7 @@ import { FileTreeRow, type ClickMods } from './FileTreeRow.js';
 import { FilteredRow } from './FilteredRow.js';
 import { useTreeKeyboard } from './use-tree-keyboard.js';
 import { buildDirSeverity, commitRename, type GitFileStatus } from './tree-context.js';
+import { WorkbenchPanelHeader } from '../../../components/workbench/index.js';
 
 interface FileTreeViewProps {
   projectId: number;
@@ -31,11 +32,12 @@ interface FileTreeViewProps {
   /** Native `root_path` of the project — feeds the menu's "Absolute path" copy. */
   projectRoot?: string | null;
   onOpen: (path: string) => void;
+  onClose?: () => void;
 }
 
 const ACTIVE_GIT_STATUS_POLL_MS = 30_000;
 
-export function FileTreeView({ projectId, active, activePath, projectRoot, onOpen }: FileTreeViewProps) {
+export function FileTreeView({ projectId, active, activePath, projectRoot, onOpen, onClose }: FileTreeViewProps) {
   // Seletores ESTREITOS (não o store inteiro): assinar `useFileTreeStore()` sem
   // seletor re-renderizava a árvore a cada mudança de qualquer campo (incl. o set
   // `loading`). Não assinamos `children`/`loading` aqui — `rows` lê o snapshot via
@@ -228,13 +230,16 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
   useTreeKeyboard({ projectId, scrollRef, getOrder, onMutated: refresh });
 
   return (
-    <div className="h-full flex flex-col bg-card/30 min-h-0">
-      <div className="h-8 shrink-0 border-b flex items-center justify-between px-2.5 gap-1">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">Explorer</span>
+    <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
+      <WorkbenchPanelHeader
+        title="Explorer"
+        onClose={onClose}
+        actions={
         <Button variant="ghost" size="icon" className="h-5 w-5 text-muted-foreground hover:text-foreground" onClick={refresh} aria-label="Reload file tree">
           <RefreshCw className="h-3 w-3" />
         </Button>
-      </div>
+        }
+      />
       <div className="shrink-0 border-b px-1.5 py-1">
         <div className="relative">
           <Search className="h-3 w-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 pointer-events-none" />

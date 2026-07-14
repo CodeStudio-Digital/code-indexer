@@ -87,11 +87,11 @@ describe('git optimizations', () => {
   it('REFUSES core.fsmonitor on git < 2.37 (would break status); no config write, no daemon', async () => {
     const calls: string[][] = [];
     const h = createGitOptimizationHandlers({ runGit: fakeGit('2.20.1', calls), resolveCwd: async () => '/x' });
-    const res = await h.configureGitOptimizations({ projectId: 1, fsmonitor: true }, {} as never);
-    expect(res.fsmonitorSupported).toBe(false);
-    expect(res.fsmonitor).toBe(false);
+    await expect(
+      h.configureGitOptimizations({ projectId: 1, fsmonitor: true }, {} as never),
+    ).rejects.toMatchObject({ code: 'git_fsmonitor_unsupported', status: 412 });
     expect(calls.some((a) => a[0] === 'config' && a[1] === 'core.fsmonitor' && a[2] === 'true')).toBe(false);
-    expect(calls.some((a) => a[0] === 'fsmonitor--daemon')).toBe(false);
+    expect(calls.some((a) => a[0] === 'fsmonitor--daemon' && a[1] === 'start')).toBe(false);
   });
 
   it('enables core.fsmonitor + starts the daemon on git ≥ 2.37', async () => {

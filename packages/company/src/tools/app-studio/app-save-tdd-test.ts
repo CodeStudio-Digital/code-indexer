@@ -4,7 +4,7 @@ import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { readTddCycles } from '@mcp/app-studio/architecture/tdd-cycles.js';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
 import { APP_STUDIO_DIRNAME } from '@mcp/app-studio/status-files.js';
 import { appWorkerTestHarnessIssues } from '@mcp/services/app-studio/index.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
@@ -42,7 +42,7 @@ export function databaseTestContractIssue(contents: string): string | null {
 export function appSaveTddTest(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_save_tdd_test',
-    description: 'Save a database-stage Vitest file for approved architecture TDD cases. Tests must query the isolated D1 binding; source-file inspection is rejected.',
+    description: 'Save a Vitest file for database acceptance cases in the active vertical slice. Tests must query the isolated D1 binding; source-file inspection is rejected.',
     parameters: PARAMETERS,
     source: 'native',
     riskLevel: 'write',
@@ -64,13 +64,14 @@ export function appSaveTddTest(binding: AppToolBinding): CoderTool {
         if (!store) return err('app_save_tdd_test: AppStudioStore not wired.');
         const session = binding.resolveAppSession(store);
         if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}.`);
-        const state = parsePipelineState(session.pipeline_json);
-        const current = state ? currentStage(state) : null;
-        if (current?.id !== 'database' || current.status === 'review') {
-          return err(`Database TDD tests are locked while the current stage is '${current?.id ?? 'none'}' (${current?.status ?? 'missing'}).`);
+        const state = parseAppWorkflowState(session.pipeline_json);
+        const blueprint = state?.phases.find((phase) => phase.id === 'blueprint');
+        const build = state?.phases.find((phase) => phase.id === 'build');
+        if (!state || (blueprint?.status !== 'active' && blueprint?.status !== 'attention' && build?.status !== 'active')) {
+          return err('Database TDD tests are available only inside an active Blueprint or Build card.');
         }
         const architecture = parseAppArchitecturePlan(store.getLatestArchitectureRevision(session.id)?.architecture_json);
-        const allowed = new Set((architecture?.tdd.cases ?? []).filter((item) => item.owner_stage === 'database').map((item) => item.id));
+        const allowed = new Set((architecture?.tdd.cases ?? []).filter((item) => item.owner_profile === 'data').map((item) => item.id));
         const unknown = caseIds.filter((id) => !allowed.has(id));
         if (unknown.length > 0) return err(`These are not database-owned TDD cases in the approved architecture: ${unknown.join(', ')}.`);
 
@@ -78,7 +79,7 @@ export function appSaveTddTest(binding: AppToolBinding): CoderTool {
         if (resolved.kind === 'no-bind-mount') return err(resolved.message);
         const harnessIssues = appWorkerTestHarnessIssues(resolved.path);
         if (harnessIssues.length > 0) {
-          return err(`The app test harness needs repair (${harnessIssues.join('; ')}). Use "Reparar app" in the App Studio guide, then retry this tool.`);
+          return err(`The app test harness needs a corrective work item (${harnessIssues.join('; ')}). Update the managed harness files, record the evidence, then retry this tool.`);
         }
 
         const absolute = join(resolved.path, ...path.split('/'));

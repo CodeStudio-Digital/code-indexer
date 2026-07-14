@@ -17,7 +17,6 @@ import {
 } from './components/ui/prompt-dialog.js';
 import Admin from './features/admin/index.js';
 import { ProjectList, ProjectView } from './features/project/index.js';
-import { AgentChat } from './features/chat/index.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
 import { AppStudioHome, AppStudioView } from './features/app-studio/index.js';
@@ -35,6 +34,7 @@ import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
 import { PopoutRoot } from './features/popout/PopoutRoot.js';
 import { GlobalNotificationListener } from './features/notifications/GlobalNotificationListener.js';
+import { GlobalSessionWorkbench } from './features/chat/global/GlobalSessionWorkbench.js';
 
 // Sprite Studio is a heavy standalone surface (virtualized library now,
 // canvas engine later) — lazy so it never weighs on the other routes.
@@ -229,8 +229,7 @@ function GlobalSessionRoute() {
   const sessionIdRaw = searchParams.get('session');
   const initialSessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined;
   return (
-    <AgentChat
-      mode="global"
+    <GlobalSessionWorkbench
       initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
     />
   );
@@ -278,7 +277,7 @@ function AppStudioSessionRoute() {
     <AppStudioView
       sessionId={id}
       initialCoderSessionId={state.coderSessionId}
-      discoveryExtra={state.idea ? `Minha ideia inicial: ${state.idea}` : null}
+      initialIdeaPrompt={state.idea ? `Minha ideia inicial: ${state.idea}` : null}
       onBack={() => navigate('/apps')}
     />
   );

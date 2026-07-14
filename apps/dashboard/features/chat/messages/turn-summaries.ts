@@ -11,13 +11,22 @@
 import type { VisualGroup } from '../types.js';
 import { filesFromEditToolCall, type EditFileRef } from './edit-tools.js';
 
-export function computeTurnEditSummaries(groups: VisualGroup[]): Map<number, EditFileRef[]> {
-  const out = new Map<number, EditFileRef[]>();
+export interface TurnEditSummary {
+  roundMessageId?: number;
+  paths: EditFileRef[];
+}
+
+export function computeTurnEditSummaries(groups: VisualGroup[]): Map<number, TurnEditSummary> {
+  const out = new Map<number, TurnEditSummary>();
   let byPath = new Map<string, EditFileRef>();
+  let roundMessageId: number | undefined;
 
   for (let gi = 0; gi < groups.length; gi++) {
     const g = groups[gi];
-    if (g.kind !== 'assistant') continue;
+    if (g.kind === 'user') {
+      roundMessageId = g.messageId;
+      continue;
+    }
 
     for (const msg of g.messages) {
       for (const b of msg.content) {
@@ -31,7 +40,9 @@ export function computeTurnEditSummaries(groups: VisualGroup[]): Map<number, Edi
     // Flush at the end of this assistant run (next group is a user turn, or EOF).
     const next = groups[gi + 1];
     if (!next || next.kind === 'user') {
-      if (byPath.size > 0) out.set(gi, [...byPath.values()]);
+      if (byPath.size > 0) {
+        out.set(gi, { roundMessageId, paths: [...byPath.values()] });
+      }
       byPath = new Map();
     }
   }

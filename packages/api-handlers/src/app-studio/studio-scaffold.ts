@@ -6,10 +6,9 @@
  *   2. `scaffoldAppStudioWorkspace` (SPA + worker + shadcn + stamp);
  *   3. registra o projeto com `builder_json {stack:'cf-fullstack', port,
  *      kind:'app', appName, appSlug, dbEngine}` — é isso que liga preview,
- *      agente `builder`, tools `app_*` e o bloco de prompt do studio;
- *   4. cria a row `app_studio_sessions` + pipeline inicial (6 etapas,
- *      roadmap vazio — a spec da entrevista o constrói);
- *   5. cria a sessão de chat inicial (`agent: 'builder'`).
+ *      coordenador, tools `app_*` e o bloco de prompt do studio;
+ *   4. cria a row `app_studio_sessions` + workflow v5 inicial;
+ *   5. cria a única sessão persistente (`agent: 'app_orchestrator'`).
  *
  * Espelha o contrato emit-driven do DS Studio: registro só acontece com
  * scaffold ok; diretório meio-escrito nunca é apagado.
@@ -18,7 +17,7 @@ import type { Project } from '@mcp/shared/types.js';
 import { scaffoldAppStudioWorkspace, slugify } from '@mcp/services/host-scaffold/index.js';
 import { CreateProjectService, ProjectError } from '@mcp/services/services/projects/index.js';
 import type { AppStudioSession } from '@mcp/store/app-studio-store.js';
-import { createPipelineState, serializePipelineState } from '@mcp/app-studio/pipeline/stages.js';
+import { createAppWorkflowState, serializeAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
 import type { HandlerDeps } from '../types.js';
 
 export interface AppStudioCreateInput {
@@ -111,17 +110,31 @@ export async function runAppStudioScaffoldStream(
       name: outcome.name,
       app_slug: appSlug,
     });
-    // Máquina de etapas (6, roadmap vazio — app_save_spec o constrói).
-    // Falha aqui nunca derruba a criação — a UI oferece pipeline/init.
+    // Workflow v5 contínuo. Falha aqui nunca derruba a criação — a UI
+    // consegue reconstruí-lo a partir dos artefatos persistidos.
     try {
-      appSession = deps.appStudioStore.setPipelineJson(
+      appSession = deps.appStudioStore.setWorkflowStateJson(
         appSession.id,
-        serializePipelineState(createPipelineState()),
+        serializeAppWorkflowState(createAppWorkflowState()),
       );
+      deps.appStudioStore.upsertWorkItems([{
+        id: `scope:${appSession.id}`,
+        app_session_id: appSession.id,
+        phase: 'define',
+        slice_id: null,
+        title: 'Definir o escopo do app',
+        outcome: 'Spec e modelo de produto claros, rastreáveis e prontos para aprovação.',
+        kind: 'plan',
+        owner_profile: 'product',
+        priority: 1,
+        status: 'ready',
+        sort_order: 0,
+        acceptance_json: JSON.stringify(['Objetivos, regras, critérios de aceite e fora de escopo registrados.']),
+      }]);
     } catch (e) {
       emit({
         event: 'log',
-        data: { stream: 'stderr', chunk: `pipeline init failed (non-fatal): ${(e as Error).message}\n` },
+        data: { stream: 'stderr', chunk: `workflow init failed (non-fatal): ${(e as Error).message}\n` },
       });
     }
 
@@ -130,8 +143,9 @@ export async function runAppStudioScaffoldStream(
       title: outcome.name,
       provider: input.provider.trim(),
       model: input.model.trim(),
-      agent: 'builder',
+      agent: 'app_orchestrator',
     });
+    appSession = deps.appStudioStore.setCoordinatorSessionId(appSession.id, coderSession.id);
     // Esforço de raciocínio escolhido no dialog de criação (sticky na sessão).
     const effort = input.reasoning_effort?.trim();
     if (effort) {

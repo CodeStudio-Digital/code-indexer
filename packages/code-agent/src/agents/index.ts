@@ -31,12 +31,7 @@ export type AgentId =
   | 'build'
   | 'admin'
   | 'spec'
-  | 'app_spec'
-  | 'app_db'
-  | 'app_architect'
-  | 'app_product'
-  | 'app_ux'
-  | 'app_wireframe'
+  | 'app_orchestrator'
   | 'builder'
   | 'api'
   | 'diagram';
@@ -123,62 +118,14 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     maxTurns: 120,
     defaultTemperature: 0.3,
   },
-  app_spec: {
-    id: 'app_spec',
-    label: 'App Plan',
-    description:
-      'App Studio requirements specialist. Plans and versions requirements with an explicit context snapshot, deterministic audit, user questions and reviewable revisions.',
-    profile: 'bootstrap',
+  app_orchestrator: {
+    id: 'app_orchestrator',
+    label: 'App Coordinator',
+    description: 'Persistent App Studio coordinator. Keeps scope, blueprint, adaptive Kanban workers and release evidence in one continuous session.',
+    profile: 'navigate',
     planMode: false,
-    maxTurns: 80,
+    maxTurns: 180,
     defaultTemperature: 0.25,
-  },
-  app_db: {
-    id: 'app_db',
-    label: 'Data Model',
-    description:
-      'App Studio database specialist. Audits data, persists versioned migrations, provisions the local database and verifies the real schema with database tools.',
-    profile: 'bootstrap',
-    planMode: false,
-    maxTurns: 80,
-    defaultTemperature: 0.2,
-  },
-  app_architect: {
-    id: 'app_architect',
-    label: 'App Architecture',
-    description:
-      'App Studio architecture specialist. Evolves requirements when architecture reveals product changes, researches official stack documentation, and produces a versioned architecture plus traceable TDD contract without editing code.',
-    profile: 'bootstrap',
-    planMode: false,
-    maxTurns: 100,
-    defaultTemperature: 0.2,
-  },
-  app_product: {
-    id: 'app_product',
-    label: 'Product Model',
-    description: 'App Studio product-modeling specialist. Expands a layperson idea into explicit domains, capabilities, scope horizons and executable scenarios without silently adding scope.',
-    profile: 'bootstrap',
-    planMode: false,
-    maxTurns: 120,
-    defaultTemperature: 0.3,
-  },
-  app_ux: {
-    id: 'app_ux',
-    label: 'App Experience',
-    description: 'App Studio UX specialist. Guides a non-technical user through three contextual visual directions and saves an auditable experience brief.',
-    profile: 'bootstrap',
-    planMode: false,
-    maxTurns: 80,
-    defaultTemperature: 0.35,
-  },
-  app_wireframe: {
-    id: 'app_wireframe',
-    label: 'App Wireframes',
-    description: 'App Studio flow and wireframe specialist. Converts requirements, architecture, UX and data into traceable screen plans, browser TDD and ordered build groups.',
-    profile: 'bootstrap',
-    planMode: false,
-    maxTurns: 100,
-    defaultTemperature: 0.2,
   },
   builder: {
     id: 'builder',

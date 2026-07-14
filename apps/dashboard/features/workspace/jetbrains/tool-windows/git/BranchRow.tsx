@@ -7,6 +7,7 @@
  */
 
 import { GitBranch as GitBranchIcon, MoreHorizontal } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { GitBranch } from '@mcp/api-bus';
 import { useContextMenu } from '../../../../../components/ui/context-menu.js';
 import { cn } from '../../../../../lib/utils.js';
@@ -18,7 +19,11 @@ export function BranchRow({
   actions,
   opInProgress,
 }: { branch: GitBranch; actions: BranchActions; opInProgress?: boolean }) {
-  const { triggerProps, Menu } = useContextMenu(buildBranchActions(b, actions, { opInProgress }));
+  const { t } = useTranslation('workspace');
+  const { triggerProps, Menu } = useContextMenu(buildBranchActions(b, actions, {
+    opInProgress,
+    t: (key, options) => t(key, options),
+  }));
 
   return (
     <>
@@ -29,7 +34,15 @@ export function BranchRow({
           b.isCurrent ? 'bg-primary/5' : 'hover:bg-muted/40',
         )}
         onClick={() => actions.onOpenLog(b)}
-        title="Open log · right-click for actions"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            actions.onOpenLog(b);
+          }
+        }}
+        title={t('git.branch.openActions')}
       >
         <GitBranchIcon
           className={cn(
@@ -56,7 +69,7 @@ export function BranchRow({
         <button
           type="button"
           className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-          aria-label="Branch actions"
+          aria-label={t('git.branch.actions')}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();

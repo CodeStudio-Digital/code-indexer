@@ -339,6 +339,10 @@ export interface BehaviorNode {
  * through to its default (e.g. no skills block, allow all tool calls).
  */
 export interface BridgeCallbacks {
+  /** Pending semantic lifecycle milestone that should compact at a safe size. */
+  peekMilestoneCompaction?: () => string | null;
+  /** Clear the milestone only after Executing actually emits its trigger. */
+  clearMilestoneCompaction?: () => void;
   /** Build the `<active_skills>` block from the trailing user message. */
   buildActiveSkillsBlock?: (compactedHistory: AgentMessage[]) => string | null;
   /** Build the `<active-context>` block (goal + todos + scope). */

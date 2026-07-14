@@ -13,7 +13,7 @@ import type { PromptWindows } from '../../completion-prompt.js';
 
 export type SnippetKind =
   | 'marker' | 'members' | 'scope'
-  | 'recent-edit' | 'lsp-def' | 'open-tab' | 'siblings' | 'imports';
+  | 'recent-edit' | 'lsp-def' | 'open-tab' | 'related-code' | 'siblings' | 'imports';
 
 export interface ContextSnippet {
   kind: SnippetKind;
@@ -52,7 +52,9 @@ export interface EngineInput {
   cacheTtlMs: number;
   /** LSP race for the volatile members source. */
   lspMemberRaceMs: number;
-  toggles: { recentEdits: boolean; openTabs: boolean; lspDefs: boolean };
+  toggles: { recentEdits: boolean; openTabs: boolean; lspDefs: boolean; relatedCode?: boolean };
+  /** Dedicated cap for FTS examples; never allowed to consume the full prompt. */
+  relatedCodeTokens?: number;
   jaccardMinScore: number;
   maxTabFiles: number;
 }

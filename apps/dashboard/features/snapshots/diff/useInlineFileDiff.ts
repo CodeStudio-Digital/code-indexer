@@ -5,7 +5,14 @@
  * panel (`onCommentClick` opens it), so the inline widget stays lean.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { acceptHunk, fetchFileDiff, revertHunk } from '../api.js';
+import {
+  acceptHunk,
+  acceptRoundHunk,
+  fetchFileDiff,
+  fetchRoundFileDiff,
+  revertHunk,
+  revertRoundHunk,
+} from '../api.js';
 import type { SessionScope, SnapshotFileDiff } from '../types.js';
 import type { DiffRowHandlers } from './DiffRow.js';
 import type { SnapshotActions } from '../../chat/messages/snapshot-files-context.js';
@@ -23,6 +30,9 @@ export function useInlineFileDiff(
   actions: SnapshotActions | null,
   /** Bumping value (e.g. the file's `lastEditedAt`) that forces a refetch. */
   refreshKey: string | number | undefined,
+  roundMessageId?: number,
+  globalBaselineId?: number,
+  onMutated?: () => void,
 ): Result {
   const [diff, setDiff] = useState<SnapshotFileDiff | null>(null);
   const [loading, setLoading] = useState(true);
@@ -35,18 +45,17 @@ export function useInlineFileDiff(
     const t = ++token.current;
     setLoading(true);
     try {
-      const r = await fetchFileDiff(scope, sessionId, baselineId, {
-        context: 3,
-        contextBefore: ctxBefore,
-        contextAfter: ctxAfter,
-      });
+      const options = { context: 3, contextBefore: ctxBefore, contextAfter: ctxAfter };
+      const r = roundMessageId == null
+        ? await fetchFileDiff(scope, sessionId, baselineId, options)
+        : await fetchRoundFileDiff(scope, sessionId, roundMessageId, baselineId, options);
       if (t === token.current) setDiff(r);
     } catch {
       if (t === token.current) setDiff(null);
     } finally {
       if (t === token.current) setLoading(false);
     }
-  }, [scope, sessionId, baselineId, ctxBefore, ctxAfter]);
+  }, [scope, sessionId, baselineId, roundMessageId, ctxBefore, ctxAfter]);
 
   useEffect(() => {
     void load();
@@ -61,22 +70,27 @@ export function useInlineFileDiff(
           setBusy(false);
           void load();
           actions?.refresh();
+          onMutated?.();
         });
     },
-    [load, actions],
+    [load, actions, onMutated],
   );
 
   const handlers = useMemo<DiffRowHandlers>(
     () => ({
-      onAccept: (fp) => mutate(() => acceptHunk(scope, sessionId, baselineId, fp)),
-      onRevert: (fp) => mutate(() => revertHunk(scope, sessionId, baselineId, fp)),
+      onAccept: (fp) => mutate(() => roundMessageId == null
+        ? acceptHunk(scope, sessionId, baselineId, fp)
+        : acceptRoundHunk(scope, sessionId, roundMessageId, baselineId, fp)),
+      onRevert: (fp) => mutate(() => roundMessageId == null
+        ? revertHunk(scope, sessionId, baselineId, fp)
+        : revertRoundHunk(scope, sessionId, roundMessageId, baselineId, fp)),
       onExpand: (side) =>
         side === 'before' ? setCtxBefore((v) => v + 10) : setCtxAfter((v) => v + 10),
-      onCommentClick: () => actions?.openSnapshots(baselineId),
+      onCommentClick: () => actions?.openSnapshots(globalBaselineId ?? baselineId),
       onUpdateComment: () => {},
       busy,
     }),
-    [mutate, scope, sessionId, baselineId, actions, busy],
+    [mutate, scope, sessionId, baselineId, roundMessageId, globalBaselineId, actions, busy],
   );
 
   return { diff, loading, handlers };

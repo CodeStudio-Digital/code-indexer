@@ -9,6 +9,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import * as api from './api.js';
 import type { ApiEnvironment, EnvVariable } from './types.js';
 
@@ -65,6 +66,13 @@ export function EnvEditor({ projectId, environments, open, onOpenChange, onChang
   };
   const remove = async () => {
     if (editId == null) return;
+    const environment = environments.find((candidate) => candidate.id === editId);
+    if (!(await confirm({
+      title: t('envManager.deleteConfirmTitle', { name: environment?.name ?? name }),
+      description: t('envManager.deleteConfirmBody'),
+      confirmLabel: t('env.delete'),
+      tone: 'destructive',
+    }))) return;
     await api.deleteEnvironment(projectId, editId);
     onChanged();
     onOpenChange(false);

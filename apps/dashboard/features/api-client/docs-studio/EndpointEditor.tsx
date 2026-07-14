@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Trash2 } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
+import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { MarkdownEditor } from './MarkdownEditor.js';
 import { parseRows } from '../kv-grid/kv-utils.js';
 import { METHOD_COLOR } from '../collection/row-format.js';
@@ -74,6 +75,12 @@ function ExamplesList({ projectId, requestId }: { projectId: number; requestId: 
   }, [projectId, requestId]);
 
   const remove = async (eid: number) => {
+    const example = examples.find((candidate) => candidate.id === eid);
+    if (!(await confirm({
+      title: t('docs.deleteExampleConfirm', { name: example?.name ?? '' }),
+      confirmLabel: t('docs.deleteExample'),
+      tone: 'destructive',
+    }))) return;
     await docsApi.deleteExample(projectId, requestId, eid);
     setExamples((xs) => xs.filter((x) => x.id !== eid));
   };

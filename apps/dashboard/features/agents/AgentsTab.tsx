@@ -1,22 +1,30 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  Activity,
+  ArrowRight,
+  Boxes,
+  FolderKanban,
   Plus,
+  Search,
   Users,
-  FileText,
   Trash2,
-  Edit2,
-  ChevronRight,
-  ChevronLeft,
-  PanelLeft,
-  PanelLeftClose,
   Copy,
   ExternalLink,
   FolderOpen,
+  LayoutTemplate,
 } from 'lucide-react';
+import { Panel, PanelGroup, type ImperativePanelHandle } from 'react-resizable-panels';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
+import { RailButton, RailContainer } from '../../components/chrome/index.js';
+import {
+  WorkbenchPanelHeader,
+  WorkbenchResizeHandle,
+  WorkbenchShell,
+  WorkbenchSurface,
+} from '../../components/workbench/index.js';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/context-menu.js';
 import { useApi } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
@@ -33,6 +41,7 @@ import { TemplateListPanel } from './TemplateListPanel.js';
 import { NewCompanyDialog } from './NewCompanyDialog.js';
 import { buildAgentsDefaultUrl } from './routing.js';
 import { CompanySessionView } from './CompanySessionView.js';
+import type { CompanyCatalogView, CompanySessionWorkbenchSlots } from './company-workbench-slots.js';
 
 interface CompanySession {
   id: number;
@@ -42,27 +51,74 @@ interface CompanySession {
   created_at: string;
 }
 
-type SidebarView = 'sessions' | 'templates';
+const COMPANY_CATALOG_VIEW_KEY = 'mcp-ide:company.catalogView';
 
 export function AgentsTab() {
   const { t } = useTranslation('agents');
   const navigate = useNavigate();
   const routeParams = useParams<{ rootId?: string }>();
   const { data: sessions, refetch: refetchSessions } = useApi<CompanySession[]>('/company/sessions');
+  const { data: templates } = useApi<Array<{ id: number }>>('/company/templates');
   // Selected session is URL-driven: the `:rootId` segment of
   // `/company/sessions/:rootId/...`. At `/agents` it's null.
   const selectedSessionId = routeParams.rootId != null ? Number(routeParams.rootId) : null;
   const [showNewTemplate, setShowNewTemplate] = useState(false);
   const [showNewCompany, setShowNewCompany] = useState(false);
-  const [sidebarView, setSidebarView] = useState<SidebarView>('sessions');
+  const [sidebarView, setSidebarView] = useState<CompanyCatalogView>(() => {
+    if (typeof window === 'undefined') return 'sessions';
+    return window.localStorage.getItem(COMPANY_CATALOG_VIEW_KEY) === 'templates' ? 'templates' : 'sessions';
+  });
   const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(selectedSessionId == null);
+  const [sessionQuery, setSessionQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<CompanySession | null>(null);
+  const catalogPanelRef = useRef<ImperativePanelHandle>(null);
+  const [sessionRailHost, setSessionRailHost] = useState<HTMLDivElement | null>(null);
 
   const selectedSession = sessions?.find((s) => s.id === selectedSessionId);
+  const filteredSessions = useMemo(() => {
+    const query = sessionQuery.trim().toLocaleLowerCase();
+    if (!query) return sessions ?? [];
+    return (sessions ?? []).filter((session) =>
+      `${session.name} ${session.status}`.toLocaleLowerCase().includes(query),
+    );
+  }, [sessionQuery, sessions]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COMPANY_CATALOG_VIEW_KEY, sidebarView);
+    } catch {
+      // Persistence is a convenience; private browsing can disable it.
+    }
+  }, [sidebarView]);
+
+  useEffect(() => {
+    if (agentsSidebarOpen) catalogPanelRef.current?.expand();
+    else catalogPanelRef.current?.collapse();
+  }, [agentsSidebarOpen]);
+
+  const toggleCatalog = useCallback((view: CompanyCatalogView) => {
+    if (sidebarView === view) {
+      setAgentsSidebarOpen((open) => !open);
+      return;
+    }
+    setSidebarView(view);
+    setAgentsSidebarOpen(true);
+  }, [sidebarView]);
+
+  const sessionWorkbenchSlots = useMemo<CompanySessionWorkbenchSlots>(() => ({
+    leftRailHost: sessionRailHost,
+    catalog: {
+      open: agentsSidebarOpen,
+      activeView: sidebarView,
+      sessionCount: sessions?.length,
+      templateCount: templates?.length,
+      onToggle: toggleCatalog,
+    },
+  }), [agentsSidebarOpen, sessionRailHost, sessions?.length, sidebarView, templates?.length, toggleCatalog]);
 
   function selectSession(id: number) {
     navigate(buildAgentsDefaultUrl(id));
-    setAgentsSidebarOpen(false);
+    if (typeof window !== 'undefined' && window.innerWidth < 768) setAgentsSidebarOpen(false);
   }
 
   async function handleDelete(e: React.MouseEvent, id: number) {
@@ -81,147 +137,161 @@ export function AgentsTab() {
   }
 
   return (
-    // h-full (not 100dvh) because AppShell's <main> already gives us
-    // viewport height minus the 36px topbar. Using 100dvh here pushed
-    // the inner SessionHeader off-screen behind the global header.
-    <div className="flex h-full">
-      {/* Sidebar — full-width on mobile when open, hidden otherwise */}
-      <div className={cn(
-        'border-r flex flex-col bg-card flex-shrink-0',
-        agentsSidebarOpen ? 'flex w-full md:w-64' : 'hidden',
-      )}>
-        {/* Top actions */}
-        <div className="p-3 border-b space-y-2">
-          <Button
-            variant="default"
-            size="sm"
-            className="w-full justify-start"
-            onClick={() => setShowNewCompany(true)}
-          >
-            <Plus className="h-3.5 w-3.5 mr-2" />
-            {t('newCompany')}
-          </Button>
-        </div>
-
-        {/* Tab switcher */}
-        <div className="flex border-b text-xs">
-          <button
-            onClick={() => setSidebarView('sessions')}
-            className={cn(
-              'flex-1 py-2 text-center transition-colors',
-              sidebarView === 'sessions'
-                ? 'border-b-2 border-primary text-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('sessions')}
-          </button>
-          <button
-            onClick={() => setSidebarView('templates')}
-            className={cn(
-              'flex-1 py-2 text-center transition-colors',
-              sidebarView === 'templates'
-                ? 'border-b-2 border-primary text-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('templates')}
-          </button>
-        </div>
-
-        {/* Sidebar content */}
-        <div className="flex-1 overflow-y-auto">
-          {sidebarView === 'sessions' && (
-            <>
-              {(!sessions || sessions.length === 0) && (
-                <p className="px-3 py-4 text-xs text-muted-foreground text-center">
-                  {t('noSessions')}
-                </p>
-              )}
-              {sessions?.map((s) => (
-                <SessionRow
-                  key={s.id}
-                  session={s}
-                  selected={selectedSessionId === s.id}
-                  onSelect={() => selectSession(s.id)}
-                  onDuplicate={(e) => handleDuplicate(e, s.id)}
-                  onDelete={(e) => handleDelete(e, s.id)}
-                />
-              ))}
-            </>
-          )}
-
-          {sidebarView === 'templates' && (
-            <TemplateListPanel onNewTemplate={() => setShowNewTemplate(true)} />
-          )}
-        </div>
-      </div>
-
-      {/* Main content — hidden on mobile when sidebar is open */}
-      <div className={cn(
-        'overflow-hidden flex flex-col',
-        agentsSidebarOpen ? 'hidden md:flex md:flex-1' : 'flex flex-1',
-      )}>
-        {/* Empty-state top bar: only when no session is selected. When
-            a session IS selected, the sessions-list toggle is rendered
-            inside `SessionHeader` instead — that lets us collapse two
-            stacked top bars into one. */}
-        {!selectedSession && (
-          <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
-            <button
-              onClick={() => setAgentsSidebarOpen((v) => !v)}
-              className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              title={agentsSidebarOpen ? 'Fechar painel' : 'Abrir painel'}
-            >
-              {agentsSidebarOpen
-                ? <PanelLeftClose className="h-4 w-4" />
-                : <PanelLeft className="h-4 w-4" />
-              }
-            </button>
-            <span className="text-xs text-muted-foreground">{t('sessions')}</span>
-          </div>
-        )}
-
-        {/* Mobile back button */}
-        {selectedSession && (
-            <button
-                className="md:hidden flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b hover:bg-muted transition-colors shrink-0"
-                onClick={() => setAgentsSidebarOpen(true)}
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-              {t('sessions')}
-            </button>
-        )}
-
+    <WorkbenchShell>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {selectedSession ? (
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <CompanySessionView
-              key={selectedSession.id}
-              sessionId={selectedSession.id}
-              sessionName={selectedSession.name}
-              sessionStatus={selectedSession.status}
-              sessionsListOpen={agentsSidebarOpen}
-              onToggleSessionsList={() => setAgentsSidebarOpen((v) => !v)}
+          <div ref={setSessionRailHost} className="contents" />
+        ) : (
+        <RailContainer side="left" aria-label="Navegação de empresas de agentes">
+          <RailButton
+            icon={Users}
+            label={t('sessions')}
+            role="toggle"
+            active={agentsSidebarOpen && sidebarView === 'sessions'}
+            onClick={() => toggleCatalog('sessions')}
+            badge={sessions?.length}
+          />
+          <RailButton
+            icon={LayoutTemplate}
+            label={t('templates')}
+            role="toggle"
+            active={agentsSidebarOpen && sidebarView === 'templates'}
+            onClick={() => toggleCatalog('templates')}
+            badge={templates?.length}
+          />
+          <div className="mt-auto pb-1">
+            <RailButton
+              icon={Plus}
+              label={t('newCompany')}
+              role="toggle"
+              active={showNewCompany}
+              onClick={() => setShowNewCompany(true)}
             />
           </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <Users className="h-16 w-16 opacity-20 mb-4" />
-            <h3 className="text-sm font-medium mb-1">{t('companyMode.title')}</h3>
-            <p className="text-xs max-w-md text-center">
-              {t('companyMode.description')}
-            </p>
-            <Button
-              variant="default"
-              size="sm"
-              className="mt-4"
-              onClick={() => setShowNewCompany(true)}
-            >
-              <Plus className="h-3.5 w-3.5 mr-2" />
-              {t('companyMode.createFirst')}
-            </Button>
-          </div>
+        </RailContainer>
         )}
+
+        <div className={cn('min-w-0 flex-1', !selectedSession && 'p-1.5')}>
+          <PanelGroup direction="horizontal" autoSaveId="mcp-company-catalog-layout" className="min-h-0 min-w-0">
+            <Panel
+              ref={catalogPanelRef}
+              order={1}
+              defaultSize={22}
+              minSize={16}
+              maxSize={34}
+              collapsible
+              collapsedSize={0}
+              onCollapse={() => setAgentsSidebarOpen(false)}
+              onExpand={() => setAgentsSidebarOpen(true)}
+            >
+              <div className={cn('h-full min-h-0', selectedSession && 'p-1.5 pr-0')}>
+              <WorkbenchSurface className="flex h-full flex-col rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+                <WorkbenchPanelHeader
+                  title={sidebarView === 'sessions' ? t('sessions') : t('templates')}
+                  icon={sidebarView === 'sessions' ? Users : LayoutTemplate}
+                  actions={
+                    <button
+                      type="button"
+                      onClick={() => sidebarView === 'sessions' ? setShowNewCompany(true) : setShowNewTemplate(true)}
+                      aria-label={sidebarView === 'sessions' ? t('newCompany') : t('template.newTemplate')}
+                      className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  }
+                  onClose={() => setAgentsSidebarOpen(false)}
+                  closeLabel="Recolher catálogo"
+                />
+
+                {sidebarView === 'sessions' ? (
+                  <>
+                    <div className="border-b border-[var(--workbench-border)] p-1.5">
+                      <label className="flex h-7 items-center gap-1.5 rounded border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 text-muted-foreground focus-within:border-[var(--workbench-focus)]">
+                        <Search className="h-3.5 w-3.5 shrink-0" />
+                        <input
+                          value={sessionQuery}
+                          onChange={(event) => setSessionQuery(event.target.value)}
+                          placeholder="Filtrar empresas…"
+                          className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                      </label>
+                    </div>
+                    <div className="flex-1 space-y-1 overflow-y-auto p-1.5">
+                      {filteredSessions.length === 0 && (
+                        <div className="px-3 py-8 text-center">
+                          <Users className="mx-auto mb-2 h-6 w-6 text-muted-foreground/50" />
+                          <p className="text-[11px] font-medium text-foreground">
+                            {sessionQuery ? 'Nenhuma empresa encontrada' : t('noSessions')}
+                          </p>
+                          {!sessionQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setShowNewCompany(true)}
+                              className="mt-2 text-[11px] text-primary hover:underline"
+                            >
+                              {t('newCompany')}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {filteredSessions.map((session) => (
+                        <SessionRow
+                          key={session.id}
+                          session={session}
+                          selected={selectedSessionId === session.id}
+                          onSelect={() => selectSession(session.id)}
+                          onDuplicate={(event) => handleDuplicate(event, session.id)}
+                          onDelete={(event) => handleDelete(event, session.id)}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex h-7 items-center border-t border-[var(--workbench-border)] px-2 text-[10px] text-muted-foreground">
+                      {filteredSessions.length} de {sessions?.length ?? 0} empresas
+                    </div>
+                  </>
+                ) : (
+                  <TemplateListPanel onNewTemplate={() => setShowNewTemplate(true)} />
+                )}
+              </WorkbenchSurface>
+              </div>
+            </Panel>
+
+            <WorkbenchResizeHandle
+              direction="horizontal"
+              disabled={!agentsSidebarOpen}
+              className={!agentsSidebarOpen ? 'w-0 cursor-default' : undefined}
+            />
+
+            <Panel order={2} minSize={42}>
+              {selectedSession ? (
+                // The selected session owns its primary/right/bottom
+                // WorkbenchSurfaces. Avoid wrapping them in one giant card,
+                // which visually glued the docks back to the content.
+                <CompanySessionView
+                  key={selectedSession.id}
+                  sessionId={selectedSession.id}
+                  sessionName={selectedSession.name}
+                  sessionStatus={selectedSession.status}
+                  workbenchSlots={sessionWorkbenchSlots}
+                />
+              ) : (
+                <WorkbenchSurface className="h-full rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)]">
+                  <CompanyHome
+                    sessions={sessions ?? []}
+                    templateCount={templates?.length ?? 0}
+                    onCreateCompany={() => setShowNewCompany(true)}
+                    onCreateTemplate={() => {
+                      setSidebarView('templates');
+                      setAgentsSidebarOpen(true);
+                      setShowNewTemplate(true);
+                    }}
+                    onOpenSession={selectSession}
+                  />
+                </WorkbenchSurface>
+              )}
+            </Panel>
+          </PanelGroup>
+        </div>
       </div>
 
       {/* Modals */}
@@ -251,6 +321,160 @@ export function AgentsTab() {
           }}
         />
       )}
+    </WorkbenchShell>
+  );
+}
+
+function CompanyHome({
+  sessions,
+  templateCount,
+  onCreateCompany,
+  onCreateTemplate,
+  onOpenSession,
+}: {
+  sessions: CompanySession[];
+  templateCount: number;
+  onCreateCompany: () => void;
+  onCreateTemplate: () => void;
+  onOpenSession: (id: number) => void;
+}) {
+  const running = sessions.filter((session) => session.status === 'running').length;
+  const recent = sessions.slice(0, 5);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <WorkbenchPanelHeader
+        title="Central de agentes"
+        icon={Users}
+        actions={
+          <Button size="sm" className="h-6 gap-1 px-2 text-[10px]" onClick={onCreateCompany}>
+            <Plus className="h-3 w-3" /> Nova empresa
+          </Button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <div className="mx-auto max-w-6xl space-y-4">
+          <section className="grid gap-3 lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,.75fr)]">
+            <div className="relative overflow-hidden rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-5">
+              <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-violet-500/8 blur-3xl" />
+              <div className="relative max-w-2xl">
+                <div className="mb-3 grid h-9 w-9 place-items-center rounded-md bg-violet-500/12 text-violet-400">
+                  <Boxes className="h-5 w-5" />
+                </div>
+                <h1 className="text-lg font-semibold text-foreground">Times de IA que trabalham como uma empresa</h1>
+                <p className="mt-1.5 max-w-xl text-xs leading-5 text-muted-foreground">
+                  Combine projetos, um agente master e papéis especializados. Acompanhe execução, arquivos,
+                  pipelines, dados e decisões sem sair do workbench.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button size="sm" className="h-8 gap-1.5" onClick={onCreateCompany}>
+                    <Plus className="h-3.5 w-3.5" /> Criar empresa
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={onCreateTemplate}>
+                    <LayoutTemplate className="h-3.5 w-3.5" /> Criar template
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
+              <Metric label="Empresas" value={sessions.length} icon={Users} />
+              <Metric label="Em execução" value={running} icon={Activity} tone="success" />
+              <Metric label="Templates" value={templateCount} icon={LayoutTemplate} />
+            </div>
+          </section>
+
+          <section className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,.8fr)]">
+            <div className="rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+              <div className="flex h-9 items-center gap-2 border-b border-[var(--workbench-border)] px-3">
+                <FolderKanban className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-xs font-semibold">Empresas recentes</h2>
+                <span className="ml-auto text-[10px] text-muted-foreground">{sessions.length} no total</span>
+              </div>
+              <div className="p-1.5">
+                {recent.length === 0 ? (
+                  <div className="px-4 py-10 text-center text-xs text-muted-foreground">
+                    Sua primeira empresa aparecerá aqui com status e acesso rápido.
+                  </div>
+                ) : recent.map((session) => (
+                  <button
+                    type="button"
+                    key={session.id}
+                    onClick={() => onOpenSession(session.id)}
+                    className="group flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-[var(--workbench-hover)]"
+                  >
+                    <span className="grid h-7 w-7 place-items-center rounded bg-[var(--workbench-raised)] text-muted-foreground">
+                      <Users className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px] font-medium text-foreground">{session.name}</span>
+                      <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                        <StatusBadge status={session.status} />
+                        {new Date(session.created_at).toLocaleDateString()}
+                      </span>
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+              <div className="flex h-9 items-center gap-2 border-b border-[var(--workbench-border)] px-3">
+                <LayoutTemplate className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-xs font-semibold">Fluxo recomendado</h2>
+              </div>
+              <div className="space-y-0 p-3">
+                <FlowStep number="1" title="Defina o blueprint" description="Crie ou escolha os papéis do time." />
+                <FlowStep number="2" title="Conecte os projetos" description="Selecione onde a empresa poderá atuar." />
+                <FlowStep number="3" title="Inicie pelo master" description="Dê o objetivo e acompanhe a delegação." last />
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  icon: Icon,
+  tone = 'default',
+}: {
+  label: string;
+  value: number;
+  icon: typeof Users;
+  tone?: 'default' | 'success';
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)] px-3 py-2.5">
+      <span className={cn(
+        'grid h-7 w-7 place-items-center rounded bg-[var(--workbench-raised)] text-muted-foreground',
+        tone === 'success' && 'bg-emerald-500/10 text-emerald-400',
+      )}>
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <span>
+        <span className="block text-base font-semibold tabular-nums">{value}</span>
+        <span className="block text-[10px] text-muted-foreground">{label}</span>
+      </span>
+    </div>
+  );
+}
+
+function FlowStep({ number, title, description, last = false }: { number: string; title: string; description: string; last?: boolean }) {
+  return (
+    <div className="relative flex gap-2.5 pb-4 last:pb-0">
+      {!last && <span className="absolute left-3 top-6 h-full w-px bg-[var(--workbench-border)]" />}
+      <span className="relative z-10 grid h-6 w-6 shrink-0 place-items-center rounded-full border border-[var(--workbench-border)] bg-[var(--workbench-raised)] text-[10px] font-semibold text-violet-400">
+        {number}
+      </span>
+      <span className="pt-0.5">
+        <span className="block text-[11px] font-medium text-foreground">{title}</span>
+        <span className="block text-[10px] leading-4 text-muted-foreground">{description}</span>
+      </span>
     </div>
   );
 }
@@ -331,13 +555,18 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
       }}
       {...triggerProps}
       className={cn(
-        'w-full text-left px-3 py-2.5 border-b text-xs hover:bg-muted/50 transition-colors group cursor-pointer',
-        selected && 'bg-muted',
+        'group w-full cursor-pointer rounded-md border border-transparent px-2 py-2 text-left text-xs transition-colors hover:border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--workbench-focus)]',
+        selected && 'border-violet-500/30 bg-[var(--workbench-active)]',
       )}
     >
       <div className="flex items-center gap-2">
-        <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <span className="font-medium truncate flex-1">{s.name}</span>
+        <span className={cn(
+          'grid h-6 w-6 shrink-0 place-items-center rounded bg-[var(--workbench-raised)] text-muted-foreground',
+          selected && 'text-violet-400',
+        )}>
+          <Users className="h-3.5 w-3.5" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{s.name}</span>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <span
             role="button"
@@ -370,7 +599,7 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
           </span>
         </div>
       </div>
-      <div className="flex items-center gap-1.5 mt-1">
+      <div className="mt-1 flex items-center gap-1.5 pl-8">
         <StatusBadge status={s.status} />
         <span className="text-[10px] text-muted-foreground">
           {new Date(s.created_at).toLocaleDateString()}

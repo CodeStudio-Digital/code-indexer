@@ -28,6 +28,8 @@ export interface RailButtonProps {
   disabled?: boolean;
   /** Right-click menu items (e.g. Pin/Unpin). Omit for no menu. */
   contextItems?: ContextMenuItem[];
+  /** Optional compact notification counter. */
+  badge?: number;
 }
 
 export const RailButton = memo(function RailButton({
@@ -39,6 +41,7 @@ export const RailButton = memo(function RailButton({
   role = 'tab',
   disabled = false,
   contextItems,
+  badge,
 }: RailButtonProps) {
   const { triggerProps, Menu } = useContextMenu(contextItems ?? []);
   const hasMenu = !!contextItems && contextItems.length > 0;
@@ -54,10 +57,10 @@ export const RailButton = memo(function RailButton({
         aria-pressed={role === 'toggle' ? active : undefined}
         {...(hasMenu ? triggerProps : {})}
         className={cn(
-          'relative h-8 w-8 grid place-items-center rounded-md transition-colors disabled:opacity-40',
+          'relative h-8 w-8 grid place-items-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--workbench-focus)] disabled:opacity-40',
           active
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+            ? 'bg-[var(--workbench-active)] text-foreground'
+            : 'text-muted-foreground hover:bg-[var(--workbench-hover)] hover:text-foreground',
         )}
       >
         <Icon className="h-4 w-4" />
@@ -65,10 +68,15 @@ export const RailButton = memo(function RailButton({
           <span
             aria-hidden
             className={cn(
-              'absolute top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary',
+              'absolute top-1.5 bottom-1.5 w-0.5 rounded-full bg-[var(--workbench-focus)]',
               side === 'right' ? '-right-1' : '-left-1',
             )}
           />
+        )}
+        {badge != null && badge > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-primary px-0.5 text-[8px] font-medium tabular-nums text-primary-foreground">
+            {badge > 99 ? '99+' : badge}
+          </span>
         )}
       </button>
       {Menu}

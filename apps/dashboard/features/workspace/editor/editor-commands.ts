@@ -7,7 +7,7 @@
  * dispatcher tokenizes by e.code — layout-immune (ABNT2's slash included)
  * on every surface where the dispatcher is mounted.
  */
-import { registerCommands } from '../../../keymap/commands.js';
+import { registerCommandHandlers } from '../../../keymap/commands.js';
 import { getActiveEditor } from './editor-models.js';
 import { registerNavCommands } from './nav-commands.js';
 import { registerAiCompleteCommands } from './ai-complete-commands.js';
@@ -46,38 +46,56 @@ export function registerEditorCommands(): () => void {
   // para que ProjectView continue com um único ponto de (des)registro.
   const unregisterNav = registerNavCommands();
   const unregisterAi = registerAiCompleteCommands();
-  const unregister = registerCommands([
-    {
-      id: 'editor.toggleLineComment',
-      title: 'Toggle Line Comment',
-      category: 'Editor',
-      defaultKeys: { intellij: 'Ctrl+/', vscode: 'Ctrl+/' },
-      allowInInputs: true, // Monaco input is a textarea
-      run: () => trigger('editor.action.commentLine'),
-    },
-    {
-      id: 'editor.toggleBlockComment',
-      title: 'Toggle Block Comment',
-      category: 'Editor',
-      defaultKeys: { intellij: 'Ctrl+Shift+/', vscode: 'Alt+Shift+A' },
-      allowInInputs: true,
-      run: () => trigger('editor.action.blockComment'),
-    },
+  const monacoActions: Record<string, string> = {
+    'editor.toggleLineComment': 'editor.action.commentLine',
+    'editor.toggleBlockComment': 'editor.action.blockComment',
+    'editor.quickFix': 'editor.action.quickFix',
+    'editor.triggerSuggest': 'editor.action.triggerSuggest',
+    'editor.parameterHints': 'editor.action.triggerParameterHints',
+    'editor.showHover': 'editor.action.showHover',
+    'editor.duplicateLine': 'editor.action.copyLinesDownAction',
+    'editor.deleteLine': 'editor.action.deleteLines',
+    'editor.moveLineUp': 'editor.action.moveLinesUpAction',
+    'editor.moveLineDown': 'editor.action.moveLinesDownAction',
+    'editor.joinLines': 'editor.action.joinLines',
+    'editor.expandSelection': 'editor.action.smartSelect.expand',
+    'editor.shrinkSelection': 'editor.action.smartSelect.shrink',
+    'editor.addNextOccurrence': 'editor.action.addSelectionToNextFindMatch',
+    'editor.selectAllOccurrences': 'editor.action.selectHighlights',
+    'editor.cursorAbove': 'editor.action.insertCursorAbove',
+    'editor.cursorBelow': 'editor.action.insertCursorBelow',
+    'editor.definition': 'editor.action.revealDefinition',
+    'editor.implementation': 'editor.action.goToImplementation',
+    'editor.references': 'editor.action.goToReferences',
+    'editor.rename': 'editor.action.rename',
+    'editor.nextProblem': 'editor.action.marker.next',
+    'editor.previousProblem': 'editor.action.marker.prev',
+    'editor.fold': 'editor.fold',
+    'editor.unfold': 'editor.unfold',
+    'editor.foldAll': 'editor.foldAll',
+    'editor.unfoldAll': 'editor.unfoldAll',
+    'editor.addSelectionToChat': 'mcp.addSelectionToChat',
+    'editor.addFileToChat': 'mcp.addFileToChat',
+    'run.file': 'mcp.runFile',
+  };
+  const unregister = registerCommandHandlers([
+    ...Object.entries(monacoActions).map(([id, actionId]) => ({ id, run: () => trigger(actionId) })),
     {
       id: 'editor.toggleCase',
-      title: 'Toggle Case',
-      category: 'Editor',
-      defaultKeys: { intellij: 'Ctrl+Shift+U' },
-      allowInInputs: true,
       run: toggleCase,
     },
     {
       id: 'editor.organizeImports',
-      title: 'Organize Imports',
-      category: 'Editor',
-      defaultKeys: { intellij: 'Ctrl+Alt+O', vscode: 'Alt+Shift+O' },
-      allowInInputs: true, // Monaco input is a textarea
       run: () => void organizeImportsInActiveEditor(),
+    },
+    {
+      id: 'editor.format',
+      run: () => {
+        const editor = getActiveEditor();
+        if (!editor) return;
+        const hasSelection = editor.getSelections()?.some((selection) => !selection.isEmpty()) ?? false;
+        trigger(hasSelection ? 'editor.action.formatSelection' : 'editor.action.formatDocument');
+      },
     },
   ]);
   return () => {

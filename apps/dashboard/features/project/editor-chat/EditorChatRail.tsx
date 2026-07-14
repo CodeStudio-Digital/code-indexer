@@ -5,7 +5,7 @@
  * the chat primitives via `useEditorChatSession`; sessions are shared with
  * the full Chat tab.
  */
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight, FilePlus2, FileText, FolderPlus, Loader2, Plus } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
@@ -31,11 +31,43 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
   const s = useEditorChatSession(projectId);
   const { fileRefs } = useEditorChatContext(projectId);
   const removeFileRef = (p: string) => editorChatContextActions().removeFileRef(projectId, p);
+  const pendingExternalPrompt = useRef<{ prompt: string; title?: string } | null>(null);
+
+  useEffect(() => {
+    const onExternalPrompt = (event: Event) => {
+      const detail = (event as CustomEvent<{ prompt?: string; newSession?: boolean; title?: string }>).detail;
+      const promptText = detail?.prompt?.trim();
+      if (!promptText) return;
+      if (s.selectedId != null && !detail.newSession) {
+        void s.handleSend(promptText, []);
+        return;
+      }
+      pendingExternalPrompt.current = { prompt: promptText, title: detail.title };
+      void s.createSession()
+        .then((id) => {
+          if (id == null) {
+            pendingExternalPrompt.current = null;
+            return undefined;
+          }
+          return detail.title ? s.renameSession(id, detail.title) : undefined;
+        })
+        .catch(() => { pendingExternalPrompt.current = null; });
+    };
+    window.addEventListener('mcp:editor-chat-prompt', onExternalPrompt);
+    return () => window.removeEventListener('mcp:editor-chat-prompt', onExternalPrompt);
+  }, [s.createSession, s.handleSend, s.renameSession, s.selectedId]);
+
+  useEffect(() => {
+    if (s.selectedId == null || !pendingExternalPrompt.current) return;
+    const { prompt: promptText } = pendingExternalPrompt.current;
+    pendingExternalPrompt.current = null;
+    void s.handleSend(promptText, []);
+  }, [s.handleSend, s.selectedId]);
 
   const activeFilePath = useWorkspaceStore((st) => st.activeFilePath);
   const openFiles = useWorkspaceStore((st) => st.openFiles);
   const active = openFiles.find(
-    (f) => f.path === activeFilePath && f.kind !== 'git-log' && f.kind !== 'git-stash' && f.kind !== 'diff',
+    (f) => f.path === activeFilePath && f.kind !== 'git-log' && f.kind !== 'git-stash' && f.kind !== 'diff' && f.kind !== 'database',
   );
   const addablePath = active ? active.path : null;
   const addableName = addablePath ? addablePath.split('/').pop() ?? addablePath : null;
@@ -76,7 +108,7 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
 
   if (s.selectedId == null) {
     return (
-      <div className="h-full flex flex-col bg-card/20 min-h-0">
+      <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
         <RailHeader
           title={t('chat.title')}
           onClose={onClose}
@@ -126,7 +158,7 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="h-full flex flex-col bg-card min-h-0">
+      <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
         <RailHeader
           title={s.sessionData?.session.title ?? t('chat.title')}
           onBack={() => s.setSelectedId(null)}
@@ -233,7 +265,7 @@ function RailHeader({
 }) {
   const { t } = useTranslation('workspace');
   return (
-    <header className="h-7 shrink-0 border-b bg-card/40 flex items-center px-1.5 gap-1">
+    <header className="h-8 shrink-0 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] flex items-center px-1.5 gap-1">
       {onBack && (
         <Button
           variant="ghost"

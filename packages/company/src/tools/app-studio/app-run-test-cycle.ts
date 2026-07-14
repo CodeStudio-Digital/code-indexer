@@ -4,8 +4,8 @@ import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-ver
 import { recordTddCycle } from '@mcp/app-studio/architecture/tdd-cycles.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
-import { filesContaining, readIfExists, runWorkspaceScript, summarizeOutput } from '@mcp/app-studio/pipeline/gate-checks.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
+import { filesContaining, readIfExists, runWorkspaceScript, summarizeOutput } from '@mcp/app-studio/verification/workspace-checks.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
 import { appResult } from './model-output.js';
@@ -34,17 +34,18 @@ export function appRunTestCycle(binding: AppToolBinding): CoderTool { return {
     if (!store) return err('AppStudioStore not wired.');
     const session = binding.resolveAppSession(store);
     if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}.`);
-    const state = parsePipelineState(session.pipeline_json);
-    const stage = state ? currentStage(state) : null;
-    if (!stage) return err('The app pipeline is complete, missing, or invalid.');
-    const architecture = parseAppArchitecturePlan(store.getLatestApprovedArchitectureRevision(session.id)?.architecture_json);
-    const architectureCases = (architecture?.tdd.cases ?? []).filter((item) => item.owner_stage === stage.id);
-    const wireframe = parseAppWireframePlan(store.getLatestApprovedWireframeRevision(session.id)?.wireframe_json);
-    const allowedCases = stage.id === 'design' ? (wireframe?.tdd_cases ?? []) : architectureCases;
+    const state = parseAppWorkflowState(session.pipeline_json);
+    const active = state?.phases.some((phase) => (phase.id === 'blueprint' || phase.id === 'build' || phase.id === 'deliver') && (phase.status === 'active' || phase.status === 'attention'));
+    if (!state || !active) return err('Test cycles are available only inside an active Blueprint, Build or Deliver card.');
+    const architecture = parseAppArchitecturePlan(store.getLatestArchitectureRevision(session.id)?.architecture_json);
+    const architectureCases = (architecture?.tdd.cases ?? []).filter((item) => script === 'test:e2e'
+      ? item.owner_profile === 'ui' || item.owner_profile === 'verify'
+      : item.owner_profile === 'data' || item.owner_profile === 'api' || item.owner_profile === 'verify');
+    const wireframe = parseAppWireframePlan(store.getLatestWireframeRevision(session.id)?.wireframe_json);
+    const allowedCases = script === 'test:e2e' ? [...architectureCases, ...(wireframe?.tdd_cases ?? [])] : architectureCases;
     const allowed = new Set(allowedCases.map((item) => item.id));
     const unknown = caseIds.filter((id) => !allowed.has(id));
-    if (unknown.length > 0) return err(`TDD cases are not owned by the current '${stage.id}' stage: ${unknown.join(', ')}.`);
-    if (stage.id === 'design' && script !== 'test:e2e') return err('Wireframe TDD cases must run with test:e2e.');
+    if (unknown.length > 0) return err(`TDD cases do not match script '${script}': ${unknown.join(', ')}.`);
     const resolved = resolveHostPath('.', ctx);
     if (resolved.kind === 'no-bind-mount') return err(resolved.message);
     const testFiles = filesContaining(`${resolved.path}/tests`, /\.(ts|tsx)$/, /./);

@@ -33,6 +33,13 @@ export interface SnapshotHunkLine {
   newLine?: number;
 }
 
+export interface RoundSnapshotFileSummary extends SnapshotFileSummary {
+  roundMessageId: number;
+  roundSnapshotId: number;
+  globalBaselineId: number;
+  projectId: number | null;
+}
+
 export interface SnapshotHunk {
   fingerprint: string;
   oldStart: number;
@@ -56,10 +63,25 @@ export interface SnapshotFileDiff {
     existedBefore: boolean;
     oversized: boolean;
     status: BaselineStatus;
+    globalBaselineId?: number;
+    roundMessageId?: number;
   };
   hunks: SnapshotHunk[];
   diffDisabled: boolean;
   currentContent: string | null;
+}
+
+export interface RoundSnapshotReviewFinding {
+  id: number;
+  round_snapshot_id: number;
+  hunk_fingerprint: string | null;
+  old_line: number | null;
+  new_line: number | null;
+  severity: SnapshotReviewSeverity;
+  body: string;
+  suggested_fix: string | null;
+  diff_excerpt: string | null;
+  created_at: string;
 }
 
 export type SnapshotReviewSource = 'manual' | 'auto';

@@ -1,4 +1,4 @@
-import { sqlHasStatements } from '../pipeline/gate-checks.js';
+import { sqlHasStatements } from '../verification/workspace-checks.js';
 
 const FORBIDDEN_SQL = /\b(?:ATTACH|DETACH|VACUUM|PRAGMA\s+(?:writable_schema|journal_mode))\b/i;
 

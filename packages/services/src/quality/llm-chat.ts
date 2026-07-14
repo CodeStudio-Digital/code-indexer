@@ -36,6 +36,10 @@ export interface ChatCallResult {
   tokensOut?: number;
   /** Wall-clock latency. */
   latencyMs: number;
+  /** Time to first generated text; equals latency for non-streaming adapters. */
+  ttftMs?: number;
+  /** Why generation ended, including client-side stream guards. */
+  finishReason?: 'provider' | 'local_stop' | 'local_max_tokens' | 'timeout' | 'aborted' | 'error';
 }
 
 export interface ChatCallOptions {
@@ -190,6 +194,7 @@ export async function openAiCompatibleChat(
         status: res.status,
         retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
         latencyMs,
+        finishReason: 'error',
       };
     }
     const parsed = (await res.json()) as OpenAiChatResponse;
@@ -198,9 +203,16 @@ export async function openAiCompatibleChat(
       tokensIn: parsed.usage?.prompt_tokens,
       tokensOut: parsed.usage?.completion_tokens,
       latencyMs,
+      ttftMs: latencyMs,
+      finishReason: 'provider',
     };
   } catch (e) {
-    return { content: '', errorBody: (e as Error).message, latencyMs: performance.now() - startedAt };
+    const latencyMs = performance.now() - startedAt;
+    const aborted = controller.signal.aborted;
+    return {
+      content: '', errorBody: (e as Error).message, latencyMs,
+      finishReason: aborted ? (options.signal?.aborted ? 'aborted' : 'timeout') : 'error',
+    };
   } finally {
     clearTimeout(timer);
   }

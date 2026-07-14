@@ -1,6 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Check, ChevronLeft, ChevronRight, Crown, FolderKanban, LayoutTemplate, Search, Sparkles } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../components/ui/dialog.js';
 import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import { type Project, type Template } from './new-company-dialog/types.js';
@@ -30,6 +39,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   const [masterProvider, setMasterProvider] = useState(providerOptions[0]?.id ?? 'anthropic');
   const [masterModel, setMasterModel] = useState('claude-sonnet-4-6');
   const [creating, setCreating] = useState(false);
+  const [step, setStep] = useState(0);
+  const [projectQuery, setProjectQuery] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   const selectedTemplate = templates?.find((t) => t.id === selectedTemplateId);
   const masterModels = getModelsForProvider(masterProvider);
@@ -40,6 +52,11 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   // template_id, producing mismatched sessions where subordinates
   // followed the template but the master ran on an unrelated model.
   const templateMaster = selectedTemplate?.roles.find((r) => r.role === 'master') ?? null;
+  const filteredProjects = (projects ?? []).filter((project) => {
+    const query = projectQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return `${project.name} ${project.root_path}`.toLocaleLowerCase().includes(query);
+  });
 
   function toggleProject(id: number) {
     setSelectedProjectIds((prev) =>
@@ -68,6 +85,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
     if (selectedProjectIds.length === 0) return;
 
     setCreating(true);
+    setError(null);
     try {
       const res = await apiPost<{ session: { id: number } }>('/company/sessions', {
         template_id: selectedTemplateId,
@@ -81,160 +99,269 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
       onClose();
     } catch (e) {
       console.error('Failed to create company session:', e);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-card rounded-lg border shadow-lg w-full max-w-lg max-h-[80vh] overflow-y-auto">
-        <div className="px-6 py-4 border-b">
-          <h2 className="text-lg font-semibold">{t('agents:newCompanyDialog.title')}</h2>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="flex h-[min(760px,88vh)] max-w-4xl flex-col gap-0 overflow-hidden border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-0">
+        <DialogHeader className="border-b border-[var(--workbench-border)] px-5 py-4 text-left">
+          <DialogTitle>{t('agents:newCompanyDialog.title')}</DialogTitle>
+          <DialogDescription>
+            Configure o time, conecte os projetos e revise a orquestração antes de iniciar.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-3 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-5">
+          {[
+            ['1', 'Identidade', LayoutTemplate],
+            ['2', 'Projetos', FolderKanban],
+            ['3', 'Orquestração', Sparkles],
+          ].map(([number, label, Icon], index) => (
+            <button
+              type="button"
+              key={String(label)}
+              onClick={() => {
+                if (index === 0 || (index === 1 && name.trim()) || (index === 2 && name.trim() && selectedProjectIds.length > 0)) {
+                  setStep(index);
+                }
+              }}
+              className={`relative flex h-11 items-center justify-center gap-2 text-[11px] transition-colors ${
+                step === index ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <span className={`grid h-5 w-5 place-items-center rounded-full border text-[9px] ${
+                step > index
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                  : step === index
+                    ? 'border-violet-500/50 bg-violet-500/10 text-violet-300'
+                    : 'border-[var(--workbench-border)]'
+              }`}>
+                {step > index ? <Check className="h-3 w-3" /> : String(number)}
+              </span>
+              <Icon className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{String(label)}</span>
+              {step === index && <span className="absolute inset-x-4 bottom-0 h-0.5 rounded bg-violet-500" />}
+            </button>
+          ))}
         </div>
 
-        <div className="p-6 space-y-4">
-          {/* Name */}
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.sessionName')}</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
-              placeholder={t('agents:newCompanyDialog.sessionPlaceholder')}
-            />
-          </div>
-
-          {/* Projects */}
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">
-              {t('agents:newCompanyDialog.projects', { count: selectedProjectIds.length })}
-            </label>
-            <div className="mt-1 max-h-40 overflow-y-auto border rounded-md divide-y">
-              {projects?.map((p) => (
-                <label key={p.id} className="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-muted/50">
-                  <input
-                    type="checkbox"
-                    checked={selectedProjectIds.includes(p.id)}
-                    onChange={() => toggleProject(p.id)}
-                    className="rounded border-gray-300"
-                  />
-                  <span className="font-medium">{p.name}</span>
-                  <span className="text-muted-foreground truncate ml-auto text-[10px]">{p.root_path}</span>
-                </label>
-              ))}
-              {(!projects || projects.length === 0) && (
-                <p className="px-3 py-2 text-xs text-muted-foreground">{t('agents:newCompanyDialog.noProjects')}</p>
-              )}
-            </div>
-          </div>
-
-          {/* Master provider/model — from admin config. Disabled when a
-              template is selected since the template's master role is
-              the source of truth. */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">
-                {t('agents:newCompanyDialog.masterProvider')}
-                {templateMaster && <span className="ml-1 text-[10px] text-primary">(from template)</span>}
-              </label>
-              <select
-                value={masterProvider}
-                onChange={(e) => handleMasterProviderChange(e.target.value)}
-                disabled={!!templateMaster}
-                className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {providerOptions.map((p) => (
-                  <option key={p.id} value={p.id}>{p.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">
-                {t('agents:newCompanyDialog.masterModel')}
-                {templateMaster && <span className="ml-1 text-[10px] text-primary">(from template)</span>}
-              </label>
-              {masterModels.length > 0 ? (
-                <select
-                  value={masterModel}
-                  onChange={(e) => setMasterModel(e.target.value)}
-                  disabled={!!templateMaster}
-                  className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm font-mono disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {masterModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}{m.mode ? ` (${m.mode})` : ''}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={masterModel}
-                  onChange={(e) => setMasterModel(e.target.value)}
-                  disabled={!!templateMaster}
-                  className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm font-mono disabled:opacity-60 disabled:cursor-not-allowed"
-                  placeholder={t('agents:newCompanyDialog.modelPlaceholder')}
-                />
-              )}
-            </div>
-          </div>
-
-          {/* Advanced — template. Collapsed by default; post-create knobs
-              (roles, fallback, rules, services) live in the session
-              sidebar, not here. */}
-          <details className="rounded-md border">
-            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/30">
-              {t('agents:newCompanyDialog.advanced')}
-            </summary>
-            <div className="space-y-4 border-t p-3">
-              {/* Template */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {step === 0 && (
+            <div className="mx-auto max-w-3xl space-y-5">
               <div>
-                <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.template')}</label>
-                <select
-                  value={selectedTemplateId ?? ''}
-                  onChange={(e) => setSelectedTemplateId(e.target.value ? Number(e.target.value) : null)}
-                  disabled={templatesLoading}
-                  className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm disabled:opacity-50"
-                >
-                  <option value="">{templatesLoading ? 'Loading templates…' : t('agents:newCompanyDialog.customTemplate')}</option>
-                  {templates?.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name} — {t.description}</option>
-                  ))}
-                </select>
-                {selectedTemplate ? (
-                  <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1">
-                    <div className="font-medium text-primary">✓ Template locked: {selectedTemplate.name}</div>
-                    {selectedTemplate.roles.map((r) => (
-                      <div key={r.role} className="font-mono text-[11px] text-muted-foreground">
-                        <span className="text-foreground">{r.role}</span>
-                        {' → '}
-                        {r.provider}/{r.model}
-                        {r.tier ? ` · tier=${r.tier}` : ''}
-                        {r.skills?.length ? ` · skills=${r.skills.length}` : ''}
-                      </div>
-                    ))}
-                    <div className="mt-1 text-[10px] italic text-muted-foreground">
-                      Master provider/model and every role's model are enforced by this template.
-                    </div>
+                <label className="text-[11px] font-medium text-foreground">{t('agents:newCompanyDialog.sessionName')}</label>
+                <p className="mb-2 text-[10px] text-muted-foreground">Um nome claro ajuda a distinguir objetivos e ambientes em execução.</p>
+                <input
+                  autoFocus
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  className="h-9 w-full rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-3 text-sm outline-none transition-colors focus:border-[var(--workbench-focus)]"
+                  placeholder={t('agents:newCompanyDialog.sessionPlaceholder')}
+                />
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-end justify-between gap-3">
+                  <div>
+                    <label className="text-[11px] font-medium text-foreground">{t('agents:newCompanyDialog.template')}</label>
+                    <p className="text-[10px] text-muted-foreground">Comece livre ou aplique um blueprint reutilizável de papéis e modelos.</p>
                   </div>
-                ) : null}
+                  <span className="text-[10px] text-muted-foreground">{templates?.length ?? 0} disponíveis</span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTemplateId(null)}
+                    className={`rounded-md border p-3 text-left transition-colors ${
+                      selectedTemplateId == null
+                        ? 'border-violet-500/60 bg-violet-500/8'
+                        : 'border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="grid h-7 w-7 place-items-center rounded bg-[var(--workbench-raised)]"><Sparkles className="h-3.5 w-3.5" /></span>
+                      <span className="text-[11px] font-medium">Configuração personalizada</span>
+                      {selectedTemplateId == null && <Check className="ml-auto h-3.5 w-3.5 text-violet-400" />}
+                    </div>
+                    <p className="mt-2 text-[10px] leading-4 text-muted-foreground">Escolha manualmente o provider e o modelo do agente master.</p>
+                  </button>
+                  {templatesLoading ? (
+                    <div className="rounded-md border border-[var(--workbench-border)] p-3 text-[10px] text-muted-foreground">Carregando templates…</div>
+                  ) : templates?.map((template) => (
+                    <button
+                      type="button"
+                      key={template.id}
+                      onClick={() => setSelectedTemplateId(template.id)}
+                      className={`rounded-md border p-3 text-left transition-colors ${
+                        selectedTemplateId === template.id
+                          ? 'border-violet-500/60 bg-violet-500/8'
+                          : 'border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="grid h-7 w-7 place-items-center rounded bg-[var(--workbench-raised)]"><LayoutTemplate className="h-3.5 w-3.5" /></span>
+                        <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{template.name}</span>
+                        {selectedTemplateId === template.id && <Check className="h-3.5 w-3.5 text-violet-400" />}
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{template.description || 'Template de empresa'}</p>
+                      <span className="mt-2 block text-[9px] text-muted-foreground">{template.roles.length} papéis configurados</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </details>
+          )}
+
+          {step === 1 && (
+            <div className="mx-auto flex h-full max-w-3xl flex-col">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold">Selecione os projetos</h3>
+                <p className="text-[10px] text-muted-foreground">A empresa receberá contexto e permissão para trabalhar nos projetos marcados.</p>
+              </div>
+              <label className="mb-2 flex h-8 items-center gap-2 rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 text-muted-foreground focus-within:border-[var(--workbench-focus)]">
+                <Search className="h-3.5 w-3.5" />
+                <input
+                  value={projectQuery}
+                  onChange={(event) => setProjectQuery(event.target.value)}
+                  placeholder="Buscar por nome ou caminho…"
+                  className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none"
+                />
+                <span className="text-[9px] tabular-nums">{selectedProjectIds.length} selecionados</span>
+              </label>
+              <div className="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-md border border-[var(--workbench-border)] p-1.5">
+                {filteredProjects.map((project) => {
+                  const checked = selectedProjectIds.includes(project.id);
+                  return (
+                    <label
+                      key={project.id}
+                      className={`flex cursor-pointer items-center gap-3 rounded-md border px-2.5 py-2 transition-colors ${
+                        checked ? 'border-violet-500/40 bg-violet-500/8' : 'border-transparent hover:bg-[var(--workbench-hover)]'
+                      }`}
+                    >
+                      <input type="checkbox" checked={checked} onChange={() => toggleProject(project.id)} className="rounded" />
+                      <span className="grid h-7 w-7 place-items-center rounded bg-[var(--workbench-raised)] text-muted-foreground">
+                        <FolderKanban className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[11px] font-medium text-foreground">{project.name}</span>
+                        <span className="block truncate font-mono text-[9px] text-muted-foreground">{project.root_path}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+                {filteredProjects.length === 0 && (
+                  <div className="px-4 py-10 text-center text-[11px] text-muted-foreground">{t('agents:newCompanyDialog.noProjects')}</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="mx-auto grid max-w-3xl gap-4 md:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold">Agente master</h3>
+                  <p className="text-[10px] text-muted-foreground">Responsável por planejar, delegar e consolidar o trabalho do time.</p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-[10px] font-medium text-muted-foreground">{t('agents:newCompanyDialog.masterProvider')}</label>
+                    <select
+                      value={masterProvider}
+                      onChange={(event) => handleMasterProviderChange(event.target.value)}
+                      disabled={!!templateMaster}
+                      className="mt-1 h-9 w-full rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {providerOptions.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-muted-foreground">{t('agents:newCompanyDialog.masterModel')}</label>
+                    {masterModels.length > 0 ? (
+                      <select
+                        value={masterModel}
+                        onChange={(event) => setMasterModel(event.target.value)}
+                        disabled={!!templateMaster}
+                        className="mt-1 h-9 w-full rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 font-mono text-[10px] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {masterModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.mode ? ` (${model.mode})` : ''}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        value={masterModel}
+                        onChange={(event) => setMasterModel(event.target.value)}
+                        disabled={!!templateMaster}
+                        className="mt-1 h-9 w-full rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 font-mono text-[10px]"
+                      />
+                    )}
+                  </div>
+                </div>
+                {templateMaster && (
+                  <div className="flex gap-2 rounded-md border border-violet-500/30 bg-violet-500/8 p-3 text-[10px] text-muted-foreground">
+                    <Crown className="h-4 w-4 shrink-0 text-amber-400" />
+                    <span>Provider e modelo são definidos pelo papel master do template <strong className="text-foreground">{selectedTemplate?.name}</strong>.</span>
+                  </div>
+                )}
+                {selectedTemplate && (
+                  <div className="rounded-md border border-[var(--workbench-border)]">
+                    <div className="border-b border-[var(--workbench-border)] px-3 py-2 text-[10px] font-medium">Papéis do blueprint</div>
+                    <div className="divide-y divide-[var(--workbench-border)]">
+                      {selectedTemplate.roles.map((role) => (
+                        <div key={role.role} className="flex items-center gap-2 px-3 py-2 text-[10px]">
+                          {role.role === 'master' ? <Crown className="h-3 w-3 text-amber-400" /> : <Sparkles className="h-3 w-3 text-muted-foreground" />}
+                          <span className="font-medium text-foreground">{role.role}</span>
+                          <span className="ml-auto truncate font-mono text-[9px] text-muted-foreground">{role.provider}/{role.model}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <aside className="rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-raised)] p-3">
+                <h3 className="text-[11px] font-semibold">Resumo da empresa</h3>
+                <dl className="mt-3 space-y-3 text-[10px]">
+                  <div><dt className="text-muted-foreground">Nome</dt><dd className="mt-0.5 font-medium text-foreground">{name}</dd></div>
+                  <div><dt className="text-muted-foreground">Projetos</dt><dd className="mt-0.5 font-medium text-foreground">{selectedProjectIds.length} selecionados</dd></div>
+                  <div><dt className="text-muted-foreground">Blueprint</dt><dd className="mt-0.5 font-medium text-foreground">{selectedTemplate?.name ?? 'Personalizado'}</dd></div>
+                  <div><dt className="text-muted-foreground">Master</dt><dd className="mt-0.5 break-all font-mono text-[9px] text-foreground">{masterProvider}/{masterModel}</dd></div>
+                </dl>
+              </aside>
+            </div>
+          )}
+
+          {error && <div className="mx-auto mt-4 max-w-3xl rounded border border-destructive/30 bg-destructive/8 px-3 py-2 text-[10px] text-destructive">{error}</div>}
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-3 border-t flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose} size="sm">{t('common:actions.cancel')}</Button>
-          <Button
-            onClick={handleCreate}
-            disabled={creating || !name.trim() || selectedProjectIds.length === 0}
-            size="sm"
-          >
-            {creating ? t('agents:newCompanyDialog.creating') : t('agents:newCompanyDialog.createStart')}
-          </Button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter className="flex-row items-center border-t border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-5 py-3 sm:justify-between">
+          <Button variant="ghost" size="sm" onClick={onClose}>{t('common:actions.cancel')}</Button>
+          <div className="ml-auto flex gap-2">
+            {step > 0 && (
+              <Button variant="outline" size="sm" className="gap-1" onClick={() => setStep((current) => current - 1)}>
+                <ChevronLeft className="h-3.5 w-3.5" /> Voltar
+              </Button>
+            )}
+            {step < 2 ? (
+              <Button
+                size="sm"
+                className="gap-1"
+                disabled={step === 0 ? !name.trim() : selectedProjectIds.length === 0}
+                onClick={() => setStep((current) => current + 1)}
+              >
+                Continuar <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <Button onClick={handleCreate} disabled={creating || !name.trim() || selectedProjectIds.length === 0} size="sm">
+                {creating ? t('agents:newCompanyDialog.creating') : t('agents:newCompanyDialog.createStart')}
+              </Button>
+            )}
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

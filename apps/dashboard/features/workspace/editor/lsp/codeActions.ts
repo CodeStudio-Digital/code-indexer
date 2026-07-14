@@ -19,6 +19,9 @@ const EMPTY = { actions: [], dispose() {} };
 /** Coalesce cursor/selection churn: Monaco re-invokes the provider on every
  *  tick and cancels the prior token, so a short wait collapses the burst. */
 const DEBOUNCE_MS = 150;
+const EXECUTE_COMMAND_ID = 'mcp.lsp.executeCodeAction';
+let executeCommandRegistered = false;
+type MonacoCodeAction = MonacoNs.languages.CodeAction & { _dto: CodeActionDTO; _file: string };
 
 /** Resolve true if `token` cancels within `ms` (or is already cancelled). */
 function cancelledWithin(ms: number, token: MonacoNs.CancellationToken): Promise<boolean> {
@@ -34,6 +37,30 @@ export function registerCodeActionProvider(
   projectId: number,
   flushDoc: (rel: string) => Promise<void>,
 ): MonacoNs.IDisposable {
+  if (!executeCommandRegistered) {
+    executeCommandRegistered = true;
+    monaco.editor.registerCommand(EXECUTE_COMMAND_ID, (_accessor, payload: { projectId: number; action: CodeActionDTO }) => {
+      if (!payload?.action?.originServerId) return;
+      void apiCall('lsp.executeCodeAction', payload).catch((error) => {
+        console.error('[lsp] command-backed code action failed', error);
+      });
+    });
+  }
+
+  const mapAction = (action: CodeActionDTO, file: string): MonacoCodeAction => ({
+    title: action.title,
+    kind: action.kind,
+    isPreferred: action.isPreferred,
+    edit: toWorkspaceEdit(monaco, action.edit),
+    command: action.command ? {
+      id: EXECUTE_COMMAND_ID,
+      title: action.title,
+      arguments: [{ projectId, action }],
+    } : undefined,
+    _dto: action,
+    _file: file,
+  });
+
   return monaco.languages.registerCodeActionProvider('*', {
     async provideCodeActions(model, range, context, token) {
       const file = relPath(model);
@@ -66,12 +93,7 @@ export function registerCodeActionProvider(
           ms: performance.now() - t0,
         });
         return {
-          actions: actions.map((a) => ({
-            title: a.title,
-            kind: a.kind,
-            isPreferred: a.isPreferred,
-            edit: toWorkspaceEdit(monaco, a.edit),
-          })),
+          actions: actions.map((action) => mapAction(action, file)),
           dispose() {},
         };
       } catch (err) {
@@ -85,6 +107,15 @@ export function registerCodeActionProvider(
         });
         return EMPTY;
       }
+    },
+    async resolveCodeAction(action, token) {
+      const current = action as MonacoCodeAction;
+      if (!current._dto.needsResolve || token.isCancellationRequested) return action;
+      const resolved = await apiCall<CodeActionDTO | null>('lsp.resolveCodeAction', {
+        projectId, file: current._file, action: current._dto,
+      }).catch(() => null);
+      if (!resolved || token.isCancellationRequested) return action;
+      return mapAction(resolved, current._file);
     },
   }, { providedCodeActionKinds: ['quickfix', 'source', 'source.organizeImports', 'source.fixAll'] });
 }

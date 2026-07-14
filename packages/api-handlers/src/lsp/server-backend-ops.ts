@@ -41,8 +41,10 @@ async function acquireWithDoc(
   root: string,
   file: string,
   languageId: string,
+  serverId?: string,
 ): Promise<{ acq: Acquired; abs: string } | null> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const manager = ensureLspManager(db);
+  const acq = serverId ? await manager.acquireById(projectId, serverId) : await manager.acquire(projectId, languageId);
   if (!acq) return null;
   const abs = relToAbs(root, file);
   const live = getDoc(projectId, file);
@@ -248,8 +250,9 @@ export async function serverFormatting(
   languageId: string,
   options: { tabSize: number; insertSpaces: boolean },
   range?: { start: { line: number; column: number }; end: { line: number; column: number } },
+  serverId?: string,
 ): Promise<TextEditDTO[] | null> {
-  const got = await acquireWithDoc(db, projectId, root, file, languageId);
+  const got = await acquireWithDoc(db, projectId, root, file, languageId, serverId);
   if (!got) return null;
   try {
     const raw = range

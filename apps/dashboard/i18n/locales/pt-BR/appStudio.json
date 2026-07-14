@@ -8,7 +8,7 @@
     "delete": "Excluir app",
     "deleteConfirm": "Excluir \"{{name}}\"? Os arquivos do projeto continuam no seu computador; só a jornada guiada é removida.",
     "status": {
-      "building": "Em construção — etapa {{n}} de {{total}}",
+      "building": "Em construção — fase {{n}} de {{total}}",
       "review": "Sua vez de revisar",
       "live": "No ar",
       "done": "Concluído"
@@ -26,6 +26,7 @@
     "effort": "Capacidade de raciocínio",
     "effortAuto": "Automático (padrão do modelo)",
     "submit": "Começar",
+    "cancel": "Cancelar",
     "creating": "Preparando tudo…",
     "showLog": "Detalhes técnicos",
     "phase": {
@@ -54,11 +55,7 @@
     "locked": "Disponível quando o plano do app existir.",
     "title": "Plano de construção",
     "emptyTitle": "Vamos planejar como o app será construído",
-    "emptyBody": "Um especialista confere a stack atual, organiza as partes do sistema e define como cada requisito será testado antes da implementação.",
-    "openAgent": "Abrir especialista",
-    "refine": "Aprimorar plano",
-    "updateSpec": "Atualizar requisitos",
-    "updateSpecPrompt": "Revise a spec deste projeto a partir das decisões de arquitetura. Identifique comigo o requisito que precisa mudar, preserve tudo que continua válido e proponha uma revisão versionada para minha aprovação. Não altere a arquitetura até essa revisão ser aprovada.",
+    "emptyBody": "O coordenador organiza stack, módulos, dados, UX e testes em um Blueprint rastreável antes da construção.",
     "ready": "Plano conferido",
     "pending": "{{count}} pendência(s)",
     "modules": "Partes do sistema",
@@ -71,10 +68,6 @@
   "product": {
     "title": "Mapa do produto",
     "emptyTitle": "Vamos aprofundar o produto",
-    "emptyBody": "O especialista transforma a ideia em domínios, capacidades e cenários, mostrando o que entra agora e o que pode esperar.",
-    "repairBody": "Este app usa uma jornada anterior. Atualize pelo reparo guiado para inserir a Modelagem do produto sem perder telas, dados, conversas ou código.",
-    "repairAction": "Ir para Reparar app",
-    "openAgent": "Especialista em produto",
     "domains": "domínios",
     "capabilities": "capacidades",
     "scenarios": "cenários",
@@ -94,24 +87,17 @@
     "flows": "Fluxos",
     "wireframes": "Wireframes",
     "plan": "Plano de telas",
-    "openUxAgent": "Especialista em UX",
-    "openWireframeAgent": "Especialista em fluxos",
-    "noUx": "Abra o especialista para criar três direções visuais contextualizadas para este app.",
-    "noWireframe": "Os wireframes aparecerão depois que a direção UX for aprovada.",
+    "noUx": "O coordenador ainda está estruturando as direções visuais deste app no Blueprint.",
+    "noWireframe": "Os wireframes aparecerão quando as fontes de UX e fluxos estiverem prontas.",
     "noPlan": "O plano rastreável de construção ainda não foi criado.",
     "navigation": "Navegação",
     "principles": "Princípios",
     "accessibility": "Acessibilidade",
     "dataBindings": "Dados utilizados",
-    "states": "Estados cobertos",
-    "changeGroup": "Reabrir grupo",
-    "changeGroupHint": "Explique o que precisa mudar. As evidências deste grupo e dos dependentes serão invalidadas, sem apagar o código.",
-    "flowCount": "{{done}}/{{total}} fluxos",
-    "taskCount": "{{done}}/{{total}} tarefas",
-    "groupWaiting": "{{name}} aguardando aprovação"
+    "states": "Estados cobertos"
   },
   "blueprint": {
-    "locked": "Disponível quando o plano do app existir (etapa \"Entender sua ideia\").",
+    "locked": "Disponível quando o Escopo do app existir.",
     "noSpec": "O mapa aparece quando o plano do app for criado na entrevista.",
     "hint": "Arraste os blocos, conecte-os para criar ligações e dê duplo-clique numa ligação para removê-la. Clique num bloco para editar.",
     "save": "Salvar plano",
@@ -150,10 +136,10 @@
     "cascadeConfirm": "Remover mesmo assim",
     "removeEdgeTitle": "Remover esta ligação?",
     "applyTitle": "Aplicar mudanças no plano?",
-    "applyBody": "O plano já foi aprovado. Aplicar mudanças reabre a etapa \"Entender sua ideia\" até você aprovar de novo, e a IA ajusta o app ao novo plano.",
+    "applyBody": "Aplicar cria uma nova revisão. Somente os cards ligados às fontes alteradas ficam desatualizados; o restante continua válido.",
     "applyConfirm": "Aplicar e avisar a IA",
     "applyFallbackFeedback": "Plano editado no Mapa (Blueprint).",
-    "applyMessage": "Editei o plano do app visualmente no Mapa. Releia a spec com app_get_spec, ajuste o que já foi construído para o novo plano e re-submeta a etapa discovery. Resumo das mudanças:",
+    "applyMessage": "Editei o plano do app visualmente no Mapa. Releia a spec, atualize somente os cards ligados às fontes alteradas e solicite a aprovação assíncrona adequada. Continue executando o trabalho independente. Resumo das mudanças:",
     "conflictBody": "A IA atualizou o plano enquanto você editava. Recarregue para ver a versão nova (suas edições não salvas se perdem) ou salve para sobrescrever.",
     "conflictReload": "Recarregar",
     "overview": {
@@ -164,7 +150,6 @@
       "noRequirements": "Ainda não há objetivos, critérios de aceite ou regras finas no plano.",
       "health": "Saúde do plano",
       "noIssues": "Nenhuma pendência importante detectada.",
-      "openAgent": "Refinar com especialista",
       "collapse": "Minimizar visão geral",
       "expand": "Expandir visão geral",
       "counts": {
@@ -218,183 +203,6 @@
       "remove": "Remover"
     }
   },
-  "stages": {
-    "discovery": {
-      "name": "Entender sua ideia",
-      "agent": "Especialista em requisitos",
-      "tagline": "A IA conversa com você para entender o que o app precisa fazer.",
-      "userAction": "Responda as perguntas no chat e depois aprove o plano."
-    },
-    "product": {
-      "name": "Modelar o produto",
-      "agent": "Especialista em produto",
-      "tagline": "Aprofundamos a ideia em capacidades, cenários e escolhas de escopo antes de construir.",
-      "userAction": "Confira Núcleo, Produto completo e Futuro na aba Produto e confirme as escolhas."
-    },
-    "architecture": {
-      "name": "Planejar a construção",
-      "agent": "Especialista em arquitetura",
-      "tagline": "Definimos como o app será montado e como cada resultado será comprovado.",
-      "userAction": "Confira as decisões e garantias na aba Construção e aprove."
-    },
-    "ux": {
-      "name": "Definir a experiência",
-      "agent": "Especialista em UX",
-      "tagline": "Escolhemos cores, estilo, navegação e regras de clareza adequadas ao seu app.",
-      "userAction": "Compare as três direções na aba Experiência e aprove a que melhor representa o app."
-    },
-    "wireframe": {
-      "name": "Planejar fluxos e telas",
-      "agent": "Especialista em fluxos e wireframes",
-      "tagline": "Organizamos como cada pessoa navega, decide e encontra os dados antes de construir.",
-      "userAction": "Confira os fluxos, wireframes e a ordem de construção na aba Experiência."
-    },
-    "database": {
-      "name": "Guardar seus dados",
-      "agent": "Especialista em dados",
-      "tagline": "Criamos o lugar onde o app guarda as informações (clientes, pedidos…).",
-      "userAction": "Confira as fichas na aba Seus dados e aprove."
-    },
-    "design": {
-      "name": "Montar as telas",
-      "agent": "Construtor de interface",
-      "tagline": "As telas do app ganham vida — acompanhe na aba Seu app.",
-      "userAction": "Olhe o app, peça mudanças no chat e aprove quando gostar."
-    },
-    "backend": {
-      "name": "Fazer funcionar",
-      "agent": "Executor da aplicação",
-      "tagline": "Ligamos os botões, cadastros e regras por trás das telas.",
-      "userAction": "Teste o app clicando nele e aprove quando estiver funcionando."
-    },
-    "review": {
-      "name": "Checagem de qualidade",
-      "agent": "Revisor da aplicação",
-      "tagline": "A IA revisa erros e segurança antes de publicar.",
-      "userAction": "Leia o relatório e aprove."
-    },
-    "launch": {
-      "name": "Publicar na internet",
-      "tagline": "Seu app vai ao ar com um endereço próprio.",
-      "userAction": "Conecte sua conta Cloudflare e publique pela aba Publicar."
-    },
-    "status": {
-      "pending": "por fazer",
-      "active": "em andamento",
-      "review": "sua vez",
-      "approved": "pronta",
-      "skipped": "não precisou"
-    }
-  },
-  "explainers": {
-    "discovery": {
-      "title": "O que acontece aqui?",
-      "body": "A IA faz perguntas simples, uma de cada vez, para montar o plano do seu app: o que ele faz, quais telas tem e o que precisa guardar. Nada é construído sem você aprovar o plano."
-    },
-    "ux": {
-      "title": "Por que escolher a experiência antes das telas?",
-      "body": "A direção UX transforma a temática e o público do app em decisões claras de cores, tipografia, densidade, navegação e acessibilidade. Assim as telas deixam de nascer com aparência genérica."
-    },
-    "wireframe": {
-      "title": "O que é um wireframe?",
-      "body": "É um rascunho estrutural da tela. Ele mostra o que aparece, em que ordem, quais dados são usados e como a pessoa avança, sem perder tempo com acabamento antes de validar o fluxo."
-    },
-    "architecture": {
-      "title": "Por que planejar antes de construir?",
-      "body": "O especialista organiza as partes do app, consulta fontes oficiais atualizadas e transforma cada requisito em uma garantia de teste. Isso reduz retrabalho sem expor você a detalhes técnicos."
-    },
-    "database": {
-      "title": "O que é um banco de dados?",
-      "body": "É como um caderno organizado onde seu app anota tudo — cada tipo de informação (clientes, pedidos…) vira uma ficha com colunas. Você vê tudo na aba Seus dados."
-    },
-    "design": {
-      "title": "Por que as telas vêm antes?",
-      "body": "Primeiro montamos a aparência com dados de exemplo, para você ver e ajustar sem esperar. Clique em qualquer parte do app para pedir mudanças."
-    },
-    "backend": {
-      "title": "O que é o \"funcionamento\"?",
-      "body": "É a parte invisível: salvar de verdade o que você digita, buscar as informações certas e proteger o que precisa de senha."
-    },
-    "review": {
-      "title": "O que é checado?",
-      "body": "A IA testa o app inteiro, procura erros e confere itens de segurança (senhas protegidas, dados guardados do jeito certo) antes de liberar a publicação."
-    },
-    "launch": {
-      "title": "O que é a Cloudflare?",
-      "body": "É o serviço (gratuito para começar) onde seu app vai morar na internet. Você conecta sua conta com um clique e o app ganha um endereço próprio para compartilhar."
-    }
-  },
-  "pipeline": {
-    "stageOf": "Etapa {{n}} de {{total}}",
-    "complete": "Tudo pronto — seu app está completo!",
-    "yourTurn": "Sua vez",
-    "stageAgent": "Agente desta etapa",
-    "start": "Começar etapa",
-    "resend": "Continuar",
-    "resolvePending": "Corrigir pendências",
-    "recheck": "Verificar novamente",
-    "reviewCta": "Revisar agora",
-    "approve": "Aprovar e continuar",
-    "requestChanges": "Quero mudar algo",
-    "feedbackPlaceholder": "Conte o que você quer diferente…",
-    "reopenConfirm": "Enviar pedido de mudança",
-    "editStep": "Editar etapa",
-    "reopenApprovedHint": "Explique o que você quer mudar. Esta etapa volta para em andamento e as etapas seguintes voltam para por fazer.",
-    "reopenApprovedPlaceholder": "Ex.: quero mudar a regra de login, remover uma tela, ajustar os dados...",
-    "reopenApprovedConfirm": "Reabrir etapa",
-    "cancel": "Cancelar",
-    "notInitialized": "A jornada deste app ainda não foi iniciada.",
-    "init": "Iniciar jornada",
-    "gateIssues": "Pendências que impedem a aprovação:",
-    "approvalBlocked": "A aprovação ainda não está disponível",
-    "approvalBlockedDescription": "O especialista precisa resolver {{count}} verificações antes de liberar os botões Aprovar e Quero mudar algo.",
-    "repairAction": "Reparar app",
-    "repairTitle": "Verificar e reparar o app",
-    "repairDescription": "Analisamos a estrutura do projeto, os testes, o banco local e a jornada antes de propor qualquer correção.",
-    "repairChecking": "Analisando o app…",
-    "repairHealthy": "O app está consistente",
-    "repairHealthyHint": "A infraestrutura, o banco local e a jornada correspondem às evidências atuais.",
-    "repairFound": "Encontramos {{count}} ajuste(s) seguro(s)",
-    "repairSafety": "A prévia não altera nada. Ao aplicar, arquivos gerenciados recebem backup; nenhum SQL pendente ou código de negócio é executado automaticamente.",
-    "repairPreserves": "Telas, código e histórico existentes são preservados. Novas etapas entram como rascunho e precisam da sua aprovação.",
-    "repairApply": "Aplicar reparo",
-    "repairApplied": "App reparado",
-    "repairAppliedHint": "O reparo foi registrado com backup. O desfazer é bloqueado se algum arquivo reparado mudar depois.",
-    "repairUndo": "Desfazer reparo",
-    "repairRetry": "Verificar novamente",
-    "repairNeedsSpecialist": "Há pontos que exigem análise especializada",
-    "repairNeedsSpecialistHint": "O reparador não altera migrações destrutivas, seeds inválidos ou regras do produto sem revisão humana.",
-    "repairAreaHealthy": "Nenhum problema encontrado nesta área.",
-    "repairWillDo": "Correção automática",
-    "repairAreas": {
-      "workspace": "Projeto e testes",
-      "database": "Banco de dados local",
-      "pipeline": "Jornada de construção"
-    },
-    "repairAreaStatus": {
-      "healthy": "ok",
-      "repairable": "reparo disponível",
-      "attention": "requer atenção"
-    },
-    "repairIssues": {
-      "invalid-package-json": "O package.json está ausente ou inválido e não pode ser alterado automaticamente.",
-      "outdated-test-package": "A infraestrutura de testes está desatualizada.",
-      "missing-vitest-config": "A configuração dos testes do Worker está ausente.",
-      "missing-worker-test-harness": "A configuração dos testes ou o setup isolado do banco está ausente.",
-      "outdated-worker-test-harness": "Os testes do banco usam uma infraestrutura antiga e não validam migrações e exemplos no D1 isolado.",
-      "missing-playwright-config": "A configuração dos testes de navegador está ausente.",
-      "missing-test-directories": "As pastas gerenciadas de testes estão incompletas.",
-      "stale-database-status": "O histórico exibido do banco não corresponde ao ledger real do D1.",
-      "database-ledger-unreadable": "O banco local existe, mas seu histórico de migrações não pôde ser lido.",
-      "destructive-pending-migrations": "Existem migrações destrutivas pendentes que precisam de revisão do especialista.",
-      "invalid-seed": "Os dados de exemplo precisam ser corrigidos pelo especialista antes de serem aplicados."
-    },
-    "repairStatus": {
-      "missing": "ausente",
-      "outdated": "desatualizada",
-      "rebuilt": "recalculada"
-    }
-  },
   "guide": {
     "title": "Sua jornada"
   },
@@ -416,66 +224,24 @@
   },
   "versions": {
     "title": "Versões do app",
-    "subtitle": "Acompanhe mudanças no plano sem perder o histórico do que já foi aprovado.",
     "locked": "Disponível quando o plano do app existir.",
     "refresh": "Atualizar",
-    "loading": "Carregando versões…",
-    "current": "Atual",
-    "openChanges": "Mudanças abertas",
-    "newChange": "Nova mudança",
-    "titlePlaceholder": "Ex.: adicionar mensalidade dos clubes",
-    "descriptionPlaceholder": "Explique o que precisa mudar no app…",
-    "createWithAgent": "Abrir especialista",
     "changes": "Mudanças",
-    "noChanges": "Nenhuma mudança aberta ainda.",
-    "noDescription": "Sem descrição.",
-    "openAgent": "Abrir especialista",
-    "apply": "Aplicar",
-    "reject": "Rejeitar",
-    "discard": "Descartar",
-    "discardTitle": "Descartar esta mudança vazia?",
-    "discardBody": "Esta mudança nunca chegou a ter uma revisão proposta. Descartar remove ela da lista. O plano atual e o histórico não são afetados.",
-    "applyTitle": "Aplicar esta evolução?",
-    "applyBody": "O plano atual será atualizado e as etapas impactadas voltarão para ajuste. O histórico anterior continua guardado.",
-    "applyConfirm": "Aplicar evolução",
-    "impactTitle": "Impacto no build",
-    "affectedStages": "Etapas afetadas",
-    "noImpactYet": "O especialista ainda não propôs uma revisão para calcular o impacto.",
-    "timeline": "Linha do tempo",
-    "createdAt": "Criada",
-    "submittedAt": "Proposta",
-    "appliedAt": "Aplicada",
-    "proposedRevision": "Revisão proposta",
-    "noProposal": "Ainda não há revisão proposta. Abra o especialista para refinar e enviar a mudança.",
+    "noProposal": "Ainda não há revisões registradas.",
     "history": "Histórico de versões",
-    "version": "Versão",
-    "screens": "Telas",
-    "dataEntities": "Dados",
-    "actions": "Ações",
-    "emptyTitle": "Sem mudanças selecionadas",
-    "emptyBody": "Crie uma mudança para evoluir o app sem perder o plano aprovado.",
     "impact": {
       "none": "Sem impacto",
       "low": "Baixo impacto",
       "medium": "Impacto médio",
       "high": "Alto impacto"
-    },
-    "status": {
-      "draft": "rascunho",
-      "review": "em revisão",
-      "approved": "aprovada",
-      "applied": "aplicada",
-      "superseded": "antiga",
-      "rejected": "rejeitada"
     }
   },
   "data": {
     "title": "Seus dados",
     "subtitle": "Veja tabelas, campos, relações, exemplos e consultas seguras do banco local do app.",
-    "locked": "Disponível depois da etapa \"Guardar seus dados\".",
-    "empty": "Seus dados aparecem aqui quando a etapa \"Guardar seus dados\" terminar.",
+    "locked": "Disponível quando o Blueprint entrar em andamento.",
+    "empty": "Os dados aparecem aqui quando as tabelas locais estiverem prontas.",
     "refresh": "Atualizar",
-    "openDbAgent": "Especialista em dados",
     "provision": "Reparar banco",
     "provisioning": "Reparando…",
     "provisionNeededTitle": "Banco local precisa atualizar",
@@ -519,7 +285,7 @@
   },
   "publish": {
     "title": "Publicar na internet",
-    "locked": "Disponível depois da \"Checagem de qualidade\". Complete as etapas do Guia primeiro.",
+    "locked": "Disponível após a aprovação de Release. A aprovação não publica automaticamente.",
     "liveAt": "Seu app está no ar em",
     "cta": "Publicar meu app",
     "retry": "Tentar de novo",
@@ -561,162 +327,8 @@
   },
   "chatRail": {
     "sessions": "Conversas",
-    "assistant": "Assistente",
-    "specSessionTitle": "Refinar plano - {{name}}",
-    "productSessionTitle": "Modelar produto - {{name}}",
-    "dbSessionTitle": "Analisar dados - {{name}}",
-    "architectureSessionTitle": "Planejar construção - {{name}}",
-    "uxSessionTitle": "Direção UX - {{name}}",
-    "wireframeSessionTitle": "Fluxos e wireframes - {{name}}",
-    "designSessionTitle": "Montar telas - {{name}}",
-    "backendSessionTitle": "Fazer funcionar - {{name}}",
-    "reviewSessionTitle": "Revisar aplicação - {{name}}",
-    "builderMode": "Chat de construção",
-    "specMode": "Especialista em spec",
-    "productMode": "Especialista em produto",
-    "dbMode": "Especialista em dados",
-    "architectureMode": "Especialista em arquitetura",
-    "uxMode": "Especialista em UX",
-    "wireframeMode": "Especialista em fluxos",
     "open": "Abrir chat",
-    "back": "Voltar para conversas",
-    "collapse": "Recolher chat",
-    "specLaunch": {
-      "title": "Abrir especialista em spec",
-      "description": "Escolha o modelo antes de criar a sessão. Assim o especialista não herda um modelo indesejado.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    },
-    "dbLaunch": {
-      "title": "Abrir especialista em dados",
-      "description": "Escolha o modelo antes de criar a sessão. Este especialista fica focado no banco de dados escolhido.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    },
-    "architectureLaunch": {
-      "title": "Abrir especialista em arquitetura",
-      "description": "Escolha o modelo que poderá refinar requisitos, pesquisar a documentação oficial e criar o plano de construção e testes.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    },
-    "productLaunch": {
-      "title": "Abrir especialista em produto",
-      "description": "Escolha o modelo que vai aprofundar a ideia, propor horizontes de escopo e mapear cenários sem incluir sugestões automaticamente.",
-      "provider": "Provedor", "model": "Modelo", "searchProvider": "Buscar provedor...", "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado", "noModels": "Nenhum modelo configurado", "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio", "effortAuto": "Automático (padrão do modelo)", "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.", "launch": "Abrir sessão"
-    },
-    "uxLaunch": {
-      "title": "Abrir especialista em direção UX",
-      "description": "Escolha o modelo que entrevistará você e definirá estilo, navegação, acessibilidade e tokens visuais a partir do plano real do app.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    },
-    "wireframeLaunch": {
-      "title": "Abrir especialista em fluxos e wireframes",
-      "description": "Escolha o modelo que transformará requisitos, arquitetura, dados e UX em fluxos, wireframes, testes e grupos de construção rastreáveis.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    },
-    "designLaunch": {
-      "title": "Abrir construtor de interface",
-      "description": "Escolha o modelo que vai montar e validar visualmente as telas planejadas para o app.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    },
-    "backendLaunch": {
-      "title": "Abrir executor da aplicação",
-      "description": "Escolha o modelo que vai implementar regras, integrações, autenticação e conexão com os dados reais.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    },
-    "reviewLaunch": {
-      "title": "Abrir revisor da aplicação",
-      "description": "Escolha o modelo que vai testar o app completo, corrigir falhas e preparar a revisão final.",
-      "provider": "Provedor",
-      "model": "Modelo",
-      "searchProvider": "Buscar provedor...",
-      "searchModel": "Buscar modelo...",
-      "noProviders": "Nenhum provedor configurado",
-      "noModels": "Nenhum modelo configurado",
-      "modelPlaceholder": "id do modelo",
-      "effort": "Esforço de raciocínio",
-      "effortAuto": "Automático (padrão do modelo)",
-      "thinking": "Pensar mais",
-      "thinkingHint": "Usa o modo thinking quando o provedor/modelo aceita.",
-      "launch": "Abrir sessão"
-    }
+    "collapse": "Recolher chat"
   },
   "surfaceFind": {
     "title": "Pesquisar nesta página",
@@ -727,15 +339,58 @@
     "next": "Próxima ocorrência",
     "close": "Fechar pesquisa"
   },
-  "stageMessage": {
-    "product": "Aprofunde este produto antes da arquitetura. Leia a ideia e o briefing persistido, apresente claramente o Núcleo atual, o Produto completo e o que pode ficar para o Futuro. Proponha capacidades importantes que o usuário leigo não mencionou, mas não selecione nada inferido ou pesquisado sem confirmação explícita. Modele domínios e cenários críticos com operações incrementais, rode app_product_audit e submeta a etapa product para revisão.",
-    "discovery": "Vamos começar! Quero criar um app e preciso da sua ajuda para planejar. Me faça UMA pergunta por vez usando a tool ask_user, em linguagem simples e sem termos técnicos, para entender: o que o app faz, quem vai usar, quais telas ele precisa, que informações ele guarda, se as pessoas fazem login, quais regras importantes existem, como vou saber que ficou pronto e o que fica fora da primeira versão. Sempre que a pergunta tiver alternativas, passe options (2 a 8) com allow_freeform: true — assim eu clico num botão OU digito minha própria resposta. Quando a pergunta permitir escolher VÁRIAS opções (ex.: quais telas, que dados guardar, formas de login), passe multi_select: true. Quando tiver tudo, salve o plano com app_save_spec incluindo requirements, rode app_spec_audit, me mostre um resumo simples e pergunte se eu aprovo. Fale sempre no meu idioma.",
-    "architecture": "Planeje como este app será construído. Leia a spec e seu histórico. Se uma decisão de arquitetura exigir mudar comportamento, escopo, dados, acesso ou critérios do produto, confirme comigo e proponha uma revisão versionada da spec antes de continuar. Caso contrário, pesquise somente documentação oficial atual da stack recomendada, registre as fontes e crie uma arquitetura versionada com um plano de testes rastreável. Cada critério de aceite, regra, comportamento, entidade e login deve ter pelo menos um teste. Salve com app_save_architecture, rode app_architecture_audit e entregue a etapa architecture com app_submit_stage. Explique o resultado em linguagem simples.",
-    "database": "Vamos conferir os dados do app. Primeiro inspecione as migrations, o seed canônico e o banco real. Se tudo já corresponder ao plano aprovado, reutilize o banco sem recriar nada. Crie apenas uma migration aditiva para uma diferença de estrutura comprovada; exemplos devem ser corrigidos com app_save_db_seed, nunca com migrations extras. Aplique somente o que estiver pendente, valide com consultas de leitura e entregue a etapa com app_submit_stage.",
-    "ux": "Conduza a direção UX deste app. Leia a spec e a arquitetura aprovadas, a estrutura e os exemplos do banco e as referências opcionais. Apresente exatamente três direções contextualizadas, faça uma pergunta simples por vez e permita selecionar, combinar e refinar. Defina tokens completos, navegação, componentes, movimento e WCAG 2.2 AA. Salve com app_save_ux, rode app_ux_audit e submeta a etapa ux somente quando tudo estiver rastreável.",
-    "wireframe": "Transforme a UX aprovada, a spec, a arquitetura e o banco real em fluxos e wireframes de baixa fidelidade. Cubra entrada, decisões, permissões, ações, dados lidos e escritos, resultados, estados, responsividade e bindings reais. Converta as obrigações TDD em casos Playwright e organize grupos e tarefas em ordem, sem estimativas de horas. Salve com app_save_wireframe, rode app_wireframe_audit e submeta a etapa wireframe.",
-    "design": "Execute somente a tarefa ativa do plano de telas. Comece pelo teste vermelho e pelo contrato de mock tipado, implemente estados, responsividade e acessibilidade, obtenha teste verde e evidência visual, então conclua a tarefa com app_complete_build_task. Ao terminar o grupo, envie com app_submit_build_group e aguarde minha aprovação antes do próximo. Não registre uma tela inteira antecipadamente.",
-    "backend": "Agora faça o app funcionar de verdade: crie as rotas da API para cada informação do plano, troque as telas dos dados de exemplo para os dados reais, e se o plano tiver login, configure a autenticação com segurança. Verifique tudo no preview, registre com app_record_feature e entregue com app_submit_stage.",
-    "review": "Faça a checagem de qualidade: teste o app inteiro no preview como se fosse eu usando, corrija qualquer erro, e escreva o relatório REVIEW.md num texto que eu entenda. Quando estiver tudo verde, entregue com app_submit_stage."
+  "workflow": {
+    "phases": { "define": "Definir", "blueprint": "Blueprint", "build": "Construir", "deliver": "Entregar" },
+    "phaseStatus": { "locked": "Aguardando", "active": "Em andamento", "attention": "Sua atenção", "complete": "Concluído" },
+    "attention": "Sua atenção",
+    "noAttention": "Nenhuma decisão pendente. O coordenador continua trabalhando nos cards liberados.",
+    "kanban": "Plano de entrega",
+    "noCards": "Nenhum card nesta coluna.",
+    "columns": { "backlog": "Backlog", "ready": "Pronto", "running": "Em andamento", "review": "Revisão", "done": "Concluído" },
+    "reviewAutomated": "A Revisão é feita por um agente verificador diferente do implementador.",
+    "approvals": { "scope": "Aprovar Escopo", "blueprint": "Aprovar Blueprint", "release": "Aprovar Release" },
+    "approve": "Aprovar",
+    "requestChanges": "Solicitar mudanças",
+    "changePlaceholder": "Descreva o que precisa mudar e, se possível, quais fontes do escopo foram afetadas.",
+    "answerPlaceholder": "Digite uma resposta ou orientação específica",
+    "answerDecision": "Responder",
+    "sendChanges": "Criar revisão corretiva",
+    "pause": "Pausar",
+    "resume": "Retomar",
+    "cancel": "Cancelar",
+    "blocked": "Bloqueado",
+    "stale": "Desatualizado",
+    "details": "Ver detalhes",
+    "acceptance": "Critérios de aceite",
+    "sources": "Fontes do spec",
+    "dependencies": "Dependências",
+    "files": "Escopo de arquivos",
+    "liveRun": "Execução ao vivo",
+    "evidence": "Evidências",
+    "evidenceCount": "{{count}} evidência(s)",
+    "blocksCards": "Bloqueia somente {{count}} card(s).",
+    "exceptional": "Bloqueados e desatualizados ({{count}})",
+    "unsliced": "Sem fatia",
+    "coordinator": "Coordenador do app",
+    "connectingCoordinator": "Conectando ao coordenador persistente…",
+    "coordinatorOwnsArtifacts": "Peça ajustes na conversa com o coordenador; ele preserva o contexto e atualiza somente os cards afetados.",
+    "versionHistoryHelp": "Histórico imutável. Aprovações e mudanças acontecem na Guia.",
+    "publishIsExplicit": "A aprovação de Release apenas libera esta ação. Publicar continua sendo uma decisão explícita sua."
+  },
+  "agentRail": {
+    "label": "Painéis dos agentes",
+    "agents": "Agentes",
+    "prompts": "Prompts adicionais",
+    "sessions": "Sessões e execuções",
+    "chat": "Chat do coordenador",
+    "profiles": "Perfis especializados",
+    "saved": "Configuração salva.",
+    "coordinatorPrompt": "Prompt adicional do coordenador",
+    "promptPlaceholder": "Instruções específicas deste app, sem repetir o prompt-base…",
+    "profilePromptPlaceholder": "Critérios, padrões e limites adicionais para este perfil…",
+    "save": "Salvar configuração",
+    "agentRuns": "Execuções dos agentes",
+    "noRuns": "Nenhum subagente executado ainda.",
+    "selectRun": "Selecione uma execução."
   }
 }

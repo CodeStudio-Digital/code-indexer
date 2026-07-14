@@ -21,7 +21,7 @@
  * driver de vídeo. Bindings na ordem de token do dispatcher (Ctrl,Alt,Shift).
  */
 import type * as MonacoNs from 'monaco-editor';
-import { registerCommands } from '../../../keymap/commands.js';
+import { registerCommandHandlers } from '../../../keymap/commands.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 import { getActiveEditor } from './editor-models.js';
 import { parseModelPath } from './editor-models-path.js';
@@ -138,6 +138,12 @@ function goToEntry(target: NavEntry): void {
   }
 }
 
+/** Public jump used by IDE affordances (usages, implementations, search). */
+export function navigateToProjectLocation(target: NavEntry): void {
+  pushCurrentNavPosition();
+  goToEntry(target);
+}
+
 /** Próximo/anterior change-marker do modelo ativo, com wrap-around. */
 function jumpChange(dir: 1 | -1): void {
   const editor = getActiveEditor();
@@ -166,13 +172,9 @@ export function registerNavCommands(): () => void {
     lastProject = s.activeProjectId;
     if (lastProject !== null) resetOnProject(lastProject);
   });
-  const unregister = registerCommands([
+  const unregister = registerCommandHandlers([
     {
       id: 'navigate.back',
-      title: 'Back',
-      category: 'Navigate',
-      defaultKeys: { intellij: 'Ctrl+Alt+Left', vscode: 'Alt+Left' },
-      allowInInputs: true, // Monaco é uma textarea
       run: () => {
         const target = navBack(currentNavPosition());
         if (target) goToEntry(target);
@@ -180,10 +182,6 @@ export function registerNavCommands(): () => void {
     },
     {
       id: 'navigate.forward',
-      title: 'Forward',
-      category: 'Navigate',
-      defaultKeys: { intellij: 'Ctrl+Alt+Right', vscode: 'Alt+Right' },
-      allowInInputs: true,
       run: () => {
         const target = navForward(currentNavPosition());
         if (target) goToEntry(target);
@@ -191,18 +189,10 @@ export function registerNavCommands(): () => void {
     },
     {
       id: 'editor.nextChange',
-      title: 'Next Change',
-      category: 'Editor',
-      defaultKeys: { intellij: 'Ctrl+Alt+Shift+Down', vscode: 'Ctrl+Alt+Shift+Down' },
-      allowInInputs: true,
       run: () => jumpChange(1),
     },
     {
       id: 'editor.prevChange',
-      title: 'Previous Change',
-      category: 'Editor',
-      defaultKeys: { intellij: 'Ctrl+Alt+Shift+Up', vscode: 'Ctrl+Alt+Shift+Up' },
-      allowInInputs: true,
       run: () => jumpChange(-1),
     },
   ]);

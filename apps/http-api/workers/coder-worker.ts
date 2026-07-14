@@ -880,13 +880,14 @@ bridge.handle('interruptWait', () => {
 
 bridge.handle('pushUserMessage', (payload) => {
   recordRpc('pushUserMessage');
-  const { content, selectedSkillIds } = payload as {
+  const { content, selectedSkillIds, roundMessageId } = payload as {
     content: string;
     selectedSkillIds?: string[];
+    roundMessageId?: number;
   };
   const runner = activeRun?.runner;
   if (!runner) throw new Error('coder-worker: no runner — call runFresh first');
-  runner.pushUserMessage(content, { selectedSkillIds });
+  runner.pushUserMessage(content, { selectedSkillIds, roundMessageId });
   return { ok: true };
 });
 

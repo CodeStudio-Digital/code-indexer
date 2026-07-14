@@ -5,6 +5,7 @@
  */
 import { useTranslation } from 'react-i18next';
 import { Input } from '../../components/ui/input.js';
+import { ApiClientSelect } from './ApiClientSelect.js';
 import { parseRows } from './kv-grid/kv-utils.js';
 import type { ApiAuthType, ApiRequest } from './types.js';
 
@@ -56,9 +57,13 @@ export function AuthEditor({ draft, upd, persist }: Props) {
     <div className="flex flex-col gap-3 p-1 max-w-md">
       <label className="flex items-center gap-2 text-xs">
         <span className="text-muted-foreground">{t('auth.typeLabel')}</span>
-        <select className="text-xs bg-background border rounded px-2 py-1" value={type} onChange={(e) => setType(e.target.value as ApiAuthType)}>
-          {TYPES.map((opt) => <option key={opt.value} value={opt.value}>{t(`auth.${opt.labelKey}`)}</option>)}
-        </select>
+        <ApiClientSelect
+          value={type}
+          onValueChange={(value) => setType(value as ApiAuthType)}
+          options={TYPES.map((option) => ({ value: option.value, label: t(`auth.${option.labelKey}`) }))}
+          ariaLabel={t('auth.typeLabel')}
+          triggerClassName="w-44"
+        />
       </label>
 
       {type === 'bearer' && field('token', t('auth.token'), '{{token}}')}
@@ -70,10 +75,16 @@ export function AuthEditor({ draft, upd, persist }: Props) {
           {field('value', t('auth.value'), '{{api_key}}')}
           <label className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">{t('auth.addTo')}</span>
-            <select className="text-xs bg-background border rounded px-2 py-1" value={cfg.in ?? 'header'} onChange={(e) => write({ in: e.target.value }, true)}>
-              <option value="header">{t('auth.inHeader')}</option>
-              <option value="query">{t('auth.inQuery')}</option>
-            </select>
+            <ApiClientSelect
+              value={cfg.in ?? 'header'}
+              onValueChange={(value) => write({ in: value }, true)}
+              options={[
+                { value: 'header', label: t('auth.inHeader') },
+                { value: 'query', label: t('auth.inQuery') },
+              ]}
+              ariaLabel={t('auth.addTo')}
+              triggerClassName="w-36"
+            />
           </label>
         </>
       )}

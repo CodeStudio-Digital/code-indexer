@@ -7,22 +7,19 @@
  * A small read-only Monaco preview reflects the theme that would apply to PHP,
  * so the user sees the palette change live.
  */
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import Editor from '@monaco-editor/react';
 import { setupMonaco } from '../../../../lib/monaco-setup.js';
 import { useEditorTheme, resolveThemeId } from '../../../../state/editor-theme.js';
 import { THEME_OPTIONS } from '../../../workspace/editor/themes/index.js';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../../../components/ui/select.js';
+import { Combobox } from '../../../../components/ui/combobox.js';
 
 const DARK_THEMES = THEME_OPTIONS.filter((t) => t.appearance === 'dark');
 const LIGHT_THEMES = THEME_OPTIONS.filter((t) => t.appearance === 'light');
+const DARK_THEME_OPTIONS = DARK_THEMES.map((theme) => ({ value: theme.id, label: theme.label }));
+const LIGHT_THEME_OPTIONS = LIGHT_THEMES.map((theme) => ({ value: theme.id, label: theme.label }));
+const ALL_THEME_OPTIONS = THEME_OPTIONS.map((theme) => ({ value: theme.id, label: theme.label }));
 
 // Languages offered for per-language overrides — the common ones in this IDE.
 // languageId values match the editor's inferLanguage / LSP dispatch keys.
@@ -67,6 +64,10 @@ export function EditorThemePane() {
   const setDarkTheme = useEditorTheme((s) => s.setDarkTheme);
   const setLightTheme = useEditorTheme((s) => s.setLightTheme);
   const setLanguageOverride = useEditorTheme((s) => s.setLanguageOverride);
+  const overrideThemeOptions = useMemo(() => [
+    { value: NO_OVERRIDE, label: t('settings.editorTheme.useDefault') },
+    ...ALL_THEME_OPTIONS,
+  ], [t]);
 
   // The preview <Editor> needs Monaco bundled + our custom themes registered.
   // setupMonaco is idempotent; run it before the child editor's loader inits.
@@ -80,34 +81,33 @@ export function EditorThemePane() {
   });
 
   return (
-    <div className="space-y-5 max-w-2xl">
+    <div className="w-full max-w-3xl space-y-5">
       <div className="space-y-0.5">
-        <h3 className="text-sm font-semibold">{t('settings.nav.editorTheme')}</h3>
         <p className="text-xs text-muted-foreground">{t('settings.editorTheme.subtitle')}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <label className="text-sm font-medium">{t('settings.editorTheme.darkLabel')}</label>
-          <Select value={darkTheme} onValueChange={setDarkTheme}>
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {DARK_THEMES.map((th) => (
-                <SelectItem key={th.id} value={th.id}>{th.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Combobox
+            value={darkTheme}
+            onChange={setDarkTheme}
+            options={DARK_THEME_OPTIONS}
+            searchPlaceholder={t('settings.select.search')}
+            emptyLabel={t('settings.select.empty')}
+            size="md"
+          />
         </div>
         <div className="space-y-1.5">
           <label className="text-sm font-medium">{t('settings.editorTheme.lightLabel')}</label>
-          <Select value={lightTheme} onValueChange={setLightTheme}>
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {LIGHT_THEMES.map((th) => (
-                <SelectItem key={th.id} value={th.id}>{th.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Combobox
+            value={lightTheme}
+            onChange={setLightTheme}
+            options={LIGHT_THEME_OPTIONS}
+            searchPlaceholder={t('settings.select.search')}
+            emptyLabel={t('settings.select.empty')}
+            size="md"
+          />
         </div>
       </div>
 
@@ -122,18 +122,15 @@ export function EditorThemePane() {
             return (
               <div key={lang.id} className="flex items-center gap-3">
                 <span className="w-28 shrink-0 text-sm text-muted-foreground">{lang.label}</span>
-                <Select
+                <Combobox
                   value={current}
-                  onValueChange={(v) => setLanguageOverride(lang.id, v === NO_OVERRIDE ? null : v)}
-                >
-                  <SelectTrigger className="w-full max-w-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_OVERRIDE}>{t('settings.editorTheme.useDefault')}</SelectItem>
-                    {THEME_OPTIONS.map((th) => (
-                      <SelectItem key={th.id} value={th.id}>{th.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onChange={(value) => setLanguageOverride(lang.id, value === NO_OVERRIDE ? null : value)}
+                  options={overrideThemeOptions}
+                  searchPlaceholder={t('settings.select.search')}
+                  emptyLabel={t('settings.select.empty')}
+                  size="md"
+                  className="max-w-xs"
+                />
               </div>
             );
           })}

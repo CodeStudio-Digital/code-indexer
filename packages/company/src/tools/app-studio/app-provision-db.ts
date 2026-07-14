@@ -1,7 +1,7 @@
 /**
  * Tool: `app_provision_db`. Aplica as migrations no banco LOCAL (D1 via
  * miniflare — o MESMO estado que o preview lê) e grava
- * `.app-studio/db.json`, que o gate da etapa database confere.
+ * `.app-studio/db.json`, usado como evidência verificável do card de dados.
  *
  * Fronteira de segurança: esta tool é LOCAL-only. Criar o banco remoto na
  * conta Cloudflare do usuário é exclusivo da launch chain iniciada pelo
@@ -26,7 +26,7 @@ export function appProvisionDb(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_provision_db',
     description:
-      'Apply the SQL migrations to the LOCAL database (the same one the live preview reads) and record the status the database-stage gate checks. Run after writing/altering migrations. Local only — publishing to the cloud happens from the Publicar panel.',
+      'Apply SQL migrations to the LOCAL database used by the live preview and record verifiable database evidence. Run after writing or changing migrations. Local only — publishing to the cloud remains an explicit action in the Publish panel.',
     parameters: PARAMETERS,
     source: 'native',
     handler: async (_args, ctx) => {
@@ -81,7 +81,7 @@ export function appProvisionDb(binding: AppToolBinding): CoderTool {
             (registration
               ? `Registered native database connection '${registration.connection.label}' for db_list/db_schema/db_query/db_command. `
               : 'Native database connection registration was skipped because the local DB file/store was not available. ') +
-            'Verify the example data shows in the preview before submitting the stage.',
+            'Verify the example data in the preview and record the result as card evidence.',
         );
       } catch (e) {
         return err(`app_provision_db failed: ${(e as Error).message}`);

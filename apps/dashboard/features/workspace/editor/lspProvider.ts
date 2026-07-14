@@ -26,6 +26,7 @@ import { registerRenameProviders } from './lsp/rename.js';
 import { registerSignatureHelpProviders } from './lsp/signatureHelp.js';
 import { registerDocumentSymbolProviders } from './lsp/documentSymbols.js';
 import { registerFormattingProviders } from './lsp/formatting.js';
+import { registerSymbolNavigationCodeLensProvider } from './lsp/symbol-navigation-ui.js';
 import {
   registerEditorOpener,
   registerNavProviders,
@@ -70,6 +71,7 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
   disposers.push(...registerRenameProviders(monaco, projectId, docSync.flush));
   disposers.push(...registerSignatureHelpProviders(monaco, projectId, docSync.flush));
   disposers.push(...registerDocumentSymbolProviders(monaco, projectId));
+  disposers.push(...registerSymbolNavigationCodeLensProvider(monaco, projectId));
   // Server-backed formatting (php) — NOT '*', keeps Monaco's built-ins visible.
   disposers.push(...registerFormattingProviders(monaco, projectId, docSync.flush));
   disposers.push(...registerNavProviders(monaco, projectId));

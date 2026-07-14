@@ -1,7 +1,7 @@
 /**
  * Client das rotas do modo Blueprint (PUT spec / PUT layout). O PUT spec
- * devolve 400 {issues} (inválida) e 409 {code:'spec_locked'} (discovery
- * aprovado — a UI orquestra o reopen antes).
+ * devolve 400 {issues} (inválida) e 409 {code:'spec_locked'} (Escopo
+ * aprovado — a UI cria uma revisão versionada).
  */
 import type { AppSpec } from '@mcp/app-studio/spec/types.js';
 import type { BlueprintLayout } from '@mcp/app-studio/blueprint/types.js';

@@ -54,7 +54,7 @@ export function ModelSelector() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="outline" className="h-7 max-w-[260px] gap-1" title={t('model.tooltip')}>
+        <Button size="sm" variant="outline" className="h-6 max-w-[260px] gap-1 border-[var(--workbench-border)] bg-[var(--workbench-surface)] px-2" title={t('model.tooltip')}>
           {busy ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <Cpu className="h-3.5 w-3.5 shrink-0" />}
           <span className="truncate">{activeLabel}</span>
         </Button>

@@ -5,8 +5,9 @@
  */
 import { apiCall } from '../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
-import { modelFor } from './editor-models.js';
+import { getActiveEditor, modelFor } from './editor-models.js';
 import { saveSftpEdit } from './sftp-edit-session.js';
+import { getEffectiveEditorSettings } from '../../../state/editor-settings.js';
 
 export async function saveFile(projectId: number, path: string): Promise<boolean> {
   // Remote (sftp) tabs re-upload over SFTP instead of writing to the project FS.
@@ -17,8 +18,18 @@ export async function saveFile(projectId: number, path: string): Promise<boolean
     (f) => (f.kind === undefined || f.kind === 'file') && f.path === path && f.projectId === projectId,
   );
   const stored = tab && (tab.kind === undefined || tab.kind === 'file') ? tab.content : null;
-  const value = modelFor(projectId, path)?.getValue() ?? stored;
+  const model = modelFor(projectId, path);
+  const settings = getEffectiveEditorSettings(projectId, path);
+  if (settings.formatOnSave && getActiveEditor()?.getModel() === model) {
+    await getActiveEditor()?.getAction('editor.action.formatDocument')?.run();
+  }
+  let value = model?.getValue() ?? stored;
   if (value == null) return false; // never-loaded tab — nothing to persist
+  if (settings.trimTrailingWhitespace) value = value.replace(/[\t ]+$/gm, '');
+  if (settings.insertFinalNewline && value && !value.endsWith('\n')) value += '\n';
+  if (settings.endOfLine === 'lf') value = value.replace(/\r\n/g, '\n');
+  if (settings.endOfLine === 'crlf') value = value.replace(/\r?\n/g, '\r\n');
+  if (model && model.getValue() !== value) model.setValue(value);
   try {
     const res = await apiCall<{ ok: true; last_modified: string }>('files.write', {
       projectId, path, content: value,

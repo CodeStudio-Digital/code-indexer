@@ -16,7 +16,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import type DatabaseConstructor from 'better-sqlite3';
-import { listSqlMigrations, readIfExists, sqlHasStatements } from '@mcp/app-studio/pipeline/gate-checks.js';
+import { listSqlMigrations, readIfExists, sqlHasStatements } from '@mcp/app-studio/verification/workspace-checks.js';
 import type { AppDbEngine } from '@mcp/app-studio/provisioner/types.js';
 import { findLocalD1File } from '@mcp/app-studio/local-db.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';

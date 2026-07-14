@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { Pencil, Pin, PinOff, Plus, Trash2 } from 'lucide-react';
 import { apiPost, apiPatch, apiDelete } from '../../../hooks/useApi.js';
 import { Button } from '../../../components/ui/button.js';
+import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { Markdown } from '../messages/Markdown.js';
 import { DriveDetailDialog } from './DriveDetailDialog.js';
 import type { DriveMemory } from './types.js';
@@ -58,6 +59,12 @@ export function DriveNotesTab({
   };
 
   const remove = async (m: DriveMemory) => {
+    if (!(await confirm({
+      title: t('drive.deleteConfirm', { name: m.title }),
+      description: t('drive.deleteConfirmBody'),
+      confirmLabel: t('drive.delete'),
+      tone: 'destructive',
+    }))) return;
     await apiDelete(`${base}/${m.id}`);
     if (selected?.id === m.id) setSelected(null);
     onChanged();

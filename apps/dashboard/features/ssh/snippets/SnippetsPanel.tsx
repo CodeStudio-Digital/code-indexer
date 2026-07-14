@@ -11,6 +11,7 @@ import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../../components/ui/select.js';
+import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { findHostByKey, listSnippets, createSnippet, patchSnippet, deleteSnippet, listSecrets, sshHostKey } from '../api.js';
 import { SecretsManager } from './SecretsManager.js';
 import type { SshHost, SshSnippet, SshSecret } from '../types.js';
@@ -206,7 +207,15 @@ export function SnippetsPanel({ projectId, hosts, onRun }: SnippetsPanelProps) {
               type="button"
               aria-label={t('panel.delete')}
               title={t('panel.delete')}
-              onClick={() => void deleteSnippet(projectId, sn.id).then(reload)}
+              onClick={async () => {
+                if (!(await confirm({
+                  title: t('snippets.deleteConfirm', { name: sn.name }),
+                  confirmLabel: t('panel.delete'),
+                  tone: 'destructive',
+                }))) return;
+                await deleteSnippet(projectId, sn.id);
+                reload();
+              }}
               className="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted-foreground hover:text-red-500 p-0.5"
             >
               <Trash2 className="h-3.5 w-3.5" />

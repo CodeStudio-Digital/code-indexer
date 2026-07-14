@@ -50,9 +50,10 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
 
   const generate = async () => {
     if (stagedCount === 0 || generating) return;
+    if (!window.confirm(t('git.aiDiffConsent'))) return;
     setGenerating(true);
     try {
-      const r = await apiCall<{ message: string }>('projectGit.aiCommitMessage', { projectId, repoPath });
+      const r = await apiCall<{ message: string }>('projectGit.aiCommitMessage', { projectId, repoPath, consent: true });
       if (r.message) setMessage(r.message);
     } catch (e) {
       const err = e as Error & { status?: number };

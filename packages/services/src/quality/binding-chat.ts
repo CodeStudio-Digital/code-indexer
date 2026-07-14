@@ -81,6 +81,13 @@ export async function coderProviderChat(
   options: ChatCallOptions,
 ): Promise<ChatCallResult> {
   const startedAt = performance.now();
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort('aborted');
+    else options.signal.addEventListener('abort', () => controller.abort('aborted'), { once: true });
+  }
   try {
     const provider = await createChatProviderAsync(binding.provider.id, binding.modelId, {
       providerId: binding.provider.id,
@@ -96,8 +103,15 @@ export async function coderProviderChat(
         content: [{ type: 'text' as const, text: message.content }],
       }));
     let content = '';
+    let ttftMs: number | undefined;
+    let finishReason: ChatCallResult['finishReason'] = 'provider';
     let tokensIn: number | undefined;
     let tokensOut: number | undefined;
+    const stops = (options.stop ?? []).filter(Boolean);
+    // OAuth adapters do not expose a per-request max-output knob consistently.
+    // Guard the stream locally so a completion can stop as soon as one useful
+    // line/block exists instead of buffering an agent-sized answer.
+    const maxChars = Math.max(16, (options.maxTokens ?? 128) * 4);
     for await (const delta of provider.chat({
       system,
       messages: agentMessages,
@@ -106,23 +120,47 @@ export async function coderProviderChat(
       // Codex/OAuth honors an explicit effort (clamped to supported levels)
       // and an AbortSignal — wire both so latency-critical one-shots (preflight)
       // can force minimal reasoning and actually cancel on timeout.
-      reasoningEffort: options.reasoningEffort,
-      signal: options.signal,
+      reasoningEffort: options.reasoningEffort ?? 'minimal',
+      signal: controller.signal,
       inference: { temperature: options.temperature },
     })) {
-      if (delta.type === 'text_delta') content += delta.text;
+      if (delta.type === 'text_delta') {
+        if (ttftMs === undefined && delta.text.length > 0) ttftMs = performance.now() - startedAt;
+        content += delta.text;
+        let cut = -1;
+        for (const stop of stops) {
+          const at = content.indexOf(stop);
+          if (at >= 0 && (cut < 0 || at < cut)) cut = at;
+        }
+        if (cut >= 0) {
+          content = content.slice(0, cut);
+          finishReason = 'local_stop';
+          controller.abort('local_stop');
+          break;
+        }
+        if (content.length >= maxChars) {
+          content = content.slice(0, maxChars);
+          finishReason = 'local_max_tokens';
+          controller.abort('local_max_tokens');
+          break;
+        }
+      }
       if (delta.type === 'usage') {
         tokensIn = delta.usage.input_tokens;
         tokensOut = delta.usage.output_tokens;
       }
     }
-    return { content, tokensIn, tokensOut, latencyMs: performance.now() - startedAt };
+    return { content, tokensIn, tokensOut, latencyMs: performance.now() - startedAt, ttftMs, finishReason };
   } catch (e) {
+    const reason = controller.signal.reason;
     return {
       content: '',
       errorBody: e instanceof Error ? e.message : String(e),
       latencyMs: performance.now() - startedAt,
+      finishReason: reason === 'timeout' ? 'timeout' : reason === 'aborted' ? 'aborted' : 'error',
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -1,5 +1,12 @@
 {
   "title": "Bancos de dados",
+  "rail": {
+    "label": "Ferramentas do banco de dados",
+    "connections": "Conexões",
+    "history": "Histórico",
+    "saved": "Consultas salvas",
+    "specialist": "Especialista de banco"
+  },
   "connections": {
     "title": "Conexões",
     "add": "Nova conexão",
@@ -106,6 +113,8 @@
     "copy": "Copiar SQL",
     "open": "Abrir em nova consulta",
     "clearConfirm": "Limpar todo o histórico desta conexão?",
+    "deleteHistoryConfirm": "Excluir esta entrada do histórico?",
+    "deleteSavedConfirm": "Excluir a consulta salva “{{name}}”?",
     "panel": "Histórico & consultas salvas"
   },
   "tree": {
@@ -262,6 +271,7 @@
     "editElement": "Editar",
     "applyEdit": "Aplicar",
     "removeElement": "Remover",
+    "removeElementConfirm": "Remover este elemento da chave?",
     "console": "Console de comandos",
     "consolePlaceholder": "Comando RESP, ex.: GET chave",
     "badTtl": "TTL deve ser um número (segundos)"
@@ -287,12 +297,18 @@
     "empty": "Nenhuma linha nesta página"
   },
   "edit": {
+    "editRow": "Editar linha",
+    "rowTitle": "Editar linha",
+    "newRowTitle": "Nova linha",
+    "saveRow": "Salvar alterações",
     "pending": "{{n}} alteração(ões) pendente(s)",
     "preview": "Pré-visualizar SQL",
     "apply": "Aplicar",
     "revert": "Reverter",
     "addRow": "Adicionar linha",
     "deleteRow": "Excluir linha",
+    "deleteApplyConfirmTitle": "Excluir {{count}} linha(s)?",
+    "deleteApplyConfirmBody": "Ao executar, as linhas marcadas serão removidas permanentemente do banco.",
     "restoreRow": "Restaurar linha",
     "setNull": "Definir NULL",
     "noPk": "Esta tabela não tem chave primária — as linhas são somente leitura (use a barra de SQL acima).",

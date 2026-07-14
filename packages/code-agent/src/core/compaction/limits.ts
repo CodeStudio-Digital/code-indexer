@@ -254,8 +254,16 @@ export interface TokenLimits {
  *               (≈ resolveTriggerRatio()×effective; 50K-capped on huge windows)
  *   protect   = floor(effective * PROTECT_TOKEN_RATIO)
  */
-export function deriveTokenLimits(model: string): TokenLimits {
-  const eff = getEffectiveContextWindow(model);
+export function deriveTokenLimits(model: string, contextWindow?: number | null): TokenLimits {
+  const resolved = getEffectiveContextWindow(model);
+  const eff = contextWindow != null && Number.isFinite(contextWindow) && contextWindow > 0
+    ? {
+        ...resolved,
+        window: Math.floor(contextWindow),
+        effective: Math.max(1, Math.floor(contextWindow) - resolved.reservedOutput),
+        isFallback: false,
+      }
+    : resolved;
   return {
     effective: eff.effective,
     trigger: Math.max(1, eff.effective - autocompactBufferTokens(eff.effective)),
@@ -266,7 +274,7 @@ export function deriveTokenLimits(model: string): TokenLimits {
 }
 
 /** Should we compact? `total` is the snapshot total (confirmed + estimate). */
-export function shouldCompact(snapshot: TokenSnapshot, model: string): boolean {
-  const limits = deriveTokenLimits(model);
+export function shouldCompact(snapshot: TokenSnapshot, model: string, contextWindow?: number | null): boolean {
+  const limits = deriveTokenLimits(model, contextWindow);
   return snapshot.total >= limits.trigger;
 }

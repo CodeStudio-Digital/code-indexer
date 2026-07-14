@@ -69,10 +69,27 @@ export interface CompactionCheckpoint {
   autoContinues: number;
 }
 
+export interface CompactionCheckpointResult {
+  status: 'committed' | 'compatibility' | 'noop' | 'failed' | 'disabled';
+  chapterId?: number | null;
+  boundaryId?: number | null;
+  reason?: string | null;
+}
+
 export interface RunnerOptions {
   provider: ChatProvider;
   /** Optional zero-temperature auxiliary binding; falls back to `provider`. */
   compactionProvider?: ChatProvider;
+  /** DB-resolved raw context window. Static registry is only a fallback. */
+  contextWindow?: number | null;
+  /** Validated config from the code-agent/compaction pipeline binding. */
+  compactionSummaryOptions?: {
+    timeoutMs?: number;
+    budgetChars?: number;
+    temperature?: number;
+    reasoningEffort?: string | null;
+    maxOutputTokens?: number;
+  };
   registry: ToolRegistry;
   systemPrompt: string;
   toolContext: ToolContext;
@@ -314,7 +331,7 @@ export interface RunnerOptions {
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
   /** Best-effort durable checkpoint for a successfully produced V3 summary. */
-  onCompactionCheckpoint?: (checkpoint: CompactionCheckpoint) => Promise<void>;
+  onCompactionCheckpoint?: (checkpoint: CompactionCheckpoint) => Promise<CompactionCheckpointResult>;
   /**
    * Global user-preferences index (migration 145) — top-N user/feedback
    * memories injected into every project, NOT gated by the project toggle.

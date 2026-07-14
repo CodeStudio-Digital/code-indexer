@@ -5,14 +5,15 @@
  */
 
 export interface ResolvedCompletionCfg {
-  contextEngine: 'v2' | 'v1';
+  contextEngine: 'v3' | 'v2' | 'v1';
   contextMode: 'layered' | 'imports_only';
   budgetTokens: number;
   sourceTimeoutMs: number;
   deadlineMs: number;
   cacheTtlMs: number;
   lspMemberRaceMs: number;
-  toggles: { recentEdits: boolean; openTabs: boolean; lspDefs: boolean };
+  toggles: { recentEdits: boolean; openTabs: boolean; lspDefs: boolean; relatedCode: boolean };
+  relatedCodeTokens: number;
   jaccardMinScore: number;
   maxTabFiles: number;
   maxPrefixLines: number;
@@ -47,7 +48,7 @@ export function parseCompletionCfg(
     legacyChars > 0 ? Math.round(legacyChars / 3.5) : endpoint === 'fim' ? BUDGET_FIM_TOK : BUDGET_CHAT_TOK,
   );
   return {
-    contextEngine: cfg.context_engine === 'v1' ? 'v1' : 'v2',
+    contextEngine: cfg.context_engine === 'v1' ? 'v1' : cfg.context_engine === 'v2' ? 'v2' : 'v3',
     contextMode: cfg.context_mode === 'imports_only' ? 'imports_only' : 'layered',
     budgetTokens,
     sourceTimeoutMs: num(cfg.context_source_timeout_ms, 100),
@@ -58,7 +59,11 @@ export function parseCompletionCfg(
       recentEdits: bool(cfg.ctx_recent_edits, true),
       openTabs: bool(cfg.ctx_open_tabs, true),
       lspDefs: bool(cfg.ctx_lsp_defs, true),
+      // Both flags are required. Existing bindings therefore stay off until
+      // the admin explicitly accepts the cross-file context notice.
+      relatedCode: cfg.ctx_related_code === true && cfg.ctx_related_code_consent_v === 1,
     },
+    relatedCodeTokens: Math.min(700, num(cfg.ctx_related_code_tokens, 700)),
     jaccardMinScore: num(cfg.jaccard_min_score, 0.1),
     maxTabFiles: num(cfg.max_tab_files, 10),
     maxPrefixLines: num(cfg.max_prefix_lines, 80),

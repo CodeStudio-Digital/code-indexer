@@ -19,12 +19,13 @@ interface ForwardEntry {
 // Module-level (Electron dual-factory).
 const cache = new TtlLru<ForwardEntry>(64, TTL_MS);
 
-const key = (projectId: number, file: string, line: number) => `${projectId}:${file}:${line}`;
+const key = (projectId: number, file: string, line: number, revision = '') => `${projectId}:${file}:${line}:${revision}`;
 
 export function rememberCompletion(
   projectId: number, file: string, line: number, prefix: string, text: string, requestId: string,
+  revision = '',
 ): void {
-  cache.set(key(projectId, file, line), { prefixTail: prefix.slice(-TAIL_CHARS), text, requestId });
+  cache.set(key(projectId, file, line, revision), { prefixTail: prefix.slice(-TAIL_CHARS), text, requestId });
 }
 
 /**
@@ -33,9 +34,9 @@ export function rememberCompletion(
  * (same position re-request) is left to the exact result cache.
  */
 export function forwardMatch(
-  projectId: number, file: string, line: number, prefix: string,
+  projectId: number, file: string, line: number, prefix: string, revision = '',
 ): { text: string; requestId: string } | null {
-  const hit = cache.get(key(projectId, file, line));
+  const hit = cache.get(key(projectId, file, line, revision));
   if (!hit || !hit.prefixTail) return null;
   const newTail = prefix.slice(-(TAIL_CHARS + hit.text.length));
   const idx = newTail.lastIndexOf(hit.prefixTail);

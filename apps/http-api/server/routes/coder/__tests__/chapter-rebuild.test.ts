@@ -17,7 +17,7 @@ function row(id: number, role: CoderMessageRow['role'], chars = 20): CoderMessag
 }
 
 describe('historical chapter rebuild chunking', () => {
-  it('caps chunks and starts every split at a user boundary', () => {
+  it('caps chunks without losing rows from a giant autonomous turn', () => {
     const rows: CoderMessageRow[] = [];
     for (let turn = 0; turn < 24; turn++) {
       rows.push(row(rows.length + 1, 'user'));
@@ -28,13 +28,24 @@ describe('historical chapter rebuild chunking', () => {
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.rows.length <= 50)).toBe(true);
     expect(chunks.every((chunk) => chunk.chars <= 60_000)).toBe(true);
-    expect(chunks.every((chunk) => chunk.rows[0]?.role === 'user')).toBe(true);
     expect(chunks.flatMap((chunk) => chunk.rows).map((item) => item.id))
       .toEqual(rows.map((item) => item.id));
   });
 
-  it('rejects a single user turn that cannot satisfy both hard caps', () => {
-    expect(() => chunkArchivedConversation([row(1, 'user', 61_000)]))
-      .toThrow(/exceeds the rebuild chunk limit/);
+  it('accepts one oversized atomic message as its own sampled chunk', () => {
+    const chunks = chunkArchivedConversation([row(1, 'user', 61_000)]);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.rows.map((item) => item.id)).toEqual([1]);
+  });
+
+  it('never separates tool_use from its following tool_result', () => {
+    const assistant = row(2, 'assistant', 20);
+    assistant.content_json = JSON.stringify([{
+      type: 'tool_use', id: 'tool-1', name: 'run', input: {},
+    }]);
+    const rows = [row(1, 'user', 59_900), assistant, row(3, 'tool', 1_000), row(4, 'assistant')];
+    const chunks = chunkArchivedConversation(rows);
+    const toolUseChunk = chunks.find((chunk) => chunk.rows.some((item) => item.id === 2));
+    expect(toolUseChunk?.rows.some((item) => item.id === 3)).toBe(true);
   });
 });

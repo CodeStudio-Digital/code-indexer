@@ -238,7 +238,7 @@ export const SessionSidebar = memo(function SessionSidebar({
       )}
       <aside
         className={cn(
-          'flex flex-col bg-card overflow-hidden',
+          'flex flex-col bg-[var(--workbench-surface)] overflow-hidden',
           // `@container`: os cards/rows reagem à largura REAL desta barra
           // (não à do viewport) — via container queries do Tailwind v4. É o
           // que o `lg:` abaixo não faz: no App Studio/ProjectView a janela é
@@ -259,7 +259,7 @@ export const SessionSidebar = memo(function SessionSidebar({
       >
       {/* Thin single-row header — matches the system's section strips
           (icon + compact title on the left, action icons on the right). */}
-      <div className="flex items-center gap-1 border-b px-2 h-9">
+      <div className="flex items-center gap-1 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2 h-9">
         <div className="flex min-w-0 items-center gap-1.5">
           <MessageSquareCode className="h-4 w-4 text-primary shrink-0" />
           {/* Some quando a barra aperta — sobra o ícone + as ações. */}
@@ -625,6 +625,7 @@ const SessionRow = memo(function SessionRow({
   const isChecked = selectMode && checked;
   return (
     <div
+      data-session-id={s.id}
       onClick={handleClick}
       className={cn(
         // Two-line row. The 2px left accent rule is a `before:` pseudo-element
@@ -633,8 +634,8 @@ const SessionRow = memo(function SessionRow({
         'group relative flex items-center gap-2 min-w-0 rounded-md pl-3 pr-2 py-1.5 cursor-pointer transition-colors',
         "before:content-[''] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors",
         !isActive && !isChecked && 'hover:bg-muted/50',
-        isActive && 'bg-accent/40 before:bg-primary hover:bg-accent/40',
-        isChecked && 'bg-accent/30 before:bg-primary/70 ring-1 ring-inset ring-primary/40',
+        isActive && 'bg-[var(--workbench-active)] before:bg-[var(--workbench-focus)] hover:bg-[var(--workbench-active)]',
+        isChecked && 'bg-[var(--workbench-active)] before:bg-[var(--workbench-focus)] ring-1 ring-inset ring-[var(--workbench-focus)]/40',
       )}
     >
       {selectMode ? (

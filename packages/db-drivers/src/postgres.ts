@@ -170,9 +170,17 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
     const pkCols = new Set((pkRes.rows as Array<{ column_name: string }>).map((r) => r.column_name));
 
     const colsRes = await pool.query(
-      `SELECT c.column_name, c.data_type, c.udt_name, c.is_nullable, c.column_default,
+      `SELECT c.column_name, c.data_type, c.udt_name, c.udt_schema, c.is_nullable, c.column_default,
               c.ordinal_position, c.character_maximum_length, c.numeric_precision,
-              pgd.description AS comment
+              pgd.description AS comment,
+              ARRAY(
+                SELECT e.enumlabel
+                  FROM pg_catalog.pg_type enum_type
+                  JOIN pg_catalog.pg_namespace enum_ns ON enum_ns.oid = enum_type.typnamespace
+                  JOIN pg_catalog.pg_enum e ON e.enumtypid = enum_type.oid
+                 WHERE enum_type.typname = c.udt_name AND enum_ns.nspname = c.udt_schema
+                 ORDER BY e.enumsortorder
+              ) AS enum_values
          FROM information_schema.columns c
          LEFT JOIN pg_catalog.pg_statio_all_tables st
            ON st.schemaname = c.table_schema AND st.relname = c.table_name
@@ -187,12 +195,14 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
         column_name: string;
         data_type: string;
         udt_name: string;
+        udt_schema: string;
         is_nullable: string;
         column_default: string | null;
         ordinal_position: number;
         character_maximum_length: number | null;
         numeric_precision: number | null;
         comment: string | null;
+        enum_values: string[];
       }>
     ).map((c) => ({
       name: c.column_name,
@@ -205,6 +215,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       charMaxLength: c.character_maximum_length,
       numericPrecision: c.numeric_precision,
       comment: c.comment,
+      enumValues: c.enum_values.length > 0 ? c.enum_values : undefined,
     }));
 
     const idxRes = await pool.query(

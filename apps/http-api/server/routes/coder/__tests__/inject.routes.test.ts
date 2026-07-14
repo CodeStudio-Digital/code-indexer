@@ -33,7 +33,12 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
   if (opts.live !== false) activeRuns.set(1, liveBus(runner));
 
   const deps = {
-    sessionStore: { appendMessage: (id: number, msg: unknown) => appendCalls.push({ id, msg }) },
+    sessionStore: {
+      appendMessage: (id: number, msg: unknown) => {
+        appendCalls.push({ id, msg });
+        return 42;
+      },
+    },
   } as unknown as ServerDeps;
   const runtime = {
     activeRuns,
@@ -61,7 +66,10 @@ describe('coder POST /sessions/:id/inject', () => {
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ injected: true });
     expect(h.appendCalls).toHaveLength(1);
-    expect(h.pushCalls).toEqual([{ content: 'follow-up', extras: { selectedSkillIds: ['s1'] } }]);
+    expect(h.pushCalls).toEqual([{
+      content: 'follow-up',
+      extras: { selectedSkillIds: ['s1'], roundMessageId: 42 },
+    }]);
   });
 
   it('returns noActiveRun when there is no live run', async () => {

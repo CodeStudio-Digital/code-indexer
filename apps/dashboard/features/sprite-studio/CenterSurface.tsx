@@ -163,10 +163,14 @@ function EmptyState({
   body: string;
 }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      <Icon className="h-8 w-8 text-muted-foreground/40" />
-      <div className="text-sm font-medium">{title}</div>
-      <div className="max-w-sm text-xs text-muted-foreground">{body}</div>
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--workbench-canvas)] p-6 text-center">
+      <span className="grid h-12 w-12 place-items-center rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-raised)]">
+        <Icon className="h-6 w-6 text-muted-foreground" />
+      </span>
+      <div className="space-y-1">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="max-w-sm text-xs leading-5 text-muted-foreground">{body}</div>
+      </div>
     </div>
   );
 }

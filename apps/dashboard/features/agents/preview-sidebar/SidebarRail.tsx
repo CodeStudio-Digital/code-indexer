@@ -107,7 +107,7 @@ export function SidebarRail({ active, onToggle, pluginWindows = [] }: SidebarRai
   );
 
   return (
-    <RailContainer side="right">
+    <RailContainer side="right" aria-label="Painéis da empresa">
       {core.map(renderIcon)}
       <RailSeparator />
       <button

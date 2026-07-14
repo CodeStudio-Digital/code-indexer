@@ -4,8 +4,8 @@ import { computeTurnEditSummaries } from '../turn-summaries.js';
 
 type Tool = { name: string; input: Record<string, unknown> };
 
-function userGroup(): VisualGroup {
-  return { kind: 'user', message: { role: 'user', content: [] } };
+function userGroup(messageId = 100): VisualGroup {
+  return { kind: 'user', message: { role: 'user', content: [] }, messageId };
 }
 
 function asstGroup(tools: Tool[]): VisualGroup {
@@ -28,7 +28,10 @@ describe('computeTurnEditSummaries', () => {
     const groups: VisualGroup[] = [userGroup(), asstGroup([{ name: 'edit_file', input: { path: 'a.ts' } }])];
     const out = computeTurnEditSummaries(groups);
     expect([...out.keys()]).toEqual([1]);
-    expect(out.get(1)).toEqual([{ path: 'a.ts', op: 'edit' }]);
+    expect(out.get(1)).toEqual({
+      roundMessageId: 100,
+      paths: [{ path: 'a.ts', op: 'edit' }],
+    });
   });
 
   it('coalesces consecutive assistant groups into one turn, keyed at the last', () => {
@@ -39,22 +42,28 @@ describe('computeTurnEditSummaries', () => {
     ];
     const out = computeTurnEditSummaries(groups);
     expect([...out.keys()]).toEqual([2]);
-    expect(out.get(2)).toEqual([
-      { path: 'a.ts', op: 'edit' },
-      { path: 'b.ts', op: 'edit' },
-    ]);
+    expect(out.get(2)).toEqual({
+      roundMessageId: 100,
+      paths: [
+        { path: 'a.ts', op: 'edit' },
+        { path: 'b.ts', op: 'edit' },
+      ],
+    });
   });
 
   it('produces one entry per turn across a multi-turn conversation', () => {
     const groups: VisualGroup[] = [
-      userGroup(),
+      userGroup(100),
       asstGroup([{ name: 'edit_file', input: { path: 'a.ts' } }]),
-      userGroup(),
+      userGroup(200),
       asstGroup([{ name: 'create_file', input: { path: 'c.ts', content: '' } }]),
     ];
     const out = computeTurnEditSummaries(groups);
     expect([...out.keys()]).toEqual([1, 3]);
-    expect(out.get(3)).toEqual([{ path: 'c.ts', op: 'add' }]);
+    expect(out.get(3)).toEqual({
+      roundMessageId: 200,
+      paths: [{ path: 'c.ts', op: 'add' }],
+    });
   });
 
   it('dedupes a path edited twice in a turn (last op wins)', () => {
@@ -66,7 +75,10 @@ describe('computeTurnEditSummaries', () => {
       ]),
     ];
     const out = computeTurnEditSummaries(groups);
-    expect(out.get(1)).toEqual([{ path: 'a.ts', op: 'edit' }]);
+    expect(out.get(1)).toEqual({
+      roundMessageId: 100,
+      paths: [{ path: 'a.ts', op: 'edit' }],
+    });
   });
 
   it('emits no entry for a turn with no file edits (or only non-edit tools)', () => {

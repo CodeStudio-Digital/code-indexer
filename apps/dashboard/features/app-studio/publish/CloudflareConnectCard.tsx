@@ -7,7 +7,6 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Cloud, ExternalLink, Loader2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
-import { ExplainerCard } from '../guide/ExplainerCard.js';
 import { streamCfLogin, type CfWhoami } from './launch-api.js';
 
 export function CloudflareConnectCard({
@@ -57,7 +56,7 @@ export function CloudflareConnectCard({
         <Cloud className="h-4 w-4 text-primary" />
         {t('publish.connect.title', { defaultValue: 'Conecte sua conta Cloudflare' })}
       </p>
-      <ExplainerCard stageId="launch" />
+      <p className="text-xs text-muted-foreground">{t('workflow.publishIsExplicit')}</p>
       <Button size="sm" className="w-full" disabled={busy} onClick={() => void connect()}>
         {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Cloud className="mr-1 h-3.5 w-3.5" />}
         {busy

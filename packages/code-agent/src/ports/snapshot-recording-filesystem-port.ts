@@ -44,8 +44,28 @@ export interface SnapshotRecorderDeps {
   store: SessionFileSnapshotStore;
   /** Returns the current turn number from the runner, or null when unknown. */
   getTurn?: () => number | null;
+  /** Persisted user-message id delimiting the current conversational round. */
+  getRoundMessageId?: () => number | null;
   /** Fired after a successful record so the SSE layer can notify clients. */
-  onRecorded?: (info: { baselineId: number; filePath: string }) => void;
+  onRecorded?: (info: {
+    baselineId: number;
+    globalBaselineId: number;
+    roundMessageId: number | null;
+    roundSnapshotId: number | null;
+    filePath: string;
+  }) => void;
+}
+
+export interface PreparedSnapshotMutation {
+  globalBaselineId: number;
+  roundMessageId: number | null;
+  projectId: number | null;
+  filePath: string;
+  contentBefore: string | null;
+  existedBefore: boolean;
+  contentAfter: string | null;
+  existedAfter: boolean;
+  oversized: boolean;
 }
 
 function toProjectRelative(absPath: string, projectRoot: string): string | null {
@@ -114,9 +134,9 @@ export class SnapshotRecorder {
     absPath: string,
     inner: IFilesystemPort,
     info: { tool: string; expectedAfter: string | null; isDelete: boolean },
-  ): Promise<void> {
+  ): Promise<PreparedSnapshotMutation | null> {
     const match = this.resolveRoot(absPath);
-    if (!match) return; // out of every known root — not tracked.
+    if (!match) return null; // out of every known root — not tracked.
     const relPath = match.relPath;
 
     let existed = true;
@@ -129,6 +149,8 @@ export class SnapshotRecorder {
     }
 
     const oversized = content != null && (content.length > MAX_BASELINE_BYTES || isBinaryLike(content));
+    const afterOversized = info.expectedAfter != null
+      && (info.expectedAfter.length > MAX_BASELINE_BYTES || isBinaryLike(info.expectedAfter));
     const baselineHash = hashContent(content);
     const create: CreateBaselineInput = {
       session_kind: this.deps.sessionKind,
@@ -136,9 +158,10 @@ export class SnapshotRecorder {
       project_id: match.projectId,
       file_path: relPath.replace(/\\/g, '/'),
       content_before: oversized ? null : content,
+      rollback_content: content,
       existed_before: existed,
       baseline_hash: baselineHash,
-      oversized,
+      oversized: oversized || afterOversized,
     };
     const afterHash = hashContent(info.expectedAfter);
     const { baseline } = this.deps.store.recordBaselineAndEdit(create, {
@@ -147,9 +170,47 @@ export class SnapshotRecorder {
       content_after_hash: afterHash,
       was_delete: info.isDelete,
     });
+    return {
+      globalBaselineId: baseline.id,
+      roundMessageId: this.deps.getRoundMessageId?.() ?? null,
+      projectId: match.projectId,
+      filePath: create.file_path,
+      contentBefore: content,
+      existedBefore: existed,
+      contentAfter: info.expectedAfter,
+      existedAfter: !info.isDelete,
+      oversized: oversized || afterOversized,
+    };
+  }
 
+  /** Commit the round envelope only after the filesystem mutation succeeded. */
+  complete(prepared: PreparedSnapshotMutation | null): void {
+    if (!prepared) return;
+    let roundSnapshotId: number | null = null;
+    if (prepared.roundMessageId != null) {
+      const round = this.deps.store.recordRoundSnapshotMutation({
+        session_kind: this.deps.sessionKind,
+        session_id: this.deps.sessionId,
+        round_message_id: prepared.roundMessageId,
+        global_baseline_id: prepared.globalBaselineId,
+        project_id: prepared.projectId,
+        file_path: prepared.filePath,
+        content_before: prepared.contentBefore,
+        existed_before: prepared.existedBefore,
+        content_after: prepared.contentAfter,
+        existed_after: prepared.existedAfter,
+        oversized: prepared.oversized,
+      });
+      roundSnapshotId = round.id;
+    }
     try {
-      this.deps.onRecorded?.({ baselineId: baseline.id, filePath: create.file_path });
+      this.deps.onRecorded?.({
+        baselineId: prepared.globalBaselineId,
+        globalBaselineId: prepared.globalBaselineId,
+        roundMessageId: prepared.roundMessageId,
+        roundSnapshotId,
+        filePath: prepared.filePath,
+      });
     } catch {
       // never let downstream notification errors propagate into the write path.
     }
@@ -173,21 +234,23 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
   }
 
   async writeFile(absPath: string, data: string): Promise<void> {
-    await this.recorder.record(absPath, this.inner, {
+    const prepared = await this.recorder.record(absPath, this.inner, {
       tool: this.currentToolName,
       expectedAfter: data,
       isDelete: false,
     });
     await this.inner.writeFile(absPath, data);
+    this.recorder.complete(prepared);
   }
 
   async unlink(absPath: string): Promise<void> {
-    await this.recorder.record(absPath, this.inner, {
+    const prepared = await this.recorder.record(absPath, this.inner, {
       tool: this.currentToolName,
       expectedAfter: null,
       isDelete: true,
     });
     await this.inner.unlink(absPath);
+    this.recorder.complete(prepared);
   }
 
   readFile(absPath: string): Promise<string> {
@@ -213,25 +276,28 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
     } catch {
       expectedAfter = null;
     }
-    await this.recorder.record(oldAbsPath, this.inner, {
+    const oldPrepared = await this.recorder.record(oldAbsPath, this.inner, {
       tool: this.currentToolName,
       expectedAfter: null,
       isDelete: true,
     });
-    await this.recorder.record(newAbsPath, this.inner, {
+    const newPrepared = await this.recorder.record(newAbsPath, this.inner, {
       tool: this.currentToolName,
       expectedAfter,
       isDelete: false,
     });
     await this.inner.rename(oldAbsPath, newAbsPath);
+    this.recorder.complete(oldPrepared);
+    this.recorder.complete(newPrepared);
   }
   async rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
-    await this.recorder.record(absPath, this.inner, {
+    const prepared = await this.recorder.record(absPath, this.inner, {
       tool: this.currentToolName,
       expectedAfter: null,
       isDelete: true,
     });
     await this.inner.rm(absPath, options);
+    this.recorder.complete(prepared);
   }
 
   /**

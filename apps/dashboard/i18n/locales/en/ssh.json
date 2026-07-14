@@ -15,6 +15,7 @@
     "importError": "Import failed: {{reason}}",
     "edit": "Edit",
     "delete": "Delete",
+    "deleteTitle": "Delete host “{{label}}”?",
     "deleteConfirm": "Delete host \"{{label}}\"?",
     "deleteSharedConfirm": "Delete shared host \"{{label}}\"? It will be removed from ALL projects.",
     "shared": "Shared",
@@ -157,7 +158,8 @@
     "multilineHint": "Each line runs as a separate command (it's run as a shell script).",
     "secretHint": "Use ${secret:NAME} to inject a stored secret (e.g. a git token) — resolved right before running.",
     "selectHost": "Select a host",
-    "runError": "Could not run snippet: {{reason}}"
+    "runError": "Could not run snippet: {{reason}}",
+    "deleteConfirm": "Delete snippet “{{name}}”?"
   },
   "secrets": {
     "title": "Secrets",
@@ -167,7 +169,9 @@
     "valueKeep": "Leave blank to keep the current value",
     "descPlaceholder": "Description (optional)",
     "save": "Save",
-    "insert": "Insert secret"
+    "insert": "Insert secret",
+    "deleteConfirm": "Delete secret “{{name}}”?",
+    "deleteConfirmBody": "Snippets that use this secret will stop working."
   },
   "tunnels": {
     "title": "Port forwarding",

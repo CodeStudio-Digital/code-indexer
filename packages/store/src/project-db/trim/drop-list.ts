@@ -35,6 +35,8 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'coder_phase_profiles', 'coder_session_groups', 'coder_task_runs', 'coder_task_run_items',
   'coder_session_index', 'coder_session_projects',
   'session_file_baselines', 'session_file_edits', 'session_file_hunk_decisions',
+  'session_file_round_snapshots', 'session_file_round_hunk_decisions',
+  'session_file_round_review_findings',
   'session_file_review_comments', 'session_file_review_runs', 'session_disabled_tools',
   // stats (central per Etapa A)
   'runs', 'costs', 'project_cost_rollup',

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CompanyTerminalPanel } from './terminal/CompanyTerminalPanel.js';
+import { CompanyBottomPanel, type CompanyBottomTab } from './CompanyBottomPanel.js';
 import { useSandboxStatus } from '../builder/useSandboxStatus.js';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, PanelGroup } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi.js';
@@ -29,6 +29,8 @@ import { parseConfig } from './session-view/types.js';
 import { mergeBoardMessages, mergeSubordinates } from './session-view/merge-live-persisted.js';
 import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
 import { SidebarPanels } from './preview-sidebar/SidebarPanels.js';
+import CompanyDbConnectionsPanel from './CompanyDbConnectionsPanel.js';
+import { DatabaseToolWindow } from '../db-client/DatabaseToolWindow.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import type { NotificationSourceContext } from '../notifications/index.js';
 import type {
@@ -36,6 +38,8 @@ import type {
   PersistedAgentRun,
   SessionProject,
 } from './session-view/types.js';
+import { WorkbenchResizeHandle, WorkbenchSurface } from '../../components/workbench/index.js';
+import type { CompanySessionWorkbenchSlots } from './company-workbench-slots.js';
 
 interface CompanySessionViewProps {
   sessionId: number;
@@ -49,6 +53,7 @@ interface CompanySessionViewProps {
    */
   sessionsListOpen?: boolean;
   onToggleSessionsList?: () => void;
+  workbenchSlots?: CompanySessionWorkbenchSlots;
 }
 
 interface SessionFullData {
@@ -90,6 +95,7 @@ export function CompanySessionView({
   sessionStatus,
   sessionsListOpen,
   onToggleSessionsList,
+  workbenchSlots,
 }: CompanySessionViewProps) {
   const { t } = useTranslation('agents');
   const contribWindows = useContributions((s) => s.toolWindows);
@@ -164,16 +170,26 @@ export function CompanySessionView({
   // in context — same affordance the old left-rail AgentsSidebar gave
   // for free, now on the right.
   const [sidePanel, setSidePanel] = useState<SidePanel | null>('company-config');
-  // Bottom terminal panel — workspace-style, resizable via
+  const DATABASE_PROJECT_KEY = `mcp-ide:agents.databaseProject.${sessionId}`;
+  const [selectedDatabaseProjectId, setSelectedDatabaseProjectId] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = Number(window.localStorage.getItem(DATABASE_PROJECT_KEY));
+    return Number.isInteger(stored) && stored > 0 ? stored : null;
+  });
+  const [databaseNavigatorHost, setDatabaseNavigatorHost] = useState<HTMLDivElement | null>(null);
+  const [databaseEditorHost, setDatabaseEditorHost] = useState<HTMLDivElement | null>(null);
+  // Bottom panel — workspace-style, resizable via
   // `react-resizable-panels` (which persists the size on its own via
-  // `autoSaveId`). The boolean below is the open/closed flag; we
-  // persist it manually so the panel state survives reloads. Default
-  // closed — first visit gets a clean board; the operator opens it
-  // via the toggle in `SessionHeader` (Ctrl+J shortcut TODO).
+  // `autoSaveId`). Its active tab is also the open/closed state, matching
+  // ProjectWorkbench's `activeBottom` contract. The legacy terminal flag
+  // remains a migration source for layouts saved before Runners moved here.
   const TERMINAL_OPEN_KEY = `mcp-ide:agents.terminalOpen.${sessionId}`;
-  const [terminalOpen, setTerminalOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return window.localStorage.getItem(TERMINAL_OPEN_KEY) === '1';
+  const BOTTOM_TAB_KEY = `mcp-ide:agents.bottomTab.${sessionId}`;
+  const [activeBottom, setActiveBottom] = useState<CompanyBottomTab | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = window.localStorage.getItem(BOTTOM_TAB_KEY);
+    if (stored === 'terminal' || stored === 'runners') return stored;
+    return window.localStorage.getItem(TERMINAL_OPEN_KEY) === '1' ? 'terminal' : null;
   });
   // Sandbox status — drives the "Sandbox" target option in the
   // terminal spawn menu. Hook is cached per sessionId so cost is
@@ -181,17 +197,48 @@ export function CompanySessionView({
   const sandboxStatus = useSandboxStatus(sessionId);
   const hasSandboxForTerminal = !!sandboxStatus.data?.containerId;
 
-  const toggleTerminal = useCallback(() => {
-    setTerminalOpen((v) => {
-      const next = !v;
+  const persistBottom = useCallback((next: CompanyBottomTab | null) => {
+    setActiveBottom(next);
+    try {
+      if (next) window.localStorage.setItem(BOTTOM_TAB_KEY, next);
+      else window.localStorage.removeItem(BOTTOM_TAB_KEY);
+      // Keep writing the old boolean during the transition so older builds
+      // still understand whether a company bottom panel was open.
+      window.localStorage.setItem(TERMINAL_OPEN_KEY, next ? '1' : '0');
+    } catch {
+      /* localStorage disabled — silent */
+    }
+  }, [BOTTOM_TAB_KEY, TERMINAL_OPEN_KEY]);
+
+  const toggleBottom = useCallback((requested: CompanyBottomTab) => {
+    setActiveBottom((current) => {
+      const next = current === requested ? null : requested;
       try {
+        if (next) window.localStorage.setItem(BOTTOM_TAB_KEY, next);
+        else window.localStorage.removeItem(BOTTOM_TAB_KEY);
         window.localStorage.setItem(TERMINAL_OPEN_KEY, next ? '1' : '0');
       } catch {
         /* localStorage disabled — silent */
       }
       return next;
     });
-  }, [TERMINAL_OPEN_KEY]);
+  }, [BOTTOM_TAB_KEY, TERMINAL_OPEN_KEY]);
+
+  // Old bookmarks used `/build/terminal` and `/build/runners` because both
+  // tools once replaced the central surface. Open the corresponding bottom
+  // tab and normalize the center back to the regular Build surface.
+  useEffect(() => {
+    const legacyBottom = routeParams.zone === 'build' &&
+      (routeParams.tab === 'terminal' || routeParams.tab === 'runners')
+      ? routeParams.tab
+      : null;
+    if (!legacyBottom) return;
+    persistBottom(legacyBottom);
+    navigate(
+      buildAgentsUrl(sessionId, activeFrontId, 'build', DEFAULT_TAB_FOR_ZONE.build),
+      { replace: true },
+    );
+  }, [activeFrontId, navigate, persistBottom, routeParams.tab, routeParams.zone, sessionId]);
   const [modalSession, setModalSession] = useState<{
     coderSessionId: number;
     role: string;
@@ -211,19 +258,39 @@ export function CompanySessionView({
     void hydrateContributions();
   }, []);
 
-  // Ctrl+J toggles the bottom terminal — same shortcut as the
+  const selectDatabaseProject = useCallback((projectId: number) => {
+    setSelectedDatabaseProjectId(projectId);
+    try {
+      window.localStorage.setItem(DATABASE_PROJECT_KEY, String(projectId));
+    } catch {
+      /* localStorage disabled — the in-memory selection still works */
+    }
+  }, [DATABASE_PROJECT_KEY]);
+
+  useEffect(() => {
+    if (selectedDatabaseProjectId == null || !sessionData?.projects) return;
+    if (sessionData.projects.some((project) => project.project_id === selectedDatabaseProjectId)) return;
+    setSelectedDatabaseProjectId(null);
+    try {
+      window.localStorage.removeItem(DATABASE_PROJECT_KEY);
+    } catch {
+      /* localStorage disabled */
+    }
+  }, [DATABASE_PROJECT_KEY, selectedDatabaseProjectId, sessionData?.projects]);
+
+  // Ctrl+J toggles the Terminal tab in the bottom panel — same shortcut as the
   // Workspace. We listen at the window level so the binding works
   // regardless of which tab inside ZoneLayout has focus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'j') {
         e.preventDefault();
-        toggleTerminal();
+        toggleBottom('terminal');
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [toggleTerminal]);
+  }, [toggleBottom]);
 
   // Reset stream state when the active sub-session changes (tab switch
   // or explicit session change). Each sub-session has its own metaBus
@@ -294,6 +361,18 @@ export function CompanySessionView({
     setSidePanel((cur) => (cur === panel ? null : panel));
   };
 
+  const databaseMode = sidePanel === 'databases';
+  const selectedDatabaseProject = (sessionData?.projects ?? []).find(
+    (project) => project.project_id === selectedDatabaseProjectId,
+  ) ?? null;
+  const handleWorkbenchZoneTabChange = (nextZone: Zone, nextTab: string) => {
+    // The database editor temporarily owns the Company center. A selection in
+    // the left activity rail must reveal the requested surface immediately;
+    // otherwise the URL changes behind an unchanged database canvas.
+    setSidePanel((current) => current === 'databases' ? null : current);
+    handleZoneTabChange(nextZone, nextTab);
+  };
+
   // Session already has a run if status is not idle/draft — use sendMessage, not start.
   const sessionAlreadyRan =
     sessionStatus === 'running' ||
@@ -359,146 +438,172 @@ export function CompanySessionView({
   );
 
   return (
-    <div className="flex flex-col h-full">
-      <SessionHeader
-        sessionName={sessionName}
-        sessionStatus={sessionStatus}
-        reportedStatus={sessionData?.session.status}
-        stream={stream}
-        sessionsListOpen={sessionsListOpen}
-        onToggleSessionsList={onToggleSessionsList}
-        recoveredAt={sessionData?.session.recovered_at ?? null}
-        recoveredReason={sessionData?.session.recovered_reason ?? null}
-        onResetClick={() => setResetDialogOpen(true)}
-        onReestablishMasterClick={() => setReestablishMasterOpen(true)}
-      />
-
-      <div className="flex-1 flex overflow-hidden">
-        {/* Resizable IDE-style splits via react-resizable-panels, mirroring
-            ProjectView: a horizontal split [center | right drawer] with a
-            nested vertical split [content | terminal] inside the center.
-            Sizes persist via autoSaveId; the right icon rail stays OUTSIDE
-            the group at a fixed width. */}
-        <PanelGroup direction="horizontal" autoSaveId="mcp-agents-horiz">
-          <Panel minSize={30}>
-            <PanelGroup direction="vertical" autoSaveId="mcp-agents-vert">
-              <Panel minSize={20}>
-                <div className="h-full flex flex-col overflow-hidden">
-                  <SessionBanners stream={stream} sessionId={activeSessionId} />
-
-                  {/* Front tabs — visible across every zone so the user always
-                      has a way to switch between Main and child fronts. */}
-                  {siblings.parent && (
-                    <FrontTabsBar
-                      parent={siblings.parent}
-                      children={siblings.children}
-                      activeSessionId={siblings.activeSessionId}
-                      onSelect={siblings.setActiveSessionId}
-                      onCreate={siblings.createChild}
-                      onArchive={siblings.archiveChild}
-                      onRename={siblings.renameChild}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--workbench-canvas)]">
+      {selectedDatabaseProject && (
+        <DatabaseToolWindow
+          key={`company-database-${selectedDatabaseProject.project_id}`}
+          projectId={selectedDatabaseProject.project_id}
+          projectName={selectedDatabaseProject.label?.trim() || selectedDatabaseProject.project_name}
+          host={databaseMode ? databaseNavigatorHost : null}
+          editorHost={databaseMode ? databaseEditorHost : null}
+          embeddedEditor
+        />
+      )}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {/* Same hierarchy as ProjectWorkbench: the vertical split owns the
+            whole workbench, so the bottom dock spans primary + right dock.
+            The fixed-width activity rail remains outside every resizable
+            panel and every surface gets the shared 6px workbench gutter. */}
+        <div className="min-w-0 flex-1 p-1.5">
+          <PanelGroup direction="vertical" autoSaveId={`mcp-agents-vert-${sessionId}`}>
+            <Panel id="company-main" order={1} minSize={28} className="min-h-0">
+              <PanelGroup direction="horizontal" autoSaveId={`mcp-agents-horiz-${sessionId}`}>
+                <Panel id="company-primary" order={1} minSize={34} className="min-w-0">
+                  <WorkbenchSurface className="flex h-full flex-col bg-[var(--workbench-canvas)]">
+                    {/* Session context belongs to the primary surface. Keeping
+                        it here aligns it with every tool-window header instead
+                        of creating a full-width band above the right dock and
+                        activity rail. */}
+                    <SessionHeader
+                      sessionName={sessionName}
+                      sessionStatus={sessionStatus}
+                      reportedStatus={sessionData?.session.status}
+                      stream={stream}
+                      sessionsListOpen={sessionsListOpen}
+                      onToggleSessionsList={onToggleSessionsList}
+                      recoveredAt={sessionData?.session.recovered_at ?? null}
+                      recoveredReason={sessionData?.session.recovered_reason ?? null}
+                      onResetClick={() => setResetDialogOpen(true)}
+                      onReestablishMasterClick={() => setReestablishMasterOpen(true)}
                     />
-                  )}
+                    <SessionBanners stream={stream} sessionId={activeSessionId} />
 
-                  {/* Zone content keeps its natural flex-1. The MasterComposer
-                      is passed as a slot so WorkZone can render it INSIDE the
-                      Board tab only — there's no point in showing it on
-                      Kanban/Pipelines/Transcript/Files/Git/etc surfaces where
-                      the operator isn't talking to the master. The terminal
-                      toggle now lives in the rail footer (mirrors ProjectView). */}
-                  <ZoneLayout
-                    sessionId={sessionId}
-                    sessionName={sessionName}
-                    zone={zone}
-                    tab={tab}
-                    onZoneTabChange={handleZoneTabChange}
-                    stream={stream}
-                    boardMessages={boardMessages}
-                    terminalOpen={terminalOpen}
-                    onToggleTerminal={toggleTerminal}
-                    composer={
-                      <MasterComposer
-                        sessionId={activeSessionId}
-                        onSend={handleSend}
-                        placeholder={
-                          !stream.started && !sessionAlreadyRan
-                            ? t('company.inputPlaceholder')
-                            : t('company.inputPlaceholderMaster')
-                        }
-                        supportsThinking={masterSupportsThinking}
-                        reasoningEffort={masterReasoningEffort}
-                        setReasoningEffort={handleMasterEffortChange}
-                        reasoningLevels={masterReasoningLevels}
+                    {/* Front tabs — visible across every zone so the user always
+                        has a way to switch between Main and child fronts. */}
+                    {siblings.parent && (
+                      <FrontTabsBar
+                        parent={siblings.parent}
+                        children={siblings.children}
+                        activeSessionId={siblings.activeSessionId}
+                        onSelect={siblings.setActiveSessionId}
+                        onCreate={siblings.createChild}
+                        onArchive={siblings.archiveChild}
+                        onRename={siblings.renameChild}
                       />
-                    }
-                  />
-                </div>
-              </Panel>
+                    )}
 
-              {/* Bottom terminal — workspace-style resizable panel beneath the
-                  composer. Drag the handle on its top edge; size persists via
-                  the PanelGroup autoSaveId. */}
-              {terminalOpen && (
-                <>
-                  <PanelResizeHandle className="h-px bg-border hover:bg-primary/40 transition-colors" />
-                  <Panel defaultSize={28} minSize={10} maxSize={60}>
-                    <div className="h-full overflow-hidden">
-                      <CompanyTerminalPanel
-                        companySessionId={sessionId}
-                        projects={sessionData?.projects ?? []}
-                        hasSandbox={hasSandboxForTerminal}
-                      />
+                    {/* Company content and the embedded database editor coexist.
+                        The inactive surface is hidden, never unmounted, so board
+                        scroll/composer state and database tabs survive toggles. */}
+                    <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                      <div
+                        aria-hidden={databaseMode}
+                        className={`absolute inset-0 flex min-h-0 ${databaseMode ? 'invisible pointer-events-none' : ''}`}
+                      >
+                        <ZoneLayout
+                          sessionId={sessionId}
+                          sessionName={sessionName}
+                          zone={zone}
+                          tab={tab}
+                          onZoneTabChange={handleWorkbenchZoneTabChange}
+                          stream={stream}
+                          boardMessages={boardMessages}
+                          bottomOpen={activeBottom !== null}
+                          onToggleBottom={() => toggleBottom('terminal')}
+                          workbenchSlots={workbenchSlots}
+                          composer={
+                            <MasterComposer
+                              sessionId={activeSessionId}
+                              onSend={handleSend}
+                              placeholder={
+                                !stream.started && !sessionAlreadyRan
+                                  ? t('company.inputPlaceholder')
+                                  : t('company.inputPlaceholderMaster')
+                              }
+                              supportsThinking={masterSupportsThinking}
+                              reasoningEffort={masterReasoningEffort}
+                              setReasoningEffort={handleMasterEffortChange}
+                              reasoningLevels={masterReasoningLevels}
+                            />
+                          }
+                        />
+                      </div>
+                      {databaseMode && (
+                        <div ref={setDatabaseEditorHost} className="absolute inset-0 overflow-hidden" />
+                      )}
                     </div>
-                  </Panel>
-                </>
-              )}
-            </PanelGroup>
-          </Panel>
+                  </WorkbenchSurface>
+                </Panel>
 
-          {/* Right drawer: drag-resizable content panel + always-on icon
-              rail. Preview is gated on builder mode; Inbox / Env /
-              Databases work for every session. Sub-sessions share the
-              parent's sandbox so we always feed the ROOT session id. */}
-          {sidePanel !== null && (
-            <>
-              <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-              <Panel defaultSize={26} minSize={15} maxSize={45}>
-                <div className="h-full border-l flex flex-col overflow-hidden">
-                  <SidebarPanels
-                    sessionId={sessionId}
-                    active={sidePanel}
-                    companyConfigSlot={
-                      // AgentsSidebar moved from a permanent left rail to
-                      // a right-drawer panel (item from the UI feedback
-                      // round). Same 14 closures, same behaviour — only
-                      // the chrome changed. `open=true` because if the
-                      // user opens this panel they want the content
-                      // expanded; the rail icon handles the toggle.
-                      <AgentsSidebar
-                        sessionId={sessionId}
-                        open={true}
-                        config={config}
-                        projects={sessionData?.projects ?? []}
-                        allProjects={allProjects ?? null}
-                        persistedAgentRuns={sessionData?.agentRuns ?? []}
-                        subordinates={subordinates}
-                        stream={stream}
-                        providerOptions={providerOptions}
-                        getModelsForProvider={getModelsForProvider}
-                        getDefaultModel={getDefaultModel}
-                        refetch={refetch}
-                        onOpenAgentRun={openAgentRun}
-                        onOpenPersistedRun={openPersistedRun}
-                        onOpenRoleDialog={(args) => setRoleDialog(args)}
-                      />
-                    }
-                    pluginWindows={contribWindows}
-                  />
-                </div>
-              </Panel>
-            </>
-          )}
-        </PanelGroup>
+                {/* Right dock is a sibling of the primary surface, exactly like
+                    ProjectWorkbench. The rail that controls it stays outside
+                    the padded/resizable workbench below. */}
+                {sidePanel !== null && (
+                  <>
+                    <WorkbenchResizeHandle direction="horizontal" />
+                    <Panel id="company-right-dock" order={2} defaultSize={26} minSize={20} maxSize={46} className="min-w-0">
+                      <WorkbenchSurface className="flex h-full flex-col bg-[var(--workbench-surface)]">
+                        <SidebarPanels
+                          sessionId={sessionId}
+                          active={sidePanel}
+                          databaseSlot={
+                            <CompanyDbConnectionsPanel
+                              projects={sessionData?.projects ?? []}
+                              selectedProjectId={selectedDatabaseProjectId}
+                              onSelectProject={selectDatabaseProject}
+                              onHostChange={setDatabaseNavigatorHost}
+                            />
+                          }
+                          companyConfigSlot={
+                            <AgentsSidebar
+                              sessionId={sessionId}
+                              open={true}
+                              config={config}
+                              projects={sessionData?.projects ?? []}
+                              allProjects={allProjects ?? null}
+                              persistedAgentRuns={sessionData?.agentRuns ?? []}
+                              subordinates={subordinates}
+                              stream={stream}
+                              providerOptions={providerOptions}
+                              getModelsForProvider={getModelsForProvider}
+                              getDefaultModel={getDefaultModel}
+                              refetch={refetch}
+                              onOpenAgentRun={openAgentRun}
+                              onOpenPersistedRun={openPersistedRun}
+                              onOpenRoleDialog={(args) => setRoleDialog(args)}
+                            />
+                          }
+                          pluginWindows={contribWindows}
+                        />
+                      </WorkbenchSurface>
+                    </Panel>
+                  </>
+                )}
+              </PanelGroup>
+            </Panel>
+
+            {/* Bottom dock spans the complete resizable workbench (primary +
+                right dock) rather than being nested inside the conversation. */}
+            {activeBottom && (
+              <>
+                <WorkbenchResizeHandle direction="vertical" />
+                <Panel id="company-bottom-dock" order={2} defaultSize={28} minSize={12} maxSize={62} className="min-h-0">
+                  <WorkbenchSurface className="h-full bg-[var(--workbench-surface)]">
+                    <CompanyBottomPanel
+                      companySessionId={sessionId}
+                      projects={sessionData?.projects ?? []}
+                      hasSandbox={hasSandboxForTerminal}
+                      activeTab={activeBottom}
+                      onSelectTab={persistBottom}
+                      onCollapse={() => persistBottom(null)}
+                      onClose={() => persistBottom(null)}
+                    />
+                  </WorkbenchSurface>
+                </Panel>
+              </>
+            )}
+          </PanelGroup>
+        </div>
         <SidebarRail
           active={sidePanel}
           onToggle={togglePanel}

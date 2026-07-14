@@ -5,30 +5,16 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { GitMergeState } from '@mcp/api-bus';
+import type { GitMergeState, GitStatus, GitStatusFile, GitWorkspaceSnapshot } from '@mcp/api-bus';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { startRouteSpan } from '../../../../../lib/perf/route-startup-metrics.js';
 import { useWorkspaceStore } from '../../../../../state/workspace.js';
 import { useGitRevision } from '../../../../../state/git-revision.js';
-import { confirm, toast } from '../../../../../components/ui/prompt-dialog.js';
+import { confirm, prompt, toast } from '../../../../../components/ui/prompt-dialog.js';
 import { setConflicts, clearConflicts, onGitReloadRequest } from '../../../editor/conflict-registry.js';
 import type { GitTab } from './GitTabNav.js';
 
-export interface GitStatusFile {
-  path: string;
-  state: string;
-  staged: boolean;
-}
-
-export interface GitStatus {
-  branch: string | null;
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-  files?: GitStatusFile[];
-  repoRoot: string | null;
-  notARepo: boolean;
-}
+export type { GitStatus, GitStatusFile } from '@mcp/api-bus';
 
 interface OpenSections {
   staged: boolean;
@@ -45,8 +31,12 @@ export interface GitWindowModel {
   tab: GitTab;
   setTab: Dispatch<SetStateAction<GitTab>>;
   mergeState: GitMergeState | null;
+  statusCounts: GitWorkspaceSnapshot['counts'] | null;
+  hasMoreStatus: boolean;
+  loadingMoreStatus: boolean;
   groups: { staged: GitStatusFile[]; unstaged: GitStatusFile[]; untracked: GitStatusFile[] };
   reload: (silent?: boolean) => Promise<void>;
+  loadMoreStatus: () => Promise<void>;
   showDiff: (file: GitStatusFile) => Promise<void>;
   onStage: (paths: string[]) => Promise<void>;
   onUnstage: (paths: string[]) => Promise<void>;
@@ -78,16 +68,26 @@ export function useGitWindow(
   const [openSections, setOpenSections] = useState<OpenSections>({ staged: true, unstaged: true, untracked: false });
   const [tab, setTab] = useState<GitTab>('changes');
   const [mergeState, setMergeState] = useState<GitMergeState | null>(null);
+  const [statusCounts, setStatusCounts] = useState<GitWorkspaceSnapshot['counts'] | null>(null);
+  const [statusSnapshotId, setStatusSnapshotId] = useState<string | null>(null);
+  const [statusCursor, setStatusCursor] = useState<string | null>(null);
+  const [loadingMoreStatus, setLoadingMoreStatus] = useState(false);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
   const staleWhileHidden = useRef(false);
+  const reloadRequest = useRef(0);
 
   useEffect(() => {
+    reloadRequest.current += 1;
     staleWhileHidden.current = false;
     setStatus(null);
     setMergeState(null);
     setError(null);
     setLoading(true);
-  }, [projectId]);
+    setStatusCounts(null);
+    setStatusSnapshotId(null);
+    setStatusCursor(null);
+    setLoadingMoreStatus(false);
+  }, [projectId, repoPath]);
 
   const showDiff = useCallback(
     async (file: GitStatusFile) => {
@@ -128,6 +128,7 @@ export function useGitWindow(
     // Hold the initial fetch until repos are known so repoPath is settled (else
     // the first status would be the project-wide aggregate). Stays in loading.
     if (!ready) return;
+    const requestId = ++reloadRequest.current;
     const includeFiles = tab === 'changes';
     if (!silent) setLoading(true);
     const finishStatusSpan = startRouteSpan('GitWindow:status', {
@@ -138,7 +139,9 @@ export function useGitWindow(
     const finishMergeSpan = startRouteSpan('GitWindow:mergeState', { projectId, tab: 'git' });
     try {
       const [s, ms] = await Promise.all([
-        apiCall<GitStatus>('projectGit.status', { projectId, repoPath, includeFiles })
+        (includeFiles
+          ? apiCall<GitWorkspaceSnapshot>('projectGit.statusPage', { projectId, repoPath, pageSize: 250 })
+          : apiCall<GitStatus>('projectGit.status', { projectId, repoPath, includeFiles: false }))
           .then((value) => {
             finishStatusSpan({ status: 'ok' });
             return value;
@@ -157,7 +160,17 @@ export function useGitWindow(
             throw err;
           }),
       ]);
+      if (requestId !== reloadRequest.current) return;
       setStatus(s);
+      if ('counts' in s) {
+        setStatusCounts(s.counts);
+        setStatusSnapshotId(s.snapshotId);
+        setStatusCursor(s.nextCursor);
+      } else {
+        setStatusCounts(null);
+        setStatusSnapshotId(null);
+        setStatusCursor(null);
+      }
       setMergeState(ms);
       staleWhileHidden.current = false;
       // Feed the editor's conflict registry (project-relative paths) so open
@@ -172,11 +185,37 @@ export function useGitWindow(
       }
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (requestId === reloadRequest.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (requestId === reloadRequest.current) setLoading(false);
     }
   }, [active, ready, projectId, repoPath, repoPrefix, tab]);
+
+  const loadMoreStatus = useCallback(async () => {
+    if (!active || !statusSnapshotId || !statusCursor || loadingMoreStatus) return;
+    const requestId = reloadRequest.current;
+    setLoadingMoreStatus(true);
+    try {
+      const page = await apiCall<GitWorkspaceSnapshot>('projectGit.statusPage', {
+        projectId,
+        repoPath,
+        snapshotId: statusSnapshotId,
+        cursor: statusCursor,
+        pageSize: 250,
+      });
+      if (requestId !== reloadRequest.current) return;
+      setStatus((current) => current ? { ...current, files: [...(current.files ?? []), ...page.files] } : page);
+      setStatusCursor(page.nextCursor);
+      setStatusCounts(page.counts);
+    } catch (cause) {
+      if (requestId !== reloadRequest.current) return;
+      const err = cause as Error & { status?: number };
+      if (err.status === 410) await reload(true);
+      else setError(err.message);
+    } finally {
+      if (requestId === reloadRequest.current) setLoadingMoreStatus(false);
+    }
+  }, [active, loadingMoreStatus, projectId, reload, repoPath, statusCursor, statusSnapshotId]);
 
   useEffect(() => {
     if (active) void reload(staleWhileHidden.current);
@@ -240,15 +279,21 @@ export function useGitWindow(
     }
   };
   const onDiscard = async (paths: string[]) => {
-    const ok = await confirm({
-      title: t(paths.length === 1 ? 'git.discardTitle_one' : 'git.discardTitle_other', { count: paths.length }),
-      description:
-        paths.length === 1
-          ? t('git.discardDescription_one', { path: paths[0] })
-          : t('git.discardDescription_other', { count: paths.length }),
-      confirmLabel: t('git.discard'),
-      tone: 'destructive',
-    });
+    const outsideCount = (status?.files ?? []).filter((file) => paths.includes(file.path) && file.outsideProject).length;
+    const needsTypedConfirmation = paths.length > 1 || outsideCount > 0;
+    const ok = needsTypedConfirmation
+      ? (await prompt({
+          title: t('git.discardTypedTitle', { count: paths.length }),
+          description: t('git.discardTypedDescription', { token: 'DISCARD', outside: outsideCount }),
+          placeholder: 'DISCARD',
+          confirmLabel: t('git.discard'),
+        })) === 'DISCARD'
+      : await confirm({
+          title: t('git.discardTitle_one', { count: paths.length }),
+          description: t('git.discardDescription_one', { path: paths[0] }),
+          confirmLabel: t('git.discard'),
+          tone: 'destructive',
+        });
     if (!ok) return;
     try {
       await apiCall('projectGit.discard', { projectId, repoPath, paths });
@@ -263,6 +308,7 @@ export function useGitWindow(
 
   return {
     status, loading, error, openSections, setOpenSections, tab, setTab, mergeState,
-    groups, reload, showDiff, onStage, onUnstage, onDiscard,
+    statusCounts, hasMoreStatus: !!statusCursor, loadingMoreStatus,
+    groups, reload, loadMoreStatus, showDiff, onStage, onUnstage, onDiscard,
   };
 }

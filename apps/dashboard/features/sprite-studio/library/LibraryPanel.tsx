@@ -48,18 +48,15 @@ export function LibraryPanel({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="shrink-0 space-y-2 border-b p-2">
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {t('library.title')}
-          </span>
-          <Button size="sm" variant="outline" className="h-6 gap-1 px-1.5 text-[11px]" onClick={() => setNewOpen(true)}>
+      <div className="shrink-0 space-y-1.5 border-b border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-1.5">
+        <div className="flex justify-end">
+          <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5 text-[11px] hover:bg-[var(--workbench-hover)]" onClick={() => setNewOpen(true)}>
             <Plus className="h-3 w-3" /> {t('library.newAsset')}
           </Button>
         </div>
         <SearchBar query={query} onQuery={onQuery} />
       </div>
-      <div className="max-h-[45%] shrink-0 overflow-y-auto border-b px-1">
+      <div className="max-h-[45%] shrink-0 overflow-y-auto border-b border-[var(--workbench-border)] px-1">
         <CategoryTree
           projectId={projectId}
           assets={assets}

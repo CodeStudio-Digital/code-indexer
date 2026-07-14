@@ -15,8 +15,10 @@ import {
   Replace,
   RotateCcw,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useContextMenu, type ContextMenuItem } from '../../../../../components/ui/context-menu.js';
 import { cn } from '../../../../../lib/utils.js';
+import { GitGraphCell, type GitGraphRow } from './git-graph.js';
 
 export interface Commit {
   sha: string;
@@ -24,6 +26,8 @@ export interface Commit {
   author: string;
   date: string;
   subject: string;
+  parents?: string[];
+  refs?: string[];
 }
 
 export interface CommitRowProps {
@@ -36,6 +40,8 @@ export interface CommitRowProps {
   selected?: boolean;
   /** A merge/cherry-pick/etc. is mid-flight — disable history-rewriting actions. */
   disabled?: boolean;
+  graph?: GitGraphRow;
+  graphMaxLanes?: number;
 }
 
 export function CommitRow({
@@ -46,18 +52,21 @@ export function CommitRow({
   onSelect,
   selected,
   disabled,
+  graph,
+  graphMaxLanes,
 }: CommitRowProps) {
+  const { t } = useTranslation('workspace');
   const items: ContextMenuItem[] = [
     {
       id: 'cherry-pick',
-      label: 'Cherry-pick onto current branch',
+      label: t('git.commitMenu.cherryPick'),
       icon: Replace,
       disabled,
       onSelect: onCherryPick,
     },
     {
       id: 'revert',
-      label: 'Revert (new commit that undoes this)',
+      label: t('git.commitMenu.revert'),
       icon: RotateCcw,
       disabled,
       onSelect: onRevert,
@@ -65,19 +74,19 @@ export function CommitRow({
     {
       id: 'reset-soft',
       separatorBefore: true,
-      label: 'Reset HEAD → here (soft)',
+      label: t('git.commitMenu.resetSoft'),
       disabled,
       onSelect: () => onReset('soft'),
     },
     {
       id: 'reset-mixed',
-      label: 'Reset HEAD → here (mixed)',
+      label: t('git.commitMenu.resetMixed'),
       disabled,
       onSelect: () => onReset('mixed'),
     },
     {
       id: 'reset-hard',
-      label: 'Reset HEAD → here (hard, destructive)',
+      label: t('git.commitMenu.resetHard'),
       destructive: true,
       disabled,
       onSelect: () => onReset('hard'),
@@ -85,7 +94,7 @@ export function CommitRow({
     {
       id: 'copy-sha',
       separatorBefore: true,
-      label: 'Copy full SHA',
+      label: t('git.commitMenu.copySha'),
       icon: ClipboardCopy,
       onSelect: () => {
         void navigator.clipboard.writeText(c.sha).catch(() => undefined);
@@ -99,17 +108,42 @@ export function CommitRow({
       <div
         {...triggerProps}
         onClick={onSelect}
+        role={onSelect ? 'button' : undefined}
+        tabIndex={onSelect ? 0 : undefined}
+        onKeyDown={onSelect ? (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onSelect();
+          }
+        } : undefined}
         className={cn(
-          'group flex items-center gap-1.5 px-2 py-1 border-b last:border-b-0 text-[11.5px] transition-colors',
+          'group flex min-h-8 items-center gap-1.5 px-2 py-0 border-b last:border-b-0 text-[11.5px] transition-colors',
           onSelect && 'cursor-pointer',
           selected ? 'bg-primary/10' : 'hover:bg-muted/40',
         )}
         title={c.subject}
       >
-        <GitCommit className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        {graph && graphMaxLanes ? (
+          <GitGraphCell row={graph} maxLanes={graphMaxLanes} selected={selected} />
+        ) : (
+          <GitCommit className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        )}
         <span className="font-mono text-[10px] text-muted-foreground w-14 shrink-0 truncate">
           {c.shortSha}
         </span>
+        {(c.refs?.length ?? 0) > 0 && (
+          <span className="flex max-w-[180px] shrink-0 items-center gap-1 overflow-hidden">
+            {c.refs?.slice(0, 2).map((ref) => (
+              <span
+                key={ref}
+                className="max-w-[86px] truncate rounded-sm border border-primary/25 bg-primary/10 px-1 py-px text-[9px] leading-3 text-primary"
+                title={ref}
+              >
+                {ref.replace(/^HEAD -> /, '')}
+              </span>
+            ))}
+          </span>
+        )}
         <span className="truncate flex-1">{c.subject}</span>
         <span className="text-[10px] text-muted-foreground/70 max-w-[110px] truncate shrink-0">
           {c.author}
@@ -120,7 +154,7 @@ export function CommitRow({
         <button
           type="button"
           className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
-          aria-label="More actions"
+          aria-label={t('git.moreActions')}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();

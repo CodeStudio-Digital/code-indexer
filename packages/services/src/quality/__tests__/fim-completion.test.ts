@@ -77,17 +77,27 @@ describe('fimCompletion', () => {
   });
 
   it('posts to /fim/completions for the mistral kind, honoring the provider base_url', async () => {
-    const fetchFn = jsonFetch({ choices: [{ text: 'ok' }] });
+    const fetchFn = jsonFetch({ choices: [{ message: { content: 'ok' } }] });
     await fimCompletion(
-      binding({ kind: 'mistral', model: 'codestral-latest', baseUrl: 'https://codestral.mistral.ai/v1' }),
+      binding({ kind: 'mistral', model: 'codestral-latest', baseUrl: 'https://api.mistral.ai/v1' }),
       { prefix: 'a', suffix: 'b', context: '', language: 'php' },
       { fetchFn: fetchFn as unknown as typeof fetch },
     );
     const [url, init] = fetchFn.mock.calls[0]!;
-    expect(url).toBe('https://codestral.mistral.ai/v1/fim/completions');
+    expect(url).toBe('https://api.mistral.ai/v1/fim/completions');
     const sent = JSON.parse(init!.body as string);
     expect(sent.prompt).toBe('a');
     expect(sent.suffix).toBe('b'); // native endpoint keeps the suffix param
+  });
+
+  it('reads the current Mistral FIM chat-choice response shape', async () => {
+    const fetchFn = jsonFetch({ choices: [{ message: { content: 'return value;' } }] });
+    const r = await fimCompletion(
+      binding({ kind: 'mistral', model: 'codestral-latest', baseUrl: 'https://api.mistral.ai/v1' }),
+      { prefix: 'function f() { ', suffix: ' }', context: '', language: 'typescript' },
+      { fetchFn: fetchFn as unknown as typeof fetch },
+    );
+    expect(r.content).toBe('return value;');
   });
 
   it('assembles a raw sentinel-token prompt (no suffix param) for template models on generic hosts', async () => {

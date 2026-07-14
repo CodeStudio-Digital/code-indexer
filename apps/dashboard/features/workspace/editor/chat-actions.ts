@@ -31,7 +31,6 @@ function activeFile(): { projectId: number; path: string } | null {
 
 export function registerChatActions(
   editor: MonacoNs.editor.IStandaloneCodeEditor,
-  monaco: typeof MonacoNs,
 ): void {
   editor.addAction({
     id: 'mcp.addSelectionToChat',
@@ -40,7 +39,6 @@ export function registerChatActions(
     label: 'Add Selection to Chat',
     contextMenuGroupId: 'navigation',
     contextMenuOrder: 1.5,
-    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI],
     run: (ed) => {
       const file = activeFile();
       if (!file) return;

@@ -30,9 +30,9 @@ describe('company tool metadata normalization', () => {
   it('keeps live reads parallel-safe but volatile', () => {
     for (const name of [
       'app_get_context',
+      'app_get_workflow',
       'docs_read',
       'list_pipelines',
-      'app_list_features',
       'app_spec_audit',
       'ds_analyze_import',
     ]) {
@@ -47,7 +47,7 @@ describe('company tool metadata normalization', () => {
   });
 
   it('marks workflows and runtime actions as execute-risk mutations', () => {
-    for (const name of ['app_provision_db', 'app_run_test_cycle', 'review_subordinate_work', 'start_pipeline']) {
+    for (const name of ['app_dispatch_ready_work', 'app_provision_db', 'app_run_test_cycle', 'review_subordinate_work', 'start_pipeline']) {
       expect(resolveToolMetadata(withCompanyToolMetadata(tool(name))), name).toMatchObject({
         mutates: true,
         parallelSafe: false,

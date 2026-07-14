@@ -6,6 +6,14 @@ import type {
 } from '../../hooks/useAgentStream.js';
 import type { AgentPreset } from '@mcp/api-bus';
 
+export interface AgentChatWorkbenchSlots {
+  sessionsHost: HTMLElement | null;
+  rightPanelHost: HTMLElement | null;
+  rightRailHost: HTMLElement | null;
+  onSessionStateChange?: (state: { hasSession: boolean; rightPanelOpen: boolean }) => void;
+  onSessionSelected?: (sessionId: number) => void;
+}
+
 /** A project linked to a global (multi-project) session. */
 export interface LinkedProject {
   project_id: number;
@@ -43,6 +51,9 @@ export interface AgentChatProps {
    * switching away would break the guided flow).
    */
   hideAgentPicker?: boolean;
+  /** Project workbench integration: moves the session list and contextual
+   * tools into the IDE's existing docks instead of nesting a second shell. */
+  workbenchSlots?: AgentChatWorkbenchSlots;
 }
 
 export interface CoderSession {
@@ -273,6 +284,8 @@ export interface ConversationChapter {
   start_message_id: number;
   end_message_id: number;
   source: ConversationChapterSource;
+  chapter_kind?: 'context' | 'milestone' | 'rebuild';
+  advances_context_boundary?: 0 | 1;
   trigger: string | null;
   title: string;
   chapter_json?: string | ConversationChapterContent | null;
@@ -288,6 +301,37 @@ export interface ConversationChapter {
 export interface ConversationChapterPage {
   items: ConversationChapter[];
   next_cursor: string | null;
+  status?: ConversationChapterStatus;
+}
+
+export interface ConversationChapterAttempt {
+  id: number;
+  status: 'started' | 'summarized' | 'deterministic_fallback' | 'noop' | 'checkpoint_failed';
+  trigger: string;
+  summary_provider?: string | null;
+  summary_model?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+}
+
+export interface ConversationChapterStatus {
+  state: 'healthy' | 'degraded' | 'empty';
+  boundary_id: number | null;
+  unsummarized_messages: number;
+  chapter_count: number;
+  context_chapters: number;
+  milestone_chapters: number;
+  rebuilt_chapters: number;
+  counters: {
+    attempts: number;
+    summarized: number;
+    deterministic_fallbacks: number;
+    checkpoint_failures: number;
+    noops: number;
+    failures: number;
+  };
+  last_attempt: ConversationChapterAttempt | null;
 }
 
 /** Original transcript row returned for a chapter range. */

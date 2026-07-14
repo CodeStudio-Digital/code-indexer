@@ -13,15 +13,25 @@ import { mountAdminPipelineBindingsRoutes } from '../pipeline-bindings.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { PipelineProfileApplyRow } from '@mcp/store/pipeline-provider-bindings-store.js';
 
-interface Captured { rows: PipelineProfileApplyRow[] | null }
+interface Captured {
+  rows: PipelineProfileApplyRow[] | null;
+  activated: Record<string, unknown> | null;
+}
 
 function setup(opts: { knownProviders?: Set<string> } = {}) {
   const known = opts.knownProviders ?? new Set(['cf-1', 'openai-1', 'anthropic-1']);
-  const captured: Captured = { rows: null };
+  const captured: Captured = { rows: null, activated: null };
   const pipelineBindingsStore = {
     bulkApplyProfile(rows: PipelineProfileApplyRow[]): number[] {
       captured.rows = rows;
       return rows.map((_, i) => i + 1);
+    },
+    activateGlobal(input: Record<string, unknown>) {
+      captured.activated = input;
+      return { id: 41, disabledIds: [7, 8] };
+    },
+    get(id: number) {
+      return id === 41 ? { id, provider_id: 'cf-1', model_id: 'codestral', enabled: true } : null;
     },
   };
   const providerStore = {
@@ -106,5 +116,36 @@ describe('POST /bulk/apply-profile', () => {
     const { app } = setup();
     const r = await post(app, { scope_type: 'session', assignments: [{ capability_kind: 'text_llm', provider_id: 'cf-1', model_id: 'm' }] });
     expect(r.status).toBe(400);
+  });
+});
+
+describe('POST /activate', () => {
+  it('activates one global route and reports preserved bindings disabled', async () => {
+    const { app, captured } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pipeline_name: 'editor', binding_role: 'autocomplete',
+        provider_id: 'cf-1', model_id: 'codestral', config: { context_engine: 'v3' },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: 41, disabledIds: [7, 8], binding: { enabled: true } });
+    expect(captured.activated).toMatchObject({
+      pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'cf-1', model_id: 'codestral',
+    });
+  });
+
+  it('rejects non-global activation without touching the store', async () => {
+    const { app, captured } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'cf-1', model_id: 'codestral',
+        scope_type: 'session', scope_id: 3,
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(captured.activated).toBeNull();
   });
 });

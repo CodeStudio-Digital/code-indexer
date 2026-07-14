@@ -8,8 +8,7 @@ import type { PatchFn } from '../ProjectSettingsModal.js';
 export function MemoryPane({ project, patch }: { project: Project; patch: PatchFn }) {
   const { t } = useTranslation(['projects']);
   return (
-    <div className="space-y-5 max-w-xl">
-      <h3 className="text-sm font-semibold">{t('settings.nav.memory')}</h3>
+    <div className="w-full max-w-3xl space-y-5">
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-0.5">
           <label className="text-sm font-medium">{t('edit.memoryLabel')}</label>

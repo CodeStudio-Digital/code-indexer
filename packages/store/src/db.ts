@@ -11,6 +11,7 @@ import { applyTuningPragmas } from './db/pragmas.js';
 import { rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { projectDbFlags, type ProjectDbFlags } from '@mcp/shared/utils/config.js';
+import type { EditorSettingsOverride } from '@mcp/shared/editor-settings.js';
 import {
   ProjectDbPool, resolveProjectDbLocation, openRawProjectDb, initProjectSchema, type ProjectDb,
 } from './project-db/index.js';
@@ -468,7 +469,7 @@ export class CodeIndexDB {
   }
   getProject(id: number): Project | undefined {
     const project = projects.get(this.db, id);
-    return project ? this.overlayRuntimeConfig(project, id) : project;
+    return project ? this.overlayEditorConfig(this.overlayRuntimeConfig(project, id), id) : project;
   }
   getProjectByName(name: string): Project | undefined { return projects.getByName(this.db, name); }
   getProjectByPath(rootPath: string): Project | undefined { return projects.getByPath(this.db, rootPath); }
@@ -534,13 +535,13 @@ export class CodeIndexDB {
       ? { id: primary.project_id, name: primary.name }
       : { id: project.id, name: project.name };
   }
-  updateProject(id: number, updates: Parameters<typeof projects.update>[2]): void {
+  updateProject(id: number, updates: Parameters<typeof projects.update>[2] & { editor_settings?: EditorSettingsOverride | null }): void {
     // Runtime/shell config (node_version/runtime_versions/runner_shell/
     // package_managers) lives in the routed `project_runtime_config` table
     // (migrations 168/169) so it travels with the project folder; the rest
     // stays on the central `projects` row. package_managers has NO central
     // column, so it MUST be destructured out (projects.update writes raw keys).
-    const { node_version, runtime_versions, runner_shell, package_managers, wsl_runtime_versions, wsl_package_managers, ...rest } = updates;
+    const { node_version, runtime_versions, runner_shell, package_managers, wsl_runtime_versions, wsl_package_managers, editor_settings, ...rest } = updates;
     const cfg: Record<string, string | null> = {};
     if ('node_version' in updates) cfg.node_version = node_version ?? null;
     if ('runtime_versions' in updates) cfg.runtime_versions = runtime_versions ?? null;
@@ -549,6 +550,7 @@ export class CodeIndexDB {
     if ('wsl_runtime_versions' in updates) cfg.wsl_runtime_versions = wsl_runtime_versions ?? null;
     if ('wsl_package_managers' in updates) cfg.wsl_package_managers = wsl_package_managers ?? null;
     if (Object.keys(cfg).length > 0) this.writeRuntimeConfig(id, cfg);
+    if ('editor_settings' in updates) this.writeEditorConfig(id, editor_settings ?? null);
     if (Object.keys(rest).length > 0) projects.update(this.db, id, rest);
     // Counts/name/config changed → drop this project's cached stats + the list.
     this.readCache.invalidateProject(id);
@@ -608,6 +610,32 @@ export class CodeIndexDB {
     const sets = cols.map((c) => `${c} = ?`).join(', ');
     routed.prepare(`UPDATE project_runtime_config SET ${sets} WHERE project_id = ?`).run(...cols.map((c) => cfg[c]), id);
   }
+
+  private overlayEditorConfig(project: Project, id: number): Project {
+    try {
+      const sql = 'SELECT settings_json FROM project_editor_config WHERE project_id = ?';
+      const routed = this.idx(id);
+      let row = routed.prepare(sql).get(id) as { settings_json: string | null } | undefined;
+      if (!row && routed !== this.db) row = this.db.prepare(sql).get(id) as typeof row;
+      if (row?.settings_json) {
+        const parsed = JSON.parse(row.settings_json) as EditorSettingsOverride;
+        project.editor_settings = parsed && typeof parsed === 'object' ? parsed : null;
+      } else project.editor_settings = null;
+    } catch {
+      project.editor_settings = null;
+    }
+    return project;
+  }
+
+  private writeEditorConfig(id: number, settings: EditorSettingsOverride | null): void {
+    const routed = this.idx(id);
+    const json = settings && Object.keys(settings).length ? JSON.stringify({ ...settings, version: 1 }) : null;
+    routed.prepare(`
+      INSERT INTO project_editor_config (project_id, settings_json, updated_at)
+      VALUES (?, ?, datetime('now'))
+      ON CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at
+    `).run(id, json);
+  }
   /** Mark a project as a synthetic global-session union (hidden from listProjects). */
   setProjectSynthetic(id: number, synthetic: boolean): void {
     projects.setSynthetic(this.db, id, synthetic);
@@ -626,6 +654,7 @@ export class CodeIndexDB {
     // project_runtime_config has no FK to projects (it lives per-project too),
     // so the central orphan row isn't cascaded — reap it explicitly.
     try { this.db.prepare('DELETE FROM project_runtime_config WHERE project_id = ?').run(id); } catch { /* pre-168 */ }
+    try { this.db.prepare('DELETE FROM project_editor_config WHERE project_id = ?').run(id); } catch { /* pre-223 */ }
     projects.del(this.db, id);
     this.readCache.invalidateProject(id);
     this.readCache.invalidateKey('projects:list');

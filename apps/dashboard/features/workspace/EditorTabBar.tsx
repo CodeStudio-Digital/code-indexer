@@ -25,6 +25,7 @@ import {
   Rows2,
   Search,
   Server,
+  Database,
   SplitSquareHorizontal,
   X,
 } from 'lucide-react';
@@ -47,6 +48,7 @@ import { hasTabPayload, readTabPayload, setTabPayload } from './editor/tab-dnd.j
 
 /** Icon for a tab — virtual surfaces get their own glyph; files use Material icons. */
 function TabIcon({ file, className }: { file: OpenTab; className?: string }) {
+  if (file.kind === 'database') return <Database className={cn('shrink-0 text-sky-400', className)} />;
   if (file.kind === 'git-log') return <GitBranch className={cn('shrink-0 text-primary', className)} />;
   if (file.kind === 'git-stash') return <Archive className={cn('shrink-0 text-amber-400', className)} />;
   if (file.kind === 'diff') return <GitCompare className={cn('shrink-0 text-amber-300', className)} />;

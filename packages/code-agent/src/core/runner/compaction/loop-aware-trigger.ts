@@ -33,6 +33,7 @@ import { computeProtectTokens } from './threshold.js';
 export interface LoopAwareCompactionInputs {
   /** Model id — resolves the effective window + trigger via `deriveTokenLimits`. */
   model: string;
+  contextWindow?: number | null;
   /** Best-effort current prompt size: real `usage.input_tokens` ?? tokenizer estimate. */
   snapshotTotal: number;
   /** Input tokens accrued SINCE the last compaction (caller subtracts its checkpoint). */
@@ -57,7 +58,7 @@ const BEHAVIORAL: ReadonlySet<CompactionTriggerDecision['reason']> = new Set([
 export function evaluateLoopAwareCompaction(
   inp: LoopAwareCompactionInputs,
 ): CompactionTriggerDecision {
-  const limits = deriveTokenLimits(inp.model);
+  const limits = deriveTokenLimits(inp.model, inp.contextWindow);
   const decision = computeCompactionTrigger({
     snapshotTotal: inp.snapshotTotal,
     trigger: limits.trigger,
@@ -80,7 +81,7 @@ export function evaluateLoopAwareCompaction(
   // find nothing above the protected tail to summarize (a wasted LLM pass).
   // Suppress it below the protect budget; the size gates still cover real bloat.
   if (decision.shouldCompact && BEHAVIORAL.has(decision.reason)) {
-    const protectTokens = computeProtectTokens({ model: inp.model });
+    const protectTokens = computeProtectTokens({ model: inp.model, contextWindow: inp.contextWindow });
     if (inp.snapshotTotal <= protectTokens) {
       return {
         shouldCompact: false,

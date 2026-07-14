@@ -11,24 +11,32 @@
  * DB (migration 168) so they travel with the project folder.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ALargeSmall, Blocks, Braces, Hexagon, MemoryStick, Palette, Search, Settings2, TerminalSquare, Trash2 } from 'lucide-react';
+import { ALargeSmall, Blocks, Braces, Code2, Hexagon, Keyboard, ListTree, Loader2, MemoryStick, Palette, Search, Settings2, Sparkles, TerminalSquare, Trash2 } from 'lucide-react';
 import type { Project } from '@mcp/shared/types.js';
 import type { RuntimeTarget, TerminalShell } from '@mcp/api-bus';
 import { cn } from '../../../lib/utils.js';
 import { apiCall } from '../../../lib/api-client.js';
 import { apiPatch } from '../../../hooks/useApi.js';
+import { Combobox } from '../../../components/ui/combobox.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/select.js';
+import { WorkbenchPanelHeader } from '../../../components/workbench/index.js';
 import { GeneralPane } from './panes/GeneralPane.js';
-import { SearchPane } from './panes/SearchPane.js';
-import { RuntimePane } from './panes/RuntimePane.js';
-import { TerminalPane } from './panes/TerminalPane.js';
-import { MemoryPane } from './panes/MemoryPane.js';
-import { AppearancePane } from './panes/AppearancePane.js';
-import { EditorThemePane } from './panes/EditorThemePane.js';
 import { DangerPane } from './panes/DangerPane.js';
+import {
+  EditorAutocompletePane,
+  EditorCodeStylePane,
+  EditorGeneralPane,
+} from './panes/EditorPreferencesPane.js';
+
+const SearchPane = lazy(() => import('./panes/SearchPane.js').then((module) => ({ default: module.SearchPane })));
+const RuntimePane = lazy(() => import('./panes/RuntimePane.js').then((module) => ({ default: module.RuntimePane })));
+const TerminalPane = lazy(() => import('./panes/TerminalPane.js').then((module) => ({ default: module.TerminalPane })));
+const MemoryPane = lazy(() => import('./panes/MemoryPane.js').then((module) => ({ default: module.MemoryPane })));
+const AppearancePane = lazy(() => import('./panes/AppearancePane.js').then((module) => ({ default: module.AppearancePane })));
+const EditorThemePane = lazy(() => import('./panes/EditorThemePane.js').then((module) => ({ default: module.EditorThemePane })));
+const KeymapPane = lazy(() => import('../../search-everywhere/KeymapDialog.js').then((module) => ({ default: module.KeymapPane })));
 
 export type SettingsSection =
   | 'general'
@@ -39,7 +47,11 @@ export type SettingsSection =
   | 'terminal'
   | 'memory'
   | 'appearance'
+  | 'editorGeneral'
+  | 'editorCodeStyle'
+  | 'editorAutocomplete'
   | 'editorTheme'
+  | 'editorKeymap'
   | 'danger';
 
 export type PatchFn = (body: Record<string, unknown>) => Promise<void>;
@@ -71,6 +83,8 @@ export function ProjectSettingsModal({
   // panes so the same picker can manage a distro's MCP-managed Linux runtimes.
   const [runtimeEnv, setRuntimeEnv] = useState<RuntimeTarget>({ kind: 'host' });
   const [wslDistros, setWslDistros] = useState<string[]>([]);
+  const [wslStatus, setWslStatus] = useState<'idle' | 'loading' | 'loaded'>('idle');
+  const isRuntimeSection = section === 'node' || section === 'php' || section === 'python';
 
   // Re-hydrate the freshest project (persisted values) every time we open, and
   // honour the requested entry section.
@@ -79,24 +93,32 @@ export function ProjectSettingsModal({
     setSection(initialSection);
     setError(null);
     setRuntimeEnv({ kind: 'host' });
+    setWslDistros([]);
+    setWslStatus('idle');
     let alive = true;
     void apiCall<Project>('projects.get', { id: initialProject.id })
       .then((p) => { if (alive) setProject(p); })
       .catch(() => undefined);
-    // Detected WSL distros become the non-Host runtime environments.
-    void apiCall<TerminalShell[]>('terminal.listShells', {})
-      .then((shells) => {
-        if (!alive) return;
-        const distros = (Array.isArray(shells) ? shells : [])
-          .filter((s) => s.id.startsWith('wsl:'))
-          .map((s) => s.id.slice('wsl:'.length));
-        setWslDistros(distros);
-      })
-      .catch(() => { if (alive) setWslDistros([]); });
     return () => { alive = false; };
   }, [open, initialSection, initialProject.id]);
 
-  const isRuntimeSection = section === 'node' || section === 'php' || section === 'python';
+  // Shell discovery is useful only for runtime management. Deferring it keeps
+  // the common General/Search openings free of an Electron bridge round-trip.
+  useEffect(() => {
+    if (!open || !isRuntimeSection || wslStatus !== 'idle') return;
+    setWslStatus('loading');
+    void apiCall<TerminalShell[]>('terminal.listShells', {})
+      .then((shells) => {
+        setWslDistros((Array.isArray(shells) ? shells : [])
+          .filter((shell) => shell.id.startsWith('wsl:'))
+          .map((shell) => shell.id.slice('wsl:'.length)));
+        setWslStatus('loaded');
+      })
+      .catch(() => {
+        setWslDistros([]);
+        setWslStatus('loaded');
+      });
+  }, [isRuntimeSection, open, wslStatus]);
 
   const patch = useCallback<PatchFn>(
     async (body) => {
@@ -114,93 +136,172 @@ export function ProjectSettingsModal({
     [initialProject.id, onSaved],
   );
 
-  const NAV: { id: SettingsSection; label: string; Icon: typeof Hexagon }[] = [
-    { id: 'general', label: t('settings.nav.general'), Icon: Settings2 },
-    { id: 'search', label: t('settings.nav.search'), Icon: Search },
-    { id: 'node', label: 'Node.js', Icon: Hexagon },
-    { id: 'php', label: 'PHP', Icon: Blocks },
-    { id: 'python', label: 'Python', Icon: Braces },
-    { id: 'terminal', label: t('settings.nav.terminal'), Icon: TerminalSquare },
-    { id: 'memory', label: t('settings.nav.memory'), Icon: MemoryStick },
-    { id: 'appearance', label: t('settings.nav.appearance'), Icon: ALargeSmall },
-    { id: 'editorTheme', label: t('settings.nav.editorTheme'), Icon: Palette },
-    { id: 'danger', label: t('settings.nav.danger'), Icon: Trash2 },
-  ];
+  const navGroups = useMemo(() => [
+    {
+      id: 'project',
+      label: t('settings.group.project'),
+      items: [
+        { id: 'general' as const, label: t('settings.nav.general'), Icon: Settings2 },
+        { id: 'search' as const, label: t('settings.nav.search'), Icon: Search },
+      ],
+    },
+    {
+      id: 'runtimes',
+      label: t('settings.group.runtimes'),
+      items: [
+        { id: 'node' as const, label: 'Node.js', Icon: Hexagon },
+        { id: 'php' as const, label: 'PHP', Icon: Blocks },
+        { id: 'python' as const, label: 'Python', Icon: Braces },
+        { id: 'terminal' as const, label: t('settings.nav.terminal'), Icon: TerminalSquare },
+      ],
+    },
+    {
+      id: 'editor',
+      label: 'EDITOR',
+      items: [
+        { id: 'editorGeneral' as const, label: 'Geral', Icon: Code2 },
+        { id: 'editorCodeStyle' as const, label: 'Estilo de código', Icon: ListTree },
+        { id: 'editorAutocomplete' as const, label: 'Autocomplete', Icon: Sparkles },
+        { id: 'editorTheme' as const, label: t('settings.nav.editorTheme'), Icon: Palette },
+        { id: 'editorKeymap' as const, label: 'Keymap', Icon: Keyboard },
+      ],
+    },
+    {
+      id: 'experience',
+      label: t('settings.group.experience'),
+      items: [
+        { id: 'memory' as const, label: t('settings.nav.memory'), Icon: MemoryStick },
+        { id: 'appearance' as const, label: t('settings.nav.appearance'), Icon: ALargeSmall },
+      ],
+    },
+    {
+      id: 'security',
+      label: t('settings.group.security'),
+      items: [{ id: 'danger' as const, label: t('settings.nav.danger'), Icon: Trash2 }],
+    },
+  ], [t]);
+  const activeNav = navGroups.flatMap((group) => group.items).find((item) => item.id === section)
+    ?? navGroups[0]!.items[0]!;
+  const runtimeEnvOptions = useMemo(() => [
+    { value: 'host', label: t('settings.runtimeEnvHost') },
+    ...wslDistros.map((distro) => ({ value: `wsl:${distro}`, label: `WSL: ${distro}` })),
+  ], [t, wslDistros]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[88vh] flex flex-col gap-0 p-0 overflow-hidden">
-        <DialogHeader className="px-4 py-3 border-b shrink-0">
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <Settings2 className="h-4 w-4 text-muted-foreground" />
-            {t('settings.title', { name: project.name })}
+      <DialogContent className="flex h-[min(760px,92vh)] w-[calc(100vw-32px)] max-w-5xl flex-col gap-0 overflow-hidden border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-0">
+        <DialogHeader className="flex h-11 shrink-0 justify-center border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-4 py-0">
+          <DialogTitle className="flex min-w-0 items-center gap-2 pr-8 text-sm">
+            <span className="grid h-6 w-6 shrink-0 place-items-center rounded bg-[var(--workbench-active)] text-violet-400">
+              <Settings2 className="h-3.5 w-3.5" />
+            </span>
+            <span className="truncate">{t('settings.title', { name: project.name })}</span>
+            <span className="hidden min-w-0 truncate font-mono text-[10px] font-normal text-muted-foreground md:inline">
+              {project.root_path}
+            </span>
           </DialogTitle>
         </DialogHeader>
-        <div className="flex min-h-0 h-[70vh]">
-          <nav className="w-52 shrink-0 border-r p-2 space-y-0.5 overflow-y-auto bg-muted/20">
-            {NAV.map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setSection(id)}
-                aria-current={section === id ? 'page' : undefined}
-                className={cn(
-                  'w-full text-left px-2.5 py-1.5 rounded-md text-sm flex items-center gap-2 transition-colors',
-                  section === id
-                    ? 'bg-accent text-accent-foreground font-medium'
-                    : 'text-muted-foreground hover:bg-muted/50',
-                  id === 'danger' && section !== id && 'text-destructive/80 hover:text-destructive',
-                )}
-              >
-                <Icon className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{label}</span>
-              </button>
-            ))}
-          </nav>
-          <div className="flex-1 min-w-0 overflow-y-auto p-4">
+        <div className="flex min-h-0 flex-1">
+          <aside className="w-60 shrink-0 border-r border-[var(--workbench-border)] bg-[var(--workbench-raised)]">
+            <nav className="h-full space-y-2 overflow-y-auto p-1.5" aria-label={t('settings.title', { name: project.name })}>
+              {navGroups.map((group) => (
+                <div key={group.id}>
+                  <div className="flex h-6 items-center px-2 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                    {group.label}
+                  </div>
+                  <div className="space-y-0.5">
+                    {group.items.map(({ id, label, Icon }) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setSection(id)}
+                        aria-current={section === id ? 'page' : undefined}
+                        className={cn(
+                          'relative flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--workbench-focus)]',
+                          section === id
+                            ? 'bg-[var(--workbench-active)] font-medium text-foreground'
+                            : 'text-muted-foreground hover:bg-[var(--workbench-hover)] hover:text-foreground',
+                          id === 'danger' && section !== id && 'text-destructive/80 hover:text-destructive',
+                        )}
+                      >
+                        {section === id && <span className="absolute bottom-1.5 left-0 top-1.5 w-0.5 rounded-r bg-[var(--workbench-focus)]" />}
+                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </nav>
+          </aside>
+
+          <section className="flex min-w-0 flex-1 flex-col bg-[var(--workbench-surface)]">
+            <WorkbenchPanelHeader
+              title={activeNav.label}
+              icon={activeNav.Icon}
+              actions={isRuntimeSection ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-muted-foreground">{t('settings.runtimeEnv')}</span>
+                  {wslStatus === 'loading' && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                  <Combobox
+                    disabled={wslStatus === 'loading'}
+                    value={runtimeEnv.kind === 'wsl' ? `wsl:${runtimeEnv.distro}` : 'host'}
+                    onChange={(value) => setRuntimeEnv(value.startsWith('wsl:')
+                      ? { kind: 'wsl', distro: value.slice('wsl:'.length) }
+                      : { kind: 'host' })}
+                    options={runtimeEnvOptions}
+                    searchPlaceholder={t('settings.select.search')}
+                    emptyLabel={t('settings.select.empty')}
+                    className="h-7 w-52 text-[11px]"
+                  />
+                </div>
+              ) : undefined}
+            />
+
             {error && (
-              <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div className="mx-4 mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {error}
               </div>
             )}
-            {isRuntimeSection && wslDistros.length > 0 && (
-              <div className="mb-4 flex items-center gap-2">
-                <label className="text-xs font-medium text-muted-foreground shrink-0">{t('settings.runtimeEnv')}</label>
-                <Select
-                  value={runtimeEnv.kind === 'wsl' ? `wsl:${runtimeEnv.distro}` : 'host'}
-                  onValueChange={(v) => setRuntimeEnv(v.startsWith('wsl:') ? { kind: 'wsl', distro: v.slice('wsl:'.length) } : { kind: 'host' })}
-                >
-                  <SelectTrigger className="h-8 w-60"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="host">{t('settings.runtimeEnvHost')}</SelectItem>
-                    {wslDistros.map((d) => (
-                      <SelectItem key={d} value={`wsl:${d}`}>{`WSL: ${d}`}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {section === 'general' && (
-              <GeneralPane
-                project={project}
-                existingGroups={existingGroups}
-                onSaved={(body) => { setProject((p) => ({ ...p, ...body }) as Project); onSaved?.(); }}
-              />
-            )}
-            {section === 'search' && <SearchPane project={project} patch={patch} />}
-            {section === 'node' && <RuntimePane kind="node" project={project} patch={patch} target={runtimeEnv} />}
-            {section === 'php' && <RuntimePane kind="php" project={project} patch={patch} target={runtimeEnv} />}
-            {section === 'python' && <RuntimePane kind="python" project={project} patch={patch} target={runtimeEnv} />}
-            {section === 'terminal' && <TerminalPane project={project} patch={patch} />}
-            {section === 'memory' && <MemoryPane project={project} patch={patch} />}
-            {section === 'appearance' && <AppearancePane />}
-            {section === 'editorTheme' && <EditorThemePane />}
-            {section === 'danger' && (
-              <DangerPane project={project} onDeleted={() => { onOpenChange(false); onDeleted?.(); }} />
-            )}
-          </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+              <Suspense fallback={<SettingsPaneLoading label={t('common:actions.loading')} />}>
+                {section === 'general' && (
+                  <GeneralPane
+                    project={project}
+                    existingGroups={existingGroups}
+                    onSaved={(body) => { setProject((current) => ({ ...current, ...body }) as Project); onSaved?.(); }}
+                  />
+                )}
+                {section === 'search' && <SearchPane project={project} patch={patch} />}
+                {section === 'node' && <RuntimePane kind="node" project={project} patch={patch} target={runtimeEnv} />}
+                {section === 'php' && <RuntimePane kind="php" project={project} patch={patch} target={runtimeEnv} />}
+                {section === 'python' && <RuntimePane kind="python" project={project} patch={patch} target={runtimeEnv} />}
+                {section === 'terminal' && <TerminalPane project={project} patch={patch} />}
+                {section === 'memory' && <MemoryPane project={project} patch={patch} />}
+                {section === 'appearance' && <AppearancePane />}
+                {section === 'editorGeneral' && <EditorGeneralPane projectId={project.id} />}
+                {section === 'editorCodeStyle' && <EditorCodeStylePane projectId={project.id} />}
+                {section === 'editorAutocomplete' && <EditorAutocompletePane projectId={project.id} />}
+                {section === 'editorTheme' && <EditorThemePane />}
+                {section === 'editorKeymap' && <KeymapPane className="h-[590px]" />}
+                {section === 'danger' && (
+                  <DangerPane project={project} onDeleted={() => { onOpenChange(false); onDeleted?.(); }} />
+                )}
+              </Suspense>
+            </div>
+          </section>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SettingsPaneLoading({ label }: { label: string }) {
+  return (
+    <div className="flex h-32 items-center justify-center gap-2 text-xs text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      {label}
+    </div>
   );
 }

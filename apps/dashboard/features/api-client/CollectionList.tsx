@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Plus, Trash2, ChevronRight, ChevronDown, Folder, FolderPlus, Pencil, ListChecks, X, FolderInput, FilePlus2,
-  ChevronsDownUp, ChevronsUpDown,
+  ChevronsDownUp, ChevronsUpDown, Search,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../../components/ui/dropdown-menu.js';
@@ -18,7 +18,13 @@ import { cn } from '../../lib/utils.js';
 import type { ApiCollection, ApiRequest } from './types.js';
 import { RequestRow } from './collection/RequestRow.js';
 import { SidebarAction } from './collection/SidebarAction.js';
+import {
+  folderMatchesCollectionSearch,
+  normalizeCollectionSearch,
+  requestMatchesCollectionSearch,
+} from './collection/collection-search.js';
 import { loadApiClientUi, saveApiClientUi } from './api-client-ui-state.js';
+import { ApiClientSelect } from './ApiClientSelect.js';
 
 type FlatItem =
   | { kind: 'top'; count: number }
@@ -61,6 +67,7 @@ export function CollectionList(p: Props) {
   const [rowDrop, setRowDrop] = useState<{ id: number; edge: 'top' | 'bottom' } | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [query, setQuery] = useState('');
 
   // Reset SELECTION + drag state when the active collection changes. This
   // component instance is reused across switches, so without this a bulk
@@ -74,6 +81,7 @@ export function CollectionList(p: Props) {
     setDragId(null);
     setDropTarget(null);
     setRowDrop(null);
+    setQuery('');
   }, [p.activeCollectionId]);
 
   const active = useMemo(() => p.collections.find((c) => c.id === p.activeCollectionId), [p.collections, p.activeCollectionId]);
@@ -182,10 +190,42 @@ export function CollectionList(p: Props) {
     }
   };
 
+  const normalizedQuery = useMemo(() => normalizeCollectionSearch(query), [query]);
+  const isSearching = normalizedQuery.length > 0;
+
+  // A matching request keeps its parent folder visible; a matching folder name
+  // exposes all of its children. Search temporarily expands results without
+  // mutating the user's persisted collapse state.
+  const searchTree = useMemo(() => {
+    if (!isSearching) return null;
+    const visibleTop = top.filter((request) => requestMatchesCollectionSearch(request, normalizedQuery));
+    const visibleFolders = folderNames.flatMap((folder) => {
+      const requests = byFolder.get(folder) ?? [];
+      const visibleRequests = folderMatchesCollectionSearch(folder, normalizedQuery)
+        ? requests
+        : requests.filter((request) => requestMatchesCollectionSearch(request, normalizedQuery));
+      return visibleRequests.length > 0 || folderMatchesCollectionSearch(folder, normalizedQuery)
+        ? [{ folder, requests: visibleRequests }]
+        : [];
+    });
+    return { top: visibleTop, folders: visibleFolders };
+  }, [isSearching, normalizedQuery, top, folderNames, byFolder]);
+
   // Flatten the (collapse-aware) tree into one list so a single virtualizer can
   // window it — a large imported spec mounts only the visible rows.
   const flat = useMemo<FlatItem[]>(() => {
     const out: FlatItem[] = [];
+    if (searchTree) {
+      if (searchTree.top.length > 0) {
+        if (folderNames.length > 0) out.push({ kind: 'top', count: searchTree.top.length });
+        for (const request of searchTree.top) out.push({ kind: 'row', request, inFolder: false, folder: null });
+      }
+      for (const { folder, requests } of searchTree.folders) {
+        out.push({ kind: 'folder', folder, count: requests.length, collapsed: false });
+        for (const request of requests) out.push({ kind: 'row', request, inFolder: true, folder });
+      }
+      return out;
+    }
     if (folderNames.length > 0) {
       out.push({ kind: 'top', count: top.length });
       if (!topCollapsed) for (const r of top) out.push({ kind: 'row', request: r, inFolder: false, folder: null });
@@ -198,7 +238,7 @@ export function CollectionList(p: Props) {
       if (!collapsed.has(f)) for (const r of reqs) out.push({ kind: 'row', request: r, inFolder: true, folder: f });
     }
     return out;
-  }, [top, byFolder, folderNames, collapsed, topCollapsed]);
+  }, [top, byFolder, folderNames, collapsed, topCollapsed, searchTree]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const virtualizer = useVirtualizer({
@@ -213,6 +253,7 @@ export function CollectionList(p: Props) {
     <RequestRow
       request={r} inFolder={inFolder} folders={folderNames}
       active={r.id === p.activeRequestId} selectMode={selectMode} selected={selected.has(r.id)}
+      allowDrag={!isSearching}
       onOpen={p.onSelectRequest} onToggleSelect={toggleSel} onDuplicate={p.onDuplicate}
       onMove={p.onMoveRequest} onMoveToNew={moveToNew} onDelete={p.onRemoveRequest}
       onDragStart={setDragId} onDragEnd={onDragEnd}
@@ -223,7 +264,10 @@ export function CollectionList(p: Props) {
     <div
       onDragOver={(e) => { e.preventDefault(); setDropTarget(''); setRowDrop(null); }}
       onDrop={(e) => { e.preventDefault(); dropTo(''); }}
-      onClick={() => { const nt = !topCollapsed; setTopCollapsed(nt); persistCollapse(collapsed, nt); }}
+      onClick={() => {
+        if (isSearching) return;
+        const nt = !topCollapsed; setTopCollapsed(nt); persistCollapse(collapsed, nt);
+      }}
       className={cn('flex items-center gap-1.5 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground border-b border-border/40 cursor-pointer hover:bg-muted/40', dropTarget === '' && dragId != null && 'bg-primary/10')}
     >
       {topCollapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
@@ -238,7 +282,7 @@ export function CollectionList(p: Props) {
       onDrop={(e) => { e.preventDefault(); dropTo(f); }}
       className={cn('group/folder flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium border-b border-border/40 cursor-pointer hover:bg-muted/40',
         dropTarget === f && dragId != null && 'bg-primary/10')}
-      onClick={() => toggle(f)}
+      onClick={() => { if (!isSearching) toggle(f); }}
     >
       {isCollapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
       <Folder className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -255,18 +299,23 @@ export function CollectionList(p: Props) {
   return (
     <div className="flex flex-col h-full">
       <div className="p-2 border-b space-y-2">
-        <select className="w-full text-xs bg-background border rounded px-2 py-1"
-          value={p.activeCollectionId ?? ''} onChange={(e) => p.onSelectCollection(Number(e.target.value))}>
-          {p.collections.length === 0 && <option value="">{t('collections.noCollections')}</option>}
-          {p.collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <ApiClientSelect
+          value={p.activeCollectionId == null ? '' : String(p.activeCollectionId)}
+          onValueChange={(value) => { if (value) p.onSelectCollection(Number(value)); }}
+          options={p.collections.length === 0
+            ? [{ value: '', label: t('collections.noCollections'), disabled: true }]
+            : p.collections.map((collection) => ({ value: String(collection.id), label: collection.name }))}
+          disabled={p.collections.length === 0}
+          ariaLabel={t('collectionsDialog.title')}
+          triggerClassName="w-full"
+        />
         <div className="flex items-center gap-0.5">
           <SidebarAction icon={FilePlus2} label={t('collections.newRequest')} onClick={p.onNewRequest} />
           {p.activeCollectionId != null && (
             <>
               <SidebarAction icon={FolderPlus} label={t('collections.newFolder')} onClick={() => void newFolder()} />
               <SidebarAction icon={ListChecks} label={t('collections.select')} active={selectMode} onClick={() => (selectMode ? clearSel() : setSelectMode(true))} />
-              {folderNames.length > 0 && (
+              {folderNames.length > 0 && !isSearching && (
                 <SidebarAction
                   icon={allCollapsed ? ChevronsUpDown : ChevronsDownUp}
                   label={allCollapsed ? t('collections.expandAll') : t('collections.collapseAll')}
@@ -276,6 +325,29 @@ export function CollectionList(p: Props) {
             </>
           )}
         </div>
+        {p.activeCollectionId != null && (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('collections.searchPlaceholder')}
+              aria-label={t('collections.searchPlaceholder')}
+              className="h-7 w-full rounded border border-border bg-background pl-7 pr-7 text-xs outline-none placeholder:text-muted-foreground focus:border-primary/70 focus:ring-1 focus:ring-primary/30"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                title={t('collections.clearSearch')}
+                className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {selectMode && (
@@ -301,6 +373,11 @@ export function CollectionList(p: Props) {
       )}
 
       <div ref={scrollRef} className="flex-1 overflow-auto">
+        {isSearching && flat.length === 0 && (
+          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+            {t('collections.noSearchResults', { query: query.trim() })}
+          </div>
+        )}
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((v) => {
             const item = flat[v.index];

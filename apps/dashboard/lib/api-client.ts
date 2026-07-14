@@ -20,6 +20,7 @@ import {
   recordApiCallCacheHit,
   startApiCallRouteSpan,
 } from './perf/route-startup-metrics.js';
+import { gitOperationKey, useGitOperationState } from '../state/git-operation-state.js';
 
 type DotPath = string;
 
@@ -35,14 +36,6 @@ const READ_VERBS = new Set<string>([
   'projects.get',
   'projects.stats',
   'projects.list',
-  'projectGit.status',
-  'projectGit.log',
-  'projectGit.mergeState',
-  'projectGit.branchesDetailed',
-  'projectGit.stashList',
-  'projectGit.commitDetail',
-  'projectGit.stashDetail',
-  'projectGit.gitOptimizations',
   'plugins.activeContributions',
   // Plugin assets are immutable for an installed version — the backend also
   // keeps a longer-lived LRU keyed by mtime; this collapses co-mounted reads.
@@ -70,22 +63,27 @@ const INFLIGHT_VERBS = new Set<string>([
   'files.tree',
   'files.list',
   'lsp.serverStatus',
+  // Git freshness is revision-driven. Share concurrent reads, but never reuse a
+  // timed body after an external checkout/index/worktree change.
+  'projectGit.status',
+  'projectGit.statusPage',
+  'projectGit.log',
+  'projectGit.logPage',
+  'projectGit.mergeState',
+  'projectGit.branchesDetailed',
+  'projectGit.stashList',
+  'projectGit.commitDetail',
+  'projectGit.stashDetail',
+  'projectGit.gitOptimizations',
 ]);
 
 /**
  * Canonicalize a read verb's input BEFORE keying/caching so callers that
- * differ only cosmetically collapse to one slot. `projectGit.status`:
- * `includeFiles:false` (summary) is a strict subset of the default full
- * status AND costs MORE git spawns (3 vs 1), so every caller is upgraded to
- * the full read — summary consumers simply ignore the `files` array. Other
- * fields are PRESERVED so a future status input field still reaches the
- * backend (don't silently swallow it by reconstructing only projectId).
+ * differ only cosmetically collapse to one slot. Git inputs are preserved:
+ * the backend now has a true one-process summary and a progressive full
+ * snapshot, so silently upgrading one into the other would waste work.
  */
-function normalizeReadInput(path: DotPath, input: unknown): unknown {
-  if (path === 'projectGit.status' && input && typeof input === 'object') {
-    // Spread-then-override: keep every field, force includeFiles:true.
-    return { ...(input as Record<string, unknown>), includeFiles: true };
-  }
+function normalizeReadInput(_path: DotPath, input: unknown): unknown {
   return input;
 }
 
@@ -109,6 +107,27 @@ const WRITE_VERBS = new Set<string>([
   'projectGit.commit',
   'projectGit.stageHunk',
   'projectGit.configureGitOptimizations',
+  'projectGit.branchCheckout',
+  'projectGit.branchCreate',
+  'projectGit.branchDelete',
+  'projectGit.branchRename',
+  'projectGit.merge',
+  'projectGit.rebase',
+  'projectGit.reset',
+  'projectGit.revert',
+  'projectGit.cherryPick',
+  'projectGit.resolveConflict',
+  'projectGit.mergeContinue',
+  'projectGit.mergeAbort',
+  'projectGit.push',
+  'projectGit.fetch',
+  'projectGit.pull',
+  'projectGit.updateBranch',
+  'projectGit.stashSave',
+  'projectGit.stashPop',
+  'projectGit.stashApply',
+  'projectGit.stashDrop',
+  'projectGit.aiExecute',
   'lsp.removeServer',
   'lsp.restartServer',
   'lsp.setLanguageLevel',
@@ -207,6 +226,13 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
     body: JSON.stringify(b),
   });
   const ip = input as Record<string, unknown> | undefined;
+  if (path.startsWith('projectGit.') && ip?.projectId) {
+    const method = path.slice('projectGit.'.length);
+    return {
+      url: `/api/projects/${ip.projectId}/git/rpc/${encodeURIComponent(method)}`,
+      init: json(ip),
+    };
+  }
   switch (path) {
     case 'projects.list':
       return { url: '/api/projects', init: {} };
@@ -296,7 +322,7 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       };
     case 'projectGit.log':
       return {
-        url: `/api/projects/${ip!.projectId}/git/log?limit=${ip!.limit ?? 30}${ip!.path ? `&path=${encodeURIComponent(String(ip!.path))}` : ''}`,
+        url: `/api/projects/${ip!.projectId}/git/log?limit=${ip!.limit ?? 30}${ip!.skip ? `&skip=${ip!.skip}` : ''}${ip!.path ? `&path=${encodeURIComponent(String(ip!.path))}` : ''}${ip!.branch ? `&branch=${encodeURIComponent(String(ip!.branch))}` : ''}${ip!.all ? '&all=true' : ''}`,
         init: {},
       };
     case 'projectGit.stage':
@@ -360,6 +386,10 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: `/api/lsp/${ip!.projectId}/did-close`, init: json({ file: ip!.file }) };
     case 'lsp.resolveCompletion':
       return { url: `/api/lsp/${ip!.projectId}/resolve-completion`, init: json({ file: ip!.file, item: ip!.item }) };
+    case 'lsp.resolveCodeAction':
+      return { url: `/api/lsp/${ip!.projectId}/resolve-code-action`, init: json({ file: ip!.file, action: ip!.action }) };
+    case 'lsp.executeCodeAction':
+      return { url: `/api/lsp/${ip!.projectId}/execute-code-action`, init: json({ action: ip!.action }) };
     case 'lsp.serverStatus':
       return { url: `/api/lsp/${ip!.projectId}/server-status`, init: json({ languageId: ip!.languageId }) };
     case 'lsp.listServers':
@@ -368,8 +398,16 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: '/api/lsp/instances', init: { method: 'GET' } };
     case 'editor.complete':
       return { url: '/api/editor/complete', init: json(ip!) };
+    case 'editor.resolveConfig':
+      return { url: '/api/editor/resolve-config', init: json(ip!) };
+    case 'editor.cancel':
+      return { url: '/api/editor/cancel', init: json(ip!) };
+    case 'editor.probe':
+      return { url: '/api/editor/probe', init: json(ip ?? {}) };
     case 'editor.feedback':
       return { url: '/api/editor/feedback', init: json(ip!) };
+    case 'editor.delivery':
+      return { url: '/api/editor/delivery', init: json(ip!) };
     case 'editor.stats':
       return { url: '/api/editor/stats', init: json(ip ?? {}) };
     case 'search.project': {
@@ -423,10 +461,19 @@ export function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
     return dedupeInflight<T>(callKey(path, input), () => apiCallRaw<T>(path, input));
   }
   if (WRITE_VERBS.has(path)) {
-    return apiCallRaw<T>(path, input).then((r) => {
-      invalidateAll();
-      return r;
-    });
+    const value = input as { projectId?: number; repoPath?: string } | undefined;
+    const operationKey = path.startsWith('projectGit.') && value?.projectId
+      ? gitOperationKey(value.projectId, value.repoPath)
+      : null;
+    if (operationKey) useGitOperationState.getState().begin(operationKey);
+    return apiCallRaw<T>(path, input)
+      .then((r) => {
+        invalidateAll();
+        return r;
+      })
+      .finally(() => {
+        if (operationKey) useGitOperationState.getState().end(operationKey);
+      });
   }
   return apiCallRaw<T>(path, input);
 }
@@ -459,7 +506,13 @@ async function apiCallRaw<T>(path: DotPath, input?: unknown): Promise<T> {
       throw new Error(`apiCall("${path}"): no HTTP fallback mapped — this method is Electron-only or needs a mapping entry`);
     }
     const res = await fetch(mapped.url, mapped.init);
-    if (!res.ok) throw new Error(`HTTP ${res.status} on ${path}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => null) as { error?: string; code?: string; message?: string } | null;
+      const e = new Error(body?.message ?? body?.error ?? `HTTP ${res.status} on ${path}`) as Error & { code?: string; status?: number };
+      e.status = res.status;
+      e.code = body?.code ?? body?.error;
+      throw e;
+    }
     // Some routes return text (e.g. snapshots.getForContext); detect by header.
     const ct = res.headers.get('content-type') ?? '';
     const value = ct.includes('application/json')

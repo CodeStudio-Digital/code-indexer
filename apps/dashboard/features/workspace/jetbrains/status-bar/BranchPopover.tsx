@@ -58,6 +58,7 @@ export function BranchPopover({
   const [filter, setFilter] = useState('');
   const [showLocal, setShowLocal] = useState(true);
   const [showRemote, setShowRemote] = useState(false);
+  const [remoteLoaded, setRemoteLoaded] = useState(false);
   // When set, that branch's actions open in a panel BESIDE the list (the list
   // stays visible — IntelliJ-style flyout, not a full-screen drill-in).
   const [menuBranch, setMenuBranch] = useState<BranchRowData | null>(null);
@@ -81,7 +82,7 @@ export function BranchPopover({
       const r = await apiCall<BranchRowData[]>('projectGit.branchesDetailed', {
         projectId,
         repoPath,
-        includeRemote: true,
+        includeRemote: remoteLoaded,
         rev: gitRev, // backend caches per (project, rev, repo) → instant reopen
       });
       setBranches(r);
@@ -91,11 +92,15 @@ export function BranchPopover({
     } finally {
       setLoading(false);
     }
-  }, [projectId, repoPath, gitRev]);
+  }, [projectId, repoPath, remoteLoaded, gitRev]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (filter.trim() && !remoteLoaded) setRemoteLoaded(true);
+  }, [filter, remoteLoaded]);
 
   // Per-branch IntelliJ action set (checkout / merge / rebase / pull / compare
   // / rename / delete / push), shared with the Git tool window's Branches tab.
@@ -229,10 +234,23 @@ export function BranchPopover({
               <BranchListRow key={`l-${b.name}`} branch={b} onPick={setMenuBranch} selected={menuBranch?.name === b.name} />
             ))}
 
-          {remotes.length > 0 && (
-            <button type="button" onClick={() => setShowRemote((v) => !v)} className={cn(sectionToggle, 'border-t mt-0.5')}>
+          {(!remoteLoaded || remotes.length > 0) && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!remoteLoaded) {
+                  setRemoteLoaded(true);
+                  setShowRemote(true);
+                  return;
+                }
+                setShowRemote((v) => !v);
+              }}
+              className={cn(sectionToggle, 'border-t mt-0.5')}
+            >
               {showRemote ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              <span className="font-semibold">Remote Branches · {remotes.length}</span>
+              <span className="font-semibold">
+                {remoteLoaded ? `Remote Branches · ${remotes.length}` : 'Remote Branches · load on demand'}
+              </span>
             </button>
           )}
           {showRemote && <RemoteBranchList remotes={remotes} onPick={setMenuBranch} selectedName={menuBranch?.name} />}

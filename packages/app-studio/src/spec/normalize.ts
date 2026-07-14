@@ -256,13 +256,20 @@ export function normalizeAppSpec(raw: unknown): unknown {
 
   const out: Record<string, unknown> = {
     ...r,
-    v: 1,
+    v: r.v === 2 ? 2 : 1,
     features: Array.isArray(r.features) ? r.features.map(coerceFeature) : r.features,
   };
   if (screens) out.screens = screens;
   if (database) out.database = database;
   if (Array.isArray(auth.methods)) out.auth = { ...auth, methods };
   if (r.requirements !== undefined) out.requirements = coerceRequirements(r.requirements);
+  if (r.requirement_ids !== undefined) {
+    const ids = rec(r.requirement_ids);
+    out.requirement_ids = Object.fromEntries(
+      ['goal', 'rule', 'acceptance', 'out-of-scope', 'assumption', 'risk']
+        .map((kind) => [kind, stringList(ids[kind]) ?? []]),
+    );
+  }
   if (Array.isArray(r.behaviors)) out.behaviors = r.behaviors.map(coerceBehavior);
   return out;
 }

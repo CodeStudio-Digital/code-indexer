@@ -8,8 +8,9 @@
  * `SkillConfigPanel`) renders `<PanelChrome>` once and passes its body
  * as children.
  */
-import { X, type LucideIcon } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
+import { WorkbenchPanelHeader } from '../../../components/workbench/index.js';
 
 export interface PanelChromeProps {
   title: string;
@@ -32,20 +33,8 @@ export function PanelChrome({
   children,
 }: PanelChromeProps) {
   return (
-    <div className="flex flex-col h-full min-h-0 bg-card">
-      <header className="flex items-center gap-2 px-3 h-9 border-b shrink-0">
-        <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <span className="text-xs font-semibold truncate flex-1">{title}</span>
-        {actions}
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close panel"
-          className="p-1 -mr-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </header>
+    <div className="flex flex-col h-full min-h-0 bg-[var(--workbench-surface)]">
+      <WorkbenchPanelHeader title={title} icon={Icon} actions={actions} onClose={onClose} closeLabel="Close panel" />
       <div className={cn('flex-1 min-h-0 overflow-auto', bodyClassName)}>{children}</div>
     </div>
   );

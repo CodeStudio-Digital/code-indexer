@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ClipboardCopy, GitCommit, Loader2 } from 'lucide-react';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../../../state/workspace.js';
@@ -33,6 +34,7 @@ interface CommitDetailPanelProps {
 }
 
 export function CommitDetailPanel({ projectId, repoPath, sha }: CommitDetailPanelProps) {
+  const { t } = useTranslation('workspace');
   const [detail, setDetail] = useState<GitCommitDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export function CommitDetailPanel({ projectId, repoPath, sha }: CommitDetailPane
         source: 'other',
       });
     } catch (e) {
-      toast.error('Failed to open file diff', {
+      toast.error(t('git.fileDiffFailed'), {
         description: e instanceof Error ? e.message : String(e),
       });
     }
@@ -90,7 +92,7 @@ export function CommitDetailPanel({ projectId, repoPath, sha }: CommitDetailPane
     return (
       <div className="h-full grid place-items-center text-center text-muted-foreground gap-2 px-6">
         <GitCommit className="h-5 w-5 opacity-40" />
-        <p className="text-[11.5px]">Select a commit to preview it.</p>
+        <p className="text-[11.5px]">{t('git.commitDetail.select')}</p>
       </div>
     );
   }
@@ -114,13 +116,13 @@ export function CommitDetailPanel({ projectId, repoPath, sha }: CommitDetailPane
           <button
             type="button"
             className="h-4 w-4 grid place-items-center rounded-sm text-muted-foreground/70 hover:text-foreground hover:bg-muted"
-            title="Copy full SHA"
+            title={t('git.commitMenu.copySha')}
             onClick={() => void navigator.clipboard.writeText(detail.sha).catch(() => undefined)}
           >
             <ClipboardCopy className="h-3 w-3" />
           </button>
           {detail.parents.length > 1 && (
-            <span className="text-[10px] text-muted-foreground/70">merge</span>
+            <span className="text-[10px] text-muted-foreground/70">{t('git.commitDetail.merge')}</span>
           )}
           <span className="ml-auto text-[10px] text-muted-foreground/60">
             {formatDate(detail.date)}
@@ -138,7 +140,7 @@ export function CommitDetailPanel({ projectId, repoPath, sha }: CommitDetailPane
       </div>
 
       <div className="shrink-0 px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground/70 border-b">
-        {detail.files.length} file{detail.files.length === 1 ? '' : 's'} changed
+        {t('git.commitDetail.filesChanged', { count: detail.files.length })}
       </div>
       <ChangedFilesList files={detail.files} onOpenFile={(f) => void openFile(f)} />
     </div>

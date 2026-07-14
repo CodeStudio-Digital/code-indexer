@@ -1,7 +1,7 @@
 /**
  * AppSpec — o documento de requisitos aprovado de um projeto App Studio,
- * produzido pela ENTREVISTA (etapa discovery) via tool `app_save_spec` e
- * congelado quando o usuário aprova a etapa. Serializado em
+ * produzido durante Definir via tool `app_save_spec` e versionado quando o
+ * usuário aprova o Escopo. Serializado em
  * `app_studio_sessions.spec_json` (canônico) + espelho legível em
  * `spec/app-spec.json` no workspace.
  *
@@ -56,7 +56,7 @@ export interface AppSpecFeature {
 /**
  * Comportamento (nó de fluxo do Blueprint): gatilho numa tela → ações em
  * ordem. NÃO compila código — é instrução estruturada que o AGENTE
- * implementa na etapa backend (o prompt exige implementar e citar cada um).
+ * implementa e verifica na fatia vertical ligada às mesmas fontes.
  */
 export type AppBehaviorTrigger = 'click' | 'submit' | 'open';
 
@@ -112,7 +112,7 @@ export interface AppSpecRequirements {
 }
 
 export interface AppSpec {
-  v: 1;
+  v: 1 | 2;
   /** Uma frase: o que o app faz. */
   summary: string;
   audience: string;
@@ -126,6 +126,8 @@ export interface AppSpec {
   integrations?: { r2?: boolean };
   /** Requisitos refinados do produto (opcional; specs antigas podem não ter). */
   requirements?: AppSpecRequirements;
+  /** IDs paralelos e estáveis introduzidos no v2; v1 é normalizado por hash. */
+  requirement_ids?: Partial<Record<'goal' | 'rule' | 'acceptance' | 'out-of-scope' | 'assumption' | 'risk', string[]>>;
   /** Nós de fluxo do Blueprint (opcional; ausente = sem comportamentos declarados). */
   behaviors?: AppBehavior[];
 }
@@ -134,7 +136,7 @@ export function parseAppSpec(json: string | null | undefined): AppSpec | null {
   if (!json) return null;
   try {
     const spec = JSON.parse(json) as AppSpec;
-    if (spec?.v !== 1 || !Array.isArray(spec.screens)) return null;
+    if ((spec?.v !== 1 && spec?.v !== 2) || !Array.isArray(spec.screens)) return null;
     return spec;
   } catch {
     return null;

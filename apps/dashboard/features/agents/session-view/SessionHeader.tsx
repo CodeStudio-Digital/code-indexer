@@ -61,12 +61,12 @@ export function SessionHeader({
   const canReconnect = !stream.connected && sessionStatus === 'running' && stream.started;
 
   return (
-    <div className="px-3 py-1.5 border-b flex items-center gap-2">
+    <header className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2">
       {onToggleSessionsList && (
         <button
           type="button"
           className={cn(
-            'p-1.5 rounded-md transition-colors shrink-0',
+            'grid h-6 w-6 shrink-0 place-items-center rounded-md transition-colors',
             sessionsListOpen
               ? 'bg-muted text-foreground'
               : 'text-muted-foreground hover:bg-muted hover:text-foreground',
@@ -78,14 +78,14 @@ export function SessionHeader({
         </button>
       )}
       <Users className="h-4 w-4 text-muted-foreground shrink-0" />
-      <h2 className="text-sm font-semibold truncate min-w-0">{sessionName}</h2>
-      <Badge variant={stream.connected ? 'default' : 'outline'} className="text-[10px] shrink-0">
+      <h2 className="min-w-0 truncate text-[11px] font-semibold">{sessionName}</h2>
+      <Badge variant={stream.connected ? 'default' : 'outline'} className="h-4 shrink-0 px-1 text-[8px]">
         {stream.connected ? t('company.live') : (reportedStatus ?? sessionStatus)}
       </Badge>
       {recoveredAt && (
         <Badge
           variant="outline"
-          className="text-[10px] gap-1 border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0"
+          className="h-4 shrink-0 gap-1 border-amber-500/40 bg-amber-500/10 px-1 text-[8px] text-amber-700 dark:text-amber-300"
           title={t('sessionRecovered.tooltip', 'This session was paused by a server restart on {{at}}. Send a message to resume.', {
             at: formatRecoveredAt(recoveredAt),
             reason: recoveredReason,
@@ -112,7 +112,7 @@ export function SessionHeader({
           onReset={onResetClick}
         />
       </div>
-    </div>
+    </header>
   );
 }
 

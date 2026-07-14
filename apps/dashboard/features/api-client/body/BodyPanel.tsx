@@ -6,6 +6,7 @@
  */
 import { useTranslation } from 'react-i18next';
 import { Input } from '../../../components/ui/input.js';
+import { ApiClientSelect } from '../ApiClientSelect.js';
 import { KeyValueGrid } from '../kv-grid/KeyValueGrid.js';
 import { parseRows, stringifyRows } from '../kv-grid/kv-utils.js';
 import { JsonRawEditor } from './JsonRawEditor.js';
@@ -48,21 +49,20 @@ export function BodyPanel({ draft, upd, persist }: Props) {
   return (
     <div className="flex flex-col h-full gap-2">
       <div className="flex items-center gap-2">
-        <select
-          className="text-xs bg-background border rounded px-2 py-1"
+        <ApiClientSelect
           value={kind}
-          onChange={(e) => { const body_kind = e.target.value as ApiBodyKind; upd({ body_kind }); persist({ body_kind }); }}
-        >
-          {KINDS.map((k) => <option key={k.value} value={k.value}>{k.labelKey ? t(`bodyPanel.${k.labelKey}`) : k.label}</option>)}
-        </select>
+          onValueChange={(value) => { const body_kind = value as ApiBodyKind; upd({ body_kind }); persist({ body_kind }); }}
+          options={KINDS.map((option) => ({ value: option.value, label: option.labelKey ? t(`bodyPanel.${option.labelKey}`) : option.label }))}
+          ariaLabel={t('request.tabBody')}
+          triggerClassName="w-52"
+        />
         {kind === 'raw' && (
-          <select
-            className="text-xs bg-background border rounded px-2 py-1"
+          <ApiClientSelect
             value={draft.body_raw_lang ?? 'text'}
-            onChange={(e) => { const body_raw_lang = e.target.value as ApiBodyRawLang; upd({ body_raw_lang }); persist({ body_raw_lang }); }}
-          >
-            {RAW_LANGS.map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
+            onValueChange={(value) => { const body_raw_lang = value as ApiBodyRawLang; upd({ body_raw_lang }); persist({ body_raw_lang }); }}
+            options={RAW_LANGS.map((language) => ({ value: language, label: language }))}
+            triggerClassName="w-36 font-mono"
+          />
         )}
       </div>
 

@@ -12,6 +12,7 @@ import { Input } from '../../components/ui/input.js';
 import { prompt } from '../../components/ui/prompt-dialog.js';
 import * as api from './api.js';
 import type { ApiCollection } from './types.js';
+import { ApiClientSelect } from './ApiClientSelect.js';
 
 interface Props {
   projectId: number;
@@ -79,19 +80,32 @@ export function SaveRequestDialog({ projectId, open, onOpenChange, collections, 
         </label>
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-muted-foreground">{t('saveDialog.collection')}</span>
-          <select className="h-8 text-sm bg-background border rounded px-2" value={collectionId ?? ''} onChange={(e) => void onCollectionChange(e.target.value)}>
-            {collections.length === 0 && <option value="">{t('saveDialog.noCollections')}</option>}
-            {collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            <option value="__new__">{t('saveDialog.newCollectionOption')}</option>
-          </select>
+          <ApiClientSelect
+            value={collectionId == null ? '' : String(collectionId)}
+            onValueChange={(value) => void onCollectionChange(value)}
+            options={[
+              ...(collections.length === 0 ? [{ value: '', label: t('saveDialog.noCollections'), disabled: true }] : []),
+              ...collections.map((collection) => ({ value: String(collection.id), label: collection.name })),
+              { value: '__new__', label: t('saveDialog.newCollectionOption') },
+            ]}
+            ariaLabel={t('saveDialog.collection')}
+            triggerClassName="h-8 text-sm"
+          />
         </label>
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-muted-foreground">{t('saveDialog.folder')}</span>
-          <select className="h-8 text-sm bg-background border rounded px-2" value={folder} onChange={(e) => void onFolderChange(e.target.value)} disabled={collectionId == null}>
-            <option value="">{t('saveDialog.topLevel')}</option>
-            {folders.map((f) => <option key={f} value={f}>{f}</option>)}
-            <option value="__newfolder__">{t('saveDialog.newFolderOption')}</option>
-          </select>
+          <ApiClientSelect
+            value={folder}
+            onValueChange={(value) => void onFolderChange(value)}
+            options={[
+              { value: '', label: t('saveDialog.topLevel') },
+              ...folders.map((folderName) => ({ value: folderName, label: folderName })),
+              { value: '__newfolder__', label: t('saveDialog.newFolderOption') },
+            ]}
+            disabled={collectionId == null}
+            ariaLabel={t('saveDialog.folder')}
+            triggerClassName="h-8 text-sm"
+          />
         </label>
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>{t('saveDialog.cancel')}</Button>

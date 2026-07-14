@@ -1,56 +1,13 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Boxes, CheckCircle2, ExternalLink, FilePenLine, Loader2, ShieldCheck, TestTube2, TriangleAlert } from 'lucide-react';
-import { Button } from '../../../components/ui/button.js';
-import { patchAppStage, type AppStudioSessionDetail } from '../app-studio-api.js';
-import { ApproveBar } from '../guide/ApproveBar.js';
+import { Boxes, CheckCircle2, ExternalLink, ShieldCheck, TestTube2, TriangleAlert } from 'lucide-react';
+import type { AppStudioSessionDetail } from '../app-studio-api.js';
 
-export function ArchitecturePanel({
-  detail,
-  onChanged,
-  onOpenAgent,
-}: {
+export function ArchitecturePanel({ detail }: {
   detail: AppStudioSessionDetail;
   onChanged: () => void;
-  onOpenAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const stage = detail.pipeline?.stages.find((item) => item.id === 'architecture');
   const architecture = detail.architecture;
-
-  async function act(action: 'approve' | 'reopen', feedback?: string) {
-    setBusy(true);
-    setError(null);
-    try {
-      await patchAppStage(detail.session.id, 'architecture', action, feedback);
-      onChanged();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openAgent() {
-    setBusy(true);
-    setError(null);
-    try {
-      if (stage?.status === 'pending') await patchAppStage(detail.session.id, 'architecture', 'start');
-      onChanged();
-      onOpenAgent?.(t('stageMessage.architecture'));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function updateSpec() {
-    setError(null);
-    onOpenAgent?.(t('architecture.updateSpecPrompt'));
-  }
 
   if (!architecture) {
     return (
@@ -60,11 +17,7 @@ export function ArchitecturePanel({
           <h2 className="text-base font-semibold">{t('architecture.emptyTitle')}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{t('architecture.emptyBody')}</p>
         </div>
-        {error && <p className="text-xs text-red-600">{error}</p>}
-        <Button size="sm" disabled={busy || !detail.spec} onClick={() => void openAgent()}>
-          {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Bot className="mr-1 h-3.5 w-3.5" />}
-          {t('architecture.openAgent')}
-        </Button>
+        <p className="text-xs text-muted-foreground">{t('workflow.coordinatorOwnsArtifacts')}</p>
       </div>
     );
   }
@@ -83,17 +36,7 @@ export function ArchitecturePanel({
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{plan.summary}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" disabled={busy} onClick={updateSpec}>
-            <FilePenLine className="mr-1 h-3.5 w-3.5" /> {t('architecture.updateSpec')}
-          </Button>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => void openAgent()}>
-            <Bot className="mr-1 h-3.5 w-3.5" /> {t('architecture.refine')}
-          </Button>
-        </div>
       </header>
-
-      {error && <p className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-800">{error}</p>}
 
       <section>
         <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold"><Boxes className="h-4 w-4 text-primary" />{t('architecture.modules')}</h3>
@@ -133,7 +76,6 @@ export function ArchitecturePanel({
         <div className="flex flex-wrap gap-2">{plan.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted">{source.title}<ExternalLink className="h-3 w-3" /></a>)}</div>
       </section>
 
-      {stage?.status === 'review' && <div className="border-t pt-4"><ApproveBar busy={busy} onApprove={() => void act('approve')} onReopen={(feedback) => void act('reopen', feedback)} /></div>}
     </div>
   );
 }

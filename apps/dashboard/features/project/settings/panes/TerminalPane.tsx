@@ -4,18 +4,11 @@
  * spawn. Extracted from the old RunnerShellChip; save-on-change.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Project } from '@mcp/shared/types.js';
 import { apiCall } from '../../../../lib/api-client.js';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from '../../../../components/ui/select.js';
+import { Combobox } from '../../../../components/ui/combobox.js';
 import { mergeShells, useShellPrefs, type TerminalShell } from '../../../../state/terminal-shell-prefs.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
 
@@ -34,31 +27,25 @@ export function TerminalPane({ project, patch }: { project: Project; patch: Patc
     return () => { alive = false; };
   }, []);
 
-  const shells = mergeShells(detected, customShells);
+  const shells = useMemo(() => mergeShells(detected, customShells), [customShells, detected]);
   const value = project.runner_shell ?? null;
+  const shellOptions = useMemo(() => [
+    { value: SYSTEM, label: t('runners.shellSystem') },
+    ...shells.map((shell) => ({ value: shell.id, label: shell.label })),
+  ], [shells, t]);
 
   return (
-    <div className="space-y-3 max-w-xl">
-      <h3 className="text-sm font-semibold">{t('settings.nav.terminal')}</h3>
+    <div className="w-full max-w-3xl space-y-3">
       <div className="space-y-1.5">
         <label className="text-sm font-medium">{t('runners.shellLabel')}</label>
-        <Select
+        <Combobox
           value={value ?? SYSTEM}
-          onValueChange={(next) => void patch({ runner_shell: next === SYSTEM ? null : next })}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SYSTEM}>{t('runners.shellSystem')}</SelectItem>
-            {shells.length > 0 && <SelectSeparator />}
-            {shells.map((s) => (
-              <SelectItem key={s.id} value={s.id}>
-                {s.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onChange={(next) => void patch({ runner_shell: next === SYSTEM ? null : next })}
+          options={shellOptions}
+          searchPlaceholder={t('settings.select.search')}
+          emptyLabel={t('settings.select.empty')}
+          size="md"
+        />
         <p className="text-xs text-muted-foreground">{t('runners.shellHint')}</p>
         {value?.startsWith('wsl:') && (
           <p className="text-xs text-muted-foreground border-l-2 border-primary/40 pl-2">

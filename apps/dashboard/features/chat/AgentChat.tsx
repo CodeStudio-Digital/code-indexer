@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { AgentPreset } from '@mcp/api-bus';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
@@ -66,7 +67,7 @@ import type { AgentAttachment } from '../../hooks/useAgentStream.js';
 import type { NotificationSourceContext } from '../notifications/index.js';
 import { markRouteEvent } from '../../lib/perf/route-startup-metrics.js';
 
-export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId, hideAgentPicker }: AgentChatProps) {
+export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId, hideAgentPicker, workbenchSlots }: AgentChatProps) {
   const { t } = useTranslation(['chat', 'common']);
   const confirm = useConfirm();
   // Global (multi-project) mode: the session list is cross-project (no
@@ -120,7 +121,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         && next !== agent
         && (
           next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' ||
-          next === 'spec' || next === 'app_spec' || next === 'app_db' || next === 'app_architect' || next === 'app_product' || next === 'app_ux' || next === 'app_wireframe' || next === 'api' || next === 'diagram' || next === 'builder'
+          next === 'spec' || next === 'app_orchestrator' || next === 'api' || next === 'diagram' || next === 'builder'
         )
       ) {
         setAgent(next);
@@ -245,6 +246,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   useEffect(() => {
     localStorage.setItem('chatRightPanelId', activeRightPanelId ?? 'null');
   }, [activeRightPanelId]);
+  useEffect(() => {
+    workbenchSlots?.onSessionStateChange?.({
+      hasSession: selectedId != null,
+      rightPanelOpen: selectedId != null && activeRightPanelId != null,
+    });
+  }, [activeRightPanelId, selectedId, workbenchSlots?.onSessionStateChange]);
   // Plugin tool windows for the right rail (side: 'right'), with dead-id guard.
   // In global mode there's no fixed project — scope plugin panels to the active
   // linked project (0 = none, so no contributions match, which is fine).
@@ -261,7 +268,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
 
-  const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
+  const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=40&detail=preview` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
 
   // Composer gate: block sending while the session's project is ACTIVELY indexing
@@ -729,6 +736,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (!selectedId) return 0;
     try {
       const qs = new URLSearchParams({ limit: String(limit) });
+      qs.set('detail', 'preview');
       if (beforeId != null) qs.set('before_id', String(beforeId));
       if (includeArchived) qs.set('include_archived', '1');
       const res = await fetch(`/api/coder/sessions/${selectedId}/messages?${qs}`);
@@ -849,7 +857,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (
       a && (
         a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' ||
-        a === 'spec' || a === 'app_spec' || a === 'app_db' || a === 'app_architect' || a === 'app_product' || a === 'app_ux' || a === 'app_wireframe' || a === 'api' || a === 'diagram' || a === 'builder'
+        a === 'spec' || a === 'app_orchestrator' || a === 'api' || a === 'diagram' || a === 'builder'
       )
     ) {
       setAgent(a);
@@ -1212,7 +1220,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 && s.agent !== agent
                 && (
                   s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'app_product' || s.agent === 'app_ux' || s.agent === 'app_wireframe' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
                 )
               ) {
                 setAgent(s.agent);
@@ -1239,7 +1247,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 && s.agent !== agent
                 && (
                   s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_spec' || s.agent === 'app_db' || s.agent === 'app_architect' || s.agent === 'app_product' || s.agent === 'app_ux' || s.agent === 'app_wireframe' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
                 )
               ) {
                 setAgent(s.agent);
@@ -1284,7 +1292,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const handleSelectSession = useCallback((id: number) => {
     setSelectedId(id);
     setMobileSidebarOpen(false);
-  }, []);
+    workbenchSlots?.onSessionSelected?.(id);
+  }, [workbenchSlots?.onSessionSelected]);
   const closeMobileSidebar = useCallback(() => setMobileSidebarOpen(false), []);
 
   // Stabilize the two inline-computed <Composer> props. Without these, each
@@ -1438,7 +1447,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             could leave the right panel taking ~50% of the viewport and
             squishing the chat header into a wrap. */}
         <PanelGroup direction="horizontal" autoSaveId="agent-chat-cols-v2" className="flex-1 min-h-0">
-        <Panel
+        {!workbenchSlots && <Panel
           ref={sessionsPanelRef}
           id="sessions-sidebar"
           order={1}
@@ -1479,11 +1488,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
           groupBy={isGlobal ? 'workspace' : 'group'}
         />
-        </Panel>
-        <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />
+        </Panel>}
+        {!workbenchSlots && <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />}
         <Panel id="chat-main" order={2} minSize={40} className="min-w-0 relative">
           {/* Collapse/expand the sessions sidebar. */}
-          <button
+          {!workbenchSlots && <button
             onClick={() => {
               // Ação manual assume o controle: limpa o flag de auto-colapso
               // para o observer de largura não brigar (reabrir/re-colapsar).
@@ -1495,9 +1504,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             className="absolute top-1.5 left-1.5 z-20 h-6 w-6 flex items-center justify-center rounded-md bg-card/80 border text-muted-foreground hover:text-foreground hover:bg-muted"
           >
             {sidebarCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
-          </button>
+          </button>}
           {!selectedId ? (
-            <main className="flex h-full w-full min-w-0 bg-card overflow-hidden min-h-0">
+            <main className="flex h-full w-full min-w-0 bg-[var(--workbench-surface)] overflow-hidden min-h-0">
               <EmptyChatState
                 onNew={handleNewSession}
                 projectId={projectId}
@@ -1506,7 +1515,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               />
             </main>
           ) : (
-            <main className="flex h-full w-full min-w-0 bg-card overflow-hidden min-h-0 flex-col">
+            <main className="flex h-full w-full min-w-0 bg-[var(--workbench-surface)] overflow-hidden min-h-0 flex-col">
               {sessionData?.session && (
                 <ChatHeader
                   session={sessionData.session}
@@ -1630,7 +1639,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             </main>
           )}
         </Panel>
-        {selectedId && activeRightPanelId && (
+        {!workbenchSlots && selectedId && activeRightPanelId && (
           <>
             {/* The diagram canvas escapes the `lg` viewport gate: the chat is
                 effectively <1024px in split mounts (ProjectView preview split,
@@ -1677,9 +1686,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         {/* Activity rail — fixed 40px, sits flush right when a session is
             open. Hidden on mobile (where the sidebar drawer already
             provides navigation, and 40px would crowd the chat). */}
-        {selectedId && (
+        {!workbenchSlots && selectedId && (
           <div className="hidden lg:block">
             <ChatRightRail
+              sessionId={selectedId}
               activePanelId={activeRightPanelId}
               onSelectPanel={setActiveRightPanelId}
               onOpenSnapshots={openSnapshots}
@@ -1690,6 +1700,71 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           </div>
         )}
       </div>
+      {workbenchSlots?.sessionsHost && createPortal(
+        <SessionSidebar
+          sessions={sessions ?? null}
+          groups={groups ?? null}
+          view={view}
+          onViewChange={handleViewChange}
+          selectedId={selectedId}
+          onSelect={handleSelectSession}
+          mobileOpen={mobileSidebarOpen}
+          onMobileClose={closeMobileSidebar}
+          onNew={handleNewSession}
+          onDelete={handleDelete}
+          onRename={handleRenameSession}
+          onDuplicate={handleDuplicate}
+          onBatchDelete={handleBatchDelete}
+          onDeleteAll={handleDeleteAll}
+          onArchive={handleArchive}
+          onFavorite={handleFavorite}
+          onTogglePin={handleTogglePin}
+          sessionPinId={sessionPinIdFor}
+          onBatchArchive={handleBatchArchive}
+          onMoveToGroup={handleMoveToGroup}
+          onBatchMoveToGroup={handleBatchMoveToGroup}
+          onCreateGroup={handleCreateGroup}
+          onRenameGroup={handleRenameGroup}
+          onDeleteGroup={handleDeleteGroup}
+          projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
+          groupBy={isGlobal ? 'workspace' : 'group'}
+        />,
+        workbenchSlots.sessionsHost,
+      )}
+      {workbenchSlots?.rightPanelHost && selectedId && activeRightPanelId && createPortal(
+        <RightPanelHost
+          activeId={activeRightPanelId}
+          sessionId={selectedId}
+          session={sessionData?.session ?? null}
+          sessionData={sessionData ?? null}
+          stats={stats}
+          projectId={(isGlobal ? activeProjectId : projectId) ?? null}
+          refreshKey={stateRefreshKey + sidebarRefreshTick}
+          todos={todos}
+          filePicks={filePicks}
+          onTogglePick={togglePick}
+          onSetManyPicks={setManyPicks}
+          onClearPicks={clearPicks}
+          skillPicks={skillPicks}
+          onToggleSkillPick={toggleSkillPick}
+          pipelineRuntime={pipelineRuntime}
+          pluginWindows={pluginPanelWindows}
+          onClose={() => setActiveRightPanelId(null)}
+        />,
+        workbenchSlots.rightPanelHost,
+      )}
+      {workbenchSlots?.rightRailHost && selectedId && createPortal(
+        <ChatRightRail
+          sessionId={selectedId}
+          activePanelId={activeRightPanelId}
+          onSelectPanel={setActiveRightPanelId}
+          onOpenSnapshots={openSnapshots}
+          pendingSnapshots={snapshotPending}
+          unreadNotifications={unreadNotifications}
+          pluginWindows={pluginPanelWindows}
+        />,
+        workbenchSlots.rightRailHost,
+      )}
       {selectedId != null && (
         <Dialog open={snapshotsOpen} onOpenChange={setSnapshotsOpen}>
           <DialogContent

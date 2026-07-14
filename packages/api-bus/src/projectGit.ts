@@ -12,6 +12,8 @@ import type { ApiContext } from './common.js';
 
 export interface GitStatusFile {
   path: string;
+  /** Previous path for a rename/copy, when Git reports one. */
+  oldPath?: string;
   state:
     | 'modified'
     | 'added'
@@ -30,6 +32,9 @@ export interface GitStatusFile {
    * single-repo status (Git tool window with an explicit repoPath) omits it.
    */
   repo?: string;
+  /** True when the selected repository is an ancestor of the project and this
+   * file lives elsewhere in that repository. */
+  outsideProject?: boolean;
 }
 
 export interface GitStatus {
@@ -42,6 +47,8 @@ export interface GitStatus {
   repoRoot: string | null;
   /** True when `root_path` isn't a git repo at all. */
   notARepo: boolean;
+  /** Non-fatal repository failures in an aggregate read. */
+  partialWarnings?: string[];
 }
 
 export interface GitCommit {
@@ -50,6 +57,10 @@ export interface GitCommit {
   author: string;
   date: string;
   subject: string;
+  /** Parent SHAs in Git order. Required to build the commit graph client-side. */
+  parents: string[];
+  /** Short decorations that point at this commit (HEAD, branches and tags). */
+  refs: string[];
 }
 
 export interface GitDiffResult {
@@ -142,22 +153,52 @@ export interface GitRunResult {
   code: number;
   stdout: string;
   stderr: string;
+  errorCode?: 'spawn_failed' | 'timeout' | 'output_too_large' | 'git_failed';
+  durationMs?: number;
+  timedOut?: boolean;
+  truncated?: boolean;
 }
 
-/**
- * Step in an AI-generated git plan. The frontend renders these for
- * user review before calling `aiExecute`. Marking `dangerous` flips
- * the row to a warning style so the user thinks twice (e.g. reset
- * --hard, force push, branch delete).
- */
+export interface GitLogPage {
+  commits: GitCommit[];
+  snapshotId: string | null;
+  nextCursor: string | null;
+}
+
+export type GitPlanRisk = 'safe' | 'mutating' | 'destructive';
+
+/** Strict operation vocabulary accepted from the model. It deliberately has
+ * no raw command/argv escape hatch. The backend normalizes this union, derives
+ * risk, stores it under a short-lived plan id, and executes only that stored
+ * copy after review. */
+export type GitPlanOperation =
+  | { op: 'branchCheckout'; name: string; create?: boolean }
+  | { op: 'branchCreate'; name: string; from?: string; checkout?: boolean }
+  | { op: 'branchRename'; oldName: string; newName: string; force?: boolean }
+  | { op: 'branchDelete'; name: string; force?: boolean }
+  | { op: 'merge'; branch: string; strategy?: 'ff-only' | 'no-ff' | 'default' }
+  | { op: 'rebase'; onto: string }
+  | { op: 'reset'; target: string; mode: 'soft' | 'mixed' | 'hard' }
+  | { op: 'revert'; commit: string; noCommit?: boolean }
+  | { op: 'cherryPick'; commits: string[]; noCommit?: boolean }
+  | { op: 'push'; remote?: string; branch?: string; force?: boolean; setUpstream?: boolean }
+  | { op: 'fetch'; remote?: string; prune?: boolean }
+  | { op: 'pull'; remote?: string; branch?: string; rebase?: boolean }
+  | { op: 'stashSave'; message?: string; includeUntracked?: boolean; keepIndex?: boolean }
+  | { op: 'stashPop' | 'stashApply' | 'stashDrop'; ref: string };
+
 export interface GitPlanStep {
-  command: string;
-  args: string[];
+  id: string;
+  operation: GitPlanOperation;
   description: string;
-  dangerous: boolean;
+  risk: GitPlanRisk;
+  /** Human-readable command preview. It is never parsed or executed. */
+  preview: string;
 }
 
 export interface GitPlan {
+  planId: string;
+  expiresAt: string;
   intent: string;
   steps: GitPlanStep[];
   /** Human-readable summary the AI produced alongside the steps. */
@@ -269,8 +310,10 @@ export interface GitScope {
  * aggregate status can skip its noise.
  */
 export interface GitRepoRef {
-  /** Absolute path of the repo root. */
+  /** Absolute path of the repo root. Legacy alias retained during migration. */
   absPath: string;
+  /** Absolute root of the selected Git working tree. */
+  repoRoot: string;
   /** POSIX path relative to the project root_path; '' when repo === project root. */
   projectRelPrefix: string;
   /** Display name (last path segment, or 'main' for the project's own repo). */
@@ -280,6 +323,33 @@ export interface GitRepoRef {
   initialized: boolean;
   /** True for a nested repo the parent repo's .gitignore excludes. */
   ignoredByParent: boolean;
+  /** Absolute project root used to discover this repository. */
+  projectRoot: string;
+  /** Whether the repository extends beyond the project root. */
+  extendsBeyondProject: boolean;
+}
+
+export interface GitStatusCounts {
+  total: number;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicts: number;
+}
+
+/** Immutable, short-lived page over one status computation. */
+export interface GitWorkspaceSnapshot extends GitStatus {
+  files: GitStatusFile[];
+  counts: GitStatusCounts;
+  snapshotId: string | null;
+  nextCursor: string | null;
+  pageSize: number;
+  partialWarnings: string[];
+  performanceHint?: {
+    elapsedMs: number;
+    suggestUntrackedCache: boolean;
+    suggestFsmonitor: boolean;
+  };
 }
 
 export interface ProjectGitApi {
@@ -293,6 +363,13 @@ export interface ProjectGitApi {
   listRepos(input: { projectId: number }, ctx: ApiContext): Promise<GitRepoRef[]>;
 
   status(input: GitScope & { includeFiles?: boolean }, ctx: ApiContext): Promise<GitStatus>;
+
+  /** Compute or continue a bounded status snapshot. `cursor` is opaque and
+   * tied to `snapshotId`; expired snapshots return 410 instead of drifting. */
+  statusPage(
+    input: GitScope & { snapshotId?: string; cursor?: string; pageSize?: number },
+    ctx: ApiContext,
+  ): Promise<GitWorkspaceSnapshot>;
 
   diff(
     input: GitScope & { path?: string; staged?: boolean },
@@ -325,9 +402,32 @@ export interface ProjectGitApi {
   ): Promise<{ ok: true; repoPath?: string }>;
 
   log(
-    input: GitScope & { limit?: number; path?: string; branch?: string },
+    input: GitScope & {
+      /** Page size. Clamped by the handler to protect the renderer/backend. */
+      limit?: number;
+      /** Number of newer commits to skip — enables incremental history pages. */
+      skip?: number;
+      path?: string;
+      branch?: string;
+      /** Walk every local/remote ref instead of only HEAD or `branch`. */
+      all?: boolean;
+    },
     ctx: ApiContext,
   ): Promise<GitCommit[]>;
+
+  /** Stable history pagination. The first call pins the resolved ref tips;
+   * subsequent cursor reads cannot drift when branches move. */
+  logPage(
+    input: GitScope & {
+      pageSize?: number;
+      snapshotId?: string;
+      cursor?: string;
+      path?: string;
+      branch?: string;
+      all?: boolean;
+    },
+    ctx: ApiContext,
+  ): Promise<GitLogPage>;
 
   /**
    * Full detail of a single commit — metadata + message body + the list
@@ -607,18 +707,14 @@ export interface ProjectGitApi {
    * after the user confirms.
    */
   aiPlan(
-    input: GitScope & { intent: string },
+    input: GitScope & { intent: string; consent: true },
     ctx: ApiContext,
   ): Promise<GitPlan>;
 
-  /**
-   * Execute a sequence of git steps, stopping at the first failure.
-   * Steps come from an `aiPlan` the user reviewed and approved — we
-   * still re-validate that every step's `command` is `git` (no shell
-   * escapes) before spawning.
-   */
+  /** Execute exactly the normalized server-side plan previously returned by
+   * `aiPlan`. Plans are short-lived, scoped to project/repository and one-shot. */
   aiExecute(
-    input: GitScope & { steps: GitPlanStep[] },
+    input: GitScope & { planId: string },
     ctx: ApiContext,
   ): Promise<{ results: GitRunResult[]; aborted: boolean }>;
 
@@ -629,7 +725,7 @@ export interface ProjectGitApi {
    * configured so the UI can point the user at Admin → AI Geral.
    */
   aiCommitMessage(
-    input: GitScope,
+    input: GitScope & { consent: true },
     ctx: ApiContext,
   ): Promise<{ message: string }>;
 

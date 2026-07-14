@@ -40,9 +40,7 @@
  *     switches.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { Monitor, Puzzle } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi.js';
 import type { Project } from '@mcp/shared/types.js';
@@ -63,7 +61,6 @@ import { useFileTreeStore } from '../../state/file-tree.js';
 import { apiCall as apiCallFs } from '../../lib/api-client.js';
 import { markRouteEvent, setRouteTab } from '../../lib/perf/route-startup-metrics.js';
 import { useActiveSurface } from '../../state/active-surface.js';
-import { installKeymapDispatcher } from '../../keymap/dispatcher.js';
 import { registerProjectCommands } from './project-commands.js';
 import { registerEditorCommands } from '../workspace/editor/editor-commands.js';
 import { registerCommands } from '../../keymap/commands.js';
@@ -73,16 +70,9 @@ import { SearchEverywhere } from '../search-everywhere/SearchEverywhere.js';
 import { FileStructurePopup } from '../search-everywhere/FileStructurePopup.js';
 import { KeymapDialog } from '../search-everywhere/KeymapDialog.js';
 import { LocalHistoryDialog } from '../workspace/local-history/LocalHistoryDialog.js';
-import { BottomPanel, BOTTOM_BUILTIN_TAB_IDS } from '../workspace/BottomPanel.js';
-import { StatusBar } from '../workspace/jetbrains/StatusBar.js';
-// Roteador de conteúdo das abas extraído para tabs/TabContent.tsx (W4 decompose) —
-// inclui as abas lazy + o ToolSurface. Aqui fica só o shell do ProjectView.
-import { TabContent } from './tabs/TabContent.js';
-
-// Config das abas (ProjectTabId/TabDef/TABS) extraída para tabs-config.ts; o top bar e
-// o rail viraram componentes próprios (ProjectTopBar/ProjectRail) — W4 decompose.
-import { TABS, type ProjectTabId, type TabDef } from './tabs-config.js';
-import { ProjectRail } from './ProjectRail.js';
+import { BOTTOM_BUILTIN_TAB_IDS } from '../workspace/BottomPanel.js';
+import { projectSurface } from './tabs-config.js';
+import { ProjectWorkbench } from './ProjectWorkbench.js';
 export type { ProjectTabId } from './tabs-config.js';
 
 interface ProjectViewProps {
@@ -107,8 +97,16 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // the lazy file tree (incremental upsert/delete) and the open tabs
   // (non-dirty → silent reload from disk; dirty → conflict badge).
   const applyFsEventsToTree = useFileTreeStore((s) => s.applyFsEvents);
+  const gitFsDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   useFsEvents(projectId, (events: FsEventDTO[]) => {
     applyFsEventsToTree(events);
+    if (events.some((event) => !event.isDir)) {
+      if (gitFsDebounce.current) clearTimeout(gitFsDebounce.current);
+      gitFsDebounce.current = setTimeout(() => {
+        const revision = useGitRevision.getState();
+        revision.bump(projectId, revision.branchByProject[projectId] ?? null);
+      }, 350);
+    }
     const ws = useWorkspaceStore.getState();
     for (const e of events) {
       if (e.isDir) continue;
@@ -137,6 +135,9 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         .catch(() => undefined);
     }
   });
+  useEffect(() => () => {
+    if (gitFsDebounce.current) clearTimeout(gitFsDebounce.current);
+  }, [projectId]);
 
   // Live git-metadata — ONE stream per project. A branch switch (in-app OR an
   // external `git checkout`) bumps the git-revision store, which re-syncs the
@@ -171,41 +172,30 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // tab and the chat-tab split.
   const hasDevTask = useRunningTasks((s) => tasksForProject(s.tasks, projectId).some(isDevServerTask));
   const previewEnabled = !!builderJson || hasDevTask;
-  const previewTabs = useMemo<TabDef[]>(
-    () => (previewEnabled ? [{ id: 'preview', label: 'Preview', icon: Monitor, group: 'core' }] : []),
-    [previewEnabled],
-  );
-
-  // Default tab: 'chat' so existing users keep the familiar landing
-  // surface. If the user opened the project specifically to look at a
-  // file (Quick Open from outside, future routes), we can switch to
-  // 'files' via a query string param down the road.
-  const [tab, setTab] = useState<ProjectTabId>(() =>
-    initialSessionId ? 'chat' : 'chat',
-  );
-
   useEffect(() => {
-    markRouteEvent('ProjectView:mounted', { projectId, tab });
+    markRouteEvent('ProjectView:mounted', { projectId, tab: layout.primarySurface });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
-    setRouteTab(tab, projectId);
-    // Publish the live rail tab so the global Pinned Tabs Bar can capture a
-    // rail pin for the view you're on + highlight the active rail chip. The
-    // tab is local state and never reaches the URL, so this is the only signal.
-    useActiveSurface.getState().setProjectTab({ projectId, tab });
-  }, [projectId, tab]);
+    setRouteTab(layout.primarySurface, projectId);
+    useActiveSurface.getState().setProjectTab({ projectId, tab: layout.primarySurface });
+  }, [projectId, layout.primarySurface]);
 
   // Clear the active-surface signal when leaving the project view so off-project
   // pages don't read a stale rail tab.
   useEffect(() => () => useActiveSurface.getState().setProjectTab(null), []);
 
-  // Recent-session deep link forces the chat tab so the user sees the
-  // session they clicked on (matches ProjectDetail's old behaviour).
+  // A session deep link intentionally takes over the primary area; ordinary
+  // project opens retain the IDE-first Editor + left/right tool windows.
   useEffect(() => {
-    if (initialSessionId) setTab('chat');
-  }, [initialSessionId]);
+    if (initialSessionId) {
+      layout.setPrimarySurface('sessions');
+      layout.setActiveLeft('sessions');
+      if (layout.activeRight === 'chat') layout.setActiveRight(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSessionId, projectId]);
 
   // Deep link to a specific tab via `?tab=<id>` — used by the global
   // running-tasks dropdown to jump straight to this project's Runners
@@ -218,14 +208,35 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     // Legacy deep-links (?tab=runs|indexed|...) now resolve to the unified
     // Index tab — the global running-tasks dropdown jumps to ?tab=runs.
     const INDEX_ALIASES = new Set(['runs', 'indexed', 'search', 'dependencies', 'architecture', 'diff', 'costs']);
-    if (BOTTOM_BUILTIN_TAB_IDS.has(requested)) {
+    const surface = projectSurface(requested);
+    const pluginWindow = contribWindows.find((window) => window.id === requested);
+    if (requested === 'chat') {
+      // Backward compatibility: the former full Chat rail tab is now the
+      // explicit rich Sessions primary surface. Alt+2 owns the compact rail.
+      useWorkspaceLayout.getState().setPrimarySurface('sessions');
+      useWorkspaceLayout.getState().setActiveLeft('sessions');
+      if (useWorkspaceLayout.getState().activeRight === 'chat') {
+        useWorkspaceLayout.getState().setActiveRight(null);
+      }
+    } else if (BOTTOM_BUILTIN_TAB_IDS.has(requested)) {
       useWorkspaceLayout.getState().setActiveBottom(requested);
     } else if (INDEX_ALIASES.has(requested)) {
-      setTab('index');
-    } else if (TABS.some((tabDef) => tabDef.id === requested)) {
-      setTab(requested);
+      useWorkspaceLayout.getState().setPrimarySurface('index');
+    } else if (surface?.kind === 'left') {
+      useWorkspaceLayout.getState().setActiveLeft(requested);
+      useWorkspaceLayout.getState().setPrimarySurface('editor');
+    } else if (surface?.kind === 'right') {
+      useWorkspaceLayout.getState().setActiveRight(requested);
+    } else if (surface?.kind === 'primary') {
+      useWorkspaceLayout.getState().setPrimarySurface(requested);
+    } else if (pluginWindow?.side === 'left') {
+      useWorkspaceLayout.getState().setActiveLeft(requested);
+    } else if (pluginWindow?.side === 'right') {
+      useWorkspaceLayout.getState().setActiveRight(requested);
+    } else if (pluginWindow?.side === 'bottom') {
+      useWorkspaceLayout.getState().setActiveBottom(requested);
     }
-  }, [location.search]);
+  }, [location.search, contribWindows]);
 
   // ─── Open file from the tree → uses the same workspace store as the
   //     legacy Workspace component so tabs persist + the editor sees
@@ -235,8 +246,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       // Instant open — content: null; MonacoMount fetches on activation
       // (SWR via ifModifiedSince once loaded). No await, no flicker.
       openFile({ projectId, path, content: null, dirty: false, lastModified: null });
-      // Switch to the files tab so the editor surfaces what was just opened.
-      setTab('files');
+      useWorkspaceLayout.getState().setPrimarySurface('editor');
     },
     [projectId, openFile],
   );
@@ -247,7 +257,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   useEffect(() => {
     function onOpenFilesTab(e: Event) {
       const d = (e as CustomEvent).detail as { projectId?: number } | undefined;
-      if (d?.projectId === projectId) setTab('files');
+      if (d?.projectId === projectId) useWorkspaceLayout.getState().setPrimarySurface('editor');
     }
     window.addEventListener('mcp:open-files-tab', onOpenFilesTab as EventListener);
     return () => window.removeEventListener('mcp:open-files-tab', onOpenFilesTab as EventListener);
@@ -304,10 +314,8 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // (Ctrl+Alt+S) edits them live.
   useEffect(() => {
     startRecentFilesTracking();
-    const uninstall = installKeymapDispatcher();
     const unregister = registerProjectCommands({
       projectId,
-      setTab: (t) => setTab(t as ProjectTabId),
       // Ctrl+J = toggle the bottom drawer; opens at Terminal when closed,
       // closes regardless of which bottom tab is active. getState() reads
       // live (this closure is registered once per project).
@@ -315,13 +323,20 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         const l = useWorkspaceLayout.getState();
         l.setActiveBottom(l.activeBottom ? null : 'terminal');
       },
-      toggleChat: () => setTab((cur) => (cur === 'chat' ? 'files' : 'chat')),
+      toggleProjectFiles: () => {
+        const state = useWorkspaceLayout.getState();
+        state.setPrimarySurface('editor');
+        state.toggleLeft('files');
+      },
+      toggleChat: () => {
+        const state = useWorkspaceLayout.getState();
+        if (state.primarySurface !== 'sessions') state.toggleRight('chat');
+      },
     });
     const unregisterEditor = registerEditorCommands();
     return () => {
       unregisterEditor();
       unregister();
-      uninstall();
     };
     // layout.toggleBottom identity is stable in the store; setTab is a
     // useState setter. Registering once per project keeps closures fresh
@@ -344,8 +359,10 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       contribEditorActions.map((action) => ({
         id: `plugin.${action.pluginNs}.${action.id}`,
         title: action.label,
+        titlePt: action.label,
         category: action.category ?? `Plugin: ${action.pluginNs}`,
-        defaultKeys: action.shortcut ? { intellij: action.shortcut, vscode: action.shortcut } : undefined,
+        target: 'project' as const,
+        defaultKeys: action.shortcut ? { intellij: [action.shortcut], vscode: [action.shortcut] } : undefined,
         allowInInputs: true,
         run: async () => {
           if (!action.runsTool) return;
@@ -359,73 +376,25 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       })),
     );
   }, [contribEditorActions, projectId]);
-  // Honor the author's declared `side`: the Project view has a single
-  // vertical rail, so `left` and `right` windows both surface here. `bottom`
-  // windows are reserved for the bottom panel and are filtered out (until
-  // that surface is wired).
-  const pluginTabs = useMemo<TabDef[]>(
-    () =>
-      contribWindows
-        .filter((w) => w.side === 'left' || w.side === 'right')
-        .map((w) => ({
-          id: w.id,
-          label: w.title,
-          icon: Puzzle,
-          group: 'plugins' as const,
-        })),
-    [contribWindows],
-  );
-  // `bottom`-side windows go to the bottom panel as extra tabs.
-  const bottomPluginWindows = useMemo(
-    () => contribWindows.filter((w) => w.side === 'bottom'),
-    [contribWindows],
-  );
-
   return (
     // `h-full` (not `flex-1`) because the parent <main> in AppShell is
     // a plain block element — `flex-1` would no-op and the bottom of
     // the viewport would leak through as an empty background slab.
     // h-full inherits main's height (which AppShell sets via its own
     // flex-1 inside the 100dvh column).
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex flex-1 min-h-0">
-        <ProjectRail projectId={projectId} activeTab={tab} onSelect={setTab} layout={layout} pluginTabs={pluginTabs} extraCoreTabs={previewTabs} />
-        <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
-          <PanelGroup direction="vertical" autoSaveId="mcp-project-vert">
-            <Panel minSize={20}>
-              <TabContent
-                tab={tab}
-                projectId={projectId}
-                projectName={projectName}
-                projectRoot={project?.root_path ?? null}
-                initialSessionId={initialSessionId}
-                onOpenFile={handleOpen}
-                activeFilePath={activeFilePath}
-                contribWindows={contribWindows}
-                builderJson={builderJson}
-                previewEnabled={previewEnabled}
-                framework={project?.framework}
-              />
-            </Panel>
-            {layout.activeBottom && (
-              <>
-                <PanelResizeHandle className="h-px bg-border hover:bg-primary/40 transition-colors" />
-                <Panel defaultSize={25} minSize={10} maxSize={60}>
-                  <BottomPanel
-                    projectId={projectId}
-                    isOpen={true}
-                    onToggle={() => layout.toggleBottom(layout.activeBottom!)}
-                    onClose={() => layout.setActiveBottom(null)}
-                    onOpenFile={handleOpen}
-                    pluginWindows={bottomPluginWindows}
-                  />
-                </Panel>
-              </>
-            )}
-          </PanelGroup>
-        </div>
-      </div>
-      <StatusBar projectId={projectId} projectName={projectName} />
+    <div className="h-full min-h-0">
+      <ProjectWorkbench
+        projectId={projectId}
+        projectName={projectName}
+        projectRoot={project?.root_path ?? null}
+        initialSessionId={initialSessionId}
+        activeFilePath={activeFilePath}
+        onOpenFile={handleOpen}
+        contribWindows={contribWindows}
+        builderJson={builderJson}
+        previewEnabled={previewEnabled}
+        framework={project?.framework}
+      />
       {/* Keymap-driven overlays — open via Shift Shift / Ctrl+F12 / Ctrl+Alt+S. */}
       <SearchEverywhere projectId={projectId} onOpenFile={handleOpen} />
       <FileStructurePopup projectId={projectId} />

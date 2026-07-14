@@ -28,8 +28,7 @@ export function DangerPane({ project, onDeleted }: { project: Project; onDeleted
   }
 
   return (
-    <div className="space-y-4 max-w-xl">
-      <h3 className="text-sm font-semibold text-destructive">{t('settings.nav.danger')}</h3>
+    <div className="w-full max-w-3xl space-y-4">
       <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 space-y-3">
         <p className="text-sm font-medium">{t('edit.deleteBtn')}</p>
         <p className="text-xs text-muted-foreground">{t('settings.dangerHint')}</p>

@@ -325,3 +325,37 @@ describe('PipelineProviderBindingsStore.findAllActiveAtScope (failover chain)', 
     expect(session.map((b) => b.provider_id)).toEqual(['p3']);
   });
 });
+
+describe('PipelineProviderBindingsStore.activateGlobal', () => {
+  let h: Handle;
+  beforeEach(() => { h = setup(); });
+  afterEach(() => teardown(h));
+
+  it('keeps exactly the selected global binding active and preserves old rows disabled', () => {
+    const old1 = h.store.upsert({ pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'old1', model_id: 'slow-a', scope_type: 'global' });
+    const old2 = h.store.upsert({ pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'old2', model_id: 'slow-b', scope_type: 'global' });
+    const template = h.store.upsert({ pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'p2', model_id: 'template', scope_type: 'template', scope_id: 7 });
+
+    const result = h.store.activateGlobal({
+      pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'cf-1', model_id: 'codestral',
+      config: { context_engine: 'v3' },
+    });
+
+    expect(result.disabledIds).toEqual([old1, old2]);
+    expect(h.store.findAllActiveAtScope({ pipelineName: 'editor', bindingRole: 'autocomplete', scopeType: 'global', scopeId: null }))
+      .toHaveLength(1);
+    expect(h.store.get(result.id)).toMatchObject({ provider_id: 'cf-1', model_id: 'codestral', enabled: true });
+    expect(h.store.get(old1)?.enabled).toBe(false);
+    expect(h.store.get(old2)?.enabled).toBe(false);
+    expect(h.store.get(template)?.enabled).toBe(true);
+  });
+
+  it('reuses and re-enables the selected row on repeated setup', () => {
+    const first = h.store.activateGlobal({ pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'cf-1', model_id: 'codestral' });
+    h.store.activateGlobal({ pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'old1', model_id: 'other' });
+    const again = h.store.activateGlobal({ pipeline_name: 'editor', binding_role: 'autocomplete', provider_id: 'cf-1', model_id: 'codestral', config: { timeout_ms: 4000 } });
+    expect(again.id).toBe(first.id);
+    expect(h.store.get(first.id)).toMatchObject({ enabled: true, config: { timeout_ms: 4000 } });
+    expect(h.store.list({ pipelineName: 'editor' })).toHaveLength(2);
+  });
+});

@@ -24,6 +24,7 @@ type FlatRow =
   | { kind: 'branch'; key: string; b: GitBranch };
 
 interface BranchesViewProps {
+  active?: boolean;
   projectId: number;
   /** Selected git root (submodule / nested repo); undefined = main repo. */
   repoPath?: string;
@@ -33,13 +34,14 @@ interface BranchesViewProps {
   opInProgress?: boolean;
 }
 
-export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: BranchesViewProps) {
+export function BranchesView({ active = true, projectId, repoPath, onMutated, opInProgress }: BranchesViewProps) {
   const { t } = useTranslation('workspace');
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
-  const [openSections, setOpenSections] = useState({ local: true, remote: true });
+  const [openSections, setOpenSections] = useState({ local: true, remote: false });
+  const [remoteLoaded, setRemoteLoaded] = useState(false);
   // Cache token: the backend memoizes branchesDetailed per (project, rev), so
   // reopening is instant until a ref actually moves (the watcher bumps gitRev).
   const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
@@ -47,7 +49,12 @@ export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: B
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await apiCall<GitBranch[]>('projectGit.branchesDetailed', { projectId, repoPath, includeRemote: true, rev: gitRev });
+      const r = await apiCall<GitBranch[]>('projectGit.branchesDetailed', {
+        projectId,
+        repoPath,
+        includeRemote: remoteLoaded,
+        rev: gitRev,
+      });
       setBranches(r);
       setError(null);
     } catch (e) {
@@ -55,11 +62,17 @@ export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: B
     } finally {
       setLoading(false);
     }
-  }, [projectId, repoPath, gitRev]);
+  }, [projectId, repoPath, remoteLoaded, gitRev]);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (active) void reload();
+  }, [active, reload]);
+
+  // Searching should cover the complete branch namespace, even when the
+  // remote section has not been expanded yet.
+  useEffect(() => {
+    if (filter.trim() && !remoteLoaded) setRemoteLoaded(true);
+  }, [filter, remoteLoaded]);
 
   // Stable getter so the shared ops hook memo doesn't churn every render.
   const branchesRef = useRef(branches);
@@ -80,18 +93,18 @@ export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: B
 
   const createBranch = async () => {
     const name = await prompt({
-      title: 'New branch',
-      description: 'Branch name (created from the current HEAD; checked out immediately).',
+      title: t('git.branch.newTitle'),
+      description: t('git.branch.newBody'),
       placeholder: 'feature/cool-thing',
     });
     if (!name?.trim()) return;
     try {
       await apiCall('projectGit.branchCreate', { projectId, repoPath, name: name.trim(), checkout: true });
-      toast.success(`Created and switched to ${name.trim()}`);
+      toast.success(t('git.branch.createdSwitched', { branch: name.trim() }));
       await reload();
       onMutated();
     } catch (e) {
-      toast.error('Create failed', { description: e instanceof Error ? e.message : String(e) });
+      toast.error(t('git.branch.createFailed'), { description: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -103,12 +116,18 @@ export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: B
       rows.push({ kind: 'header', key: 'h-local', section: 'local', title: t('git.local', { count: local.length }), open: openSections.local });
       if (openSections.local) for (const b of local) rows.push({ kind: 'branch', key: `l-${b.name}`, b });
     }
-    if (remote.length > 0) {
-      rows.push({ kind: 'header', key: 'h-remote', section: 'remote', title: t('git.remote', { count: remote.length }), open: openSections.remote });
+    if (!remoteLoaded || remote.length > 0) {
+      rows.push({
+        kind: 'header',
+        key: 'h-remote',
+        section: 'remote',
+        title: remoteLoaded ? t('git.remote', { count: remote.length }) : t('git.branch.remoteOnDemand'),
+        open: openSections.remote,
+      });
       if (openSections.remote) for (const b of remote) rows.push({ kind: 'branch', key: `r-${b.name}`, b });
     }
     return rows;
-  }, [local, remote, openSections, t]);
+  }, [local, remote, openSections, remoteLoaded, t]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const virtualizer = useVirtualizer({
@@ -126,14 +145,14 @@ export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: B
           <Input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter branches…"
+            placeholder={t('git.branch.filter')}
             className="h-6 text-[11px] pl-6"
           />
         </div>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void reload()} title="Refresh">
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void reload()} title={t('git.refresh')}>
           {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
         </Button>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void createBranch()} title="New branch">
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void createBranch()} title={t('git.branch.newTitle')}>
           <Plus className="h-3 w-3" />
         </Button>
       </div>
@@ -143,7 +162,7 @@ export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: B
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
         {!loading && filtered.length === 0 && (
           <div className="text-center text-[11px] text-muted-foreground p-4">
-            {filter ? `No branches match "${filter}".` : 'No branches found.'}
+            {filter ? t('git.branch.noMatch', { filter }) : t('git.branch.none')}
           </div>
         )}
         {flat.length > 0 && (
@@ -156,7 +175,14 @@ export function BranchesView({ projectId, repoPath, onMutated, opInProgress }: B
                   <div key={row.key} data-index={v.index} ref={virtualizer.measureElement} style={base}>
                     <button
                       type="button"
-                      onClick={() => setOpenSections((s) => ({ ...s, [row.section]: !s[row.section] }))}
+                      onClick={() => {
+                        if (row.section === 'remote' && !remoteLoaded) {
+                          setRemoteLoaded(true);
+                          setOpenSections((s) => ({ ...s, remote: true }));
+                          return;
+                        }
+                        setOpenSections((s) => ({ ...s, [row.section]: !s[row.section] }));
+                      }}
                       className="w-full flex items-center gap-1 px-2.5 py-1 bg-card/60 border-b text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
                     >
                       {row.open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}

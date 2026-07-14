@@ -20,8 +20,10 @@ export function RailContainer({ side, children, 'aria-label': ariaLabel }: RailC
     <nav
       aria-label={ariaLabel}
       className={cn(
-        'flex flex-col w-10 shrink-0 items-center gap-0.5 bg-card/40 py-1 overflow-y-auto',
-        side === 'left' ? 'border-r' : 'border-l',
+        'flex flex-col w-10 shrink-0 items-center gap-0.5 overflow-x-hidden overflow-y-auto bg-[var(--workbench-raised)] py-1',
+        side === 'left'
+          ? 'border-r border-[var(--workbench-border)]'
+          : 'border-l border-[var(--workbench-border)]',
       )}
     >
       {children}

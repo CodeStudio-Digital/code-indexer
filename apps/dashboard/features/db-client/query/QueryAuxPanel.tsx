@@ -24,16 +24,20 @@ export function QueryAuxPanel({
   connectionId,
   refreshKey,
   onOpenQuery,
+  view,
 }: {
   projectId: number;
   connectionId: number | null;
   refreshKey: number;
   onOpenQuery: (sql: string) => void;
+  /** When set, render one rail-owned view without the internal tab strip. */
+  view?: 'history' | 'saved';
 }) {
   const { t } = useTranslation('dbClient');
   const [tab, setTab] = useState<'history' | 'saved'>('history');
   const [history, setHistory] = useState<DbQueryHistoryRow[]>([]);
   const [saved, setSaved] = useState<DbSavedQuery[]>([]);
+  const activeTab = view ?? tab;
 
   const loadHistory = useCallback(async () => {
     if (connectionId == null) {
@@ -59,25 +63,27 @@ export function QueryAuxPanel({
   };
 
   return (
-    <div className="flex h-full flex-col bg-card">
-      <SubTabs
-        tabs={[
-          { id: 'history', label: t('aux.history') },
-          { id: 'saved', label: t('aux.saved'), badge: saved.length },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
+    <div className="flex h-full flex-col bg-[var(--workbench-surface)]">
+      {!view && (
+        <SubTabs
+          tabs={[
+            { id: 'history', label: t('aux.history') },
+            { id: 'saved', label: t('aux.saved'), badge: saved.length },
+          ]}
+          active={tab}
+          onChange={setTab}
+        />
+      )}
       <div className="flex items-center gap-1 border-b px-2 py-0.5">
         <div className="flex-1" />
         <button
           className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           title={t('aux.refresh')}
-          onClick={() => void (tab === 'history' ? loadHistory() : loadSaved())}
+          onClick={() => void (activeTab === 'history' ? loadHistory() : loadSaved())}
         >
           <RefreshCw className="h-3 w-3" />
         </button>
-        {tab === 'history' && connectionId != null && history.length > 0 && (
+        {activeTab === 'history' && connectionId != null && history.length > 0 && (
           <button
             className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-red-400"
             title={t('aux.clear')}
@@ -94,7 +100,7 @@ export function QueryAuxPanel({
       </div>
 
       <div className="flex-1 overflow-auto py-1 text-xs">
-        {tab === 'history' ? (
+        {activeTab === 'history' ? (
           history.length === 0 ? (
             <Empty label={t('aux.empty')} />
           ) : (
@@ -105,6 +111,11 @@ export function QueryAuxPanel({
                 onOpen={() => onOpenQuery(h.sql)}
                 onCopy={() => void copy(h.sql)}
                 onDelete={async () => {
+                  if (!(await confirm({
+                    title: t('aux.deleteHistoryConfirm'),
+                    confirmLabel: t('aux.delete'),
+                    tone: 'destructive',
+                  }))) return;
                   await api.deleteHistoryRow(projectId, h.id).catch(() => void 0);
                   void loadHistory();
                 }}
@@ -125,6 +136,11 @@ export function QueryAuxPanel({
               onOpen={() => onOpenQuery(q.sql)}
               onCopy={() => void copy(q.sql)}
               onDelete={async () => {
+                if (!(await confirm({
+                  title: t('aux.deleteSavedConfirm', { name: q.name }),
+                  confirmLabel: t('aux.delete'),
+                  tone: 'destructive',
+                }))) return;
                 await api.deleteSavedQuery(projectId, q.id).catch(() => void 0);
                 void loadSaved();
               }}

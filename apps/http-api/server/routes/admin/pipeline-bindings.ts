@@ -9,6 +9,7 @@
  *   GET    /api/admin/pipeline-bindings              → list (with catalog hints)
  *   GET    /api/admin/pipeline-bindings/catalog      → static catalog only
  *   POST   /api/admin/pipeline-bindings              → upsert (returns id)
+ *   POST   /api/admin/pipeline-bindings/activate     → sole active global binding
  *   PATCH  /api/admin/pipeline-bindings/:id          → toggle enabled / update priority
  *   DELETE /api/admin/pipeline-bindings/:id          → remove
  *   POST   /api/admin/pipeline-bindings/:id/test     → smoke test the binding
@@ -28,6 +29,7 @@ import {
 } from '@mcp/services/pipelines/index.js';
 import type {
   BindingScopeType,
+  PipelineBindingActivationInput,
   PipelineProfileApplyRow,
   PipelineProviderBindingInput,
 } from '@mcp/store/pipeline-provider-bindings-store.js';
@@ -152,6 +154,35 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
 
     const id = pipelineBindingsStore.upsert(input);
     return c.json({ id, binding: pipelineBindingsStore.get(id) });
+  });
+
+  // ───── POST /activate ─────────────────────────────────────────────────
+  // Guided completion setup uses this instead of a plain upsert so changing
+  // model cannot leave two equally-ranked global routes active.
+  app.post('/api/admin/pipeline-bindings/activate', async (c) => {
+    let body: UpsertBody;
+    try {
+      body = (await c.req.json()) as UpsertBody;
+    } catch {
+      return c.json({ error: 'invalid_json' }, 400);
+    }
+    const errors: string[] = [];
+    if (!body.pipeline_name) errors.push('pipeline_name is required');
+    if (!body.binding_role) errors.push('binding_role is required');
+    if (!body.provider_id) errors.push('provider_id is required');
+    if (!body.model_id) errors.push('model_id is required');
+    if (body.scope_type !== undefined && body.scope_type !== 'global') errors.push('only global scope is supported');
+    if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
+    if (!providerStore.getProvider(body.provider_id!)) {
+      return c.json({ error: 'provider_not_found', provider_id: body.provider_id }, 404);
+    }
+    const input: PipelineBindingActivationInput = {
+      pipeline_name: body.pipeline_name!, binding_role: body.binding_role!,
+      provider_id: body.provider_id!, model_id: body.model_id!,
+      model_mode: body.model_mode ?? '', config: body.config ?? {}, priority: body.priority ?? 0,
+    };
+    const activated = pipelineBindingsStore.activateGlobal(input);
+    return c.json({ ...activated, binding: pipelineBindingsStore.get(activated.id) });
   });
 
   // ───── PATCH /:id ──────────────────────────────────────────────────────

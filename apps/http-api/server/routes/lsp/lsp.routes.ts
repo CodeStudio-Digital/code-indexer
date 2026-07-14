@@ -15,7 +15,7 @@
 import type { Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { createLspHandlers, createContext } from '@mcp/api-handlers';
-import { ApiError, type DocChange, type Position } from '@mcp/api-bus';
+import { ApiError, type CodeActionDTO, type DocChange, type Position } from '@mcp/api-bus';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
 
@@ -205,6 +205,22 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     } catch (err) {
       return mapApiError(c, err);
     }
+  });
+
+  app.post('/api/lsp/:projectId/resolve-code-action', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; action: CodeActionDTO }>();
+      return c.json(await h.resolveCodeAction({ projectId, ...body }, createContext()));
+    } catch (err) { return mapApiError(c, err); }
+  });
+
+  app.post('/api/lsp/:projectId/execute-code-action', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ action: CodeActionDTO }>();
+      return c.json(await h.executeCodeAction({ projectId, ...body }, createContext()));
+    } catch (err) { return mapApiError(c, err); }
   });
 
   app.post('/api/lsp/:projectId/hover', async (c) => {

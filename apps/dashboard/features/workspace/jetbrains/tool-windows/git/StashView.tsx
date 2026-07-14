@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Archive, Loader2, Plus, RefreshCw } from 'lucide-react';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
@@ -37,6 +38,7 @@ interface GitRunResult {
 }
 
 interface StashViewProps {
+  active?: boolean;
   projectId: number;
   /** Selected git root (submodule / nested repo); undefined = main repo. */
   repoPath?: string;
@@ -46,7 +48,8 @@ interface StashViewProps {
   opInProgress?: boolean;
 }
 
-export function StashView({ projectId, repoPath, onMutated, opInProgress }: StashViewProps) {
+export function StashView({ active = true, projectId, repoPath, onMutated, opInProgress }: StashViewProps) {
+  const { t } = useTranslation('workspace');
   const [stashes, setStashes] = useState<GitStashEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,8 +72,8 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
   }, [projectId, repoPath]);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (active) void reload();
+  }, [active, reload]);
 
   const runOp = async (
     label: string,
@@ -80,9 +83,9 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
   ) => {
     if (confirmDestructive) {
       const ok = await confirm({
-        title: `Drop ${ref}?`,
-        description: 'Stash will be permanently deleted from the repository.',
-        confirmLabel: 'Drop',
+        title: t('git.stash.dropTitle', { ref }),
+        description: t('git.stash.dropBody'),
+        confirmLabel: t('git.stash.drop'),
         tone: 'destructive',
       });
       if (!ok) return;
@@ -91,11 +94,11 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
     try {
       const r = await apiCall<GitRunResult>(method, { projectId, repoPath, ref });
       if (r.ok) {
-        toast.success(`${label} OK`, {
+        toast.success(t('git.operationOk', { operation: label }), {
           description:
             r.stdout.trim().split('\n').slice(-2).join('\n') ||
             r.stderr.trim().split('\n').slice(-2).join('\n') ||
-            'Done.',
+            t('git.done'),
         });
         // Pop/Drop remove a stash and renumber every ref above it, so any
         // open stash-preview tabs now point at the wrong (or gone) entry.
@@ -109,12 +112,12 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
         onMutated();
         await reload();
       } else {
-        toast.error(`${label} failed`, {
+        toast.error(t('git.operationFailed', { operation: label }), {
           description: r.stderr.trim().slice(0, 320) || r.stdout.trim().slice(0, 320),
         });
       }
     } catch (e) {
-      toast.error(`${label} failed`, { description: e instanceof Error ? e.message : String(e) });
+      toast.error(t('git.operationFailed', { operation: label }), { description: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusyRef(null);
     }
@@ -147,7 +150,7 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
         source: 'git-stash',
       });
     } catch (e) {
-      toast.error('Show stash failed', {
+      toast.error(t('git.stash.showFailed'), {
         description: e instanceof Error ? e.message : String(e),
       });
     }
@@ -158,15 +161,15 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
       <div className="shrink-0 px-2 py-1.5 border-b flex items-center gap-1.5">
         <span className="text-[11px] text-muted-foreground flex-1">
           {stashes.length === 0 && !loading
-            ? 'No stashes — your working tree is clean (or unstashed).'
-            : `${stashes.length} stash${stashes.length === 1 ? '' : 'es'}`}
+            ? t('git.stash.none')
+            : t('git.stash.count', { count: stashes.length })}
         </span>
         <Button
           variant="ghost"
           size="icon"
           className="h-6 w-6"
           onClick={() => void reload()}
-          title="Refresh"
+          title={t('git.refresh')}
         >
           {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
         </Button>
@@ -175,7 +178,7 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
           size="icon"
           className="h-6 w-6"
           onClick={() => setCreateOpen(true)}
-          title="New stash"
+          title={t('git.stash.new')}
           disabled={opInProgress}
         >
           <Plus className="h-3 w-3" />
@@ -188,7 +191,7 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
         {!loading && stashes.length === 0 && (
           <div className="text-center text-[11px] text-muted-foreground p-6 flex flex-col items-center gap-2">
             <Archive className="h-5 w-5 opacity-50" />
-            <p>Click + to stash your current changes.</p>
+            <p>{t('git.stash.emptyHint')}</p>
           </div>
         )}
         {stashes.map((s) => (
@@ -198,9 +201,9 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
             busy={busyRef === s.index}
             opInProgress={opInProgress}
             onOpen={() => openDetail(s)}
-            onPop={() => void runOp('Pop', 'projectGit.stashPop', s.index)}
-            onApply={() => void runOp('Apply', 'projectGit.stashApply', s.index)}
-            onDrop={() => void runOp('Drop', 'projectGit.stashDrop', s.index, true)}
+            onPop={() => void runOp(t('git.stash.pop'), 'projectGit.stashPop', s.index)}
+            onApply={() => void runOp(t('git.stash.apply'), 'projectGit.stashApply', s.index)}
+            onDrop={() => void runOp(t('git.stash.drop'), 'projectGit.stashDrop', s.index, true)}
             onShow={() => void showDiff(s)}
           />
         ))}
@@ -221,4 +224,3 @@ export function StashView({ projectId, repoPath, onMutated, opInProgress }: Stas
     </div>
   );
 }
-

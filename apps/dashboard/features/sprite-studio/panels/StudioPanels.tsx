@@ -20,11 +20,12 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, PanelGroup, type ImperativePanelHandle } from 'react-resizable-panels';
 import { LayoutGrid, SlidersHorizontal, SquareTerminal } from 'lucide-react';
 import { RailButton } from '../../../components/chrome/RailButton.js';
 import { RailContainer } from '../../../components/chrome/RailContainer.js';
 import { RailSeparator } from '../../../components/chrome/RailSeparator.js';
+import { WorkbenchResizeHandle, WorkbenchSurface } from '../../../components/workbench/index.js';
 import { loadSpriteStudioUi, saveSpriteStudioUi } from '../sprite-studio-ui-state.js';
 import type { StudioMode } from '../types.js';
 import { PanelChrome } from './PanelChrome.js';
@@ -32,9 +33,6 @@ import { BottomPanel } from './BottomPanel.js';
 import { panelsForSide } from './panel-registry.js';
 
 type Collapsed = { left: boolean; right: boolean; bottom: boolean };
-
-const HANDLE_V = 'w-px bg-border transition-colors hover:bg-primary/40';
-const HANDLE_H = 'h-px bg-border transition-colors hover:bg-primary/40';
 
 export function StudioPanels({
   projectId,
@@ -67,6 +65,9 @@ export function StudioPanels({
   const [leftTab, setLeftTab] = useState<string>(
     () => loadSpriteStudioUi(projectId)?.leftTab ?? 'library',
   );
+  const leftPanelRef = useRef<ImperativePanelHandle>(null);
+  const rightPanelRef = useRef<ImperativePanelHandle>(null);
+  const bottomPanelRef = useRef<ImperativePanelHandle>(null);
 
   const setSide = (side: keyof Collapsed, value: boolean) =>
     setCollapsed((prev) => {
@@ -89,6 +90,24 @@ export function StudioPanels({
     setCollapsed(ui?.panelsCollapsed ?? { left: false, right: false, bottom: true });
     setLeftTab(ui?.leftTab ?? 'library');
   }, [projectId]);
+
+  // Panels remain mounted at all times. Collapsing only changes geometry, so
+  // canvas state, virtualized lists and in-flight generation jobs survive a
+  // rail toggle exactly like editor/tool windows in the project workbench.
+  useEffect(() => {
+    if (collapsed.left) leftPanelRef.current?.collapse();
+    else leftPanelRef.current?.expand();
+  }, [collapsed.left]);
+
+  useEffect(() => {
+    if (collapsed.right) rightPanelRef.current?.collapse();
+    else rightPanelRef.current?.expand();
+  }, [collapsed.right]);
+
+  useEffect(() => {
+    if (collapsed.bottom) bottomPanelRef.current?.collapse();
+    else bottomPanelRef.current?.expand();
+  }, [collapsed.bottom]);
 
   useEffect(() => {
     if (!activeDef || activeDef.id === leftTab) return;
@@ -122,9 +141,9 @@ export function StudioPanels({
       : activeDef?.render({ projectId }) ?? library;
 
   return (
-    <div className="min-h-0 flex-1">
+    <div className="min-h-0 flex-1 bg-[var(--workbench-canvas)]">
       <PanelGroup direction="vertical" autoSaveId={`mcp-sprite-studio-v-${projectId}`}>
-        <Panel minSize={30}>
+        <Panel order={1} minSize={30}>
           <div className="flex h-full min-h-0">
             {/* LEFT icon rail — tab switch + console toggle in the footer. */}
             <RailContainer side="left" aria-label={t('panels.leftRail')}>
@@ -152,50 +171,75 @@ export function StudioPanels({
               </div>
             </RailContainer>
 
+            <div aria-hidden className="w-1.5 shrink-0" />
+
             {/* Horizontal group: left body | center | right inspector. */}
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 py-1.5">
               <PanelGroup
-                key={`h-${collapsed.left}-${collapsed.right}`}
                 direction="horizontal"
-                autoSaveId={`mcp-sprite-studio-h-${projectId}-${collapsed.left}-${collapsed.right}`}
+                autoSaveId={`mcp-sprite-studio-h-${projectId}`}
               >
-                {!collapsed.left && (
-                  <>
-                    <Panel defaultSize={20} minSize={14} maxSize={36}>
-                      <PanelChrome
-                        title={t(activeDef?.titleKey ?? 'library.title')}
-                        icon={activeDef?.icon ?? LayoutGrid}
-                        side="left"
-                        collapsed={false}
-                        onToggle={() => setSide('left', true)}
-                      >
-                        {leftContent}
-                      </PanelChrome>
-                    </Panel>
-                    <PanelResizeHandle className={HANDLE_V} />
-                  </>
-                )}
-                <Panel minSize={30}>
-                  <div className="h-full min-h-0 min-w-0">{center}</div>
+                <Panel
+                  ref={leftPanelRef}
+                  order={1}
+                  defaultSize={20}
+                  minSize={14}
+                  maxSize={36}
+                  collapsible
+                  collapsedSize={0}
+                >
+                  <WorkbenchSurface className="h-full">
+                    <PanelChrome
+                      title={t(activeDef?.titleKey ?? 'library.title')}
+                      icon={activeDef?.icon ?? LayoutGrid}
+                      side="left"
+                      collapsed={false}
+                      onToggle={() => setSide('left', true)}
+                    >
+                      {leftContent}
+                    </PanelChrome>
+                  </WorkbenchSurface>
                 </Panel>
-                {!collapsed.right && (
-                  <>
-                    <PanelResizeHandle className={HANDLE_V} />
-                    <Panel defaultSize={26} minSize={18} maxSize={40}>
-                      <PanelChrome
-                        title={t('panels.inspector')}
-                        icon={SlidersHorizontal}
-                        side="right"
-                        collapsed={false}
-                        onToggle={() => setSide('right', true)}
-                      >
-                        {inspector}
-                      </PanelChrome>
-                    </Panel>
-                  </>
-                )}
+                <WorkbenchResizeHandle
+                  direction="horizontal"
+                  disabled={collapsed.left}
+                  className={collapsed.left ? 'w-0 cursor-default' : undefined}
+                />
+                <Panel order={2} minSize={30}>
+                  <WorkbenchSurface className="h-full">
+                    <div className="h-full min-h-0 min-w-0">{center}</div>
+                  </WorkbenchSurface>
+                </Panel>
+                <WorkbenchResizeHandle
+                  direction="horizontal"
+                  disabled={collapsed.right}
+                  className={collapsed.right ? 'w-0 cursor-default' : undefined}
+                />
+                <Panel
+                  ref={rightPanelRef}
+                  order={3}
+                  defaultSize={26}
+                  minSize={18}
+                  maxSize={40}
+                  collapsible
+                  collapsedSize={0}
+                >
+                  <WorkbenchSurface className="h-full">
+                    <PanelChrome
+                      title={t('panels.inspector')}
+                      icon={SlidersHorizontal}
+                      side="right"
+                      collapsed={false}
+                      onToggle={() => setSide('right', true)}
+                    >
+                      {inspector}
+                    </PanelChrome>
+                  </WorkbenchSurface>
+                </Panel>
               </PanelGroup>
             </div>
+
+            <div aria-hidden className="w-1.5 shrink-0" />
 
             {/* RIGHT icon rail — single inspector toggle. */}
             <RailContainer side="right" aria-label={t('panels.rightRail')}>
@@ -210,14 +254,26 @@ export function StudioPanels({
             </RailContainer>
           </div>
         </Panel>
-        {!collapsed.bottom && (
-          <>
-            <PanelResizeHandle className={HANDLE_H} />
-            <Panel defaultSize={25} minSize={10} maxSize={60}>
+        <WorkbenchResizeHandle
+          direction="vertical"
+          disabled={collapsed.bottom}
+          className={collapsed.bottom ? 'h-0 cursor-default' : undefined}
+        />
+        <Panel
+          ref={bottomPanelRef}
+          order={2}
+          defaultSize={25}
+          minSize={10}
+          maxSize={60}
+          collapsible
+          collapsedSize={0}
+        >
+          <div className={`h-full overflow-hidden ${collapsed.bottom ? '' : 'px-1.5 pb-1.5'}`}>
+            <WorkbenchSurface className="h-full">
               <BottomPanel onClose={() => setSide('bottom', true)} />
-            </Panel>
-          </>
-        )}
+            </WorkbenchSurface>
+          </div>
+        </Panel>
       </PanelGroup>
     </div>
   );

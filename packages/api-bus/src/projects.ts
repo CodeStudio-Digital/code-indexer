@@ -1,4 +1,5 @@
 import type { ApiContext, AsyncStream } from './common.js';
+import type { EditorSettingsOverride } from './editor.js';
 
 /**
  * Projects = root unit of work. Each project is bound to a `root_path` on
@@ -23,6 +24,7 @@ export interface Project {
    * Drives the preview element-selector mode. Set by the `get` handler.
    */
   framework?: 'next' | 'react' | 'vue' | 'angular' | null;
+  editor_settings?: EditorSettingsOverride | null;
 }
 
 export interface ProjectStats {
@@ -115,6 +117,8 @@ export interface UpdateProjectInput {
   index_ignore_patterns?: string | null;
   /** Per-project agent-memory toggle (Mem C write-back + retrieval). */
   memory_enabled?: boolean;
+  /** Persisted in the routed project DB, not in repository files. */
+  editor_settings?: EditorSettingsOverride | null;
 }
 
 export interface IndexProjectInput {

@@ -538,10 +538,12 @@ async function runGroupParallel(
 
   const specs: ParallelAgentSpec[] = tasks.map((t) => {
     const art = resolveKindArtifacts(t);
+    const profile = t.agent_profile ?? (t.kind === 'investigate' ? 'explore' : t.kind === 'verify' ? 'verify' : 'implement');
     return {
       task: buildTaskBriefing(t),
-      label: `${t.kind ?? 'implement'}:${t.id}`,
+      label: `${profile}:${t.id}`,
       maxTurns: 100,
+      profile,
       systemPrompt: art.systemPrompt,
       allowlist: art.allowlist,
       pathScope: art.pathScope,
@@ -553,7 +555,7 @@ async function runGroupParallel(
   const groupId = `tasks-wave-${Date.now().toString(36)}`;
   ctx.runner?.emit('agents_group_start', {
     groupId,
-    agents: tasks.map((t, i) => ({ index: i, label: `${t.kind ?? 'implement'}:${t.id}`, task: specs[i].task })),
+    agents: tasks.map((t, i) => ({ index: i, label: specs[i].label, task: specs[i].task })),
   });
 
   let parallelRun: Awaited<ReturnType<typeof runParallelAgents>>;
@@ -719,7 +721,7 @@ async function runOneTask(
           agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         },
         {
-          profile: task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement',
+          profile: task.agent_profile ?? (task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement'),
           systemPrompt: art.systemPrompt,
           label: task.title,
           allowlist: art.allowlist,

@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from 'chokidar';
-import { readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 /**
  * Watches a project's `.git` metadata (HEAD + refs + sequencer state) so the
@@ -34,7 +34,7 @@ export interface GitMetaWatcherEvents {
  *  live in the shared common dir, so ref-only updates (a commit/fetch without a
  *  HEAD change) aren't detected for worktrees; those self-heal on the next
  *  HEAD-touching event or the file-tree's periodic git-status poll. */
-function resolveGitDir(rootPath: string): string | null {
+function resolveDotGit(rootPath: string): string | null {
   const dotGit = join(rootPath, '.git');
   let st;
   try {
@@ -52,6 +52,50 @@ function resolveGitDir(rootPath: string): string | null {
     }
   }
   return null;
+}
+
+function resolveGitContext(rootPath: string): { repoRoot: string; gitDir: string } | null {
+  let current = resolve(rootPath);
+  while (true) {
+    const gitDir = resolveDotGit(current);
+    if (gitDir) return { repoRoot: current, gitDir };
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function resolveCommonGitDir(gitDir: string): string | null {
+  try {
+    const rel = readFileSync(join(gitDir, 'commondir'), 'utf8').trim();
+    return rel ? resolve(gitDir, rel) : null;
+  } catch {
+    return null;
+  }
+}
+
+const NESTED_DENY = new Set(['.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.cache', 'vendor', 'target']);
+
+function resolveNestedGitDirs(projectRoot: string): string[] {
+  const out: string[] = [];
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: projectRoot, depth: 0 }];
+  let visited = 0;
+  while (queue.length > 0 && visited < 1_000) {
+    const item = queue.shift()!;
+    visited += 1;
+    let entries: import('node:fs').Dirent[];
+    try { entries = readdirSync(item.dir, { withFileTypes: true }); } catch { continue; }
+    if (item.dir !== projectRoot && entries.some((entry) => entry.name === '.git')) {
+      const gitDir = resolveDotGit(item.dir);
+      if (gitDir) out.push(gitDir);
+      continue;
+    }
+    if (item.depth >= 3) continue;
+    for (const entry of entries) {
+      if (entry.isDirectory() && !NESTED_DENY.has(entry.name)) queue.push({ dir: join(item.dir, entry.name), depth: item.depth + 1 });
+    }
+  }
+  return out;
 }
 
 /** Resolve the gitdirs of a repo's INITIALIZED submodules by parsing
@@ -72,7 +116,7 @@ function resolveSubmoduleGitDirs(rootPath: string): string[] {
   while ((m = re.exec(text)) !== null) {
     const sub = m[1].trim();
     if (!sub) continue;
-    const gd = resolveGitDir(join(rootPath, sub));
+    const gd = resolveDotGit(join(rootPath, sub));
     if (gd) out.push(gd);
   }
   return out;
@@ -170,12 +214,18 @@ export class GitMetaWatcher {
    *  git revision → editor change markers re-fetch their submodule baseline). */
   startWatching(projectId: number, rootPath: string, events: GitMetaWatcherEvents): void {
     if (this.watchers.has(projectId)) return;
-    const mainGitDir = resolveGitDir(rootPath);
-    if (!mainGitDir) return;
+    const context = resolveGitContext(rootPath);
+    if (!context) return;
+    const { repoRoot, gitDir: mainGitDir } = context;
     // [main, ...submodule gitdirs]. Each path's owning gitdir is the DEEPEST
     // match (a submodule gitdir lives under the main one), so its HEAD/refs are
     // classified against the right root while its object DB is still pruned.
-    const gitDirs = [mainGitDir, ...resolveSubmoduleGitDirs(rootPath)];
+    const gitDirs = Array.from(new Set([
+      mainGitDir,
+      ...(resolveCommonGitDir(mainGitDir) ? [resolveCommonGitDir(mainGitDir)!] : []),
+      ...resolveSubmoduleGitDirs(repoRoot),
+      ...resolveNestedGitDirs(rootPath),
+    ]));
     this.pending.set(projectId, new Set());
     // Baseline for the transient-read fallback above (main repo's HEAD).
     this.lastHead.set(projectId, readHead(mainGitDir));
@@ -250,9 +300,9 @@ export class GitMetaWatcher {
   /** Current branch snapshot (changed:[]) — used to seed a new subscriber so it
    *  can tell a real switch from its first frame. Null when not a git repo. */
   readCurrent(rootPath: string): GitMetaEvent | null {
-    const gitDir = resolveGitDir(rootPath);
-    if (!gitDir) return null;
-    const { branch, detached } = readHead(gitDir);
+    const context = resolveGitContext(rootPath);
+    if (!context) return null;
+    const { branch, detached } = readHead(context.gitDir);
     return { branch, detached, changed: [] };
   }
 }

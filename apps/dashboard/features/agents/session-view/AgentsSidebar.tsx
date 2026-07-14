@@ -162,7 +162,7 @@ export function AgentsSidebar({
         // Previously had `w-64 border-r` because it lived as a fixed
         // left-rail; now the drawer owns width/borders so we strip
         // those and just let it expand.
-        'h-full w-full overflow-y-auto bg-muted/10 flex-col',
+        'h-full min-w-0 w-full overflow-x-hidden overflow-y-auto bg-muted/10 flex-col',
         open ? 'flex' : 'hidden',
       )}
     >

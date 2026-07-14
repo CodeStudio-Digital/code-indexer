@@ -384,6 +384,11 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     // instead of the default 12 KB when the parent session elevates it.
     // Coherent with the user intent: "this whole session is free."
     toolOutputCapLevel: parent.ctx.toolOutputCapLevel,
+    // The app/company operator configures effort once on the parent session;
+    // every ephemeral specialist inherits that exact provider request level.
+    reasoningEffort: typeof parent.ctx.runner?.getReasoningEffort === 'function'
+      ? parent.ctx.runner.getReasoningEffort()
+      : undefined,
   });
 
   const abortRunner = () => subRunner.abort();
@@ -731,6 +736,12 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
   // parent's structured trail (the master sees the deliverable post in the
   // tool_result text without needing to re-read the board).
   'post_to_board',
+  // Assigned skills stay lazy: the task tells the specialist which ids to
+  // load, and these read-only discovery tools materialize only those bodies.
+  'list_skill_namespaces',
+  'get_skills_list',
+  'get_skill_content',
+  'invoke_skill',
 ]);
 
 /**
@@ -826,6 +837,11 @@ export const IMPLEMENT_ALLOWLIST = new Set<string>([
   'lsp_diagnostics',
   'git_status',
   'git_diff',
+  // App/company profile skills are explicit operator assignments.
+  'list_skill_namespaces',
+  'get_skills_list',
+  'get_skill_content',
+  'invoke_skill',
 ]);
 
 /**

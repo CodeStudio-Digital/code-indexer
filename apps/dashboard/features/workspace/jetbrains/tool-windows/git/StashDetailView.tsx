@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Archive, ClipboardCopy, Loader2 } from 'lucide-react';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { useWorkspaceStore, type OpenGitStash } from '../../../../../state/workspace.js';
@@ -27,6 +28,7 @@ interface GitStashDetail {
 }
 
 export function StashDetailView({ tab }: { tab: OpenGitStash }) {
+  const { t } = useTranslation('workspace');
   const { projectId, stashRef, repoPath } = tab;
   const [detail, setDetail] = useState<GitStashDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,7 +72,7 @@ export function StashDetailView({ tab }: { tab: OpenGitStash }) {
         source: 'git-stash',
       });
     } catch (e) {
-      toast.error('Failed to open file diff', {
+      toast.error(t('git.fileDiffFailed'), {
         description: e instanceof Error ? e.message : String(e),
       });
     }
@@ -90,7 +92,7 @@ export function StashDetailView({ tab }: { tab: OpenGitStash }) {
 
   // The auto "WIP on <branch>:" prefix is redundant once we show the
   // branch as its own chip — strip it for the headline.
-  const headline = detail.message.replace(/^(?:WIP on|On)\s+[^:]+:\s*/, '').trim() || '(no message)';
+  const headline = detail.message.replace(/^(?:WIP on|On)\s+[^:]+:\s*/, '').trim() || t('git.stash.noMessage');
 
   return (
     <div className="h-full flex flex-col min-h-0 bg-background">
@@ -101,13 +103,13 @@ export function StashDetailView({ tab }: { tab: OpenGitStash }) {
           <button
             type="button"
             className="h-4 w-4 grid place-items-center rounded-sm text-muted-foreground/70 hover:text-foreground hover:bg-muted"
-            title="Copy stash ref"
+            title={t('git.stash.copyRef')}
             onClick={() => void navigator.clipboard.writeText(detail.ref).catch(() => undefined)}
           >
             <ClipboardCopy className="h-3 w-3" />
           </button>
           {detail.branch && (
-            <span className="text-[10px] text-muted-foreground/70 truncate">on {detail.branch}</span>
+            <span className="text-[10px] text-muted-foreground/70 truncate">{t('git.stash.onBranch', { branch: detail.branch })}</span>
           )}
           <span className="ml-auto text-[10px] text-muted-foreground/60">{formatDate(detail.date)}</span>
         </div>
@@ -115,7 +117,7 @@ export function StashDetailView({ tab }: { tab: OpenGitStash }) {
       </div>
 
       <div className="shrink-0 px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground/70 border-b">
-        {detail.files.length} file{detail.files.length === 1 ? '' : 's'} stashed
+        {t('git.stash.filesStashed', { count: detail.files.length })}
       </div>
       <ChangedFilesList files={detail.files} onOpenFile={(f) => void openFile(f)} />
     </div>

@@ -2,16 +2,13 @@
  * Routes — App Studio sessions.
  *
  *   GET    /api/app-studio/sessions      → list (enriquecidas p/ os cards da Home)
- *   GET    /api/app-studio/sessions/:id  → detail (pipeline + spec + interview + deploy + features)
+ *   GET    /api/app-studio/sessions/:id  → detail (workflow + artifacts + deploy + features)
  *   DELETE /api/app-studio/sessions/:id  → remove a face App Studio (o projeto fica)
  *
  * Criação é exclusiva de `POST /api/app-studio` (scaffold SSE). O
- * progresso do roadmap é DERIVADO em leitura (roadmapProgress × features
- * registradas) — nunca armazenado.
+ * O progresso é derivado do workflow v5 e dos cards persistidos.
  */
 import type { Hono } from 'hono';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
-import { roadmapProgress } from '@mcp/app-studio/pipeline/roadmap.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import type { AppStudioSession } from '@mcp/store/app-studio-store.js';
 import { auditAppArchitecture } from '@mcp/app-studio/architecture/audit.js';
@@ -22,6 +19,7 @@ import { auditAppProductModel } from '@mcp/app-studio/product/audit.js';
 import { parseAppProductModel, productModelFingerprint } from '@mcp/app-studio/product/types.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
+import { getAppWorkflowView } from './workflow-service.js';
 
 function parseJsonColumn<T>(raw: string | null): T | null {
   if (!raw) return null;
@@ -35,24 +33,11 @@ function parseJsonColumn<T>(raw: string | null): T | null {
 export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
   const { appStudioStore, db } = deps;
 
-  function pipelineView(session: AppStudioSession) {
-    const state = parsePipelineState(session.pipeline_json);
-    if (!state) return null;
-    const recorded = appStudioStore
-      .listFeatures(session.id)
-      .map((f) => ({ name: f.name, kind: f.kind }));
-    return {
-      stages: state.stages,
-      current_stage: currentStage(state)?.id ?? null,
-      roadmap: roadmapProgress(state.roadmap, recorded),
-    };
-  }
-
   function enrich(session: AppStudioSession) {
     const project = db.getProject(session.project_id);
     const builder = parseJsonColumn<{ port?: number }>(project?.builder_json ?? null);
-    const state = parsePipelineState(session.pipeline_json);
-    const current = state ? currentStage(state) : null;
+    const workflow = getAppWorkflowView(deps, session.id);
+    const current = workflow?.state.phases.find((phase) => phase.status === 'active' || phase.status === 'attention') ?? null;
     const deploy = parseJsonColumn<{ url?: string | null }>(session.deploy_json);
     return {
       ...session,
@@ -60,10 +45,10 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
         ? { id: project.id, name: project.name, root_path: project.root_path }
         : null,
       builder_port: typeof builder?.port === 'number' ? builder.port : null,
-      current_stage: current?.id ?? null,
-      current_stage_status: current?.status ?? null,
-      stage_total: state?.stages.length ?? 0,
-      stage_done: state ? state.stages.filter((s) => s.status === 'approved' || s.status === 'skipped').length : 0,
+      current_phase: current?.id ?? null,
+      current_phase_status: current?.status ?? null,
+      phase_total: workflow?.state.phases.length ?? 0,
+      phase_done: workflow?.state.phases.filter((phase) => phase.status === 'complete').length ?? 0,
       live_url: deploy?.url ?? null,
     };
   }
@@ -90,7 +75,7 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
       session,
       project: enriched.project,
       builder_port: enriched.builder_port,
-      pipeline: pipelineView(session),
+      workflow: getAppWorkflowView(deps, id),
       spec,
       product: productRevision && product ? {
         id: productRevision.id,
@@ -143,10 +128,7 @@ export function mountAppStudioSessionRoutes(app: Hono, deps: ServerDeps): void {
         plan: wireframe,
         audit: auditAppWireframePlan(wireframe, spec, architecture, product),
       } : null,
-      build_groups: wireframeRevision ? appStudioStore.listBuildGroups(wireframeRevision.id) : [],
-      build_tasks: wireframeRevision ? appStudioStore.listBuildTaskEvidence(wireframeRevision.id) : [],
       deploy: parseJsonColumn(session.deploy_json),
-      features: appStudioStore.listFeatures(id),
     });
   });
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { BookOpen, ChevronDown, Info, LogOut, Settings } from 'lucide-react';
+import { Activity, BookOpen, ChevronDown, Home, Info, LogOut, Orbit, Settings, Sparkles, Users } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,6 +41,27 @@ export function AppMenu() {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuItem onClick={() => navigate('/')}>
+            <Home />
+            {t('nav.projects')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate('/apps')}>
+            <Sparkles />
+            {t('nav.apps', { defaultValue: 'Meus apps' })}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate('/agents')}>
+            <Users />
+            {t('nav.agents')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate('/global')}>
+            <Orbit />
+            {t('nav.global')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate('/telemetry')}>
+            <Activity />
+            {t('nav.telemetry')}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setAboutOpen(true)}>
             <Info />
             {t('appMenu.about')}

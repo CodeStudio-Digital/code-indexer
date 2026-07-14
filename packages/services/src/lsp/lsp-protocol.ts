@@ -40,6 +40,8 @@ export interface LspCompletionItem {
   preselect?: boolean;
   labelDetails?: { detail?: string; description?: string };
   commitCharacters?: string[];
+  deprecated?: boolean;
+  tags?: number[];
 }
 
 export interface LspTextEdit {
@@ -63,6 +65,9 @@ export interface LspCodeAction {
   isPreferred?: boolean;
   edit?: LspWorkspaceEdit;
   command?: { title?: string; command: string; arguments?: unknown[] };
+  /** Opaque token used by codeAction/resolve. */
+  data?: unknown;
+  disabled?: { reason: string };
 }
 
 export interface LspLocationLike {
@@ -120,7 +125,8 @@ export interface SemanticTokensLegend {
 export interface ServerCapabilities {
   textDocumentSync?: number | { change?: number };
   positionEncoding?: string;
-  codeActionProvider?: boolean | { codeActionKinds?: string[] };
+  codeActionProvider?: boolean | { codeActionKinds?: string[]; resolveProvider?: boolean };
+  executeCommandProvider?: { commands?: string[] };
   semanticTokensProvider?: {
     legend: SemanticTokensLegend;
     full?: boolean | { delta?: boolean };

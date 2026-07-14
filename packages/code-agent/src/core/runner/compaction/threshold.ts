@@ -24,6 +24,7 @@ export interface CompactionThresholdInputs {
    * effective context window. Default 0.90.
    */
   triggerRatio?: number;
+  contextWindow?: number | null;
 }
 
 export interface CompactionThresholdDecision {
@@ -47,7 +48,7 @@ export const DEFAULT_TRIGGER_RATIO = DEFAULT_COMPACT_TRIGGER_RATIO;
 export { resolveTriggerRatio };
 
 export function shouldCompact90(inp: CompactionThresholdInputs): CompactionThresholdDecision {
-  const limits = deriveTokenLimits(inp.model);
+  const limits = deriveTokenLimits(inp.model, inp.contextWindow);
   const triggerRatio = inp.triggerRatio ?? resolveTriggerRatio();
   if (limits.effective <= 0 || inp.promptTokens <= 0) {
     return {
@@ -76,6 +77,7 @@ export interface ProtectTokensInputs {
   model: string;
   /** Fraction of effective window kept verbatim as the tail. Default 0.40. */
   protectRatio?: number;
+  contextWindow?: number | null;
 }
 
 /**
@@ -101,7 +103,7 @@ export function resolveProtectRatio(): number {
 }
 
 export function computeProtectTokens(inp: ProtectTokensInputs): number {
-  const limits = deriveTokenLimits(inp.model);
+  const limits = deriveTokenLimits(inp.model, inp.contextWindow);
   const ratio = inp.protectRatio ?? resolveProtectRatio();
   return Math.max(1, Math.floor(limits.effective * ratio));
 }
@@ -213,10 +215,10 @@ export function resolveContextSpillRatio(): number {
  * clamped AT this ceiling still estimates ≤ `protectTokens` (overhead + marker
  * included), so it can never be the cutoff-collapse no-op cause.
  */
-export function contextSpillCeilingChars(model: string): number {
+export function contextSpillCeilingChars(model: string, contextWindow?: number | null): number {
   const ratio = resolveContextSpillRatio();
   if (ratio <= 0) return Number.POSITIVE_INFINITY;
-  const protectTokens = computeProtectTokens({ model });
+  const protectTokens = computeProtectTokens({ model, contextWindow });
   const budgetTokens = protectTokens - CONTEXT_SPILL_MARGIN_TOKENS;
   return Math.max(1, Math.floor(budgetTokens * CONTEXT_SPILL_CHARS_PER_TOKEN * ratio));
 }
@@ -227,8 +229,8 @@ export function contextSpillCeilingChars(model: string): number {
  * unit-testable independently of `CoderRunner`. `Infinity` ceiling (knob off)
  * → the user's cap wins unchanged.
  */
-export function resolveFinalizeCap(userCap: number, model: string): number {
-  return Math.min(userCap, contextSpillCeilingChars(model));
+export function resolveFinalizeCap(userCap: number, model: string, contextWindow?: number | null): number {
+  return Math.min(userCap, contextSpillCeilingChars(model, contextWindow));
 }
 
 /**

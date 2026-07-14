@@ -13,6 +13,7 @@ import {
   relPath,
   toEditOps,
   type CompletionItemDTO,
+  type CompletionListDTO,
   type Monaco,
   type SuggestionWithMeta,
 } from './dto.js';
@@ -47,7 +48,7 @@ export function registerCompletionProviders(
     label: e.labelDetails ? { label: e.label, detail: e.labelDetails.detail, description: e.labelDetails.description } : e.label,
     kind: mapCompletionKind(monaco, e.kind),
     insertText: e.insertText ?? e.label,
-    detail: e.detail,
+    detail: [e.detail, e.origin ? `Source: ${e.origin.toUpperCase()}` : ''].filter(Boolean).join(' · ') || undefined,
     documentation: e.documentation,
     // Snippet ONLY when the producer declared format 2 — else a literal
     // `${1:..}`/`$1` would be inserted verbatim.
@@ -60,7 +61,12 @@ export function registerCompletionProviders(
     commitCharacters: e.commitCharacters,
     // Server-chosen replace range is authoritative for `::`/`->` members;
     // fall back to the current word range.
-    range: e.textEdit
+    range: e.insertReplaceEdit
+      ? {
+        insert: new monaco.Range(e.insertReplaceEdit.insert.start.line, e.insertReplaceEdit.insert.start.column, e.insertReplaceEdit.insert.end.line, e.insertReplaceEdit.insert.end.column),
+        replace: new monaco.Range(e.insertReplaceEdit.replace.start.line, e.insertReplaceEdit.replace.start.column, e.insertReplaceEdit.replace.end.line, e.insertReplaceEdit.replace.end.column),
+      }
+      : e.textEdit
       ? new monaco.Range(
         e.textEdit.range.start.line, e.textEdit.range.start.column,
         e.textEdit.range.end.line, e.textEdit.range.end.column,
@@ -69,10 +75,13 @@ export function registerCompletionProviders(
     additionalTextEdits: e.additionalTextEdits ? toEditOps(monaco, e.additionalTextEdits) : undefined,
     _raw: e.raw,
     _file: file,
+    tags: e.deprecated || e.tags?.includes(1) ? [monaco.languages.CompletionItemTag.Deprecated] : undefined,
   });
 
+  let latestRequest = 0;
   const completionProvider: MonacoNs.languages.CompletionItemProvider = {
-    async provideCompletionItems(model, position, context) {
+    async provideCompletionItems(model, position, context, token) {
+      const request = ++latestRequest;
       const file = relPath(model);
       const lang = model.getLanguageId();
       const t0 = performance.now();
@@ -82,7 +91,8 @@ export function registerCompletionProviders(
         // corre na frente do didChange e o server computa sobre um buffer velho → []. No-op
         // quando não há pending (Ctrl+Space / arquivo não-sincronizado).
         await flushDoc(file);
-        const entries = await apiCall<CompletionItemDTO[]>('lsp.completion', {
+        if (token.isCancellationRequested || request !== latestRequest) return { suggestions: [] };
+        const response = await apiCall<CompletionListDTO>('lsp.completion', {
           projectId,
           file,
           position: { line: position.lineNumber, column: position.column },
@@ -90,6 +100,8 @@ export function registerCompletionProviders(
           // → LSP (1 / 2 / 3): +1.
           context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
         });
+        if (token.isCancellationRequested || request !== latestRequest || model.isDisposed()) return { suggestions: [] };
+        const entries = response.items;
         // Fase 0 — observabilidade: distinguir "vazio" de "lançou" é o que separa
         // "backend alcançável mas mudo" de "provider lançou" no diagnóstico de P2.
         logLsp({ op: 'completion', file, lang, outcome: entries.length ? 'ok' : 'empty',
@@ -101,7 +113,7 @@ export function registerCompletionProviders(
         // já não vem de race (didChange atrasado), e sim de cold-boot real.
         return {
           suggestions: entries.map((e) => mapSuggestion(e, model, position, file)),
-          incomplete: entries.length === 0 || entries.length >= 120,
+          incomplete: response.isIncomplete,
         };
       } catch (err) {
         logLsp({ op: 'completion', file, lang, outcome: 'threw',

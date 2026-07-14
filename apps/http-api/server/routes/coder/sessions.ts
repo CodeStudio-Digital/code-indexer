@@ -960,6 +960,7 @@ export function mountCoderSessionsRoutes(
   app.get('/api/coder/sessions/:id', (c) => {
     const id = parseIdParam(c);
     const full = c.req.query('full') === '1';
+    const preview = c.req.query('detail') === 'preview';
     const tailQ = c.req.query('tail');
     const tail = tailQ ? Math.max(1, parseInt(tailQ, 10) || 60) : 0;
 
@@ -983,7 +984,9 @@ export function mountCoderSessionsRoutes(
     // (`session.project_id`). Empty for normal sessions — no extra query cost.
     const linked_projects = data.session.is_global ? sessionStore.getSessionProjects(id) : [];
 
-    if (full) return c.json({ ...data, total_messages, archived_count, tool_results, linked_projects });
+    if (full || !preview) {
+      return c.json({ ...data, total_messages, archived_count, tool_results, linked_projects });
+    }
 
     return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, tool_results, linked_projects });
   });
@@ -1003,6 +1006,7 @@ export function mountCoderSessionsRoutes(
     // (pre-summary) transcript — driven by the dashboard's "view earlier
     // history" button.
     const includeArchived = c.req.query('include_archived') === '1';
+    const preview = c.req.query('detail') === 'preview';
 
     // A compacted session may have zero visible rows, so the dashboard has no
     // earliest id to send when the user reveals the archived transcript. Use a
@@ -1012,7 +1016,11 @@ export function mountCoderSessionsRoutes(
 
     const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit, includeArchived);
     const tool_results = reconstructMissingToolResults(sessionStore, sessionId, data.messages);
-    return c.json({ messages: trimMessageBlocks(data.messages), message_rows: data.message_rows, tool_results });
+    return c.json({
+      messages: preview ? trimMessageBlocks(data.messages) : data.messages,
+      message_rows: data.message_rows,
+      tool_results,
+    });
   });
 
   app.get('/api/coder/sessions/:id/tool-results/:toolUseId/full', (c) => {

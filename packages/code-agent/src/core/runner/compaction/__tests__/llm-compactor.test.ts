@@ -149,6 +149,35 @@ describe('compactWithLLM', () => {
     expect(result.error?.message).toBe('LLM down');
   });
 
+  it('falls back from the auxiliary binding to the active session provider', async () => {
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      messages.push(user(`u${i}`));
+      messages.push(assistant(`a${i}`));
+    }
+    const fallbackProvider: ChatProvider = {
+      ...NEVER_CALLED_PROVIDER,
+      name: 'session-provider',
+      model: 'session-model',
+    };
+    const seen: string[] = [];
+    const result = await compactWithLLM({
+      messages,
+      protectTokens: 10,
+      summaryProvider: NEVER_CALLED_PROVIDER,
+      fallbackProvider,
+      summarize: async (_head, candidate) => {
+        seen.push(`${candidate.name}/${candidate.model}`);
+        if (candidate === NEVER_CALLED_PROVIDER) throw new Error('invalid JSON from auxiliary');
+        return STUB_SUMMARY;
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual(['mock/mock-model', 'session-provider/session-model']);
+    expect(result.summaryProviderName).toBe('session-provider');
+    expect(result.attemptErrors?.[0]).toContain('invalid JSON from auxiliary');
+  });
+
   it('aborts a stalled summarizer without waiting for the provider', async () => {
     const messages: AgentMessage[] = [];
     for (let i = 0; i < 20; i++) {

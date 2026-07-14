@@ -1,16 +1,13 @@
-import { Bot, CheckCircle2, CircleAlert, CircleHelp, FileText, PanelRightClose, PanelRightOpen, Target, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, CircleAlert, CircleHelp, FileText, PanelRightClose, PanelRightOpen, Target, TriangleAlert } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { auditAppSpec, type SpecAuditIssue, type SpecAuditSeverity } from '@mcp/app-studio/spec/audit.js';
+import { auditAppSpec, type SpecAuditSeverity } from '@mcp/app-studio/spec/audit.js';
 import type { AppSpec } from '@mcp/app-studio/spec/types.js';
 import { Button } from '../../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { cn } from '../../../lib/utils.js';
 
-interface SpecOverviewPanelProps {
-  spec: AppSpec;
-  onOpenSpecAgent?: (prompt: string) => void;
-}
+interface SpecOverviewPanelProps { spec: AppSpec }
 
 const SEVERITY_CLASS: Record<SpecAuditSeverity, string> = {
   error: 'border-red-300/70 bg-red-50 text-red-800 dark:border-red-400/30 dark:bg-red-950/25 dark:text-red-200',
@@ -27,29 +24,6 @@ function IssueIcon({ severity }: { severity: SpecAuditSeverity }) {
   return <CircleHelp className="h-3.5 w-3.5 shrink-0" />;
 }
 
-function issuePromptLine(issue: SpecAuditIssue): string {
-  return `- [${issue.severity}/${issue.area}] ${issue.title}: ${issue.detail}`;
-}
-
-function buildSpecialistPrompt(spec: AppSpec, issues: SpecAuditIssue[], score: number): string {
-  const top = issues.slice(0, 8).map(issuePromptLine).join('\n') || '- Nenhuma pendencia critica detectada.';
-  return [
-    'Abra uma revisao especializada do plano do App Studio.',
-    'Objetivo: melhorar a spec antes do build, em linguagem simples para usuario leigo.',
-    '',
-    `App: ${spec.summary}`,
-    `Publico: ${spec.audience}`,
-    `Saude atual da spec: ${score}/100`,
-    '',
-    'Pontos detectados pela auditoria:',
-    top,
-    '',
-    'Use app_get_pipeline, app_get_spec e app_spec_audit para se ancorar. Se faltar decisao do usuario, faca UMA pergunta por vez com ask_user.',
-    'Se discovery ainda nao estiver aprovada, salve a spec completa com app_save_spec incluindo requirements.goals, requirements.acceptance_criteria, requirements.business_rules e requirements.out_of_scope.',
-    'Se discovery ja estiver aprovada, proponha uma revisao com app_propose_spec_revision em vez de sobrescrever a spec aprovada.',
-  ].join('\n');
-}
-
 function requirementCount(spec: AppSpec): number {
   const r = spec.requirements;
   if (!r) return 0;
@@ -63,7 +37,7 @@ function requirementCount(spec: AppSpec): number {
   ].reduce((sum, items) => sum + (items?.length ?? 0), 0);
 }
 
-export function SpecOverviewPanel({ spec, onOpenSpecAgent }: SpecOverviewPanelProps) {
+export function SpecOverviewPanel({ spec }: SpecOverviewPanelProps) {
   const { t } = useTranslation('appStudio');
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -74,7 +48,6 @@ export function SpecOverviewPanel({ spec, onOpenSpecAgent }: SpecOverviewPanelPr
   });
   const report = useMemo(() => auditAppSpec(spec), [spec]);
   const topIssues = report.issues.slice(0, 5);
-  const prompt = useMemo(() => buildSpecialistPrompt(spec, report.issues, report.score), [spec, report]);
   const counts = [
     { label: t('blueprint.overview.counts.features'), value: spec.features.length },
     { label: t('blueprint.overview.counts.screens'), value: spec.screens.length },
@@ -143,23 +116,6 @@ export function SpecOverviewPanel({ spec, onOpenSpecAgent }: SpecOverviewPanelPr
 
         <div className="min-h-2 flex-1" />
 
-        {onOpenSpecAgent && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => onOpenSpecAgent(prompt)}
-                aria-label={t('blueprint.overview.openAgent')}
-              >
-                <Bot className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">{t('blueprint.overview.openAgent')}</TooltipContent>
-          </Tooltip>
-        )}
       </aside>
     );
   }
@@ -261,12 +217,7 @@ export function SpecOverviewPanel({ spec, onOpenSpecAgent }: SpecOverviewPanelPr
         </section>
       </div>
 
-      <footer className="shrink-0 border-t p-2">
-        <Button className="w-full justify-center gap-2" size="sm" onClick={() => onOpenSpecAgent?.(prompt)}>
-          <Bot className="h-4 w-4" />
-          {t('blueprint.overview.openAgent')}
-        </Button>
-      </footer>
+      <footer className="shrink-0 border-t p-2 text-[11px] text-muted-foreground">{t('workflow.coordinatorOwnsArtifacts')}</footer>
     </aside>
   );
 }

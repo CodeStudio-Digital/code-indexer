@@ -7,6 +7,7 @@
  * conflict lights the Git window's banner + Conflicts tab.
  */
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../../../state/workspace.js';
 import { confirm, prompt, toast } from '../../../../../components/ui/prompt-dialog.js';
@@ -49,6 +50,7 @@ const tail = (r: GitRunResult) => r.stderr.trim().slice(0, 300) || r.stdout.trim
 const remoteOf = (b: GitBranch) => b.name.split('/')[0] || 'origin';
 
 export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onClose }: UseBranchOps): BranchActions {
+  const { t } = useTranslation('workspace');
   const openGitLog = useWorkspaceStore((s) => s.openGitLog);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
 
@@ -63,36 +65,36 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
       if (b.isCurrent) return;
       try {
         const name = await checkoutBranch(projectId, b.name, b.isRemote, repoPath);
-        toast.success(`Switched to ${name}`);
+        toast.success(t('git.branchSwitched', { branch: name }));
         await after();
         onClose?.();
       } catch (e) {
-        toast.error('Checkout failed', { description: e instanceof Error ? e.message : String(e) });
+        toast.error(t('git.checkoutFailed'), { description: e instanceof Error ? e.message : String(e) });
       }
     };
 
     const newBranchFrom = async (b: GitBranch) => {
-      const name = await prompt({ title: `New branch from ${b.name}`, description: 'Created from the selected branch and checked out immediately.', placeholder: 'feature/cool-thing' });
+      const name = await prompt({ title: t('git.branch.newFromTitle', { branch: b.name }), description: t('git.branch.newFromBody'), placeholder: 'feature/cool-thing' });
       if (!name?.trim()) return;
       try {
         await apiCall('projectGit.branchCreate', { projectId, repoPath, name: name.trim(), from: b.name, checkout: true });
-        toast.success(`Created and switched to ${name.trim()}`);
+        toast.success(t('git.branch.createdSwitched', { branch: name.trim() }));
         await after();
         onClose?.();
       } catch (e) {
-        toast.error('Create failed', { description: e instanceof Error ? e.message : String(e) });
+        toast.error(t('git.branch.createFailed'), { description: e instanceof Error ? e.message : String(e) });
       }
     };
 
     const rename = async (b: GitBranch) => {
-      const newName = await prompt({ title: `Rename ${b.name}`, description: 'New branch name.', placeholder: b.name, defaultValue: b.name });
+      const newName = await prompt({ title: t('git.branch.renameTitle', { branch: b.name }), description: t('git.branch.renameBody'), placeholder: b.name, defaultValue: b.name });
       if (!newName?.trim() || newName.trim() === b.name) return;
       try {
         await apiCall('projectGit.branchRename', { projectId, repoPath, oldName: b.name, newName: newName.trim() });
-        toast.success(`Renamed to ${newName.trim()}`);
+        toast.success(t('git.branch.renamed', { branch: newName.trim() }));
         await after();
       } catch (e) {
-        toast.error('Rename failed', { description: e instanceof Error ? e.message : String(e) });
+        toast.error(t('git.branch.renameFailed'), { description: e instanceof Error ? e.message : String(e) });
       }
     };
 
@@ -100,72 +102,78 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
       try {
         const remote = b.upstream ? b.upstream.split('/')[0] : 'origin';
         const r = await apiCall<GitRunResult>('projectGit.push', { projectId, repoPath, remote, branch: b.name, setUpstream: !b.upstream });
-        r.ok ? toast.success(`Pushed ${b.name}`) : toast.error('Push had issues', { description: tail(r) });
+        r.ok ? toast.success(t('git.branch.pushed', { branch: b.name })) : toast.error(t('git.branch.pushIssues'), { description: tail(r) });
         await after();
       } catch (e) {
-        toast.error('Push failed', { description: e instanceof Error ? e.message : String(e) });
+        toast.error(t('git.pushFailed'), { description: e instanceof Error ? e.message : String(e) });
       }
     };
 
     const remove = async (b: GitBranch) => {
-      if (b.isCurrent) { toast.error('Cannot delete the current branch', { description: 'Switch to a different branch first.' }); return; }
-      if (b.isRemote) { toast.message('Remote branches are read-only here', { description: 'Use `git push origin --delete <branch>` from the terminal.' }); return; }
-      const ok = await confirm({ title: `Delete branch ${b.name}?`, description: b.ahead > 0 ? `This branch has ${b.ahead} commit(s) not in any other branch — they will be lost unless force-deleted.` : 'The branch will be deleted from your local repo only.', confirmLabel: 'Delete', tone: 'destructive' });
+      if (b.isCurrent) { toast.error(t('git.branch.deleteCurrent'), { description: t('git.branch.deleteCurrentBody') }); return; }
+      if (b.isRemote) { toast.message(t('git.branch.remoteReadOnly'), { description: t('git.branch.remoteReadOnlyBody') }); return; }
+      const ok = await confirm({ title: t('git.branch.deleteTitle', { branch: b.name }), description: b.ahead > 0 ? t('git.branch.deleteAheadBody', { count: b.ahead }) : t('git.branch.deleteBody'), confirmLabel: t('git.branchMenu.delete'), tone: 'destructive' });
       if (!ok) return;
       try {
         await apiCall('projectGit.branchDelete', { projectId, repoPath, name: b.name });
-        toast.success(`Deleted ${b.name}`);
+        toast.success(t('git.branch.deleted', { branch: b.name }));
         await after();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (/not fully merged|not yet merged/i.test(msg)) {
-          const force = await confirm({ title: `Force-delete ${b.name}?`, description: 'Branch has unmerged commits. Force-delete loses them.', confirmLabel: 'Force delete', tone: 'destructive' });
+          const force = (await prompt({
+            title: t('git.branch.forceDeleteTitle', { branch: b.name }),
+            description: t('git.branch.forceDeleteBody', { token: `DELETE ${b.name}` }),
+            placeholder: `DELETE ${b.name}`,
+            confirmLabel: t('git.branch.forceDelete'),
+            validate: (value) => value === `DELETE ${b.name}` ? null : t('git.branch.forceDeleteValidation', { token: `DELETE ${b.name}` }),
+          })) === `DELETE ${b.name}`;
           if (!force) return;
-          try { await apiCall('projectGit.branchDelete', { projectId, repoPath, name: b.name, force: true }); toast.success(`Force-deleted ${b.name}`); await after(); }
-          catch (e2) { toast.error('Delete failed', { description: e2 instanceof Error ? e2.message : String(e2) }); }
-        } else { toast.error('Delete failed', { description: msg }); }
+          try { await apiCall('projectGit.branchDelete', { projectId, repoPath, name: b.name, force: true }); toast.success(t('git.branch.forceDeleted', { branch: b.name })); await after(); }
+          catch (e2) { toast.error(t('git.branch.deleteFailed'), { description: e2 instanceof Error ? e2.message : String(e2) }); }
+        } else { toast.error(t('git.branch.deleteFailed'), { description: msg }); }
       }
     };
 
     const merge = async (b: GitBranch) => {
       const current = currentName();
-      if (!current) { toast.error('Merge requires a current branch (detached HEAD)'); return; }
-      const ok = await confirm({ title: `Merge ${b.name} into ${current}?`, description: 'Creates a merge commit if needed. Conflicts open in the resolver.', confirmLabel: 'Merge' });
+      if (!current) { toast.error(t('git.branch.mergeDetached')); return; }
+      const ok = await confirm({ title: t('git.branch.mergeTitle', { branch: b.name, current }), description: t('git.branch.mergeBody'), confirmLabel: t('git.branch.merge') });
       if (!ok) return;
       try {
         const r = await apiCall<GitRunResult>('projectGit.merge', { projectId, repoPath, branch: b.name });
-        r.ok ? toast.success(`Merged ${b.name} into ${current}`) : toast.error('Merge had issues', { description: tail(r) });
+        r.ok ? toast.success(t('git.branch.merged', { branch: b.name, current })) : toast.error(t('git.branch.mergeIssues'), { description: tail(r) });
         await after();
         requestGitReload();
-      } catch (e) { toast.error('Merge failed', { description: e instanceof Error ? e.message : String(e) }); }
+      } catch (e) { toast.error(t('git.branch.mergeFailed'), { description: e instanceof Error ? e.message : String(e) }); }
     };
 
     const rebase = async (b: GitBranch) => {
       const current = currentName();
-      if (!current) { toast.error('Rebase requires a current branch (detached HEAD)'); return; }
-      const ok = await confirm({ title: `Rebase ${current} onto ${b.name}?`, description: 'Replays your commits on top of the target. Conflicts open in the resolver; finish with Continue or Abort.', confirmLabel: 'Rebase' });
+      if (!current) { toast.error(t('git.branch.rebaseDetached')); return; }
+      const ok = await confirm({ title: t('git.branch.rebaseTitle', { current, branch: b.name }), description: t('git.branch.rebaseBody'), confirmLabel: t('git.branch.rebase') });
       if (!ok) return;
       try {
         const r = await apiCall<GitRunResult>('projectGit.rebase', { projectId, repoPath, onto: b.name });
-        r.ok ? toast.success(`Rebased ${current} onto ${b.name}`) : toast.error('Rebase stopped', { description: tail(r) });
+        r.ok ? toast.success(t('git.branch.rebased', { current, branch: b.name })) : toast.error(t('git.branch.rebaseStopped'), { description: tail(r) });
         await after();
         requestGitReload();
-      } catch (e) { toast.error('Rebase failed', { description: e instanceof Error ? e.message : String(e) }); }
+      } catch (e) { toast.error(t('git.branch.rebaseFailed'), { description: e instanceof Error ? e.message : String(e) }); }
     };
 
     const pull = async (b: GitBranch, mode: 'merge' | 'rebase') => {
       const current = currentName();
-      if (!current) { toast.error('Pull requires a current branch (detached HEAD)'); return; }
+      if (!current) { toast.error(t('git.branch.pullDetached')); return; }
       try {
         const fetched = await apiCall<GitRunResult>('projectGit.fetch', { projectId, repoPath, remote: remoteOf(b) });
-        if (!fetched.ok) { toast.error('Fetch failed', { description: tail(fetched) }); return; }
+        if (!fetched.ok) { toast.error(t('git.branch.fetchFailed'), { description: tail(fetched) }); return; }
         const r = mode === 'rebase'
           ? await apiCall<GitRunResult>('projectGit.rebase', { projectId, repoPath, onto: b.name })
           : await apiCall<GitRunResult>('projectGit.merge', { projectId, repoPath, branch: b.name });
-        r.ok ? toast.success(`Pulled ${b.name} into ${current}`) : toast.error('Pull stopped', { description: tail(r) });
+        r.ok ? toast.success(t('git.branch.pulled', { branch: b.name, current })) : toast.error(t('git.branch.pullStopped'), { description: tail(r) });
         await after();
         requestGitReload();
-      } catch (e) { toast.error('Pull failed', { description: e instanceof Error ? e.message : String(e) }); }
+      } catch (e) { toast.error(t('git.branch.pullFailed'), { description: e instanceof Error ? e.message : String(e) }); }
     };
 
     const update = async (b: GitBranch) => {
@@ -175,19 +183,19 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
         const r = b.isCurrent
           ? await apiCall<GitRunResult>('projectGit.pull', { projectId, repoPath, rebase: true })
           : await apiCall<GitRunResult>('projectGit.updateBranch', { projectId, repoPath, branch: b.name });
-        r.ok ? toast.success(`Updated ${b.name}`) : toast.error('Update had issues', { description: tail(r) });
+        r.ok ? toast.success(t('git.branch.updated', { branch: b.name })) : toast.error(t('git.branch.updateIssues'), { description: tail(r) });
         await after();
         requestGitReload();
-      } catch (e) { toast.error('Update failed', { description: e instanceof Error ? e.message : String(e) }); }
+      } catch (e) { toast.error(t('git.branch.updateFailed'), { description: e instanceof Error ? e.message : String(e) }); }
     };
 
     const compare = async (b: GitBranch, worktree: boolean) => {
       try {
         const { patch } = await apiCall<{ patch: string }>('projectGit.branchDiff', { projectId, repoPath, branch: b.name, worktree });
-        if (!patch.trim()) { toast.message('No differences', { description: worktree ? `Working tree matches ${b.name}.` : `${b.name} matches the current branch.` }); return; }
+        if (!patch.trim()) { toast.message(t('git.branch.noDifferences'), { description: worktree ? t('git.branch.worktreeMatches', { branch: b.name }) : t('git.branch.matchesCurrent', { branch: b.name }) }); return; }
         openDiff({ kind: 'diff', projectId, path: `branchdiff:${worktree ? 'wt' : 'cmp'}:${b.name}`, title: worktree ? `Diff vs ${b.name}` : `Compare ${b.name}`, patch, source: 'git-unstaged' });
         onClose?.();
-      } catch (e) { toast.error('Compare failed', { description: e instanceof Error ? e.message : String(e) }); }
+      } catch (e) { toast.error(t('git.branch.compareFailed'), { description: e instanceof Error ? e.message : String(e) }); }
     };
 
     return {
@@ -204,5 +212,5 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
       onPush: (b) => void push(b),
       onDelete: (b) => void remove(b),
     };
-  }, [projectId, repoPath, getBranches, onMutated, onClose, openGitLog, openDiff]);
+  }, [projectId, repoPath, getBranches, onMutated, onClose, openGitLog, openDiff, t]);
 }

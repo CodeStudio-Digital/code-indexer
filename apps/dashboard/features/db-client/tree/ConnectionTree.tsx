@@ -3,8 +3,9 @@
  * (if needed) and lazily fetches databases → schemas → tables → columns. Each
  * level fetches its children on first expand and shows a per-node spinner.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ChevronRight, ChevronDown, Database, Table2, Eye, Columns3, Box, Loader2,
   Plus, RefreshCw, MoreVertical, Plug, PlugZap, Folder, KeyRound, Link2, Zap, Braces, Hash, Search,
@@ -342,6 +343,87 @@ function nodeSearchText(node: DbTreeNode, conn?: DbConnection): string {
   ].filter(Boolean).join(' '));
 }
 
+export type ConnectionTreeRenderItem =
+  | { kind: 'node'; key: string; node: DbTreeNode }
+  | { kind: 'group'; key: string; label: string }
+  | { kind: 'schema-filter'; key: string; nodeId: string; depth: number; value: string };
+
+/**
+ * Build the exact flat sequence consumed by the virtualizer. Keeping group
+ * headings and schema filters in the same sequence gives every visual row a
+ * stable key and a deterministic height; expanded schemas with thousands of
+ * tables no longer create thousands of mounted React nodes.
+ */
+export function buildConnectionTreeRenderItems({
+  rows,
+  connections,
+  expanded,
+  schemaFilters,
+}: {
+  rows: DbTreeNode[];
+  connections: DbConnection[];
+  expanded: ReadonlySet<string>;
+  schemaFilters: Record<string, string>;
+}): ConnectionTreeRenderItem[] {
+  const items: ConnectionTreeRenderItem[] = [];
+  const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+  let lastGroup = '';
+  let schemaContext: { id: string; query: string } | null = null;
+  let hiddenPrefix: string | null = null;
+
+  for (const node of rows) {
+    if (hiddenPrefix && node.id.startsWith(`${hiddenPrefix}/`)) continue;
+    hiddenPrefix = null;
+    if (schemaContext && node.id !== schemaContext.id && !node.id.startsWith(`${schemaContext.id}/`)) {
+      schemaContext = null;
+    }
+
+    if (node.depth === 0) {
+      const group = connectionById.get(node.connectionId)?.group_name?.trim() ?? '';
+      if (group && group !== lastGroup) {
+        items.push({ kind: 'group', key: `group:${group}:${node.id}`, label: group });
+      }
+      lastGroup = group;
+    }
+
+    if (node.kind === 'schema') {
+      items.push({ kind: 'node', key: node.id, node });
+      if (expanded.has(node.id)) {
+        const value = schemaFilters[node.id] ?? '';
+        schemaContext = { id: node.id, query: normalizeSearchText(value.trim()) };
+        items.push({
+          kind: 'schema-filter',
+          key: `filter:${node.id}`,
+          nodeId: node.id,
+          depth: node.depth + 1,
+          value,
+        });
+      } else {
+        schemaContext = null;
+      }
+      continue;
+    }
+
+    if (schemaContext?.query && (node.kind === 'table' || node.kind === 'view')) {
+      const name = normalizeSearchText(node.name ?? node.label);
+      if (!name.includes(schemaContext.query)) {
+        hiddenPrefix = node.id;
+        continue;
+      }
+    }
+
+    items.push({ kind: 'node', key: node.id, node });
+  }
+
+  return items;
+}
+
+function treeItemHeight(item: ConnectionTreeRenderItem): number {
+  if (item.kind === 'group') return 26;
+  if (item.kind === 'schema-filter') return 24;
+  return 22;
+}
+
 function NodeIcon({ node }: { node: DbTreeNode }) {
   if (node.depth === 0) return <Database className="h-3.5 w-3.5 text-sky-500" />;
   switch (node.kind) {
@@ -433,9 +515,27 @@ export function ConnectionTree({
     return db.treeRows.filter((row) => includeIds.has(row.id));
   }, [filter, db.treeRows, db.connections]);
 
+  const renderItems = useMemo(
+    () => buildConnectionTreeRenderItems({
+      rows: visibleRows,
+      connections: db.connections,
+      expanded: db.expanded,
+      schemaFilters,
+    }),
+    [visibleRows, db.connections, db.expanded, schemaFilters],
+  );
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: renderItems.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => treeItemHeight(renderItems[index]!),
+    getItemKey: (index) => renderItems[index]?.key ?? index,
+    overscan: 14,
+  });
+
   return (
-    <div className="flex h-full flex-col bg-card">
-      <div className="flex items-center gap-1 border-b px-2 py-1.5">
+    <div className="flex h-full flex-col bg-[var(--workbench-surface)]">
+      <div className="flex items-center gap-1 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2 py-1.5">
         <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           {t('connections.title')}
         </span>
@@ -457,7 +557,7 @@ export function ConnectionTree({
         />
       </div>
 
-      <div className="flex-1 overflow-auto py-1">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1">
         {db.connections.length === 0 && !db.loading && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">{t('connections.empty')}</div>
         )}
@@ -466,63 +566,39 @@ export function ConnectionTree({
             {t('connections.noSearchResults', { query: filter.trim() })}
           </div>
         )}
-        {(() => {
-          const els: React.ReactNode[] = [];
-          let lastGroup = '';
-          // Active expanded-schema filter context + a prefix to skip the subtree
-          // of any table hidden by that filter.
-          let schemaCtx: { id: string; q: string } | null = null;
-          let hiddenPrefix: string | null = null;
-          for (const node of visibleRows) {
-            if (hiddenPrefix && node.id.startsWith(`${hiddenPrefix}/`)) continue;
-            hiddenPrefix = null;
-            if (schemaCtx && node.id !== schemaCtx.id && !node.id.startsWith(`${schemaCtx.id}/`)) schemaCtx = null;
-
-            if (node.depth === 0) {
-              const g = db.connections.find((c) => c.id === node.connectionId)?.group_name?.trim() ?? '';
-              if (g && g !== lastGroup) {
-                els.push(
-                  <div key={`grp:${g}`} className="px-3 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50">
-                    {g}
-                  </div>,
-                );
-              }
-              lastGroup = g;
-            }
-
-            if (node.kind === 'schema') {
-              els.push(<Row key={node.id} node={node} db={db} t={t} onEdit={onEdit} />);
-              if (db.expanded.has(node.id)) {
-                const cur = schemaFilters[node.id] ?? '';
-                schemaCtx = { id: node.id, q: cur.trim().toLowerCase() };
-                els.push(
-                  <SchemaFilterRow
-                    key={`flt:${node.id}`}
-                    value={cur}
-                    depth={node.depth + 1}
-                    placeholder={t('tree.filterTables')}
-                    onChange={(v) => setSchemaFilters((s) => ({ ...s, [node.id]: v }))}
-                  />,
-                );
-              } else {
-                schemaCtx = null;
-              }
-              continue;
-            }
-
-            // Filter the direct tables/views of the active schema; hide their subtree too.
-            if (schemaCtx?.q && (node.kind === 'table' || node.kind === 'view')) {
-              const name = (node.name ?? node.label).toLowerCase();
-              if (!name.includes(schemaCtx.q)) {
-                hiddenPrefix = node.id;
-                continue;
-              }
-            }
-
-            els.push(<Row key={node.id} node={node} db={db} t={t} onEdit={onEdit} />);
-          }
-          return els;
-        })()}
+        {renderItems.length > 0 && (
+          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const item = renderItems[virtualRow.index];
+              if (!item) return null;
+              return (
+                <div
+                  key={item.key}
+                  className="absolute left-0 top-0 w-full"
+                  style={{
+                    height: virtualRow.size,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  {item.kind === 'group' ? (
+                    <div className="flex h-[26px] items-end px-3 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/50">
+                      {item.label}
+                    </div>
+                  ) : item.kind === 'schema-filter' ? (
+                    <SchemaFilterRow
+                      value={item.value}
+                      depth={item.depth}
+                      placeholder={t('tree.filterTables')}
+                      onChange={(value) => setSchemaFilters((state) => ({ ...state, [item.nodeId]: value }))}
+                    />
+                  ) : (
+                    <Row node={item.node} db={db} t={t} onEdit={onEdit} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -541,7 +617,7 @@ function SchemaFilterRow({
   placeholder: string;
 }) {
   return (
-    <div className="flex items-center py-0.5" style={{ paddingLeft: 4 + depth * 12 }} onClick={(e) => e.stopPropagation()}>
+    <div className="flex h-6 items-center" style={{ paddingLeft: 4 + depth * 12 }} onClick={(e) => e.stopPropagation()}>
       <Search className="mr-1 h-3 w-3 shrink-0 text-muted-foreground/50" />
       <input
         className="h-5 w-[80%] rounded border bg-background px-1.5 text-[11px] outline-none"

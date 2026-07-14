@@ -41,7 +41,8 @@ export function insertRebuilt(
 
   const tx = db.transaction((): InsertRebuiltConversationChaptersResult => {
     const boundary = currentBoundary(db, sessionId);
-    if (ordered[ordered.length - 1].endMessageId > boundary) {
+    if (ordered.some((chapter) => chapter.advancesContextBoundary === true)
+      && ordered[ordered.length - 1].endMessageId > boundary) {
       throw new RangeError('rebuilt chapters cannot extend beyond the durable boundary');
     }
     for (const chapter of ordered) {
@@ -72,18 +73,13 @@ export function insertRebuilt(
 
     const first = ordered[0].startMessageId;
     const last = ordered[ordered.length - 1].endMessageId;
-    const conflict = db.prepare(`
-      SELECT id FROM coder_session_chapters
-      WHERE session_id = ? AND superseded_at IS NULL AND source != 'legacy'
-        AND start_message_id <= ? AND end_message_id >= ?
-      LIMIT 1
-    `).get(sessionId, last, first) as { id: number } | undefined;
-    if (conflict) throw new Error(`rebuilt chapter range overlaps active chapter ${conflict.id}`);
-
+    // Navigation-only rebuilds may overlap durable context chapters. They do
+    // not move the model boundary and will be superseded automatically when a
+    // newer context checkpoint covers their range.
     const superseded = db.prepare(`
       UPDATE coder_session_chapters
       SET superseded_at = datetime('now')
-      WHERE session_id = ? AND source = 'legacy' AND superseded_at IS NULL
+      WHERE session_id = ? AND source IN ('legacy', 'rebuild') AND superseded_at IS NULL
         AND start_message_id <= ? AND end_message_id >= ?
     `).run(sessionId, last, first).changes;
 
@@ -94,17 +90,19 @@ export function insertRebuilt(
     const insert = db.prepare(`
       INSERT INTO coder_session_chapters (
         session_id, ordinal, start_message_id, end_message_id,
-        source, trigger, title,
+        source, trigger, title, chapter_kind, advances_context_boundary,
         chapter_json, chapter_text, resume_json, resume_text,
         version, metrics_json
-      ) VALUES (?, ?, ?, ?, 'rebuild', ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, 'rebuild', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const items: ConversationChapterRow[] = [];
     for (const chapter of ordered) {
       ordinal += 1;
       const result = insert.run(
         sessionId, ordinal, chapter.startMessageId, chapter.endMessageId,
-        chapter.trigger, chapter.title, chapter.chapterJson, chapter.chapterText,
+        chapter.trigger, chapter.title,
+        chapter.chapterKind ?? 'rebuild', chapter.advancesContextBoundary === true ? 1 : 0,
+        chapter.chapterJson, chapter.chapterText,
         chapter.resumeJson, chapter.resumeText, chapter.version, chapter.metricsJson ?? null,
       );
       items.push(db.prepare('SELECT * FROM coder_session_chapters WHERE id = ?')
@@ -163,9 +161,10 @@ export function copy(
     const insert = db.prepare(`
       INSERT INTO coder_session_chapters (
         session_id, ordinal, start_message_id, end_message_id,
-        source, trigger, title, chapter_json, chapter_text, resume_json,
+        source, trigger, title, chapter_kind, advances_context_boundary,
+        chapter_json, chapter_text, resume_json,
         resume_text, version, metrics_json, created_at, superseded_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     let copied = 0;
     let lastLive: { end: number; resume: string } | null = null;
@@ -176,12 +175,15 @@ export function copy(
       ordinal += 1;
       insert.run(
         toSessionId, ordinal, mappedStart, mappedEnd, chapter.source, chapter.trigger,
-        chapter.title, chapter.chapter_json, chapter.chapter_text, chapter.resume_json,
+        chapter.title, chapter.chapter_kind, chapter.advances_context_boundary,
+        chapter.chapter_json, chapter.chapter_text, chapter.resume_json,
         chapter.resume_text, chapter.version, chapter.metrics_json,
         chapter.created_at, chapter.superseded_at,
       );
       copied += 1;
-      if (chapter.superseded_at == null) lastLive = { end: mappedEnd, resume: chapter.resume_text };
+      if (chapter.superseded_at == null && chapter.advances_context_boundary === 1) {
+        lastLive = { end: mappedEnd, resume: chapter.resume_text };
+      }
     }
     if (lastLive) {
       db.prepare(`
@@ -206,7 +208,8 @@ export function rollback(db: DB, sessionId: number, fromMessageId: number): numb
     `).run(sessionId, fromMessageId).changes;
     const previous = db.prepare(`
       SELECT end_message_id, resume_text FROM coder_session_chapters
-      WHERE session_id = ? AND superseded_at IS NULL AND end_message_id < ?
+      WHERE session_id = ? AND superseded_at IS NULL
+        AND advances_context_boundary = 1 AND end_message_id < ?
       ORDER BY ordinal DESC LIMIT 1
     `).get(sessionId, fromMessageId) as { end_message_id: number; resume_text: string } | undefined;
     db.prepare(`

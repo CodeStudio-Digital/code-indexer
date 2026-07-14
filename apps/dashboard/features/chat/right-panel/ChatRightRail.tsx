@@ -9,11 +9,12 @@
  * as the left `ProjectRail` in `ProjectView`, so the visual language is
  * consistent across rails.
  */
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   BarChart3,
   Bell,
+  BookOpen,
   ClipboardList,
   Compass,
   Gauge,
@@ -25,10 +26,10 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
-import { cn } from '../../../lib/utils.js';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
+import { RailButton, RailContainer, RailSeparator } from '../../../components/chrome/index.js';
 
 interface RailEntry {
   id: RightPanelId | 'snapshots';
@@ -44,6 +45,7 @@ interface RailEntry {
 }
 
 interface ChatRightRailProps {
+  sessionId: number;
   activePanelId: RightPanelId | null;
   onSelectPanel: (id: RightPanelId | null) => void;
   /** Fired when the user clicks the Snapshots icon. Optional. */
@@ -57,6 +59,7 @@ interface ChatRightRailProps {
 }
 
 export const ChatRightRail = memo(function ChatRightRail({
+  sessionId,
   activePanelId,
   onSelectPanel,
   onOpenSnapshots,
@@ -65,6 +68,18 @@ export const ChatRightRail = memo(function ChatRightRail({
   pluginWindows = [],
 }: ChatRightRailProps) {
   const { t } = useTranslation(['chat']);
+  const [chapterCount, setChapterCount] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(`/api/coder/sessions/${sessionId}/chapters?limit=1`, { signal: controller.signal })
+      .then((response) => response.ok ? response.json() : null)
+      .then((page: { status?: { chapter_count?: number } } | null) => {
+        if (!controller.signal.aborted) setChapterCount(page?.status?.chapter_count ?? 0);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [activePanelId, sessionId]);
 
   const pluginEntries = useMemo<RailEntry[]>(
     () =>
@@ -87,9 +102,10 @@ export const ChatRightRail = memo(function ChatRightRail({
       { id: 'meta', icon: Compass, labelKey: 'rightRail.meta', kind: 'panel' },
       { id: 'plans', icon: ClipboardList, labelKey: 'rightRail.plans', kind: 'panel' },
       { id: 'drive', icon: HardDrive, labelKey: 'rightRail.drive', kind: 'panel' },
+      { id: 'chapters', icon: BookOpen, labelKey: 'rightRail.chapters', kind: 'panel', badge: chapterCount },
       { id: 'diagram', icon: Workflow, labelKey: 'rightRail.diagram', kind: 'panel' },
     ],
-    [],
+    [chapterCount],
   );
 
   const inspectEntries = useMemo<RailEntry[]>(
@@ -125,7 +141,6 @@ export const ChatRightRail = memo(function ChatRightRail({
   };
 
   const renderEntry = (entry: RailEntry) => {
-    const Icon = entry.icon;
     const active = entry.kind === 'panel' && activePanelId === entry.id;
     const label = entry.label ?? t(`chat:${entry.labelKey}`, entry.id);
     const handleClick = () => {
@@ -137,55 +152,30 @@ export const ChatRightRail = memo(function ChatRightRail({
       onSelectPanel(active ? null : (entry.id as RightPanelId));
     };
     return (
-      <button
+      <RailButton
         key={entry.id}
-        type="button"
+        icon={entry.icon}
+        label={label}
+        side="right"
+        role="toggle"
+        active={active}
         onClick={handleClick}
-        aria-label={label}
-        title={label}
-        aria-pressed={active}
-        className={cn(
-          'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-          active
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-        )}
-      >
-        <Icon className="h-4 w-4" />
-        {active && (
-          <span
-            aria-hidden
-            className="absolute -right-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-          />
-        )}
-        {entry.badge != null && entry.badge > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-1 rounded-full bg-primary text-primary-foreground text-[8px] font-medium flex items-center justify-center tabular-nums">
-            {entry.badge > 99 ? '99+' : entry.badge}
-          </span>
-        )}
-      </button>
+        badge={entry.badge}
+      />
     );
   };
 
   return (
-    <nav
-      className="flex flex-col w-10 shrink-0 border-l bg-card/40 py-1 gap-0.5 items-center"
-      aria-label="Session tools"
-    >
+    <RailContainer side="right" aria-label="Session tools">
       {contextEntries.map(renderEntry)}
-      <RailDivider />
+      <RailSeparator />
       {inspectEntries.map(renderEntry)}
-      {pluginEntries.length > 0 && <RailDivider />}
+      {pluginEntries.length > 0 && <RailSeparator />}
       {pluginEntries.map(renderEntry)}
       <div className="mt-auto flex flex-col items-center gap-0.5 pt-1">
-        <RailDivider />
+        <RailSeparator />
         {renderEntry(configEntry)}
       </div>
-    </nav>
+    </RailContainer>
   );
 });
-
-/** Thin horizontal rule between rail groups — mirrors the left `ProjectRail`. */
-function RailDivider() {
-  return <span aria-hidden className="h-px w-6 bg-border my-1" />;
-}

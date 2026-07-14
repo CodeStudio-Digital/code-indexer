@@ -18,6 +18,7 @@ import { AuthEditor } from './AuthEditor.js';
 import { ScriptEditor } from './ScriptEditor.js';
 import { useQuerySync, serializeQuery, stripQuery } from './useQuerySync.js';
 import { SubTabs, type SubTabDef } from './SubTabs.js';
+import { ApiClientSelect } from './ApiClientSelect.js';
 import type { ScriptAssistPayload } from './api.js';
 
 const METHOD_COLOR: Record<string, string> = {
@@ -120,13 +121,14 @@ export function RequestEditor({ request, baseUrl, sending, isDraft, responseShap
       </div>
       <div className="flex items-center gap-2 p-2 border-b">
         <div className="flex items-center flex-1 min-w-0 h-9 border rounded-md bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
-          <select
-            className={cn('h-full text-xs font-mono font-bold bg-transparent pl-2.5 pr-1 focus:outline-none cursor-pointer', METHOD_COLOR[d.method] ?? 'text-foreground')}
+          <ApiClientSelect
             value={d.method}
-            onChange={(e) => { upd({ method: e.target.value }); persist({ method: e.target.value }); }}
-          >
-            {HTTP_METHODS.map((m) => <option key={m} value={m} className="text-foreground">{m}</option>)}
-          </select>
+            onValueChange={(method) => { upd({ method }); persist({ method }); }}
+            options={HTTP_METHODS.map((method) => ({ value: method, label: method, className: METHOD_COLOR[method] }))}
+            ariaLabel={t('request.method')}
+            triggerClassName={cn('h-full w-[92px] rounded-none border-0 bg-transparent px-2.5 font-mono font-bold shadow-none focus:ring-0 focus:ring-offset-0', METHOD_COLOR[d.method] ?? 'text-foreground')}
+            contentClassName="min-w-[9rem] font-mono"
+          />
           <div className="w-px h-5 bg-border shrink-0" />
           {baseUrl && <span className="pl-2 text-[11px] text-muted-foreground font-mono truncate max-w-[40%] shrink-0" title={baseUrl}>{baseUrl}</span>}
           <input

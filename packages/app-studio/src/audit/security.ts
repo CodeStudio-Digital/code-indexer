@@ -1,15 +1,15 @@
 /**
- * Auditoria de segurança determinística do workspace App Studio — gate
- * bloqueante da etapa review (errors) + avisos não-bloqueantes (warnings).
- * Checks baratos regex/fs; o consumidor das mensagens é o AGENTE, que
- * conserta e re-submete. Cobre os erros que um app gerado para leigo não
+ * Auditoria de segurança determinística do workspace App Studio — evidência
+ * obrigatória do card verificador (errors) + avisos não-bloqueantes (warnings).
+ * Checks baratos regex/fs; o consumidor das mensagens é o agente verificador.
+ * Cobre os erros que um app gerado para leigo não
  * pode ter: segredo hardcoded, SQL concatenado (D1 exige .bind()), CORS
  * aberto com auth, rota desprotegida e wrangler.jsonc quebrado.
  */
 import { join } from 'node:path';
 import type { AppSpec } from '../spec/types.js';
 import { parseJsonc } from '../jsonc.js';
-import { filesContaining, listFilesRecursive, readIfExists } from '../pipeline/gate-checks.js';
+import { filesContaining, listFilesRecursive, readIfExists } from '../verification/workspace-checks.js';
 
 export interface SecurityAuditResult {
   errors: string[];

@@ -53,11 +53,14 @@ import { parseView, type ActiveView } from './lib/route-view.js';
 import { usePinnedTabs } from './state/pinned-tabs.js';
 import { useActiveSurface } from './state/active-surface.js';
 import { describeCurrentPin } from './state/pinned-tabs-describe.js';
+import { installKeymapDispatcher } from './keymap/dispatcher.js';
+import { registerCommandHandlers } from './keymap/commands.js';
 import { useWindowChrome } from './hooks/useWindowChrome.js';
 import { initRunningTasks } from './state/running-tasks.js';
 import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
+import { ProjectBranchControl, ProjectRunControl } from './features/project/ProjectIdeToolbar.js';
 
 interface NavItem {
   id: ActiveView['page'] | string;
@@ -137,21 +140,25 @@ export function AppShell() {
     initRunningTasks();
   }, []);
 
-  // Global ⌘K / Ctrl+K toggles the command palette from anywhere.
+  // Install the single global dispatcher at shell lifetime. Ctrl+K is a
+  // catalogue action now, so it can be remapped and can also be the prefix
+  // of a longer chord (the dispatcher resolves the exact-prefix timeout).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        setPaletteOpen((o) => !o);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const uninstall = installKeymapDispatcher();
+    const unregister = registerCommandHandlers([{
+      id: 'workbench.commandPalette',
+      run: () => setPaletteOpen((open) => !open),
+    }]);
+    return () => { unregister(); uninstall(); };
   }, []);
 
   // Breadcrumb name + palette sources. Both endpoints are tiny; the
   // recent-sessions one is also read by RecentSessionsDropdown (cheap).
   const isProjectView = view.page === 'project';
+  const isAppStudioWorkbench = /^\/apps\/\d+(?:\/|$)/.test(location.pathname);
+  const isCompanyWorkbench = view.page === 'agents';
+  const isSpriteWorkbench = view.page === 'sprites';
+  const isWorkbenchView = isProjectView || isAppStudioWorkbench || isCompanyWorkbench || isSpriteWorkbench;
   const { data: activeProject } = useApi<{ name: string }>(
     isProjectView && view.projectId ? `/projects/${view.projectId}` : '',
   );
@@ -247,6 +254,7 @@ export function AppShell() {
       <header
         className={cn(
           'drag h-9 min-w-0 shrink-0 overflow-hidden border-b bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/40 flex items-center px-2 gap-1 transition-opacity',
+          isWorkbenchView && 'border-[var(--workbench-border)] bg-[var(--workbench-raised)] supports-[backdrop-filter]:bg-[var(--workbench-raised)]',
           platform === 'darwin' && 'pl-[72px]',
           !isFocused && 'opacity-60',
         )}
@@ -268,23 +276,78 @@ export function AppShell() {
             </ProjectSwitcher>
           </div>
         )}
-        <span className="mx-0.5 h-4 w-px bg-border" />
+        {isAppStudioWorkbench && (
+          <div className="no-drag flex min-w-0 items-center gap-1 text-[12px]">
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <button
+              type="button"
+              onClick={() => navigate('/apps')}
+              className="flex h-7 items-center gap-1.5 rounded px-1.5 font-medium transition-colors hover:bg-[var(--workbench-hover)]"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-violet-400" />
+              <span>{t('nav.apps', { defaultValue: 'Meus apps' })}</span>
+            </button>
+          </div>
+        )}
+        {isCompanyWorkbench && (
+          <div className="no-drag flex min-w-0 items-center gap-1 text-[12px]">
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <button
+              type="button"
+              onClick={() => navigate('/agents')}
+              className="flex h-7 items-center gap-1.5 rounded px-1.5 font-medium transition-colors hover:bg-[var(--workbench-hover)]"
+            >
+              <Users className="h-3.5 w-3.5 text-violet-400" />
+              <span>{t('nav.agents')}</span>
+            </button>
+          </div>
+        )}
+        {isSpriteWorkbench && (
+          <div className="no-drag flex min-w-0 items-center gap-1 text-[12px]">
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <button
+              type="button"
+              onClick={() => navigate('/sprites')}
+              className="flex h-7 items-center gap-1.5 rounded px-1.5 font-medium transition-colors hover:bg-[var(--workbench-hover)]"
+            >
+              <ImagePlay className="h-3.5 w-3.5 text-violet-400" />
+              <span>{t('nav.sprites')}</span>
+            </button>
+          </div>
+        )}
+        {isProjectView && view.projectId && <ProjectBranchControl projectId={view.projectId} />}
+        {!isWorkbenchView && <span className="mx-0.5 h-4 w-px bg-border" />}
         {/* Center: primary nav (interactive → carved out of the drag region) */}
-        <nav className="no-drag hidden items-center gap-0.5 md:flex" aria-label={t('nav.primaryAria')}>
-          {nav.map((item) => (
-            <Fragment key={item.id}>
-              {item.id === 'telemetry' && <span className="mx-1 h-4 w-px bg-border" />}
-              <NavButton
-                item={item}
-                active={view.page === item.id}
-                onClick={() => navigate(item.href)}
-              />
-            </Fragment>
-          ))}
-        </nav>
+        {isWorkbenchView ? (
+          <div className="no-drag flex min-w-0 flex-1 justify-center px-3">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              aria-label={t('commandPalette.open')}
+              className="flex h-7 w-full max-w-md items-center gap-2 rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)] px-2 text-[11px] text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span className="truncate">Search Everywhere</span>
+              <kbd className="ml-auto rounded bg-[var(--workbench-raised)] px-1 font-sans text-[10px]">{shortcut}</kbd>
+            </button>
+          </div>
+        ) : (
+          <nav className="no-drag hidden items-center gap-0.5 md:flex" aria-label={t('nav.primaryAria')}>
+            {nav.map((item) => (
+              <Fragment key={item.id}>
+                {item.id === 'telemetry' && <span className="mx-1 h-4 w-px bg-border" />}
+                <NavButton
+                  item={item}
+                  active={view.page === item.id}
+                  onClick={() => navigate(item.href)}
+                />
+              </Fragment>
+            ))}
+          </nav>
+        )}
         {/* Right cluster */}
         <div className="no-drag ml-auto flex items-center gap-0.5">
-          <button
+          {!isWorkbenchView && <button
             type="button"
             onClick={() => setPaletteOpen(true)}
             aria-label={t('commandPalette.open')}
@@ -295,7 +358,8 @@ export function AppShell() {
             <kbd className="rounded bg-background px-1 font-sans text-[10px] text-muted-foreground">
               {shortcut}
             </kbd>
-          </button>
+          </button>}
+          {isProjectView && view.projectId && <ProjectRunControl projectId={view.projectId} />}
           {currentPin && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -319,9 +383,9 @@ export function AppShell() {
               navigate(`/projects/${projectId}${sessionId ? `?session=${sessionId}` : ''}`)
             }
           />
-          <LanguageSwitcher />
+          {!isWorkbenchView && <LanguageSwitcher />}
           <CloudStatusButton />
-          <Tooltip>
+          {!isWorkbenchView && <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
@@ -334,7 +398,7 @@ export function AppShell() {
               </Button>
             </TooltipTrigger>
             <TooltipContent>{t('theme.toggle')}</TooltipContent>
-          </Tooltip>
+          </Tooltip>}
           <WindowControls />
         </div>
       </header>

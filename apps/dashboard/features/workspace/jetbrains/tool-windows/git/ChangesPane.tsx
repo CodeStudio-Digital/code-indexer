@@ -15,6 +15,7 @@ import { fileKind } from './file-kind.js';
 // Tipos vêm do hook (fonte única). Evita a cópia local que dessincronizaria em
 // silêncio se o shape divergir (dashboard não roda tsc). W4 decompose.
 import type { GitStatus, GitStatusFile } from './use-git-window.js';
+import type { GitStatusCounts } from '@mcp/api-bus';
 
 interface ChangesPaneProps {
   projectId: number;
@@ -27,6 +28,10 @@ interface ChangesPaneProps {
     unstaged: GitStatusFile[];
     untracked: GitStatusFile[];
   };
+  counts: GitStatusCounts | null;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void | Promise<void>;
   openSections: { staged: boolean; unstaged: boolean; untracked: boolean };
   setOpenSections: React.Dispatch<
     React.SetStateAction<{ staged: boolean; unstaged: boolean; untracked: boolean }>
@@ -50,6 +55,10 @@ export function ChangesPane({
   status,
   error,
   groups,
+  counts,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   openSections,
   setOpenSections,
   showDiff,
@@ -59,8 +68,7 @@ export function ChangesPane({
   onCommitted,
 }: ChangesPaneProps) {
   const { t } = useTranslation('workspace');
-  const total =
-    groups.staged.length + groups.unstaged.length + groups.untracked.length;
+  const total = counts?.total ?? groups.staged.length + groups.unstaged.length + groups.untracked.length;
 
   if (!status && !error) {
     return (
@@ -200,6 +208,23 @@ export function ChangesPane({
           ))}
         </CollapsibleSection>
       )}
+      {hasMore && (
+        <div className="flex justify-center p-2">
+          <button
+            type="button"
+            onClick={() => void onLoadMore()}
+            disabled={loadingMore}
+            className="rounded border px-3 py-1 text-[11px] text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            {loadingMore ? t('git.loadingMore') : t('git.loadMoreChanges', { loaded: groups.staged.length + groups.unstaged.length + groups.untracked.length, total })}
+          </button>
+        </div>
+      )}
+      {status?.partialWarnings?.map((warning) => (
+        <div key={warning} className="mx-2 my-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
+          {warning}
+        </div>
+      ))}
       </div>
       <CommitBox
         projectId={projectId}
@@ -225,18 +250,27 @@ function FileRow({
   const k = fileKind(file.state);
   return (
     <div
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
       className={cn(
         'group flex items-center gap-2 px-2.5 py-1 transition-colors border-b last:border-b-0 text-[11.5px]',
         onClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/40',
       )}
       onClick={onClick}
+      onKeyDown={(event) => {
+        if (onClick && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          onClick();
+        }
+      }}
       title={onClick ? t('git.openDiffFor', { path: file.path }) : file.path}
     >
       <span className={cn('font-mono text-[10px] w-3 shrink-0 text-center', k.color)}>
         {k.letter}
       </span>
       <span className="truncate flex-1">{file.path}</span>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      {file.outsideProject && <span className="text-[9px] text-amber-600">{t('git.outsideProject')}</span>}
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
         {actions}
       </div>
     </div>

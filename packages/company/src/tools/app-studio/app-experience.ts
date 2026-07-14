@@ -13,7 +13,7 @@ import {
 } from '@mcp/app-studio/experience/types.js';
 import { parseAppArchitecturePlan } from '@mcp/app-studio/architecture/types.js';
 import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
@@ -91,17 +91,18 @@ export function appSaveUx(binding: AppToolBinding): CoderTool {
   return { name: 'app_save_ux', description: 'Save the complete UX brief for the current approved spec, architecture and data model. Exactly three guided directions are required.', parameters: WRAPPED('brief'), source: 'native', riskLevel: 'write', handler: async (args, ctx) => {
     try {
       const c = context(binding);
-      const state = parsePipelineState(c.session.pipeline_json);
-      if (!state) return err('The app pipeline is missing or invalid. Use Repair app before saving UX.');
-      if (currentStage(state)?.id !== 'ux') return err(`UX is locked while current stage is '${currentStage(state)?.id ?? 'none'}'.`);
-      if (!c.architectureRevision || !c.architecture) return err('Approve architecture before UX.');
+      const state = parseAppWorkflowState(c.session.pipeline_json);
+      const phase = state?.phases.find((item) => item.id === 'blueprint');
+      if (!state) return err('The App Studio v5 workflow is missing. Open the journey once to migrate it.');
+      if (phase?.status === 'locked' || phase?.status === 'complete') return err(`UX is locked while Blueprint is '${phase?.status ?? 'missing'}'.`);
+      if (!c.architectureRevision || !c.architecture) return err('Save the architecture before UX.');
       const brief = normalizeAppUxBrief(args.brief, { specRevisionId: c.specRevision?.id ?? null, architectureRevisionId: c.architectureRevision.id, dataFingerprint: dataModelFingerprint(c.spec) });
       const audit = auditAppUxBrief(brief);
       if (!audit.ok) return err(['UX audit failed:', ...audit.issues.map((issue) => `  - ${issue}`)].join('\n'));
       const json = serializeExperienceArtifact(brief);
       const revision = c.store.saveUxRevision({ app_session_id: c.session.id, spec_revision_id: c.specRevision?.id ?? null, architecture_revision_id: c.architectureRevision.id, data_fingerprint: brief.data_fingerprint, ux_json: json });
       writeArtifact(ctx, 'spec/app-ux.json', json);
-      return appResult('App UX saved', { revision, audit, next: "Submit stage 'ux' for user review." });
+      return appResult('App UX saved', { revision, audit, next: 'Continue the shared Blueprint; no separate UX approval exists.' });
     } catch (e) { return err(`app_save_ux failed: ${(e as Error).message}`); }
   } };
 }
@@ -117,20 +118,18 @@ export function appGetWireframe(binding: AppToolBinding): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      view: { type: 'string', enum: ['summary', 'flows', 'screens', 'tests', 'groups', 'tasks', 'full'], description: "Default: 'summary'." },
+      view: { type: 'string', enum: ['summary', 'flows', 'screens', 'tests', 'slices', 'checklist', 'full'], description: "Default: 'summary'." },
       ...PAGE_PROPERTIES,
     },
     additionalProperties: false,
   };
-  return { name: 'app_get_wireframe', description: 'Read a progressive projection of flows, screens, tests and the ordered build plan.', parameters, source: 'native', handler: async (args) => {
+  return { name: 'app_get_wireframe', description: 'Read a progressive projection of flows, screens, tests, vertical slices and delivery checklists.', parameters, source: 'native', handler: async (args) => {
     try {
       const c = context(binding); const revision = c.store.getLatestWireframeRevision(c.session.id); const plan = parseAppWireframePlan(revision?.wireframe_json);
       const audit = auditAppWireframePlan(plan, c.spec, c.architecture, c.product);
       if (!revision || !plan) return appResult('App wireframe — summary', { revision: null, plan: null, audit: compactAudit(audit) });
       const { wireframe_json: _wireframeJson, ...revisionMeta } = revision;
-      const view = viewArg(args, ['summary', 'flows', 'screens', 'tests', 'groups', 'tasks', 'full'], 'summary');
-      const groupStates = c.store.listBuildGroups(revision.id);
-      const taskEvidence = c.store.listBuildTaskEvidence(revision.id);
+      const view = viewArg(args, ['summary', 'flows', 'screens', 'tests', 'slices', 'checklist', 'full'], 'summary');
       const base = {
         view,
         revision: revisionMeta,
@@ -139,49 +138,50 @@ export function appGetWireframe(binding: AppToolBinding): CoderTool {
           flows: plan.flows.length,
           screens: plan.screens.length,
           tests: plan.tdd_cases.length,
-          groups: plan.build_groups.length,
-          tasks: plan.tasks.length,
+          slices: plan.delivery_slices.length,
+          checklist_items: plan.checklist_items.length,
         },
         audit: compactAudit(audit),
       };
-      if (view === 'full') return appResult('App wireframe — full', { ...base, plan, audit, group_states: groupStates, task_evidence: taskEvidence });
+      if (view === 'full') return appResult('App wireframe — full', { ...base, plan, audit });
       if (view === 'flows') return appResult('App wireframe — flows', { ...base, ...pageItems(plan.flows, args, (item) => item.id) });
       if (view === 'screens') return appResult('App wireframe — screens', { ...base, ...pageItems(plan.screens, args, (item) => item.screen_id) });
       if (view === 'tests') return appResult('App wireframe — tests', { ...base, ...pageItems(plan.tdd_cases, args, (item) => item.id) });
-      if (view === 'groups') {
-        const page = pageItems(plan.build_groups, args, (item) => item.id);
-        return appResult('App wireframe — groups', { ...base, ...page, group_states: groupStates.filter((state) => page.items.some((group) => group.id === state.group_id)) });
+      if (view === 'slices') {
+        const page = pageItems(plan.delivery_slices, args, (item) => item.id);
+        return appResult('App wireframe — vertical slices', { ...base, ...page });
       }
-      if (view === 'tasks') {
-        const page = pageItems(plan.tasks, args, (item) => item.id);
-        return appResult('App wireframe — tasks', { ...base, ...page, task_evidence: taskEvidence.filter((evidence) => page.items.some((task) => task.id === evidence.task_id)) });
+      if (view === 'checklist') {
+        const page = pageItems(plan.checklist_items, args, (item) => item.id);
+        return appResult('App wireframe — delivery checklist', { ...base, ...page });
       }
-      return appResult('App wireframe — summary', { ...base, group_states: groupStates, completed_tasks: taskEvidence.filter((item) => item.status === 'done').length });
+      return appResult('App wireframe — summary', base);
     } catch (e) { return err(`app_get_wireframe failed: ${(e as Error).message}`); }
   } };
 }
 
 export function appSaveWireframe(binding: AppToolBinding): CoderTool {
-  return { name: 'app_save_wireframe', description: 'Save flows, low-fidelity screen wireframes, executable browser TDD cases and the ordered build plan.', parameters: WRAPPED('plan'), source: 'native', riskLevel: 'write', handler: async (args, ctx) => {
+  return { name: 'app_save_wireframe', description: 'Save flows, low-fidelity screen wireframes, executable browser TDD cases, vertical slices and delivery checklists.', parameters: WRAPPED('plan'), source: 'native', riskLevel: 'write', handler: async (args, ctx) => {
     try {
-      const c = context(binding); const state = parsePipelineState(c.session.pipeline_json);
-      if (!state) return err('The app pipeline is missing or invalid. Use Repair app before saving wireframes.');
-      if (currentStage(state)?.id !== 'wireframe') return err(`Wireframes are locked while current stage is '${currentStage(state)?.id ?? 'none'}'.`);
-      const uxRevision = c.store.getLatestApprovedUxRevision(c.session.id);
-      if (!uxRevision) return err('Approve the UX direction before wireframes.');
+      const c = context(binding); const state = parseAppWorkflowState(c.session.pipeline_json);
+      const phase = state?.phases.find((item) => item.id === 'blueprint');
+      if (!state) return err('The App Studio v5 workflow is missing. Open the journey once to migrate it.');
+      if (phase?.status === 'locked' || phase?.status === 'complete') return err(`Wireframes are locked while Blueprint is '${phase?.status ?? 'missing'}'.`);
+      const uxRevision = c.store.getLatestUxRevision(c.session.id);
+      if (!uxRevision) return err('Save the selected UX direction before wireframes.');
       const plan = normalizeAppWireframePlan(args.plan, { specRevisionId: c.specRevision?.id ?? null, architectureRevisionId: c.architectureRevision?.id ?? null, uxRevisionId: uxRevision.id, dataFingerprint: dataModelFingerprint(c.spec) });
       const audit = auditAppWireframePlan(plan, c.spec, c.architecture, c.product);
       if (!audit.ok) return err(['Wireframe audit failed:', ...audit.issues.map((issue) => `  - ${issue}`)].join('\n'));
       const json = serializeExperienceArtifact(plan);
       const revision = c.store.saveWireframeRevision({ app_session_id: c.session.id, spec_revision_id: c.specRevision?.id ?? null, architecture_revision_id: c.architectureRevision?.id ?? null, ux_revision_id: uxRevision.id, data_fingerprint: plan.data_fingerprint, wireframe_json: json });
       writeArtifact(ctx, 'spec/app-wireframes.json', json);
-      return appResult('App wireframe saved', { revision, audit, groups: plan.build_groups.length, tasks: plan.tasks.length, next: "Submit stage 'wireframe' for user review." });
+      return appResult('App wireframe saved', { revision, audit, slices: plan.delivery_slices.length, checklist_items: plan.checklist_items.length, next: 'Convert the slices into Kanban cards, save the delivery blueprint and request Blueprint approval.' });
     } catch (e) { return err(`app_save_wireframe failed: ${(e as Error).message}`); }
   } };
 }
 
 export function appWireframeAudit(binding: AppToolBinding): CoderTool {
-  return { name: 'app_wireframe_audit', description: 'Audit coverage, data bindings, UI TDD traceability and build-plan dependencies.', parameters: EMPTY, source: 'native', handler: async () => {
+  return { name: 'app_wireframe_audit', description: 'Audit coverage, data bindings, UI TDD traceability, vertical slices and checklist dependencies.', parameters: EMPTY, source: 'native', handler: async () => {
     try { const c = context(binding); const revision = c.store.getLatestWireframeRevision(c.session.id); return appResult('App wireframe audit', auditAppWireframePlan(parseAppWireframePlan(revision?.wireframe_json), c.spec, c.architecture, c.product)); }
     catch (e) { return err(`app_wireframe_audit failed: ${(e as Error).message}`); }
   } };

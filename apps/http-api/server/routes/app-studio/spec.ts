@@ -3,8 +3,8 @@
  *
  *   PUT /api/app-studio/sessions/:id/spec       { spec }
  *       — mesmo caminho da tool app_save_spec (prepareSpecSave: normalize→
- *         validate→roadmap). 409 `spec_locked` com discovery aprovado (a UI
- *         orquestra o reopen ANTES quando o usuário "Aplica mudanças");
+ *         validate→fontes estáveis). 409 `spec_locked` com Escopo aprovado
+ *         (a UI cria uma revisão versionada quando o usuário aplica mudanças);
  *         400 { issues } quando inválida.
  *   PUT /api/app-studio/sessions/:id/blueprint  { layout }
  *       — posições do canvas. SEM lock (drag salva mesmo com spec travada);
@@ -16,7 +16,6 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Hono } from 'hono';
 import { prepareSpecSave } from '@mcp/app-studio/spec/save-core.js';
-import { parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
 import { parseBlueprintLayout } from '@mcp/app-studio/blueprint/types.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
@@ -31,11 +30,12 @@ export function mountAppStudioSpecRoutes(app: Hono, deps: ServerDeps): void {
     const session = appStudioStore.getSession(id);
     if (!session) return notFound(c);
 
-    const state = parsePipelineState(session.pipeline_json);
-    const discovery = state?.stages.find((s) => s.id === 'discovery');
-    if (discovery?.status === 'approved') {
+    const latestScope = appStudioStore.listApprovals(id)
+      .filter((approval) => approval.type === 'scope' && approval.status !== 'superseded')
+      .sort((a, b) => b.bundle_revision - a.bundle_revision)[0] ?? null;
+    if (latestScope?.status === 'approved') {
       return c.json(
-        { code: 'spec_locked', error: 'Spec is locked — reopen the discovery stage before saving changes.' },
+        { code: 'spec_locked', error: 'Scope is approved — request a versioned change instead of overwriting it.' },
         409,
       );
     }
@@ -45,7 +45,7 @@ export function mountAppStudioSpecRoutes(app: Hono, deps: ServerDeps): void {
     if (!prepared.ok) return c.json({ issues: prepared.issues }, 400);
 
     appStudioStore.setSpecJson(id, prepared.specJson);
-    if (prepared.pipelineJson) appStudioStore.setPipelineJson(id, prepared.pipelineJson);
+    if (prepared.workflowJson) appStudioStore.setWorkflowStateJson(id, prepared.workflowJson);
 
     // Espelho legível no workspace — best-effort (mesma semântica da tool).
     try {

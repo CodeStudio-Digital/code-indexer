@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import { auditAppProductModel } from '@mcp/app-studio/product/audit.js';
 import { normalizeAppProductModel, parseAppProductModel, productModelFingerprint, serializeAppProductModel } from '@mcp/app-studio/product/types.js';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 
@@ -19,10 +19,9 @@ export function mountAppStudioProductRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const session = deps.appStudioStore.getSession(id);
     if (!session) return notFound(c);
-    const state = parsePipelineState(session.pipeline_json);
-    if (!state || currentStage(state)?.id !== 'product' || currentStage(state)?.status === 'review') {
-      return c.json({ error: 'A modelagem do produto não está aberta para edição.' }, 409);
-    }
+    const state = parseAppWorkflowState(session.pipeline_json);
+    const define = state?.phases.find((phase) => phase.id === 'define');
+    if (!state || define?.status === 'locked' || define?.status === 'complete') return c.json({ error: 'A modelagem do produto não está aberta para edição.' }, 409);
     const revision = deps.appStudioStore.getLatestProductRevision(id);
     const model = parseAppProductModel(revision?.product_json);
     if (!revision || revision.status !== 'draft' || !model) return c.json({ error: 'Nenhum rascunho de produto está disponível.' }, 409);

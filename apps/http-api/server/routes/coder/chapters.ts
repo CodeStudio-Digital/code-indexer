@@ -13,6 +13,7 @@ interface ChapterPage<T = unknown> {
  * crashing an older process whose store has not been migrated yet.
  */
 interface ConversationChapterStore {
+  getConversationChapterStatus?: (sessionId: number) => unknown;
   listConversationChapters?: (
     sessionId: number,
     options: { limit: number; cursor?: string },
@@ -31,6 +32,7 @@ interface ConversationChapterStore {
 }
 
 export interface RebuildConversationChaptersInput {
+  scope?: 'archived' | 'visible' | 'all';
   /** Rebuild only the transcript that predates the current durable boundary. */
   archived_only?: boolean;
 }
@@ -74,10 +76,22 @@ export function mountCoderChapterRoutes(
 
     if (query) {
       if (!store.searchConversationChapters) return unavailable(c);
-      return c.json(store.searchConversationChapters(sessionId, query, { limit, cursor }));
+      const page = store.searchConversationChapters(sessionId, query, { limit, cursor });
+      return c.json({
+        ...page,
+        ...(store.getConversationChapterStatus
+          ? { status: store.getConversationChapterStatus(sessionId) }
+          : {}),
+      });
     }
     if (!store.listConversationChapters) return unavailable(c);
-    return c.json(store.listConversationChapters(sessionId, { limit, cursor }));
+    const page = store.listConversationChapters(sessionId, { limit, cursor });
+    return c.json({
+      ...page,
+      ...(store.getConversationChapterStatus
+        ? { status: store.getConversationChapterStatus(sessionId) }
+        : {}),
+    });
   });
 
   // Register the static path before `:chapterId` so rebuild can never be
@@ -89,8 +103,16 @@ export function mountCoderChapterRoutes(
       return c.json({ error: 'conversation chapter rebuild is not configured' }, 501);
     }
     const body = await parseJsonBody<RebuildConversationChaptersInput>(c);
+    const scope = body.scope
+      ?? (body.archived_only === false ? 'all' : 'archived');
+    if (scope !== 'archived' && scope !== 'visible' && scope !== 'all') {
+      return c.json({ error: 'scope must be archived, visible, or all' }, 400);
+    }
     try {
-      const result = await options.rebuild(sessionId, { archived_only: body.archived_only !== false });
+      const result = await options.rebuild(sessionId, {
+        archived_only: body.archived_only,
+        scope,
+      });
       return c.json(result, 202);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

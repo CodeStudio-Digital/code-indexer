@@ -23,9 +23,10 @@ import {
 } from '../../../components/ui/dropdown-menu.js';
 import { columnNames, cellText } from './grid-utils.js';
 import { CellValuePanel } from './CellValuePanel.js';
+import { RowEditorDialog } from './RowEditorDialog.js';
 import { toCsv, toJson, toInsertSql, cellToCopy } from './grid-export.js';
 import { rowKeyOf, type GridEdits } from './use-grid-edits.js';
-import type { DbQueryResult, DbTableSort } from '../types.js';
+import type { DbColumn, DbQueryResult, DbTableSort } from '../types.js';
 
 const ROW_H = 24;
 const ROWNUM_W = 52;
@@ -51,6 +52,7 @@ export function VirtualResultGrid({
   onSort,
   hiddenColumns,
   onRowOpen,
+  columnMeta,
 }: {
   result: DbQueryResult | null;
   error?: string | null;
@@ -67,16 +69,32 @@ export function VirtualResultGrid({
   hiddenColumns?: Set<string>;
   /** Read-only row action (document store) — pencil per row → open the full record. */
   onRowOpen?: (row: Record<string, unknown>) => void;
+  /** Introspected relational metadata; enables the shared typed row editor. */
+  columnMeta?: DbColumn[];
 }) {
   const { t } = useTranslation('dbClient');
   const [internalSort, setInternalSort] = useState<SortState>(null);
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [cellView, setCellView] = useState<{ col: string; value: unknown } | null>(null);
   const [active, setActive] = useState<string | null>(null); // `${rowId}:${col}`
+  const [rowEdit, setRowEdit] = useState<
+    | { kind: 'existing'; rowKey: string; row: Record<string, unknown> }
+    | { kind: 'new'; tempId: string; row: Record<string, unknown> }
+    | null
+  >(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const editable = !!(edits && pkCols && pkCols.length > 0);
   const columns = (result ? columnNames(result) : []).filter((c) => !hiddenColumns?.has(c));
+  const editorColumns = useMemo<DbColumn[]>(() => {
+    const byName = new Map((columnMeta ?? []).map((column) => [column.name, column]));
+    return columns.map((name) => byName.get(name) ?? {
+      name,
+      dataType: 'text',
+      nullable: true,
+      isPrimaryKey: pkCols?.includes(name) ?? false,
+    });
+  }, [columnMeta, columns, pkCols]);
 
   // Server-sorted when controlled; otherwise sort the page client-side.
   const baseRows = useMemo(() => {
@@ -200,6 +218,9 @@ export function VirtualResultGrid({
                 return (
                   <div key={nr.tempId} className="absolute left-0 flex bg-emerald-500/5" style={style}>
                     <div className="flex shrink-0 items-center justify-center border-b border-r" style={{ width: ROWNUM_W }}>
+                      <button type="button" className="rounded p-0.5 text-muted-foreground hover:text-primary" title={t('edit.editRow')} onClick={() => setRowEdit({ kind: 'new', tempId: nr.tempId, row: nr.values })}>
+                        <Pencil className="h-3 w-3" />
+                      </button>
                       <button type="button" className="rounded p-0.5 text-muted-foreground hover:text-red-400" title={t('edit.deleteRow')} onClick={() => edits!.removeNewRow(nr.tempId)}>
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -232,14 +253,26 @@ export function VirtualResultGrid({
                 <div key={rk} className={cn('group absolute left-0 flex hover:bg-muted/30', isDeleted && 'opacity-50')} style={style}>
                   <div className="flex shrink-0 items-center justify-end gap-1 border-b border-r px-1 text-right text-muted-foreground/40 tabular-nums" style={{ width: ROWNUM_W }}>
                     {editable ? (
-                      <button
-                        type="button"
-                        className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-red-400 group-hover:opacity-100"
-                        title={isDeleted ? t('edit.restoreRow') : t('edit.deleteRow')}
-                        onClick={() => edits!.toggleDelete(rk)}
-                      >
-                        {isDeleted ? <Undo2 className="h-3 w-3" /> : <Trash2 className="h-3 w-3" />}
-                      </button>
+                      <>
+                        {!isDeleted && (
+                          <button
+                            type="button"
+                            className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-primary group-hover:opacity-100"
+                            title={t('edit.editRow')}
+                            onClick={() => setRowEdit({ kind: 'existing', rowKey: rk, row })}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-red-400 group-hover:opacity-100"
+                          title={isDeleted ? t('edit.restoreRow') : t('edit.deleteRow')}
+                          onClick={() => edits!.toggleDelete(rk)}
+                        >
+                          {isDeleted ? <Undo2 className="h-3 w-3" /> : <Trash2 className="h-3 w-3" />}
+                        </button>
+                      </>
                     ) : onRowOpen ? (
                       <button
                         type="button"
@@ -282,8 +315,39 @@ export function VirtualResultGrid({
       </div>
 
       {cellView && <CellValuePanel open column={cellView.col} value={cellView.value} onClose={() => setCellView(null)} />}
+      {rowEdit && editable && (
+        <RowEditorDialog
+          open
+          columns={editorColumns}
+          row={rowEdit.row}
+          isNew={rowEdit.kind === 'new'}
+          onClose={() => setRowEdit(null)}
+          onSave={(values) => {
+            if (rowEdit.kind === 'new') {
+              Object.entries(values).forEach(([column, value]) => edits!.setNewCell(rowEdit.tempId, column, value));
+            } else {
+              Object.entries(values).forEach(([column, value]) => {
+                if (!sameGridValue(value, rowEdit.row[column])) edits!.setCell(rowEdit.rowKey, column, value);
+              });
+            }
+            setRowEdit(null);
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function sameGridValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 /** One body cell — read-only (click → view) or editable (click → inline edit, dbl-click → view). */

@@ -42,29 +42,40 @@
   --status-info: #6366f1;
 
   /* ===== shadcn tokens (light) — paleta da marca (índigo/violeta) ===== */
-  --background: #f7f8fc;
+  --background: #e9edf4;
   --foreground: #0f1b35;
-  --card: #ffffff;
+  --card: #f7f9fc;
   --card-foreground: #0f1b35;
   --popover: #ffffff;
   --popover-foreground: #0f1b35;
   --primary: #6366f1;
   --primary-foreground: #f5f8ff;
-  --secondary: #e8ecfa;
+  --secondary: #e9edf5;
   --secondary-foreground: #0f1b35;
-  --muted: #e8ecfa;
+  --muted: #e9edf5;
   --muted-foreground: #5b6a7f;
-  --accent: #f8f5ff;
-  --accent-foreground: #8b3fd4; /* violeta escurecido do site #9f5dea → ~5.6:1 p/ texto pequeno de menu */
+  --accent: #e7e5ff;
+  --accent-foreground: #3730a3;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
   --success: #22c55e;
   --warning: #f59e0b;
   --info: #6366f1; /* sem equivalente no site; índigo = cor de "link/info" legível no fundo claro */
-  --border: #e5ecfb;
-  --input: #e5ecfb;
+  --border: #d6dce8;
+  --input: #d6dce8;
   --ring: #6366f1;
   --radius: 0.375rem;
+  /* Workbench semantic surfaces. Product pages may keep using the shadcn
+     tokens above; the IDE shell uses these explicit elevation levels so the
+     editor, docks and chrome do not collapse into one flat card color. */
+  --workbench-canvas: #e9edf4;
+  --workbench-surface: #f7f9fc;
+  --workbench-raised: #ffffff;
+  --workbench-border: #d6dce8;
+  --workbench-hover: #e9edf5;
+  --workbench-active: #e7e5ff;
+  --workbench-focus: #6366f1;
+  --workbench-gap: 6px;
   /* Premium IDE typography — Inter variable + JetBrains Mono via the
      Google Fonts link in index.html. System fallbacks cover offline. */
   --font-sans: "Inter", "InterVariable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -90,29 +101,37 @@ html[data-density="large"] {
 .dark {
   /* Dark native controls (select dropdowns, scrollbars) — see :root note. */
   color-scheme: dark;
-  /* Deep premium dark — azul-preto da marca (site), índigo/violeta. */
-  --background: #050a16;
+  /* Neutral graphite foundation. Violet is reserved for selection, AI and
+     high-value actions; surface elevation no longer changes hue. */
+  --background: #0b0e14;
   --foreground: #e8ecfa;
-  --card: #0d1629;
+  --card: #111620;
   --card-foreground: #e8ecfa;
-  --popover: #131c33;
+  --popover: #171d29;
   --popover-foreground: #e8ecfa;
   --primary: #7c6ff0; /* violeta saturado p/ IDE densa; branco por cima = ~4.6:1 AA (site cru é #a78bfa) */
   --primary-foreground: #ffffff;
-  --secondary: #131c33;
+  --secondary: #202736;
   --secondary-foreground: #e8ecfa;
-  --muted: #131c33;
+  --muted: #202736;
   --muted-foreground: #9ca3af;
-  --accent: #3730a3;
+  --accent: #282548;
   --accent-foreground: #ddd6fe;
   --destructive: #f87171;
   --destructive-foreground: #450a0a; /* site cru claro dava ~2.6:1 (ilegível); vermelho-escuro → ~5.0:1 */
   --success: #22c55e;
   --warning: #f97316;
-  --info: #67e8f9; /* cyan: legível no #050a16 e distinto do violeta primary */
-  --border: #161f35;
-  --input: #161f35;
+  --info: #67e8f9; /* cyan: legível no canvas grafite e distinto do violeta primary */
+  --border: #242c3a;
+  --input: #242c3a;
   --ring: #7c6ff0;
+  --workbench-canvas: #0b0e14;
+  --workbench-surface: #111620;
+  --workbench-raised: #171d29;
+  --workbench-border: #242c3a;
+  --workbench-hover: #202736;
+  --workbench-active: #282548;
+  --workbench-focus: #8b80f8;
 }
 
 @theme inline {
@@ -159,6 +178,47 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* ── AI-first workbench chrome ─────────────────────────────── */
+.workbench-shell {
+  background: var(--workbench-canvas);
+  color: var(--foreground);
+}
+.workbench-surface {
+  background: var(--workbench-surface);
+  border: 1px solid var(--workbench-border);
+  border-radius: 6px;
+}
+.workbench-panel-header {
+  height: 32px;
+  flex: 0 0 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--foreground);
+  background: var(--workbench-raised);
+  border-bottom: 1px solid var(--workbench-border);
+  user-select: none;
+}
+.workbench-resize-handle {
+  position: relative;
+  background: var(--workbench-canvas);
+}
+.workbench-resize-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+.workbench-resize-handle.w-1\.5::after { width: 1px; height: 100%; }
+.workbench-resize-handle.h-1\.5::after { height: 1px; width: 100%; }
+.workbench-resize-handle:hover::after,
+.workbench-resize-handle[data-resize-handle-active]::after {
+  background: color-mix(in srgb, var(--workbench-focus) 70%, transparent);
 }
 
 code, pre, kbd, samp {
@@ -312,6 +372,115 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .mcp-run-glyph { cursor: pointer; text-align: center; }
 .mcp-run-glyph::before { content: '\25B6'; color: var(--success); font-size: 10px; opacity: 0.85; }
 .mcp-run-glyph:hover::before { color: var(--foreground); opacity: 1; }
+
+/* Symbol navigation: right glyph lane stays independent from run/conflict markers. */
+.mcp-symbol-implementation-glyph,
+.mcp-symbol-usage-glyph { cursor: pointer; text-align: center; }
+.mcp-symbol-implementation-glyph::before {
+  content: '\21B3';
+  color: #8b7cf6;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.9;
+}
+.mcp-symbol-usage-glyph::before {
+  content: '\25C9';
+  color: #5796e8;
+  font-size: 10px;
+  opacity: 0.82;
+}
+.mcp-symbol-implementation-glyph:hover::before,
+.mcp-symbol-usage-glyph:hover::before { color: var(--foreground); opacity: 1; }
+
+/* Standalone-friendly IntelliJ-style usages / implementations popup. */
+.mcp-symbol-navigation-popup {
+  z-index: 45;
+  width: min(620px, calc(100vw - 80px));
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--popover-foreground, var(--foreground));
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 86%, var(--primary));
+  border-radius: 8px;
+  box-shadow: 0 14px 38px rgb(0 0 0 / 42%), 0 2px 8px rgb(0 0 0 / 28%);
+  backdrop-filter: blur(10px);
+  font: 12px/1.4 var(--font-sans, system-ui, sans-serif);
+}
+.mcp-symbol-navigation-popup__header {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 26px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.mcp-symbol-navigation-popup__header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.mcp-symbol-navigation-popup__count,
+.mcp-symbol-navigation-popup__position {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.mcp-symbol-navigation-popup__close {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 20px;
+}
+.mcp-symbol-navigation-popup__close:hover { color: var(--foreground); background: var(--accent); }
+.mcp-symbol-navigation-popup__filter {
+  height: 30px;
+  margin: 8px 8px 5px;
+  padding: 0 9px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: none;
+}
+.mcp-symbol-navigation-popup__filter:focus { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.mcp-symbol-navigation-popup__list { min-height: 36px; max-height: 275px; overflow: auto; padding: 3px 5px 7px; }
+.mcp-symbol-navigation-popup__result {
+  width: 100%;
+  min-height: 35px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.mcp-symbol-navigation-popup__result:hover,
+.mcp-symbol-navigation-popup__result:focus { background: var(--accent); outline: none; }
+.mcp-symbol-navigation-popup__result:disabled { cursor: default; opacity: 0.55; }
+.mcp-symbol-navigation-popup__icon { color: #8b7cf6; font-size: 13px; text-align: center; }
+.mcp-symbol-navigation-popup__label { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.mcp-symbol-navigation-popup__label strong { flex: 0 0 auto; font-size: 12px; }
+.mcp-symbol-navigation-popup__label span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-symbol-navigation-popup__empty { padding: 18px 12px; color: var(--muted-foreground); text-align: center; }
 
 /* IntelliJ-style git change markers in the lines-decorations gutter. A thin
    vertical bar marks added (green) / modified (blue) lines vs the file's HEAD

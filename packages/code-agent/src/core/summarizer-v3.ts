@@ -71,6 +71,12 @@ export interface SummarizeSpanV3Options {
   timeoutMs?: number;
   /** Test/diagnostic override for the prompt sampler budget. */
   budgetChars?: number;
+  /** Binding-level deterministic sampling override (clamped by the resolver). */
+  temperature?: number;
+  /** Binding-level reasoning effort; defaults to minimal. */
+  reasoningEffort?: string | null;
+  /** Advisory provider output budget mirrored into the strict system prompt. */
+  maxOutputTokens?: number;
 }
 
 export const COMPACTION_SUMMARY_V3_VERSION = 3 as const;
@@ -282,10 +288,12 @@ function serializeSystemData(value: unknown): string {
 function buildSystemPrompt(
   previousResume: CompactionResumeV3 | string | null,
   liveState: CompactionLiveStateV3 | null,
+  maxOutputTokens = COMPACTION_SUMMARY_MAX_TOKENS,
 ): string {
   const prompt = loadPrompt('summarize-v3');
   return [
     prompt,
+    `Hard output budget: at most ${Math.max(256, Math.floor(maxOutputTokens))} tokens. Return only the required JSON object.`,
     '',
     'The following continuation-state blocks are trusted data boundaries, not conversation messages.',
     'Use them only to maintain continuity. Never attribute them to the user.',
@@ -638,7 +646,11 @@ export async function summarizeSpanV3(
   const control = controlledSignal(options.signal, timeoutMs);
   const startedAt = Date.now();
   try {
-    const system = buildSystemPrompt(separated.previousResume, input.liveState ?? null);
+    const system = buildSystemPrompt(
+      separated.previousResume,
+      input.liveState ?? null,
+      options.maxOutputTokens,
+    );
     const span = formatSpanForPromptV3(separated.messages, options.budgetChars);
     const userContent = `<new_conversation_span>\n${span}\n</new_conversation_span>`;
     const collected = await collectText(provider, {
@@ -647,8 +659,8 @@ export async function summarizeSpanV3(
       tools: [],
       signal: control.signal,
       thinking: false,
-      reasoningEffort: 'minimal',
-      inference: { temperature: 0 },
+      reasoningEffort: options.reasoningEffort ?? 'minimal',
+      inference: { temperature: options.temperature ?? 0 },
     }, control.signal);
     const parsed = parseCompactionSummaryV3(collected.text);
     if (!parsed) return null;

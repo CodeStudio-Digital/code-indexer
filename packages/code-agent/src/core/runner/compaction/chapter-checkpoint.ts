@@ -13,6 +13,7 @@ export interface PersistChapterCheckpointInput {
   summary: CompactionSummaryV3;
   headMessages: readonly AgentMessage[];
   source?: 'auto' | 'manual';
+  chapterKind?: 'context' | 'milestone';
   trigger?: string;
   chaptersEnabled?: boolean;
   autoContinues?: number;
@@ -125,6 +126,7 @@ export function persistChapterCheckpoint(
     startMessageId: start,
     endMessageId: end,
     source: input.source ?? 'auto',
+    chapterKind: input.chapterKind ?? (input.trigger?.startsWith('milestone:') ? 'milestone' : 'context'),
     trigger: input.trigger ?? 'context_threshold',
     title: input.summary.chapter.title || `Conversation chapter through message ${end}`,
     chapterJson: JSON.stringify(input.summary.chapter),

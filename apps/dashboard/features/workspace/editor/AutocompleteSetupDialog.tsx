@@ -13,7 +13,9 @@ import { cn } from '../../../lib/utils.js';
 import { fetchProviders, fetchProviderModels } from '../../admin/api.js';
 import type { AdminProvider, AdminModel } from '../../admin/types.js';
 import { AC_PRESETS, applyAcPreset, type AcPreset } from './autocompleteSetupPresets.js';
-import { useAiCompleteStore } from './inlineCompletionProvider.js';
+import { useAiCompleteStore } from './ai-complete-store.js';
+import { apiCall } from '../../../lib/api-client.js';
+import type { EditorProbeResult } from '@mcp/api-bus';
 
 export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [preset, setPreset] = useState<AcPreset | null>(null);
@@ -28,11 +30,14 @@ export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onCl
   const [error, setError] = useState<string | null>(null);
   const [testWarning, setTestWarning] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [doneMessage, setDoneMessage] = useState('Ghost text is on — Tab accepts, Alt+\\ triggers manually.');
+  const [relatedCodeConsent, setRelatedCodeConsent] = useState(true);
 
   useEffect(() => {
     if (!open) {
       setPreset(null); setApiKey(''); setBaseUrl(''); setModelId('');
-      setError(null); setTestWarning(null); setDone(false);
+      setError(null); setTestWarning(null); setDone(false); setRelatedCodeConsent(true);
+      setDoneMessage('Ghost text is on — Tab accepts, Alt+\\ triggers manually.');
     }
   }, [open]);
 
@@ -53,9 +58,19 @@ export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onCl
     setBusy(true); setError(null); setTestWarning(null);
     const r = await applyAcPreset(preset, {
       apiKey, baseUrl, modelId, existingProviderId, existingModelId,
-    }, { bindAnyway });
+    }, { bindAnyway, relatedCodeConsent });
     setBusy(false);
     if (r.ok) {
+      if (preset.id === 'chat-model') {
+        const probe = await apiCall<EditorProbeResult>('editor.probe', {}).catch(() => null);
+        setDoneMessage(probe?.verifiedForAutomatic
+          ? `Completion probe passed (${probe.latency.p50 ?? '—'}ms p50). Automatic ghost text is enabled.`
+          : 'Model bound as manual-only. Use Alt+\\; run the completion probe again in Admin after tuning it.');
+      } else if (r.forced) {
+        setDoneMessage('Binding enabled without a successful completion probe. Use Admin to retest it before relying on automatic ghost text.');
+      } else if (r.probe) {
+        setDoneMessage(`Completion endpoint verified (${r.probe.latency.p50 ?? '—'}ms p50). Ghost text is enabled.`);
+      }
       useAiCompleteStore.getState().setEnabled(true);
       useAiCompleteStore.getState().requestNudge('enabled-hint');
       setDone(true);
@@ -79,7 +94,7 @@ export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onCl
 
         {done ? (
           <div className="py-6 text-sm text-emerald-500">
-            Ghost text is on — Tab accepts, Alt+\ triggers manually.
+            {doneMessage}
           </div>
         ) : !preset ? (
           <div className="flex flex-col gap-2">
@@ -150,6 +165,13 @@ export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onCl
                 )}
               </>
             )}
+
+            <label className="flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
+              <input type="checkbox" className="mt-0.5" checked={relatedCodeConsent} onChange={(e) => setRelatedCodeConsent(e.target.checked)} />
+              <span>
+                Use indexed related code. Up to three relevant windows (700 tokens total) from other project files may be sent to this provider.
+              </span>
+            </label>
 
             {error && <div className="text-xs text-red-400">{error}</div>}
             {testWarning && (

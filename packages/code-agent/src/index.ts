@@ -9,6 +9,10 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import type {
+  CompactionCheckpoint,
+  CompactionCheckpointResult,
+} from '@mcp/code-agent/core/runner/types.js';
 import { parseToolOutputCapLevel, levelFromLegacyBoolean } from '@mcp/code-agent/core/runner/output-caps.js';
 import { PermissionGate, normalizeToolPermissionMode } from '@mcp/code-agent/core/permission-gate.js';
 import { loadAgentsMd } from '@mcp/code-agent/core/agents-md.js';
@@ -161,11 +165,6 @@ import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import {
-  APP_SPECIALIST_PRESERVE_OUTPUT_TOOLS,
-  APP_SPECIALIST_TOOL_ALLOWLISTS,
-  isAppSpecialistAgentId,
-} from '@mcp/code-agent/agents/app-specialists.js';
 
 // Public types live in ./index/types.ts (extracted to keep this file under
 // the LOC cap). Re-exported below so external consumers of @mcp/code-agent
@@ -942,6 +941,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     secondaryRoots: secondaryRoots.map((r) => ({ projectId: r.projectId, rootPath: r.rootPath })),
     store: snapshotStore,
     getTurn: () => runnerRef?.turn ?? null,
+    getRoundMessageId: () => runnerRef?.roundMessageId ?? null,
     onRecorded: opts.onSnapshotRecorded,
   });
   const fsPort = new SnapshotRecordingFilesystemPort(rawFsPort, recorder);
@@ -1015,7 +1015,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try {
         store.resolvePlan(toolUseId, status, feedback);
         if (status === 'approved') {
-          autoCapture.onPlanResolved(status, store.listPlans(session.id)[0]?.plan_text ?? null, feedback);
+          const captured = autoCapture.onPlanResolved(
+            status,
+            store.listPlans(session.id)[0]?.plan_text ?? null,
+            feedback,
+          );
+          if (captured) runnerRef?.requestMilestoneCompaction('milestone:plan-approved');
         }
       } catch (e) {
         console.warn(`[coder] resolvePlan failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -1070,7 +1075,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     updateTaskStatus: (taskId, patch) => {
       try {
         const row = store.updateTaskStatus(session.id, taskId, patch);
-        autoCapture.onTaskStatus(taskId, patch as Parameters<typeof autoCapture.onTaskStatus>[1]);
+        if (autoCapture.onTaskStatus(taskId, patch as Parameters<typeof autoCapture.onTaskStatus>[1])) {
+          runnerRef?.requestMilestoneCompaction('milestone:task-closed');
+        }
         return row;
       } catch (e) {
         console.warn(`[coder] updateTaskStatus failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -1102,7 +1109,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     upsertGoalState: (goal) => {
       try {
         store.upsertSessionGoal(session.id, goal);
-        autoCapture.onGoalUpserted(goal);
+        if (autoCapture.onGoalUpserted(goal)) {
+          runnerRef?.requestMilestoneCompaction('milestone:goal-completed');
+        }
       } catch (e) {
         console.warn(`[coder] upsertSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -1436,14 +1445,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
-  if (isAppSpecialistAgentId(effectiveAgentId)) {
-    const before = registry.list().length;
-    const allowlist = APP_SPECIALIST_TOOL_ALLOWLISTS[effectiveAgentId];
-    registry.filterInPlace((t) => allowlist.has(t.name));
-    const after = registry.list().length;
-    console.log(`[coder] ${effectiveAgentId} agent: reduced tool surface ${before} → ${after}`);
-  }
-
   // Optional repo map (B6). Auto-sized by indexed file count: 0 (<50 files),
   // 1500 chars (50-499), 3000 (500-1999), 4500 (≥2000). Set CODER_REPOMAP_TOKENS
   // to a positive integer to override the auto budget, or "0" to disable.
@@ -1630,7 +1631,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // time, no DB query per turn (spec/auth details reach the agent via
     // the app_* tools at runtime, never via the prompt).
     systemPrompt = appendStaticPromptSection(systemPrompt, interpolate(loadPrompt('app-studio'), {
-      appName: appWorkspace.appName ?? '(see app_get_pipeline)',
+      appName: appWorkspace.appName ?? '(see app_get_workflow)',
       appSlug: appWorkspace.appSlug ?? '',
       dbEngine: appWorkspace.dbEngine,
     }));
@@ -1761,9 +1762,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // via `expand_toolset('diagram')`.
   if (effectiveAgentId === 'diagram') {
     activeTiers.add('diagram');
-  }
-  if (effectiveAgentId === 'app_db') {
-    activeTiers.add('db');
   }
   // Sticky extra tiers (mig 142): master/preview/custom tiers this session
   // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that
@@ -2045,6 +2043,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // tool/system prefix remains stable. A missing/broken binding is a clean
   // fallback to the active chat provider.
   let compactionProvider: ChatProvider = provider;
+  const compactionSummaryOptions: NonNullable<
+    import('@mcp/code-agent/core/runner/types.js').RunnerOptions['compactionSummaryOptions']
+  > = {};
   try {
     const resolver = new PipelineProviderResolver(
       new PipelineProviderBindingsStore(store.getDb()),
@@ -2054,7 +2055,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       sessionId: session.id,
       companySessionId: opts.companyContext?.companySessionId,
     });
-    if (bound) compactionProvider = await createCoderProvider(bound.provider.id, bound.modelId);
+    if (bound) {
+      compactionProvider = await createCoderProvider(bound.provider.id, bound.modelId);
+      const positiveNumber = (value: unknown): number | undefined => (
+        typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+      );
+      const temperature = typeof bound.config.temperature === 'number'
+        && Number.isFinite(bound.config.temperature)
+        ? Math.max(0, Math.min(2, bound.config.temperature))
+        : undefined;
+      compactionSummaryOptions.timeoutMs = positiveNumber(bound.config.timeout_ms);
+      compactionSummaryOptions.budgetChars = positiveNumber(bound.config.budget_chars);
+      compactionSummaryOptions.maxOutputTokens = positiveNumber(bound.config.max_tokens);
+      compactionSummaryOptions.temperature = temperature;
+      compactionSummaryOptions.reasoningEffort = typeof bound.config.reasoning_effort === 'string'
+        ? bound.config.reasoning_effort
+        : undefined;
+    }
   } catch (e) {
     console.warn(
       `[coder] compaction provider binding unavailable; using session model: ${e instanceof Error ? e.message : String(e)}`,
@@ -2064,6 +2081,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const runner = new CoderRunner({
     provider,
     compactionProvider,
+    contextWindow: sessionContextWindow,
+    compactionSummaryOptions,
     registry,
     systemPrompt,
     toolContext,
@@ -2284,10 +2303,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     companySessionId: opts.companyContext?.companySessionId ?? null,
     adminOverride: opts.adminOverride,
     agentId: effectiveAgentId,
-    preserveToolOutputNames:
-      isAppSpecialistAgentId(effectiveAgentId)
-        ? APP_SPECIALIST_PRESERVE_OUTPUT_TOOLS
-        : undefined,
     sessionTemperature: session.temperature_override,
     roleTemperature: opts.roleTemperature,
     // Reasoning-effort override (orthogonal to thinking). Company callers pass
@@ -2428,12 +2443,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       opts.selectedSkillIds && opts.selectedSkillIds.length > 0
         ? { selectedSkillIds: opts.selectedSkillIds }
         : undefined;
-    runner.pushUserContent(userBlocks, pickExtras);
-    store.appendMessage(session.id, {
+    const roundMessageId = store.appendMessage(session.id, {
       role: 'user',
       content: userBlocks,
       ...(pickExtras ?? {}),
     });
+    runner.pushUserContent(userBlocks, { ...(pickExtras ?? {}), roundMessageId });
   } else {
     // Resume: tool_result was already appended to the DB by the API handler.
     // It is already part of initialMessages → runner.messages, so the
@@ -2445,6 +2460,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // path appends a "Mode transition" reminder AFTER the "Plan approved" tool
     // result, which would otherwise hide it. Walk back to the most recent plan
     // verdict — a later rejection/abort must NOT be overridden by an older approval.
+    const latestPersistedUser = [...(existingEarly?.message_rows ?? [])]
+      .reverse()
+      .find((row) => row.role === 'user' && !row.is_meta);
+    runner.setRoundMessageId(latestPersistedUser?.id ?? null);
     for (let i = runner.messages.length - 1, seen = 0; i >= 0 && seen < 6; i--) {
       const m = runner.messages[i];
       if (m.role !== 'tool') continue;
@@ -2751,12 +2770,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   runner.on('tool_call_result', (id, name, result, durationMs) => {
     // Error-streak tracker for auto-captured "Fixed: <tool>" notes. Cheap,
     // best-effort, and independent of the telemetry buffering below.
-    autoCapture.onToolResult(
+    const capturedMilestone = autoCapture.onToolResult(
       name,
       Boolean(result.isError),
       result.isError ? String(result.content ?? '').slice(0, 200) : '',
       runnerRef?.turn ?? 0,
     );
+    if (capturedMilestone) runnerRef?.requestMilestoneCompaction('milestone:error-resolved');
     if (!pendingTurn) return;
     const pending = pendingToolCalls.get(id);
     const content = result.content ?? '';
@@ -2849,15 +2869,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // pair we align that summarized head with the visible DB prefix and append
   // the chapter + boundary atomically. There is no history_compacted-triggered
   // second summarization anymore.
-  let durableCheckpointHealthy = true;
-  runner.setCompactionCheckpointHandler(async (checkpoint) => {
-    if (!durableCompactionEnabled() || runner.isSubagent || session.id == null) return;
-    // If a prior checkpoint could not align/commit, this in-memory run already
-    // has a summarized head that the DB does not. Never try to leap over that
-    // gap on a later compaction; the next fresh run will retry from raw rows.
-    if (!durableCheckpointHealthy) return;
+  let pendingDurableCheckpoint: CompactionCheckpoint | null = null;
+  const commitDurableCheckpoint = async (
+    checkpoint: CompactionCheckpoint,
+  ): Promise<CompactionCheckpointResult> => {
+    if (!durableCompactionEnabled() || runner.isSubagent || session.id == null) {
+      return { status: 'disabled' };
+    }
     try {
-      await serializeSessionCompaction(session.id, async () => {
+      return await serializeSessionCompaction(session.id, async () => {
         await flushPendingTurn();
         const committed = persistChapterCheckpoint({
           store,
@@ -2865,33 +2885,104 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           summary: checkpoint.summary,
           headMessages: checkpoint.headMessages,
           source: 'auto',
+          chapterKind: checkpoint.trigger?.startsWith('milestone:') ? 'milestone' : 'context',
           trigger: checkpoint.trigger ?? 'context_threshold',
           chaptersEnabled: process.env.CODER_CONVERSATION_CHAPTERS !== '0',
           autoContinues: checkpoint.autoContinues,
         });
-        if (committed.status !== 'committed' && committed.status !== 'compatibility') {
-          durableCheckpointHealthy = false;
-          return;
+        const accepted = committed.status === 'committed'
+          || committed.status === 'compatibility'
+          || (committed.status === 'noop' && committed.reason === 'already_committed');
+        if (!accepted) {
+          return {
+            status: committed.status === 'noop' ? 'noop' : 'failed',
+            boundaryId: committed.boundary_id,
+            reason: committed.status === 'noop' ? committed.reason : 'checkpoint rejected',
+          };
         }
-        if (!opts.runEndMemory) return;
-        // Reuse the same paid V3 summary. Harvest is best-effort and does not
-        // delay the model loop after the atomic chapter commit succeeds.
-        void harvestCompactionMemory({
-          runEndMemory: opts.runEndMemory,
-          store,
-          getMemoryEnabled: () => db.getProjectMemoryEnabled(memoryWriteProjectId),
-          projectId: project.id,
-          projectName: project.name,
-          sessionId: session.id,
-          summary: summaryV3ToV2(checkpoint.summary),
+        if (opts.runEndMemory) {
+          // Reuse the same paid V3 summary. Harvest is best-effort and does not
+          // delay the model loop after the atomic chapter commit succeeds.
+          void harvestCompactionMemory({
+            runEndMemory: opts.runEndMemory,
+            store,
+            getMemoryEnabled: () => db.getProjectMemoryEnabled(memoryWriteProjectId),
+            projectId: project.id,
+            projectName: project.name,
+            sessionId: session.id,
+            summary: summaryV3ToV2(checkpoint.summary),
+            boundaryId: committed.boundary_id,
+            trigger: 'compaction',
+          });
+        }
+        return {
+          status: committed.status === 'compatibility' ? 'compatibility' : 'committed',
+          chapterId: 'chapter' in committed ? committed.chapter?.id ?? null : null,
           boundaryId: committed.boundary_id,
-          trigger: 'compaction',
-        });
+        };
       });
     } catch (error) {
-      durableCheckpointHealthy = false;
-      throw error;
+      return {
+        status: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      };
     }
+  };
+  const retryPendingDurableCheckpoint = async (): Promise<CompactionCheckpointResult | null> => {
+    if (!pendingDurableCheckpoint) return null;
+    const checkpoint = pendingDurableCheckpoint;
+    const chars = checkpoint.headMessages.reduce((total, message) => {
+      try { return total + JSON.stringify(message.content).length; } catch { return total; }
+    }, 0);
+    const attemptId = store.startCompactionAttempt({
+      session_id: session.id,
+      run_id: runner.runId,
+      turn: runner.turn,
+      turn_telemetry_id: runner.lastTurnTelemetryId,
+      trigger: `checkpoint_retry:${checkpoint.trigger ?? 'context_threshold'}`,
+      provider_chain: [],
+      prompt_tokens_before: Math.ceil(chars / 4),
+      history_chars_before: chars,
+    });
+    const retried = await commitDurableCheckpoint(checkpoint);
+    store.finishCompactionAttempt(attemptId, {
+      status: retried.status === 'committed' || retried.status === 'compatibility'
+        ? 'summarized'
+        : retried.status === 'disabled'
+          ? 'noop'
+          : 'checkpoint_failed',
+      strategy: 'summarizer',
+      summarizer_ran: false,
+      history_chars_after: chars,
+      chapter_id: retried.chapterId ?? null,
+      boundary_id: retried.boundaryId ?? null,
+      error_message: retried.reason ?? null,
+    });
+    if (retried.status === 'committed' || retried.status === 'compatibility' || retried.status === 'disabled') {
+      pendingDurableCheckpoint = null;
+    }
+    return retried;
+  };
+  runner.setCompactionCheckpointHandler(async (checkpoint) => {
+    const prior = await retryPendingDurableCheckpoint();
+    if (pendingDurableCheckpoint) {
+      return {
+        status: 'failed',
+        boundaryId: prior?.boundaryId ?? null,
+        reason: `prior checkpoint still pending: ${prior?.reason ?? prior?.status ?? 'unknown'}`,
+      };
+    }
+    const committed = await commitDurableCheckpoint(checkpoint);
+    if (committed.status === 'failed' || committed.status === 'noop') {
+      pendingDurableCheckpoint = checkpoint;
+    }
+    return committed;
+  });
+  // A failed alignment is usually caused by an assistant/tool pair that was
+  // still buffered. Retry after the next turn-start flush as well as at run
+  // end; this does not block or suppress later checkpoints.
+  runner.on('turn_start', () => {
+    if (pendingDurableCheckpoint) void retryPendingDurableCheckpoint();
   });
 
   // Phase-route skip summary handler removed along with PhaseRouter.
@@ -2950,11 +3041,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     .run()
     .then(async (res) => {
       await flushPendingTurn();
+      await retryPendingDurableCheckpoint();
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
       return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
     })
     .catch(async (e) => {
       await flushPendingTurn();
+      await retryPendingDurableCheckpoint();
       store.updateSessionStatus(session.id, 'error');
       throw e;
     })

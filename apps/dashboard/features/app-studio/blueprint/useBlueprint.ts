@@ -1,8 +1,7 @@
 /**
  * Cérebro do canvas Blueprint: draft da spec + layout + dirty/conflito e
- * as duas saídas (Salvar direto quando o discovery está destravado;
- * "Aplicar mudanças" = reopen → PUT spec → PUT layout → mensagem de
- * reconcile pro agente quando travado).
+ * as duas saídas: salvar o Escopo inicial ou criar uma revisão rastreável
+ * quando o gate de Escopo já foi aprovado.
  *
  * Regras duras contra o polling de 5s do detail:
  *  - dirty ⇒ o detail NUNCA re-seeda o draft;
@@ -18,7 +17,7 @@ import { parseBlueprintLayout, type BlueprintLayout, type BlueprintPosition } fr
 import { diffSpec, formatDiffSummary, type DiffKind } from '@mcp/app-studio/blueprint/diff-summary.js';
 import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { requestStudioSend } from '../../builder/studio/studio-context-store.js';
-import { patchAppStage, type AppStudioSessionDetail } from '../app-studio-api.js';
+import { createAppEvolution, proposeAppEvolution, type AppStudioSessionDetail } from '../app-studio-api.js';
 import { putAppSpec, putBlueprintLayout } from './blueprint-api.js';
 
 const LAYOUT_DEBOUNCE_MS = 800;
@@ -113,16 +112,15 @@ export function useBlueprint(detail: AppStudioSessionDetail, t: TFunction, refre
     [sessionId],
   );
 
-  const discoveryApproved =
-    detail.pipeline?.stages.find((s) => s.id === 'discovery')?.status === 'approved';
+  const scopeApproved = detail.workflow.approvals.some((approval) => approval.type === 'scope' && approval.status === 'approved');
 
-  /** Salvar (destravado) OU aplicar com reopen+reconcile (travado). */
+  /** Salvar o rascunho OU criar revisão e reconciliar fontes seletivamente. */
   const save = useCallback(async (): Promise<void> => {
     if (!draft || busy) return;
     const baseline = parseAppSpec(baselineRef.current);
     setBusy(true);
     try {
-      if (discoveryApproved) {
+      if (scopeApproved) {
         const kindLabels = Object.fromEntries(
           (['screen', 'entity', 'feature', 'behavior', 'auth'] as DiffKind[]).map((k) => [
             k,
@@ -136,8 +134,9 @@ export function useBlueprint(detail: AppStudioSessionDetail, t: TFunction, refre
           confirmLabel: t('blueprint.applyConfirm'),
         });
         if (!go) return;
-        await patchAppStage(sessionId, 'discovery', 'reopen', summary || t('blueprint.applyFallbackFeedback'));
-        await putAppSpec(sessionId, draft);
+        const changeReason = summary || t('blueprint.applyFallbackFeedback');
+        const { evolution } = await createAppEvolution(sessionId, { title: t('blueprint.applyTitle'), description: changeReason });
+        await proposeAppEvolution(sessionId, evolution.id, { spec: draft, summary, change_reason: changeReason });
         await putBlueprintLayout(sessionId, layout).catch(() => {});
         requestStudioSend(projectId, `${t('blueprint.applyMessage')}${summary ? `\n${summary}` : ''}`);
       } else {
@@ -152,7 +151,7 @@ export function useBlueprint(detail: AppStudioSessionDetail, t: TFunction, refre
     } finally {
       setBusy(false);
     }
-  }, [draft, busy, discoveryApproved, sessionId, projectId, layout, refresh, t]);
+  }, [draft, busy, scopeApproved, sessionId, projectId, layout, refresh, t]);
 
   /** Descarta o draft e re-seeda do servidor. */
   const reload = useCallback(() => {
@@ -170,7 +169,7 @@ export function useBlueprint(detail: AppStudioSessionDetail, t: TFunction, refre
     conflict,
     busy,
     issues,
-    discoveryApproved,
+    scopeApproved,
     mutate,
     setNodePosition,
     setNodePositions,

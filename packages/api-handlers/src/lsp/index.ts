@@ -39,7 +39,9 @@ import {
   serverDefinition,
   serverHover,
   serverReferences,
+  serverResolveCodeAction,
   serverResolveCompletion,
+  serverExecuteCodeAction,
   serverSemanticTokens,
   serverStatusFor,
 } from './server-backend.js';
@@ -246,7 +248,8 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
           new Promise<typeof SOFT>((r) => { timer = setTimeout(() => r(SOFT), softDeadlineMs()); }),
         ]);
         if (timer) clearTimeout(timer);
-        const serverItems = raced !== SOFT && Array.isArray(raced) ? (raced as CompletionItem[]) : [];
+        const serverList = raced !== SOFT && raced && 'items' in raced ? raced : null;
+        const serverItems = serverList?.items ?? [];
         if (raced === SOFT) void serverP.catch(() => undefined); // abandoned (lost the race)
         // SEMPRE mescla o índice estrutural: os símbolos do PROJETO aparecem mesmo se o
         // server falhar / retornar vazio / mandar itens que o Monaco descarta (P2). A query
@@ -258,7 +261,10 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
           `src=${serverItems.length ? 'server+index' : raced === SOFT ? 'soft-timeout→index' : 'index'} ` +
           `serverState=${serverState} server=${serverItems.length} index=${fbItems.length} warmMs=${Date.now() - t0}`,
         );
-        return merged;
+        return {
+          items: merged.map((item) => ({ ...item, origin: item.origin ?? (serverItems.includes(item) ? 'lsp' : 'index') })),
+          isIncomplete: raced === SOFT || !serverList || serverList.isIncomplete,
+        };
       }
       const entries = await exec().tsCompletions(opCtx(projectId, root, file, position, content));
       const tsItems = entries.map<CompletionItem>((e) => ({
@@ -273,10 +279,11 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
         // Só candidatos de auto-import (hasAction) carregam `raw` → o renderer resolve
         // só esses. Embutimos a position porque o Monaco não a passa ao resolve.
         raw: e.hasAction ? { name: e.name, source: e.source, data: e.data, position } : undefined,
+        origin: 'ts',
       }));
       const lang = languageIdForPath(file);
       const fbItems = await exec().fallbackCompletion(opCtx(projectId, root, file, position, undefined, lang));
-      return mergeCompletions(tsItems, fbItems);
+      return { items: mergeCompletions(tsItems, fbItems.map((item) => ({ ...item, origin: 'index' as const }))), isIncomplete: false };
     },
 
     async resolveCompletion({ projectId, file, item }) {
@@ -463,6 +470,16 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       const viaServer = await serverCodeActions(db, projectId, root, file, lang, range);
       return (viaServer ?? []) satisfies CodeActionDTO[];
+    },
+
+    async resolveCodeAction({ projectId, action }) {
+      requireProjectRoot(projectId);
+      return serverResolveCodeAction(db, projectId, action);
+    },
+
+    async executeCodeAction({ projectId, action }) {
+      requireProjectRoot(projectId);
+      return serverExecuteCodeAction(db, projectId, action);
     },
   } satisfies Omit<
     LspApi,

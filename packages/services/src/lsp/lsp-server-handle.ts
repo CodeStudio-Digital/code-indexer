@@ -339,6 +339,23 @@ export class LspServerHandle {
     }, REQ_TIMEOUT_MS.codeAction);
   }
 
+  supportsCodeActionResolve(): boolean {
+    const provider = this.capabilities.codeActionProvider;
+    return typeof provider === 'object' && provider.resolveProvider === true;
+  }
+
+  resolveCodeAction(action: unknown): Promise<unknown> {
+    return this.rpc.request('codeAction/resolve', action, REQ_TIMEOUT_MS.codeAction);
+  }
+
+  executeCommand(command: string, args?: unknown[]): Promise<unknown> {
+    const advertised = this.capabilities.executeCommandProvider?.commands ?? [];
+    if (advertised.length > 0 && !advertised.includes(command)) {
+      return Promise.reject(new Error(`LSP command not advertised: ${command}`));
+    }
+    return this.rpc.request('workspace/executeCommand', { command, arguments: args ?? [] }, REQ_TIMEOUT_MS.codeAction);
+  }
+
   /** `textDocument/implementation` — Location[] / LocationLink[] like definition. */
   implementation(absPath: string, position: { line: number; column: number }): Promise<unknown> {
     return this.rpc.request('textDocument/implementation', {

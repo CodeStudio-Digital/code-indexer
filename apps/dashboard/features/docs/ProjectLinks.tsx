@@ -120,12 +120,13 @@ export function ProjectLinks({ collectionId }: Props) {
   const available = projects.filter((p) => !linkedIds.has(p.id));
 
   return (
-    <section className="rounded-md border bg-muted/10 p-3 space-y-2">
-      <div className="flex items-center gap-2 text-sm font-medium">
+    <section className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+      <div className="flex h-8 items-center gap-2 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 text-xs font-medium">
         <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
         {t('projectLinks.heading')}
       </div>
-      <p className="text-xs text-muted-foreground">{t('projectLinks.description')}</p>
+      <div className="space-y-2 p-3">
+        <p className="text-xs text-muted-foreground">{t('projectLinks.description')}</p>
 
       {links === null ? (
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -190,6 +191,7 @@ export function ProjectLinks({ collectionId }: Props) {
           </Button>
         </div>
       )}
+      </div>
     </section>
   );
 }

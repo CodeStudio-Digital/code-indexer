@@ -5,7 +5,7 @@
  * the old ProjectEditDialog.
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Project } from '@mcp/shared/types.js';
 import { Button } from '../../../../components/ui/button.js';
@@ -31,10 +31,31 @@ export function GeneralPane({ project, existingGroups = [], onSaved }: GeneralPa
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const groupOptions = existingGroups.map((g) => ({ value: g, label: g }));
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const groupOptions = useMemo(
+    () => existingGroups.map((group) => ({ value: group, label: group })),
+    [existingGroups],
+  );
+  const normalizedGroup = groupName.trim() || null;
+  const dirty = name !== project.name
+    || rootPath !== project.root_path
+    || description !== (project.description ?? '')
+    || normalizedGroup !== (project.group_name ?? null);
+
+  useEffect(() => {
+    setName(project.name);
+    setRootPath(project.root_path);
+    setDescription(project.description ?? '');
+    setGroupName(project.group_name ?? '');
+  }, [project.description, project.group_name, project.id, project.name, project.root_path]);
+
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+  }, []);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (!dirty) return;
     setError(null);
     setSaving(true);
     try {
@@ -42,15 +63,15 @@ export function GeneralPane({ project, existingGroups = [], onSaved }: GeneralPa
       if (name !== project.name) body.name = name;
       if (rootPath !== project.root_path) body.root_path = rootPath;
       if (description !== (project.description ?? '')) body.description = description;
-      const newGroup = groupName.trim() || null;
-      if (newGroup !== (project.group_name ?? null)) body.group_name = newGroup;
+      if (normalizedGroup !== (project.group_name ?? null)) body.group_name = normalizedGroup;
 
       if (Object.keys(body).length > 0) {
         await apiPatch(`/projects/${project.id}`, body);
         onSaved(body as Partial<Project>);
       }
       setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -59,52 +80,64 @@ export function GeneralPane({ project, existingGroups = [], onSaved }: GeneralPa
   }
 
   return (
-    <form onSubmit={save} className="space-y-4 max-w-xl">
-      <h3 className="text-sm font-semibold">{t('settings.nav.general')}</h3>
+    <form onSubmit={save} className="w-full max-w-3xl">
+      <section className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+        <div className="flex h-8 items-center border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {t('settings.general.title')}
+        </div>
 
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium">{t('edit.nameLabel')}</label>
-        <Input value={name} onChange={(e) => setName(e.target.value)} required />
-      </div>
+        <div className="grid gap-4 p-4 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">{t('edit.nameLabel')}</label>
+            <Input className="h-8" value={name} onChange={(event) => setName(event.target.value)} required />
+          </div>
 
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium">{t('edit.rootPathLabel')}</label>
-        <Input value={rootPath} onChange={(e) => setRootPath(e.target.value)} className="font-mono text-xs" required />
-        <p className="text-xs text-muted-foreground">{t('edit.rootPathHint')}</p>
-      </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">{t('edit.groupLabel')}</label>
+            {groupOptions.length > 0 ? (
+              <Combobox
+                value={groupName}
+                onChange={setGroupName}
+                options={groupOptions}
+                placeholder={t('edit.groupPlaceholder')}
+                searchPlaceholder={t('edit.groupSearchPlaceholder')}
+                emptyLabel={t('edit.groupEmptyLabel')}
+                allowCustom
+                size="md"
+              />
+            ) : (
+              <Input className="h-8" value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder={t('edit.groupInputPlaceholder')} />
+            )}
+            <p className="text-[11px] text-muted-foreground">{t('edit.groupHint')}</p>
+          </div>
 
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium">{t('edit.groupLabel')}</label>
-        {groupOptions.length > 0 ? (
-          <Combobox
-            value={groupName}
-            onChange={setGroupName}
-            options={groupOptions}
-            placeholder={t('edit.groupPlaceholder')}
-            searchPlaceholder={t('edit.groupSearchPlaceholder')}
-            emptyLabel={t('edit.groupEmptyLabel')}
-            allowCustom
-            size="md"
-          />
-        ) : (
-          <Input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder={t('edit.groupInputPlaceholder')} />
-        )}
-        <p className="text-xs text-muted-foreground">{t('edit.groupHint')}</p>
-      </div>
+          <div className="space-y-1.5 md:col-span-2">
+            <label className="text-xs font-medium">{t('edit.rootPathLabel')}</label>
+            <Input value={rootPath} onChange={(event) => setRootPath(event.target.value)} className="h-8 font-mono text-xs" required />
+            <p className="text-[11px] text-muted-foreground">{t('edit.rootPathHint')}</p>
+          </div>
 
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium">{t('edit.descLabel')}</label>
-        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
-      </div>
+          <div className="space-y-1.5 md:col-span-2">
+            <label className="text-xs font-medium">{t('edit.descLabel')}</label>
+            <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+          </div>
 
-      {error && <div className="text-sm text-destructive">{error}</div>}
+          {error && <div className="text-xs text-destructive md:col-span-2">{error}</div>}
+        </div>
 
-      <div className="flex items-center gap-3">
-        <Button type="submit" disabled={saving}>
-          {saving ? t('common:actions.saving') : t('common:actions.save')}
-        </Button>
-        {saved && <span className="text-xs text-emerald-500">{t('settings.saved')}</span>}
-      </div>
+        <div className="flex min-h-11 items-center justify-between gap-3 border-t border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-4 py-2">
+          <span className="text-[11px]" aria-live="polite">
+            {dirty ? (
+              <span className="text-amber-500">{t('settings.unsaved')}</span>
+            ) : saved ? (
+              <span className="text-emerald-500">{t('settings.saved')}</span>
+            ) : null}
+          </span>
+          <Button type="submit" size="sm" className="h-8" disabled={saving || !dirty || !name.trim() || !rootPath.trim()}>
+            {saving ? t('common:actions.saving') : t('common:actions.save')}
+          </Button>
+        </div>
+      </section>
     </form>
   );
 }

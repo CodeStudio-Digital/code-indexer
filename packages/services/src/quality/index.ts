@@ -55,6 +55,15 @@ export {
 } from './binding-chat.js';
 
 export {
+  completionCompatibility,
+  completionBindingRevision,
+  makeCompletionProbeStamp,
+  type CompletionCompatibility,
+  type CompletionProbeStamp,
+  type CompletionSuitability,
+} from './completion-compatibility.js';
+
+export {
   DriftDetector,
   type DriftDetectorConfig,
   type DriftReport,

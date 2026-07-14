@@ -207,9 +207,9 @@ export function createConflictHandlers(deps: ConflictDeps): ConflictApi {
       if (remaining.length > 0) {
         throw new ApiError('unresolved_conflicts', 409, `${remaining.length} unresolved conflict(s) remain`);
       }
-      // GIT_EDITOR=true (and the -c belt-and-suspenders) keep --continue from
-      // opening the commit-message editor and hanging the spawned process.
-      return deps.runAsResult(repoRoot, 'git', ['-c', 'core.editor=true', kind, '--continue'], {
+      // Editor suppression is environment-only: no `git -c` configuration
+      // override enters the shared command path.
+      return deps.runAsResult(repoRoot, 'git', [kind, '--continue'], {
         GIT_EDITOR: 'true',
         GIT_SEQUENCE_EDITOR: 'true',
       });

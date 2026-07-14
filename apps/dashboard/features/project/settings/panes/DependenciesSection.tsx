@@ -7,7 +7,7 @@
  * follow suit. Runs reveal the Runners tab via `launchRun`.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, CheckCircle2, Download, RefreshCw } from 'lucide-react';
 import type { DetectedGroup, DetectedRunners, ManagerStatus, RuntimeKind, RuntimeTarget } from '@mcp/api-bus';
@@ -15,13 +15,7 @@ import type { Project } from '@mcp/shared/types.js';
 import { readPackageManager, writePackageManager } from '@mcp/shared/utils/package-managers.js';
 import { readWslPackageManager, writeWslPackageManager, type WslPackageManagerKey } from '@mcp/shared/utils/wsl-package-managers.js';
 import { Button } from '../../../../components/ui/button.js';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../../../components/ui/select.js';
+import { Combobox } from '../../../../components/ui/combobox.js';
 import { apiCall } from '../../../../lib/api-client.js';
 import { launchRun } from '../../../../state/run-launch.js';
 import { MANAGER_KEY, MANAGER_OPTIONS, MANAGERS_FOR_KIND, updateCommand } from '../../../../lib/pkg-manager-cmds.js';
@@ -59,6 +53,10 @@ export function DependenciesSection({
         ? readWslPackageManager(project.wsl_package_managers, distro, key as WslPackageManagerKey)
         : readPackageManager(project.package_managers, key)
       : undefined) ?? 'auto';
+  const managerOptions = useMemo(() => MANAGER_OPTIONS[kind].map((manager) => ({
+    value: manager,
+    label: manager === 'auto' ? t('runtime.deps.auto') : manager,
+  })), [kind, t]);
 
   // Detect the group for this runtime. Keyed on `tick` (bumped AFTER a manager
   // change persists), NOT on the optimistic project.package_managers — detect
@@ -122,18 +120,13 @@ export function DependenciesSection({
           <div className="space-y-1.5">
             <label className="text-xs font-medium">{t('runtime.deps.manager')}</label>
             {key ? (
-              <Select value={selected} onValueChange={(v) => void changeManager(v)}>
-                <SelectTrigger className="h-8 w-full text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MANAGER_OPTIONS[kind].map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m === 'auto' ? t('runtime.deps.auto') : m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Combobox
+                value={selected}
+                onChange={(value) => void changeManager(value)}
+                options={managerOptions}
+                searchPlaceholder={t('settings.select.search')}
+                emptyLabel={t('settings.select.empty')}
+              />
             ) : (
               <p className="font-mono text-xs capitalize">{group.manager}</p>
             )}

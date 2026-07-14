@@ -1,25 +1,22 @@
 import { useMemo, useState } from 'react';
-import { Bot, Check, CircleAlert, Layers3, Search, ShieldCheck, Wrench } from 'lucide-react';
+import { Check, CircleAlert, Layers3, Search, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../../../components/ui/button.js';
 import { cn } from '../../../lib/utils.js';
 import { patchAppProductScope, type AppProductCapabilityView, type AppStudioSessionDetail } from '../app-studio-api.js';
 
 const HORIZONS: AppProductCapabilityView['horizon'][] = ['core', 'complete', 'future'];
 
-export function ProductPanel({ detail, onChanged, onOpenAgent, onOpenRepair }: {
+export function ProductPanel({ detail, onChanged }: {
   detail: AppStudioSessionDetail;
   onChanged: () => void;
-  onOpenAgent?: (prompt: string) => void;
-  onOpenRepair?: () => void;
 }) {
   const { t } = useTranslation('appStudio');
   const product = detail.product;
   const [selectedDomain, setSelectedDomain] = useState(product?.model.domains[0]?.id ?? null);
   const [query, setQuery] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
-  const stage = detail.pipeline?.stages.find((item) => item.id === 'product');
-  const editable = product?.status === 'draft' && stage?.status === 'active';
+  const define = detail.workflow.state.phases.find((item) => item.id === 'define');
+  const editable = product?.status === 'draft' && (define?.status === 'active' || define?.status === 'attention');
   const capabilities = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return (product?.model.capabilities ?? []).filter((item) =>
@@ -40,15 +37,13 @@ export function ProductPanel({ detail, onChanged, onOpenAgent, onOpenRepair }: {
   }
 
   if (!product) {
-    const needsRepair = !detail.pipeline?.stages.some((item) => item.id === 'product');
-    return <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center"><Layers3 className="h-8 w-8 text-primary" /><h2 className="font-semibold">{t('product.emptyTitle')}</h2><p className="max-w-lg text-sm text-muted-foreground">{t(needsRepair ? 'product.repairBody' : 'product.emptyBody')}</p><Button size="sm" onClick={needsRepair ? onOpenRepair : () => onOpenAgent?.(t('stageMessage.product'))}>{needsRepair ? <Wrench className="mr-1 h-4 w-4" /> : <Bot className="mr-1 h-4 w-4" />}{t(needsRepair ? 'product.repairAction' : 'product.openAgent')}</Button></div>;
+    return <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center"><Layers3 className="h-8 w-8 text-primary" /><h2 className="font-semibold">{t('product.emptyTitle')}</h2><p className="max-w-lg text-sm text-muted-foreground">{t('workflow.coordinatorOwnsArtifacts')}</p></div>;
   }
 
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3">
       <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h1 className="font-semibold">{t('product.title')}</h1><span className="rounded bg-muted px-1.5 py-0.5 text-[11px]">{t(`product.complexity.${product.model.complexity}`)}</span></div><p className="truncate text-xs text-muted-foreground">{product.model.summary}</p></div>
       <div className="flex items-center gap-3 text-xs text-muted-foreground"><span>{product.audit.counts.domains} {t('product.domains')}</span><span>{product.audit.counts.selected}/{product.audit.counts.capabilities} {t('product.capabilities')}</span><span>{product.audit.counts.scenarios} {t('product.scenarios')}</span></div>
-      <Button size="sm" variant="outline" className="h-8" onClick={() => onOpenAgent?.(t('stageMessage.product'))}><Bot className="mr-1 h-3.5 w-3.5" />{t('product.openAgent')}</Button>
     </header>
     <div className="flex min-h-0 flex-1">
       <aside className="w-52 shrink-0 overflow-auto border-r p-2 md:w-64">

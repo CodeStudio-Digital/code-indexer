@@ -467,6 +467,7 @@ export class ExecutingNode implements BehaviorNode {
       // hasn't emitted the next tool batch yet. Just messages + prefix.
       prefixTokens: prefixTokensEstimate,
       model: ctx.opts.provider.model,
+      contextWindow: ctx.opts.contextWindow,
       // EMA-learned real/estimate ratio — keeps a drifting chars/4 estimate
       // from compacting prematurely (or never) before the provider call.
       calibration: ctx.estimateCalibration ?? 1,
@@ -772,7 +773,7 @@ export class ExecutingNode implements BehaviorNode {
       realPromptTokens ?? Math.round(estPromptTokens * (ctx.estimateCalibration ?? 1));
     const usageSource: 'usage' | 'estimate' = realPromptTokens != null ? 'usage' : 'estimate';
     {
-      const limits = deriveTokenLimits(ctx.opts.provider.model);
+      const limits = deriveTokenLimits(ctx.opts.provider.model, ctx.opts.contextWindow);
       ctx.emit('context_status', {
         turn: ctx.turn,
         prompt_tokens: promptTokens,
@@ -1041,6 +1042,25 @@ export class ExecutingNode implements BehaviorNode {
       });
     }
 
+    // Semantic chapter mode: lifecycle hooks queue a milestone, but we only
+    // compact when the span is substantial enough to avoid noisy micro-
+    // chapters. The signal remains pending across turns until this guard is
+    // satisfied. A milestone compaction still preserves the normal recent
+    // tail and therefore remains safe for an autonomous run.
+    const milestoneTrigger = ctx.bridge?.peekMilestoneCompaction?.() ?? null;
+    if (milestoneTrigger) {
+      const renderableMessages = ctx.messages.reduce(
+        (count, message) => count + (message.role === 'tool' ? 0 : 1),
+        0,
+      );
+      const milestoneChars = ctx.messages.reduce((total, message) => {
+        try { return total + JSON.stringify(message.content).length; } catch { return total; }
+      }, 0);
+      if (renderableMessages >= 12 || milestoneChars >= 20_000) {
+        return events.tokenThresholdHit({ ratio: 1, trigger: milestoneTrigger });
+      }
+    }
+
     // Fix B — compaction decision. Works WITH or WITHOUT provider `usage`:
     // when usage is absent (the ChatGPT backend) we fall back to the
     // calibrated tokenizer ESTIMATE of what we just sent. `promptTokens` is
@@ -1052,6 +1072,7 @@ export class ExecutingNode implements BehaviorNode {
     //     + a token-budget backstop aligned to the same ratio.
     const loopAware = evaluateLoopAwareCompaction({
       model: ctx.opts.provider.model,
+      contextWindow: ctx.opts.contextWindow,
       snapshotTotal: promptTokens,
       cumulativeInputTokens: ctx.cumulativeInputTokens - ctx.cumulativeAtLastCompaction,
       consecutiveNoTextTurns: ctx.consecutiveNoTextTurns,
@@ -1060,8 +1081,13 @@ export class ExecutingNode implements BehaviorNode {
       promptTokens,
       prefixTokens: prefixTokensEstimate,
       model: ctx.opts.provider.model,
+      contextWindow: ctx.opts.contextWindow,
     });
-    const totalDecision = shouldCompact90({ promptTokens, model: ctx.opts.provider.model });
+    const totalDecision = shouldCompact90({
+      promptTokens,
+      model: ctx.opts.provider.model,
+      contextWindow: ctx.opts.contextWindow,
+    });
     if (loopAware.shouldCompact || bodyDecision.shouldCompact || totalDecision.shouldCompact) {
       // Camada 2 — breaker de no-op. Se as últimas compactações não reduziram
       // nada (contexto irredutível: ex. um tool_result maior que o teto da

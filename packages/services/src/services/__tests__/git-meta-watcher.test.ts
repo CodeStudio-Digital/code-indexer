@@ -85,6 +85,14 @@ describe('readCurrent', () => {
     writeFileSync(join(root, '.git'), `gitdir: ${realGitDir}\n`);
     expect(watcher.readCurrent(root)).toEqual({ branch: 'main', detached: false, changed: [] });
   });
+
+  it('resolves the enclosing repository when the project is a nested directory', () => {
+    const root = makeRepo('ref: refs/heads/parent-main\n');
+    roots.push(root);
+    const project = join(root, 'packages', 'app');
+    mkdirSync(project, { recursive: true });
+    expect(watcher.readCurrent(project)).toEqual({ branch: 'parent-main', detached: false, changed: [] });
+  });
 });
 
 describe('live watch', () => {

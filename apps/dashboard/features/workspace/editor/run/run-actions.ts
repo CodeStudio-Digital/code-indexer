@@ -23,13 +23,11 @@ function activeFilePath(): { projectId: number; path: string } | null {
 
 export function registerRunActions(
   editor: MonacoNs.editor.IStandaloneCodeEditor,
-  monaco: typeof MonacoNs,
 ): void {
   editor.addAction({
     id: 'mcp.runFile',
     // Editor-internal label (command palette) — not scanned JSX.
     label: 'Run File',
-    keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F10],
     run: () => {
       const file = activeFilePath();
       if (!file) return;

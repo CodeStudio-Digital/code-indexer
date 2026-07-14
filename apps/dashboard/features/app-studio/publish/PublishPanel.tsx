@@ -3,7 +3,8 @@
  * "aceso"): Conectar Cloudflare (OAuth) → Publicar (deploy streamado em
  * passos humanos) → "Seu app está no ar!" (URL + copiar/abrir). Travado
  * até a checagem de qualidade aprovar; deploy roda server-side (fechar o
- * app não perde o estado — deploy_json persiste).
+ * app não perde o estado — deploy_json persiste). Só é liberado quando a
+ * aprovação assíncrona de Release estiver concluída.
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,8 +16,7 @@ import { DeployProgressCard } from './DeployProgressCard.js';
 import { LiveAppCard } from './LiveAppCard.js';
 
 export function publishTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
-  const review = detail?.pipeline?.stages.find((s) => s.id === 'review');
-  return !!review && (review.status === 'approved' || review.status === 'skipped');
+  return detail?.workflow.state.release_unlocked === true;
 }
 
 export function PublishPanel({ detail, onChanged }: { detail: AppStudioSessionDetail; onChanged: () => void }) {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { validateAppSpec } from '../spec/validate.js';
 import { normalizeAppSpec } from '../spec/normalize.js';
 import { prepareSpecSave } from '../spec/save-core.js';
-import { createPipelineState, parsePipelineState, serializePipelineState } from '../pipeline/stages.js';
+import { createAppWorkflowState, parseAppWorkflowState, serializeAppWorkflowState } from '../workflow/state.js';
 import type { AppSpec } from '../spec/types.js';
 import { makeSpec } from './fixtures.js';
 
@@ -76,15 +76,15 @@ describe('behaviors — normalize', () => {
 });
 
 describe('prepareSpecSave (save-core)', () => {
-  it('normalizes, validates and rebuilds the roadmap', () => {
-    const pipeline = serializePipelineState(createPipelineState());
-    const result = prepareSpecSave(makeSpec(), pipeline);
+  it('normalizes, validates, upgrades stable ids and preserves the workflow', () => {
+    const workflow = serializeAppWorkflowState(createAppWorkflowState());
+    const result = prepareSpecSave(makeSpec(), workflow);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(JSON.parse(result.specJson)).toEqual(result.spec);
     expect(result.mirrorJson).toContain('\n'); // pretty
-    const state = parsePipelineState(result.pipelineJson)!;
-    expect(state.roadmap.length).toBeGreaterThan(0);
+    expect(result.spec.v).toBe(2);
+    expect(parseAppWorkflowState(result.workflowJson)?.v).toBe(5);
   });
 
   it('returns issues on invalid spec and null pipeline when input pipeline is null', () => {
@@ -95,6 +95,6 @@ describe('prepareSpecSave (save-core)', () => {
 
     const good = prepareSpecSave(makeSpec(), null);
     expect(good.ok).toBe(true);
-    if (good.ok) expect(good.pipelineJson).toBeNull();
+    if (good.ok) expect(good.workflowJson).toBeNull();
   });
 });

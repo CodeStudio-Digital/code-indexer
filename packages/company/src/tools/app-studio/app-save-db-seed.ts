@@ -1,7 +1,7 @@
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import { replaceAppSeedFile, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
@@ -35,10 +35,11 @@ export function appSaveDbSeed(binding: AppToolBinding): CoderTool {
         if (!store) return err('app_save_db_seed: AppStudioStore not wired.');
         const session = binding.resolveAppSession(store);
         if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}.`);
-        const state = parsePipelineState(session.pipeline_json);
-        const current = state ? currentStage(state) : null;
-        if (current?.id !== 'database' || current.status === 'review') {
-          return err(`Canonical seed changes are locked while the current stage is '${current?.id ?? 'none'}' (${current?.status ?? 'missing'}).`);
+        const state = parseAppWorkflowState(session.pipeline_json);
+        const blueprint = state?.phases.find((phase) => phase.id === 'blueprint');
+        const build = state?.phases.find((phase) => phase.id === 'build');
+        if (!state || (blueprint?.status !== 'active' && blueprint?.status !== 'attention' && build?.status !== 'active')) {
+          return err('Canonical seed changes are available only inside an active Blueprint or Build card.');
         }
         const resolved = resolveHostPath('.', ctx);
         if (resolved.kind === 'no-bind-mount') return err(resolved.message);

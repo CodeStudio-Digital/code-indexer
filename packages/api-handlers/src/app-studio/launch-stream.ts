@@ -8,11 +8,7 @@
  */
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
-import {
-  applyStageSubmit,
-  parsePipelineState,
-  serializePipelineState,
-} from '@mcp/app-studio/pipeline/stages.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
 import { writeDeployStatus, type AppDeployStatusFile } from '@mcp/app-studio/status-files.js';
 import { getDatabaseProvisioner } from '@mcp/services/app-studio/index.js';
 import { runHostCommand } from '@mcp/services/host-scaffold/run-host-command.js';
@@ -47,6 +43,11 @@ export async function runAppLaunchStream(
   const session = deps.appStudioStore.getSession(sessionId);
   if (!session) {
     emit({ event: 'error', data: { message: `App Studio session ${sessionId} not found.` } });
+    return;
+  }
+  const workflow = parseAppWorkflowState(session.pipeline_json);
+  if (!workflow?.release_unlocked) {
+    emit({ event: 'error', data: { message: 'Release approval is required before publishing.' } });
     return;
   }
   const project = deps.db.getProject(session.project_id);
@@ -147,20 +148,13 @@ export async function runAppLaunchStream(
     deps.appStudioStore.setDeployJson(sessionId, JSON.stringify(deployStatus));
     writeDeployStatus(workspaceDir, deployStatus);
 
-    // A chain é o submitter da etapa launch (o usuário ainda aprova na UI).
-    // Re-publicações com pipeline completo caem no catch silencioso.
-    try {
-      const state = parsePipelineState(deps.appStudioStore.getSession(sessionId)?.pipeline_json);
-      if (state) {
-        const next = applyStageSubmit(state, 'launch', `Publicado em ${url}`, {
-          ok: healthy,
-          issues: healthy ? [] : [`Health check failed at ${url}/api/health`],
-        });
-        deps.appStudioStore.setPipelineJson(sessionId, serializePipelineState(next));
-      }
-    } catch {
-      /* launch não é a etapa corrente (re-publish) — o deploy em si valeu */
-    }
+    deps.appStudioStore.appendWorkflowEvent(
+      sessionId,
+      'publish.completed',
+      'deploy',
+      url,
+      JSON.stringify({ url, health_ok: healthy, deployed_at: deployStatus.deployed_at }),
+    );
 
     if (!healthy) {
       throw new Error(`Deployed to ${url} but the health check never turned green — open the app to inspect.`);

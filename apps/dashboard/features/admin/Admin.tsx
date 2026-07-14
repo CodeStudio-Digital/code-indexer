@@ -6,7 +6,7 @@ import {
   AppWindow,
   Blocks,
   BookOpen,
-  ChevronRight,
+  ChevronDown,
   Languages,
   Database,
   Gauge,
@@ -22,7 +22,21 @@ import {
   Wand2,
   Wrench,
 } from 'lucide-react';
+import { Panel, PanelGroup } from 'react-resizable-panels';
 import { Button } from '../../components/ui/button.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu.js';
+import {
+  WorkbenchPageHeader,
+  WorkbenchPanelHeader,
+  WorkbenchResizeHandle,
+  WorkbenchShell,
+  WorkbenchSurface,
+} from '../../components/workbench/index.js';
 import { SettingsRail } from './SettingsRail.js';
 import type { GroupDef, SectionDef, SectionId } from './settings-types.js';
 import { BedrockCredentialsDialog } from './BedrockCredentialsDialog.js';
@@ -177,90 +191,93 @@ export default function Admin() {
   const active = sections.find((s) => s.id === section) ?? sections[0];
 
   return (
-    // Full-height IDE-style shell: rail + content scroll independently.
-    // `/admin` opts out of AppShell's outer scroll+padding (see AppShell),
-    // so this owns the height and padding. `min-h-0` on flex children is
-    // load-bearing — without it the inner `overflow-y-auto` never engages.
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-1 min-h-0">
-        {/* Left rail — searchable, collapsible settings tree. Scrolls
-            independently of the content pane. */}
-        <aside className="w-56 shrink-0 border-r overflow-y-auto bg-card/40">
-          <SettingsRail
-            sections={sections}
-            groups={groups}
-            activeId={section}
-            onSelect={setSection}
-          />
-        </aside>
-
-        {/* Content pane — fixed breadcrumb header + scrolling body. */}
-        <section className="flex-1 min-w-0 flex flex-col min-h-0">
-          <div className="flex items-center gap-1.5 px-6 py-3 border-b shrink-0 text-sm">
-            <span className="text-muted-foreground">{t('admin:title')}</span>
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
-            <active.icon className="h-4 w-4 text-primary shrink-0" />
-            <span className="font-semibold truncate">{active.label}</span>
-            {active.hint && (
-              <span className="text-[11.5px] text-muted-foreground hidden md:inline truncate">
-                · {active.hint}
-              </span>
-            )}
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-4">
-          {section === 'providers' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-end gap-2 flex-wrap">
-                <Button variant="outline" onClick={() => setCopilotOpen(true)}>
-                  {t('admin:connectCopilot')}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setClaudeCodeProviderId(null);
-                    setClaudeCodeOpen(true);
-                  }}
-                >
-                  {t('admin:connectClaudeCode')}
-                </Button>
-                <Button variant="outline" onClick={() => setGoogleOpen(true)}>
-                  <Globe className="h-4 w-4 mr-2" /> {t('admin:connectGoogle')}
-                </Button>
-                <Button variant="outline" onClick={() => setChatgptOpen(true)}>
-                  {t('admin:connectChatgpt')}
-                </Button>
-                <Button variant="outline" onClick={() => setKimiCodeOpen(true)}>
-                  {t('admin:connectKimiCode')}
-                </Button>
-                <Button variant="outline" onClick={() => setBedrockOpen(true)}>
-                  {t('admin:awsBedrock')}
-                </Button>
-                <Button
-                  onClick={() =>
-                    setEditing({
-                      kind: 'openai',
-                      auth_mode: 'api_key',
-                      enabled: true,
-                      use_for_agent: true,
-                      use_for_coder: true,
-                    })
-                  }
-                >
-                  <Plus className="h-4 w-4 mr-2" /> {t('admin:addProvider')}
-                </Button>
+    <WorkbenchShell>
+      <WorkbenchPageHeader icon={Settings2} title={t('admin:title')} description={t('admin:description')} />
+      <div className="min-h-0 flex-1 p-1.5">
+        <PanelGroup direction="horizontal" autoSaveId="mcp-admin-settings-horiz">
+          <Panel defaultSize={18} minSize={14} maxSize={28}>
+            <WorkbenchSurface className="flex h-full min-h-0 flex-col">
+              <WorkbenchPanelHeader title={t('admin:rail.sectionsLabel')} />
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <SettingsRail
+                  sections={sections}
+                  groups={groups}
+                  activeId={section}
+                  onSelect={setSection}
+                />
               </div>
+            </WorkbenchSurface>
+          </Panel>
 
+          <WorkbenchResizeHandle direction="horizontal" />
+
+          <Panel minSize={45}>
+            <WorkbenchSurface className="flex h-full min-h-0 flex-col">
+              <WorkbenchPanelHeader
+                title={active.label}
+                icon={active.icon}
+                actions={(
+                  <>
+                    {active.hint && (
+                      <span className="mr-1 hidden max-w-[360px] truncate text-[10px] text-muted-foreground xl:inline">
+                        {active.hint}
+                      </span>
+                    )}
+                    {section === 'providers' && (
+                      <>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-[11px]">
+                              <Plug className="h-3.5 w-3.5" />
+                              {t('admin:provider.connect')}
+                              <ChevronDown className="h-3 w-3" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-56">
+                            <DropdownMenuItem onSelect={() => setCopilotOpen(true)}>{t('admin:connectCopilot')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => { setClaudeCodeProviderId(null); setClaudeCodeOpen(true); }}>{t('admin:connectClaudeCode')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setGoogleOpen(true)}>{t('admin:connectGoogle')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setChatgptOpen(true)}>{t('admin:connectChatgpt')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setKimiCodeOpen(true)}>{t('admin:connectKimiCode')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setBedrockOpen(true)}>{t('admin:awsBedrock')}</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        <Button
+                          size="sm"
+                          className="h-7 px-2 text-[11px]"
+                          onClick={() => setEditing({
+                            kind: 'openai',
+                            auth_mode: 'api_key',
+                            enabled: true,
+                            use_for_agent: true,
+                            use_for_coder: true,
+                          })}
+                        >
+                          <Plus className="mr-1 h-3.5 w-3.5" /> {t('admin:addProvider')}
+                        </Button>
+                      </>
+                    )}
+                  </>
+                )}
+              />
+
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+          {section === 'providers' && (
+            <div className="space-y-3">
               {loading && <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>}
 
-              {/* Grid de tiles quadrados — flex-wrap pra quebra automática.
+              {/* Responsive provider wall. The tile itself remains compact,
+                  while the grid consumes the available editor surface.
                   Click no tile abre `ProviderModal` (renderizado abaixo do
                   grid) com todos os controles avançados do provider. A
                   contagem de modelos no badge precisa ter sido carregada
                   ao menos uma vez — fazemos lazy-load no primeiro hover/
                   open. Pra o badge inicial, `models[p.id]` pode ser
                   `undefined`; nesse caso o tile mostra `?`. */}
-              <div className="flex flex-wrap gap-3">
+              <div
+                className="grid gap-2"
+                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))' }}
+              >
                 {providers.map((p) => {
                   const known = models[p.id];
                   return (
@@ -277,7 +294,7 @@ export default function Admin() {
                   );
                 })}
                 {!loading && providers.length === 0 && (
-                  <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center w-full">
+                  <div className="col-span-full rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] p-8 text-center text-xs text-muted-foreground">
                     {t('admin:noProviders')}
                   </div>
                 )}
@@ -351,8 +368,10 @@ export default function Admin() {
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
           {section === 'perf'              && <PerfMonitorPanel />}
           {section === 'auth'              && <AuthPanel />}
-          </div>
-        </section>
+              </div>
+            </WorkbenchSurface>
+          </Panel>
+        </PanelGroup>
       </div>
 
       {editing && (
@@ -408,6 +427,6 @@ export default function Admin() {
           }}
         />
       )}
-    </div>
+    </WorkbenchShell>
   );
 }

@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import type { ServerDeps } from '../../../deps.js';
 import { mountCoderChapterRoutes } from '../chapters.js';
 
-function setup(options: { rebuild?: (sessionId: number) => Promise<unknown> } = {}) {
+function setup(options: { rebuild?: (sessionId: number, input: { scope?: string }) => Promise<unknown> } = {}) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const row = {
     id: 7,
@@ -25,6 +25,9 @@ function setup(options: { rebuild?: (sessionId: number) => Promise<unknown> } = 
   };
   const sessionStore = {
     getSession: (id: number) => id === 1 ? { id } : null,
+    getConversationChapterStatus: () => ({
+      state: 'healthy', boundary_id: 20, unsummarized_messages: 4, chapter_count: 1,
+    }),
     listConversationChapters: (...args: unknown[]) => {
       calls.push({ method: 'list', args });
       return { items: [row], next_cursor: '2' };
@@ -54,7 +57,9 @@ describe('coder conversation chapter routes', () => {
     const { app, calls } = setup();
     const list = await app.request('/api/coder/sessions/1/chapters?limit=999&cursor=3');
     expect(list.status).toBe(200);
-    expect((await list.json() as { next_cursor: string }).next_cursor).toBe('2');
+    const listBody = await list.json() as { next_cursor: string; status: { state: string } };
+    expect(listBody.next_cursor).toBe('2');
+    expect(listBody.status.state).toBe('healthy');
     expect(calls[0]).toEqual({ method: 'list', args: [1, { limit: 50, cursor: '3' }] });
 
     const search = await app.request('/api/coder/sessions/1/chapters?q=first%20decision&limit=5');
@@ -90,17 +95,17 @@ describe('coder conversation chapter routes', () => {
   });
 
   it('accepts an injected rebuild orchestrator without coupling it to the store', async () => {
-    const seen: number[] = [];
-    const { app } = setup({ rebuild: async (sessionId) => {
-      seen.push(sessionId);
+    const seen: Array<{ sessionId: number; scope?: string }> = [];
+    const { app } = setup({ rebuild: async (sessionId, input) => {
+      seen.push({ sessionId, scope: input.scope });
       return { queued: true };
     } });
     const response = await app.request('/api/coder/sessions/1/chapters/rebuild', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ archived_only: true }),
+      body: JSON.stringify({ scope: 'all' }),
     });
     expect(response.status).toBe(202);
-    expect(seen).toEqual([1]);
+    expect(seen).toEqual([{ sessionId: 1, scope: 'all' }]);
   });
 });

@@ -9,7 +9,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
-  Bot,
   CheckCircle2,
   Columns3,
   Database,
@@ -32,8 +31,8 @@ import { TableSheetDialog } from './TableSheetDialog.js';
 import { type AppDataQueryResult, type AppDataTable, provisionAppData, runAppDataQuery, useAppData } from './useAppData.js';
 
 export function dataTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
-  const database = detail?.pipeline?.stages.find((s) => s.id === 'database');
-  return !!database && database.status !== 'pending';
+  const blueprint = detail?.workflow.state.phases.find((phase) => phase.id === 'blueprint');
+  return !!blueprint && blueprint.status !== 'locked';
 }
 
 function q(name: string): string {
@@ -58,40 +57,12 @@ function issueLabel(issue: string, t: (key: string, options?: object) => string)
   return issue;
 }
 
-function buildDbSpecialistPrompt(detail: AppStudioSessionDetail, tables: AppDataTable[]): string {
-  const tableLines = tables.map((table) => {
-    const fields = table.columns
-      .slice(0, 10)
-      .map((col) => {
-        const relation = col.references ? ` -> ${col.references.label}.${col.references.column}` : '';
-        const flags = [col.primary_key ? 'PK' : null, col.required ? 'obrigatorio' : null].filter(Boolean).join(', ');
-        return `${col.label} (${col.name}, ${col.type}${relation}${flags ? `, ${flags}` : ''})`;
-      })
-      .join('; ');
-    return `- ${table.label} (${table.name}): ${table.row_count} registros; campos: ${fields}`;
-  });
-
-  return [
-    'Atue como especialista em banco de dados deste App Studio.',
-    'Fale em portugues simples, como um analista de dados explicando para uma pessoa leiga.',
-    'Seu foco e: entender as tabelas, melhorar relacionamentos, apontar FKs ausentes, revisar dados de exemplo, sugerir consultas e ajustar a spec quando fizer sentido.',
-    'Use somente ferramentas ligadas ao app/spec/database. Comece lendo app_get_spec, app_get_spec_history e app_get_pipeline. Depois chame db_list; o banco local do App Studio deve aparecer como uma conexao nativa quando ja existir. Use db_schema para estrutura, db_query para SQL relacional e db_command para Mongo/Redis. Se db_list vier vazio e o banco local deveria existir, rode app_provision_db uma vez e tente db_list novamente. Se precisar alterar a estrutura planejada antes da aprovacao da discovery, use app_save_spec e depois app_spec_audit; se o plano ja estiver aprovado, use app_create_evolution e app_propose_spec_revision.',
-    'Nao faca alteracoes destrutivas sem confirmar comigo. Quando precisar decidir algo, faca uma pergunta por vez.',
-    `App: ${detail.session.name}`,
-    `Projeto: ${detail.project?.name ?? 'sem projeto vinculado'}`,
-    'Tabelas vistas na aba Seus dados:',
-    tableLines.length ? tableLines.join('\n') : '- nenhuma tabela carregada ainda',
-  ].join('\n');
-}
-
 export function DataPanel({
   detail,
   onChanged,
-  onOpenDbAgent,
 }: {
   detail: AppStudioSessionDetail;
   onChanged?: () => void;
-  onOpenDbAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
   const unlocked = dataTabUnlocked(detail);
@@ -216,17 +187,6 @@ export function DataPanel({
           <h3 className="text-sm font-semibold">{t('data.title')}</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">{t('data.subtitle')}</p>
         </div>
-        {onOpenDbAgent && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 gap-1.5 text-xs"
-            onClick={() => onOpenDbAgent(buildDbSpecialistPrompt(detail, loadedTables))}
-          >
-            <Bot className="h-3.5 w-3.5" />
-            {t('data.openDbAgent')}
-          </Button>
-        )}
         <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-xs" disabled={loading} onClick={refresh}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
           {t('data.refresh')}

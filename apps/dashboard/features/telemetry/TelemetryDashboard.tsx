@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Activity, AlertTriangle, DollarSign, Info, Loader2, Scissors } from 'lucide-react';
+import { Activity, AlertTriangle, DollarSign, Loader2, Scissors } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
+import {
+  WorkbenchPageHeader,
+  WorkbenchShell,
+  WorkbenchSurface,
+  WorkbenchToolbar,
+} from '../../components/workbench/index.js';
 import { cn } from '../../lib/utils.js';
 import { QualityPanel } from '../admin/QualityPanel.js';
 import { SupervisorPanel } from '../admin/SupervisorPanel.js';
@@ -145,79 +150,53 @@ const TELEMETRY_TABS = ['overview', 'prices', 'quality', 'completion', 'supervis
 export function TelemetryDashboard() {
   const { t } = useTranslation(['telemetry', 'common']);
   return (
-    // Full-height IDE-style shell, mirroring `/docs` (DocsPage): the title,
-    // an info affordance (description on hover) and the tabs share one
-    // compact top band; the active tab's body fills the rest and scrolls on
-    // its own. `/telemetry` opts out of AppShell's outer scroll+padding (see
-    // AppShell), so this owns its height — `min-h-0` is load-bearing.
-    <Tabs defaultValue="overview" className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-2 px-3 h-11 border-b shrink-0">
-        <Activity className="h-4 w-4 text-primary shrink-0" />
-        <span className="text-[13px] font-semibold shrink-0">{t('telemetry:title')}</span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={t('telemetry:aboutAria')}
-              className="text-muted-foreground/70 hover:text-foreground transition-colors shrink-0"
-            >
-              <Info className="h-3.5 w-3.5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-sm leading-relaxed">
-            {t('telemetry:subtitle')}
-          </TooltipContent>
-        </Tooltip>
+    <WorkbenchShell>
+      <Tabs defaultValue="overview" className="flex h-full min-h-0 flex-col">
+        <WorkbenchPageHeader icon={Activity} title={t('telemetry:title')} description={t('telemetry:subtitle')} />
 
-        <div className="mx-1 h-4 w-px bg-border shrink-0" />
-
-        <TabsList className="h-auto gap-0.5 bg-transparent p-0">
+        <TabsList className="h-8 w-full shrink-0 justify-start gap-0 rounded-none border-b border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-0">
           {TELEMETRY_TABS.map((id) => (
             <TabsTrigger
               key={id}
               value={id}
-              className={cn(
-                'h-7 rounded px-2 text-xs font-medium text-muted-foreground shadow-none',
-                'hover:text-foreground hover:bg-muted',
-                'data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none',
-              )}
+              className="h-8 rounded-none border-b-2 border-transparent bg-transparent px-3 text-[11px] font-medium text-muted-foreground shadow-none hover:bg-[var(--workbench-hover)] hover:text-foreground data-[state=active]:border-violet-400 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
             >
               {t(`telemetry:tabs.${id}`)}
             </TabsTrigger>
           ))}
         </TabsList>
-      </header>
 
-      <TabsContent value="overview" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
-        <div className="pt-3">
+        <TabsContent value="overview" className="m-0 min-h-0 flex-1 p-1.5">
+          <WorkbenchSurface className="h-full overflow-y-auto">
           <TelemetryOverview />
-        </div>
-      </TabsContent>
+          </WorkbenchSurface>
+        </TabsContent>
 
-      <TabsContent value="prices" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
-        <div className="pt-3">
+        <TabsContent value="prices" className="m-0 min-h-0 flex-1 p-1.5">
+          <WorkbenchSurface className="h-full overflow-y-auto p-3">
           <ModelPricesPanel />
-        </div>
-      </TabsContent>
+          </WorkbenchSurface>
+        </TabsContent>
 
-      <TabsContent value="quality" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
-        <div className="pt-3">
+        <TabsContent value="quality" className="m-0 min-h-0 flex-1 p-1.5">
+          <WorkbenchSurface className="h-full overflow-y-auto p-3">
           <QualityPanel />
-        </div>
-      </TabsContent>
+          </WorkbenchSurface>
+        </TabsContent>
 
-      <TabsContent value="completion" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
-        <div className="pt-3">
+        <TabsContent value="completion" className="m-0 min-h-0 flex-1 p-1.5">
+          <WorkbenchSurface className="h-full overflow-y-auto p-3">
           <CompletionQualityPanel />
-        </div>
-      </TabsContent>
+          </WorkbenchSurface>
+        </TabsContent>
 
-      <TabsContent value="supervisor" className="flex-1 min-h-0 mt-0 overflow-y-auto px-4 pb-4">
-        <div className="pt-3">
+        <TabsContent value="supervisor" className="m-0 min-h-0 flex-1 p-1.5">
+          <WorkbenchSurface className="h-full overflow-y-auto p-3">
           <SupervisorPanel variant="dashboard" />
-        </div>
-      </TabsContent>
-    </Tabs>
+          </WorkbenchSurface>
+        </TabsContent>
+      </Tabs>
+    </WorkbenchShell>
   );
 }
 
@@ -242,12 +221,12 @@ function TelemetryOverview() {
   const { data: projectList } = useApi<{ projects: ProjectOption[] }>('/projects');
 
   return (
-    <div className="space-y-4">
+    <div className="min-h-full">
       {/* Filters: project + since. Both rebind to the same URL — the API
           serves filtered aggregations natively (migration 072). */}
-      <div className="flex flex-wrap gap-2 text-xs">
+      <WorkbenchToolbar className="sticky top-0 z-10">
         <select
-          className="rounded border bg-background px-2 py-1"
+          className="h-7 min-w-44 rounded border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 text-[11px] outline-none focus:border-[var(--workbench-focus)]"
           value={projectId === 'all' ? 'all' : String(projectId)}
           onChange={(e) => setProjectId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
         >
@@ -256,18 +235,26 @@ function TelemetryOverview() {
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
-        <div className="inline-flex rounded border overflow-hidden">
+        <div className="inline-flex h-7 overflow-hidden rounded border border-[var(--workbench-border)] bg-[var(--workbench-canvas)]">
           {SINCE_PRESETS.map((p) => (
             <button
               key={p.key}
-              className={`px-2 py-1 ${sinceKey === p.key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+              type="button"
+              className={cn(
+                'border-r border-[var(--workbench-border)] px-2 text-[10px] last:border-r-0',
+                sinceKey === p.key
+                  ? 'bg-[var(--workbench-active)] text-foreground'
+                  : 'text-muted-foreground hover:bg-[var(--workbench-hover)] hover:text-foreground',
+              )}
               onClick={() => setSinceKey(p.key)}
             >
               {t(`telemetry:filters.since.${p.key}`)}
             </button>
           ))}
         </div>
-      </div>
+      </WorkbenchToolbar>
+
+      <div className="space-y-3 p-3">
 
       {loading && (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -287,7 +274,10 @@ function TelemetryOverview() {
       {data && !loading && data.overall.turn_count > 0 && (
         <>
           {/* Overall stat cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div
+            className="grid gap-1.5"
+            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 170px), 1fr))' }}
+          >
             <StatCard label={t('telemetry:overall.sessions')} value={String(data.overall.session_count)} />
             <StatCard label={t('telemetry:overall.turns')} value={String(data.overall.turn_count)} />
             <StatCard label={t('telemetry:overall.inputTokens')} value={formatK(data.overall.total_input_tokens)} />
@@ -331,13 +321,13 @@ function TelemetryOverview() {
 
           {/* Top tools (migration 072) — by output_chars produced. */}
           {data.top_tools && data.top_tools.length > 0 && (
-            <div className="rounded-md border bg-card/50">
-              <div className="px-3 py-2 border-b text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+              <div className="flex h-8 items-center border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 {t('telemetry:topTools.title')}
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
-                  <thead className="bg-muted/40">
+                  <thead className="bg-[var(--workbench-raised)] text-muted-foreground">
                     <tr className="text-left">
                       <th className="px-3 py-2 font-medium">{t('telemetry:topTools.name')}</th>
                       <th className="px-3 py-2 text-right font-medium">{t('telemetry:topTools.calls')}</th>
@@ -348,7 +338,7 @@ function TelemetryOverview() {
                   </thead>
                   <tbody>
                     {data.top_tools.slice(0, 15).map((r) => (
-                      <tr key={r.name} className="border-t hover:bg-muted/20">
+                      <tr key={r.name} className="border-t border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)]">
                         <td className="px-3 py-2 font-mono">{r.name}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{r.calls}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{formatK(r.total_output_chars)}</td>
@@ -365,8 +355,8 @@ function TelemetryOverview() {
           )}
 
           {data.guard_rollout && data.guard_rollout.length > 0 && (
-            <div className="rounded-md border bg-card/50">
-              <div className="px-3 py-2 border-b">
+            <div className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+              <div className="border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 py-2">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   {t('telemetry:guardRollout.title')}
                 </div>
@@ -376,7 +366,7 @@ function TelemetryOverview() {
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
-                  <thead className="bg-muted/40">
+                  <thead className="bg-[var(--workbench-raised)] text-muted-foreground">
                     <tr className="text-left">
                       <th className="px-3 py-2 font-medium">{t('telemetry:guardRollout.class')}</th>
                       <th className="px-3 py-2 text-right font-medium">{t('telemetry:guardRollout.candidates')}</th>
@@ -388,7 +378,7 @@ function TelemetryOverview() {
                   </thead>
                   <tbody>
                     {data.guard_rollout.map((row) => (
-                      <tr key={`${row.repeat_policy}:${row.execution_class}`} className="border-t hover:bg-muted/20">
+                      <tr key={`${row.repeat_policy}:${row.execution_class}`} className="border-t border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)]">
                         <td className="px-3 py-2 font-mono">{row.repeat_policy}/{row.execution_class}</td>
                         <td className="px-3 py-2 text-right tabular-nums">
                           {row.candidates}/{row.target_candidates}
@@ -418,12 +408,12 @@ function TelemetryOverview() {
 
           {/* Phase breakdown (Camada 2 — empty until PhaseRouter ships). */}
           {data.phase_breakdown && data.phase_breakdown.length > 0 && (
-            <div className="rounded-md border bg-card/50">
-              <div className="px-3 py-2 border-b text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+              <div className="flex h-8 items-center border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 {t('telemetry:phaseBreakdown.title')}
               </div>
               <table className="w-full text-xs">
-                <thead className="bg-muted/40">
+                <thead className="bg-[var(--workbench-raised)] text-muted-foreground">
                   <tr className="text-left">
                     <th className="px-3 py-2 font-medium">{t('telemetry:phaseBreakdown.phase')}</th>
                     <th className="px-3 py-2 text-right font-medium">{t('telemetry:phaseBreakdown.calls')}</th>
@@ -433,7 +423,7 @@ function TelemetryOverview() {
                 </thead>
                 <tbody>
                   {data.phase_breakdown.map((r) => (
-                    <tr key={r.phase} className="border-t hover:bg-muted/20">
+                    <tr key={r.phase} className="border-t border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)]">
                       <td className="px-3 py-2 font-mono">{r.phase}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.tool_calls}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatK(r.total_output_chars)}</td>
@@ -492,8 +482,8 @@ function TelemetryOverview() {
 
           {/* Skills mode adoption */}
           {data.skills_modes && data.skills_modes.length > 0 && (
-            <div className="rounded-md border bg-card/50">
-              <div className="px-3 py-2 border-b text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+              <div className="flex h-8 items-center border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 {t('telemetry:skillsModes.title')}
               </div>
               <div className="px-3 py-2 flex flex-wrap gap-2 text-xs">
@@ -507,13 +497,13 @@ function TelemetryOverview() {
           )}
 
           {/* Top sessions */}
-          <div className="rounded-md border bg-card/50">
-            <div className="px-3 py-2 border-b text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+            <div className="flex h-8 items-center border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               {t('telemetry:topSessions.title')}
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
-                <thead className="bg-muted/40">
+                <thead className="bg-[var(--workbench-raised)] text-muted-foreground">
                   <tr className="text-left">
                     <th className="px-3 py-2 font-medium">{t('telemetry:topSessions.session')}</th>
                     <th className="px-3 py-2 font-medium">{t('telemetry:topSessions.providerModel')}</th>
@@ -527,7 +517,7 @@ function TelemetryOverview() {
                 </thead>
                 <tbody>
                   {data.top_sessions.map((s) => (
-                    <tr key={s.session_id ?? Math.random()} className="border-t hover:bg-muted/20">
+                    <tr key={s.session_id ?? Math.random()} className="border-t border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)]">
                       <td className="px-3 py-2 font-medium truncate max-w-xs">
                         {s.title ?? `#${s.session_id ?? '?'}`}
                       </td>
@@ -558,6 +548,7 @@ function TelemetryOverview() {
           )}
         </>
       )}
+      </div>
     </div>
   );
 }
@@ -586,9 +577,9 @@ function StatCard({ label, value, intent, icon }: { label: string; value: string
         ? 'text-amber-600 dark:text-amber-400'
         : '';
   return (
-    <div className="rounded-md border bg-card/50 p-3 flex flex-col">
-      <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">{icon}{label}</span>
-      <span className={`text-base font-semibold tabular-nums ${valueClass}`}>{value}</span>
+    <div className="flex min-h-[58px] min-w-0 flex-col justify-center rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 py-2">
+      <span className="inline-flex items-center gap-1 truncate text-[10px] text-muted-foreground">{icon}{label}</span>
+      <span className={`truncate text-base font-semibold tabular-nums ${valueClass}`}>{value}</span>
     </div>
   );
 }
@@ -613,15 +604,15 @@ function BreakdownTable({
 }) {
   const max = rows.reduce((m, r) => Math.max(m, r.input), 0);
   return (
-    <div className="rounded-md border bg-card/50">
-      <div className="px-3 py-2 border-b text-xs font-medium uppercase tracking-wide text-muted-foreground">
+    <div className="overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+      <div className="flex h-8 items-center border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-3 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
         {title}
       </div>
       {rows.length === 0 ? (
         <div className="px-3 py-4 text-xs text-muted-foreground">—</div>
       ) : (
         <table className="w-full text-xs">
-          <thead className="bg-muted/40">
+          <thead className="bg-[var(--workbench-raised)] text-muted-foreground">
             <tr className="text-left">
               <th className="px-3 py-2 font-medium">{tHeader.label}</th>
               <th className="px-3 py-2 text-right font-medium">{tHeader.turns}</th>
@@ -635,7 +626,7 @@ function BreakdownTable({
             {rows.map((r) => {
               const pct = max > 0 ? Math.round((r.input / max) * 100) : 0;
               return (
-                <tr key={r.key} className="border-t hover:bg-muted/20">
+                <tr key={r.key} className="border-t border-[var(--workbench-border)] hover:bg-[var(--workbench-hover)]">
                   <td className="px-3 py-2 font-medium">{r.label}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{r.turns}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatK(r.input)}</td>

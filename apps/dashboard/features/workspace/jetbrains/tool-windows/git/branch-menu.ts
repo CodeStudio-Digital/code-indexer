@@ -1,8 +1,7 @@
 /**
  * The IntelliJ-style branch action set, built ONCE and shared by the Git
  * tool-window Branches tab and the status-bar branch popover. Pure: given a
- * branch + the ops, returns the ordered context-menu items. Labels are raw
- * strings to match the surrounding git-menu code (BranchRow).
+ * branch + the ops, returns the ordered context-menu items.
  */
 import {
   ArrowDownToLine,
@@ -22,22 +21,23 @@ import type { BranchActions } from './use-branch-ops.js';
 export function buildBranchActions(
   b: GitBranch,
   actions: BranchActions,
-  opts: { opInProgress?: boolean } = {},
+  opts: { opInProgress?: boolean; t?: (key: string, options?: Record<string, unknown>) => string } = {},
 ): ContextMenuItem[] {
   const op = !!opts.opInProgress; // a sequencer op is mid-flight → gate merge/rebase/pull
+  const tr = (key: string, fallback: string, options?: Record<string, unknown>) => opts.t?.(key, options) ?? fallback;
   const items: ContextMenuItem[] = [];
 
   items.push({
     id: 'switch',
-    label: b.isRemote ? 'Checkout as local branch' : 'Checkout',
+    label: b.isRemote ? tr('git.branchMenu.checkoutLocal', 'Checkout as local branch') : tr('git.checkout', 'Checkout'),
     disabled: b.isCurrent,
     onSelect: () => actions.onSwitch(b),
   });
-  items.push({ id: 'open-log', label: 'Open in log', onSelect: () => actions.onOpenLog(b) });
+  items.push({ id: 'open-log', label: tr('git.branchMenu.openLog', 'Open in log'), onSelect: () => actions.onOpenLog(b) });
   items.push({
     id: 'new-from',
     separatorBefore: true,
-    label: 'New branch from here…',
+    label: tr('git.branchMenu.newFrom', 'New branch from here…'),
     icon: GitBranchPlus,
     onSelect: () => actions.onNewBranchFrom(b),
   });
@@ -48,14 +48,14 @@ export function buildBranchActions(
     items.push({
       id: 'merge',
       separatorBefore: true,
-      label: `Merge '${b.name}' into current`,
+      label: tr('git.branchMenu.mergeCurrent', `Merge '${b.name}' into current`, { branch: b.name }),
       icon: GitMerge,
       disabled: op,
       onSelect: () => actions.onMerge(b),
     });
     items.push({
       id: 'rebase',
-      label: `Rebase current onto '${b.name}'`,
+      label: tr('git.branchMenu.rebaseCurrent', `Rebase current onto '${b.name}'`, { branch: b.name }),
       icon: GitGraph,
       disabled: op,
       onSelect: () => actions.onRebase(b),
@@ -63,25 +63,25 @@ export function buildBranchActions(
     if (b.isRemote) {
       items.push({
         id: 'pull',
-        label: 'Pull into current',
+        label: tr('git.branchMenu.pullCurrent', 'Pull into current'),
         icon: ArrowDownToLine,
         disabled: op,
         submenu: [
-          { id: 'pull-merge', label: 'Using Merge', onSelect: () => actions.onPull(b, 'merge') },
-          { id: 'pull-rebase', label: 'Using Rebase', onSelect: () => actions.onPull(b, 'rebase') },
+          { id: 'pull-merge', label: tr('git.branchMenu.usingMerge', 'Using Merge'), onSelect: () => actions.onPull(b, 'merge') },
+          { id: 'pull-rebase', label: tr('git.branchMenu.usingRebase', 'Using Rebase'), onSelect: () => actions.onPull(b, 'rebase') },
         ],
       });
     }
     items.push({
       id: 'compare',
       separatorBefore: true,
-      label: 'Compare with current',
+      label: tr('git.branchMenu.compareCurrent', 'Compare with current'),
       icon: GitCompare,
       onSelect: () => actions.onCompare(b),
     });
     items.push({
       id: 'show-diff',
-      label: 'Show diff with working tree',
+      label: tr('git.branchMenu.diffWorktree', 'Show diff with working tree'),
       icon: GitCompare,
       onSelect: () => actions.onShowDiff(b),
     });
@@ -93,7 +93,7 @@ export function buildBranchActions(
     items.push({
       id: 'update',
       separatorBefore: true,
-      label: 'Update',
+      label: tr('git.branchMenu.update', 'Update'),
       icon: ArrowDownToLine,
       disabled: op,
       onSelect: () => actions.onUpdate(b),
@@ -101,22 +101,22 @@ export function buildBranchActions(
   }
 
   if (!b.isRemote) {
-    items.push({ id: 'rename', separatorBefore: true, label: 'Rename…', icon: Pencil, onSelect: () => actions.onRename(b) });
+    items.push({ id: 'rename', separatorBefore: true, label: tr('git.branchMenu.rename', 'Rename…'), icon: Pencil, onSelect: () => actions.onRename(b) });
     items.push({
       id: 'push',
-      label: b.upstream ? 'Push' : 'Push (set upstream)',
+      label: b.upstream ? tr('git.branchMenu.push', 'Push') : tr('git.branchMenu.pushUpstream', 'Push (set upstream)'),
       icon: Upload,
       onSelect: () => actions.onPush(b),
     });
     if (!b.isCurrent) {
-      items.push({ id: 'delete', label: 'Delete', icon: Trash2, destructive: true, onSelect: () => actions.onDelete(b) });
+      items.push({ id: 'delete', label: tr('git.branchMenu.delete', 'Delete'), icon: Trash2, destructive: true, onSelect: () => actions.onDelete(b) });
     }
   }
 
   items.push({
     id: 'copy-name',
     separatorBefore: true,
-    label: 'Copy name',
+    label: tr('git.branchMenu.copyName', 'Copy name'),
     icon: ClipboardCopy,
     onSelect: () => void navigator.clipboard.writeText(b.name).catch(() => undefined),
   });

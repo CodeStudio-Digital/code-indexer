@@ -18,6 +18,7 @@ interface Props {
   folders: string[];
   selectMode: boolean;
   selected: boolean;
+  allowDrag: boolean;
   onOpen: (id: number) => void;
   onToggleSelect: (id: number) => void;
   onDuplicate: (id: number) => void;
@@ -54,8 +55,8 @@ function RequestRowImpl(p: Props) {
 
   return (
     <div
-      draggable={!p.selectMode}
-      onDragStart={() => p.onDragStart(r.id)}
+      draggable={!p.selectMode && p.allowDrag}
+      onDragStart={() => { if (p.allowDrag) p.onDragStart(r.id); }}
       onDragEnd={p.onDragEnd}
       onClick={() => (p.selectMode ? p.onToggleSelect(r.id) : p.onOpen(r.id))}
       {...triggerProps}

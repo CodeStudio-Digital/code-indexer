@@ -13,6 +13,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useReducer } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { useShallow } from 'zustand/react/shallow';
 import {
   FileCode2,
   FilePlus2,
@@ -24,7 +25,12 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
-import { useWorkspaceStore } from '../../state/workspace.js';
+import {
+  useWorkspaceStore,
+  type OpenDatabaseTab,
+  type OpenGitLog,
+  type OpenGitStash,
+} from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { EditorTabBar } from './EditorTabBar.js';
 import { ExternalChangeBanner } from './ExternalChangeBanner.js';
@@ -46,17 +52,17 @@ const MarkdownView = lazy(() =>
 const DrawioEditor = lazy(() =>
   import('./editor/DrawioEditor.js').then((m) => ({ default: m.DrawioEditor })),
 );
-const GitLogView = lazy(() =>
-  import('./jetbrains/tool-windows/git/GitLogView.js').then((m) => ({ default: m.GitLogView })),
-);
-const StashDetailView = lazy(() =>
-  import('./jetbrains/tool-windows/git/StashDetailView.js').then((m) => ({ default: m.StashDetailView })),
+const GitEditorStack = lazy(() =>
+  import('./jetbrains/tool-windows/git/GitEditorStack.js').then((m) => ({ default: m.GitEditorStack })),
 );
 const MergeTabView = lazy(() =>
   import('./editor/merge/MergeTabView.js').then((m) => ({ default: m.MergeTabView })),
 );
 const SftpEditMount = lazy(() =>
   import('../ssh/sftp/SftpEditMount.js').then((m) => ({ default: m.SftpEditMount })),
+);
+const DatabaseEditorStack = lazy(() =>
+  import('../db-client/DatabaseEditorView.js').then((m) => ({ default: m.DatabaseEditorStack })),
 );
 
 function isMarkdownPath(path: string): boolean {
@@ -149,11 +155,15 @@ function EditorPaneView({ paneId }: { paneId: string }) {
               </div>
             }
           >
-            {activeFile.kind === 'git-log' ? (
-              <GitLogView tab={activeFile} />
-            ) : activeFile.kind === 'git-stash' ? (
-              <StashDetailView tab={activeFile} />
-            ) : activeFile.kind === 'merge' ? (
+            <PaneDatabaseSurfaces
+              paneId={paneId}
+              activePath={activeFile.kind === 'database' ? activeFile.path : null}
+            />
+            <PaneGitSurfaces
+              paneId={paneId}
+              activePath={activeFile.kind === 'git-log' || activeFile.kind === 'git-stash' ? activeFile.path : null}
+            />
+            {activeFile.kind === 'database' || activeFile.kind === 'git-log' || activeFile.kind === 'git-stash' ? null : activeFile.kind === 'merge' ? (
               // Key by path: a fresh instance per merged file so switching
               // between two merge tabs never mounts the old file's content
               // (and stale Apply target) under the new file's URI.
@@ -188,6 +198,54 @@ function EditorPaneView({ paneId }: { paneId: string }) {
       </div>
     </div>
   );
+}
+
+/**
+ * Keeps every database tab in this editor pane alive until the tab is closed.
+ * Isolated subscription: regular file content updates do not make the whole
+ * EditorPaneView (and therefore Monaco) rerender.
+ */
+function PaneDatabaseSurfaces({ paneId, activePath }: { paneId: string; activePath: string | null }) {
+  const tabs = useWorkspaceStore(
+    useShallow((s): OpenDatabaseTab[] => {
+      const order = s.panes.find((p) => p.id === paneId)?.order ?? [];
+      if (order.length === 0) return [];
+      const byPath = new Map(
+        s.openFiles
+          .filter((tab): tab is OpenDatabaseTab => tab.kind === 'database')
+          .map((tab) => [tab.path, tab]),
+      );
+      return order.flatMap((path) => {
+        const tab = byPath.get(path);
+        return tab ? [tab] : [];
+      });
+    }),
+  );
+
+  if (tabs.length === 0) return null;
+  return <DatabaseEditorStack tabs={tabs} activePath={activePath} />;
+}
+
+/** Retains Log/Stash per editor tab; diff patches remain on-demand. */
+function PaneGitSurfaces({ paneId, activePath }: { paneId: string; activePath: string | null }) {
+  const tabs = useWorkspaceStore(
+    useShallow((s): Array<OpenGitLog | OpenGitStash> => {
+      const order = s.panes.find((p) => p.id === paneId)?.order ?? [];
+      if (order.length === 0) return [];
+      const byPath = new Map(
+        s.openFiles
+          .filter((tab): tab is OpenGitLog | OpenGitStash => tab.kind === 'git-log' || tab.kind === 'git-stash')
+          .map((tab) => [tab.path, tab]),
+      );
+      return order.flatMap((path) => {
+        const tab = byPath.get(path);
+        return tab ? [tab] : [];
+      });
+    }),
+  );
+
+  if (tabs.length === 0) return null;
+  return <GitEditorStack tabs={tabs} activePath={activePath} />;
 }
 
 /** Placeholder for a freshly-split pane that has no tab yet. */

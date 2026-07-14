@@ -31,12 +31,7 @@ export type AgentPreset =
   | 'build'
   | 'admin'
   | 'spec'
-  | 'app_spec'
-  | 'app_db'
-  | 'app_architect'
-  | 'app_product'
-  | 'app_ux'
-  | 'app_wireframe'
+  | 'app_orchestrator'
   | 'api'
   | 'diagram'
   | 'builder';

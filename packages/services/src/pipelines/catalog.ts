@@ -506,7 +506,7 @@ const CATALOG_SEED: CatalogSeed[] = [
     pipelineName: 'editor',
     bindingRole: 'autocomplete',
     description:
-      'Inline AI code completion (ghost text) in the editor. PRIVACY: the code around the cursor is sent to this provider on each suggestion. Pick a FAST, cheap, code-specialized model — a model with a native fill-in-the-middle endpoint (codestral via the Mistral provider, deepseek-chat, qwen2.5-coder) gives the cleanest/fastest completions; any chat model also works as a fallback. Reasoning is auto-disabled per request for GLM/Gemini-2.5+/Qwen3/R1 (set disable_thinking:false to opt out); other thinking models will burn the token budget and return empty. Unset = feature unavailable (editor toggle shows "not configured"). Config knobs: max_tokens, temperature, debounce_ms, multiline, max_prefix_lines, max_suffix_lines, timeout_ms, disable_thinking, fim (force/disable the native FIM endpoint; auto-detected by default), fim_template (auto | native | qwen | starcoder | codellama | codegemma | granite | seedcoder | codestral-raw — raw sentinel-token prompt for /completions hosts that ignore the suffix param). Context engine: context_engine ("v2" default snippet engine, "v1" legacy kill-switch), context_budget_tokens (0 = auto: 2500 FIM / 1200 chat; legacy context_budget_chars honored when set), context_source_timeout_ms (100), context_deadline_ms (150), context_cache_ttl_ms (10000, stable-region cache), lsp_member_race_ms (250), ctx_recent_edits / ctx_open_tabs / ctx_lsp_defs (per-source toggles, default true), jaccard_min_score (0.1), max_tab_files (10), context_mode ("layered" default, or "imports_only" as an A/B baseline through the v1 engine).',
+      'Inline AI code completion (ghost text) in the editor. PRIVACY: code around the cursor is sent on each suggestion; indexed cross-file examples are sent only when ctx_related_code=true AND ctx_related_code_consent_v=1. Prefer native/template FIM models. Generic chat is manual-only (Alt+\\) until the project-free 3-prompt completion probe meets p50<=750ms and p90<=1500ms; allow_degraded_auto=true is an explicit override. Reasoning is minimized and OAuth streams are locally stopped after a useful line/block. Unset = feature unavailable. Config knobs: max_tokens, temperature, debounce_ms, multiline, max_prefix_lines, max_suffix_lines, timeout_ms, disable_thinking, fim, fim_template, allow_degraded_auto. Context engine: context_engine ("v3" default, "v2"/"v1" kill-switches), context_budget_tokens, context_source_timeout_ms (100), context_deadline_ms (150), context_cache_ttl_ms, lsp_member_race_ms (250), ctx_recent_edits / ctx_open_tabs / ctx_lsp_defs, ctx_related_code, ctx_related_code_consent_v, ctx_related_code_tokens (capped at 700), jaccard_min_score and max_tab_files.',
     recommendedDefault: {
       providerKind: 'mistral',
       modelHint: 'codestral-latest',
@@ -519,6 +519,7 @@ const CATALOG_SEED: CatalogSeed[] = [
         max_prefix_lines: 80,
         max_suffix_lines: 30,
         timeout_ms: 4000,
+        context_engine: 'v3',
       },
     },
     introducedInPhase: 'editor-autocomplete',

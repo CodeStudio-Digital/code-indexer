@@ -16,7 +16,7 @@ import { lspServersBaseDir } from '@mcp/shared/utils/data-paths.js';
 import { relToAbsCanonical } from '@mcp/shared/utils/fs-canonical.js';
 import { LspServerHandle } from './lsp-server-handle.js';
 import type { LspDiagnostic } from './lsp-protocol.js';
-import { installDirFor, isInstalled, serverForLanguage, spawnSpecFor, type LspServerDef } from './server-registry.js';
+import { installDirFor, isInstalled, serverById, serverForLanguage, spawnSpecFor, type LspServerDef } from './server-registry.js';
 
 export interface LspManagerDeps {
   baseDir?: string;
@@ -96,6 +96,18 @@ export class LspServerManager {
     if (process.env.MCP_LSP_ENABLED === '0') return null;
     const def = serverForLanguage(languageId);
     if (!def) return null;
+    return this.acquireDefinition(projectId, def, languageId);
+  }
+
+  /** Acquire the exact origin server for resolve/execute round-trips. */
+  async acquireById(projectId: number, serverId: string): Promise<{ handle: LspServerHandle; def: LspServerDef; root: string } | null> {
+    if (process.env.MCP_LSP_ENABLED === '0') return null;
+    const def = serverById(serverId);
+    if (!def) return null;
+    return this.acquireDefinition(projectId, def, def.languages[0] ?? 'plaintext');
+  }
+
+  private async acquireDefinition(projectId: number, def: LspServerDef, languageId: string): Promise<{ handle: LspServerHandle; def: LspServerDef; root: string } | null> {
     const baseDir = this.deps.baseDir ?? lspServersBaseDir();
     if (!isInstalled(baseDir, def)) return null;
     const root = this.deps.resolveRoot(projectId);

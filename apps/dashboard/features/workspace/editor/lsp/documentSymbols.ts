@@ -8,18 +8,10 @@
  * mudança de view — sem cache seria um round-trip por scroll.
  */
 import type * as MonacoNs from 'monaco-editor';
-import { apiCall } from '../../../../lib/api-client.js';
+import type { DocumentSymbolDTO } from '@mcp/api-bus';
 import { logLsp } from '../lsp-log.js';
-import { relPath, type Monaco, type Position } from './dto.js';
-
-interface DocumentSymbolDTO {
-  name: string;
-  detail?: string;
-  kind: string;
-  range: { start: Position; end: Position };
-  selectionRange: { start: Position; end: Position };
-  children?: DocumentSymbolDTO[];
-}
+import { relPath, type Monaco } from './dto.js';
+import { documentSymbolsForModel } from './symbol-navigation-ui.js';
 
 // Monaco SymbolKind por LITERAL numérico (const enum pode faltar no runtime).
 const KIND: Record<string, number> = {
@@ -54,23 +46,16 @@ export function registerDocumentSymbolProviders(
   monaco: Monaco,
   projectId: number,
 ): MonacoNs.IDisposable[] {
-  const cache = new Map<string, { versionId: number; result: MonacoNs.languages.DocumentSymbol[] }>();
-
   const provider: MonacoNs.languages.DocumentSymbolProvider = {
     async provideDocumentSymbols(model) {
-      const uriKey = model.uri.toString();
       const versionId = model.getVersionId();
-      const hit = cache.get(uriKey);
-      if (hit && hit.versionId === versionId) return hit.result;
-
       const file = relPath(model);
       const lang = model.getLanguageId();
       const t0 = performance.now();
       try {
-        const dtos = await apiCall<DocumentSymbolDTO[]>('lsp.documentSymbols', { projectId, file });
+        const dtos = await documentSymbolsForModel(model, projectId);
+        if (model.isDisposed() || model.getVersionId() !== versionId) return [];
         const result = (dtos ?? []).map((d) => toMonacoSymbol(monaco, d));
-        cache.set(uriKey, { versionId, result });
-        if (cache.size > 40) cache.delete(cache.keys().next().value as string);
         logLsp({
           op: 'documentSymbols', file, lang,
           outcome: result.length > 0 ? 'ok' : 'empty', count: result.length, ms: performance.now() - t0,

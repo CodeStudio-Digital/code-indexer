@@ -7,11 +7,8 @@ import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
-import { isAppSpecialistAgentId } from '@mcp/code-agent/agents/app-specialists.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
-import { findLocalD1File } from '@mcp/app-studio/local-db.js';
-import { ensureAppStudioDbConnection } from '@mcp/company/tools/app-studio/db-client-bridge.js';
 import {
   createBus,
   publish,
@@ -174,26 +171,10 @@ export function mountCoderStreamRoutes(
   function resolveRunAgent(id: number, requested: unknown): AgentId | undefined {
     const session = sessionStore.getSession(id);
     const persisted = typeof session?.agent === 'string' && isAgentId(session.agent) ? session.agent : undefined;
-    if (persisted && isAppSpecialistAgentId(persisted)) {
+    if (persisted === 'app_orchestrator') {
       return persisted;
     }
     return typeof requested === 'string' && isAgentId(requested) ? requested : undefined;
-  }
-
-  function syncAppStudioDbConnectionForAgentRun(id: number): void {
-    const session = sessionStore.getSession(id);
-    if (session?.project_id == null) return;
-    const appSession = deps.appStudioStore.getSessionByProjectId(session.project_id);
-    if (!appSession) return;
-    const project = deps.db.getProject(session.project_id);
-    if (!project?.root_path) return;
-    const dbFile = findLocalD1File(project.root_path);
-    if (!dbFile) return;
-    ensureAppStudioDbConnection({
-      listConnections: (projectId) => deps.dbClientFor(projectId).listConnections(projectId),
-      createConnection: (input) => deps.dbClientFor(input.project_id).createConnection(input),
-      updateConnection: (projectId, connId, patch) => deps.dbClientFor(projectId).updateConnection(connId, patch),
-    }, appSession, dbFile);
   }
 
   /** Resolved provider `kind` for the session (drives PDF-native gating). */
@@ -443,13 +424,6 @@ export function mountCoderStreamRoutes(
     // history and there's no new user message to attach.
     if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
     const runAgent = resolveRunAgent(id, body.agent);
-    if (runAgent === 'app_db') {
-      try {
-        syncAppStudioDbConnectionForAgentRun(id);
-      } catch (e) {
-        console.warn('[app-studio] failed to sync native DB connection for app_db agent:', e);
-      }
-    }
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Log the route hit. The bus may not exist yet (fresh session) —
     // emitWorkerLog no-ops in that case, but if a worker is still alive
@@ -600,8 +574,8 @@ export function mountCoderStreamRoutes(
             content: [{ type: 'text', text: body.content }],
             ...(selectedSkillIds ? { selectedSkillIds } : {}),
           };
-          sessionStore.appendMessage(id, userMsg);
-          await pool.pushUserMessage(id, body.content, selectedSkillIds);
+          const roundMessageId = sessionStore.appendMessage(id, userMsg);
+          await pool.pushUserMessage(id, body.content, selectedSkillIds, roundMessageId);
           return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
         }
         // Fresh run via the worker — `runFresh` spawns the worker (if
@@ -693,8 +667,8 @@ export function mountCoderStreamRoutes(
           content: [{ type: 'text', text: body.content }],
           ...(selectedSkillIds ? { selectedSkillIds } : {}),
         };
-        sessionStore.appendMessage(id, userMsg);
-        runner.pushUserMessage(body.content, { selectedSkillIds });
+        const roundMessageId = sessionStore.appendMessage(id, userMsg);
+        runner.pushUserMessage(body.content, { selectedSkillIds, roundMessageId });
 
         // Tail mode: subscribe to events from now on, no replay. The runner
         // will emit a fresh `turn_start` (and downstream tool calls) when
@@ -899,13 +873,6 @@ export function mountCoderStreamRoutes(
       return c.json({ error: 'session not in resumable state' }, 409);
     }
     const runAgent = resolveRunAgent(id, body.agent);
-    if (runAgent === 'app_db') {
-      try {
-        syncAppStudioDbConnectionForAgentRun(id);
-      } catch (e) {
-        console.warn('[app-studio] failed to sync native DB connection for app_db continue:', e);
-      }
-    }
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Pre-spawn log: bus is about to be created below. We can't emit
     // here because no bus exists yet — but the route-entry hit will

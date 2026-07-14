@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { createEditorHandlers, createContext } from '@mcp/api-handlers';
-import type { EditorCompleteInput, EditorFeedbackInput } from '@mcp/api-bus';
+import type { EditorCancelInput, EditorCompleteInput, EditorDeliveryInput, EditorFeedbackInput, EditorProbeInput } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
 
 /**
@@ -11,6 +11,15 @@ import type { ServerDeps } from '../deps.js';
  */
 export function mountEditorRoutes(app: Hono, deps: ServerDeps): void {
   const h = createEditorHandlers(deps);
+
+  app.post('/api/editor/resolve-config', async (c) => {
+    try {
+      const body = await c.req.json() as { projectId: number; file: string };
+      return c.json(await h.resolveConfig(body, createContext()));
+    } catch (error) {
+      return c.json({ settings: {}, sources: [], error: error instanceof Error ? error.message : 'bad request' }, 400);
+    }
+  });
 
   app.post('/api/editor/complete', async (c) => {
     try {
@@ -28,6 +37,27 @@ export function mountEditorRoutes(app: Hono, deps: ServerDeps): void {
     } catch {
       return c.json({ ok: false }, 400);
     }
+  });
+
+  app.post('/api/editor/delivery', async (c) => {
+    try {
+      const body = (await c.req.json()) as EditorDeliveryInput;
+      return c.json(await h.delivery(body, createContext()));
+    } catch { return c.json({ ok: false }, 400); }
+  });
+
+  app.post('/api/editor/cancel', async (c) => {
+    try {
+      const body = (await c.req.json()) as EditorCancelInput;
+      return c.json(await h.cancel(body, createContext()));
+    } catch { return c.json({ ok: false }, 400); }
+  });
+
+  app.post('/api/editor/probe', async (c) => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as EditorProbeInput;
+      return c.json(await h.probe(body, createContext()));
+    } catch { return c.json({ ok: false, samples: [], latency: { p50: null, p90: null }, verifiedForAutomatic: false }, 500); }
   });
 
   app.post('/api/editor/stats', async (c) => {

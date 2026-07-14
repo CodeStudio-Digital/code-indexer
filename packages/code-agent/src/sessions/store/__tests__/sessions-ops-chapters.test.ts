@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import type { Database as DB } from 'better-sqlite3';
 import { coderSessionChapters208 } from '@mcp/store/migrations/208_coder_session_chapters.js';
+import { coderCompactionReliability217 } from '@mcp/store/migrations/217_coder_compaction_reliability.js';
 import * as chapters from '../chapters.js';
 import * as ops from '../sessions-ops.js';
 
@@ -101,6 +102,7 @@ function createSchema(): void {
     );
   `);
   coderSessionChapters208.up(db);
+  coderCompactionReliability217.up(db);
   db.prepare(`
     INSERT INTO coder_sessions (id, project_id, title, provider, model)
     VALUES (1, 10, 'source', 'test-provider', 'test-model')

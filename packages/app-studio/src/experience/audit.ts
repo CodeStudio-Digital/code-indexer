@@ -2,6 +2,7 @@ import type { AppArchitecturePlan } from '../architecture/types.js';
 import type { AppSpec } from '../spec/types.js';
 import type { AppProductModel } from '../product/types.js';
 import { architectureDesignCaseIds, type AppUxBrief, type AppWireframePlan } from './types.js';
+import { stableRequirementSourceIds } from '../spec/stable-ids.js';
 
 export interface AppExperienceAudit { ok: boolean; issues: string[] }
 const unique = (items: string[]): boolean => new Set(items).size === items.length;
@@ -44,7 +45,7 @@ export function auditAppWireframePlan(
   const requiredSourceIds = [
     ...spec.features.map((feature) => `feature:${feature.id}`),
     ...(spec.behaviors ?? []).map((behavior) => `behavior:${behavior.id}`),
-    ...(spec.requirements?.acceptance_criteria ?? []).map((_, index) => `acceptance:${index}`),
+    ...stableRequirementSourceIds(spec, 'acceptance'),
     ...(product?.capabilities ?? []).filter((item) => item.selected && item.horizon !== 'declined').map((item) => `capability:${item.id}`),
   ];
   const plannedScreens = plan.screens.map((screen) => screen.screen_id);
@@ -86,37 +87,37 @@ export function auditAppWireframePlan(
     const capabilities = testCase.source_ids.filter((id) => id.startsWith('capability:'));
     if (capabilities.length > 1) issues.push(`Wireframe TDD case '${testCase.id}' compresses unrelated capabilities (${capabilities.join(', ')}); split it.`);
   }
-  const groupIds = new Set(plan.build_groups.map((group) => group.id));
-  const taskIds = new Set(plan.tasks.map((task) => task.id));
-  if (!unique([...groupIds])) issues.push('Build group ids must be unique.');
-  if (!unique([...taskIds])) issues.push('Build task ids must be unique.');
-  for (const group of plan.build_groups) {
-    if (!group.id || !group.name || group.task_ids.length === 0) issues.push(`Build group '${group.id || '?'}' needs a name and tasks.`);
-    for (const dep of group.depends_on) if (!groupIds.has(dep)) issues.push(`Build group '${group.id}' depends on unknown group '${dep}'.`);
-    for (const taskId of group.task_ids) if (!taskIds.has(taskId)) issues.push(`Build group '${group.id}' references unknown task '${taskId}'.`);
-    for (const flowId of group.flow_ids) if (!flowIds.has(flowId)) issues.push(`Build group '${group.id}' references unknown flow '${flowId}'.`);
-    for (const capabilityId of group.capability_ids) if (!product?.capabilities.some((item) => item.id === capabilityId)) issues.push(`Build group '${group.id}' references unknown capability '${capabilityId}'.`);
-    for (const screenId of group.screen_ids) if (!screenIds.has(screenId)) issues.push(`Build group '${group.id}' references unknown screen '${screenId}'.`);
-    const groupTasks = plan.tasks.filter((task) => task.group_id === group.id);
-    const declared = new Set(group.task_ids);
-    for (const task of groupTasks) if (!declared.has(task.id)) issues.push(`Build group '${group.id}' does not declare task '${task.id}'.`);
+  const sliceIds = new Set(plan.delivery_slices.map((slice) => slice.id));
+  const checklistIds = new Set(plan.checklist_items.map((item) => item.id));
+  if (!unique([...sliceIds])) issues.push('Delivery slice ids must be unique.');
+  if (!unique([...checklistIds])) issues.push('Checklist item ids must be unique.');
+  for (const slice of plan.delivery_slices) {
+    if (!slice.id || !slice.name || slice.checklist_item_ids.length === 0) issues.push(`Delivery slice '${slice.id || '?'}' needs a name and checklist items.`);
+    for (const dep of slice.depends_on) if (!sliceIds.has(dep)) issues.push(`Delivery slice '${slice.id}' depends on unknown slice '${dep}'.`);
+    for (const checklistId of slice.checklist_item_ids) if (!checklistIds.has(checklistId)) issues.push(`Delivery slice '${slice.id}' references unknown checklist item '${checklistId}'.`);
+    for (const flowId of slice.flow_ids) if (!flowIds.has(flowId)) issues.push(`Delivery slice '${slice.id}' references unknown flow '${flowId}'.`);
+    for (const capabilityId of slice.capability_ids) if (!product?.capabilities.some((item) => item.id === capabilityId)) issues.push(`Delivery slice '${slice.id}' references unknown capability '${capabilityId}'.`);
+    for (const screenId of slice.screen_ids) if (!screenIds.has(screenId)) issues.push(`Delivery slice '${slice.id}' references unknown screen '${screenId}'.`);
+    const sliceItems = plan.checklist_items.filter((item) => item.slice_id === slice.id);
+    const declared = new Set(slice.checklist_item_ids);
+    for (const item of sliceItems) if (!declared.has(item.id)) issues.push(`Delivery slice '${slice.id}' does not declare checklist item '${item.id}'.`);
     for (const kind of ['test-red', 'mock-contract', 'screen', 'responsive', 'accessibility', 'test-green', 'preview'] as const) {
-      if (!groupTasks.some((task) => task.kind === kind)) issues.push(`Build group '${group.id}' needs a '${kind}' task.`);
+      if (!sliceItems.some((item) => item.kind === kind)) issues.push(`Delivery slice '${slice.id}' needs a '${kind}' checklist item.`);
     }
   }
-  for (const task of plan.tasks) {
-    if (!groupIds.has(task.group_id)) issues.push(`Task '${task.id}' belongs to unknown group '${task.group_id}'.`);
-    if (task.screen_id && !screenIds.has(task.screen_id)) issues.push(`Task '${task.id}' references unknown screen '${task.screen_id}'.`);
-    for (const dep of task.depends_on) if (!taskIds.has(dep)) issues.push(`Task '${task.id}' depends on unknown task '${dep}'.`);
-    for (const testId of task.tdd_case_ids) if (!testIds.has(testId)) issues.push(`Task '${task.id}' references unknown TDD case '${testId}'.`);
+  for (const item of plan.checklist_items) {
+    if (!sliceIds.has(item.slice_id)) issues.push(`Checklist item '${item.id}' belongs to unknown slice '${item.slice_id}'.`);
+    if (item.screen_id && !screenIds.has(item.screen_id)) issues.push(`Checklist item '${item.id}' references unknown screen '${item.screen_id}'.`);
+    for (const dep of item.depends_on) if (!checklistIds.has(dep)) issues.push(`Checklist item '${item.id}' depends on unknown item '${dep}'.`);
+    for (const testId of item.tdd_case_ids) if (!testIds.has(testId)) issues.push(`Checklist item '${item.id}' references unknown TDD case '${testId}'.`);
   }
-  for (const screenId of screenIds) if (!plan.tasks.some((task) => task.screen_id === screenId && task.kind === 'screen')) issues.push(`Screen '${screenId}' has no implementation task.`);
-  for (const flowId of flowIds) if (!plan.build_groups.some((group) => group.flow_ids.includes(flowId))) issues.push(`Flow '${flowId}' is not assigned to a build group.`);
+  for (const screenId of screenIds) if (!plan.checklist_items.some((item) => item.screen_id === screenId && item.kind === 'screen')) issues.push(`Screen '${screenId}' has no implementation checklist item.`);
+  for (const flowId of flowIds) if (!plan.delivery_slices.some((slice) => slice.flow_ids.includes(flowId))) issues.push(`Flow '${flowId}' is not assigned to a delivery slice.`);
   for (const capability of product?.capabilities.filter((item) => item.selected && item.horizon !== 'declined') ?? []) {
     const sourceId = `capability:${capability.id}`;
     if (!plan.flows.some((flow) => flow.source_ids.includes(sourceId))) issues.push(`Selected capability '${capability.id}' has no user flow.`);
     if (capability.critical && !plan.tdd_cases.some((testCase) => testCase.source_ids.includes(sourceId))) issues.push(`Critical capability '${capability.id}' has no dedicated interface TDD case.`);
-    if (!plan.build_groups.some((group) => group.capability_ids.includes(capability.id))) issues.push(`Selected capability '${capability.id}' is not assigned to a vertical build group.`);
+    if (!plan.delivery_slices.some((slice) => slice.capability_ids.includes(capability.id))) issues.push(`Selected capability '${capability.id}' is not assigned to a vertical delivery slice.`);
   }
   return { ok: issues.length === 0, issues: [...new Set(issues)] };
 }

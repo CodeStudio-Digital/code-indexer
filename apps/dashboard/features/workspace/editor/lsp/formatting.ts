@@ -12,9 +12,10 @@ import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../../lib/api-client.js';
 import { logLsp } from '../lsp-log.js';
 import { relPath, toMonacoRange, type Monaco, type Position, type TextEditDTO } from './dto.js';
+import { toast } from '../../../../components/ui/prompt-dialog.js';
 
 /** Server-backed languages only — keep Monaco's built-in formatters visible. */
-const FORMAT_LANGS = ['php'] as const;
+const FORMAT_LANGS = ['php', 'python', 'rust'] as const;
 
 function modelOptions(model: MonacoNs.editor.ITextModel): { tabSize: number; insertSpaces: boolean } {
   const o = model.getOptions();
@@ -48,6 +49,9 @@ async function fetchEdits(
     logLsp({
       op: 'formatting', file, lang, outcome: 'threw',
       ms: performance.now() - t0, err: err instanceof Error ? err.message : String(err),
+    });
+    toast.error(`Formatter indisponível para ${lang}`, {
+      description: err instanceof Error ? err.message : String(err),
     });
     return null;
   }

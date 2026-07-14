@@ -107,13 +107,13 @@ export interface AppWireframeTestCase {
   expected: string;
 }
 
-export type AppBuildTaskKind = 'test-red' | 'mock-contract' | 'screen' | 'responsive' | 'accessibility' | 'test-green' | 'preview';
+export type AppDeliveryChecklistKind = 'test-red' | 'mock-contract' | 'screen' | 'responsive' | 'accessibility' | 'test-green' | 'preview';
 
-export interface AppBuildTask {
+export interface AppDeliveryChecklistItem {
   id: string;
-  group_id: string;
+  slice_id: string;
   screen_id: string | null;
-  kind: AppBuildTaskKind;
+  kind: AppDeliveryChecklistKind;
   title: string;
   sequence: number;
   complexity: AppBuildComplexity;
@@ -123,7 +123,7 @@ export interface AppBuildTask {
   source_ids: string[];
 }
 
-export interface AppBuildGroup {
+export interface AppDeliverySlice {
   id: string;
   name: string;
   goal: string;
@@ -133,11 +133,11 @@ export interface AppBuildGroup {
   capability_ids: string[];
   screen_ids: string[];
   depends_on: string[];
-  task_ids: string[];
+  checklist_item_ids: string[];
 }
 
 export interface AppWireframePlan {
-  v: 1;
+  v: 2;
   spec_revision_id: number | null;
   architecture_revision_id: number | null;
   ux_revision_id: number | null;
@@ -146,8 +146,8 @@ export interface AppWireframePlan {
   flows: AppWireframeFlow[];
   screens: AppScreenWireframe[];
   tdd_cases: AppWireframeTestCase[];
-  build_groups: AppBuildGroup[];
-  tasks: AppBuildTask[];
+  delivery_slices: AppDeliverySlice[];
+  checklist_items: AppDeliveryChecklistItem[];
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -243,7 +243,7 @@ export function normalizeAppWireframePlan(
 ): AppWireframePlan {
   const raw = record(value);
   return {
-    v: 1,
+    v: 2,
     spec_revision_id: links.specRevisionId,
     architecture_revision_id: links.architectureRevisionId,
     ux_revision_id: links.uxRevisionId,
@@ -281,13 +281,13 @@ export function normalizeAppWireframePlan(
       const testCase = record(item);
       return { id: text(testCase.id), title: text(testCase.title), architecture_case_ids: strings(testCase.architecture_case_ids), source_ids: strings(testCase.source_ids), flow_ids: strings(testCase.flow_ids), screen_ids: strings(testCase.screen_ids), preconditions: strings(testCase.preconditions), steps: strings(testCase.steps), expected: text(testCase.expected) };
     }),
-    build_groups: (Array.isArray(raw.build_groups) ? raw.build_groups : []).map((item) => {
-      const group = record(item);
-      return { id: text(group.id), name: text(group.name), goal: text(group.goal), sequence: Number(group.sequence) || 0, complexity: oneOf(group.complexity, ['small', 'medium', 'large'] as const, 'medium'), flow_ids: strings(group.flow_ids), capability_ids: strings(group.capability_ids), screen_ids: strings(group.screen_ids), depends_on: strings(group.depends_on), task_ids: strings(group.task_ids) };
+    delivery_slices: (Array.isArray(raw.delivery_slices) ? raw.delivery_slices : Array.isArray(raw.build_groups) ? raw.build_groups : []).map((item) => {
+      const slice = record(item);
+      return { id: text(slice.id), name: text(slice.name), goal: text(slice.goal), sequence: Number(slice.sequence) || 0, complexity: oneOf(slice.complexity, ['small', 'medium', 'large'] as const, 'medium'), flow_ids: strings(slice.flow_ids), capability_ids: strings(slice.capability_ids), screen_ids: strings(slice.screen_ids), depends_on: strings(slice.depends_on), checklist_item_ids: strings(slice.checklist_item_ids).length > 0 ? strings(slice.checklist_item_ids) : strings(slice.task_ids) };
     }),
-    tasks: (Array.isArray(raw.tasks) ? raw.tasks : []).map((item) => {
-      const task = record(item);
-      return { id: text(task.id), group_id: text(task.group_id), screen_id: text(task.screen_id) || null, kind: oneOf(task.kind, ['test-red', 'mock-contract', 'screen', 'responsive', 'accessibility', 'test-green', 'preview'] as const, 'screen'), title: text(task.title), sequence: Number(task.sequence) || 0, complexity: oneOf(task.complexity, ['small', 'medium', 'large'] as const, 'medium'), depends_on: strings(task.depends_on), tdd_case_ids: strings(task.tdd_case_ids), entity_names: strings(task.entity_names), source_ids: strings(task.source_ids) };
+    checklist_items: (Array.isArray(raw.checklist_items) ? raw.checklist_items : Array.isArray(raw.tasks) ? raw.tasks : []).map((item) => {
+      const checklist = record(item);
+      return { id: text(checklist.id), slice_id: text(checklist.slice_id) || text(checklist.group_id), screen_id: text(checklist.screen_id) || null, kind: oneOf(checklist.kind, ['test-red', 'mock-contract', 'screen', 'responsive', 'accessibility', 'test-green', 'preview'] as const, 'screen'), title: text(checklist.title), sequence: Number(checklist.sequence) || 0, complexity: oneOf(checklist.complexity, ['small', 'medium', 'large'] as const, 'medium'), depends_on: strings(checklist.depends_on), tdd_case_ids: strings(checklist.tdd_case_ids), entity_names: strings(checklist.entity_names), source_ids: strings(checklist.source_ids) };
     }),
   };
 }
@@ -295,8 +295,9 @@ export function normalizeAppWireframePlan(
 export function parseAppWireframePlan(raw: string | null | undefined): AppWireframePlan | null {
   if (!raw) return null;
   try {
-    const value = JSON.parse(raw) as AppWireframePlan;
-    if (value?.v !== 1 || !Array.isArray(value.flows) || !Array.isArray(value.screens) || !Array.isArray(value.tasks)) return null;
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if ((value?.v !== 1 && value?.v !== 2) || !Array.isArray(value.flows) || !Array.isArray(value.screens)
+      || (!Array.isArray(value.checklist_items) && !Array.isArray(value.tasks))) return null;
     return normalizeAppWireframePlan(value, {
       specRevisionId: numberOrNull(value.spec_revision_id), architectureRevisionId: numberOrNull(value.architecture_revision_id),
       uxRevisionId: numberOrNull(value.ux_revision_id), dataFingerprint: text(value.data_fingerprint),
@@ -309,5 +310,5 @@ export function serializeExperienceArtifact(value: AppUxBrief | AppWireframePlan
 }
 
 export function architectureDesignCaseIds(plan: AppArchitecturePlan | null): string[] {
-  return (plan?.tdd.cases ?? []).filter((testCase) => testCase.owner_stage === 'design').map((testCase) => testCase.id);
+  return (plan?.tdd.cases ?? []).filter((testCase) => testCase.owner_profile === 'ui').map((testCase) => testCase.id);
 }

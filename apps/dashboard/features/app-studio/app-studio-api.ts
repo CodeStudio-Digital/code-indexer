@@ -5,10 +5,10 @@
  * (start/phase/log/done/error — parse manual, EventSource não faz POST).
  */
 
-export type AppStageId = 'discovery' | 'product' | 'architecture' | 'database' | 'ux' | 'wireframe' | 'design' | 'backend' | 'review' | 'launch';
-export type AppStageStatus = 'pending' | 'active' | 'review' | 'approved' | 'skipped';
-export type AppStageAction = 'start' | 'approve' | 'reopen' | 'skip';
-export type AppRoadmapTier = 'screen' | 'api';
+export type AppWorkflowPhaseId = 'define' | 'blueprint' | 'build' | 'deliver';
+export type AppWorkflowPhaseStatus = 'locked' | 'active' | 'attention' | 'complete';
+export type AppWorkItemStatus = 'backlog' | 'ready' | 'running' | 'review' | 'done' | 'blocked' | 'stale' | 'cancelled';
+export type AppApprovalType = 'scope' | 'blueprint' | 'release';
 
 export interface AppStudioSession {
   id: number;
@@ -18,31 +18,65 @@ export interface AppStudioSession {
   stack: 'cf-fullstack';
   db_engine: 'd1' | 'postgres' | 'mysql';
   spec_json: string | null;
-  pipeline_json: string | null;
   deploy_json: string | null;
   /** Layout do canvas Blueprint (mig 201). */
   blueprint_json: string | null;
+  coordinator_session_id: number | null;
   created_at: string;
 }
 
-export interface AppPipelineStage {
-  id: AppStageId;
-  status: AppStageStatus;
-  summary: string | null;
-  gate: { ok: boolean; issues: string[] } | null;
-  feedback: string | null;
-  submitted_at: string | null;
-  approved_at: string | null;
+export interface AppWorkflowBundleRefs {
+  spec_revision_id?: number | null;
+  product_revision_id?: number | null;
+  architecture_revision_id?: number | null;
+  ux_revision_id?: number | null;
+  wireframe_revision_id?: number | null;
+  delivery_blueprint_id?: number | null;
 }
 
-export interface AppPipelineView {
-  stages: AppPipelineStage[];
-  current_stage: AppStageId | null;
-  roadmap: Array<{ name: string; tier: AppRoadmapTier; feature_id: string | null; recorded: boolean }>;
+export interface AppWorkItemView {
+  id: string; app_session_id: number; phase: AppWorkflowPhaseId; slice_id: string | null;
+  title: string; outcome: string; kind: 'research' | 'plan' | 'contract' | 'implement' | 'verify' | 'release' | 'change';
+  owner_profile: string; priority: number; revision: number; status: AppWorkItemStatus; sort_order: number;
+  depends_on: string[]; source_ids: string[]; acceptance: string[];
+  evidence: Array<{ kind: string; value: string; recorded_at?: string }>;
+  file_scope: string[]; blocked_reason: string | null;
+  run: { mode?: 'inline' | 'subagent'; run_id?: string; agent?: string } | null;
+  created_at: string; updated_at: string;
+}
+
+export interface AppApprovalView {
+  id: number; app_session_id: number; type: AppApprovalType;
+  status: 'pending' | 'approved' | 'changes_requested' | 'superseded';
+  bundle_revision: number; bundle: AppWorkflowBundleRefs; summary: string; feedback: string | null;
+  requested_at: string; resolved_at: string | null;
+}
+
+export interface AppDecisionRequestView {
+  id: number; app_session_id: number; question: string;
+  options: Array<{ label: string; value: string }>;
+  blocked_work_item_ids: string[]; status: 'open' | 'resolved'; answer: string | null;
+  requested_at: string; resolved_at: string | null;
+}
+
+export interface AppWorkflowView {
+  state: {
+    v: 5;
+    phases: Array<{ id: AppWorkflowPhaseId; status: AppWorkflowPhaseStatus; bundle: AppWorkflowBundleRefs }>;
+    release_unlocked: boolean;
+    migrated_from: number | null;
+    migrated_at: string | null;
+  };
+  work_items: AppWorkItemView[];
+  approvals: AppApprovalView[];
+  decisions: AppDecisionRequestView[];
+  blueprint: { v: 1; refs: AppWorkflowBundleRefs; slices: unknown[]; test_matrix: unknown[] } | null;
+  coordinator_session_id: number | null;
+  attention: { approval_ids: number[]; decision_ids: number[] };
 }
 
 export interface AppSpecView {
-  v: 1;
+  v: 1 | 2;
   summary: string;
   audience: string;
   locale: string;
@@ -66,6 +100,7 @@ export interface AppSpecView {
     assumptions?: string[];
     risks?: string[];
   };
+  requirement_ids?: Partial<Record<'goal' | 'rule' | 'acceptance' | 'out-of-scope' | 'assumption' | 'risk', string[]>>;
   behaviors?: Array<{
     id: string;
     screen_id: string;
@@ -90,10 +125,10 @@ export interface AppDeployView {
 export interface AppStudioListEntry extends AppStudioSession {
   project: { id: number; name: string; root_path: string } | null;
   builder_port: number | null;
-  current_stage: AppStageId | null;
-  current_stage_status: AppStageStatus | null;
-  stage_total: number;
-  stage_done: number;
+  current_phase: AppWorkflowPhaseId | null;
+  current_phase_status: AppWorkflowPhaseStatus | null;
+  phase_total: number;
+  phase_done: number;
   live_url: string | null;
 }
 
@@ -101,16 +136,13 @@ export interface AppStudioSessionDetail {
   session: AppStudioSession;
   project: { id: number; name: string; root_path: string } | null;
   builder_port: number | null;
-  pipeline: AppPipelineView | null;
+  workflow: AppWorkflowView;
   spec: AppSpecView | null;
   product: AppProductView | null;
   architecture: AppArchitectureView | null;
   ux: AppUxView | null;
   wireframe: AppWireframeView | null;
-  build_groups: AppBuildGroupView[];
-  build_tasks: AppBuildTaskEvidenceView[];
   deploy: AppDeployView | null;
-  features: Array<{ id: number; name: string; kind: string; summary: string | null; verified_in_preview: boolean }>;
 }
 
 export interface AppProductCapabilityView {
@@ -177,46 +209,14 @@ export interface AppWireframeView {
   approved_at: string | null;
   audit: { ok: boolean; issues: string[] };
   plan: {
-    v: 1;
+    v: 2;
     summary: string;
     flows: Array<{ id: string; name: string; actor: string; goal: string; entry_screen_id: string; source_ids: string[]; steps: Array<{ id: string; screen_id: string; action: string; result: string; reads: string[]; writes: string[]; next_step_ids: string[] }> }>;
     screens: Array<{ screen_id: string; route: string; flow_ids: string[]; hierarchy: string[]; regions: Array<{ id: string; purpose: string; components: string[] }>; actions: string[]; data_bindings: Array<{ entity: string; fields: string[]; purpose: string; fixture_scenario: string }>; states: string[]; responsive: string; accessibility: string[] }>;
     tdd_cases: Array<{ id: string; title: string; architecture_case_ids: string[]; source_ids: string[]; flow_ids: string[]; screen_ids: string[]; preconditions: string[]; steps: string[]; expected: string }>;
-    build_groups: Array<{ id: string; name: string; goal: string; sequence: number; complexity: 'small' | 'medium' | 'large'; flow_ids: string[]; capability_ids: string[]; screen_ids: string[]; depends_on: string[]; task_ids: string[] }>;
-    tasks: Array<{ id: string; group_id: string; screen_id: string | null; kind: string; title: string; sequence: number; complexity: 'small' | 'medium' | 'large'; depends_on: string[]; tdd_case_ids: string[]; entity_names: string[]; source_ids: string[] }>;
+    delivery_slices: Array<{ id: string; name: string; goal: string; sequence: number; complexity: 'small' | 'medium' | 'large'; flow_ids: string[]; capability_ids: string[]; screen_ids: string[]; depends_on: string[]; checklist_item_ids: string[] }>;
+    checklist_items: Array<{ id: string; slice_id: string; screen_id: string | null; kind: string; title: string; sequence: number; complexity: 'small' | 'medium' | 'large'; depends_on: string[]; tdd_case_ids: string[]; entity_names: string[]; source_ids: string[] }>;
   };
-}
-
-export interface AppBuildGroupView { id: number; wireframe_revision_id: number; group_id: string; status: 'pending' | 'active' | 'review' | 'approved'; summary: string | null; feedback: string | null; submitted_at: string | null; approved_at: string | null }
-export interface AppBuildTaskEvidenceView { id: number; wireframe_revision_id: number; task_id: string; status: 'pending' | 'active' | 'done'; summary: string | null; evidence_json: string | null; completed_at: string | null }
-
-export interface AppRepairArea {
-  id: 'workspace' | 'database' | 'pipeline';
-  status: 'healthy' | 'repairable' | 'attention';
-  issues: Array<{
-    code: string;
-    severity: 'warning' | 'error';
-    message: string;
-    repairable: boolean;
-  }>;
-  actions: Array<{ title: string; reason: string }>;
-}
-
-export interface AppRepairReport {
-  changed: boolean;
-  healthy: boolean;
-  action_count: number;
-  areas: AppRepairArea[];
-  pipeline: {
-    v: 2 | 3 | 4;
-    stages: AppPipelineStage[];
-    roadmap: Array<{ name: string; tier: AppRoadmapTier; feature_id: string | null; source: 'spec' }>;
-  };
-}
-
-export interface AppRepairPreview {
-  preview_token: string;
-  report: AppRepairReport;
 }
 
 export interface AppArchitectureView {
@@ -246,7 +246,7 @@ export interface AppArchitectureView {
         id: string;
         title: string;
         layer: 'database' | 'worker' | 'browser' | 'e2e';
-        owner_stage: 'database' | 'design' | 'backend' | 'review';
+        owner_profile: 'data' | 'ui' | 'api' | 'verify';
         priority: 'critical' | 'important' | 'supporting';
         source_ids: string[];
         preconditions: string[];
@@ -259,7 +259,8 @@ export interface AppArchitectureView {
 
 export interface AppSpecImpactView {
   level: 'none' | 'low' | 'medium' | 'high';
-  stage_ids: AppStageId[];
+  affected_phases: AppWorkflowPhaseId[];
+  source_ids: string[];
   reasons: string[];
 }
 
@@ -333,6 +334,94 @@ export async function getAppStudioSession(id: number): Promise<AppStudioSessionD
   return unwrap(await fetch(`/api/app-studio/sessions/${id}`));
 }
 
+export interface AppAgentProfileConfigView {
+  enabled: boolean;
+  additional_prompt: string;
+  skills: string[];
+}
+
+export interface AppAgentConfigView {
+  v: 1;
+  coordinator_prompt: string;
+  coordinator_skills: string[];
+  profiles: Record<string, AppAgentProfileConfigView>;
+}
+
+export interface AppAgentSkillView {
+  id: string;
+  name: string;
+  description: string;
+  slash_command: string | null;
+  context_mode: string;
+  source: string;
+  author: string | null;
+}
+
+export interface AppAgentToolCallView {
+  id: number;
+  seq: number;
+  turn: number | null;
+  tool_name: string;
+  productive: 0 | 1;
+  is_error: 0 | 1;
+  refusal_kind: string | null;
+  duration_ms: number;
+  result_chars: number;
+  created_at: string;
+}
+
+export interface AppAgentRunView {
+  id: number;
+  run_id: string;
+  parent_run_id: string | null;
+  spawn_id: string | null;
+  profile: string;
+  label: string | null;
+  task_preview: string | null;
+  reason: string | null;
+  turns: number;
+  tool_calls: number;
+  productive_operations: number;
+  error_calls: number;
+  refused_calls: number;
+  elapsed_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  started_at: string;
+  completed_at: string | null;
+  tool_calls_detail: AppAgentToolCallView[];
+}
+
+export interface AppAgentOverviewView {
+  config: AppAgentConfigView;
+  coordinator: null | {
+    id: number;
+    title: string;
+    status: 'idle' | 'running' | 'error';
+    provider: string;
+    model: string;
+    agent: string | null;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    last_turn_input_tokens: number;
+    tool_permission_mode: 'ask' | 'auto' | 'unrestricted' | null;
+    reasoning_effort: string | null;
+    created_at: string;
+    updated_at: string;
+  };
+  profiles: Array<{
+    name: string;
+    enabled: boolean;
+    additional_prompt: string;
+    skills: string[];
+    cards: number;
+    active_cards: number;
+    runs: number;
+  }>;
+  runs: AppAgentRunView[];
+  available_skills: AppAgentSkillView[];
+}
+
 export async function patchAppProductScope(
   sessionId: number,
   input: { expected_revision_number: number; selections: Array<{ capability_id: string; selected: boolean; horizon?: AppProductCapabilityView['horizon'] }> },
@@ -344,56 +433,45 @@ export async function patchAppProductScope(
   }));
 }
 
-export async function patchAppStage(
+export async function getAppWorkflow(sessionId: number): Promise<AppWorkflowView> {
+  const result = await unwrap<{ workflow: AppWorkflowView }>(await fetch(`/api/app-studio/sessions/${sessionId}/workflow`));
+  return result.workflow;
+}
+
+export async function resolveAppApproval(
   sessionId: number,
-  stageId: AppStageId,
-  action: AppStageAction,
-  feedback?: string,
-): Promise<void> {
-  await unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/stage`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage_id: stageId, action, feedback }),
-    }),
-  );
+  approvalId: number,
+  decision: 'approve' | 'request_changes',
+  input: { feedback?: string; source_ids?: string[] } = {},
+): Promise<AppWorkflowView> {
+  const result = await unwrap<{ workflow: AppWorkflowView }>(await fetch(`/api/app-studio/sessions/${sessionId}/approvals/${approvalId}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `ui:${sessionId}:${approvalId}:${decision}` },
+    body: JSON.stringify({ decision, ...input }),
+  }));
+  return result.workflow;
 }
 
-export async function recheckAppStage(sessionId: number, stageId: AppStageId): Promise<{ ready_for_review: boolean }> {
-  return unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/stage/recheck`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage_id: stageId }),
-    }),
-  );
-}
-
-export async function initAppPipeline(sessionId: number): Promise<void> {
-  await unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/pipeline/init`, { method: 'POST' }));
-}
-
-export async function previewAppRepair(sessionId: number): Promise<AppRepairPreview> {
-  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/repair/preview`, { method: 'POST' }));
-}
-
-export async function applyAppRepair(
+export async function updateAppWorkItem(
   sessionId: number,
-  previewToken: string,
-): Promise<{ report: AppRepairReport; repair_id: number | null }> {
-  return unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/repair`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preview_token: previewToken }),
-    }),
-  );
+  workItemId: string,
+  input: { action: 'reorder' | 'pause' | 'resume' | 'cancel' | 'request_changes'; sort_order?: number; feedback?: string },
+): Promise<AppWorkflowView> {
+  const result = await unwrap<{ workflow: AppWorkflowView }>(await fetch(`/api/app-studio/sessions/${sessionId}/work-items/${encodeURIComponent(workItemId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }));
+  return result.workflow;
 }
 
-export async function undoAppRepair(sessionId: number, repairId: number): Promise<void> {
-  await unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/repair/${repairId}/undo`, { method: 'POST' }),
-  );
+export async function resolveAppDecision(sessionId: number, decisionId: number, answer: string): Promise<AppWorkflowView> {
+  const result = await unwrap<{ workflow: AppWorkflowView }>(await fetch(`/api/app-studio/sessions/${sessionId}/decisions/${decisionId}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer }),
+  }));
+  return result.workflow;
 }
 
 export async function deleteAppStudioSession(sessionId: number): Promise<void> {
@@ -417,21 +495,6 @@ export async function createAppEvolution(
   );
 }
 
-export async function applyAppEvolution(
-  sessionId: number,
-  evolutionId: number,
-): Promise<{ impact: AppSpecImpactView; evolution: AppEvolutionView }> {
-  return unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/evolutions/${evolutionId}/apply`, { method: 'POST' }),
-  );
-}
-
-export async function rejectAppEvolution(sessionId: number, evolutionId: number): Promise<{ evolution: AppEvolutionView }> {
-  return unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/evolutions/${evolutionId}/reject`, { method: 'POST' }),
-  );
-}
-
 /** Discard an empty draft evolution (409 if it already has a proposed revision). */
 export async function deleteAppEvolution(sessionId: number, evolutionId: number): Promise<{ deleted_id: number }> {
   return unwrap(
@@ -439,19 +502,36 @@ export async function deleteAppEvolution(sessionId: number, evolutionId: number)
   );
 }
 
-export async function patchBuildGroup(
+export async function getAppAgentOverview(sessionId: number): Promise<AppAgentOverviewView> {
+  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/agents`));
+}
+
+export async function saveAppAgentConfig(sessionId: number, config: AppAgentConfigView): Promise<AppAgentConfigView> {
+  const result = await unwrap<{ config: AppAgentConfigView }>(await fetch(`/api/app-studio/sessions/${sessionId}/agents/config`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }));
+  return result.config;
+}
+
+export async function saveAppAgentRuntime(sessionId: number, input: { provider: string; model: string; reasoning_effort: string | null }): Promise<{ provider: string; model: string; reasoning_effort: string | null }> {
+  const result = await unwrap<{ runtime: { provider: string; model: string; reasoning_effort: string | null } }>(await fetch(`/api/app-studio/sessions/${sessionId}/agents/runtime`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }));
+  return result.runtime;
+}
+
+export async function proposeAppEvolution(
   sessionId: number,
-  groupId: string,
-  action: 'approve' | 'reopen',
-  feedback?: string,
-): Promise<{ groups: AppBuildGroupView[]; tasks: AppBuildTaskEvidenceView[] }> {
-  return unwrap(
-    await fetch(`/api/app-studio/sessions/${sessionId}/build-groups/${encodeURIComponent(groupId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, feedback }),
-    }),
-  );
+  evolutionId: number,
+  input: { spec: AppSpecView; title?: string; summary?: string; change_reason?: string },
+): Promise<{ evolution: AppEvolutionView; revision: AppSpecRevisionView; impact: AppSpecImpactView }> {
+  return unwrap(await fetch(`/api/app-studio/sessions/${sessionId}/evolutions/${evolutionId}/propose`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  }));
 }
 
 // ── Criação (SSE) ────────────────────────────────────────────────────

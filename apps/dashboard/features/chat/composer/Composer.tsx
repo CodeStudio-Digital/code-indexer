@@ -40,12 +40,7 @@ const BORDER_TINT: Record<AgentId, string> = {
   build: 'border-l-emerald-500',
   admin: 'border-l-rose-500',
   spec: 'border-l-amber-500',
-  app_spec: 'border-l-indigo-500',
-  app_db: 'border-l-teal-500',
-  app_architect: 'border-l-blue-500',
-  app_ux: 'border-l-pink-500',
-  app_wireframe: 'border-l-cyan-500',
-  app_product: 'border-l-emerald-500',
+  app_orchestrator: 'border-l-violet-500',
   api: 'border-l-cyan-500',
   diagram: 'border-l-violet-500',
   builder: 'border-l-fuchsia-500',
@@ -399,7 +394,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     const skillPicks = props.skillPicks ?? [];
 
     return (
-      <div className="relative border-t bg-card" {...dropHandlers}>
+      <div className="relative border-t border-[var(--workbench-border)] bg-[var(--workbench-raised)]" {...dropHandlers}>
         <DropOverlay show={isDragging} />
         {props.queuedStrip}
         {(attachments.length > 0 || filePicks.length > 0 || skillPicks.length > 0) && (

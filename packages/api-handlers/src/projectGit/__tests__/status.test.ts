@@ -107,7 +107,7 @@ function makeHandlers(root: string) {
 }
 
 describe('project git status', () => {
-  it('returns summary without files and without running full git status', async () => {
+  it('returns summary without files using one git status process', async () => {
     const handlers = makeHandlers(await setupRepo());
     gitSpawnStats.statusCalls = 0;
 
@@ -115,7 +115,7 @@ describe('project git status', () => {
 
     expect(status.branch).toBe('main');
     expect('files' in status).toBe(false);
-    expect(gitSpawnStats.statusCalls).toBe(0);
+    expect(gitSpawnStats.statusCalls).toBe(1);
   });
 
   it('parses full porcelain v2 status with a single git status call', async () => {

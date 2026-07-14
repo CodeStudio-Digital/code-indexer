@@ -14,6 +14,7 @@
 import {
   BarChart3,
   Bell,
+  BookOpen,
   ClipboardList,
   Compass,
   Gauge,
@@ -35,6 +36,7 @@ import { PlansPanel } from './PlansPanel.js';
 import { DiagramPanel } from './diagram/DiagramPanel.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
 import { NotificationsPanel } from '../notifications/NotificationsPanel.js';
+import { ConversationChaptersPanel } from '../messages/ConversationChapters.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
@@ -117,6 +119,17 @@ export function RightPanelHost(props: RightPanelHostProps) {
       return (
         <PanelChrome title={t('chat:rightRail.drive', 'Drive')} icon={HardDrive} onClose={onClose}>
           <SessionDriveView sessionId={sessionId} active />
+        </PanelChrome>
+      );
+    case 'chapters':
+      return (
+        <PanelChrome title={t('chat:rightRail.chapters', 'Chapters')} icon={BookOpen} onClose={onClose}
+          bodyClassName="overflow-hidden">
+          <ConversationChaptersPanel
+            sessionId={sessionId}
+            sessionStatus={props.session?.status}
+            fallbackSummary={props.session?.compaction_summary}
+          />
         </PanelChrome>
       );
     case 'config':

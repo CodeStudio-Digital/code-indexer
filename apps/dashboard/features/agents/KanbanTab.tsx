@@ -5,6 +5,7 @@ import { KanbanColumn } from './KanbanColumn.js';
 import { KanbanCardModal } from './KanbanCardModal.js';
 import { useKanbanState } from './useKanbanState.js';
 import { Button } from '../../components/ui/button.js';
+import { WorkBoardToolbar, WorkBoardViewport } from '../../components/work-board/index.js';
 import { Input } from '../../components/ui/input.js';
 import {
   Dialog,
@@ -277,7 +278,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
       )}
 
       {/* Toolbar: priority pipeline trigger + auto toggle + clear */}
-      <div className="px-3 pt-2 pb-1 flex items-center gap-2 text-xs">
+      <WorkBoardToolbar>
         <Button
           size="sm"
           variant={priorityScores ? 'default' : 'outline'}
@@ -320,11 +321,10 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
         >
           <Sparkles className="h-3 w-3 mr-1" /> Recommend role
         </Button>
-      </div>
+      </WorkBoardToolbar>
 
       {/* Columns */}
-      <div className="flex-1 overflow-x-auto p-3">
-        <div className="flex gap-3 h-full min-h-0">
+      <WorkBoardViewport>
           {KANBAN_COLUMNS.map((col) => (
             <KanbanColumn
               key={col}
@@ -343,8 +343,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
               titleForCard={(id) => titleById.get(id)}
             />
           ))}
-        </div>
-      </div>
+      </WorkBoardViewport>
 
       {/* Card detail modal */}
       {activeCard && (

@@ -1,5 +1,6 @@
 import type { AppSpec } from '../spec/types.js';
 import type { AppProductModel } from '../product/types.js';
+import { stableRequirementSourceIds } from '../spec/stable-ids.js';
 import {
   APP_ARCHITECTURE_SOURCE_DOMAINS,
   APP_STACK_PROFILE_ID,
@@ -15,8 +16,8 @@ export interface AppArchitectureAudit {
 
 export function requiredTestSourceIds(spec: AppSpec, product?: AppProductModel | null): string[] {
   const ids: string[] = [];
-  for (let i = 0; i < (spec.requirements?.acceptance_criteria?.length ?? 0); i += 1) ids.push(`acceptance:${i}`);
-  for (let i = 0; i < (spec.requirements?.business_rules?.length ?? 0); i += 1) ids.push(`rule:${i}`);
+  ids.push(...stableRequirementSourceIds(spec, 'acceptance'));
+  ids.push(...stableRequirementSourceIds(spec, 'rule'));
   for (const behavior of spec.behaviors ?? []) ids.push(`behavior:${behavior.id}`);
   for (const entity of spec.database.entities) ids.push(`entity:${entity.name}`);
   if (spec.auth.enabled) ids.push('auth');

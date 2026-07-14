@@ -36,7 +36,13 @@ export interface CompletionItemDTO {
   labelDetails?: { detail?: string; description?: string };
   commitCharacters?: string[];
   textEdit?: { range: { start: Position; end: Position }; newText: string };
+  insertReplaceEdit?: { insert: { start: Position; end: Position }; replace: { start: Position; end: Position }; newText: string };
+  deprecated?: boolean;
+  tags?: number[];
+  origin?: 'ts' | 'lsp' | 'index';
 }
+
+export interface CompletionListDTO { items: CompletionItemDTO[]; isIncomplete: boolean }
 
 /** Our suggestion carries the opaque LSP item + file for lazy resolve. */
 export type SuggestionWithMeta = MonacoNs.languages.CompletionItem & {
@@ -68,6 +74,10 @@ export interface CodeActionDTO {
   kind: string;
   isPreferred?: boolean;
   edit?: WorkspaceEditDTO;
+  command?: { command: string; arguments?: unknown[] };
+  originServerId?: string;
+  raw?: unknown;
+  needsResolve?: boolean;
 }
 
 export function toEditOps(

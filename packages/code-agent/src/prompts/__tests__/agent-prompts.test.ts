@@ -120,24 +120,21 @@ describe('capability-aligned composition', () => {
     projectRoot: 'D:/nonexistent-prompt-test',
     os: 'win32',
     providerFamily: 'zai',
-    profile: 'bootstrap',
-    agentId: 'app_spec',
-    availableTools: new Set(['ask_user', 'app_get_context', 'app_get_spec', 'app_save_spec']),
+    profile: 'navigate',
+    agentId: 'app_orchestrator',
+    availableTools: new Set(['app_get_workflow', 'app_request_decision', 'app_dispatch_ready_work', 'execute_tasks']),
   };
 
-  it('does not advertise capabilities removed by a specialist allowlist', () => {
+  it('advertises the coordinator identity and its durable workflow tools', () => {
     const prompt = buildSystemPrompt(BASE_CTX);
-    expect(prompt).toContain('# App Studio Spec Specialist mode is ACTIVE');
-    expect(prompt).toContain('`ask_user`');
-    expect(prompt).not.toContain('# Native tools available to this session');
-    expect(prompt).not.toContain('# Subagents (isolated delegation)');
-    expect(prompt).not.toContain('`task_list`');
-    expect(prompt).not.toContain('# Memory');
+    expect(prompt).toContain('# App Studio Coordinator mode is ACTIVE');
+    expect(prompt).toContain('`app_get_workflow`');
+    expect(prompt).toContain('`execute_tasks`');
   });
 
-  it('loads each specialist identity exactly once', () => {
+  it('loads the coordinator identity exactly once', () => {
     const prompt = buildSystemPrompt(BASE_CTX);
-    expect(prompt.split('# App Studio Spec Specialist mode is ACTIVE')).toHaveLength(2);
+    expect(prompt.split('# App Studio Coordinator mode is ACTIVE')).toHaveLength(2);
   });
 
   it('inserts session-fixed extensions before the dynamic boundary', () => {

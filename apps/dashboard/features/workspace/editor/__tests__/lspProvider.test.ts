@@ -38,6 +38,9 @@ vi.mock('../lsp/signatureHelp.js', () => ({
 vi.mock('../lsp/documentSymbols.js', () => ({
   registerDocumentSymbolProviders: vi.fn(() => [disposer()]),
 }));
+vi.mock('../lsp/symbol-navigation-ui.js', () => ({
+  registerSymbolNavigationCodeLensProvider: vi.fn(() => [disposer()]),
+}));
 vi.mock('../lsp/formatting.js', () => ({
   registerFormattingProviders: vi.fn(() => [disposer()]),
 }));
@@ -56,6 +59,7 @@ import { registerCompletionProviders } from '../lsp/completion.js';
 import { registerRenameProviders } from '../lsp/rename.js';
 import { registerSignatureHelpProviders } from '../lsp/signatureHelp.js';
 import { registerDocumentSymbolProviders } from '../lsp/documentSymbols.js';
+import { registerSymbolNavigationCodeLensProvider } from '../lsp/symbol-navigation-ui.js';
 import { registerFormattingProviders } from '../lsp/formatting.js';
 import {
   registerSemanticTokenProviders,
@@ -75,6 +79,7 @@ const SUB_PROVIDERS = [
   registerRenameProviders,
   registerSignatureHelpProviders,
   registerDocumentSymbolProviders,
+  registerSymbolNavigationCodeLensProvider,
   registerFormattingProviders,
   registerSemanticTokenProviders,
   registerNavProviders,

@@ -31,7 +31,6 @@ import {
   KanbanSquare,
   MessageSquare,
   Network,
-  Play,
   type LucideIcon,
 } from 'lucide-react';
 import type { BuildTab, DataTab, WorkTab, Zone } from './types.js';
@@ -65,7 +64,6 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   { zone: 'build', tab: 'docs', Icon: BookText, labelKey: 'company.docs', fallbackLabel: 'Docs', advanced: true },
   { zone: 'build', tab: 'tests', Icon: FlaskConical, labelKey: 'company.tests', fallbackLabel: 'Tests', advanced: true },
   { zone: 'build', tab: 'api', Icon: BookOpen, labelKey: 'company.apiReference', fallbackLabel: 'API', advanced: true },
-  { zone: 'build', tab: 'runners', Icon: Play, labelKey: 'company.runners', fallbackLabel: 'Runners', advanced: true },
   { zone: 'data', tab: 'snapshots', Icon: GitCompare, labelKey: 'company.snapshots', fallbackLabel: 'Snapshots', advanced: true },
   { zone: 'data', tab: 'archived', Icon: Archive, labelKey: 'company.archived', fallbackLabel: 'Archived', advanced: true },
 ] as const;

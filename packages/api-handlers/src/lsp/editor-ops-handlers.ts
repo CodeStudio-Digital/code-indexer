@@ -138,19 +138,20 @@ export function createEditorOpsHandlers(
       // for server languages (php today).
       const root = helpers.requireProjectRoot(projectId);
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      if (!serverForLanguage(lang)) {
+      const formatterServerId = lang === 'python' ? 'ruff' : undefined;
+      if (!serverForLanguage(lang) && lang !== 'python') {
         throw new ApiError(
           'unsupported_language', 422,
           `No formatter for ${lang} files — formatting needs a language server ` +
           '(TS/JS/JSON/CSS/HTML format via the editor’s built-in workers).',
         );
       }
-      const edits = await serverFormatting(db, projectId, root, file, lang, options, range);
+      const edits = await serverFormatting(db, projectId, root, file, lang, options, range, formatterServerId);
       if (!edits) {
         throw new ApiError(
           'server_unavailable', 503,
-          `The ${lang} language server could not format the file — ` +
-          'check it is installed and ready (language chip in the status bar).',
+          `The ${lang === 'python' ? 'Ruff formatter' : `${lang} language server`} could not format the file — ` +
+          'check it is installed and ready in Settings > Editor > Autocomplete.',
         );
       }
       return edits;

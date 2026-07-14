@@ -6,8 +6,7 @@
  */
 import { useTranslation } from 'react-i18next';
 import { BookOpen, Boxes, History, ListChecks, Monitor, type LucideIcon } from 'lucide-react';
-import { cn } from '../../../lib/utils.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
+import { RailButton, RailContainer } from '../../../components/chrome/index.js';
 import type { DesignSystemSessionDetail } from '../design-system-api.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { ComponentsPanel } from './ComponentsPanel.js';
@@ -34,38 +33,22 @@ export function DsStudioRail({
 }) {
   const { t } = useTranslation('designSystems');
   return (
-    <nav
-      className="flex w-10 shrink-0 flex-col items-center gap-0.5 border-l bg-card/40 py-1"
-      aria-label={t('studio.railAria')}
-    >
+    <RailContainer side="right" aria-label={t('studio.railAria')}>
       {TABS.map(({ id, icon: Icon, labelKey }) => {
         const isActive = active === id;
         return (
-          <Tooltip key={id}>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => onSelect(id)}
-                aria-label={t(labelKey)}
-                aria-current={isActive ? 'page' : undefined}
-                className={cn(
-                  'relative grid h-8 w-8 place-items-center rounded-md transition-colors',
-                  isActive
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {isActive && (
-                  <span aria-hidden className="absolute -right-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="left">{t(labelKey)}</TooltipContent>
-          </Tooltip>
+          <RailButton
+            key={id}
+            icon={Icon}
+            label={t(labelKey)}
+            side="right"
+            role="toggle"
+            active={isActive}
+            onClick={() => onSelect(id)}
+          />
         );
       })}
-    </nav>
+    </RailContainer>
   );
 }
 

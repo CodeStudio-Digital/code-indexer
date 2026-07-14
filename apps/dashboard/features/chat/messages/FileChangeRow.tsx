@@ -1,15 +1,20 @@
 /**
  * One file row shared by `FileEditBlock` and `TurnFilesSummary`: A/M/D badge +
- * path + `+added/−removed` (from the session snapshot, keyed by path) + a
- * chevron that expands the inline diff. Counts show `–` until the baseline is
- * indexed (streaming race); expand is disabled until then.
+ * path + `+added/−removed` from an explicitly supplied snapshot + a chevron
+ * that expands the inline diff. Completed-round callers pass the immutable
+ * round snapshot; tool-call/legacy rows stay non-actionable rather than
+ * falling back to the cumulative global baseline.
  */
 import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { InlineDiff } from '../../snapshots/diff/InlineDiff.js';
-import { useSnapshotActions, useSnapshotFile, statusKind } from './snapshot-files-context.js';
+import { useSnapshotActions, statusKind } from './snapshot-files-context.js';
 import type { EditFileRef, FileEditOp } from './edit-tools.js';
+import type {
+  RoundSnapshotFileSummary,
+  RoundSnapshotReviewFinding,
+} from '../../snapshots/types.js';
 
 const STATUS_STYLES: Record<'A' | 'M' | 'D', string> = {
   A: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
@@ -23,10 +28,22 @@ function opToKind(op: FileEditOp): 'A' | 'M' | 'D' {
   return 'M';
 }
 
-export function FileChangeRow({ file }: { file: EditFileRef }) {
+export function FileChangeRow({
+  file,
+  snapshot,
+  roundMessageId,
+  reviewFindings = [],
+  onRoundMutated,
+}: {
+  file: EditFileRef;
+  snapshot?: RoundSnapshotFileSummary;
+  roundMessageId?: number;
+  reviewFindings?: RoundSnapshotReviewFinding[];
+  onRoundMutated?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const actions = useSnapshotActions();
-  const summary = useSnapshotFile(file.path);
+  const summary = snapshot;
 
   const kind = summary ? statusKind(summary) : opToKind(file.op);
   const baselineId = summary?.baselineId;
@@ -69,6 +86,10 @@ export function FileChangeRow({ file }: { file: EditFileRef }) {
             scope={actions.scope}
             sessionId={actions.sessionId}
             baselineId={baselineId}
+            roundMessageId={roundMessageId ?? summary.roundMessageId}
+            globalBaselineId={summary.globalBaselineId}
+            reviewFindings={reviewFindings}
+            onMutated={onRoundMutated}
             refreshKey={summary?.lastEditedAt}
           />
         </div>

@@ -55,11 +55,11 @@ describe('CoderRunner pending user-message liveness', () => {
       toolContext: { cwd: process.cwd(), projectName: 'pending-message-test' },
     });
 
-    runner.pushUserMessage('initial message');
+    runner.pushUserMessage('initial message', { roundMessageId: 11 });
     const running = runner.run();
 
     await provider.firstTurnStarted.promise;
-    runner.pushUserMessage('queued during final turn');
+    runner.pushUserMessage('queued during final turn', { roundMessageId: 22 });
     provider.releaseFirstTurn.resolve();
 
     const result = await running;
@@ -69,5 +69,6 @@ describe('CoderRunner pending user-message liveness', () => {
     expect(provider.requests[1]).toContain('queued during final turn');
     expect(runner.turn).toBe(2);
     expect(runner.hasPendingUserMessages()).toBe(false);
+    expect(runner.roundMessageId).toBe(22);
   });
 });

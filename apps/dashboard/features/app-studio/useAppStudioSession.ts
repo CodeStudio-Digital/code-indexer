@@ -1,12 +1,9 @@
 /**
- * Polling do detail da sessão App Studio (5s, visibility-aware) — mesmo
- * padrão do DsStudioView. O detail alimenta Guia/GuideBar/Dados/Publicar.
+ * Detail inicial + eventos duráveis do workflow. O SSE invalida a leitura
+ * somente quando algo mudou, sem varrer toda a sessão a cada cinco segundos.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { usePolling } from '../../hooks/usePolling.js';
 import { getAppStudioSession, type AppStudioSessionDetail } from './app-studio-api.js';
-
-const REFRESH_INTERVAL_MS = 5_000;
 
 export function useAppStudioSession(sessionId: number): {
   detail: AppStudioSessionDetail | null;
@@ -28,7 +25,24 @@ export function useAppStudioSession(sessionId: number): {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  usePolling(() => void refresh(), REFRESH_INTERVAL_MS, { immediate: false });
+  useEffect(() => {
+    const events = new EventSource(`/api/app-studio/sessions/${sessionId}/events`);
+    const changed = (event: MessageEvent) => {
+      if (event.type !== 'heartbeat') void refresh();
+    };
+    const eventNames = [
+      'workflow.migrated', 'work_item.upserted', 'work_item.status_changed',
+      'work_item.reordered', 'approval.requested', 'approval.resolved',
+      'decision.requested', 'decision.resolved', 'blueprint.saved',
+      'publish.completed',
+    ];
+    eventNames.forEach((name) => events.addEventListener(name, changed));
+    events.onerror = () => setError((current) => current ?? 'A conexão ao workflow será retomada automaticamente.');
+    return () => {
+      eventNames.forEach((name) => events.removeEventListener(name, changed));
+      events.close();
+    };
+  }, [refresh, sessionId]);
 
   return { detail, error, refresh };
 }

@@ -36,6 +36,8 @@ export interface BaselineRow {
   project_id: number | null;
   file_path: string;
   content_before: string | null;
+  /** Full pre-session content used for rollback even when the visual diff is disabled. */
+  rollback_content: string | null;
   existed_before: number;
   baseline_hash: string;
   oversized: number;
@@ -71,6 +73,7 @@ export interface CreateBaselineInput {
   project_id?: number | null;
   file_path: string;
   content_before: string | null;
+  rollback_content?: string | null;
   existed_before: boolean;
   baseline_hash: string;
   oversized: boolean;
@@ -84,8 +87,82 @@ export interface AppendEditInput {
   was_delete: boolean;
 }
 
+export interface RoundSnapshotRow {
+  id: number;
+  session_kind: SessionKind;
+  session_id: number;
+  round_message_id: number;
+  global_baseline_id: number;
+  project_id: number | null;
+  file_path: string;
+  content_before: string | null;
+  existed_before: number;
+  content_after: string | null;
+  existed_after: number;
+  oversized: number;
+  status: BaselineStatus;
+  first_seen_at: string;
+  last_edited_at: string;
+  closed_at: string | null;
+}
+
+export interface RecordRoundSnapshotMutationInput {
+  session_kind: SessionKind;
+  session_id: number;
+  round_message_id: number;
+  global_baseline_id: number;
+  project_id?: number | null;
+  file_path: string;
+  content_before: string | null;
+  existed_before: boolean;
+  content_after: string | null;
+  existed_after: boolean;
+  oversized: boolean;
+}
+
+export interface RoundHunkDecisionRow {
+  id: number;
+  round_snapshot_id: number;
+  hunk_fingerprint: string;
+  decision: HunkDecision;
+  decided_at: string;
+}
+
+export interface RoundReviewFindingRow {
+  id: number;
+  round_snapshot_id: number;
+  hunk_fingerprint: string | null;
+  old_line: number | null;
+  new_line: number | null;
+  severity: 'critical' | 'high' | 'medium' | 'low' | null;
+  body: string;
+  suggested_fix: string | null;
+  diff_excerpt: string | null;
+  created_at: string;
+}
+
+export interface CreateRoundReviewFindingInput {
+  round_snapshot_id: number;
+  hunk_fingerprint?: string | null;
+  old_line?: number | null;
+  new_line?: number | null;
+  severity?: RoundReviewFindingRow['severity'];
+  body: string;
+  suggested_fix?: string | null;
+  diff_excerpt?: string | null;
+}
+
 export class SessionFileSnapshotStore {
-  constructor(private readonly db: DB) {}
+  private readonly supportsRollbackContent: boolean;
+
+  constructor(private readonly db: DB) {
+    try {
+      const columns = db.prepare('PRAGMA table_info(session_file_baselines)').all() as Array<{ name: string }>;
+      this.supportsRollbackContent = columns.some((column) => column.name === 'rollback_content');
+    } catch {
+      this.supportsRollbackContent = false;
+    }
+  }
 
   /**
    * Return the currently-active baseline for a file, if any. Used to decide
@@ -135,30 +212,43 @@ export class SessionFileSnapshotStore {
       );
       let created = false;
       if (!baseline) {
-        const stmt = this.db.prepare(
-          `INSERT INTO session_file_baselines
-            (session_kind, session_id, project_id, file_path, content_before, existed_before,
-             baseline_hash, oversized, status, first_seen_at, last_edited_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
-        );
-        const r = stmt.run(
+        const stmt = this.supportsRollbackContent
+          ? this.db.prepare(
+              `INSERT INTO session_file_baselines
+                (session_kind, session_id, project_id, file_path, content_before, rollback_content,
+                 existed_before, baseline_hash, oversized, status, first_seen_at, last_edited_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+            )
+          : this.db.prepare(
+              `INSERT INTO session_file_baselines
+                (session_kind, session_id, project_id, file_path, content_before, existed_before,
+                 baseline_hash, oversized, status, first_seen_at, last_edited_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+            );
+        const values = [
           create.session_kind,
           create.session_id,
           create.project_id ?? null,
           create.file_path,
           create.content_before,
+          ...(this.supportsRollbackContent ? [create.rollback_content ?? create.content_before] : []),
           create.existed_before ? 1 : 0,
           create.baseline_hash,
           create.oversized ? 1 : 0,
-        );
+        ];
+        const r = stmt.run(...values);
         baseline = this.getBaselineById(Number(r.lastInsertRowid))!;
         created = true;
       } else {
         this.db
           .prepare(
-            `UPDATE session_file_baselines SET last_edited_at = datetime('now') WHERE id = ?`,
+            `UPDATE session_file_baselines
+                SET last_edited_at = datetime('now'),
+                    oversized = CASE WHEN oversized = 1 OR ? = 1 THEN 1 ELSE 0 END
+              WHERE id = ?`,
           )
-          .run(baseline.id);
+          .run(create.oversized ? 1 : 0, baseline.id);
+        baseline = this.getBaselineById(baseline.id)!;
       }
       this.db
         .prepare(
@@ -217,6 +307,173 @@ export class SessionFileSnapshotStore {
       .all(baselineId) as HunkDecisionRow[];
   }
 
+  /**
+   * Upsert the immutable before/after envelope for one user round. The first
+   * mutation owns `content_before`; later mutations only advance `content_after`.
+   */
+  recordRoundSnapshotMutation(input: RecordRoundSnapshotMutationInput): RoundSnapshotRow {
+    const tx = this.db.transaction(() => {
+      const existing = this.db.prepare(
+        `SELECT * FROM session_file_round_snapshots
+          WHERE session_kind = ? AND session_id = ? AND round_message_id = ?
+            AND project_id IS ? AND file_path = ?
+          LIMIT 1`,
+      ).get(
+        input.session_kind,
+        input.session_id,
+        input.round_message_id,
+        input.project_id ?? null,
+        input.file_path,
+      ) as RoundSnapshotRow | undefined;
+
+      if (existing) {
+        this.db.prepare(
+          `UPDATE session_file_round_snapshots
+              SET content_after = ?, existed_after = ?,
+                  oversized = CASE WHEN oversized = 1 OR ? = 1 THEN 1 ELSE 0 END,
+                  global_baseline_id = ?, status = 'active', closed_at = NULL,
+                  last_edited_at = datetime('now')
+            WHERE id = ?`,
+        ).run(
+          input.content_after,
+          input.existed_after ? 1 : 0,
+          input.oversized ? 1 : 0,
+          input.global_baseline_id,
+          existing.id,
+        );
+        return this.getRoundSnapshotById(existing.id)!;
+      }
+
+      const inserted = this.db.prepare(
+        `INSERT INTO session_file_round_snapshots
+          (session_kind, session_id, round_message_id, global_baseline_id, project_id,
+           file_path, content_before, existed_before, content_after, existed_after,
+           oversized, status, first_seen_at, last_edited_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+      ).run(
+        input.session_kind,
+        input.session_id,
+        input.round_message_id,
+        input.global_baseline_id,
+        input.project_id ?? null,
+        input.file_path,
+        input.content_before,
+        input.existed_before ? 1 : 0,
+        input.content_after,
+        input.existed_after ? 1 : 0,
+        input.oversized ? 1 : 0,
+      );
+      return this.getRoundSnapshotById(Number(inserted.lastInsertRowid))!;
+    });
+    return tx();
+  }
+
+  getRoundSnapshotById(id: number): RoundSnapshotRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM session_file_round_snapshots WHERE id = ?',
+    ).get(id) as RoundSnapshotRow | undefined;
+    return row ?? null;
+  }
+
+  listRoundSnapshots(
+    kind: SessionKind,
+    sessionId: number,
+    roundMessageId: number,
+    opts: { includeClosed?: boolean } = {},
+  ): RoundSnapshotRow[] {
+    const statusClause = opts.includeClosed ? '' : " AND status = 'active'";
+    return this.db.prepare(
+      `SELECT * FROM session_file_round_snapshots
+        WHERE session_kind = ? AND session_id = ? AND round_message_id = ?${statusClause}
+        ORDER BY first_seen_at ASC, id ASC`,
+    ).all(kind, sessionId, roundMessageId) as RoundSnapshotRow[];
+  }
+
+  listRoundHunkDecisions(roundSnapshotId: number): RoundHunkDecisionRow[] {
+    return this.db.prepare(
+      `SELECT * FROM session_file_round_hunk_decisions
+        WHERE round_snapshot_id = ? ORDER BY id ASC`,
+    ).all(roundSnapshotId) as RoundHunkDecisionRow[];
+  }
+
+  upsertRoundHunkDecision(
+    roundSnapshotId: number,
+    fingerprint: string,
+    decision: HunkDecision,
+  ): void {
+    this.db.prepare(
+      `INSERT INTO session_file_round_hunk_decisions
+        (round_snapshot_id, hunk_fingerprint, decision, decided_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(round_snapshot_id, hunk_fingerprint) DO UPDATE SET
+         decision = excluded.decision,
+         decided_at = excluded.decided_at`,
+    ).run(roundSnapshotId, fingerprint, decision);
+  }
+
+  closeRoundSnapshot(id: number, status: 'closed_kept' | 'closed_reverted'): void {
+    this.db.prepare(
+      `UPDATE session_file_round_snapshots
+          SET status = ?, closed_at = datetime('now')
+        WHERE id = ? AND status = 'active'`,
+    ).run(status, id);
+  }
+
+  listRoundReviewFindings(
+    kind: SessionKind,
+    sessionId: number,
+    roundMessageId: number,
+  ): RoundReviewFindingRow[] {
+    return this.db.prepare(
+      `SELECT f.*
+         FROM session_file_round_review_findings f
+         JOIN session_file_round_snapshots s ON s.id = f.round_snapshot_id
+        WHERE s.session_kind = ? AND s.session_id = ? AND s.round_message_id = ?
+        ORDER BY f.id ASC`,
+    ).all(kind, sessionId, roundMessageId) as RoundReviewFindingRow[];
+  }
+
+  replaceRoundReviewFindings(
+    roundSnapshotIds: number[],
+    findings: CreateRoundReviewFindingInput[],
+  ): RoundReviewFindingRow[] {
+    if (roundSnapshotIds.length === 0) return [];
+    const placeholders = roundSnapshotIds.map(() => '?').join(',');
+    const tx = this.db.transaction(() => {
+      this.db.prepare(
+        `DELETE FROM session_file_round_review_findings
+          WHERE round_snapshot_id IN (${placeholders})`,
+      ).run(...roundSnapshotIds);
+      const insert = this.db.prepare(
+        `INSERT INTO session_file_round_review_findings
+          (round_snapshot_id, hunk_fingerprint, old_line, new_line, severity,
+           body, suggested_fix, diff_excerpt, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      );
+      const ids: number[] = [];
+      for (const finding of findings) {
+        const result = insert.run(
+          finding.round_snapshot_id,
+          finding.hunk_fingerprint ?? null,
+          finding.old_line ?? null,
+          finding.new_line ?? null,
+          finding.severity ?? null,
+          finding.body,
+          finding.suggested_fix ?? null,
+          finding.diff_excerpt ?? null,
+        );
+        ids.push(Number(result.lastInsertRowid));
+      }
+      if (ids.length === 0) return [];
+      const findingPlaceholders = ids.map(() => '?').join(',');
+      return this.db.prepare(
+        `SELECT * FROM session_file_round_review_findings
+          WHERE id IN (${findingPlaceholders}) ORDER BY id ASC`,
+      ).all(...ids) as RoundReviewFindingRow[];
+    });
+    return tx();
+  }
+
   upsertHunkDecision(
     baselineId: number,
     fingerprint: string,
@@ -243,6 +500,15 @@ export class SessionFileSnapshotStore {
          WHERE id = ? AND status = 'active'`,
       )
       .run(status, baselineId);
+  }
+
+  /** A closed-kept global baseline may be reopened from history and restored. */
+  markBaselineReverted(baselineId: number): void {
+    this.db.prepare(
+      `UPDATE session_file_baselines
+          SET status = 'closed_reverted', closed_at = datetime('now')
+        WHERE id = ?`,
+    ).run(baselineId);
   }
 
   /** Returns IDs of all active baselines for a session — used by accept/revert-all. */

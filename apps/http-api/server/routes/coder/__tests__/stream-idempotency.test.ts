@@ -39,14 +39,19 @@ import type { CoderRuntime } from '../state.js';
 function makeRunner() {
   const state = { waiting: false };
   const pushCalls: string[] = [];
+  const pushExtras: unknown[] = [];
   return {
     runner: {
       isWaitingForInput: () => state.waiting,
       interruptWait: () => true,
-      pushUserMessage: (content: string) => { pushCalls.push(content); },
+      pushUserMessage: (content: string, extras: unknown) => {
+        pushCalls.push(content);
+        pushExtras.push(extras);
+      },
     },
     state,
     pushCalls,
+    pushExtras,
   };
 }
 
@@ -183,6 +188,7 @@ describe('POST /messages idempotency', () => {
     expect(r1.status).toBe(200);
     expect(h.appendCalls).toHaveLength(1);
     expect(live.pushCalls).toEqual(['hi']);
+    expect(live.pushExtras).toEqual([{ selectedSkillIds: undefined, roundMessageId: 1 }]);
 
     // Retry (connection dropped, ReconnectingSSEClient re-POSTs the same body).
     const r2 = await h.post(
@@ -262,8 +268,8 @@ describe('POST /messages idempotency', () => {
     markEnded(live.bus, 'done', {});
   });
 
-  it('keeps a persisted app_spec session on the specialist agent even if the POST carries a stale agent', async () => {
-    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_spec' });
+  it('keeps a persisted app coordinator even if the POST carries a stale agent', async () => {
+    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
     const res = await h.post('/api/coder/sessions/1/messages', {
       content: 'seguir refinando',
@@ -273,23 +279,8 @@ describe('POST /messages idempotency', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_spec' });
+    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_orchestrator' });
   });
-
-  it.each(['app_db', 'app_architect'] as const)(
-    'keeps a persisted %s session on the specialist agent even if the POST carries a stale agent',
-    async (specialist) => {
-      const h = setup(new RecentMessageKeys(), { sessionAgent: specialist });
-      const res = await h.post('/api/coder/sessions/1/messages', {
-        content: 'continuar o trabalho especializado',
-        agent: 'explore',
-        client_msg_id: `lock-${specialist}`,
-      });
-      expect(res.status).toBe(200);
-      await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-      expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: specialist });
-    },
-  );
 
   it('still honors explicit agent changes for normal non-specialist sessions', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'build' });
@@ -338,8 +329,8 @@ describe('POST /continue idempotency + live-run hardening', () => {
     expect(runCoderMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a persisted app_spec session on the specialist agent during continue', async () => {
-    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_spec' });
+  it('keeps a persisted app coordinator during continue', async () => {
+    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
     const res = await h.post('/api/coder/sessions/1/continue', {
       agent: 'explore',
@@ -348,17 +339,6 @@ describe('POST /continue idempotency + live-run hardening', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_spec', resume: true });
-  });
-
-  it('keeps a persisted app_architect session on the specialist agent during continue', async () => {
-    const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_architect' });
-    const res = await h.post('/api/coder/sessions/1/continue', {
-      agent: 'explore',
-      client_msg_id: 'architect-continue',
-    });
-    expect(res.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_architect', resume: true });
+    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_orchestrator', resume: true });
   });
 });

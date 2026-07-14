@@ -1,6 +1,8 @@
 /**
- * Context Engine v2 orchestrator — replaces buildLayeredContext when the
- * `context_engine` knob is 'v2' (default). Gathers stable sources in parallel
+ * Context Engine v2/v3 orchestrator — replaces buildLayeredContext for both
+ * snippet engines. v3 adds consent-gated FTS related-code retrieval and split
+ * stable/dynamic revisions; v2 remains a kill-switch without related code.
+ * Gathers stable sources in parallel
  * (each race-boxed, all under a global deadline) with a per-region cache so
  * the stable block stays byte-identical across keystrokes, runs the volatile
  * sources (scope/members) concurrently, then packs everything by priority
@@ -13,10 +15,11 @@ import { enclosingClass } from '../../../lsp/fallback-members.js';
 import {
   markerSnippet, scopeSnippet, memberSnippets, siblingSnippets, importSnippets,
 } from './source-index.js';
-import { ensureTracking } from './edit-tracker.js';
+import { contextRevision, ensureTracking } from './edit-tracker.js';
 import { recentEditSnippets } from './source-recent-edits.js';
 import { openTabSnippets } from './source-open-tabs.js';
 import { lspDefSnippets } from './source-lsp-defs.js';
+import { relatedCodeSnippets } from './source-related-code.js';
 import {
   SNIPPET_OVERHEAD_TOK,
   type AssembledContext,
@@ -38,8 +41,9 @@ const KIND_PRIORITY: Record<ContextSnippet['kind'], number> = {
   'recent-edit': 3,
   'lsp-def': 4,
   'open-tab': 5,
-  siblings: 6,
-  imports: 7,
+  'related-code': 6,
+  siblings: 7,
+  imports: 8,
 };
 
 // ── Stable-region cache (module-level: Electron dual-factory) ─────────────
@@ -51,33 +55,35 @@ interface StableEntry {
 }
 const STABLE_CACHE_CAP = 32;
 const stableCache = new Map<string, StableEntry>();
+const dynamicCache = new Map<string, StableEntry>();
 /** Version distance that forces a rebuild even inside the TTL (big paste/refactor). */
 const VERSION_JUMP = 50;
 
-function cacheGet(key: string, ttlMs: number, docVersion: number): StableEntry | null {
-  const hit = stableCache.get(key);
+function cacheGet(cache: Map<string, StableEntry>, key: string, ttlMs: number, docVersion: number): StableEntry | null {
+  const hit = cache.get(key);
   if (!hit) return null;
   if (performance.now() - hit.builtAt > ttlMs || docVersion - hit.builtVersion >= VERSION_JUMP) {
-    stableCache.delete(key);
+    cache.delete(key);
     return null;
   }
-  stableCache.delete(key); // refresh recency
-  stableCache.set(key, hit);
+  cache.delete(key); // refresh recency
+  cache.set(key, hit);
   return hit;
 }
 
-function cacheSet(key: string, entry: StableEntry): void {
-  if (stableCache.has(key)) stableCache.delete(key);
-  stableCache.set(key, entry);
-  if (stableCache.size > STABLE_CACHE_CAP) {
-    const oldest = stableCache.keys().next().value;
-    if (oldest !== undefined) stableCache.delete(oldest);
+function cacheSet(cache: Map<string, StableEntry>, key: string, entry: StableEntry): void {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, entry);
+  if (cache.size > STABLE_CACHE_CAP) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
   }
 }
 
 /** Test hook — the cache is module state. */
 export function __clearStableCacheForTests(): void {
   stableCache.clear();
+  dynamicCache.clear();
 }
 
 /** Region identity: file + innermost enclosing container (or a 40-line bucket). */
@@ -148,6 +154,7 @@ export function renderSnippetSections(snips: ContextSnippet[]): string {
       case 'recent-edit': parts.push(`### Recently edited: ${s.filePath}\n${s.content}`); break;
       case 'lsp-def': parts.push(`### Definition: ${s.filePath}\n${s.content}`); break;
       case 'open-tab': parts.push(`### From open file: ${s.filePath}\n${s.content}`); break;
+      case 'related-code': parts.push(`### Similar code: ${s.filePath}\n${s.content}`); break;
       case 'siblings': parts.push(`### Current class & file\n${s.content}`); break;
       case 'imports': parts.push(`### Imported APIs\n${s.content}`); break;
     }
@@ -163,26 +170,26 @@ export async function assembleContext(input: EngineInput): Promise<AssembledCont
     try { syms = db.getSymbolsByFile(projectId, file); } catch { syms = []; }
     const doc = getDoc(projectId, file);
     const docVersion = doc?.version ?? 0;
+    const revision = contextRevision(projectId);
+    const windowKey = input.windows.prefix.slice(-300).replace(/\s+/g, ' ').slice(-120);
     const regionKey = regionKeyFor(projectId, file, syms, position.line);
+    const dynamicKey = `${regionKey}:r${revision}:w${windowKey}`;
     const enclosing = enclosingClass(syms, position.line);
 
     // Volatile sources start immediately (concurrent with the stable gather).
     const volatileP = memberSnippets(input, syms, doc?.content);
 
-    // Stable block: cache hit skips every stable source.
-    let stableSnips: ContextSnippet[];
-    let sources: Record<string, SourceStats> = {};
-    let stableCacheHit = false;
-    const cached = cacheGet(regionKey, input.cacheTtlMs, docVersion);
-    if (cached) {
-      stableSnips = cached.snips;
-      sources = { ...cached.sources };
-      stableCacheHit = true;
-    } else {
-      const EMPTY_RACE = { v: [] as ContextSnippet[], ms: 0, timedOut: true, error: false };
-      const gather = Promise.all([
+    // Imports/symbols use the long stable cache. Cursor-sensitive cross-file
+    // sources have their own revision and a short cache so they never freeze
+    // for the old 10-second window.
+    const EMPTY_RACE = { v: [] as ContextSnippet[], ms: 0, timedOut: true, error: false };
+    const staticCached = cacheGet(stableCache, regionKey, input.cacheTtlMs, docVersion);
+    const dynamicCached = cacheGet(dynamicCache, dynamicKey, Math.min(input.cacheTtlMs, 1_500), docVersion);
+    const staticGather = staticCached ? Promise.resolve(null) : raceSource(() => Promise.all([
         raceSource(() => siblingSnippets(db, projectId, syms, enclosing, file), input.sourceTimeoutMs, []),
         raceSource(() => importSnippets(db, projectId, file), input.sourceTimeoutMs, []),
+      ]), input.deadlineMs + 50, null);
+    const dynamicGather = dynamicCached ? Promise.resolve(null) : raceSource(() => Promise.all([
         input.toggles.recentEdits
           ? raceSource(() => recentEditSnippets(input), input.sourceTimeoutMs, [])
           : Promise.resolve(EMPTY_RACE),
@@ -192,20 +199,29 @@ export async function assembleContext(input: EngineInput): Promise<AssembledCont
         input.toggles.lspDefs
           ? raceSource(() => lspDefSnippets(input), input.sourceTimeoutMs, [])
           : Promise.resolve(EMPTY_RACE),
-      ]);
-      // Global deadline over the whole stable gather (belt over the per-source boxes).
-      const all = await raceSource(() => gather, input.deadlineMs + 50, null);
-      const [sib, imp, edits, tabs, defs] = all.v ?? [EMPTY_RACE, EMPTY_RACE, EMPTY_RACE, EMPTY_RACE, EMPTY_RACE];
-      stableSnips = [markerSnippet(file, input.language), ...edits.v, ...defs.v, ...tabs.v, ...sib.v, ...imp.v];
-      sources = {
-        siblings: statsOf(sib.v, sib),
-        imports: statsOf(imp.v, imp),
-        edits: statsOf(edits.v, edits),
-        tabs: statsOf(tabs.v, tabs),
-        lspDefs: statsOf(defs.v, defs),
-      };
-      cacheSet(regionKey, { snips: stableSnips, builtVersion: docVersion, builtAt: performance.now(), sources });
-    }
+        input.toggles.relatedCode
+          ? raceSource(() => relatedCodeSnippets(input), input.sourceTimeoutMs, [])
+          : Promise.resolve(EMPTY_RACE),
+      ]), input.deadlineMs + 50, null);
+    const [staticResult, dynamicResult] = await Promise.all([staticGather, dynamicGather]);
+    const [sib, imp] = staticResult?.v ?? [EMPTY_RACE, EMPTY_RACE];
+    const [edits, tabs, defs, related] = dynamicResult?.v ?? [EMPTY_RACE, EMPTY_RACE, EMPTY_RACE, EMPTY_RACE];
+    const staticEntry = staticCached ?? {
+      snips: [...sib.v, ...imp.v], builtVersion: docVersion, builtAt: performance.now(),
+      sources: { siblings: statsOf(sib.v, sib), imports: statsOf(imp.v, imp) },
+    };
+    const dynamicEntry = dynamicCached ?? {
+      snips: [...edits.v, ...defs.v, ...tabs.v, ...related.v], builtVersion: docVersion, builtAt: performance.now(),
+      sources: {
+        edits: statsOf(edits.v, edits), tabs: statsOf(tabs.v, tabs),
+        lspDefs: statsOf(defs.v, defs), related: statsOf(related.v, related),
+      },
+    };
+    if (!staticCached) cacheSet(stableCache, regionKey, staticEntry);
+    if (!dynamicCached) cacheSet(dynamicCache, dynamicKey, dynamicEntry);
+    const stableSnips = [markerSnippet(file, input.language), ...dynamicEntry.snips, ...staticEntry.snips];
+    const sources: Record<string, SourceStats> = { ...staticEntry.sources, ...dynamicEntry.sources };
+    const stableCacheHit = !!staticCached && !!dynamicCached;
 
     const mem = await volatileP;
     const volatileSnips: ContextSnippet[] = [];

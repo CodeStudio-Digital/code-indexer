@@ -260,6 +260,7 @@ export interface CoderMessageRow {
 
 /** Provenance of an append-only conversation chapter (migration 208). */
 export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild';
+export type ConversationChapterKind = 'context' | 'milestone' | 'rebuild';
 
 /**
  * Persisted chapter payload. JSON columns intentionally stay opaque strings:
@@ -283,6 +284,10 @@ export interface ConversationChapterRow {
   metrics_json: string | null;
   created_at: string;
   superseded_at: string | null;
+  /** Navigation classification; migration 217. */
+  chapter_kind: ConversationChapterKind;
+  /** 1 only when this row also moved coder_sessions.summary_boundary_id. */
+  advances_context_boundary: 0 | 1;
 }
 
 export interface ConversationChapterSearchResult extends ConversationChapterRow {
@@ -294,6 +299,82 @@ export interface ConversationChapterPage<T> {
   items: T[];
   /** Opaque store cursor. Null means the page is complete. */
   next_cursor: string | null;
+  /** Additive operational status used by the persistent chapter panel. */
+  status?: ConversationChapterStatus;
+}
+
+export type CompactionAttemptStatus =
+  | 'started'
+  | 'summarized'
+  | 'deterministic_fallback'
+  | 'noop'
+  | 'checkpoint_failed';
+
+export interface CompactionAttemptRow {
+  id: number;
+  session_id: number;
+  run_id: string;
+  turn: number;
+  turn_telemetry_id: number | null;
+  trigger: string;
+  provider_chain_json: string;
+  summary_provider: string | null;
+  summary_model: string | null;
+  status: CompactionAttemptStatus;
+  strategy: 'none' | 'summarizer' | 'deterministic';
+  summarizer_ran: 0 | 1;
+  prompt_tokens_before: number | null;
+  history_chars_before: number | null;
+  history_chars_after: number | null;
+  pruned_messages: number;
+  chapter_id: number | null;
+  boundary_id: number | null;
+  error_message: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface StartCompactionAttemptInput {
+  session_id: number;
+  run_id: string;
+  turn: number;
+  turn_telemetry_id?: number | null;
+  trigger?: string;
+  provider_chain?: Array<{ provider: string; model: string }>;
+  prompt_tokens_before?: number | null;
+  history_chars_before?: number | null;
+}
+
+export interface FinishCompactionAttemptInput {
+  status: Exclude<CompactionAttemptStatus, 'started'>;
+  strategy: 'none' | 'summarizer' | 'deterministic';
+  summarizer_ran: boolean;
+  summary_provider?: string | null;
+  summary_model?: string | null;
+  history_chars_after?: number | null;
+  pruned_messages?: number;
+  chapter_id?: number | null;
+  boundary_id?: number | null;
+  error_message?: string | null;
+}
+
+export interface ConversationChapterStatus {
+  state: 'healthy' | 'degraded' | 'empty';
+  boundary_id: number | null;
+  unsummarized_messages: number;
+  chapter_count: number;
+  context_chapters: number;
+  milestone_chapters: number;
+  rebuilt_chapters: number;
+  counters: {
+    attempts: number;
+    summarized: number;
+    deterministic_fallbacks: number;
+    checkpoint_failures: number;
+    noops: number;
+    failures: number;
+  };
+  last_attempt: CompactionAttemptRow | null;
 }
 
 export interface CommitConversationChapterInput {
@@ -303,6 +384,7 @@ export interface CommitConversationChapterInput {
   startMessageId: number;
   endMessageId: number;
   source: Extract<ConversationChapterSource, 'auto' | 'manual'>;
+  chapterKind?: Exclude<ConversationChapterKind, 'rebuild'>;
   trigger: string;
   title: string;
   chapterJson: string;
@@ -339,6 +421,8 @@ export interface RebuiltConversationChapterInput {
   resumeText: string;
   version: number;
   metricsJson?: string | null;
+  chapterKind?: ConversationChapterKind;
+  advancesContextBoundary?: boolean;
 }
 
 export interface InsertRebuiltConversationChaptersResult {
@@ -493,6 +577,8 @@ export interface CoderTask {
   id: string;
   title: string;
   description: string;
+  /** Operator-facing profile name used for subagent telemetry and skill routing. */
+  agent_profile?: string;
   /**
    * Track-gate (lightweight checklist) fields — set only when the owning
    * `TasksState.gate === 'track'`. `content` is the imperative label and

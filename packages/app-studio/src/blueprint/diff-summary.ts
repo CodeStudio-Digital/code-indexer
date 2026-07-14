@@ -1,6 +1,6 @@
 /**
- * Diff estruturado entre duas specs — alimenta o feedback do reopen e a
- * mensagem de reconcile pro agente quando o usuário "Aplica mudanças" do
+ * Diff estruturado entre duas specs — alimenta a revisão versionada e a
+ * mensagem de reconciliação quando o usuário "Aplica mudanças" do
  * Blueprint com a spec travada. Estruturado (não texto) para a UI
  * renderizar com i18n; `formatDiffSummary` é o fallback compacto.
  */

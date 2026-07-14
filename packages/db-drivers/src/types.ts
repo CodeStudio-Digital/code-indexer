@@ -101,6 +101,8 @@ export interface ColumnInfo {
   charMaxLength?: number | null;
   numericPrecision?: number | null;
   comment?: string | null;
+  /** Enumerated values when the engine exposes them through metadata. */
+  enumValues?: string[];
 }
 
 export interface IndexInfo {

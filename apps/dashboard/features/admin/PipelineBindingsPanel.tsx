@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Pencil, Layers, Eraser, Settings2, Wand2 } from 'lucide-react';
+import { Loader2, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Pencil, Layers, Eraser, Settings2, Wand2, Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
@@ -44,9 +44,15 @@ import {
 } from './pipeline-bindings-api.js';
 import { fetchProviders, fetchProviderModels } from './api.js';
 import type { AdminModel, AdminProvider } from './types.js';
+import type { EditorProbeResult } from '@mcp/api-bus';
+import { apiCall } from '../../lib/api-client.js';
 import { usePipelineFilter } from './pipeline-filter/usePipelineFilter.js';
 import { PipelineFilterBar } from './pipeline-filter/PipelineFilterBar.js';
 import { SetupWizard } from './setup-wizard/SetupWizard.js';
+import {
+  aiCompleteToggleUnset,
+  useAiCompleteStore,
+} from '../workspace/editor/ai-complete-store.js';
 
 /**
  * State shape for the bulk-apply dialog. Mirrors the single-row edit
@@ -105,13 +111,15 @@ interface EditingState {
 }
 
 function emptyDraft(catalog: PipelineCatalogEntry): EditingState['draft'] {
+  const recommended = catalog.recommendedDefault?.config ?? {};
+  const config = catalog.pipelineName === 'editor' && catalog.bindingRole === 'autocomplete'
+    ? { ...recommended, context_engine: 'v3', ctx_related_code: true, ctx_related_code_consent_v: 1 }
+    : recommended;
   return {
     provider_id: '',
     model_id: '',
     model_mode: '',
-    config_json: catalog.recommendedDefault?.config
-      ? JSON.stringify(catalog.recommendedDefault.config, null, 2)
-      : '{}',
+    config_json: JSON.stringify(config, null, 2),
     scope_type: 'global',
     scope_id: '',
     enabled: true,
@@ -197,6 +205,21 @@ function configSummary(config: Record<string, unknown>): string {
     .join(' · ');
 }
 
+function completionSuitability(row: PipelineBinding): 'native-fim' | 'template-fim' | 'verified-fast-chat' | 'best-effort-chat' {
+  const reasoningOnly = /(reasoner|\br1\b|-r1|think)/i.test(row.model_id) && row.config?.fim !== true;
+  if (!reasoningOnly && (row.config?.fim === true || row.provider_kind === 'deepseek' || /deepseek-coder|codestral|devstral/i.test(row.model_id))) return 'native-fim';
+  if (row.config?.fim !== false && /qwen[\d.]*-?coder|starcoder|stable-?code|codegemma|\bfim\b/i.test(row.model_id)) return 'template-fim';
+  const probe = row.config?.completion_probe as { passed?: boolean; prompts?: number } | undefined;
+  return probe?.passed && (probe.prompts ?? 0) >= 3 ? 'verified-fast-chat' : 'best-effort-chat';
+}
+
+function hasRelatedCodeConsent(configJson: string): boolean {
+  try {
+    const cfg = JSON.parse(configJson) as Record<string, unknown>;
+    return cfg.ctx_related_code === true && cfg.ctx_related_code_consent_v === 1;
+  } catch { return false; }
+}
+
 export function PipelineBindingsPanel() {
   const { t } = useTranslation(['admin', 'common']);
   const notify = useNotify();
@@ -208,6 +231,7 @@ export function PipelineBindingsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [testResults, setTestResults] = useState<Record<number, BindingTestResult>>({});
+  const [completionProbeResults, setCompletionProbeResults] = useState<Record<number, EditorProbeResult>>({});
   const [busy, setBusy] = useState<number | null>(null);
   /** Bulk-apply dialog state. `null` = closed. */
   const [bulkApply, setBulkApply] = useState<BulkApplyState | null>(null);
@@ -392,6 +416,27 @@ export function PipelineBindingsPanel() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const onCompletionProbe = async (binding: PipelineBinding) => {
+    setBusy(binding.id);
+    try {
+      const result = await apiCall<EditorProbeResult>('editor.probe', { bindingId: binding.id });
+      setCompletionProbeResults((prev) => ({ ...prev, [binding.id]: result }));
+      await load(); // successful probes persist their compatibility stamp
+    } finally { setBusy(null); }
+  };
+
+  const setRelatedConsent = (enabled: boolean) => {
+    setEditing((state) => {
+      if (!state) return state;
+      let cfg: Record<string, unknown> = {};
+      try { cfg = JSON.parse(state.draft.config_json || '{}') as Record<string, unknown>; } catch { /* keep visible parse error for submit */ }
+      cfg.ctx_related_code = enabled;
+      if (enabled) cfg.ctx_related_code_consent_v = 1;
+      else delete cfg.ctx_related_code_consent_v;
+      return { ...state, draft: { ...state.draft, config_json: JSON.stringify(cfg, null, 2) } };
+    });
   };
 
   const onDelete = async (binding: PipelineBinding) => {
@@ -645,6 +690,8 @@ export function PipelineBindingsPanel() {
                   <div className="space-y-2">
                     {group.rows.map((row) => {
                       const test = testResults[row.id];
+                      const completionProbe = completionProbeResults[row.id];
+                      const isCompletion = row.pipeline_name === 'editor' && row.binding_role === 'autocomplete';
                       const configText = configSummary(row.config ?? {});
                       return (
                         <div key={row.id} className="rounded-lg border bg-background/60 p-3 text-sm">
@@ -660,6 +707,11 @@ export function PipelineBindingsPanel() {
                                 <Badge variant="outline" className="normal-case tracking-normal">
                                   {t('admin:pipelines.priorityShort', { priority: row.priority })}
                                 </Badge>
+                                {isCompletion && (
+                                  <Badge variant={completionSuitability(row) === 'best-effort-chat' ? 'warning' : 'success'} className="normal-case tracking-normal">
+                                    {completionSuitability(row)}
+                                  </Badge>
+                                )}
                               </div>
                               <div className="font-medium truncate">{bindingSummary(row)}</div>
                               {configText && (
@@ -677,6 +729,12 @@ export function PipelineBindingsPanel() {
                                   )}
                                 </div>
                               )}
+                              {completionProbe && (
+                                <div className={`text-xs ${completionProbe.verifiedForAutomatic ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  {completionProbe.message} p50 {completionProbe.latency.p50 ?? '—'}ms · p90 {completionProbe.latency.p90 ?? '—'}ms
+                                  {completionProbe.route && ` · ${completionProbe.route.transport} · ${completionProbe.route.health}`}
+                                </div>
+                              )}
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               <Switch checked={row.enabled} onCheckedChange={() => onToggleEnabled(row)} disabled={busy === row.id} />
@@ -686,6 +744,11 @@ export function PipelineBindingsPanel() {
                               <Button size="sm" variant="ghost" onClick={() => onTest(row)} disabled={busy === row.id} title={t('admin:pipelines.test')}>
                                 <PlayCircle className="h-3 w-3" />
                               </Button>
+                              {isCompletion && (
+                                <Button size="sm" variant="ghost" onClick={() => void onCompletionProbe(row)} disabled={busy === row.id} title="Run 3-prompt completion probe (no project files)">
+                                  <Sparkles className="h-3 w-3" />
+                                </Button>
+                              )}
                               <Button size="sm" variant="ghost" onClick={() => onDelete(row)} disabled={busy === row.id} title={t('common:actions.delete')}>
                                 <Trash2 className="h-3 w-3 text-red-500" />
                               </Button>
@@ -721,9 +784,6 @@ export function PipelineBindingsPanel() {
           // toggle (an explicit '0' is an explicit no).
           void (async () => {
             try {
-              const { aiCompleteToggleUnset, useAiCompleteStore } = await import(
-                '../workspace/editor/inlineCompletionProvider.js'
-              );
               if (!aiCompleteToggleUnset()) return;
               const { bindings } = await fetchBindings({ pipelineName: 'editor', enabledOnly: true });
               if (bindings.some((b) => b.binding_role === 'autocomplete')) {
@@ -844,6 +904,18 @@ export function PipelineBindingsPanel() {
                   className="font-mono text-xs"
                 />
               </div>
+
+              {editing.catalog.pipelineName === 'editor' && editing.catalog.bindingRole === 'autocomplete' && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+                  <div className="flex items-center gap-2">
+                    <Switch checked={hasRelatedCodeConsent(editing.draft.config_json)} onCheckedChange={setRelatedConsent} />
+                    <span className="text-xs font-medium">Use indexed related code (context v3)</span>
+                  </div>
+                  <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+                    Up to three relevant windows (700 tokens total) from other project files may be sent to this completion provider. Existing bindings remain off until you confirm here.
+                  </p>
+                </div>
+              )}
 
               <div className="flex items-center gap-2">
                 <Switch

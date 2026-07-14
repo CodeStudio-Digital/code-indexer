@@ -86,8 +86,14 @@ interface SessionTelemetrySummary {
   total_thinking_tokens: number;
   cache_hit_ratio: number | null;
   total_tool_calls: number;
+  peak_context_tokens: number;
   compaction_turns: number;
   summarizer_turns: number;
+  compaction_attempts: number;
+  llm_summaries: number;
+  persisted_chapters: number;
+  mechanical_fallbacks: number;
+  checkpoint_failures: number;
   /** Migration 130 — lifetime durable-compaction counts (auto + manual). */
   compaction_count_auto: number;
   compaction_count_manual: number;
@@ -190,15 +196,26 @@ export function SessionMetricsView({
                 <Stat label={t('chat:metrics.session.msgsUser')} value={String(data.messages_user)} />
                 <Stat
                   label={t('chat:metrics.session.summarizations')}
-                  value={String(data.compaction_count_auto + data.compaction_count_manual)}
+                  value={String(data.llm_summaries)}
                 />
-                <Stat label={t('chat:metrics.session.summAuto')} value={String(data.compaction_count_auto)} />
-                <Stat label={t('chat:metrics.session.summManual')} value={String(data.compaction_count_manual)} />
+                <Stat label={t('chat:metrics.session.attempts')} value={String(data.compaction_attempts)} />
+                <Stat label={t('chat:metrics.session.chapters')} value={String(data.persisted_chapters)} />
+                <Stat
+                  label={t('chat:metrics.session.fallbacks')}
+                  value={String(data.mechanical_fallbacks)}
+                  intent={data.mechanical_fallbacks > 0 ? 'warn' : undefined}
+                />
+                <Stat
+                  label={t('chat:metrics.session.checkpointFailures')}
+                  value={String(data.checkpoint_failures)}
+                  intent={data.checkpoint_failures > 0 ? 'warn' : undefined}
+                />
               </Section>
 
               {/* Token totals */}
               <Section title={t('chat:metrics.tokens.title')} icon={<BarChart3 className="h-3.5 w-3.5" />}>
-                <Stat label={t('chat:metrics.tokens.input')} value={formatK(data.total_input_tokens)} />
+                <Stat label={t('chat:metrics.tokens.inputAccumulated')} value={formatK(data.total_input_tokens)} />
+                <Stat label={t('chat:metrics.tokens.peakContext')} value={formatK(data.peak_context_tokens)} />
                 <Stat label={t('chat:metrics.tokens.output')} value={formatK(data.total_output_tokens)} />
                 <Stat label={t('chat:metrics.tokens.cacheRead')} value={formatK(data.total_cache_read_tokens)} />
                 <Stat label={t('chat:metrics.tokens.cacheCreation')} value={formatK(data.total_cache_creation_tokens)} />

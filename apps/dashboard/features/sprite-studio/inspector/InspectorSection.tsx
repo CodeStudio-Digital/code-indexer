@@ -56,13 +56,13 @@ export function InspectorSection({
   // Edge-to-edge: a bottom divider instead of a boxed border — compact, no
   // lateral padding around the section itself (mirrors the chat sidebar).
   return (
-    <section className="border-b border-border/60 last:border-b-0">
-      <div className="flex items-center gap-1 px-2 py-1.5">
+    <section className="border-b border-[var(--workbench-border)] last:border-b-0">
+      <div className="flex h-8 items-center gap-1 bg-[var(--workbench-surface)] px-2">
         <button
           type="button"
           onClick={toggle}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <span className="shrink-0">
             {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}

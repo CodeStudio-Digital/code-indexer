@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './editor-settings.js';
 export * from './version.js';
 export * from './utils/config.js';
 export * from './utils/data-paths.js';

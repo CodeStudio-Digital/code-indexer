@@ -44,9 +44,10 @@ import { useEnsureFileContent } from './useEnsureFileContent.js';
 import { useConflictMarkers } from './useConflictMarkers.js';
 import { useChangeMarkers } from './useChangeMarkers.js';
 import { useRunGutter } from './run/useRunGutter.js';
+import { useSymbolNavigationGutter } from './useSymbolNavigationGutter.js';
 import { registerRunActions } from './run/run-actions.js';
 import { applyMonacoKeymap, watchKeymapPreset } from './monaco-keymap.js';
-import { useKeymapStore } from '../../../keymap/keymap-store.js';
+import { useEffectiveEditorSettings } from '../../../state/editor-settings.js';
 
 function detectDarkMode(): boolean {
   if (typeof document === 'undefined') return true;
@@ -93,6 +94,7 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   const currentPathRef = useRef(modelKey);
   const setContent = useWorkspaceStore((s) => s.setContent);
   const editorFontPx = useUiDensity((s) => s.metrics.editorFontPx);
+  const { settings: editorSettings } = useEffectiveEditorSettings(file.projectId, file.path);
   // Editor + monaco exposed as state (not just refs) so conflict UI can
   // attach reactively once the editor has actually mounted.
   const [editorInstance, setEditorInstance] = useState<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
@@ -110,6 +112,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // IntelliJ-style ▶ run gutter for package.json/composer.json scripts and
   // Python __main__ (gated inside the hook to the relevant files).
   useRunGutter(file, editorInstance, monacoInstance);
+  // Code Vision is provider-backed; these glyph-margin affordances make
+  // usages/implementations visible even when CodeLens is outside the viewport.
+  useSymbolNavigationGutter(file, editorInstance, monacoInstance);
 
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
@@ -133,8 +138,8 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       });
       // Editor-level keymap (Ctrl+D duplicate, Ctrl+B declaration, …) per
       // the active preset — IntelliJ by default.
-      applyMonacoKeymap(monaco, useKeymapStore.getState().preset);
-      watchKeymapPreset(monaco); // live re-apply on preset switch (no reload)
+      applyMonacoKeymap(monaco);
+      watchKeymapPreset(monaco); // live re-apply on every binding/preset change
       // NB: LSP providers are NOT wired here. Their lifetime is owned by the
       // project-scoped effect below (register on mount / projectId change,
       // unregister on cleanup) so switching or closing a project tears the
@@ -142,9 +147,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // Copilot-rail actions: "Add Selection to Chat" (Ctrl/Cmd+I) and
       // "Add File to Chat" in the context menu. They read the active file
       // from the workspace store at run time, so registering once is safe.
-      registerChatActions(editor, monaco);
+      registerChatActions(editor);
       // "Run File" (Shift+F10) — runs the active file with its runtime.
-      registerRunActions(editor, monaco);
+      registerRunActions(editor);
       // Histórico de navegação do cursor (Ctrl+Alt+Left/Right): empilha a
       // posição DEIXADA em saltos >10 linhas (debounce) e trocas de aba.
       // Vida útil atada ao editor (onDidDispose) — nada a limpar aqui.
@@ -250,9 +255,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // Glyph margin hosts the run ▶ (and conflict/merge gutters). Explicit
       // so the run gutter always has a column to paint into.
       glyphMargin: true,
-      fontSize: editorFontPx,
-      fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, "Liberation Mono", Menlo, monospace',
-      fontLigatures: true,
+      fontSize: editorSettings.fontSize ?? editorFontPx,
+      fontFamily: editorSettings.fontFamily,
+      fontLigatures: editorSettings.fontLigatures,
       fontWeight: '400',
       lineHeight: 1.55,
       letterSpacing: 0,
@@ -266,7 +271,7 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // Minimap: subtle, small, no rendering of overview ruler so it
       // doesn't fight the gutter.
       minimap: {
-        enabled: true,
+        enabled: editorSettings.minimap,
         renderCharacters: false,
         maxColumn: 100,
         scale: 1,
@@ -276,13 +281,16 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       smoothScrolling: true,
       cursorBlinking: 'smooth',
       cursorSmoothCaretAnimation: 'on',
-      wordWrap: 'off',
-      tabSize: 2,
+      wordWrap: editorSettings.wordWrap,
+      wordWrapColumn: editorSettings.wordWrapColumn,
+      detectIndentation: editorSettings.detectIndentation,
+      tabSize: editorSettings.tabSize,
+      insertSpaces: editorSettings.insertSpaces,
       renderLineHighlight: 'gutter',
-      renderWhitespace: 'selection',
-      stickyScroll: { enabled: true, defaultModel: 'outlineModel' },
-      formatOnPaste: true,
-      formatOnType: false,
+      renderWhitespace: editorSettings.renderWhitespace,
+      stickyScroll: { enabled: editorSettings.stickyScroll, defaultModel: 'outlineModel' },
+      formatOnPaste: editorSettings.formatOnPaste,
+      formatOnType: editorSettings.formatOnType,
       // Padding around the content area — keeps the first line off
       // the topbar shadow.
       padding: { top: 8, bottom: 8 },
@@ -293,7 +301,7 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       },
       // The default scrollbars are okay; we hide the rulers since most
       // projects don't have a single shared line-length convention.
-      rulers: [],
+      rulers: editorSettings.rulers,
       // Acessory features that punch above their weight.
       folding: true,
       foldingHighlight: true,
@@ -306,13 +314,20 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
         showWords: false, // kill `abc php`/`abc public` word completions
         showInlineDetails: true, // signature inline after the label
         localityBonus: true, // nearby symbols float up (additive to sortText)
+        snippetsPreventQuickSuggestions: editorSettings.snippetSuggestions === 'none',
       },
       // Slightly denser popup rows (IntelliJ feel); paired with the rounded
       // chrome + colored symbol icons from the theme (see widget-colors.ts).
       suggestFontSize: Math.max(12, editorFontPx - 1),
       suggestLineHeight: Math.round(Math.max(12, editorFontPx - 1) * 1.6),
-      wordBasedSuggestions: 'off',
+      quickSuggestions: editorSettings.quickSuggestions,
+      suggestOnTriggerCharacters: editorSettings.suggestOnTriggerCharacters,
+      acceptSuggestionOnEnter: editorSettings.acceptSuggestionOnEnter,
+      tabCompletion: editorSettings.tabCompletion,
+      snippetSuggestions: editorSettings.snippetSuggestions,
+      wordBasedSuggestions: editorSettings.wordBasedSuggestions,
       inlayHints: { enabled: 'onUnlessPressed' },
+      codeLens: true,
       // Force semantic highlighting ON (default is 'configuredByTheme', and the
       // standalone vs/vs-dark themes DON'T enable it — so LSP semantic tokens
       // for ts/js/php/python were never painted). This is what lets a theme
@@ -331,9 +346,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
         multipleImplementations: 'gotoAndPeek',
         multipleReferences: 'gotoAndPeek',
         multipleDeclarations: 'goto',
-      },
+        },
     }),
-    [editorFontPx],
+    [editorFontPx, editorSettings],
   );
 
   if (file.content === null) {

@@ -18,7 +18,6 @@ import { ProjectSelect } from '../../../builder/preview/ProjectSelect.js';
 import type { SessionProject } from '../../../builder/preview/useSessionProjects.js';
 
 interface Props {
-  sessionId: number;
   projects: SessionProject[];
 }
 

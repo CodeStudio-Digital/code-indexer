@@ -1,6 +1,6 @@
 /**
  * Tool: `app_spec_audit`. Deterministic quality check for App Studio specs.
- * It gives the specialist agent a compact, tool-readable list of weak spots
+ * It gives the coordinator a compact, tool-readable list of weak spots
  * before it asks the user or saves a refined spec.
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
@@ -27,7 +27,7 @@ export function appSpecAudit(binding: AppToolBinding): CoderTool {
         const session = binding.resolveAppSession(store);
         if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}.`);
         const spec = parseAppSpec(session.spec_json);
-        if (!spec) return ok('No spec saved yet — run discovery and call app_save_spec first.');
+        if (!spec) return ok('No spec saved yet — complete Define and call app_save_spec first.');
         const report = auditAppSpec(spec);
         const topIssues = report.issues.slice(0, 12);
         return appResult('App spec audit', { ...report, issues: topIssues });

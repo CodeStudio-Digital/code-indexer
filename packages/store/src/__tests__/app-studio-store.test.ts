@@ -1,9 +1,4 @@
-/**
- * AppStudioStore (migration 200) — pina os invariantes da feature:
- * 1 sessão por projeto (UNIQUE project_id), upsert de feature no
- * UNIQUE(app_session_id, name, kind) e delete explícito de filhos
- * (FK cascade não é garantido sem PRAGMA foreign_keys ON).
- */
+/** Invariantes persistentes da jornada App Studio e do workflow v5. */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -54,60 +49,45 @@ describe('AppStudioStore', () => {
   it('updates the JSON documents independently', () => {
     const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
     h.store.setSpecJson(s.id, '{"v":1}');
-    h.store.setPipelineJson(s.id, '{"v":1,"stages":[]}');
+    h.store.setWorkflowStateJson(s.id, '{"v":1,"stages":[]}');
     const updated = h.store.setDeployJson(s.id, '{"url":null}');
     expect(updated.spec_json).toBe('{"v":1}');
     expect(updated.pipeline_json).toBe('{"v":1,"stages":[]}');
     expect(updated.deploy_json).toBe('{"url":null}');
   });
 
-  it('upserts features on (session, name, kind) and lists them', () => {
-    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
-    h.store.upsertFeature({ app_session_id: s.id, name: 'PainelScreen', kind: 'screen', summary: 'v1' });
-    const updated = h.store.upsertFeature({
-      app_session_id: s.id,
-      name: 'PainelScreen',
-      kind: 'screen',
-      summary: 'v2',
-      verified_in_preview: true,
-    });
-    expect(updated.summary).toBe('v2');
-    expect(updated.verified_in_preview).toBe(true);
-    // Mesmo nome, kind diferente = linha nova.
-    h.store.upsertFeature({ app_session_id: s.id, name: 'PainelScreen', kind: 'api' });
-    expect(h.store.listFeatures(s.id)).toHaveLength(2);
-  });
-
-  it('re-record without summary preserves the previous summary (COALESCE)', () => {
-    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
-    h.store.upsertFeature({ app_session_id: s.id, name: 'PainelScreen', kind: 'screen', summary: 'first' });
-    // Re-record only flipping verified — summary omitted must NOT wipe it.
-    const again = h.store.upsertFeature({
-      app_session_id: s.id,
-      name: 'PainelScreen',
-      kind: 'screen',
-      verified_in_preview: true,
-    });
-    expect(again.summary).toBe('first');
-    expect(again.verified_in_preview).toBe(true);
-  });
-
   it('deleteSession removes children explicitly', () => {
     const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
-    h.store.upsertFeature({ app_session_id: s.id, name: 'X', kind: 'feature' });
+    h.store.upsertWorkItems([{ id: 'x', app_session_id: s.id, phase: 'define', title: 'X', kind: 'plan' }]);
     h.store.deleteSession(s.id);
     expect(h.store.getSession(s.id)).toBeNull();
-    expect(h.store.listFeatures(s.id)).toEqual([]);
+    expect(h.store.listWorkItems(s.id)).toEqual([]);
   });
 
-  it('deletes recorded features by kind', () => {
-    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
-    h.store.upsertFeature({ app_session_id: s.id, name: 'PainelScreen', kind: 'screen' });
-    h.store.upsertFeature({ app_session_id: s.id, name: 'pedidos', kind: 'api' });
-    h.store.upsertFeature({ app_session_id: s.id, name: 'Relatório', kind: 'feature' });
+  it('isolates stable work item ids between app sessions', () => {
+    const first = h.store.createSession({ project_id: h.projectId, name: 'First', app_slug: 'first' });
+    const project = h.db.raw().prepare("INSERT INTO projects (name, root_path) VALUES ('second-app', ?)").run(join(h.dir, 'second-ws'));
+    const second = h.store.createSession({ project_id: Number(project.lastInsertRowid), name: 'Second', app_slug: 'second' });
+    const shared = (sessionId: number, title: string) => ({
+      id: 'slice:orders', app_session_id: sessionId, phase: 'build' as const,
+      title, outcome: title, kind: 'implement' as const,
+    });
+    h.store.upsertWorkItems([shared(first.id, 'First orders'), shared(second.id, 'Second orders')]);
+    expect(h.store.getWorkItem(first.id, 'slice:orders')?.title).toBe('First orders');
+    expect(h.store.getWorkItem(second.id, 'slice:orders')?.title).toBe('Second orders');
+  });
 
-    expect(h.store.deleteFeaturesByKinds(s.id, ['screen', 'api'])).toBe(2);
-    expect(h.store.listFeatures(s.id).map((f) => f.kind)).toEqual(['feature']);
+  it('releases verifier cards from review dependencies without reviving stale work', () => {
+    const session = h.store.createSession({ project_id: h.projectId, name: 'App', app_slug: 'app' });
+    h.store.upsertWorkItems([
+      { id: 'implement', app_session_id: session.id, phase: 'build', title: 'Implement', kind: 'implement', status: 'review', owner_profile: 'ui' },
+      { id: 'verify', app_session_id: session.id, phase: 'build', title: 'Verify', kind: 'verify', status: 'backlog', owner_profile: 'verify', depends_on_json: '["implement"]' },
+      { id: 'stale', app_session_id: session.id, phase: 'build', title: 'Stale', kind: 'implement', status: 'stale', revision: 3 },
+    ]);
+    h.store.refreshReadyWorkItems(session.id);
+    expect(h.store.getWorkItem(session.id, 'verify')?.status).toBe('ready');
+    h.store.upsertWorkItems([{ id: 'stale', app_session_id: session.id, phase: 'build', title: 'Refined stale', kind: 'implement', status: 'ready', revision: 1 }]);
+    expect(h.store.getWorkItem(session.id, 'stale')).toMatchObject({ status: 'stale', revision: 3, title: 'Refined stale' });
   });
 
   it('tracks spec revisions and applies a proposed evolution as current spec', () => {
@@ -129,7 +109,7 @@ describe('AppStudioStore', () => {
       title: 'Relatorios',
       spec_json: '{"v":1,"summary":"v2","screens":[]}',
       base_revision_id: initial?.id ?? null,
-      impact_json: '{"level":"medium","stage_ids":["design"],"reasons":[]}',
+      impact_json: '{"level":"medium","affected_phases":["build"],"source_ids":[],"reasons":[]}',
     });
     h.store.updateEvolution(evolution.id, {
       status: 'review',
@@ -196,7 +176,7 @@ describe('AppStudioStore', () => {
     });
     expect(updated.id).toBe(draft.id);
     expect(updated.architecture_json).toContain('refined');
-    expect(h.store.approveArchitectureRevision(s.id, updated.id).status).toBe('approved');
+    h.store.approveBlueprintArtifacts(s.id);
     expect(h.store.getLatestApprovedArchitectureRevision(s.id)?.id).toBe(updated.id);
   });
 
@@ -212,7 +192,7 @@ describe('AppStudioStore', () => {
       product_json: '{"v":1,"candidate_spec":{"v":1}}',
     });
     const candidate = '{"v":1,"summary":"deep product","screens":[]}';
-    const approved = h.store.approveProductRevision({ sessionId: s.id, revisionId: product.id, candidateSpecJson: candidate, afterPipelineJson: '{"v":4}' });
+    const approved = h.store.applyProductRevisionToScope({ sessionId: s.id, revisionId: product.id, candidateSpecJson: candidate, workflowStateJson: '{"v":4}' });
     expect(approved.product.status).toBe('approved');
     expect(approved.product.result_spec_revision_id).toBe(approved.spec.id);
     expect(approved.spec.status).toBe('approved');
@@ -221,62 +201,106 @@ describe('AppStudioStore', () => {
     expect(h.store.getSpecRevision(initial.id)?.status).toBe('superseded');
   });
 
-  it('applies and safely undoes a pipeline repair with optimistic concurrency', () => {
+  it('migrates a legacy workflow once and keeps a recovery snapshot', () => {
     const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
-    const before = '{"v":2,"stages":[],"roadmap":[]}';
-    const after = '{"v":2,"stages":[{"id":"discovery"}],"roadmap":[]}';
-    h.store.setPipelineJson(s.id, before);
-    const applied = h.store.applyPipelineRepair({
-      app_session_id: s.id,
-      before_pipeline_json: before,
-      after_pipeline_json: after,
-      report_json: '{"changed":true}',
-    });
-    expect(applied.repair.undone_at).toBeNull();
+    const before = '{"v":4,"stages":[]}';
+    const after = '{"v":5,"phases":[],"active_revision_refs":{},"release_unlocked":false,"migrated_from":4,"migrated_at":null}';
+    h.store.setWorkflowStateJson(s.id, before);
+    const input = {
+      sessionId: s.id,
+      sourceVersion: 4,
+      previousStateJson: before,
+      workflowJson: after,
+      workItems: [],
+      approvals: [],
+    };
+    h.store.applyWorkflowMigration(input);
+    h.store.applyWorkflowMigration(input);
     expect(h.store.getSession(s.id)?.pipeline_json).toBe(after);
-    const undone = h.store.undoPipelineRepair(s.id, applied.repair.id);
-    expect(undone.repair.undone_at).toBeTruthy();
-    expect(h.store.getSession(s.id)?.pipeline_json).toBe(before);
+    expect((h.db.raw().prepare('SELECT COUNT(*) AS count FROM app_studio_workflow_snapshots WHERE app_session_id = ?').get(s.id) as { count: number }).count).toBe(1);
   });
 
-  it('versions UX and wireframes and keeps build evidence scoped to the approved revision', () => {
+  it('approves Blueprint artifacts as one bundle and tracks work through evidence', () => {
     const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
+    h.store.setSpecJson(s.id, '{"v":2,"summary":"scope"}');
+    const spec = h.store.ensureInitialSpecRevision(s.id)!;
+    const architecture = h.store.saveArchitectureRevision({
+      app_session_id: s.id,
+      spec_revision_id: spec.id,
+      architecture_json: '{"v":1,"summary":"architecture"}',
+    });
     const uxDraft = h.store.saveUxRevision({
       app_session_id: s.id,
-      spec_revision_id: 10,
-      architecture_revision_id: 20,
+      spec_revision_id: spec.id,
+      architecture_revision_id: architecture.id,
       data_fingerprint: 'data-v1',
       ux_json: '{"v":1,"summary":"draft"}',
     });
     const uxRefined = h.store.saveUxRevision({
       app_session_id: s.id,
-      spec_revision_id: 10,
-      architecture_revision_id: 20,
+      spec_revision_id: spec.id,
+      architecture_revision_id: architecture.id,
       data_fingerprint: 'data-v1',
       ux_json: '{"v":1,"summary":"refined"}',
     });
     expect(uxRefined.id).toBe(uxDraft.id);
-    expect(h.store.approveUxRevision(s.id, uxRefined.id).status).toBe('approved');
-
     const wireframe = h.store.saveWireframeRevision({
       app_session_id: s.id,
-      spec_revision_id: 10,
-      architecture_revision_id: 20,
+      spec_revision_id: spec.id,
+      architecture_revision_id: architecture.id,
       ux_revision_id: uxRefined.id,
       data_fingerprint: 'data-v1',
       wireframe_json: '{"v":1,"summary":"flows"}',
     });
-    h.store.approveWireframeRevision(s.id, wireframe.id, ['core', 'reports'], ['core-red', 'core-preview', 'reports-red']);
-    expect(h.store.listBuildGroups(wireframe.id).map((group) => group.group_id)).toEqual(['core', 'reports']);
-    expect(h.store.listBuildTaskEvidence(wireframe.id)).toHaveLength(3);
+    h.store.approveBlueprintArtifacts(s.id);
+    expect(h.store.getLatestApprovedUxRevision(s.id)?.id).toBe(uxRefined.id);
+    expect(h.store.getLatestApprovedWireframeRevision(s.id)?.id).toBe(wireframe.id);
 
-    h.store.setBuildTaskEvidence({ appSessionId: s.id, wireframeRevisionId: wireframe.id, taskId: 'core-red', status: 'done', summary: 'red recorded', evidenceJson: '{"command":"test"}' });
-    h.store.submitBuildGroup(s.id, wireframe.id, 'core', 'core ready');
-    h.store.approveBuildGroup(s.id, wireframe.id, 'core');
-    expect(h.store.listBuildGroups(wireframe.id).find((group) => group.group_id === 'core')?.status).toBe('approved');
+    h.store.upsertWorkItems([{
+      id: 'slice:core:verify', app_session_id: s.id, phase: 'build', slice_id: 'core',
+      title: 'Verify core slice', kind: 'verify', status: 'review',
+    }]);
+    expect(() => h.store.setWorkItemStatus(s.id, 'slice:core:verify', 'done')).toThrow(/needs evidence/);
+    const done = h.store.setWorkItemStatus(s.id, 'slice:core:verify', 'done', {
+      evidenceJson: '[{"kind":"test","value":"vitest:pass"}]',
+    });
+    expect(done.status).toBe('done');
+    expect(h.store.listWorkflowEvents(s.id).map((event) => event.kind)).toContain('work_item.status_changed');
+  });
 
-    h.store.reopenBuildGroup(s.id, wireframe.id, ['core', 'reports'], ['core-red', 'core-preview', 'reports-red'], 'change navigation');
-    expect(h.store.listBuildGroups(wireframe.id).every((group) => group.status === 'pending')).toBe(true);
-    expect(h.store.listBuildTaskEvidence(wireframe.id).every((task) => task.status === 'pending' && task.evidence_json == null)).toBe(true);
+  it('resolves approval events idempotently', () => {
+    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
+    const approval = h.store.requestApproval({ sessionId: s.id, type: 'scope', bundleRevision: 1, bundleJson: '{}', summary: 'Scope ready' });
+    const duplicateRequest = h.store.requestApproval({ sessionId: s.id, type: 'scope', bundleRevision: 2, bundleJson: '{}', summary: 'Same bundle, revised wording' });
+    expect(duplicateRequest.id).toBe(approval.id);
+    expect(h.store.listWorkflowEvents(s.id).filter((event) => event.kind === 'approval.requested')).toHaveLength(1);
+    const first = h.store.resolveApproval({ sessionId: s.id, approvalId: approval.id, decision: 'approve', idempotencyKey: 'approval:scope:1' });
+    const second = h.store.resolveApproval({ sessionId: s.id, approvalId: approval.id, decision: 'approve', idempotencyKey: 'approval:scope:1' });
+    expect(first.status).toBe('approved');
+    expect(second.status).toBe('approved');
+    expect(h.store.listWorkflowEvents(s.id).filter((event) => event.kind === 'approval.resolved')).toHaveLength(1);
+  });
+
+  it('resolves decisions idempotently and refuses a conflicting replay', () => {
+    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
+    const decision = h.store.createDecisionRequest({ sessionId: s.id, question: 'Which option?' });
+    expect(h.store.resolveDecisionRequest(s.id, decision.id, 'A').answer).toBe('A');
+    expect(h.store.resolveDecisionRequest(s.id, decision.id, 'A').answer).toBe('A');
+    expect(() => h.store.resolveDecisionRequest(s.id, decision.id, 'B')).toThrow(/different answer/);
+    expect(h.store.listWorkflowEvents(s.id).filter((event) => event.kind === 'decision.resolved')).toHaveLength(1);
+  });
+
+  it('reorders non-started cards and blocks dependents of cancelled work', () => {
+    const s = h.store.createSession({ project_id: h.projectId, name: 'A', app_slug: 'a' });
+    h.store.upsertWorkItems([
+      { id: 'a', app_session_id: s.id, phase: 'build', title: 'A', kind: 'implement', status: 'ready', sort_order: 0 },
+      { id: 'b', app_session_id: s.id, phase: 'build', title: 'B', kind: 'implement', status: 'ready', sort_order: 1 },
+      { id: 'dependent', app_session_id: s.id, phase: 'build', title: 'Dependent', kind: 'implement', status: 'backlog', depends_on_json: '["a"]' },
+    ]);
+    h.store.reorderWorkItem(s.id, 'b', 0);
+    expect(h.store.listWorkItems(s.id).filter((item) => item.status === 'ready').sort((a, b) => a.sort_order - b.sort_order).map((item) => item.id)).toEqual(['b', 'a']);
+    h.store.setWorkItemStatus(s.id, 'a', 'cancelled');
+    h.store.refreshReadyWorkItems(s.id);
+    expect(h.store.getWorkItem(s.id, 'dependent')).toMatchObject({ status: 'blocked', blocked_reason: "Dependency 'a' was cancelled." });
   });
 });

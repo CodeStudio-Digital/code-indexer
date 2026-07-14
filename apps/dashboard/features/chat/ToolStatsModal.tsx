@@ -170,22 +170,29 @@ export function ToolStatsView({
 
             {data && (
               <>
-                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
-                  <span className="text-muted-foreground">{t('toolStats.totalCalls')}</span>
-                  <span className="font-mono font-semibold tabular-nums">{data.totalCalls}</span>
-                  {data.directCalls != null && data.nestedCalls != null && (
-                    <span className="text-[10px] text-muted-foreground">
-                      {t('toolStats.scopeCalls', { direct: data.directCalls, nested: data.nestedCalls })}
-                    </span>
-                  )}
+                <div
+                  className="grid gap-x-4 gap-y-2 text-xs"
+                  style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' }}
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-muted-foreground">{t('toolStats.totalCalls')}</span>
+                      <span className="font-mono font-semibold tabular-nums">{data.totalCalls}</span>
+                    </div>
+                    {data.directCalls != null && data.nestedCalls != null && (
+                      <div className="mt-0.5 text-[10px] text-muted-foreground">
+                        {t('toolStats.scopeCalls', { direct: data.directCalls, nested: data.nestedCalls })}
+                      </div>
+                    )}
+                  </div>
                   {dominant && (
-                    <>
-                      <span className="text-muted-foreground sm:ml-auto">{t('toolStats.dominant')}</span>
-                      <span className="font-mono font-semibold">
+                    <div className="min-w-0">
+                      <div className="text-[10px] text-muted-foreground">{t('toolStats.dominant')}</div>
+                      <div className="truncate font-mono font-semibold" title={dominant.name}>
                         {dominant.name}{' '}
                         <span className="text-muted-foreground">({dominantPct}%)</span>
-                      </span>
-                    </>
+                      </div>
+                    </div>
                   )}
                 </div>
 
@@ -194,7 +201,10 @@ export function ToolStatsView({
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                       {t('toolStats.guardOutcomes')}
                     </div>
-                    <div className="grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-5">
+                    <div
+                      className="grid gap-2 text-[10px]"
+                      style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(88px, 1fr))' }}
+                    >
                       {([
                         ['genuineErrors', 'toolStats.genuineErrors', 'text-destructive'],
                         ['rootRefusals', 'toolStats.rootRefusals', 'text-amber-600 dark:text-amber-400'],
@@ -202,11 +212,11 @@ export function ToolStatsView({
                         ['reusedCalls', 'toolStats.reusedCalls', 'text-emerald-600 dark:text-emerald-400'],
                         ['shadowCandidates', 'toolStats.shadowCandidates', 'text-sky-600 dark:text-sky-400'],
                       ] as const).map(([key, label, color]) => (
-                        <div key={key} className="rounded border bg-background/60 px-2 py-1.5">
+                        <div key={key} className="min-w-0 rounded border bg-background/60 px-2 py-1.5">
                           <div className={`font-mono text-sm font-semibold tabular-nums ${color}`}>
                             {data.guardOutcomes?.[key] ?? 0}
                           </div>
-                          <div className="text-muted-foreground leading-tight">{t(label)}</div>
+                          <div className="break-words leading-tight text-muted-foreground">{t(label)}</div>
                         </div>
                       ))}
                     </div>
@@ -241,7 +251,10 @@ export function ToolStatsView({
                           {t('toolStats.rawPercent', { count: savedPct })}
                         </span>
                       </div>
-                      <div className="grid grid-cols-2 gap-1 text-[10px] text-muted-foreground sm:grid-cols-4">
+                      <div
+                        className="grid gap-1 text-[10px] text-muted-foreground"
+                        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))' }}
+                      >
                         <span>{t('toolStats.semantic')}: <b className="font-mono">{formatChars(sv.semanticSavedChars ?? 0)}</b></span>
                         <span>{t('toolStats.jsonCrush')}: <b className="font-mono">{formatChars(sv.jsonCrushSavedChars ?? 0)}</b></span>
                         <span>{t('toolStats.hardCap')}: <b className="font-mono">{formatChars(sv.hardCapSavedChars ?? 0)}</b></span>
@@ -299,8 +312,8 @@ export function ToolStatsView({
                         || (b.propagatedFailureCount ?? 0) > 0;
                       return (
                         <div key={b.name} className="text-xs">
-                          <div className="flex items-baseline gap-2">
-                            <span className="font-mono truncate flex-1">{b.name}</span>
+                          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="min-w-[110px] flex-1 truncate font-mono" title={b.name}>{b.name}</span>
                             <span className="font-mono tabular-nums text-muted-foreground">
                               {b.count}
                             </span>
@@ -361,8 +374,8 @@ export function ToolStatsView({
                               : 'border-border/40 bg-muted/30'
                           }`}
                         >
-                          <div className="flex items-baseline gap-2 min-w-0">
-                            <span className="font-mono font-medium truncate">{r.name}</span>
+                          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="min-w-[100px] flex-1 truncate font-mono font-medium" title={r.name}>{r.name}</span>
                             {r.outcome && r.outcome !== 'success' ? (
                               <Badge
                                 variant="outline"
@@ -379,7 +392,7 @@ export function ToolStatsView({
                                 {t('toolStats.error')}
                               </Badge>
                             )}
-                            <span className="ml-auto text-[10px] text-muted-foreground tabular-nums shrink-0">
+                            <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
                               {r.durationMs}ms
                             </span>
                             <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">

@@ -150,8 +150,8 @@ export function mountCoderInteractionRoutes(
         if (!interject) return c.json({ waiting: true });
         await pool.interruptWait(id).catch(() => undefined);
       }
-      sessionStore.appendMessage(id, userMsg);
-      await pool.pushUserMessage(id, content, skillIds);
+      const roundMessageId = sessionStore.appendMessage(id, userMsg);
+      await pool.pushUserMessage(id, content, skillIds, roundMessageId);
       return c.json({ injected: true });
     }
 
@@ -163,8 +163,8 @@ export function mountCoderInteractionRoutes(
       if (!interject) return c.json({ waiting: true });
       runner.interruptWait();
     }
-    sessionStore.appendMessage(id, userMsg);
-    runner.pushUserMessage(content, { selectedSkillIds: skillIds });
+    const roundMessageId = sessionStore.appendMessage(id, userMsg);
+    runner.pushUserMessage(content, { selectedSkillIds: skillIds, roundMessageId });
     return c.json({ injected: true });
   });
 

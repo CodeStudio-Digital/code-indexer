@@ -8,9 +8,9 @@
  * frame — e a posição persiste apenas no drag-stop (layout + PUT
  * debounced). Round-trip de posição por mousemove foi a causa do flicker.
  *
- * Conectar/editar vira mutação cirúrgica na spec. Salvar direto quando o
- * discovery está destravado; "Aplicar mudanças" (reopen + reconcile via
- * chat) quando travado. Duplo-clique numa ligação remove (com confirm).
+ * Conectar/editar vira mutação cirúrgica na spec. Salvar direto antes da
+ * aprovação de Escopo; depois, "Aplicar mudanças" cria uma revisão e envia
+ * a reconciliação seletiva ao coordenador. Duplo-clique remove uma ligação.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -74,11 +74,9 @@ function edgeRemovalMutation(edge: BlueprintEdge): BlueprintMutation | null {
 export function BlueprintPanel({
   detail,
   onChanged,
-  onOpenSpecAgent,
 }: {
   detail: AppStudioSessionDetail;
   onChanged: () => void;
-  onOpenSpecAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
   const bp = useBlueprint(detail, t, onChanged);
@@ -222,7 +220,7 @@ export function BlueprintPanel({
         )}
         <Button size="sm" className="h-7 text-xs" disabled={!bp.dirty || bp.busy || bp.issues.length > 0} onClick={() => void bp.save()}>
           {bp.busy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Save className="mr-1 h-3 w-3" />}
-          {bp.discoveryApproved ? t('blueprint.apply') : t('blueprint.save')}
+          {bp.scopeApproved ? t('blueprint.apply') : t('blueprint.save')}
         </Button>
       </div>
 
@@ -265,7 +263,7 @@ export function BlueprintPanel({
         {selectedData && bp.draft ? (
           <NodeInspector data={selectedData} spec={bp.draft} onMutate={bp.mutate} onClose={() => setSelectedId(null)} />
         ) : (
-          <SpecOverviewPanel spec={bp.draft} onOpenSpecAgent={onOpenSpecAgent} />
+          <SpecOverviewPanel spec={bp.draft} />
         )}
       </div>
       <p className="shrink-0 border-t px-3 py-1 text-[10px] text-muted-foreground">{t('blueprint.hint')}</p>

@@ -99,11 +99,14 @@ function makeRef(
 ): GitRepoRef {
   return {
     absPath,
+    repoRoot: absPath,
     projectRelPrefix: posixRel(projectRoot, absPath),
     name: path.basename(absPath) || absPath,
     kind,
     initialized,
     ignoredByParent,
+    projectRoot,
+    extendsBeyondProject: !samePath(projectRoot, absPath) && isInside(absPath, projectRoot),
   };
 }
 
@@ -176,6 +179,7 @@ export function createRepoResolver(deps: RepoResolverDeps): RepoResolver {
   const { runGit, requireRoot, detectRepo } = deps;
   // Cache discovered repos per project root (root_path is stable for a project).
   const cache = new Map<string, { repos: GitRepoRef[]; canonicalRoot: string; at: number }>();
+  const inflight = new Map<string, Promise<{ repos: GitRepoRef[]; canonicalRoot: string }>>();
   // Reverse index projectId → root so `bust(projectId)` can drop the entry.
   const rootByProject = new Map<number, string>();
 
@@ -222,17 +226,23 @@ export function createRepoResolver(deps: RepoResolverDeps): RepoResolver {
     if (hit && Date.now() - hit.at < REPO_LIST_CACHE_MS) {
       return { repos: hit.repos, canonicalRoot: hit.canonicalRoot };
     }
+    const pending = inflight.get(root);
+    if (pending) return pending;
     // Canonicalize once (symlink/junction in root_path) so file-path containment
     // below matches the realpath'd repo roots discovery resolves.
-    let canonicalRoot = root;
-    try {
-      canonicalRoot = await fs.realpath(root);
-    } catch {
-      /* keep raw root */
-    }
-    const repos = await discover(canonicalRoot);
-    cache.set(root, { repos, canonicalRoot, at: Date.now() });
-    return { repos, canonicalRoot };
+    const work = (async () => {
+      let canonicalRoot = root;
+      try {
+        canonicalRoot = await fs.realpath(root);
+      } catch {
+        /* keep raw root */
+      }
+      const repos = await discover(canonicalRoot);
+      cache.set(root, { repos, canonicalRoot, at: Date.now() });
+      return { repos, canonicalRoot };
+    })().finally(() => inflight.delete(root));
+    inflight.set(root, work);
+    return work;
   }
 
   return {
@@ -276,7 +286,10 @@ export function createRepoResolver(deps: RepoResolverDeps): RepoResolver {
 
     bust(projectId) {
       const root = rootByProject.get(projectId);
-      if (root) cache.delete(root);
+      if (root) {
+        cache.delete(root);
+        inflight.delete(root);
+      }
     },
   };
 }

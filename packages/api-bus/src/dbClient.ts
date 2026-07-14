@@ -118,6 +118,8 @@ export interface DbColumn {
   charMaxLength?: number | null;
   numericPrecision?: number | null;
   comment?: string | null;
+  /** Enumerated values when the driver can introspect them (for example PostgreSQL ENUM). */
+  enumValues?: string[];
 }
 
 export interface DbIndex {

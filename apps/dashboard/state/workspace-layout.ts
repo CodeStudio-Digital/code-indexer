@@ -1,156 +1,174 @@
 /**
- * Workspace layout state — which tool windows are pinned on the left
- * and right activity bars, which bottom panel tab is showing, panel
- * sizes. Persisted to localStorage so the user's layout sticks.
+ * Persistent workbench layout state.
  *
- * Naming follows JetBrains: an "activity bar" is the column of icons
- * on the side; a "tool window" is the panel that opens when you click
- * an icon. Click the active icon again to collapse.
+ * Visibility/selection lives here; panel dimensions are persisted by
+ * react-resizable-panels using project-scoped autoSaveIds. Keeping a single
+ * owner for sizes avoids the old v2 split-brain state, where pixel fields were
+ * written to localStorage but never consumed by the rendered shell.
  */
 
 import { create } from 'zustand';
 
-// Open id types: built-ins plus any string id a plugin contributes. The
-// activity rail + layout store are id-agnostic, so widening to `string` lets
-// plugin-contributed tool windows participate without a union edit.
+export type WorkbenchSide = 'left' | 'right' | 'bottom';
 export type LeftToolId = string;
 export type RightToolId = string;
 export type BottomToolId = string;
+export type PrimarySurfaceId = string;
 
-interface WorkspaceLayoutState {
+export interface PersistedWorkspaceLayout {
   activeLeft: LeftToolId | null;
   activeRight: RightToolId | null;
   activeBottom: BottomToolId | null;
-
-  leftSize: number; // px
-  rightSize: number; // px
-  bottomSize: number; // px
-
-  /** Project preview pane visibility (builder/preview-enabled projects). */
+  primarySurface: PrimarySurfaceId;
   previewVisible: boolean;
+}
 
+interface LegacyWorkspaceLayoutV2 extends Partial<PersistedWorkspaceLayout> {
+  leftSize?: number;
+  rightSize?: number;
+  bottomSize?: number;
+}
+
+interface WorkspaceLayoutState extends PersistedWorkspaceLayout {
   toggleLeft: (id: LeftToolId) => void;
   toggleRight: (id: RightToolId) => void;
   toggleBottom: (id: BottomToolId) => void;
+  toggleTool: (side: WorkbenchSide, id: string) => void;
   togglePreview: () => void;
   setPreviewVisible: (visible: boolean) => void;
-
   setActiveLeft: (id: LeftToolId | null) => void;
   setActiveRight: (id: RightToolId | null) => void;
   setActiveBottom: (id: BottomToolId | null) => void;
-
-  setLeftSize: (px: number) => void;
-  setRightSize: (px: number) => void;
-  setBottomSize: (px: number) => void;
+  setPrimarySurface: (id: PrimarySurfaceId) => void;
 }
 
-const STORAGE_KEY = 'mcp-ide:workspace-layout-v2';
+export const WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v3';
+export const LEGACY_WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v2';
 
-interface PersistedSnapshot {
-  activeLeft: LeftToolId | null;
-  activeRight: RightToolId | null;
-  activeBottom: BottomToolId | null;
-  leftSize: number;
-  rightSize: number;
-  bottomSize: number;
-  previewVisible: boolean;
-}
-
-const DEFAULTS: PersistedSnapshot = {
+export const DEFAULT_WORKSPACE_LAYOUT: PersistedWorkspaceLayout = {
   activeLeft: 'files',
   activeRight: 'chat',
   activeBottom: null,
-  leftSize: 260,
-  rightSize: 360,
-  bottomSize: 240,
+  primarySurface: 'editor',
   previewVisible: true,
 };
 
-function loadPersisted(): PersistedSnapshot {
-  if (typeof window === 'undefined') return DEFAULTS;
+/** Pure migration used by both the store and focused tests. */
+export function migrateWorkspaceLayoutV2(
+  legacy: LegacyWorkspaceLayoutV2 | null | undefined,
+): PersistedWorkspaceLayout {
+  if (!legacy) return { ...DEFAULT_WORKSPACE_LAYOUT };
+  const databaseSurface = legacy.primarySurface === 'databases';
+  return {
+    activeLeft: databaseSurface ? 'databases' : (legacy.activeLeft === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeLeft : legacy.activeLeft),
+    activeRight: legacy.activeRight === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeRight : legacy.activeRight,
+    activeBottom: legacy.activeBottom === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeBottom : legacy.activeBottom,
+    primarySurface: databaseSurface ? 'editor' : (legacy.primarySurface || DEFAULT_WORKSPACE_LAYOUT.primarySurface),
+    previewVisible: legacy.previewVisible ?? DEFAULT_WORKSPACE_LAYOUT.previewVisible,
+  };
+}
+
+export function normalizeWorkspaceLayout(
+  value: Partial<PersistedWorkspaceLayout> | null | undefined,
+): PersistedWorkspaceLayout {
+  const databaseSurface = value?.primarySurface === 'databases';
+  return {
+    activeLeft: databaseSurface ? 'databases' : (value?.activeLeft === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeLeft : value.activeLeft),
+    activeRight: value?.activeRight === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeRight : value.activeRight,
+    activeBottom: value?.activeBottom === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeBottom : value.activeBottom,
+    primarySurface: databaseSurface ? 'editor' : (value?.primarySurface || DEFAULT_WORKSPACE_LAYOUT.primarySurface),
+    previewVisible: value?.previewVisible ?? DEFAULT_WORKSPACE_LAYOUT.previewVisible,
+  };
+}
+
+function safeParse(raw: string | null): LegacyWorkspaceLayoutV2 | null {
+  if (!raw) return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULTS;
-    return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<PersistedSnapshot>) };
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as LegacyWorkspaceLayoutV2) : null;
   } catch {
-    return DEFAULTS;
+    return null;
   }
 }
 
-function persist(snap: Partial<PersistedSnapshot>): void {
+function loadPersisted(): PersistedWorkspaceLayout {
+  if (typeof window === 'undefined') return { ...DEFAULT_WORKSPACE_LAYOUT };
+  const current = safeParse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY));
+  if (current) return normalizeWorkspaceLayout(current);
+
+  const legacy = safeParse(window.localStorage.getItem(LEGACY_WORKSPACE_LAYOUT_STORAGE_KEY));
+  const migrated = migrateWorkspaceLayoutV2(legacy);
+  try {
+    window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify(migrated));
+  } catch {
+    // Storage may be disabled; the in-memory migrated value is still valid.
+  }
+  return migrated;
+}
+
+function persist(patch: Partial<PersistedWorkspaceLayout>): void {
   if (typeof window === 'undefined') return;
   try {
-    const cur = loadPersisted();
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...cur, ...snap }));
+    const current = normalizeWorkspaceLayout(safeParse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)));
+    window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify({ ...current, ...patch }));
   } catch {
-    /* localStorage full / disabled — silently drop */
+    // localStorage full/disabled: keep the live Zustand state working.
   }
 }
 
-export const useWorkspaceLayout = create<WorkspaceLayoutState>((set, get) => {
+function toggleKey<K extends 'activeLeft' | 'activeRight' | 'activeBottom'>(
+  key: K,
+  id: string,
+  set: (updater: (state: WorkspaceLayoutState) => Partial<WorkspaceLayoutState>) => void,
+): void {
+  set((state) => {
+    const next = state[key] === id ? null : id;
+    persist({ [key]: next });
+    return { [key]: next } as Partial<WorkspaceLayoutState>;
+  });
+}
+
+export const useWorkspaceLayout = create<WorkspaceLayoutState>((set) => {
   const initial = loadPersisted();
   return {
     ...initial,
-
-    toggleLeft: (id) =>
-      set((s) => {
-        const next = s.activeLeft === id ? null : id;
-        persist({ activeLeft: next });
-        return { activeLeft: next };
-      }),
-    toggleRight: (id) =>
-      set((s) => {
-        const next = s.activeRight === id ? null : id;
-        persist({ activeRight: next });
-        return { activeRight: next };
-      }),
-    toggleBottom: (id) =>
-      set((s) => {
-        const next = s.activeBottom === id ? null : id;
-        persist({ activeBottom: next });
-        return { activeBottom: next };
-      }),
+    toggleLeft: (id) => toggleKey('activeLeft', id, set),
+    toggleRight: (id) => toggleKey('activeRight', id, set),
+    toggleBottom: (id) => toggleKey('activeBottom', id, set),
+    toggleTool: (side, id) => {
+      if (side === 'left') toggleKey('activeLeft', id, set);
+      else if (side === 'right') toggleKey('activeRight', id, set);
+      else toggleKey('activeBottom', id, set);
+    },
     togglePreview: () =>
-      set((s) => {
-        const next = !s.previewVisible;
-        persist({ previewVisible: next });
-        return { previewVisible: next };
+      set((state) => {
+        const previewVisible = !state.previewVisible;
+        persist({ previewVisible });
+        return { previewVisible };
       }),
-    setPreviewVisible: (visible) => {
-      persist({ previewVisible: visible });
-      set({ previewVisible: visible });
+    setPreviewVisible: (previewVisible) => {
+      persist({ previewVisible });
+      set({ previewVisible });
     },
-
-    setActiveLeft: (id) => {
-      persist({ activeLeft: id });
-      set({ activeLeft: id });
+    setActiveLeft: (activeLeft) => {
+      persist({ activeLeft });
+      set({ activeLeft });
     },
-    setActiveRight: (id) => {
-      persist({ activeRight: id });
-      set({ activeRight: id });
+    setActiveRight: (activeRight) => {
+      persist({ activeRight });
+      set({ activeRight });
     },
-    setActiveBottom: (id) => {
-      persist({ activeBottom: id });
-      set({ activeBottom: id });
+    setActiveBottom: (activeBottom) => {
+      persist({ activeBottom });
+      set({ activeBottom });
     },
-
-    setLeftSize: (px) => {
-      persist({ leftSize: px });
-      set({ leftSize: px });
-    },
-    setRightSize: (px) => {
-      persist({ rightSize: px });
-      set({ rightSize: px });
-    },
-    setBottomSize: (px) => {
-      persist({ bottomSize: px });
-      set({ bottomSize: px });
+    setPrimarySurface: (primarySurface) => {
+      persist({ primarySurface });
+      set({ primarySurface });
     },
   };
 });
 
-// Re-export the snapshot helper for non-React readers (the status bar
-// shows a count of currently-pinned tool windows).
 export function getWorkspaceLayoutSnapshot(): WorkspaceLayoutState {
   return useWorkspaceLayout.getState();
 }

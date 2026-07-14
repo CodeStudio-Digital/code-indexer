@@ -47,9 +47,9 @@ export function ProviderTile({ provider: p, modelCount, testResult: tr, onOpen }
       type="button"
       onClick={onOpen}
       className={cn(
-        'group relative w-[170px] h-[120px] rounded-lg border bg-card text-left overflow-hidden',
+        'group relative h-[112px] w-full overflow-hidden rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-raised)] text-left',
         'flex flex-col transition-all',
-        'hover:border-primary/50 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5',
+        'hover:border-[var(--workbench-focus)] hover:bg-[var(--workbench-hover)]',
         // Accent stripe on the left edge mirrors the provider's tint.
         // Wider on hover for a subtle "tap me" cue.
         'border-l-2',

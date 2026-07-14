@@ -88,7 +88,9 @@ export interface FimInput {
 }
 
 interface FimResponse {
-  choices?: Array<{ text?: string }>;
+  // OpenAI-compatible completion hosts use `text`; current Mistral FIM uses
+  // the chat-completion choice shape (`message.content`). Accept both.
+  choices?: Array<{ text?: string; message?: { content?: string } }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
@@ -99,7 +101,7 @@ function fimUrl(binding: ResolvedBinding): string {
   const base = resolveBaseUrl(binding).replace(/\/+$/, '');
   // DeepSeek serves FIM under /beta, not /v1.
   if (binding.provider.kind === 'deepseek') return `${base.replace(/\/v1$/, '')}/beta/completions`;
-  // Mistral's native FIM endpoint (works on api.mistral.ai AND codestral.mistral.ai).
+  // Mistral's current native FIM endpoint lives on the public API host.
   if (binding.provider.kind === 'mistral') return `${base}/fim/completions`;
   return `${base}/completions`;
 }
@@ -184,17 +186,23 @@ export async function fimCompletion(
         status: res.status,
         retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
         latencyMs,
+        finishReason: 'error',
       };
     }
     const parsed = (await res.json()) as FimResponse;
     return {
-      content: parsed.choices?.[0]?.text ?? '',
+      content: parsed.choices?.[0]?.text ?? parsed.choices?.[0]?.message?.content ?? '',
       tokensIn: parsed.usage?.prompt_tokens,
       tokensOut: parsed.usage?.completion_tokens,
       latencyMs,
+      ttftMs: latencyMs,
+      finishReason: 'provider',
     };
   } catch (e) {
-    return { content: '', errorBody: (e as Error).message, latencyMs: performance.now() - startedAt };
+    return {
+      content: '', errorBody: (e as Error).message, latencyMs: performance.now() - startedAt,
+      finishReason: controller.signal.aborted ? (options.signal?.aborted ? 'aborted' : 'timeout') : 'error',
+    };
   } finally {
     clearTimeout(timer);
   }

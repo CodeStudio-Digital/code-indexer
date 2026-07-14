@@ -141,7 +141,7 @@ describe('mapServerWorkspaceEdit', () => {
 });
 
 describe('mapServerCodeActions', () => {
-  it('keeps edit-backed actions and drops command-only actions', () => {
+  it('keeps edit-backed, command-backed and lazy-resolvable actions', () => {
     const actions = mapServerCodeActions([
       {
         title: 'Import class',
@@ -155,8 +155,9 @@ describe('mapServerCodeActions', () => {
           },
         },
       },
-      { title: 'Run server command', command: { command: 'x' } },
-    ]);
+      { title: 'Run server command', command: { command: 'x', arguments: [1] } },
+      { title: 'Resolve later', data: { id: 7 } },
+    ], 'intelephense');
 
     expect(actions).toEqual([
       {
@@ -170,6 +171,19 @@ describe('mapServerCodeActions', () => {
             ],
           },
         },
+        command: undefined,
+        originServerId: 'intelephense',
+        raw: expect.any(Object),
+        needsResolve: false,
+      },
+      {
+        title: 'Run server command', kind: 'quickfix', isPreferred: undefined, edit: undefined,
+        command: { command: 'x', arguments: [1] }, originServerId: 'intelephense',
+        raw: expect.any(Object), needsResolve: false,
+      },
+      {
+        title: 'Resolve later', kind: 'quickfix', isPreferred: undefined, edit: undefined,
+        command: undefined, originServerId: 'intelephense', raw: expect.any(Object), needsResolve: true,
       },
     ]);
   });

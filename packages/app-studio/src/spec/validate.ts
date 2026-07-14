@@ -56,7 +56,7 @@ export function validateAppSpec(value: unknown): string[] {
       if (!str(s.name) || !PASCAL_RE.test(s.name as string)) {
         issues.push(`screens[${i}].name must be PascalCase (component name, e.g. 'OrdersScreen')`);
       } else if (screenNames.has((s.name as string).toLowerCase())) {
-        // Duplicate names collapse roadmap coverage (one recorded feature
+        // Duplicate names collapse source traceability (one feature
         // would satisfy two screens) AND collide as files in src/screens/.
         issues.push(`screens[${i}].name '${String(s.name)}' is duplicated — each screen needs a distinct component name`);
       } else {

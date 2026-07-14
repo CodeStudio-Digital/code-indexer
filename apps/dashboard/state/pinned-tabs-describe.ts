@@ -118,7 +118,7 @@ export function describeCurrentPin(input: DescribeInput): Pin | null {
       });
     }
     const tab = railTabFor(view.projectId, activeProjectTab, search);
-    if (tab && tab !== 'chat' && isKnownTab(tab)) {
+    if (tab && tab !== 'editor' && tab !== 'chat' && isKnownTab(tab)) {
       return buildRailPin({ projectId: view.projectId, tabId: tab, projectName: names.projectName });
     }
     return buildProjectPin({ projectId: view.projectId, name: names.projectName });

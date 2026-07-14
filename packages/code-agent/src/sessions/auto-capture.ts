@@ -24,16 +24,16 @@ export interface AutoCaptureStore {
 }
 
 export interface AutoCapture {
-  onPlanResolved(status: string, planText: string | null, feedback?: string): void;
-  onGoalUpserted(goal: { text: string; status: string; completionNote?: string | null }): void;
+  onPlanResolved(status: string, planText: string | null, feedback?: string): boolean;
+  onGoalUpserted(goal: { text: string; status: string; completionNote?: string | null }): boolean;
   onTaskStatus(
     taskId: string,
     patch: {
       status?: string;
       result?: { summary?: string; files_modified?: string[]; errors?: string } | null;
     },
-  ): void;
-  onToolResult(name: string, isError: boolean, errorSnippet: string, turn: number): void;
+  ): boolean;
+  onToolResult(name: string, isError: boolean, errorSnippet: string, turn: number): boolean;
 }
 
 /** Consecutive failures of the same tool before a success mints a note. */
@@ -44,13 +44,6 @@ function excerpt(text: string, cap: number): string {
   return collapsed.length > cap ? `${collapsed.slice(0, cap)}…` : collapsed;
 }
 
-const NOOP: AutoCapture = {
-  onPlanResolved: () => undefined,
-  onGoalUpserted: () => undefined,
-  onTaskStatus: () => undefined,
-  onToolResult: () => undefined,
-};
-
 export function buildAutoCapture(args: {
   store: AutoCaptureStore;
   sessionId: number;
@@ -58,10 +51,10 @@ export function buildAutoCapture(args: {
   /** Polling/repeatable tools fail-then-succeed by design — exempt from streak notes. */
   isRepeatable?: (toolName: string) => boolean;
 }): AutoCapture {
-  if (!args.enabled) return NOOP;
   const { store, sessionId } = args;
 
   const save = (input: { title: string; body: string; kind: string; pinned?: boolean }): void => {
+    if (!args.enabled) return;
     try {
       store.rememberMemory(sessionId, input);
     } catch {
@@ -74,32 +67,34 @@ export function buildAutoCapture(args: {
 
   return {
     onPlanResolved(status, planText, feedback) {
-      if (status !== 'approved' || !planText) return;
+      if (status !== 'approved' || !planText) return false;
       const fb = feedback?.trim() ? ` User feedback: ${excerpt(feedback, 200)}` : '';
       save({
         title: 'Approved plan',
         body: `${excerpt(planText, 300)}${fb}`,
         kind: 'auto:plan',
       });
+      return true;
     },
 
     onGoalUpserted(goal) {
       // Goal creation is already structural (goal_* columns render in the
       // state block live) — only COMPLETION is a durable fact worth a note.
-      if (goal.status !== 'complete' || !goal.text) return;
+      if (goal.status !== 'complete' || !goal.text) return false;
       const note = goal.completionNote?.trim() ? ` — ${excerpt(goal.completionNote, 160)}` : '';
       save({
         title: 'Goal completed',
         body: `${excerpt(goal.text, 200)}${note}`,
         kind: 'auto:goal',
       });
+      return true;
     },
 
     onTaskStatus(taskId, patch) {
       const status = patch.status;
-      if (status !== 'done' && status !== 'failed') return;
+      if (status !== 'done' && status !== 'failed') return false;
       const summary = patch.result?.summary?.trim();
-      if (!summary) return; // a closure without a summary carries no signal
+      if (!summary) return false; // a closure without a summary carries no signal
       const files = (patch.result?.files_modified ?? []).slice(0, 5);
       const filesLine = files.length ? ` Files: ${files.join(', ')}` : '';
       save({
@@ -107,17 +102,18 @@ export function buildAutoCapture(args: {
         body: `${status}: ${excerpt(summary, 240)}${filesLine}`,
         kind: 'auto:task',
       });
+      return true;
     },
 
     onToolResult(name, isError, errorSnippet, turn) {
-      if (args.isRepeatable?.(name)) return;
+      if (args.isRepeatable?.(name)) return false;
       const cur = streaks.get(name);
       if (isError) {
         streaks.set(name, {
           count: (cur?.count ?? 0) + 1,
           lastError: errorSnippet || cur?.lastError || '',
         });
-        return;
+        return false;
       }
       streaks.delete(name);
       if (cur && cur.count >= FIX_STREAK_THRESHOLD) {
@@ -128,7 +124,9 @@ export function buildAutoCapture(args: {
             (cur.lastError ? ` Last error: ${excerpt(cur.lastError, 160)}` : ''),
           kind: 'auto:fix',
         });
+        return true;
       }
+      return false;
     },
   };
 }

@@ -229,6 +229,13 @@ import { coderToolOutputFormat213 } from './213_coder_tool_output_format.js';
 import { docIngestGenerations214 } from './214_doc_ingest_generations.js';
 import { docRagTelemetryCache215 } from './215_doc_rag_telemetry_cache.js';
 import { docIngestPauseWorkers216 } from './216_doc_ingest_pause_workers.js';
+import { coderCompactionReliability217 } from './217_coder_compaction_reliability.js';
+import { appStudioWorkflowV5218 } from './218_app_studio_workflow_v5.js';
+import { appStudioWorkItemIdentity219 } from './219_app_studio_work_item_identity.js';
+import { appStudioImpactV5220 } from './220_app_studio_impact_v5.js';
+import { appStudioAgentConfig221 } from './221_app_studio_agent_config.js';
+import { coderRoundFileSnapshots222 } from './222_coder_round_file_snapshots.js';
+import { projectEditorConfig223 } from './223_project_editor_config.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -474,6 +481,13 @@ export const MIGRATIONS: Migration[] = [
   docIngestGenerations214,
   docRagTelemetryCache215,
   docIngestPauseWorkers216,
+  coderCompactionReliability217,
+  appStudioWorkflowV5218,
+  appStudioWorkItemIdentity219,
+  appStudioImpactV5220,
+  appStudioAgentConfig221,
+  coderRoundFileSnapshots222,
+  projectEditorConfig223,
 ];
 
 /**

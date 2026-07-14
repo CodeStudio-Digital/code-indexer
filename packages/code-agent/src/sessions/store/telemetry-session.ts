@@ -14,6 +14,10 @@ function columnExists(db: DB, table: string, column: string): boolean {
     .some((row) => row.name === column);
 }
 
+function tableExists(db: DB, table: string): boolean {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+}
+
 export interface SessionTelemetrySummary {
   turn_count: number;
   subagent_turn_count: number;
@@ -24,8 +28,15 @@ export interface SessionTelemetrySummary {
   total_thinking_tokens: number;
   cache_hit_ratio: number | null;
   total_tool_calls: number;
+  /** Peak prompt carried by any one provider call (main run or subagent). */
+  peak_context_tokens: number;
   compaction_turns: number;
   summarizer_turns: number;
+  compaction_attempts: number;
+  llm_summaries: number;
+  persisted_chapters: number;
+  mechanical_fallbacks: number;
+  checkpoint_failures: number;
   /** Migration 130 — lifetime durable-compaction counters (survive compaction). */
   compaction_count_auto: number;
   compaction_count_manual: number;
@@ -100,6 +111,7 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
          COALESCE(SUM(cache_creation_input_tokens), 0) AS total_cache_creation_tokens,
          COALESCE(SUM(thinking_tokens), 0)          AS total_thinking_tokens,
          COALESCE(SUM(tool_count), 0)               AS total_tool_calls,
+         COALESCE(MAX(input_tokens), 0)             AS peak_context_tokens,
          COALESCE(SUM(compaction_triggered), 0)     AS compaction_turns,
          COALESCE(SUM(summarizer_ran), 0)           AS summarizer_turns,
          COALESCE(SUM(paginate_count), 0)           AS paginate_total,
@@ -124,7 +136,42 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
       | 'messages_conversation'
       | 'messages_user'
       | 'structured_output'
+      | 'compaction_attempts'
+      | 'llm_summaries'
+      | 'persisted_chapters'
+      | 'mechanical_fallbacks'
+      | 'checkpoint_failures'
     >;
+
+  const compactionAudit = tableExists(db, 'coder_compaction_attempts')
+    ? db.prepare(`
+        SELECT COUNT(*) AS compaction_attempts,
+          COALESCE(SUM(CASE
+            WHEN summarizer_ran = 1 AND strategy = 'summarizer'
+              AND status IN ('summarized', 'checkpoint_failed') THEN 1 ELSE 0 END), 0) AS llm_summaries,
+          COALESCE(SUM(CASE WHEN status = 'deterministic_fallback' THEN 1 ELSE 0 END), 0) AS mechanical_fallbacks,
+          COALESCE(SUM(CASE WHEN status = 'checkpoint_failed' THEN 1 ELSE 0 END), 0) AS checkpoint_failures,
+          COALESCE(SUM(summarizer_ran), 0) AS summarizer_turns
+        FROM coder_compaction_attempts WHERE session_id = ?
+      `).get(sessionId) as {
+        compaction_attempts: number;
+        llm_summaries: number;
+        mechanical_fallbacks: number;
+        checkpoint_failures: number;
+        summarizer_turns: number;
+      }
+    : {
+        compaction_attempts: totals.compaction_turns,
+        llm_summaries: totals.summarizer_turns,
+        mechanical_fallbacks: 0,
+        checkpoint_failures: 0,
+        summarizer_turns: totals.summarizer_turns,
+      };
+  const persistedChapters = tableExists(db, 'coder_session_chapters')
+    ? (db.prepare(`
+        SELECT COUNT(*) AS count FROM coder_session_chapters WHERE session_id = ?
+      `).get(sessionId) as { count: number }).count
+    : 0;
 
   // Migration 130: lifetime message counts straight from `coder_messages`. NOT
   // boundary-filtered on purpose — the panel's whole point is a count that does
@@ -305,6 +352,13 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
 
   return {
     ...totals,
+    compaction_turns: compactionAudit.compaction_attempts,
+    summarizer_turns: compactionAudit.summarizer_turns,
+    compaction_attempts: compactionAudit.compaction_attempts,
+    llm_summaries: compactionAudit.llm_summaries,
+    persisted_chapters: persistedChapters,
+    mechanical_fallbacks: compactionAudit.mechanical_fallbacks,
+    checkpoint_failures: compactionAudit.checkpoint_failures,
     messages_all: msgCounts.messages_all,
     messages_conversation: msgCounts.messages_conversation,
     messages_user: msgCounts.messages_user,

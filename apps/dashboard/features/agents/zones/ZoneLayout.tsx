@@ -11,12 +11,14 @@
  * active selection; this component is purely presentational.
  */
 import { useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 import type { BoardMessage } from '../../../state/company/types.js';
 import { WorkZone } from './work/WorkZone.js';
 import { BuildZone } from './build/BuildZone.js';
 import { DataZone } from './data/DataZone.js';
 import { LeftTabRail } from './LeftTabRail.js';
+import type { CompanySessionWorkbenchSlots } from '../company-workbench-slots.js';
 import {
   DEFAULT_TAB_FOR_ZONE,
   isValidTab,
@@ -40,9 +42,10 @@ interface ZoneLayoutProps {
    * the composer's closures without WorkZone re-wiring them.
    */
   composer?: React.ReactNode;
-  /** Bottom terminal panel open state — forwarded to the rail footer toggle. */
-  terminalOpen: boolean;
-  onToggleTerminal: () => void;
+  /** Bottom panel open state — forwarded to the rail footer toggle. */
+  bottomOpen: boolean;
+  onToggleBottom: () => void;
+  workbenchSlots?: CompanySessionWorkbenchSlots;
 }
 
 export function ZoneLayout({
@@ -54,8 +57,9 @@ export function ZoneLayout({
   stream,
   boardMessages,
   composer,
-  terminalOpen,
-  onToggleTerminal,
+  bottomOpen,
+  onToggleBottom,
+  workbenchSlots,
 }: ZoneLayoutProps) {
   const handleChange = useCallback(
     (nextZone: Zone, nextTab: string) => {
@@ -67,20 +71,24 @@ export function ZoneLayout({
     [onZoneTabChange],
   );
 
+  const rail = (
+    <LeftTabRail
+      activeZone={zone}
+      activeTab={tab}
+      onChange={handleChange}
+      bottomOpen={bottomOpen}
+      onToggleBottom={onToggleBottom}
+      catalog={workbenchSlots?.catalog}
+    />
+  );
+
   return (
-    // flex-1 inside the company-session view's flex-column center
-    // (CompanySessionView). The bottom terminal panel lives below the
-    // composer now (not wrapping ZoneLayout in a PanelGroup), so this
-    // is the natural flex layout again.
-    <div className="flex-1 flex overflow-hidden">
-      <LeftTabRail
-        activeZone={zone}
-        activeTab={tab}
-        onChange={handleChange}
-        terminalOpen={terminalOpen}
-        onToggleTerminal={onToggleTerminal}
-      />
-      <div className="flex-1 flex flex-col overflow-hidden">
+    <>
+      {workbenchSlots
+        ? (workbenchSlots.leftRailHost && createPortal(rail, workbenchSlots.leftRailHost))
+        : rail}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {zone === 'work' && (
           <WorkZone
             sessionId={sessionId}
@@ -103,7 +111,8 @@ export function ZoneLayout({
             tab={(isValidTab('data', tab) ? tab : DEFAULT_TAB_FOR_ZONE.data) as DataTab}
           />
         )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }

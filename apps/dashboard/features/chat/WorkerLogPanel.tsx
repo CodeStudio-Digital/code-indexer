@@ -138,7 +138,7 @@ function WorkerLogPanelInner({ onClose, sessionId, kind = 'coder', embedded }: W
   return (
     <div
       className={cn(
-        'flex h-full w-full flex-col bg-card text-card-foreground',
+        'flex h-full w-full flex-col bg-[var(--workbench-surface)] text-card-foreground',
         !embedded && 'border-l border-border',
       )}
     >

@@ -15,6 +15,7 @@
     "importError": "Falha na importação: {{reason}}",
     "edit": "Editar",
     "delete": "Excluir",
+    "deleteTitle": "Excluir o host “{{label}}”?",
     "deleteConfirm": "Excluir o host \"{{label}}\"?",
     "deleteSharedConfirm": "Excluir o host compartilhado \"{{label}}\"? Ele será removido de TODOS os projetos.",
     "shared": "Compartilhados",
@@ -157,7 +158,8 @@
     "multilineHint": "Cada linha roda como um comando separado (executa como um script de shell).",
     "secretHint": "Use ${secret:NOME} para injetar um segredo salvo (ex.: token do git) — resolvido na hora de rodar.",
     "selectHost": "Selecione um host",
-    "runError": "Não foi possível rodar o snippet: {{reason}}"
+    "runError": "Não foi possível rodar o snippet: {{reason}}",
+    "deleteConfirm": "Excluir o snippet “{{name}}”?"
   },
   "secrets": {
     "title": "Segredos",
@@ -167,7 +169,9 @@
     "valueKeep": "Deixe em branco para manter o valor atual",
     "descPlaceholder": "Descrição (opcional)",
     "save": "Salvar",
-    "insert": "Inserir segredo"
+    "insert": "Inserir segredo",
+    "deleteConfirm": "Excluir o segredo “{{name}}”?",
+    "deleteConfirmBody": "Snippets que usam este segredo deixarão de funcionar."
   },
   "tunnels": {
     "title": "Encaminhamento de portas",

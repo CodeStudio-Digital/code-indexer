@@ -19,6 +19,7 @@ import { OverviewEditor, BrandingEditor, GuidePageEditor } from './DocEditors.js
 import { EndpointEditor } from './EndpointEditor.js';
 import { DocShell } from '../doc-shell/DocShell.js';
 import { METHOD_COLOR } from '../collection/row-format.js';
+import { ApiClientSelect } from '../ApiClientSelect.js';
 
 type Sel = { kind: 'overview' } | { kind: 'branding' } | { kind: 'guide'; id: number } | { kind: 'endpoint'; id: number };
 
@@ -77,10 +78,13 @@ export function DocsStudioView({ projectId }: { projectId: number }) {
       <div className="h-10 shrink-0 border-b flex items-center gap-2 px-3 text-xs">
         <BookText className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="font-medium">{t('docs.title')}</span>
-        <select className="text-xs bg-background border rounded px-2 py-1 max-w-[220px]"
-          value={state.activeCollectionId ?? ''} onChange={(e) => { setSel({ kind: 'overview' }); c.selectCollection(Number(e.target.value)); }}>
-          {state.collections.map((col) => <option key={col.id} value={col.id}>{col.name}</option>)}
-        </select>
+        <ApiClientSelect
+          value={state.activeCollectionId == null ? '' : String(state.activeCollectionId)}
+          onValueChange={(value) => { if (!value) return; setSel({ kind: 'overview' }); c.selectCollection(Number(value)); }}
+          options={state.collections.map((collection) => ({ value: String(collection.id), label: collection.name }))}
+          ariaLabel={t('collectionsDialog.title')}
+          triggerClassName="w-[220px]"
+        />
         {state.error && <span className="text-red-500 truncate">{state.error}</span>}
         <div className="ml-auto flex items-center gap-0.5">
           <HeaderToggle

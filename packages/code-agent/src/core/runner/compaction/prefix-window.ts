@@ -57,6 +57,7 @@ export interface ShouldCompactBodyAfterPrefixInputs {
   prefixTokens: number;
   /** Model id — used to look up the effective context window. */
   model: string;
+  contextWindow?: number | null;
   /**
    * Compaction trigger ratio applied to BODY headroom (effective - prefix).
    * Default 0.85 — more aggressive than the legacy 0.90 because the body
@@ -102,7 +103,7 @@ export function resolveBodyAfterPrefixRatio(): number {
 export function shouldCompactBodyAfterPrefix(
   inp: ShouldCompactBodyAfterPrefixInputs,
 ): BodyAfterPrefixDecision {
-  const limits = deriveTokenLimits(inp.model);
+  const limits = deriveTokenLimits(inp.model, inp.contextWindow);
   const triggerRatio = inp.triggerRatio ?? resolveBodyAfterPrefixRatio();
   const bodyTokens = Math.max(0, inp.promptTokens - inp.prefixTokens);
   const bodyCapacity = Math.max(0, limits.effective - inp.prefixTokens);
@@ -128,6 +129,7 @@ export function decideCompactionBodyAfterPrefix(args: {
   systemPrompt: string;
   tools: ReadonlyArray<{ name: string; description?: string; parameters?: unknown }>;
   model: string;
+  contextWindow?: number | null;
   triggerRatio?: number;
 }): BodyAfterPrefixDecision & { prefixTokens: number } {
   const prefixTokens = computePrefixTokens(args.systemPrompt, args.tools);
@@ -135,6 +137,7 @@ export function decideCompactionBodyAfterPrefix(args: {
     promptTokens: args.promptTokens,
     prefixTokens,
     model: args.model,
+    contextWindow: args.contextWindow,
     triggerRatio: args.triggerRatio,
   });
   return { ...decision, prefixTokens };

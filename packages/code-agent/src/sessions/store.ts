@@ -33,6 +33,9 @@ import type {
   ConversationChapterSource,
   InsertRebuiltConversationChaptersResult,
   RebuiltConversationChapterInput,
+  ConversationChapterStatus,
+  FinishCompactionAttemptInput,
+  StartCompactionAttemptInput,
 } from '@mcp/code-agent/sessions/types.js';
 
 import * as core from './store/sessions-core.js';
@@ -58,6 +61,7 @@ import * as telemetryBackfill from './store/telemetry-backfill.js';
 import * as subagentTelemetry from './store/subagent-telemetry.js';
 import * as subagentRecommendations from './store/subagent-recommendations.js';
 import * as chapters from './store/chapters.js';
+import * as compactionAttempts from './store/compaction-attempts.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -225,6 +229,9 @@ export class SessionStore {
   supersedeConversationChapters(sessionId: number, opts: { source?: ConversationChapterSource; throughEndMessageId?: number } = {}): number { return chapters.supersede(this.db, sessionId, opts); }
   copyConversationChapters(fromSessionId: number, toSessionId: number, idMap?: ReadonlyMap<number, number>): number { return chapters.copy(this.db, fromSessionId, toSessionId, idMap); }
   rollbackConversationChapters(sessionId: number, fromMessageId: number): number { return chapters.rollback(this.db, sessionId, fromMessageId); }
+  getConversationChapterStatus(sessionId: number): ConversationChapterStatus { return compactionAttempts.chapterStatus(this.db, sessionId); }
+  startCompactionAttempt(input: StartCompactionAttemptInput): number | null { return compactionAttempts.start(this.db, input); }
+  finishCompactionAttempt(id: number | null, input: FinishCompactionAttemptInput): void { compactionAttempts.finish(this.db, id, input); }
 
   // ─── Plans ─────────────────────────────────────────────────────
   recordPlan(input: plans.RecordPlanInput): CoderPlanRow { return plans.record(this.db, input); }
@@ -293,6 +300,8 @@ export class SessionStore {
   startSubagentRun(input: subagentTelemetry.StartSubagentRunInput): void { subagentTelemetry.start(this.db, input); }
   recordSubagentToolCall(input: subagentTelemetry.SubagentToolCallInput): void { subagentTelemetry.recordToolCall(this.db, input); }
   completeSubagentRun(input: subagentTelemetry.CompleteSubagentRunInput): void { subagentTelemetry.complete(this.db, input); }
+  listSubagentRuns(sessionId: number, limit = 50): subagentTelemetry.SubagentRunTelemetry[] { return subagentTelemetry.listRuns(this.db, sessionId, limit); }
+  listSubagentToolCalls(runId: string, limit = 100): subagentTelemetry.SubagentToolCallTelemetry[] { return subagentTelemetry.listToolCalls(this.db, runId, limit); }
   getSubagentBudgetRecommendations(): subagentRecommendations.SubagentBudgetRecommendation[] {
     return subagentRecommendations.getSubagentBudgetRecommendations(this.db);
   }

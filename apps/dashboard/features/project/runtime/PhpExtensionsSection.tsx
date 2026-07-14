@@ -4,21 +4,15 @@
  * are listed (we own their php.ini); system/Homebrew PHP is not shown here.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Plus } from 'lucide-react';
 import type { InstallProgress, PhpExtension, Runtime } from '@mcp/api-bus';
 import { Button } from '../../../components/ui/button.js';
+import { Combobox } from '../../../components/ui/combobox.js';
 import { Input } from '../../../components/ui/input.js';
 import { Switch } from '../../../components/ui/switch.js';
 import { ScrollArea } from '../../../components/ui/scroll-area.js';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../../components/ui/select.js';
 import { apiCall, apiStream } from '../../../lib/api-client.js';
 
 export function PhpExtensionsSection({ installs }: { installs: Runtime[] }) {
@@ -28,6 +22,10 @@ export function PhpExtensionsSection({ installs }: { installs: Runtime[] }) {
   const [error, setError] = useState<string | null>(null);
   const [peclName, setPeclName] = useState('');
   const [busy, setBusy] = useState(false);
+  const installOptions = useMemo(
+    () => installs.map((install) => ({ value: install.version, label: install.version })),
+    [installs],
+  );
 
   // Default to the first managed install; keep it valid as installs change.
   useEffect(() => {
@@ -96,18 +94,14 @@ export function PhpExtensionsSection({ installs }: { installs: Runtime[] }) {
           {t('runtime.extensions')}
         </h4>
         {installs.length > 1 && (
-          <Select value={version} onValueChange={setVersion}>
-            <SelectTrigger className="h-7 w-40 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {installs.map((i) => (
-                <SelectItem key={i.version} value={i.version}>
-                  {i.version}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Combobox
+            value={version}
+            onChange={setVersion}
+            options={installOptions}
+            searchPlaceholder={t('settings.select.search')}
+            emptyLabel={t('settings.select.empty')}
+            className="h-7 w-40 text-xs"
+          />
         )}
       </div>
 

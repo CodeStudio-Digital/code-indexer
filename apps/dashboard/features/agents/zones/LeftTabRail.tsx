@@ -19,19 +19,21 @@
  * is pinned to the footer (`mt-auto`) mirroring that rail.
  */
 import { Fragment, useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, TerminalSquare } from 'lucide-react';
+import { ChevronDown, ChevronUp, LayoutTemplate, TerminalSquare, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { RailButton, RailContainer, RailSeparator } from '../../../components/chrome/index.js';
 import { TAB_REGISTRY, type TabDef } from './tab-registry.js';
 import type { Zone } from './types.js';
+import type { CompanyCatalogRail } from '../company-workbench-slots.js';
 
 interface LeftTabRailProps {
   activeZone: Zone;
   activeTab: string;
   onChange: (zone: Zone, tab: string) => void;
-  /** Bottom terminal panel open state — drives the footer toggle. */
-  terminalOpen: boolean;
-  onToggleTerminal: () => void;
+  /** Bottom panel open state — drives the footer toggle. */
+  bottomOpen: boolean;
+  onToggleBottom: () => void;
+  catalog?: CompanyCatalogRail;
 }
 
 const ADVANCED_STORAGE_KEY = 'agents.railAdvanced';
@@ -44,7 +46,7 @@ function readStoredAdvanced(): boolean {
   }
 }
 
-export function LeftTabRail({ activeZone, activeTab, onChange, terminalOpen, onToggleTerminal }: LeftTabRailProps) {
+export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onToggleBottom, catalog }: LeftTabRailProps) {
   const { t } = useTranslation('agents');
   const [expanded, setExpanded] = useState(readStoredAdvanced);
 
@@ -95,7 +97,7 @@ export function LeftTabRail({ activeZone, activeTab, onChange, terminalOpen, onT
   const terminalLabel = t('company.terminal', { defaultValue: 'Terminal' });
 
   return (
-    <RailContainer side="left">
+    <RailContainer side="left" aria-label="Ferramentas da empresa">
       {renderGroup(core)}
       <RailSeparator />
       <button
@@ -115,9 +117,30 @@ export function LeftTabRail({ activeZone, activeTab, onChange, terminalOpen, onT
           icon={TerminalSquare}
           label={terminalLabel}
           role="toggle"
-          active={terminalOpen}
-          onClick={onToggleTerminal}
+          active={bottomOpen}
+          onClick={onToggleBottom}
         />
+        {catalog && (
+          <>
+            <RailSeparator />
+            <RailButton
+              icon={Users}
+              label={t('sessions')}
+              role="toggle"
+              active={catalog.open && catalog.activeView === 'sessions'}
+              onClick={() => catalog.onToggle('sessions')}
+              badge={catalog.sessionCount}
+            />
+            <RailButton
+              icon={LayoutTemplate}
+              label={t('templates')}
+              role="toggle"
+              active={catalog.open && catalog.activeView === 'templates'}
+              onClick={() => catalog.onToggle('templates')}
+              badge={catalog.templateCount}
+            />
+          </>
+        )}
       </div>
     </RailContainer>
   );

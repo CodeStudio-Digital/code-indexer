@@ -75,7 +75,11 @@ describe('CompactingNode', () => {
     ctx.messages = Array.from({ length: 20 }, (_, index) => (
       index % 2 === 0 ? user(`u${index}`) : assistant(`a${index}`)
     ));
-    const checkpoint = vi.fn(async (_value: CompactionCheckpoint) => undefined);
+    const checkpoint = vi.fn(async (_value: CompactionCheckpoint) => ({
+      status: 'committed' as const,
+      chapterId: 1,
+      boundaryId: 10,
+    }));
     ctx.opts.onCompactionCheckpoint = checkpoint;
 
     const event = await new CompactingNode({
@@ -104,6 +108,46 @@ describe('CompactingNode', () => {
     expect(event.kind).toBe('CompactionDone');
     expect(ctx.messages[0].content[0]).toMatchObject({ type: 'text' });
     expect((ctx.messages[0].content[0] as { text: string }).text).toContain('auto-compacted summary');
+  });
+
+  it('records an unaligned checkpoint and still permits a later checkpoint', async () => {
+    const { ctx } = makeTestContext();
+    const finished: Array<{ status: string }> = [];
+    Object.assign(ctx.opts, {
+      sessionId: 1,
+      sessionStore: {
+        startCompactionAttempt: () => 1,
+        finishCompactionAttempt: (_id: number, value: { status: string }) => finished.push(value),
+      },
+    });
+    const checkpoint = vi.fn()
+      .mockResolvedValueOnce({ status: 'noop', reason: 'unaligned', boundaryId: 0 })
+      .mockResolvedValueOnce({ status: 'committed', chapterId: 2, boundaryId: 20 });
+    ctx.opts.onCompactionCheckpoint = checkpoint;
+    const node = new CompactingNode({
+      protectTokensOverride: 100,
+      maxTailTokensOverride: 200,
+      summarizeOverride: async () => STUB_SUMMARY,
+    });
+
+    ctx.messages = Array.from({ length: 40 }, (_, index) => (
+      index % 2 === 0 ? user(`first-${index}`) : assistant(`first-${index}`)
+    ));
+    const firstResult = await node.execute(ctx, null);
+    const { ctx: nextCtx } = makeTestContext();
+    Object.assign(nextCtx.opts, {
+      sessionId: 1,
+      sessionStore: ctx.opts.sessionStore,
+      onCompactionCheckpoint: checkpoint,
+    });
+    nextCtx.messages = Array.from({ length: 40 }, (_, index) => (
+      index % 2 === 0 ? user(`second-${index}`) : assistant(`second-${index}`)
+    ));
+    const secondResult = await node.execute(nextCtx, null);
+
+    expect([firstResult, secondResult].map((result) => result.kind)).toEqual(['CompactionDone', 'CompactionDone']);
+    expect(checkpoint).toHaveBeenCalledTimes(2);
+    expect(finished.map((item) => item.status)).toEqual(['checkpoint_failed', 'summarized']);
   });
 
   it('emits CompactionDone with collapsedFrom=0 when history already fits', async () => {

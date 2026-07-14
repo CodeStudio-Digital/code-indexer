@@ -8,7 +8,7 @@
     "delete": "Delete app",
     "deleteConfirm": "Delete \"{{name}}\"? The project files stay on your computer; only the guided journey is removed.",
     "status": {
-      "building": "In progress — step {{n}} of {{total}}",
+      "building": "In progress — phase {{n}} of {{total}}",
       "review": "Your turn to review",
       "live": "Live",
       "done": "Done"
@@ -26,6 +26,7 @@
     "effort": "Reasoning power",
     "effortAuto": "Automatic (model default)",
     "submit": "Start",
+    "cancel": "Cancel",
     "creating": "Setting things up…",
     "showLog": "Technical details",
     "phase": {
@@ -54,11 +55,7 @@
     "locked": "Available after the app plan exists.",
     "title": "Construction plan",
     "emptyTitle": "Let's plan how the app will be built",
-    "emptyBody": "A specialist checks the current stack, organizes the system parts and defines how every requirement will be tested before implementation.",
-    "openAgent": "Open specialist",
-    "refine": "Refine plan",
-    "updateSpec": "Update requirements",
-    "updateSpecPrompt": "Review this project's spec using the architecture decisions. Help me identify the requirement that must change, preserve everything that remains valid, and propose a versioned revision for my approval. Do not change the architecture until that revision is approved.",
+    "emptyBody": "The coordinator organizes stack, modules, data, UX and tests into a traceable Blueprint before construction.",
     "ready": "Plan checked",
     "pending": "{{count}} issue(s)",
     "modules": "System parts",
@@ -71,10 +68,6 @@
   "product": {
     "title": "Product map",
     "emptyTitle": "Let's deepen the product",
-    "emptyBody": "The specialist turns the idea into domains, capabilities and scenarios, showing what belongs now and what can wait.",
-    "repairBody": "This app uses an earlier journey. Use guided repair to insert Product modeling without losing screens, data, conversations, or code.",
-    "repairAction": "Go to Repair app",
-    "openAgent": "Product specialist",
     "domains": "domains", "capabilities": "capabilities", "scenarios": "scenarios", "decisions": "decisions",
     "allDomains": "All domains", "search": "Search capability...",
     "openDecisions": "{{count}} decision(s) still need confirmation", "addScope": "Include in scope", "removeScope": "Remove from scope", "critical": "critical",
@@ -87,24 +80,17 @@
     "flows": "Flows",
     "wireframes": "Wireframes",
     "plan": "Screen plan",
-    "openUxAgent": "UX specialist",
-    "openWireframeAgent": "Flow specialist",
-    "noUx": "Open the specialist to create three contextual visual directions for this app.",
-    "noWireframe": "Wireframes will appear after the UX direction is approved.",
+    "noUx": "The coordinator is still structuring this app's visual directions in the Blueprint.",
+    "noWireframe": "Wireframes will appear when the UX and flow sources are ready.",
     "noPlan": "The traceable construction plan has not been created yet.",
     "navigation": "Navigation",
     "principles": "Principles",
     "accessibility": "Accessibility",
     "dataBindings": "Data used",
-    "states": "Covered states",
-    "changeGroup": "Reopen group",
-    "changeGroupHint": "Explain what must change. Evidence for this group and its dependents will be invalidated without deleting code.",
-    "flowCount": "{{done}}/{{total}} flows",
-    "taskCount": "{{done}}/{{total}} tasks",
-    "groupWaiting": "{{name}} waiting for approval"
+    "states": "Covered states"
   },
   "blueprint": {
-    "locked": "Available once the app plan exists (\"Understand your idea\" step).",
+    "locked": "Available once the app Scope exists.",
     "noSpec": "The map shows up once the app plan is created in the interview.",
     "hint": "Drag blocks, connect them to create links, double-click a link to remove it. Click a block to edit.",
     "save": "Save plan",
@@ -143,10 +129,10 @@
     "cascadeConfirm": "Remove anyway",
     "removeEdgeTitle": "Remove this link?",
     "applyTitle": "Apply changes to the plan?",
-    "applyBody": "The plan was already approved. Applying changes reopens the \"Understand your idea\" step until you approve again, and the AI adjusts the app to the new plan.",
+    "applyBody": "Applying creates a new revision. Only cards linked to changed sources become stale; all unaffected work remains valid.",
     "applyConfirm": "Apply and tell the AI",
     "applyFallbackFeedback": "Plan edited in the Map (Blueprint).",
-    "applyMessage": "I edited the app plan visually in the Map. Re-read the spec with app_get_spec, adjust what was already built to the new plan and re-submit the discovery stage. Summary of changes:",
+    "applyMessage": "I edited the app plan visually in the Map. Re-read the spec, update only cards linked to changed sources and request the appropriate asynchronous approval. Continue independent work. Summary of changes:",
     "conflictBody": "The AI updated the plan while you were editing. Reload to see the new version (your unsaved edits are lost) or save to overwrite.",
     "conflictReload": "Reload",
     "overview": {
@@ -157,7 +143,6 @@
       "noRequirements": "No goals, acceptance criteria or detailed rules have been added yet.",
       "health": "Plan health",
       "noIssues": "No major issues detected.",
-      "openAgent": "Refine with specialist",
       "collapse": "Collapse overview",
       "expand": "Expand overview",
       "counts": {
@@ -211,183 +196,6 @@
       "remove": "Remove"
     }
   },
-  "stages": {
-    "discovery": {
-      "name": "Understand your idea",
-      "agent": "Requirements specialist",
-      "tagline": "The AI chats with you to understand what the app needs to do.",
-      "userAction": "Answer the questions in the chat, then approve the plan."
-    },
-    "product": {
-      "name": "Model the product",
-      "agent": "Product specialist",
-      "tagline": "We deepen the idea into capabilities, scenarios and scope choices before construction.",
-      "userAction": "Review Core, Complete product and Future in the Product tab and confirm the choices."
-    },
-    "architecture": {
-      "name": "Plan the construction",
-      "agent": "Architecture specialist",
-      "tagline": "We define how the app will be assembled and how every outcome will be proven.",
-      "userAction": "Review the decisions and guarantees in Construction, then approve."
-    },
-    "ux": {
-      "name": "Define the experience",
-      "agent": "UX specialist",
-      "tagline": "We choose colors, style, navigation and clarity rules suited to your app.",
-      "userAction": "Compare the three directions in Experience and approve the one that best represents the app."
-    },
-    "wireframe": {
-      "name": "Plan flows and screens",
-      "agent": "Flow and wireframe specialist",
-      "tagline": "We organize how people navigate, decide and find data before building.",
-      "userAction": "Review the flows, wireframes and build order in Experience."
-    },
-    "database": {
-      "name": "Store your data",
-      "agent": "Data specialist",
-      "tagline": "We create the place where the app keeps its information (customers, orders…).",
-      "userAction": "Check the cards in Your data and approve."
-    },
-    "design": {
-      "name": "Build the screens",
-      "agent": "Interface builder",
-      "tagline": "The app's screens come to life — watch them in Your app.",
-      "userAction": "Look at the app, ask for changes in the chat, approve when you like it."
-    },
-    "backend": {
-      "name": "Make it work",
-      "agent": "Application executor",
-      "tagline": "We wire the buttons, forms and rules behind the screens.",
-      "userAction": "Test the app by clicking around and approve when it works."
-    },
-    "review": {
-      "name": "Quality check",
-      "agent": "Application reviewer",
-      "tagline": "The AI reviews errors and security before publishing.",
-      "userAction": "Read the report and approve."
-    },
-    "launch": {
-      "name": "Publish to the internet",
-      "tagline": "Your app goes live with its own address.",
-      "userAction": "Connect your Cloudflare account and publish from the Publish tab."
-    },
-    "status": {
-      "pending": "to do",
-      "active": "in progress",
-      "review": "your turn",
-      "approved": "done",
-      "skipped": "not needed"
-    }
-  },
-  "explainers": {
-    "discovery": {
-      "title": "What happens here?",
-      "body": "The AI asks simple questions, one at a time, to draft your app's plan: what it does, which screens it has and what it stores. Nothing is built before you approve the plan."
-    },
-    "ux": {
-      "title": "Why define the experience before screens?",
-      "body": "UX direction turns the app's theme and audience into clear choices for color, typography, density, navigation and accessibility, preventing a generic interface."
-    },
-    "wireframe": {
-      "title": "What is a wireframe?",
-      "body": "It is a structural screen draft. It shows what appears, in what order, which data is used and how people move forward before visual polish begins."
-    },
-    "architecture": {
-      "title": "Why plan before building?",
-      "body": "The specialist organizes the app, checks current official sources and turns each requirement into a test guarantee. This reduces rework without exposing technical complexity."
-    },
-    "database": {
-      "title": "What is a database?",
-      "body": "It's like an organized notebook where your app writes everything down — each kind of information (customers, orders…) becomes a card with columns. You see it all in the Your data tab."
-    },
-    "design": {
-      "title": "Why screens first?",
-      "body": "We build the look with example data first, so you can see and adjust without waiting. Click any part of the app to request changes."
-    },
-    "backend": {
-      "title": "What does \"make it work\" mean?",
-      "body": "The invisible part: actually saving what you type, fetching the right information and protecting what needs a password."
-    },
-    "review": {
-      "title": "What gets checked?",
-      "body": "The AI tests the whole app, hunts for errors and verifies security items (protected passwords, data stored the right way) before allowing publication."
-    },
-    "launch": {
-      "title": "What is Cloudflare?",
-      "body": "It's the service (free to start) where your app will live on the internet. Connect your account with one click and the app gets its own shareable address."
-    }
-  },
-  "pipeline": {
-    "stageOf": "Step {{n}} of {{total}}",
-    "complete": "All done — your app is complete!",
-    "yourTurn": "Your turn",
-    "stageAgent": "Agent for this step",
-    "start": "Start step",
-    "resend": "Continue",
-    "resolvePending": "Fix pending checks",
-    "recheck": "Check again",
-    "reviewCta": "Review now",
-    "approve": "Approve and continue",
-    "requestChanges": "I want changes",
-    "feedbackPlaceholder": "Tell us what you'd like different…",
-    "reopenConfirm": "Send change request",
-    "editStep": "Edit step",
-    "reopenApprovedHint": "Explain what you want to change. This step returns to in progress and the following steps go back to to do.",
-    "reopenApprovedPlaceholder": "E.g.: change the login rule, remove a screen, adjust the data...",
-    "reopenApprovedConfirm": "Reopen step",
-    "cancel": "Cancel",
-    "notInitialized": "This app's journey has not started yet.",
-    "init": "Start journey",
-    "gateIssues": "Pending checks blocking approval:",
-    "approvalBlocked": "Approval is not available yet",
-    "approvalBlockedDescription": "The specialist must resolve {{count}} checks before the Approve and Request changes buttons are enabled.",
-    "repairAction": "Repair app",
-    "repairTitle": "Check and repair the app",
-    "repairDescription": "We analyze the project structure, tests, local database, and journey before proposing any change.",
-    "repairChecking": "Analyzing the app…",
-    "repairHealthy": "The app is consistent",
-    "repairHealthyHint": "Infrastructure, local database, and journey match the current evidence.",
-    "repairFound": "We found {{count}} safe adjustment(s)",
-    "repairSafety": "The preview changes nothing. Applying creates backups of managed files; pending SQL and business code are never run automatically.",
-    "repairPreserves": "Existing screens, code, and history are preserved. New stages are added as drafts and require your approval.",
-    "repairApply": "Apply repair",
-    "repairApplied": "App repaired",
-    "repairAppliedHint": "The repair was recorded with a backup. Undo is blocked if a repaired file changes afterward.",
-    "repairUndo": "Undo repair",
-    "repairRetry": "Check again",
-    "repairNeedsSpecialist": "Some items require specialist analysis",
-    "repairNeedsSpecialistHint": "The repair tool does not change destructive migrations, invalid seeds, or product rules without human review.",
-    "repairAreaHealthy": "No issue found in this area.",
-    "repairWillDo": "Automatic repair",
-    "repairAreas": {
-      "workspace": "Project and tests",
-      "database": "Local database",
-      "pipeline": "Build journey"
-    },
-    "repairAreaStatus": {
-      "healthy": "ok",
-      "repairable": "repair available",
-      "attention": "needs attention"
-    },
-    "repairIssues": {
-      "invalid-package-json": "package.json is missing or invalid and cannot be changed automatically.",
-      "outdated-test-package": "The test harness is outdated.",
-      "missing-vitest-config": "The Worker test configuration is missing.",
-      "missing-worker-test-harness": "The Worker test configuration or isolated database setup is missing.",
-      "outdated-worker-test-harness": "Database tests use an outdated harness that does not validate migrations and sample data in isolated D1.",
-      "missing-playwright-config": "The browser test configuration is missing.",
-      "missing-test-directories": "The managed test directories are incomplete.",
-      "stale-database-status": "The displayed database history does not match the real D1 ledger.",
-      "database-ledger-unreadable": "The local database exists, but its migration history could not be read.",
-      "destructive-pending-migrations": "Pending destructive migrations require specialist review.",
-      "invalid-seed": "Sample data must be corrected by the specialist before it is applied."
-    },
-    "repairStatus": {
-      "missing": "missing",
-      "outdated": "outdated",
-      "rebuilt": "rebuilt"
-    }
-  },
   "guide": {
     "title": "Your journey"
   },
@@ -409,66 +217,24 @@
   },
   "versions": {
     "title": "App versions",
-    "subtitle": "Track plan changes without losing the history of what was approved.",
     "locked": "Available once the app plan exists.",
     "refresh": "Refresh",
-    "loading": "Loading versions…",
-    "current": "Current",
-    "openChanges": "Open changes",
-    "newChange": "New change",
-    "titlePlaceholder": "E.g.: add club subscriptions",
-    "descriptionPlaceholder": "Explain what needs to change in the app…",
-    "createWithAgent": "Open specialist",
     "changes": "Changes",
-    "noChanges": "No open changes yet.",
-    "noDescription": "No description.",
-    "openAgent": "Open specialist",
-    "apply": "Apply",
-    "reject": "Reject",
-    "discard": "Discard",
-    "discardTitle": "Discard this empty change?",
-    "discardBody": "This change never got a proposed revision. Discarding removes it from the list. The current plan and history are not affected.",
-    "applyTitle": "Apply this evolution?",
-    "applyBody": "The current plan will be updated and impacted steps will return for adjustment. The previous history stays saved.",
-    "applyConfirm": "Apply evolution",
-    "impactTitle": "Build impact",
-    "affectedStages": "Affected steps",
-    "noImpactYet": "The specialist has not proposed a revision yet, so impact is not calculated.",
-    "timeline": "Timeline",
-    "createdAt": "Created",
-    "submittedAt": "Proposed",
-    "appliedAt": "Applied",
-    "proposedRevision": "Proposed revision",
-    "noProposal": "No revision has been proposed yet. Open the specialist to refine and submit the change.",
+    "noProposal": "No revisions have been recorded yet.",
     "history": "Version history",
-    "version": "Version",
-    "screens": "Screens",
-    "dataEntities": "Data",
-    "actions": "Actions",
-    "emptyTitle": "No change selected",
-    "emptyBody": "Create a change to evolve the app without losing the approved plan.",
     "impact": {
       "none": "No impact",
       "low": "Low impact",
       "medium": "Medium impact",
       "high": "High impact"
-    },
-    "status": {
-      "draft": "draft",
-      "review": "in review",
-      "approved": "approved",
-      "applied": "applied",
-      "superseded": "old",
-      "rejected": "rejected"
     }
   },
   "data": {
     "title": "Your data",
     "subtitle": "See tables, fields, relationships, examples and safe queries from the app's local database.",
-    "locked": "Available after the \"Store your data\" step.",
-    "empty": "Your data shows up here once the \"Store your data\" step finishes.",
+    "locked": "Available when the Blueprint phase starts.",
+    "empty": "Your data shows up once local tables are ready.",
     "refresh": "Refresh",
-    "openDbAgent": "Data specialist",
     "provision": "Repair database",
     "provisioning": "Repairing…",
     "provisionNeededTitle": "Local database needs an update",
@@ -512,7 +278,7 @@
   },
   "publish": {
     "title": "Publish to the internet",
-    "locked": "Available after the \"Quality check\". Finish the Guide steps first.",
+    "locked": "Available after Release approval. Approval never publishes automatically.",
     "liveAt": "Your app is live at",
     "cta": "Publish my app",
     "retry": "Try again",
@@ -554,162 +320,8 @@
   },
   "chatRail": {
     "sessions": "Conversations",
-    "assistant": "Assistant",
-    "specSessionTitle": "Refine plan - {{name}}",
-    "productSessionTitle": "Model product - {{name}}",
-    "dbSessionTitle": "Analyze data - {{name}}",
-    "architectureSessionTitle": "Plan construction - {{name}}",
-    "uxSessionTitle": "UX direction - {{name}}",
-    "wireframeSessionTitle": "Flows and wireframes - {{name}}",
-    "designSessionTitle": "Build screens - {{name}}",
-    "backendSessionTitle": "Make it work - {{name}}",
-    "reviewSessionTitle": "Review application - {{name}}",
-    "builderMode": "Build chat",
-    "specMode": "Spec specialist",
-    "productMode": "Product specialist",
-    "dbMode": "Data specialist",
-    "architectureMode": "Architecture specialist",
-    "uxMode": "UX specialist",
-    "wireframeMode": "Flow specialist",
     "open": "Open chat",
-    "back": "Back to conversations",
-    "collapse": "Collapse chat",
-    "specLaunch": {
-      "title": "Open spec specialist",
-      "description": "Choose the model before creating the session, so the specialist does not inherit an unwanted default.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    },
-    "dbLaunch": {
-      "title": "Open data specialist",
-      "description": "Choose the model before creating the session. This specialist stays focused on the selected database.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    },
-    "architectureLaunch": {
-      "title": "Open architecture specialist",
-      "description": "Choose the model that can refine requirements, research official documentation, and create the construction and test plan.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    },
-    "productLaunch": {
-      "title": "Open product specialist",
-      "description": "Choose the model that will deepen the idea, propose scope horizons and map scenarios without automatically including suggestions.",
-      "provider": "Provider", "model": "Model", "searchProvider": "Search provider...", "searchModel": "Search model...",
-      "noProviders": "No provider configured", "noModels": "No model configured", "modelPlaceholder": "model id",
-      "effort": "Reasoning effort", "effortAuto": "Automatic (model default)", "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when supported by the provider/model.", "launch": "Open session"
-    },
-    "uxLaunch": {
-      "title": "Open UX direction specialist",
-      "description": "Choose the model that will interview you and define style, navigation, accessibility, and visual tokens from the app's actual plan.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    },
-    "wireframeLaunch": {
-      "title": "Open flows and wireframes specialist",
-      "description": "Choose the model that will turn requirements, architecture, data, and UX into traceable flows, wireframes, tests, and build groups.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    },
-    "designLaunch": {
-      "title": "Open interface builder",
-      "description": "Choose the model that will build and visually verify the app's planned screens.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    },
-    "backendLaunch": {
-      "title": "Open application executor",
-      "description": "Choose the model that will implement rules, integrations, authentication, and real data connections.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    },
-    "reviewLaunch": {
-      "title": "Open application reviewer",
-      "description": "Choose the model that will test the full app, fix failures, and prepare the final review.",
-      "provider": "Provider",
-      "model": "Model",
-      "searchProvider": "Search provider...",
-      "searchModel": "Search model...",
-      "noProviders": "No provider configured",
-      "noModels": "No model configured",
-      "modelPlaceholder": "model id",
-      "effort": "Reasoning effort",
-      "effortAuto": "Automatic (model default)",
-      "thinking": "Think more",
-      "thinkingHint": "Uses thinking mode when the provider/model accepts it.",
-      "launch": "Open session"
-    }
+    "collapse": "Collapse chat"
   },
   "surfaceFind": {
     "title": "Find on this page",
@@ -720,15 +332,58 @@
     "next": "Next occurrence",
     "close": "Close search"
   },
-  "stageMessage": {
-    "product": "Deepen this product before architecture. Read the idea and persisted briefing, clearly present the current Core, Complete product, and what can wait for the Future. Propose important capabilities a lay user did not mention, but never select inferred or researched scope without explicit confirmation. Model domains and critical scenarios incrementally, run app_product_audit, and submit the product stage for review.",
-    "discovery": "Let's start! I want to create an app and need your help planning it. Ask me ONE question at a time using the ask_user tool, in plain language with no technical terms, to understand: what the app does, who uses it, which screens it needs, what information it stores, whether people log in, which important rules exist, how I will know it is ready, and what stays out of the first version. Whenever the question has choices, pass options (2 to 8) with allow_freeform: true — so I can click a button OR type my own answer. When the question allows picking SEVERAL options (e.g. which screens, what data to store, login methods), pass multi_select: true. When you have everything, save the plan with app_save_spec including requirements, run app_spec_audit, show me a simple summary and ask if I approve. Always speak my language.",
-    "architecture": "Plan how this app will be built. Read the spec and its history. If an architecture decision requires changing product behavior, scope, data, access, or acceptance criteria, confirm it with me and propose a versioned spec revision before continuing. Otherwise, research only current official documentation for the recommended stack, record the sources, and create a versioned architecture with a traceable test plan. Every acceptance criterion, rule, behavior, entity and login requirement must have at least one test. Save with app_save_architecture, run app_architecture_audit, and submit the architecture stage with app_submit_stage. Explain the result in plain language.",
-    "database": "Let's verify the app data. First inspect migrations, the canonical seed, and the real database. If everything already matches the approved plan, reuse the database without rebuilding anything. Create only one additive migration for a confirmed schema difference; fix examples with app_save_db_seed, never extra migrations. Apply only pending work, validate with read-only queries, and submit with app_submit_stage.",
-    "ux": "Lead this app's UX direction. Read the approved spec and architecture, the database structure and examples, and optional references. Present exactly three contextual directions, ask one simple question at a time, and allow selecting, combining, and refining. Define complete tokens, navigation, components, motion, and WCAG 2.2 AA. Save with app_save_ux, run app_ux_audit, and submit the ux stage only when everything is traceable.",
-    "wireframe": "Turn the approved UX, spec, architecture, and real database into low-fidelity flows and wireframes. Cover entry, decisions, permissions, actions, data read and written, outcomes, states, responsiveness, and real bindings. Convert TDD obligations into Playwright cases and order groups and tasks without artificial hour estimates. Save with app_save_wireframe, run app_wireframe_audit, and submit the wireframe stage.",
-    "design": "Work only on the active screen-plan task. Start with a red test and typed mock contract, implement states, responsiveness, and accessibility, obtain a green test and visual evidence, then complete the task with app_complete_build_task. Submit the finished group with app_submit_build_group and wait for my approval before moving on. Do not register a whole screen early.",
-    "backend": "Now make the app really work: create the API routes for every piece of information in the plan, switch the screens from example data to real data, and if the plan has login, set up authentication securely. Verify everything in the preview, record with app_record_feature and deliver with app_submit_stage.",
-    "review": "Run the quality check: test the whole app in the preview as if you were me, fix any errors, and write the REVIEW.md report in words I understand. When everything is green, deliver with app_submit_stage."
+  "workflow": {
+    "phases": { "define": "Define", "blueprint": "Blueprint", "build": "Build", "deliver": "Deliver" },
+    "phaseStatus": { "locked": "Waiting", "active": "In progress", "attention": "Needs you", "complete": "Complete" },
+    "attention": "Your attention",
+    "noAttention": "No pending decisions. The coordinator keeps working on every unblocked card.",
+    "kanban": "Delivery plan",
+    "noCards": "No cards in this column.",
+    "columns": { "backlog": "Backlog", "ready": "Ready", "running": "In progress", "review": "Review", "done": "Done" },
+    "reviewAutomated": "Review is performed by a verifier agent other than the implementer.",
+    "approvals": { "scope": "Approve Scope", "blueprint": "Approve Blueprint", "release": "Approve Release" },
+    "approve": "Approve",
+    "requestChanges": "Request changes",
+    "changePlaceholder": "Describe what needs to change and, when possible, which scope sources were affected.",
+    "answerPlaceholder": "Enter a specific answer or direction",
+    "answerDecision": "Answer",
+    "sendChanges": "Create corrective revision",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel",
+    "blocked": "Blocked",
+    "stale": "Stale",
+    "details": "View details",
+    "acceptance": "Acceptance criteria",
+    "sources": "Spec sources",
+    "dependencies": "Dependencies",
+    "files": "File scope",
+    "liveRun": "Live execution",
+    "evidence": "Evidence",
+    "evidenceCount": "{{count}} evidence item(s)",
+    "blocksCards": "Blocks only {{count}} card(s).",
+    "exceptional": "Blocked and stale ({{count}})",
+    "unsliced": "No slice",
+    "coordinator": "App coordinator",
+    "connectingCoordinator": "Connecting to the persistent coordinator…",
+    "coordinatorOwnsArtifacts": "Ask for changes in the coordinator conversation; it preserves context and updates only affected cards.",
+    "versionHistoryHelp": "Immutable history. Approvals and changes happen in Guide.",
+    "publishIsExplicit": "Release approval only unlocks this action. Publishing remains your explicit decision."
+  },
+  "agentRail": {
+    "label": "Agent panels",
+    "agents": "Agents",
+    "prompts": "Additional prompts",
+    "sessions": "Sessions and runs",
+    "chat": "Coordinator chat",
+    "profiles": "Specialist profiles",
+    "saved": "Configuration saved.",
+    "coordinatorPrompt": "Coordinator additional prompt",
+    "promptPlaceholder": "App-specific instructions without repeating the base prompt…",
+    "profilePromptPlaceholder": "Additional criteria, standards and limits for this profile…",
+    "save": "Save configuration",
+    "agentRuns": "Agent runs",
+    "noRuns": "No subagent has run yet.",
+    "selectRun": "Select a run."
   }
 }

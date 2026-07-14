@@ -12,32 +12,42 @@
  */
 
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { realpath, rm } from 'node:fs/promises';
 import {
   ApiError,
   type ProjectGitApi,
   type GitStatus,
   type GitStatusFile,
+  type GitCommit,
   type GitCommitFileChange,
   type GitBranch,
   type GitRunResult,
   type GitStashEntry,
   type GitPlan,
   type GitPlanStep,
+  type GitPlanOperation,
+  type GitPlanRisk,
+  type GitWorkspaceSnapshot,
 } from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
-import { callGeneralAiJson } from '../aiJson.js';
-import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
+import { callGeneralAiJson, stripJsonFences } from '../aiJson.js';
+import { durationToBucket } from '@mcp/store/pipeline-telemetry-store.js';
 import { createConflictHandlers } from './conflicts.js';
 import { createGitOptimizationHandlers } from './git-optimizations.js';
 import { createRepoResolver } from './repos.js';
 import { selectHunks } from './hunk-stage.js';
+import { guardProjectGitApi, recordGitCacheDecision, recordGitProcess } from './guard.js';
 
 interface GitResult {
   code: number;
   stdout: string;
   stderr: string;
+  durationMs?: number;
+  timedOut?: boolean;
+  truncated?: boolean;
+  errorCode?: GitRunResult['errorCode'];
 }
 
 interface GitRunOptions {
@@ -45,13 +55,12 @@ interface GitRunOptions {
   env?: Record<string, string>;
   timeoutMs?: number;
   maxOutputBytes?: number;
+  profile?: 'read' | 'mutation' | 'network';
 }
 
 const GIT_READ_TIMEOUT_MS = Number(process.env.MCP_GIT_READ_TIMEOUT_MS ?? 15_000);
 const GIT_SUMMARY_TIMEOUT_MS = Number(process.env.MCP_GIT_SUMMARY_TIMEOUT_MS ?? 3_000);
-// Only auto-enable git fsmonitor/untrackedCache for repos whose `git status`
-// took longer than this — fast/small repos never get a persistent daemon.
-const GIT_AUTO_OPTIMIZE_SLOW_MS = Number(process.env.MCP_GIT_AUTO_OPTIMIZE_SLOW_MS ?? 3_000);
+const GIT_MUTATION_TIMEOUT_MS = Number(process.env.MCP_GIT_MUTATION_TIMEOUT_MS ?? 60_000);
 // Bound network ops (fetch/pull) so an unreachable remote can't hang the UI
 // forever — git itself has no default timeout here.
 const GIT_NETWORK_TIMEOUT_MS = Number(process.env.MCP_GIT_NETWORK_TIMEOUT_MS ?? 30_000);
@@ -60,6 +69,41 @@ const GIT_STATUS_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_STATUS_MAX_OUTPUT
 const GIT_AGG_CONCURRENCY = Number(process.env.MCP_GIT_AGG_CONCURRENCY ?? 4);
 const GIT_LIST_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_LIST_MAX_OUTPUT_BYTES ?? 8 * 1024 * 1024);
 const GIT_DETAIL_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_DETAIL_MAX_OUTPUT_BYTES ?? 32 * 1024 * 1024);
+
+const GIT_ENV_BLOCKLIST = new Set([
+  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG', 'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_CEILING_DIRECTORIES',
+]);
+
+function safeGitEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (GIT_ENV_BLOCKLIST.has(key) || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key) || key === 'GIT_CONFIG_COUNT') continue;
+    env[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (!GIT_ENV_BLOCKLIST.has(key) && !/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key) && key !== 'GIT_CONFIG_COUNT') {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
+function terminateProcessTree(child: ReturnType<typeof spawn>): void {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    killer.unref();
+    return;
+  }
+  child.kill('SIGTERM');
+  const hardKill = setTimeout(() => child.kill('SIGKILL'), 1_000);
+  hardKill.unref?.();
+}
 
 function throwGitReadFailure(operation: string, result: GitResult, fallback: string): never {
   const message = result.stderr.trim() || fallback;
@@ -87,6 +131,9 @@ function runGit(
 ): Promise<GitResult> {
   const opts = typeof optsOrStdin === 'string' ? { stdin: optsOrStdin } : (optsOrStdin ?? {});
   return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const timeoutMs = opts.timeoutMs ?? (opts.profile === 'network' ? GIT_NETWORK_TIMEOUT_MS : opts.profile === 'read' ? GIT_READ_TIMEOUT_MS : GIT_MUTATION_TIMEOUT_MS);
+    const maxOutputBytes = opts.maxOutputBytes ?? GIT_DETAIL_MAX_OUTPUT_BYTES;
     let settled = false;
     let timedOut = false;
     let outputTooLarge = false;
@@ -95,7 +142,7 @@ function runGit(
     const child = spawn('git', args, {
       cwd,
       windowsHide: true,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env: safeGitEnv({ ...(opts.profile === 'network' ? { GIT_TERMINAL_PROMPT: '0' } : {}), ...opts.env }),
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
@@ -103,14 +150,19 @@ function runGit(
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      recordGitProcess({
+        outputBytes: Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8'),
+        timedOut: result.timedOut,
+        truncated: result.truncated,
+      });
       resolve(result);
     };
     const collect = (target: Buffer[], chunk: Buffer) => {
       if (settled) return;
       outputBytes += chunk.length;
-      if (opts.maxOutputBytes && outputBytes > opts.maxOutputBytes) {
+      if (maxOutputBytes && outputBytes > maxOutputBytes) {
         outputTooLarge = true;
-        child.kill();
+        terminateProcessTree(child);
         return;
       }
       target.push(chunk);
@@ -118,28 +170,30 @@ function runGit(
     child.stdout.on('data', (chunk: Buffer) => collect(out, chunk));
     child.stderr.on('data', (chunk: Buffer) => collect(err, chunk));
     child.on('error', (e) => {
-      finish({ code: -1, stdout: '', stderr: (e as Error).message });
+      finish({ code: -1, stdout: '', stderr: (e as Error).message, durationMs: Date.now() - startedAt, errorCode: 'spawn_failed' });
     });
     child.on('close', (code) => {
       if (timedOut) {
-        finish({ code: -1, stdout: '', stderr: `git ${args[0] ?? ''} timed out after ${opts.timeoutMs}ms` });
+        finish({ code: -1, stdout: '', stderr: `git ${args[0] ?? ''} timed out after ${timeoutMs}ms`, durationMs: Date.now() - startedAt, timedOut: true, errorCode: 'timeout' });
         return;
       }
       if (outputTooLarge) {
-        finish({ code: -1, stdout: '', stderr: `git output exceeded ${opts.maxOutputBytes} bytes` });
+        finish({ code: -1, stdout: '', stderr: `git output exceeded ${maxOutputBytes} bytes`, durationMs: Date.now() - startedAt, truncated: true, errorCode: 'output_too_large' });
         return;
       }
       finish({
         code: code ?? -1,
         stdout: Buffer.concat(out).toString('utf8'),
         stderr: Buffer.concat(err).toString('utf8'),
+        durationMs: Date.now() - startedAt,
+        ...(code === 0 ? {} : { errorCode: 'git_failed' as const }),
       });
     });
-    if (opts.timeoutMs && opts.timeoutMs > 0) {
+    if (timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
-        child.kill();
-      }, opts.timeoutMs);
+        terminateProcessTree(child);
+      }, timeoutMs);
       timer.unref?.();
     }
     if (opts.stdin) {
@@ -167,15 +221,15 @@ function interpretStatusChar(c: string): GitStatusFile['state'] | null {
   }
 }
 
-function appendStatusEntries(entries: GitStatusFile[], xy: string, path: string): void {
+function appendStatusEntries(entries: GitStatusFile[], xy: string, path: string, oldPath?: string): void {
   if (!path) return;
   const stagedState = interpretStatusChar(xy[0] ?? '.');
   if (stagedState && stagedState !== 'untracked' && stagedState !== 'ignored') {
-    entries.push({ path, state: stagedState, staged: true });
+    entries.push({ path, oldPath, state: stagedState, staged: true });
   }
   const wtState = interpretStatusChar(xy[1] ?? '.');
   if (wtState) {
-    entries.push({ path, state: wtState, staged: false });
+    entries.push({ path, oldPath, state: wtState, staged: false });
   }
 }
 
@@ -184,7 +238,7 @@ function appendStatusEntries(entries: GitStatusFile[], xy: string, path: string)
  * headers and file rows. V2 avoids the old two-command v1+v2 split and
  * keeps rename/copy paths unquoted under `-z`.
  */
-function parsePorcelainV2Status(out: string): {
+export function parsePorcelainV2Status(out: string): {
   head: { branch: string | null; upstream: string | null; ahead: number; behind: number };
   files: GitStatusFile[];
 } {
@@ -201,13 +255,15 @@ function parsePorcelainV2Status(out: string): {
     }
     if (r.startsWith('2 ')) {
       const parts = r.split(' ');
-      appendStatusEntries(files, parts[1] ?? '..', parts.slice(9).join(' '));
-      i += 1; // old path for rename/copy
+      const oldPath = records[i + 1] || undefined;
+      appendStatusEntries(files, parts[1] ?? '..', parts.slice(9).join(' '), oldPath);
+      i += 1;
       continue;
     }
     if (r.startsWith('u ')) {
       const parts = r.split(' ');
-      appendStatusEntries(files, parts[1] ?? 'UU', parts.slice(10).join(' '));
+      const conflictPath = parts.slice(10).join(' ');
+      if (conflictPath) files.push({ path: conflictPath, state: 'unmerged', staged: false });
       continue;
     }
     if (r.startsWith('? ')) {
@@ -254,44 +310,11 @@ function parseHeadBranchInfo(out: string): {
   return { branch, upstream, ahead, behind };
 }
 
-async function readHeadSummary(cwd: string): Promise<{
-  branch: string | null;
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-}> {
-  // branch + upstream are independent lookups — fire both at once, then the
-  // ahead/behind rev-list (which needs the upstream ref) runs only if present.
-  const [branchRes, upstreamRes] = await Promise.all([
-    runGit(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { timeoutMs: GIT_SUMMARY_TIMEOUT_MS }),
-    runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], {
-      timeoutMs: GIT_SUMMARY_TIMEOUT_MS,
-    }),
-  ]);
-  const branch = branchRes.code === 0 ? branchRes.stdout.trim() || null : null;
-  const upstream = upstreamRes.code === 0 ? upstreamRes.stdout.trim() || null : null;
-  if (!upstream) return { branch, upstream: null, ahead: 0, behind: 0 };
-
-  const abRes = await runGit(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], {
-    timeoutMs: GIT_SUMMARY_TIMEOUT_MS,
-  });
-  if (abRes.code !== 0) return { branch, upstream, ahead: 0, behind: 0 };
-  const [aheadRaw, behindRaw] = abRes.stdout.trim().split(/\s+/);
-  return {
-    branch,
-    upstream,
-    ahead: Number(aheadRaw) || 0,
-    behind: Number(behindRaw) || 0,
-  };
-}
-
 /**
  * Build a changed-file list by merging `--name-status` (authoritative
  * status + rename old/new paths) with `--numstat` (per-file add/remove
- * counts, keyed by the new path). We avoid `-z` parsing to keep the
- * splits trivial; for renames the numstat path is a combined `old =>
- * new` token that won't key-match, so those rows fall back to 0/0 — fine
- * since renames are usually content-identical.
+ * counts, keyed by the new path). Both streams use NUL delimiters so spaces,
+ * tabs, Unicode and newlines in file names remain unambiguous.
  *
  * `argsWith(flag)` produces the full git argv for the given stat flag —
  * differs between a commit (`show … <sha>`) and a stash (`stash show …
@@ -310,50 +333,61 @@ async function collectChangedFiles(
     return 'modified'; // M, T (typechange), and anything unexpected
   };
 
-  const numstat = await runGit(cwd, argsWith('--numstat'), {
-    timeoutMs: GIT_READ_TIMEOUT_MS,
-    maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
-  });
+  const [numstat, nameStatus] = await Promise.all([
+    runGit(cwd, [...argsWith('--numstat'), '-z'], {
+      timeoutMs: GIT_READ_TIMEOUT_MS,
+      maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+    }),
+    runGit(cwd, [...argsWith('--name-status'), '-z'], {
+      timeoutMs: GIT_READ_TIMEOUT_MS,
+      maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+    }),
+  ]);
   if (numstat.code !== 0) {
     throwGitReadFailure('git_changed_files', numstat, 'git changed files failed');
   }
   const counts = new Map<string, { additions: number; deletions: number }>();
-  for (const line of numstat.stdout.split('\n')) {
-    if (!line.trim()) continue;
-    const [adds, dels, ...pathParts] = line.split('\t');
-    const path = pathParts.join('\t');
-    if (!path) continue;
-    counts.set(path, {
+  const numRecords = numstat.stdout.split('\0');
+  for (let i = 0; i < numRecords.length; i += 1) {
+    const record = numRecords[i];
+    if (!record) continue;
+    const firstTab = record.indexOf('\t');
+    const secondTab = firstTab < 0 ? -1 : record.indexOf('\t', firstTab + 1);
+    if (secondTab < 0) continue;
+    const adds = record.slice(0, firstTab);
+    const dels = record.slice(firstTab + 1, secondTab);
+    let filePath = record.slice(secondTab + 1);
+    if (!filePath) {
+      i += 1; // pre-image path
+      filePath = numRecords[++i] ?? ''; // post-image path
+    }
+    if (!filePath) continue;
+    counts.set(filePath, {
       additions: adds === '-' ? 0 : Number(adds) || 0,
       deletions: dels === '-' ? 0 : Number(dels) || 0,
     });
   }
 
-  const nameStatus = await runGit(cwd, argsWith('--name-status'), {
-    timeoutMs: GIT_READ_TIMEOUT_MS,
-    maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
-  });
   if (nameStatus.code !== 0) {
     throwGitReadFailure('git_changed_files', nameStatus, 'git changed files failed');
   }
   const files: GitCommitFileChange[] = [];
-  for (const line of nameStatus.stdout.split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    const code = parts[0];
+  const nameRecords = nameStatus.stdout.split('\0');
+  for (let i = 0; i < nameRecords.length; i += 1) {
+    const code = nameRecords[i];
     if (!code) continue;
     const state = mapState(code);
-    let path: string;
+    let filePath: string;
     let oldPath: string | undefined;
-    if ((state === 'renamed' || state === 'copied') && parts.length >= 3) {
-      oldPath = parts[1];
-      path = parts[2];
+    if (state === 'renamed' || state === 'copied') {
+      oldPath = nameRecords[++i] ?? '';
+      filePath = nameRecords[++i] ?? '';
     } else {
-      path = parts[1] ?? '';
+      filePath = nameRecords[++i] ?? '';
     }
-    if (!path) continue;
-    const c = counts.get(path) ?? { additions: 0, deletions: 0 };
-    files.push({ path, oldPath, state, additions: c.additions, deletions: c.deletions });
+    if (!filePath) continue;
+    const c = counts.get(filePath) ?? { additions: 0, deletions: 0 };
+    files.push({ path: filePath, oldPath, state, additions: c.additions, deletions: c.deletions });
   }
   return files;
 }
@@ -378,9 +412,158 @@ function posixRel(from: string, to: string): string {
   return path.relative(from, to).replace(/\\/g, '/');
 }
 
+function parseGitLog(out: string): GitCommit[] {
+  return out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [sha, shortSha, author, date, subject, parentStr = '', refStr = ''] = line.split('\x1f');
+      return {
+        sha,
+        shortSha,
+        author,
+        date,
+        subject,
+        parents: parentStr.trim() ? parentStr.trim().split(/\s+/) : [],
+        refs: refStr.trim() ? refStr.split(',').map((ref) => ref.trim()).filter(Boolean) : [],
+      };
+    });
+}
+
+function asText(value: unknown, max = 1_024): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= max && !value.includes('\0')
+    ? value
+    : undefined;
+}
+
+function normalizeAiOperation(value: unknown): GitPlanOperation | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const op = asText(v.op, 40);
+  const bool = (key: string) => v[key] === true ? true : undefined;
+  switch (op) {
+    case 'branchCheckout': {
+      const name = asText(v.name); return name ? { op, name, create: bool('create') } : null;
+    }
+    case 'branchCreate': {
+      const name = asText(v.name); if (!name) return null;
+      return { op, name, ...(asText(v.from) ? { from: asText(v.from) } : {}), checkout: bool('checkout') };
+    }
+    case 'branchRename': {
+      const oldName = asText(v.oldName); const newName = asText(v.newName);
+      return oldName && newName ? { op, oldName, newName, force: bool('force') } : null;
+    }
+    case 'branchDelete': {
+      const name = asText(v.name); return name ? { op, name, force: bool('force') } : null;
+    }
+    case 'merge': {
+      const branch = asText(v.branch); if (!branch) return null;
+      const strategy = v.strategy === 'ff-only' || v.strategy === 'no-ff' ? v.strategy : 'default';
+      return { op, branch, strategy };
+    }
+    case 'rebase': {
+      const onto = asText(v.onto); return onto ? { op, onto } : null;
+    }
+    case 'reset': {
+      const target = asText(v.target);
+      const mode = v.mode === 'soft' || v.mode === 'mixed' || v.mode === 'hard' ? v.mode : null;
+      return target && mode ? { op, target, mode } : null;
+    }
+    case 'revert': {
+      const commit = asText(v.commit); return commit ? { op, commit, noCommit: bool('noCommit') } : null;
+    }
+    case 'cherryPick': {
+      const commits = Array.isArray(v.commits) ? v.commits.map((item) => asText(item)).filter((item): item is string => !!item).slice(0, 100) : [];
+      return commits.length > 0 ? { op, commits, noCommit: bool('noCommit') } : null;
+    }
+    case 'push':
+      return { op, ...(asText(v.remote) ? { remote: asText(v.remote) } : {}), ...(asText(v.branch) ? { branch: asText(v.branch) } : {}), force: bool('force'), setUpstream: bool('setUpstream') };
+    case 'fetch':
+      return { op, ...(asText(v.remote) ? { remote: asText(v.remote) } : {}), prune: bool('prune') };
+    case 'pull':
+      return { op, ...(asText(v.remote) ? { remote: asText(v.remote) } : {}), ...(asText(v.branch) ? { branch: asText(v.branch) } : {}), rebase: bool('rebase') };
+    case 'stashSave':
+      return { op, ...(asText(v.message, 10_000) ? { message: asText(v.message, 10_000) } : {}), includeUntracked: bool('includeUntracked'), keepIndex: bool('keepIndex') };
+    case 'stashPop':
+    case 'stashApply':
+    case 'stashDrop': {
+      const ref = asText(v.ref); return ref ? { op, ref } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function operationRisk(operation: GitPlanOperation): GitPlanRisk {
+  if (
+    (operation.op === 'reset' && operation.mode === 'hard') ||
+    (operation.op === 'branchDelete' && operation.force) ||
+    (operation.op === 'branchRename' && operation.force) ||
+    (operation.op === 'push' && operation.force) ||
+    operation.op === 'stashDrop'
+  ) return 'destructive';
+  return 'mutating';
+}
+
+function buildOperation(operation: GitPlanOperation): {
+  args: string[];
+  env?: Record<string, string>;
+  profile?: 'mutation' | 'network';
+} {
+  switch (operation.op) {
+    case 'branchCheckout': return { args: operation.create ? ['checkout', '-b', operation.name] : ['checkout', operation.name] };
+    case 'branchCreate': return { args: [...(operation.checkout ? ['checkout', '-b'] : ['branch']), operation.name, ...(operation.from ? [operation.from] : [])] };
+    case 'branchRename': return { args: ['branch', operation.force ? '-M' : '-m', operation.oldName, operation.newName] };
+    case 'branchDelete': return { args: ['branch', operation.force ? '-D' : '-d', operation.name] };
+    case 'merge': return { args: ['merge', ...(operation.strategy === 'ff-only' ? ['--ff-only'] : operation.strategy === 'no-ff' ? ['--no-ff'] : []), operation.branch] };
+    case 'rebase': return { args: ['rebase', operation.onto], env: { GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' } };
+    case 'reset': return { args: ['reset', `--${operation.mode}`, operation.target] };
+    case 'revert': return { args: ['revert', ...(operation.noCommit ? ['--no-commit'] : []), operation.commit] };
+    case 'cherryPick': return { args: ['cherry-pick', ...(operation.noCommit ? ['--no-commit'] : []), ...operation.commits] };
+    case 'push': return { args: ['push', ...(operation.force ? ['--force-with-lease'] : []), ...(operation.setUpstream ? ['-u'] : []), ...(operation.remote ? [operation.remote] : []), ...(operation.branch ? [operation.branch] : [])], profile: 'network' };
+    case 'fetch': return { args: ['fetch', ...(operation.prune ? ['--prune'] : []), ...(operation.remote ? [operation.remote] : [])], profile: 'network' };
+    case 'pull': return { args: ['pull', ...(operation.rebase ? ['--rebase'] : []), ...(operation.remote ? [operation.remote] : []), ...(operation.branch ? [operation.branch] : [])], profile: 'network' };
+    case 'stashSave': return { args: ['stash', 'push', ...(operation.includeUntracked ? ['-u'] : []), ...(operation.keepIndex ? ['--keep-index'] : []), ...(operation.message ? ['-m', operation.message] : [])] };
+    case 'stashPop': return { args: ['stash', 'pop', operation.ref] };
+    case 'stashApply': return { args: ['stash', 'apply', operation.ref] };
+    case 'stashDrop': return { args: ['stash', 'drop', operation.ref] };
+  }
+}
+
+function commandPreview(operation: GitPlanOperation): string {
+  const quote = (arg: string) => /^[\w./:@{}+-]+$/.test(arg) ? arg : JSON.stringify(arg);
+  return `git ${buildOperation(operation).args.map(quote).join(' ')}`;
+}
+
 export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   const { db } = deps;
   const statusInflight = new Map<string, Promise<GitStatus>>();
+  const STATUS_SNAPSHOT_TTL_MS = Number(process.env.MCP_GIT_STATUS_SNAPSHOT_TTL_MS ?? 30_000);
+  const statusSnapshots = new Map<string, {
+    projectId: number;
+    repoPath?: string;
+    status: GitStatus & { files: GitStatusFile[] };
+    createdAt: number;
+    elapsedMs: number;
+  }>();
+  const AI_PLAN_TTL_MS = Number(process.env.MCP_GIT_AI_PLAN_TTL_MS ?? 5 * 60_000);
+  const aiPlans = new Map<string, {
+    projectId: number;
+    repoPath?: string;
+    expiresAt: number;
+    steps: GitPlanStep[];
+  }>();
+  const LOG_SNAPSHOT_TTL_MS = Number(process.env.MCP_GIT_LOG_SNAPSHOT_TTL_MS ?? 5 * 60_000);
+  const logSnapshots = new Map<string, {
+    projectId: number;
+    repoPath?: string;
+    root: string;
+    refs: string[];
+    path?: string;
+    branch?: string;
+    all: boolean;
+    createdAt: number;
+  }>();
 
   function requireRoot(projectId: number): string {
     const project = db.getProject(projectId);
@@ -390,12 +573,16 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
   // repoRoot + absolute gitDir are stable for a fixed root_path across a
   // session (branch checkout / commit don't move them), yet resolving them
-  // costs a ~8-10s git spawn on heavy repos — a tax EVERY method paid first.
+  // costs an extra git spawn on heavy repos — a tax every method paid first.
   // Cache positives with a short TTL so a burst of reloads shares one lookup
   // while bounding staleness against the rare external `.git` swap; negatives
   // are never cached so a later `git init` is still picked up.
   const REPO_CACHE_MS = Number(process.env.MCP_GIT_REPO_CACHE_MS ?? 30_000);
   const repoRootCache = new Map<string, { repoRoot: string; gitDir: string; at: number }>();
+  const repoCacheKey = (value: string) => {
+    const resolved = path.resolve(value).replace(/\\/g, '/');
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
   // branchesDetailed is the heavy one on big repos (for-each-ref over 100s of
   // refs + per-ref ahead/behind). Cache its result per (project, includeRemote,
   // git-revision) so reopening the branch list is instant; a ref change bumps
@@ -405,7 +592,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   async function detectRepo(
     root: string,
   ): Promise<{ repoRoot: string | null; gitDir: string | null; notARepo: boolean }> {
-    const cached = repoRootCache.get(root);
+    const key = repoCacheKey(root);
+    const cached = repoRootCache.get(key);
     if (cached && Date.now() - cached.at < REPO_CACHE_MS) {
       return { repoRoot: cached.repoRoot, gitDir: cached.gitDir, notARepo: false };
     }
@@ -418,7 +606,9 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     if (r.code !== 0) return { repoRoot: null, gitDir: null, notARepo: true };
     const [repoRoot = '', gitDir = ''] = r.stdout.split('\n').map((s) => s.trim());
     if (!repoRoot) return { repoRoot: null, gitDir: null, notARepo: true };
-    repoRootCache.set(root, { repoRoot, gitDir, at: Date.now() });
+    const value = { repoRoot, gitDir, at: Date.now() };
+    repoRootCache.set(key, value);
+    repoRootCache.set(repoCacheKey(repoRoot), value);
     return { repoRoot, gitDir, notARepo: false };
   }
 
@@ -428,6 +618,72 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   // back to the project's main repo when omitted.
   const repoResolver = createRepoResolver({ runGit, requireRoot, detectRepo });
   const resolveCwd = repoResolver.resolveCwd;
+
+  async function ensureBranchName(cwd: string, name: string): Promise<void> {
+    const result = await runGit(cwd, ['check-ref-format', '--branch', name], { profile: 'read' });
+    if (result.code !== 0) throw new ApiError('git_branch_invalid', 400, `invalid branch name: ${name}`);
+  }
+
+  async function ensureCommitRef(cwd: string, ref: string): Promise<void> {
+    const result = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], { profile: 'read' });
+    if (result.code !== 0) throw new ApiError('git_ref_invalid', 400, `unknown commit reference: ${ref}`);
+  }
+
+  async function ensureLocalBranch(cwd: string, name: string): Promise<void> {
+    await ensureBranchName(cwd, name);
+    const result = await runGit(cwd, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { profile: 'read' });
+    if (result.code !== 0) throw new ApiError('git_branch_not_found', 404, `local branch not found: ${name}`);
+  }
+
+  async function ensureRemote(cwd: string, remote: string | undefined): Promise<void> {
+    if (!remote) return;
+    const result = await runGit(cwd, ['remote'], { profile: 'read' });
+    const remotes = result.code === 0 ? result.stdout.split('\n').map((item) => item.trim()).filter(Boolean) : [];
+    if (!remotes.includes(remote)) throw new ApiError('git_remote_not_found', 404, `remote not found: ${remote}`);
+  }
+
+  async function ensureStash(cwd: string, ref: string): Promise<void> {
+    if (!/^stash@\{\d+\}$/.test(ref)) throw new ApiError('git_stash_invalid', 400, 'invalid stash reference');
+    const result = await runGit(cwd, ['stash', 'list', '--format=%gd'], { profile: 'read' });
+    const stashes = result.code === 0 ? result.stdout.split('\n').map((item) => item.trim()).filter(Boolean) : [];
+    if (!stashes.includes(ref)) throw new ApiError('git_stash_not_found', 404, `stash not found: ${ref}`);
+  }
+
+  async function validateOperation(cwd: string, operation: GitPlanOperation): Promise<void> {
+    switch (operation.op) {
+      case 'branchCheckout':
+        if (operation.create) await ensureBranchName(cwd, operation.name);
+        else await ensureCommitRef(cwd, operation.name);
+        return;
+      case 'branchCreate':
+        await ensureBranchName(cwd, operation.name);
+        if (operation.from) await ensureCommitRef(cwd, operation.from);
+        return;
+      case 'branchRename':
+        await ensureLocalBranch(cwd, operation.oldName);
+        await ensureBranchName(cwd, operation.newName);
+        return;
+      case 'branchDelete': await ensureLocalBranch(cwd, operation.name); return;
+      case 'merge': await ensureCommitRef(cwd, operation.branch); return;
+      case 'rebase': await ensureCommitRef(cwd, operation.onto); return;
+      case 'reset': await ensureCommitRef(cwd, operation.target); return;
+      case 'revert': await ensureCommitRef(cwd, operation.commit); return;
+      case 'cherryPick': for (const ref of operation.commits) await ensureCommitRef(cwd, ref); return;
+      case 'push':
+        await ensureRemote(cwd, operation.remote);
+        if (operation.branch) await ensureCommitRef(cwd, operation.branch);
+        return;
+      case 'fetch': await ensureRemote(cwd, operation.remote); return;
+      case 'pull':
+        await ensureRemote(cwd, operation.remote);
+        if (operation.branch) await ensureBranchName(cwd, operation.branch);
+        return;
+      case 'stashPop':
+      case 'stashApply':
+      case 'stashDrop': await ensureStash(cwd, operation.ref); return;
+      case 'stashSave': return;
+    }
+  }
 
   // Path-scoped auto-routing (explorer / editor): with NO explicit repo selected,
   // resolve which discovered repo CONTAINS a project-relative path and run there
@@ -458,8 +714,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     return groups;
   }
 
-  // Git accelerators (fsmonitor/untrackedCache). Created once so `readStatus`
-  // can also auto-enable them per repo on first status (ensureAutoOptimized).
+  // Git accelerators are opt-in only. Slow status reads return a recommendation
+  // through statusPage; configuration changes require an explicit UI action.
   const gitOpt = createGitOptimizationHandlers({ runGit, resolveCwd });
 
   // Aggregate working-tree status across EVERY git root in the project — the
@@ -497,22 +753,29 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
       });
       // Tolerate a single repo failing (transient lock / race) — the rest render.
-      if (res.code !== 0) return { repo: r, files: [] as GitStatusFile[] };
-      return { repo: r, files: parsePorcelainV2Status(res.stdout).files };
+      if (res.code !== 0) {
+        return { repo: r, files: [] as GitStatusFile[], head: null, warning: `${r.name}: ${res.stderr.trim() || 'git status failed'}` };
+      }
+      const parsed = parsePorcelainV2Status(res.stdout);
+      return { repo: r, files: parsed.files, head: parsed.head, warning: null };
     });
 
     const files: GitStatusFile[] = [];
+    const partialWarnings: string[] = [];
     for (const { repo, files: repoFiles } of perRepo) {
       for (const f of repoFiles) {
         const projRel = posixRel(projectRoot, path.resolve(repo.absPath, f.path));
         if (projRel.startsWith('..') || path.isAbsolute(projRel)) continue; // outside the project
         if (repoPrefixes.has(projRel)) continue; // a discovered repo's gitlink → already detailed
-        files.push({ path: projRel, state: f.state, staged: f.staged, repo: repo.projectRelPrefix || undefined });
+        files.push({ path: projRel, oldPath: f.oldPath, state: f.state, staged: f.staged, repo: repo.projectRelPrefix || undefined });
       }
     }
-    // Branch / ahead-behind come from the repo that contains the project root.
-    const head = await readHeadSummary(main.absPath);
-    return { ...head, files, repoRoot: main.absPath, notARepo: false };
+    for (const result of perRepo) if (result.warning) partialWarnings.push(result.warning);
+    // Reuse the headers already parsed from the main repo's status invocation.
+    const head = perRepo.find((entry) => entry.repo.absPath === main.absPath)?.head ?? {
+      branch: null, upstream: null, ahead: 0, behind: 0,
+    };
+    return { ...head, files, repoRoot: main.absPath, notARepo: false, partialWarnings };
   }
 
   async function readStatus(projectId: number, includeFiles: boolean, repoPath?: string): Promise<GitStatus> {
@@ -535,13 +798,20 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     }
     const cwd = repoRoot ?? root;
     if (!includeFiles) {
+      // One process supplies branch, upstream and ahead/behind. Suppressing
+      // untracked discovery keeps this summary substantially cheaper than the
+      // full snapshot while preserving porcelain-v2's authoritative headers.
+      const summary = await runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=no'], {
+        timeoutMs: GIT_SUMMARY_TIMEOUT_MS,
+        maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
+      });
+      if (summary.code !== 0) throwGitReadFailure('git_status_summary', summary, 'git status summary failed');
       return {
-        ...(await readHeadSummary(cwd)),
+        ...parseHeadBranchInfo(summary.stdout),
         repoRoot: cwd,
         notARepo: false,
       };
     }
-    const startedAt = Date.now();
     const statusRes = await runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z'], {
       timeoutMs: GIT_READ_TIMEOUT_MS,
       maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
@@ -549,14 +819,18 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     if (statusRes.code !== 0) {
       throwGitReadFailure('git_status', statusRes, 'git status failed');
     }
-    // Warm fsmonitor/untrackedCache only for repos whose status was actually
-    // slow (large / cold) so small repos never get a persistent daemon.
-    // Fire-and-forget — never adds latency; once-per-repo guarded inside.
-    if (Date.now() - startedAt > GIT_AUTO_OPTIMIZE_SLOW_MS) void gitOpt.ensureAutoOptimized(cwd);
     const { head, files } = parsePorcelainV2Status(statusRes.stdout);
+    let projectRoot = requireRoot(projectId);
+    try { projectRoot = await realpath(projectRoot); } catch { /* keep raw root */ }
+    const scopedFiles = files.map((file) => {
+      const absolute = path.resolve(cwd, file.path);
+      const projectRel = path.relative(projectRoot, absolute);
+      const outsideProject = projectRel.startsWith('..') || path.isAbsolute(projectRel);
+      return outsideProject ? { ...file, outsideProject: true } : file;
+    });
     return {
       ...head,
-      files,
+      files: scopedFiles,
       repoRoot: cwd,
       notARepo: false,
     };
@@ -565,7 +839,11 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   function statusSingleFlight(projectId: number, includeFiles: boolean, repoPath?: string): Promise<GitStatus> {
     const key = `${projectId}:${includeFiles ? 'full' : 'summary'}:${repoPath ?? ''}`;
     const existing = statusInflight.get(key);
-    if (existing) return existing;
+    if (existing) {
+      recordGitCacheDecision(true);
+      return existing;
+    }
+    recordGitCacheDecision(false);
     const promise = readStatus(projectId, includeFiles, repoPath).finally(() => {
       statusInflight.delete(key);
     });
@@ -589,6 +867,68 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async status({ projectId, includeFiles = true, repoPath }) {
       return statusSingleFlight(projectId, includeFiles !== false, repoPath);
+    },
+
+    async statusPage({ projectId, repoPath, snapshotId, cursor, pageSize = 250 }) {
+      const now = Date.now();
+      for (const [id, entry] of statusSnapshots) {
+        if (now - entry.createdAt > STATUS_SNAPSHOT_TTL_MS) statusSnapshots.delete(id);
+      }
+      const size = Math.max(1, Math.min(1_000, Math.trunc(pageSize)));
+      let entry = snapshotId ? statusSnapshots.get(snapshotId) : undefined;
+      if (snapshotId && !entry) throw new ApiError('git_status_snapshot_expired', 410, 'status snapshot expired; refresh and try again');
+      if (entry && (entry.projectId !== projectId || entry.repoPath !== repoPath)) {
+        throw new ApiError('git_status_snapshot_scope', 400, 'status snapshot belongs to another repository');
+      }
+      if (!entry) {
+        recordGitCacheDecision(false);
+        const startedAt = Date.now();
+        const status = await statusSingleFlight(projectId, true, repoPath) as GitStatus & { files: GitStatusFile[] };
+        const bytes = Buffer.byteLength(JSON.stringify(status.files), 'utf8');
+        if (bytes > GIT_STATUS_MAX_OUTPUT_BYTES) {
+          throw new ApiError('git_status_snapshot_too_large', 413, `status snapshot exceeded ${GIT_STATUS_MAX_OUTPUT_BYTES} bytes`);
+        }
+        entry = { projectId, repoPath, status, createdAt: now, elapsedMs: Date.now() - startedAt };
+      } else {
+        recordGitCacheDecision(true);
+      }
+      const offset = cursor ? Number(cursor) : 0;
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > entry.status.files.length) {
+        throw new ApiError('git_status_cursor_invalid', 400, 'status cursor is invalid');
+      }
+      const files = entry.status.files.slice(offset, offset + size);
+      const nextOffset = offset + files.length;
+      const hasMore = nextOffset < entry.status.files.length;
+      let id: string | null = snapshotId ?? null;
+      if (hasMore && !id) {
+        id = randomUUID();
+        statusSnapshots.set(id, entry);
+      }
+      const all = entry.status.files;
+      const counts = {
+        total: all.length,
+        staged: all.filter((file) => file.staged).length,
+        unstaged: all.filter((file) => !file.staged && file.state !== 'untracked').length,
+        untracked: all.filter((file) => file.state === 'untracked').length,
+        conflicts: all.filter((file) => file.state === 'unmerged').length,
+      };
+      const result: GitWorkspaceSnapshot = {
+        ...entry.status,
+        files,
+        counts,
+        snapshotId: id,
+        nextCursor: hasMore ? String(nextOffset) : null,
+        pageSize: size,
+        partialWarnings: entry.status.partialWarnings ?? [],
+        ...(entry.elapsedMs >= 1_000 ? {
+          performanceHint: {
+            elapsedMs: entry.elapsedMs,
+            suggestUntrackedCache: true,
+            suggestFsmonitor: true,
+          },
+        } : {}),
+      };
+      return result;
     },
 
     async detectRemote({ projectId, repoPath }) {
@@ -682,6 +1022,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async branchDiff({ projectId, branch, worktree, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureCommitRef(root, branch);
       // worktree → branch vs the working tree ("Show diff with working tree");
       // else the symmetric three-dot diff from the merge-base ("Compare with
       // current"), so it shows exactly what `branch` carries relative to HEAD.
@@ -698,15 +1039,20 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { patch: r.stdout };
     },
 
-    async log({ projectId, limit = 30, path, branch, repoPath }) {
+    async log({ projectId, limit = 30, skip = 0, path, branch, all = false, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
-      const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s';
-      const args = ['log', `--pretty=format:${fmt}`, '--date=iso-strict', `-n${limit}`];
+      if (branch) await ensureCommitRef(root, branch);
+      const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%P%x1f%D';
+      const pageSize = Math.max(1, Math.min(500, Math.trunc(Number.isFinite(limit) ? limit : 30)));
+      const pageOffset = Math.max(0, Math.min(1_000_000, Math.trunc(Number.isFinite(skip) ? skip : 0)));
+      const args = ['log', `--pretty=format:${fmt}`, '--date=iso-strict', '--decorate=short', `-n${pageSize}`];
+      if (pageOffset > 0) args.push(`--skip=${pageOffset}`);
       // Branch filter ALWAYS goes BEFORE the `--` separator. Treating
       // it as a single ref is intentional — the renderer drives a
       // dropdown that emits exact branch names, so we don't need glob
       // expansion (which would also let users `git log --all` here).
-      if (branch) args.push(branch);
+      if (all) args.push('--all');
+      else if (branch) args.push(branch);
       if (path) args.push('--', path);
       const r = await runGit(root, args, {
         timeoutMs: GIT_READ_TIMEOUT_MS,
@@ -715,39 +1061,91 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       if (r.code !== 0) {
         throwGitReadFailure('git_log', r, 'git log failed');
       }
-      return r.stdout
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          const [sha, shortSha, author, date, subject] = line.split('\x1f');
-          return { sha, shortSha, author, date, subject };
-        });
+      return parseGitLog(r.stdout);
+    },
+
+    async logPage({ projectId, repoPath, branch, all = false, path: filePath, pageSize = 80, snapshotId, cursor }) {
+      const now = Date.now();
+      for (const [id, stored] of logSnapshots) if (now - stored.createdAt > LOG_SNAPSHOT_TTL_MS) logSnapshots.delete(id);
+      let snapshot = snapshotId ? logSnapshots.get(snapshotId) : undefined;
+      if (snapshotId && !snapshot) throw new ApiError('git_log_snapshot_expired', 410, 'history snapshot expired; refresh and try again');
+      if (snapshot && (
+        snapshot.projectId !== projectId ||
+        snapshot.repoPath !== repoPath ||
+        snapshot.path !== filePath ||
+        snapshot.branch !== branch ||
+        snapshot.all !== all
+      )) {
+        throw new ApiError('git_log_snapshot_scope', 400, 'history snapshot belongs to another query');
+      }
+      if (!snapshot) {
+        recordGitCacheDecision(false);
+        const root = await resolveCwd(projectId, repoPath);
+        let refs: string[] = [];
+        if (all) {
+          const result = await runGit(root, ['for-each-ref', '--format=%(objectname)', 'refs/heads', 'refs/remotes'], { profile: 'read' });
+          if (result.code !== 0) throwGitReadFailure('git_log_refs', result, 'failed to resolve history refs');
+          refs = Array.from(new Set(result.stdout.split('\n').map((ref) => ref.trim()).filter(Boolean)));
+        } else {
+          const source = branch ?? 'HEAD';
+          await ensureCommitRef(root, source);
+          const result = await runGit(root, ['rev-parse', '--verify', '--end-of-options', `${source}^{commit}`], { profile: 'read' });
+          if (result.code !== 0) throwGitReadFailure('git_log_ref', result, 'failed to resolve history ref');
+          refs = [result.stdout.trim()];
+        }
+        snapshot = { projectId, repoPath, root, refs, path: filePath, branch, all, createdAt: now };
+      } else {
+        recordGitCacheDecision(true);
+      }
+      const size = Math.max(1, Math.min(500, Math.trunc(pageSize)));
+      const offset = cursor ? Number(cursor) : 0;
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) throw new ApiError('git_log_cursor_invalid', 400, 'history cursor is invalid');
+      if (snapshot.refs.length === 0) return { commits: [], snapshotId: null, nextCursor: null };
+      const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%P%x1f%D';
+      const args = ['log', `--pretty=format:${fmt}`, '--date=iso-strict', '--decorate=short', `-n${size + 1}`];
+      if (offset > 0) args.push(`--skip=${offset}`);
+      args.push(...snapshot.refs);
+      if (snapshot.path) args.push('--', snapshot.path);
+      const result = await runGit(snapshot.root, args, { timeoutMs: GIT_READ_TIMEOUT_MS, maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES });
+      if (result.code !== 0) throwGitReadFailure('git_log', result, 'git log failed');
+      const parsed = parseGitLog(result.stdout);
+      const hasMore = parsed.length > size;
+      const commits = parsed.slice(0, size);
+      let id = snapshotId ?? null;
+      if (hasMore && !id) {
+        id = randomUUID();
+        logSnapshots.set(id, snapshot);
+      }
+      return { commits, snapshotId: id, nextCursor: hasMore ? String(offset + commits.length) : null };
     },
 
     async commitDetail({ projectId, sha, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureCommitRef(root, sha);
       // Metadata in one pass. `%P` (parents) is space-separated; `%b`
       // (body) can contain anything including our separator, so it's
       // fetched in a second `-s` call where it's the whole output.
       const metaFmt = '%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%s';
-      const meta = await runGit(root, ['show', '-s', `--format=${metaFmt}`, '--date=iso-strict', sha], {
-        timeoutMs: GIT_READ_TIMEOUT_MS,
-        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
-      });
+      const [meta, bodyRes, files] = await Promise.all([
+        runGit(root, ['show', '-s', `--format=${metaFmt}`, '--date=iso-strict', sha], {
+          timeoutMs: GIT_READ_TIMEOUT_MS,
+          maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+        }),
+        runGit(root, ['show', '-s', '--format=%b', sha], {
+          timeoutMs: GIT_READ_TIMEOUT_MS,
+          maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
+        }),
+        collectChangedFiles(root, (flag) => ['show', flag, '--format=', sha]),
+      ]);
       if (meta.code !== 0) {
         throwGitReadFailure('git_show', meta, 'git show failed');
       }
       const [fullSha, shortSha, author, authorEmail, date, parentStr, subject] =
         meta.stdout.trim().split('\x1f');
-      const bodyRes = await runGit(root, ['show', '-s', '--format=%b', sha], {
-        timeoutMs: GIT_READ_TIMEOUT_MS,
-        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
-      });
       if (bodyRes.code !== 0) {
         throwGitReadFailure('git_show', bodyRes, 'git show failed');
       }
       const body = bodyRes.stdout.replace(/\s+$/, '');
-      const files = await collectChangedFiles(root, (flag) => ['show', flag, '--format=', sha]);
       return {
         sha: fullSha,
         shortSha,
@@ -763,6 +1161,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async commitFileDiff({ projectId, sha, path, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureCommitRef(root, sha);
       // Empty `--format=` strips the commit header so we return only the
       // unified patch — matches the shape `diff` returns.
       const r = await runGit(root, ['show', '--no-color', '--format=', sha, '--', path], {
@@ -795,7 +1194,10 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         ? new Map([[await resolveCwd(projectId, repoPath), paths]])
         : await groupPathsByRepo(projectId, paths);
       for (const [cwd, gitPaths] of groups) {
-        const r = await runGit(cwd, ['restore', '--staged', '--', ...gitPaths]);
+        const hasHead = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { profile: 'read' });
+        const r = hasHead.code === 0
+          ? await runGit(cwd, ['restore', '--staged', '--', ...gitPaths], { profile: 'mutation' })
+          : await runGit(cwd, ['rm', '--cached', '--ignore-unmatch', '--', ...gitPaths], { profile: 'mutation' });
         if (r.code !== 0) throw new ApiError('git_unstage_failed', 500, r.stderr.trim() || 'git restore --staged failed');
       }
       return { ok: true as const };
@@ -807,8 +1209,39 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         ? new Map([[await resolveCwd(projectId, repoPath), paths]])
         : await groupPathsByRepo(projectId, paths);
       for (const [cwd, gitPaths] of groups) {
-        const r = await runGit(cwd, ['checkout', '--', ...gitPaths]);
-        if (r.code !== 0) throw new ApiError('git_discard_failed', 500, r.stderr.trim() || 'git checkout failed');
+        // Classify the complete batch. Checking only its first item can turn a
+        // mixed tracked/untracked request into a recursive delete of tracked
+        // content (or make checkout reject every untracked item).
+        const trackedResult = await runGit(cwd, ['ls-files', '-z', '--', ...gitPaths], {
+          profile: 'read',
+          maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+        });
+        if (trackedResult.code !== 0) {
+          throwGitReadFailure('git_discard_classify', trackedResult, 'failed to classify discard paths');
+        }
+        const trackedFiles = trackedResult.stdout
+          .split('\0')
+          .filter(Boolean)
+          .map((file) => file.replace(/\\/g, '/'));
+        const isTracked = (candidate: string) => {
+          const normalized = candidate.replace(/\\/g, '/').replace(/\/$/, '');
+          return trackedFiles.some((file) => file === normalized || file.startsWith(`${normalized}/`));
+        };
+        const trackedPaths = gitPaths.filter(isTracked);
+        const untrackedPaths = gitPaths.filter((gitPath) => !isTracked(gitPath));
+
+        if (trackedPaths.length > 0) {
+          const r = await runGit(cwd, ['checkout', '--', ...trackedPaths], { profile: 'mutation' });
+          if (r.code !== 0) throw new ApiError('git_discard_failed', 500, r.stderr.trim() || 'git checkout failed');
+        }
+        // The Changes UI labels untracked discard as Delete. Delete only after
+        // the shared validator proved every path is relative and non-escaping.
+        for (const gitPath of untrackedPaths) {
+          const absolute = path.resolve(cwd, gitPath);
+          const relative = path.relative(cwd, absolute);
+          if (relative.startsWith('..') || path.isAbsolute(relative)) throw new ApiError('git_discard_escape', 400, 'discard path escapes repository');
+          await rm(absolute, { recursive: true, force: true });
+        }
       }
       return { ok: true as const };
     },
@@ -839,6 +1272,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async branchCheckout({ projectId, name, create, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      if (create) await ensureBranchName(root, name);
+      else await ensureCommitRef(root, name);
       const args = create ? ['checkout', '-b', name] : ['checkout', name];
       const r = await runGit(root, args);
       if (r.code !== 0) {
@@ -856,7 +1291,11 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const cacheKey = rev !== undefined ? `${projectId}:${withRemote}:${repoPath ?? ''}:${rev}` : null;
       if (cacheKey) {
         const hit = branchesCache.get(cacheKey);
-        if (hit) return hit;
+        if (hit) {
+          recordGitCacheDecision(true);
+          return hit;
+        }
+        recordGitCacheDecision(false);
       }
       const root = await resolveCwd(projectId, repoPath);
       // `git for-each-ref` with a tab-separated format is the cheap
@@ -926,6 +1365,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async branchCreate({ projectId, name, from, checkout, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureBranchName(root, name);
+      if (from) await ensureCommitRef(root, from);
       const args = checkout ? ['checkout', '-b', name] : ['branch', name];
       if (from) args.push(from);
       const r = await runGit(root, args);
@@ -937,6 +1378,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async branchDelete({ projectId, name, force, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureLocalBranch(root, name);
       // -D (force) merges -d's safety check + force-delete; -d alone
       // refuses to delete branches not fully merged into HEAD.
       const args = ['branch', force ? '-D' : '-d', name];
@@ -949,6 +1391,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async branchRename({ projectId, oldName, newName, force, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureLocalBranch(root, oldName);
+      await ensureBranchName(root, newName);
       const args = ['branch', force ? '-M' : '-m', oldName, newName];
       const r = await runGit(root, args);
       if (r.code !== 0) {
@@ -960,6 +1404,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     // ─── Merge / reset / revert / cherry-pick ────────────────────
     async merge({ projectId, branch, ffOnly, noFf, message, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureCommitRef(root, branch);
       const args = ['merge'];
       if (ffOnly) args.push('--ff-only');
       if (noFf) args.push('--no-ff');
@@ -970,6 +1415,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async reset({ projectId, target, mode, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureCommitRef(root, target);
       // Whitelist mode — never trust raw input as a git CLI flag.
       const flag =
         mode === 'soft' ? '--soft' : mode === 'hard' ? '--hard' : '--mixed';
@@ -978,6 +1424,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async revert({ projectId, commit, noCommit, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureCommitRef(root, commit);
       const args = ['revert'];
       if (noCommit) args.push('--no-commit');
       args.push(commit);
@@ -989,6 +1436,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       if (commits.length === 0) {
         throw new ApiError('bad_input', 400, 'cherryPick requires at least one commit');
       }
+      for (const commit of commits) await ensureCommitRef(root, commit);
       const args = ['cherry-pick'];
       if (noCommit) args.push('--no-commit');
       for (const c of commits) args.push(c);
@@ -997,11 +1445,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async rebase({ projectId, onto, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureCommitRef(root, onto);
       // Non-interactive: suppress the editor (todo list + commit message) so a
       // rebase can never block on it. A conflict stops the rebase and is picked
       // up by mergeState (kind 'rebase') — the resolver + continue/abort flow
       // already handle it, exactly like a conflicting cherry-pick.
-      return runAsResult(root, 'git', ['-c', 'core.editor=true', 'rebase', onto], {
+      return runAsResult(root, 'git', ['rebase', onto], {
         GIT_EDITOR: 'true',
         GIT_SEQUENCE_EDITOR: 'true',
       });
@@ -1014,6 +1463,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     // diverged branches, suggested next steps).
     async push({ projectId, remote, branch, force, setUpstream, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureRemote(root, remote);
+      if (branch) await ensureCommitRef(root, branch);
       const args = ['push'];
       // --force-with-lease is the safe variant: rejects when the
       // remote moved since we last fetched. Never expose plain --force
@@ -1022,31 +1473,35 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       if (setUpstream) args.push('-u');
       if (remote) args.push(remote);
       if (branch) args.push(branch);
-      return runAsResult(root, 'git', args);
+      return runAsResult(root, 'git', args, { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
     },
 
     async fetch({ projectId, remote, prune, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureRemote(root, remote);
       const args = ['fetch'];
       if (prune) args.push('--prune');
       if (remote) args.push(remote);
       // No remote arg → `git fetch` fetches the current branch's upstream
       // (or all configured remotes when there's no upstream). Matches
       // JetBrains "Update Project" intuition.
-      return runAsResult(root, 'git', args, undefined, GIT_NETWORK_TIMEOUT_MS);
+      return runAsResult(root, 'git', args, { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
     },
 
     async pull({ projectId, remote, branch, rebase, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureRemote(root, remote);
+      if (branch) await ensureBranchName(root, branch);
       const args = ['pull'];
       if (rebase) args.push('--rebase');
       if (remote) args.push(remote);
       if (branch) args.push(branch);
-      return runAsResult(root, 'git', args, undefined, GIT_NETWORK_TIMEOUT_MS);
+      return runAsResult(root, 'git', args, { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
     },
 
     async updateBranch({ projectId, branch, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      await ensureLocalBranch(root, branch);
       // The branch's configured upstream, e.g. "origin/feature/x".
       const up = await runGit(root, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], {
         timeoutMs: GIT_READ_TIMEOUT_MS,
@@ -1063,7 +1518,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const src = upstream.slice(slash + 1); //   feature/x
       // Fast-forward the LOCAL ref from its upstream without `+`, so git refuses
       // a diverged (non-fast-forward) update instead of clobbering local commits.
-      return runAsResult(root, 'git', ['fetch', remote, `${src}:${branch}`], undefined, GIT_NETWORK_TIMEOUT_MS);
+      await ensureRemote(root, remote);
+      return runAsResult(root, 'git', ['fetch', remote, `${src}:${branch}`], { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
     },
 
     // ─── Stash (list / save / pop / apply / drop / show) ─────────
@@ -1120,6 +1576,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
       const root = await resolveCwd(projectId, repoPath);
+      await ensureStash(root, ref);
       return runAsResult(root, 'git', ['stash', 'pop', ref]);
     },
 
@@ -1128,6 +1585,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
       const root = await resolveCwd(projectId, repoPath);
+      await ensureStash(root, ref);
       return runAsResult(root, 'git', ['stash', 'apply', ref]);
     },
 
@@ -1136,6 +1594,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
       const root = await resolveCwd(projectId, repoPath);
+      await ensureStash(root, ref);
       return runAsResult(root, 'git', ['stash', 'drop', ref]);
     },
 
@@ -1144,6 +1603,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
       const root = await resolveCwd(projectId, repoPath);
+      await ensureStash(root, ref);
       // `-p` emits a unified diff. Skips the index-summary at the top
       // that the default `stash show` produces.
       const r = await runGit(root, ['stash', 'show', '-p', '--no-color', ref], {
@@ -1159,18 +1619,21 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     async stashDetail({ projectId, ref, repoPath }) {
       if (!ref) throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       const root = await resolveCwd(projectId, repoPath);
+      await ensureStash(root, ref);
       // A stash IS a commit object, so `git show -s` reads its metadata.
       // %s is the stash subject ("WIP on <branch>: <sha> <subject>").
-      const meta = await runGit(root, ['show', '-s', '--format=%h%x1f%cI%x1f%s', '--date=iso-strict', ref], {
-        timeoutMs: GIT_READ_TIMEOUT_MS,
-        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
-      });
+      const [meta, files] = await Promise.all([
+        runGit(root, ['show', '-s', '--format=%h%x1f%cI%x1f%s', '--date=iso-strict', ref], {
+          timeoutMs: GIT_READ_TIMEOUT_MS,
+          maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+        }),
+        collectChangedFiles(root, (flag) => ['stash', 'show', flag, ref]),
+      ]);
       if (meta.code !== 0) {
         throwGitReadFailure('git_stash_show', meta, 'git show failed');
       }
       const [shortSha, date, message] = meta.stdout.trim().split('\x1f');
       const m = message?.match(/^(?:WIP on|On)\s+([^:]+):/);
-      const files = await collectChangedFiles(root, (flag) => ['stash', 'show', flag, ref]);
       return {
         ref,
         shortSha: shortSha ?? '',
@@ -1184,6 +1647,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     async stashFileDiff({ projectId, ref, path, repoPath }) {
       if (!ref) throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       const root = await resolveCwd(projectId, repoPath);
+      await ensureStash(root, ref);
       // `git stash show` rejects a `-- <path>` pathspec ("too many
       // revisions"). A stash IS a commit whose first parent is the base
       // it was taken from, so diffing base→stash for one path gives the
@@ -1208,51 +1672,82 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       // Gather lightweight context so the AI can plan against the real
       // repo state (current branch, recent branches, last few commits).
       const [curRes, branchRes, logRes] = await Promise.all([
-        runGit(root, ['branch', '--show-current']),
+        runGit(root, ['branch', '--show-current'], { profile: 'read' }),
         runGit(root, ['for-each-ref', '--count=20', '--sort=-committerdate',
-                       '--format=%(refname:short)', 'refs/heads', 'refs/remotes']),
-        runGit(root, ['log', '-n8', '--pretty=format:%h %s']),
+                       '--format=%(refname:short)', 'refs/heads', 'refs/remotes'], { profile: 'read' }),
+        runGit(root, ['log', '-n8', '--pretty=format:%h %s'], { profile: 'read' }),
       ]);
       const ctx = {
         currentBranch: curRes.stdout.trim(),
         recentBranches: branchRes.stdout.split('\n').filter(Boolean).slice(0, 20),
         recentCommits: logRes.stdout.split('\n').filter(Boolean).slice(0, 8),
       };
-      const { plan } = await generateAiPlan(deps, intent, ctx);
+      const draft = await generateAiPlan(deps, cleaned, ctx);
+      const planId = randomUUID();
+      const expiresAtMs = Date.now() + AI_PLAN_TTL_MS;
+      const steps: GitPlanStep[] = draft.steps.map(({ operation, description }) => ({
+        id: randomUUID(),
+        operation,
+        description,
+        risk: operationRisk(operation),
+        preview: commandPreview(operation),
+      }));
+      if (steps.length > 0 && !draft.refusal) {
+        for (const [id, stored] of aiPlans) if (stored.expiresAt <= Date.now()) aiPlans.delete(id);
+        aiPlans.set(planId, { projectId, repoPath, expiresAt: expiresAtMs, steps });
+      }
+      const plan: GitPlan = {
+        planId,
+        expiresAt: new Date(expiresAtMs).toISOString(),
+        intent: cleaned,
+        summary: draft.summary,
+        steps,
+        ...(draft.refusal ? { refusal: draft.refusal } : {}),
+      };
       return plan;
     },
 
-    async aiExecute({ projectId, steps, repoPath }) {
+    async aiExecute({ projectId, planId, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
+      const stored = aiPlans.get(planId);
+      if (!stored || stored.expiresAt <= Date.now()) {
+        aiPlans.delete(planId);
+        throw new ApiError('git_ai_plan_expired', 410, 'AI plan expired or was already executed; generate a new plan');
+      }
+      if (stored.projectId !== projectId || stored.repoPath !== repoPath) {
+        throw new ApiError('git_ai_plan_scope', 400, 'AI plan belongs to another repository');
+      }
+      // One-shot: remove before the first spawn so retries cannot replay a
+      // destructive plan after an ambiguous transport failure.
+      aiPlans.delete(planId);
       const results: GitRunResult[] = [];
       let aborted = false;
-      for (const step of steps) {
-        // Hard-validate the command on every step — the steps come
-        // from the renderer (which got them from the AI), so we must
-        // never trust the field at face value. ONLY allow `git`.
-        if (step.command !== 'git') {
+      for (const step of stored.steps) {
+        const built = buildOperation(step.operation);
+        try {
+          await validateOperation(root, step.operation);
+        } catch (error) {
           results.push({
-            command: step.command,
-            args: step.args,
+            command: 'git',
+            args: built.args,
             ok: false,
             code: -1,
             stdout: '',
-            stderr: `refused: only \`git\` commands are allowed (got \`${step.command}\`)`,
+            stderr: error instanceof Error ? error.message : String(error),
+            errorCode: 'git_failed',
           });
           aborted = true;
           break;
         }
-        const safeArgs = Array.isArray(step.args) ? step.args.filter((a) => typeof a === 'string') : [];
-        const r = await runGit(root, safeArgs);
-        results.push({
-          command: 'git',
-          args: safeArgs,
-          ok: r.code === 0,
-          code: r.code,
-          stdout: r.stdout,
-          stderr: r.stderr,
-        });
-        if (r.code !== 0) {
+        const result = await runAsResult(
+          root,
+          'git',
+          built.args,
+          built.env ?? (built.profile === 'network' ? { GIT_TERMINAL_PROMPT: '0' } : undefined),
+          built.profile === 'network' ? GIT_NETWORK_TIMEOUT_MS : undefined,
+        );
+        results.push(result);
+        if (!result.ok) {
           aborted = true;
           break;
         }
@@ -1314,14 +1809,44 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   // god-file from growing further. They're injected with the same spawn
   // helpers + repo resolver so there's a single source of truth for how
   // we shell out to git.
-  return {
+  const api: ProjectGitApi = {
     ...base,
     ...createConflictHandlers({ runGit, runAsResult, resolveCwd, detectRepo, resolveRepoForPath: repoResolver.resolveRepoForPath }),
-    // Only the two public methods reach the IPC surface — `ensureAutoOptimized`
-    // stays internal (called fire-and-forget from readStatus).
     gitOptimizations: gitOpt.gitOptimizations,
     configureGitOptimizations: gitOpt.configureGitOptimizations,
   };
+  return guardProjectGitApi(api, (_method, input) => {
+    for (const key of branchesCache.keys()) {
+      if (key.startsWith(`${input.projectId}:`) && key.includes(`:${input.repoPath ?? ''}:`)) branchesCache.delete(key);
+    }
+    for (const [id, snapshot] of statusSnapshots) {
+      if (snapshot.projectId === input.projectId && snapshot.repoPath === input.repoPath) statusSnapshots.delete(id);
+    }
+    for (const [id, snapshot] of logSnapshots) {
+      if (snapshot.projectId === input.projectId && snapshot.repoPath === input.repoPath) logSnapshots.delete(id);
+    }
+  }, (metric) => {
+    try {
+      deps.pipelineTelemetryStore?.insert({
+        pipeline_name: 'project_git',
+        stage: metric.method,
+        component_name: 'git_cli',
+        duration_ms: metric.durationMs,
+        duration_bucket: durationToBucket(metric.durationMs),
+        cache_hits: metric.cacheHits,
+        cache_misses: metric.cacheMisses,
+        errors: metric.ok ? 0 : 1,
+        diag: {
+          mutation: metric.mutation,
+          queue_wait_ms: metric.queueWaitMs,
+          process_count: metric.processCount,
+          output_bytes: metric.outputBytes,
+          timed_out: metric.timedOut,
+          truncated: metric.truncated,
+        },
+      });
+    } catch { /* telemetry is fail-open and never contains refs, paths or content */ }
+  });
 }
 
 /**
@@ -1338,139 +1863,60 @@ async function runAsResult(
   env?: Record<string, string>,
   timeoutMs?: number,
 ): Promise<GitRunResult> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const child = spawn('git', args, {
-      cwd,
-      windowsHide: true,
-      env: env ? { ...process.env, ...env } : process.env,
-    });
-    const out: Buffer[] = [];
-    const err: Buffer[] = [];
-    const finish = (r: GitRunResult) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolve(r);
-    };
-    // Optional wall-clock bound (network ops): kill the child and surface a
-    // timeout as a non-zero GitRunResult instead of hanging forever.
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        child.kill();
-        finish({
-          command: 'git', args, ok: false, code: -1,
-          stdout: Buffer.concat(out).toString('utf8'),
-          stderr: `git ${args[0] ?? ''} timed out after ${timeoutMs}ms`,
-        });
-      }, timeoutMs);
-    }
-    child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
-    child.stderr.on('data', (chunk: Buffer) => err.push(chunk));
-    child.on('error', (e) =>
-      finish({ command: 'git', args, ok: false, code: -1, stdout: '', stderr: (e as Error).message }),
-    );
-    child.on('close', (code) =>
-      finish({
-        command: 'git',
-        args,
-        ok: code === 0,
-        code: code ?? -1,
-        stdout: Buffer.concat(out).toString('utf8'),
-        stderr: Buffer.concat(err).toString('utf8'),
-      }),
-    );
-    child.stdin.end();
+  const result = await runGit(cwd, args, {
+    env,
+    timeoutMs,
+    profile: timeoutMs ? 'network' : 'mutation',
+    maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
   });
+  return {
+    command: 'git',
+    args,
+    ok: result.code === 0,
+    code: result.code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    errorCode: result.errorCode,
+    durationMs: result.durationMs,
+    timedOut: result.timedOut,
+    truncated: result.truncated,
+  };
 }
 
-/**
- * Drive the project's "general AI" provider to produce a git plan.
- *
- * The prompt asks for STRICT JSON to keep parsing robust — temperature
- * is 0 to minimise drift. On parse failure we surface a refusal in the
- * plan so the user gets an actionable message instead of a 500.
- *
- * Provider selection mirrors the generate-title route: prefer
- * `getGeneralDefault()`, then fall through to any anthropic/openai/
- * openrouter/zai/deepseek provider with an api_key. OAuth-only kinds aren't usable
- * by the SDKs here.
- */
+interface AiPlanDraft {
+  summary: string;
+  refusal?: string;
+  steps: Array<{ operation: GitPlanOperation; description: string }>;
+}
+
 async function generateAiPlan(
   deps: HandlerDeps,
   intent: string,
   ctx: { currentBranch: string; recentBranches: string[]; recentCommits: string[] },
-): Promise<{ plan: GitPlan }> {
-  const { providerStore } = deps;
-  const isUsable = (p: { kind?: string; api_key?: string | null; enabled?: boolean } | null) => {
-    if (!p?.enabled || !p.api_key) return false;
-    const k = p.kind ?? '';
-    return k === 'anthropic' || k === 'openai' || k === 'openrouter' || k === 'zai' || k === 'deepseek';
-  };
-
-  const def = providerStore.getGeneralDefault();
-  let cfg = def ? providerStore.getProvider(def.providerId) : null;
-  let modelId = def?.modelId ?? '';
-  if (!isUsable(cfg) || !modelId) {
-    const fallback = providerStore.listProviders({ enabled: true }).find(isUsable);
-    if (!fallback) {
-      return {
-        plan: {
-          intent,
-          steps: [],
-          summary: '',
-          refusal: 'No usable AI provider — set an API key for Anthropic / OpenAI / Z.AI / DeepSeek in Configurações → Providers.',
-        },
-      };
-    }
-    cfg = fallback;
-    const first = providerStore.listModels(fallback.id, true)[0];
-    modelId = first?.model_id ?? '';
-    if (!modelId) {
-      return {
-        plan: { intent, steps: [], summary: '', refusal: 'Fallback provider has no enabled models.' },
-      };
-    }
-  }
-  if (!cfg) {
-    return { plan: { intent, steps: [], summary: '', refusal: 'Provider config missing after selection.' } };
-  }
-
-  // Strip ::mode the dashboard appends so the SDK sees a bare model id.
-  let modelMode: string | undefined;
-  if (modelId.includes('::')) {
-    [modelId, modelMode] = modelId.split('::', 2);
-  }
-  // Z.AI routing precedence — same order as generate-title:
-  //   1. ZAI_BASE_URL env  2. ::coding/::general suffix  3. cfg.base_url  4. general default
-  let baseUrl: string | undefined = cfg.base_url ?? undefined;
-  if (cfg.kind === 'zai') {
-    if (process.env.ZAI_BASE_URL) {
-      baseUrl = process.env.ZAI_BASE_URL;
-    } else if (modelMode === 'coding') {
-      baseUrl = 'https://api.z.ai/api/coding/paas/v4/';
-    } else if (modelMode === 'general') {
-      baseUrl = 'https://api.z.ai/api/paas/v4/';
-    } else if (!baseUrl) {
-      baseUrl = 'https://api.z.ai/api/paas/v4/';
-    }
-  } else if (cfg.kind === 'openrouter' && !baseUrl) {
-    baseUrl = 'https://openrouter.ai/api/v1';
-  }
-
-  const system = `You are a git expert wired into an IDE. The user describes what they want; you produce a JSON plan of git commands to execute. NEVER execute or assume — your sole job is to plan.
+): Promise<AiPlanDraft> {
+  const system = `You are a git expert inside an IDE. Produce only a typed JSON plan; never emit shell commands or argv.
 
 Rules:
-- ALWAYS return a single JSON object matching this TypeScript shape:
-  { summary: string; steps: { command: 'git'; args: string[]; description: string; dangerous: boolean }[]; refusal?: string }
-- Every step's "command" is literally the string "git". Put the subcommand and flags into "args".
-- Mark a step "dangerous": true when it could destroy work (reset --hard, branch -D, push --force, clean -fd, filter-branch, rebase -i).
+- Return { summary, steps: [{ operation, description }], refusal? }.
+- operation must be exactly one of:
+  {op:"branchCheckout",name,create?}
+  {op:"branchCreate",name,from?,checkout?}
+  {op:"branchRename",oldName,newName,force?}
+  {op:"branchDelete",name,force?}
+  {op:"merge",branch,strategy?:"ff-only"|"no-ff"|"default"}
+  {op:"rebase",onto}
+  {op:"reset",target,mode:"soft"|"mixed"|"hard"}
+  {op:"revert",commit,noCommit?}
+  {op:"cherryPick",commits:string[],noCommit?}
+  {op:"push",remote?,branch?,force?,setUpstream?}
+  {op:"fetch",remote?,prune?}
+  {op:"pull",remote?,branch?,rebase?}
+  {op:"stashSave",message?,includeUntracked?,keepIndex?}
+  {op:"stashPop"|"stashApply"|"stashDrop",ref}
 - If the intent is unclear, ambiguous, or unsafe, return { summary: "", steps: [], refusal: "<why>" }.
 - Keep step descriptions short, in the user's language when possible.
-- Never include shell metacharacters (|, &, ;, $(...)); each arg must be a literal string.
-- Prefer fast-forward merges when the user just says "merge X into Y" without specifics.
-- For "switch to / change branch", use \`switch\` (or \`checkout\` if the user said it).
+- Configuration, clean, gc, submodules, aliases, arbitrary flags and raw commands are unsupported: refuse them.
+- Prefer ff-only for an unspecified merge strategy.
 
 Output ONLY the JSON object. No markdown, no prose.`;
 
@@ -1483,74 +1929,26 @@ ${ctx.recentCommits.map((l) => `    ${l}`).join('\n') || '    (no commits)'}
 User intent:
 ${intent}`;
 
-  let raw = '';
-  try {
-    if (cfg.kind === 'anthropic') {
-      const { default: Anthropic } = await import('@anthropic-ai/sdk');
-      const client = new Anthropic({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}), fetch: nativeFetch() });
-      const resp = await client.messages.create({
-        model: modelId,
-        max_tokens: 800,
-        system,
-        messages: [{ role: 'user', content: userMsg }],
-      });
-      raw = resp.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('');
-    } else {
-      const { default: OpenAI } = await import('openai');
-      const client = new OpenAI({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}), fetch: nativeFetch() });
-      const resp = await client.chat.completions.create({
-        model: modelId,
-        max_tokens: 800,
-        temperature: 0,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userMsg },
-        ],
-      });
-      raw = resp.choices[0]?.message?.content ?? '';
-    }
-  } catch (e) {
-    console.warn(`[git-aiPlan] provider=${cfg.kind} model=${modelId} failed:`, e);
-    return {
-      plan: { intent, steps: [], summary: '', refusal: `AI call failed: ${e instanceof Error ? e.message : String(e)}` },
-    };
-  }
-
-  // Models sometimes wrap JSON in ```json fences despite our "no
-  // markdown" instruction. Strip them defensively before parsing.
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const result = await callGeneralAiJson(deps, { system, user: userMsg, maxTokens: 800 });
+  if ('refusal' in result) return { summary: '', steps: [], refusal: result.refusal };
+  const cleaned = stripJsonFences(result.raw);
   try {
     const parsed = JSON.parse(cleaned) as {
       summary?: string;
       refusal?: string;
-      steps?: Array<{ command?: string; args?: string[]; description?: string; dangerous?: boolean }>;
+      steps?: Array<{ operation?: unknown; description?: unknown }>;
     };
-    const steps: GitPlanStep[] = Array.isArray(parsed.steps)
-      ? parsed.steps
-          .filter((s) => s && s.command === 'git' && Array.isArray(s.args))
-          .map((s) => ({
-            command: 'git',
-            args: (s.args ?? []).filter((a): a is string => typeof a === 'string'),
-            description: typeof s.description === 'string' ? s.description : '',
-            dangerous: !!s.dangerous,
-          }))
-      : [];
-    return {
-      plan: {
-        intent,
-        summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-        steps,
-        refusal: typeof parsed.refusal === 'string' && parsed.refusal ? parsed.refusal : undefined,
-      },
-    };
+    const candidates = Array.isArray(parsed.steps) ? parsed.steps.slice(0, 25) : [];
+    const steps = candidates.flatMap((step) => {
+      const operation = normalizeAiOperation(step?.operation);
+      return operation ? [{ operation, description: typeof step.description === 'string' ? step.description.slice(0, 500) : '' }] : [];
+    });
+    const refusal = typeof parsed.refusal === 'string' && parsed.refusal.trim() ? parsed.refusal.trim().slice(0, 2_000) : undefined;
+    if (candidates.length > 0 && steps.length === 0 && !refusal) {
+      return { summary: '', steps: [], refusal: 'The AI proposed unsupported Git operations. Rephrase the request using branches, history, sync, or stash.' };
+    }
+    return { summary: typeof parsed.summary === 'string' ? parsed.summary.slice(0, 2_000) : '', steps, ...(refusal ? { refusal } : {}) };
   } catch {
-    return {
-      plan: {
-        intent,
-        steps: [],
-        summary: '',
-        refusal: `AI returned unparseable JSON. Raw response: ${cleaned.slice(0, 200)}`,
-      },
-    };
+    return { summary: '', steps: [], refusal: 'AI returned an invalid typed plan. No command was accepted or executed.' };
   }
 }

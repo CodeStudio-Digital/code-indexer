@@ -44,6 +44,7 @@ function getByEnd(db: DB, sessionId: number, endMessageId: number): Conversation
   return (db.prepare(`
     SELECT * FROM coder_session_chapters
     WHERE session_id = ? AND end_message_id = ? AND superseded_at IS NULL
+      AND advances_context_boundary = 1
   `).get(sessionId, endMessageId) as ConversationChapterRow | undefined) ?? null;
 }
 
@@ -113,13 +114,14 @@ export function commit(
     const inserted = db.prepare(`
       INSERT INTO coder_session_chapters (
         session_id, ordinal, start_message_id, end_message_id,
-        source, trigger, title,
+        source, trigger, title, chapter_kind, advances_context_boundary,
         chapter_json, chapter_text, resume_json, resume_text,
         version, metrics_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
     `).run(
       input.sessionId, ordinal, start, end,
       input.source, input.trigger, input.title,
+      input.chapterKind ?? (input.trigger.startsWith('milestone:') ? 'milestone' : 'context'),
       input.chapterJson, input.chapterText, input.resumeJson, input.resumeText,
       input.version, input.metricsJson ?? null,
     );
@@ -141,6 +143,18 @@ export function commit(
       input.sessionId, expected,
     );
     if (updated.changes !== 1) throw new Error('chapter boundary changed during commit');
+
+    // A user-triggered rebuild may have created navigation-only chapters over
+    // this raw span. Once a real context checkpoint covers them, keep the rows
+    // for audit/source access but hide the duplicate live navigation entries.
+    db.prepare(`
+      UPDATE coder_session_chapters
+      SET superseded_at = COALESCE(superseded_at, datetime('now'))
+      WHERE session_id = ? AND source = 'rebuild'
+        AND advances_context_boundary = 0
+        AND superseded_at IS NULL
+        AND start_message_id >= ? AND end_message_id <= ?
+    `).run(input.sessionId, start, end);
 
     const chapter = db.prepare('SELECT * FROM coder_session_chapters WHERE id = ?')
       .get(Number(inserted.lastInsertRowid)) as ConversationChapterRow;

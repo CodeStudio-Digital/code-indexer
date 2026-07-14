@@ -4,7 +4,7 @@
  * undefined (node), então testamos a isolação em-memória + o drop do setProject,
  * e o layout de painéis (split/reorder/move) direto pelas ações + helpers puros.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   useWorkspaceStore,
   serializeLayout,
@@ -276,6 +276,10 @@ describe('useWorkspaceStore — split de painéis', () => {
 describe('abas virtuais (upsertVirtualTab)', () => {
   beforeEach(reset);
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('openDiff coloca a aba no painel ativo e faz refresh in-place (sem duplicar)', () => {
     useWorkspaceStore.setState({ activeProjectId: 1 });
     useWorkspaceStore
@@ -290,6 +294,100 @@ describe('abas virtuais (upsertVirtualTab)', () => {
     const pool = useWorkspaceStore.getState().openFiles;
     expect(pool).toHaveLength(1); // refresh, não duplica
     expect((pool[0] as { patch?: string }).patch).toBe('P2');
+  });
+
+  it('openDatabaseTab abre e refoca o objeto no editor sem duplicar', () => {
+    const tab = {
+      kind: 'database' as const,
+      projectId: 1,
+      path: 'database:data:1:public:users',
+      title: 'users',
+      workTab: {
+        id: 'data:1:public:users',
+        kind: 'data' as const,
+        title: 'users',
+        connectionId: 1,
+        connKey: '1',
+        schema: 'public',
+        table: 'users',
+      },
+      engine: 'postgres' as const,
+      suggestions: ['users', 'id'],
+    };
+    useWorkspaceStore.getState().openDatabaseTab(tab);
+    useWorkspaceStore.getState().openDatabaseTab({ ...tab, suggestions: ['users', 'id', 'email'] });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.openFiles).toHaveLength(1);
+    expect(state.openFiles[0]).toMatchObject({ kind: 'database', suggestions: ['users', 'id', 'email'] });
+    expect(state.panes[0].activePath).toBe(tab.path);
+  });
+
+  it.each([
+    ['diff', () => useWorkspaceStore.getState().openDiff({ kind: 'diff', projectId: 7, path: 'diff:a.ts', title: 'a.ts', patch: 'P1', source: 'other' })],
+    ['branch log', () => useWorkspaceStore.getState().openGitLog({ kind: 'git-log', projectId: 7, path: 'gitlog:main', title: 'Log: main', branch: 'main', isRemote: false })],
+    ['stash', () => useWorkspaceStore.getState().openGitStash({ kind: 'git-stash', projectId: 7, path: 'gitstash:0', title: 'Stash abc', stashRef: 'stash@{0}' })],
+  ])('pede a superficie do editor ao abrir %s', (_label, open) => {
+    const browserWindow = new EventTarget();
+    const listener = vi.fn();
+    browserWindow.addEventListener('mcp:open-files-tab', listener);
+    vi.stubGlobal('window', browserWindow);
+
+    open();
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ projectId: 7 });
+  });
+
+  it('repete o pedido ao atualizar a mesma aba virtual', () => {
+    const browserWindow = new EventTarget();
+    const listener = vi.fn();
+    browserWindow.addEventListener('mcp:open-files-tab', listener);
+    vi.stubGlobal('window', browserWindow);
+    const open = (patch: string) => useWorkspaceStore.getState().openDiff({
+      kind: 'diff', projectId: 7, path: 'diff:a.ts', title: 'a.ts', patch, source: 'other',
+    });
+
+    open('P1');
+    open('P2');
+
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserva seleção, scroll e limite do log ao abrir um diff e voltar', () => {
+    useWorkspaceStore.setState({ activeProjectId: 7 });
+    const log = {
+      kind: 'git-log' as const,
+      projectId: 7,
+      path: 'gitlog:main',
+      title: 'Log: main',
+      branch: 'main',
+      isRemote: false,
+    };
+
+    useWorkspaceStore.getState().openGitLog(log);
+    useWorkspaceStore.getState().setGitLogViewState(7, log.path, {
+      selectedSha: 'abc123',
+      scrollOffset: 1840,
+      limit: 250,
+    });
+    useWorkspaceStore.getState().openDiff({
+      kind: 'diff', projectId: 7, path: 'gitshow:abc123:a.ts', title: 'a.ts', patch: 'P1', source: 'other',
+    });
+    useWorkspaceStore.getState().setActive(log.path);
+
+    let restored = useWorkspaceStore.getState().openFiles.find((f) => f.path === log.path);
+    expect(restored?.kind === 'git-log' ? restored.viewState : undefined).toEqual({
+      selectedSha: 'abc123', scrollOffset: 1840, limit: 250,
+    });
+
+    // Re-clicking the same branch refreshes/focuses the descriptor but must not
+    // reset the navigation state of its existing tab.
+    useWorkspaceStore.getState().openGitLog({ ...log, title: 'Log: main (refreshed)' });
+    restored = useWorkspaceStore.getState().openFiles.find((f) => f.path === log.path);
+    expect(restored?.kind === 'git-log' ? restored.viewState : undefined).toEqual({
+      selectedSha: 'abc123', scrollOffset: 1840, limit: 250,
+    });
   });
 });
 

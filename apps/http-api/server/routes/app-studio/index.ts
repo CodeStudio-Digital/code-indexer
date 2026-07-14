@@ -7,15 +7,14 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { mountAppStudioCreateRoutes } from './studio.js';
 import { mountAppStudioSessionRoutes } from './sessions.js';
-import { mountAppStudioPipelineRoutes } from './pipeline.js';
 import { mountAppStudioDataRoutes } from './data.js';
 import { mountAppStudioLaunchRoutes } from './launch.js';
 import { mountAppStudioSpecRoutes } from './spec.js';
 import { mountAppStudioRevisionRoutes } from './revisions.js';
 import { mountAppStudioArchitectureRoutes } from './architecture.js';
-import { mountAppStudioPipelineRepairRoutes } from './pipeline-repair.js';
-import { mountAppStudioExperienceRoutes } from './experience.js';
 import { mountAppStudioProductRoutes } from './product.js';
+import { mountAppStudioWorkflowRoutes } from './workflow.js';
+import { mountAppStudioAgentRoutes } from './agents.js';
 import { requireLocalOrigin } from './origin-guard.js';
 
 export function mountAppStudioRoutes(app: Hono, deps: ServerDeps): void {
@@ -26,13 +25,12 @@ export function mountAppStudioRoutes(app: Hono, deps: ServerDeps): void {
   app.use('/api/app-studio/*', requireLocalOrigin);
   mountAppStudioCreateRoutes(app, deps);
   mountAppStudioSessionRoutes(app, deps);
-  mountAppStudioPipelineRoutes(app, deps);
   mountAppStudioDataRoutes(app, deps);
   mountAppStudioLaunchRoutes(app, deps);
   mountAppStudioSpecRoutes(app, deps);
   mountAppStudioRevisionRoutes(app, deps);
   mountAppStudioArchitectureRoutes(app, deps);
-  mountAppStudioPipelineRepairRoutes(app, deps);
-  mountAppStudioExperienceRoutes(app, deps);
   mountAppStudioProductRoutes(app, deps);
+  mountAppStudioWorkflowRoutes(app, deps);
+  mountAppStudioAgentRoutes(app, deps);
 }

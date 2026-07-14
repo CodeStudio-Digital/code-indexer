@@ -62,7 +62,7 @@ export function WorkAreaTabBar({ db }: { db: UseDbClient }) {
   }
 
   return (
-    <div className="relative flex h-8 shrink-0 items-stretch border-b bg-card/20">
+    <div className="relative flex h-8 shrink-0 items-stretch border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)]">
       <div ref={stripRef} className="flex min-w-0 flex-1 items-stretch overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
         {db.workTabs.length === 0 ? (
           <div className="flex items-center px-3 text-[11px] text-muted-foreground">{t('tabs.empty')}</div>

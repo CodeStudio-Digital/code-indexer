@@ -18,9 +18,8 @@ export function AppearancePane() {
   const setDensity = useUiDensity((s) => s.setDensity);
 
   return (
-    <div className="space-y-5 max-w-xl">
+    <div className="w-full max-w-3xl space-y-5">
       <div className="space-y-0.5">
-        <h3 className="text-sm font-semibold">{t('settings.nav.appearance')}</h3>
         <p className="text-xs text-muted-foreground">{t('settings.appearance.subtitle')}</p>
       </div>
 

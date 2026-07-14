@@ -4,16 +4,19 @@
  * plus a toolbar for the active environment. Mounted both in the project IDE
  * (ProjectView) and inside the company API tab.
  */
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { Loader2, Settings2, Download, Upload, Play, ChevronDown, Plus, Library, Globe, RefreshCw } from 'lucide-react';
+import { Activity, Loader2, Settings2, Download, Upload, Play, ChevronDown, Plus, Library, Globe, RefreshCw, Webhook } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { WorkbenchPanelHeader } from '../../components/workbench/index.js';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '../../components/ui/dropdown-menu.js';
 import { toast, prompt, confirm } from '../../components/ui/prompt-dialog.js';
 import { useApiClient } from './useApiClient.js';
+import { isRequestDeleteUndoShortcut } from './request-delete-undo.js';
 import { SubTabs } from './SubTabs.js';
 import { downloadJson } from './download.js';
 import * as api from './api.js';
@@ -28,7 +31,7 @@ import { RequestTabBar } from './RequestTabBar.js';
 import { ResponseViewer } from './ResponseViewer.js';
 import { RequestTimeline } from './RequestTimeline.js';
 import { EnvEditor } from './EnvEditor.js';
-import { EnvManagerDialog } from './EnvManagerDialog.js';
+import { EnvironmentList, EnvManagerDialog } from './EnvManagerDialog.js';
 import { ImportOpenApiDialog } from './ImportOpenApiDialog.js';
 import { ImportCurlDialog } from './ImportCurlDialog.js';
 import { CodeDialog } from './CodeDialog.js';
@@ -36,6 +39,7 @@ import { PublishDocsDialog } from './PublishDocsDialog.js';
 import { CloudSyncDialog } from './CloudSyncDialog.js';
 import { RegressionPanel } from './RegressionPanel.js';
 import { jsonShape } from './ai/response-shape.js';
+import type { ApiClientWorkbenchSlots } from './workbench-slots.js';
 
 // Docs Studio lives INSIDE this tab (Client / Docs toggle), not as its own rail
 // tab — lazy so its heavy deps (Scalar, Monaco) don't weigh on the client view.
@@ -46,7 +50,40 @@ const RESP_TABS = [
   { id: 'history' as const, labelKey: 'history' },
 ];
 
-export function ApiClientTab({ projectId, docsAccess = false }: { projectId: number; docsAccess?: boolean }) {
+const NAV_TABS = [
+  { id: 'collections' as const, labelKey: 'collections' },
+  { id: 'environments' as const, labelKey: 'environments' },
+];
+
+/** Keeps portal children mounted even while their workbench dock is collapsed. */
+function useDockPortalRoot(host: HTMLElement | null, name: string) {
+  const [root] = useState<HTMLElement | null>(() => {
+    if (typeof document === 'undefined') return null;
+    const element = document.createElement('div');
+    element.className = 'h-full min-h-0 overflow-hidden';
+    element.dataset.apiWorkbenchPortal = name;
+    return element;
+  });
+
+  useLayoutEffect(() => {
+    if (!root) return;
+    if (host) host.appendChild(root);
+    else root.remove();
+    return () => root.remove();
+  }, [host, root]);
+
+  return root;
+}
+
+export function ApiClientTab({
+  projectId,
+  docsAccess = false,
+  workbenchSlots,
+}: {
+  projectId: number;
+  docsAccess?: boolean;
+  workbenchSlots?: ApiClientWorkbenchSlots;
+}) {
   const { t } = useTranslation('apiClient');
   const c = useApiClient(projectId);
   const { state } = c;
@@ -60,6 +97,7 @@ export function ApiClientTab({ projectId, docsAccess = false }: { projectId: num
   const [curlOpen, setCurlOpen] = useState(false);
   const [regressionOpen, setRegressionOpen] = useState(false);
   const [respTab, setRespTab] = useState<'response' | 'history'>('response');
+  const [navTab, setNavTab] = useState<'collections' | 'environments'>('collections');
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeRid, setCodeRid] = useState<number | null>(null);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
@@ -67,7 +105,43 @@ export function ApiClientTab({ projectId, docsAccess = false }: { projectId: num
   const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveDraftObj, setSaveDraftObj] = useState<ApiRequest | null>(null);
+  const leftPortalRoot = useDockPortalRoot(workbenchSlots?.leftHost ?? null, 'left');
+  const rightPortalRoot = useDockPortalRoot(workbenchSlots?.rightHost ?? null, 'right');
   const openEnvEditor = (id: number | null) => { setEnvManagerOpen(false); setEnvEditId(id); setEnvEditorOpen(true); };
+
+  const removeRequestGuarded = useCallback(async (requestId: number) => {
+    const request = state.requests.find((candidate) => candidate.id === requestId);
+    if (!request) return;
+    const accepted = await confirm({
+      title: t('request.deleteConfirmTitle', { name: request.name }),
+      description: t('request.deleteConfirmBody'),
+      confirmLabel: t('request.delete'),
+      tone: 'destructive',
+    });
+    if (!accepted) return;
+    try {
+      await c.removeRequest(requestId);
+      toast.info(t('request.deleted'), { description: t('request.deleteUndoHint') });
+    } catch (error) {
+      toast.error(t('request.deleteFailed'), { description: error instanceof Error ? error.message : String(error) });
+    }
+  }, [c.removeRequest, state.requests, t]);
+
+  useEffect(() => {
+    const undoDeletedRequest = (event: KeyboardEvent) => {
+      if (!c.canUndoRequestDelete || !isRequestDeleteUndoShortcut(event)) return;
+      event.preventDefault();
+      void c.undoLastRequestDelete()
+        .then((restored) => {
+          if (restored) toast.success(t('request.restored', { name: restored.name }));
+        })
+        .catch((error) => toast.error(t('request.restoreFailed'), {
+          description: error instanceof Error ? error.message : String(error),
+        }));
+    };
+    window.addEventListener('keydown', undoDeletedRequest);
+    return () => window.removeEventListener('keydown', undoDeletedRequest);
+  }, [c.canUndoRequestDelete, c.undoLastRequestDelete, t]);
 
   // Create a collection and return its id (for the Save-request modal).
   const createCollectionReturningId = async (name: string): Promise<number> => {
@@ -190,8 +264,185 @@ export function ApiClientTab({ projectId, docsAccess = false }: { projectId: num
     }
   }, [state.response, activeRequest, projectId, t]);
 
+  const navigator = state.loading ? (
+    <div className="grid h-full place-items-center text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /></div>
+  ) : (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
+      <WorkbenchPanelHeader
+        title="API Client"
+        icon={Webhook}
+        onClose={workbenchSlots?.onCloseLeft}
+        actions={navTab === 'collections' ? (
+          <>
+            <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.newCollection')} onClick={() => void newCollection()}>
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.collections')} onClick={() => setCollectionsOpen(true)}>
+              <Library className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.newEnvironment')} onClick={() => openEnvEditor(null)}>
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.sync')} onClick={() => setCloudSyncOpen(true)}>
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.environments')} onClick={() => setEnvManagerOpen(true)}>
+              <Settings2 className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        )}
+      />
+      <SubTabs
+        tabs={NAV_TABS.map((tab) => ({ id: tab.id, label: t(`toolbar.${tab.labelKey}`) }))}
+        active={navTab}
+        onChange={setNavTab}
+        className="h-8 shrink-0 bg-[var(--workbench-canvas)]"
+      />
+      <div className="min-h-0 flex-1">
+        {navTab === 'collections' ? (
+          <CollectionList
+            projectId={projectId}
+            collections={state.collections}
+            requests={state.requests}
+            activeCollectionId={state.activeCollectionId}
+            activeRequestId={state.activeRequestId}
+            onSelectCollection={c.selectCollection}
+            onSelectRequest={c.selectRequest}
+            onNewRequest={c.newDraft}
+            onAddRequest={c.addRequest}
+            onRemoveRequest={removeRequestGuarded}
+            onDuplicate={c.duplicateRequest}
+            onAddFolder={c.addFolder}
+            onRenameFolder={c.renameFolder}
+            onRemoveFolder={c.removeFolder}
+            onMoveRequest={c.moveRequest}
+            onReorder={c.reorderRequests}
+            onBulkMove={c.bulkMove}
+            onBulkDelete={c.bulkDelete}
+          />
+        ) : (
+          <EnvironmentList
+            environments={state.environments}
+            selectedEnvId={state.selectedEnvId}
+            onSelect={c.selectEnv}
+            onEdit={openEnvEditor}
+            onDelete={c.removeEnvironment}
+            className="h-full"
+          />
+        )}
+      </div>
+    </div>
+  );
+
+  const requestWorkspace = state.loading ? (
+    <div className="grid h-full place-items-center text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /></div>
+  ) : (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-canvas)]">
+      <RequestTabBar
+        requests={state.requests}
+        draftRequest={state.draftRequest}
+        draftDirty={state.draftDirty}
+        openTabIds={state.openTabIds}
+        activeRequestId={state.activeRequestId}
+        onActivate={c.selectRequest}
+        onClose={closeTabGuarded}
+        onCloseOthers={onCloseOthers}
+        onCloseRight={onCloseRight}
+        onCloseLeft={onCloseLeft}
+        onCloseAll={onCloseAllTabs}
+      />
+      <div className="min-h-0 flex-1">
+        <RequestEditor
+          request={editing}
+          isDraft={isDraft}
+          baseUrl={selectedEnv?.base_url ?? ''}
+          sending={state.sending}
+          responseShape={responseShape}
+          onSave={(rid, patch) => (isDraft ? c.updateDraft(patch) : c.saveRequest(rid, patch))}
+          onSend={c.send}
+          onSendDraft={c.sendDraft}
+          onSaveDraft={(draft) => { setSaveDraftObj(draft); setSaveOpen(true); }}
+          onDiscardDraft={discardDraftGuarded}
+          onOpenCode={openCode}
+          onAssist={(payload) => api.scriptAssist(projectId, payload)}
+        />
+      </div>
+    </div>
+  );
+
+  const inspector = state.loading ? (
+    <div className="grid h-full place-items-center text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /></div>
+  ) : (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
+      <WorkbenchPanelHeader title="API Inspector" icon={Activity} onClose={workbenchSlots?.onCloseRight} />
+      <SubTabs
+        tabs={RESP_TABS.map((tab) => ({ id: tab.id, label: t(`toolbar.${tab.labelKey}`) }))}
+        active={respTab}
+        onChange={setRespTab}
+        className="h-8 shrink-0 bg-[var(--workbench-canvas)]"
+      />
+      <div className="min-h-0 flex-1">
+        {respTab === 'response' ? (
+          <ResponseViewer
+            response={state.response}
+            error={state.error}
+            sending={state.sending}
+            verifiedStatus={activeRequest?.verified ? activeRequest.expected_status : null}
+            onMarkVerified={activeRequest ? (status) => c.verifyRequest(activeRequest.id, status) : undefined}
+            onSaveExample={state.response && activeRequest && !isDraft ? saveExample : undefined}
+          />
+        ) : (
+          <RequestTimeline
+            projectId={projectId}
+            requestId={state.activeRequestId}
+            refreshToken={state.response}
+          />
+        )}
+      </div>
+    </div>
+  );
+
+  const clientToolbar = (
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--workbench-border)] px-2 text-xs">
+      <span className="font-medium">API</span>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm" variant="outline" className="h-7 gap-1">
+            <Download className="h-3.5 w-3.5" /> {t('toolbar.import')} <ChevronDown className="h-3 w-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onClick={() => setImportOpen(true)}>OpenAPI / Swagger</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setCurlOpen(true)}>cURL / bash</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm" variant="outline" className="h-7 gap-1" disabled={state.activeCollectionId == null}>
+            <Upload className="h-3.5 w-3.5" /> {t('toolbar.export')} <ChevronDown className="h-3 w-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onClick={() => void exportCollection('postman')}>Postman v2.1</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => void exportCollection('openapi')}>OpenAPI 3.1</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setPublishDocsOpen(true)}><Globe className="mr-2 h-3.5 w-3.5" /> {t('toolbar.publishDocs')}</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Button size="sm" variant="outline" className="h-7 gap-1" disabled={state.activeCollectionId == null} onClick={() => setRegressionOpen(true)}>
+        <Play className="h-3.5 w-3.5" /> {t('toolbar.runAll')}
+      </Button>
+      <div className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground" title={selectedEnv?.base_url}>
+        <Globe className="h-3 w-3 shrink-0" />
+        <span className="max-w-40 truncate">{selectedEnv?.name ?? t('toolbar.noEnvironments')}</span>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="flex flex-col h-full bg-card">
+    <div className="flex h-full flex-col bg-[var(--workbench-surface)]">
       {docsAccess && (
         <div className="h-8 shrink-0 flex items-center gap-1 px-2 border-b text-xs">
           <ModeBtn active={view === 'client'} onClick={() => setView('client')}>{t('mode.client')}</ModeBtn>
@@ -204,151 +455,28 @@ export function ApiClientTab({ projectId, docsAccess = false }: { projectId: num
             <DocsStudioView projectId={projectId} />
           </Suspense>
         </div>
-      ) : state.loading ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>
+      ) : workbenchSlots ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          {clientToolbar}
+          <div className="min-h-0 flex-1">{requestWorkspace}</div>
+        </div>
       ) : (
-      <>
-      <div className="h-10 flex items-center gap-2 px-3 border-b text-xs">
-        <span className="font-medium">API</span>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="outline" className="h-7 gap-1">
-              <Download className="h-3.5 w-3.5" /> {t('toolbar.import')} <ChevronDown className="h-3 w-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={() => setImportOpen(true)}>OpenAPI / Swagger</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setCurlOpen(true)}>cURL / bash</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="outline" className="h-7 gap-1" disabled={state.activeCollectionId == null}>
-              <Upload className="h-3.5 w-3.5" /> {t('toolbar.export')} <ChevronDown className="h-3 w-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={() => void exportCollection('postman')}>Postman v2.1</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => void exportCollection('openapi')}>OpenAPI 3.1</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPublishDocsOpen(true)}><Globe className="h-3.5 w-3.5 mr-2" /> {t('toolbar.publishDocs')}</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button size="sm" variant="outline" className="h-7 gap-1" disabled={state.activeCollectionId == null} onClick={() => setRegressionOpen(true)}>
-          <Play className="h-3.5 w-3.5" /> {t('toolbar.runAll')}
-        </Button>
-        <div className="w-px h-5 bg-border mx-1" />
-        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => void newCollection()}>
-          <Plus className="h-3.5 w-3.5" /> {t('toolbar.newCollection')}
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => setCollectionsOpen(true)}>
-          <Library className="h-3.5 w-3.5" /> {t('toolbar.collections')}
-        </Button>
-        <span className="ml-auto text-muted-foreground">{t('toolbar.env')}</span>
-        <select
-          className="text-xs bg-background border rounded px-2 py-1 max-w-[180px]"
-          value={state.selectedEnvId ?? ''}
-          onChange={(e) => c.selectEnv(Number(e.target.value))}
-        >
-          {state.environments.length === 0 && <option value="">{t('toolbar.noEnvironments')}</option>}
-          {state.environments.map((e) => <option key={e.id} value={e.id}>{e.name}{e.is_default ? ' ★' : ''}</option>)}
-        </select>
-        <Button size="sm" variant="outline" className="h-7 w-7 p-0" title={t('toolbar.newEnvironment')} onClick={() => openEnvEditor(null)}>
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 w-7 p-0" title={t('toolbar.sync')} onClick={() => setCloudSyncOpen(true)}>
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => setEnvManagerOpen(true)}>
-          <Settings2 className="h-3.5 w-3.5" /> {t('toolbar.environments')}
-        </Button>
-      </div>
+        <div className="flex min-h-0 flex-1 flex-col">
+          {clientToolbar}
+          <div className="min-h-0 flex-1">
+            <PanelGroup direction="horizontal" autoSaveId={`mcp-api-client-horiz-${projectId}`}>
+              <Panel defaultSize={22} minSize={14} maxSize={40}>{navigator}</Panel>
+              <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
+              <Panel minSize={28}>{requestWorkspace}</Panel>
+              <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
+              <Panel defaultSize={34} minSize={20}>{inspector}</Panel>
+            </PanelGroup>
+          </div>
+        </div>
+      )}
 
-      <div className="flex-1 min-h-0">
-        <PanelGroup direction="horizontal" autoSaveId={`mcp-api-client-horiz-${projectId}`}>
-          <Panel defaultSize={22} minSize={14} maxSize={40}>
-            <div className="h-full border-r overflow-hidden">
-              <CollectionList
-                projectId={projectId}
-                collections={state.collections}
-                requests={state.requests}
-                activeCollectionId={state.activeCollectionId}
-                activeRequestId={state.activeRequestId}
-                onSelectCollection={c.selectCollection}
-                onSelectRequest={c.selectRequest}
-                onNewRequest={c.newDraft}
-                onAddRequest={c.addRequest}
-                onRemoveRequest={c.removeRequest}
-                onDuplicate={c.duplicateRequest}
-                onAddFolder={c.addFolder}
-                onRenameFolder={c.renameFolder}
-                onRemoveFolder={c.removeFolder}
-                onMoveRequest={c.moveRequest}
-                onReorder={c.reorderRequests}
-                onBulkMove={c.bulkMove}
-                onBulkDelete={c.bulkDelete}
-              />
-            </div>
-          </Panel>
-          <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-          <Panel minSize={28}>
-            <div className="flex flex-col h-full">
-              <RequestTabBar
-                requests={state.requests}
-                draftRequest={state.draftRequest}
-                draftDirty={state.draftDirty}
-                openTabIds={state.openTabIds}
-                activeRequestId={state.activeRequestId}
-                onActivate={c.selectRequest}
-                onClose={closeTabGuarded}
-                onCloseOthers={onCloseOthers}
-                onCloseRight={onCloseRight}
-                onCloseLeft={onCloseLeft}
-                onCloseAll={onCloseAllTabs}
-              />
-              <div className="flex-1 min-h-0">
-                <RequestEditor
-                  request={editing}
-                  isDraft={isDraft}
-                  baseUrl={selectedEnv?.base_url ?? ''}
-                  sending={state.sending}
-                  responseShape={responseShape}
-                  onSave={(rid, p) => (isDraft ? c.updateDraft(p) : c.saveRequest(rid, p))}
-                  onSend={c.send}
-                  onSendDraft={c.sendDraft}
-                  onSaveDraft={(d) => { setSaveDraftObj(d); setSaveOpen(true); }}
-                  onDiscardDraft={discardDraftGuarded}
-                  onOpenCode={openCode}
-                  onAssist={(payload) => api.scriptAssist(projectId, payload)}
-                />
-              </div>
-            </div>
-          </Panel>
-          <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-          <Panel defaultSize={34} minSize={20}>
-            <div className="h-full border-l overflow-hidden flex flex-col">
-              <SubTabs tabs={RESP_TABS.map((tab) => ({ id: tab.id, label: t(`toolbar.${tab.labelKey}`) }))} active={respTab} onChange={setRespTab} className="shrink-0" />
-              <div className="flex-1 min-h-0">
-                {respTab === 'response' ? (
-                  <ResponseViewer
-                    response={state.response}
-                    error={state.error}
-                    sending={state.sending}
-                    verifiedStatus={activeRequest?.verified ? activeRequest.expected_status : null}
-                    onMarkVerified={activeRequest ? (status) => c.verifyRequest(activeRequest.id, status) : undefined}
-                    onSaveExample={state.response && activeRequest && !isDraft ? saveExample : undefined}
-                  />
-                ) : (
-                  <RequestTimeline
-                    projectId={projectId}
-                    requestId={state.activeRequestId}
-                    refreshToken={state.response}
-                  />
-                )}
-              </div>
-            </div>
-          </Panel>
-        </PanelGroup>
-      </div>
+      {workbenchSlots && leftPortalRoot && createPortal(navigator, leftPortalRoot)}
+      {workbenchSlots && rightPortalRoot && createPortal(inspector, rightPortalRoot)}
 
       <CollectionsDialog
         collections={state.collections}
@@ -423,8 +551,6 @@ export function ApiClientTab({ projectId, docsAccess = false }: { projectId: num
         onOpenChange={setRegressionOpen}
         onRequestsChanged={c.reloadRequests}
       />
-      </>
-      )}
     </div>
   );
 }

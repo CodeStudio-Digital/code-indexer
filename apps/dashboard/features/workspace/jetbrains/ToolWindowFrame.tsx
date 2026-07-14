@@ -4,9 +4,8 @@
  * visually consistent without each one re-implementing the same header.
  */
 
-import { X } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
-import { Button } from '../../../components/ui/button.js';
+import { WorkbenchPanelHeader } from '../../../components/workbench/index.js';
 
 interface ToolWindowFrameProps {
   title: string;
@@ -25,24 +24,8 @@ export function ToolWindowFrame({
   children,
 }: ToolWindowFrameProps) {
   return (
-    <div className={cn('h-full flex flex-col bg-card/20 min-h-0', className)}>
-      <div className="h-7 shrink-0 border-b flex items-center px-2 gap-1 bg-card/40">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] flex-1 truncate">
-          {title}
-        </span>
-        {actions}
-        {onClose && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-5 w-5 text-muted-foreground hover:text-foreground"
-            onClick={onClose}
-            aria-label={`Close ${title}`}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        )}
-      </div>
+    <div className={cn('h-full flex flex-col bg-[var(--workbench-surface)] min-h-0', className)}>
+      <WorkbenchPanelHeader title={title} actions={actions} onClose={onClose} />
       <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
     </div>
   );

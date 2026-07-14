@@ -3,6 +3,7 @@
  * Reuses `useDiffRows` + `DiffRowsView` (same rows as the full panel, incl.
  * per-hunk keep/revert) inside a bounded, scrollable box.
  */
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
@@ -10,7 +11,12 @@ import { useDiffRows } from './useDiffRows.js';
 import { DiffRowsView } from './DiffRowsView.js';
 import { useInlineFileDiff } from './useInlineFileDiff.js';
 import { useSnapshotActions } from '../../chat/messages/snapshot-files-context.js';
-import type { SessionScope, SnapshotFileDiff, SnapshotReviewComment } from '../types.js';
+import type {
+  RoundSnapshotReviewFinding,
+  SessionScope,
+  SnapshotFileDiff,
+  SnapshotReviewComment,
+} from '../types.js';
 
 const NO_COMMENTS: SnapshotReviewComment[] = [];
 const EMPTY_DIFF: SnapshotFileDiff = {
@@ -24,17 +30,57 @@ export function InlineDiff({
   scope,
   sessionId,
   baselineId,
+  roundMessageId,
+  globalBaselineId,
+  reviewFindings = [],
+  onMutated,
   refreshKey,
 }: {
   scope: SessionScope;
   sessionId: number;
   baselineId: number;
+  roundMessageId?: number;
+  globalBaselineId?: number;
+  reviewFindings?: RoundSnapshotReviewFinding[];
+  onMutated?: () => void;
   refreshKey?: string | number;
 }) {
   const { t } = useTranslation('chat');
   const actions = useSnapshotActions();
-  const { diff, loading, handlers } = useInlineFileDiff(scope, sessionId, baselineId, actions, refreshKey);
-  const { rows, maxContentChars } = useDiffRows(diff ?? EMPTY_DIFF, NO_COMMENTS);
+  const { diff, loading, handlers } = useInlineFileDiff(
+    scope,
+    sessionId,
+    baselineId,
+    actions,
+    refreshKey,
+    roundMessageId,
+    globalBaselineId,
+    onMutated,
+  );
+  const contextualComments = useMemo<SnapshotReviewComment[]>(
+    () => reviewFindings.map((finding) => ({
+      id: finding.id,
+      run_id: null,
+      baseline_id: baselineId,
+      source: 'auto',
+      status: 'accepted',
+      file_path: '',
+      hunk_fingerprint: finding.hunk_fingerprint,
+      old_line: finding.old_line,
+      new_line: finding.new_line,
+      severity: finding.severity,
+      body: finding.body,
+      suggested_fix: finding.suggested_fix,
+      diff_excerpt: finding.diff_excerpt,
+      created_at: finding.created_at,
+      updated_at: finding.created_at,
+    })),
+    [reviewFindings, baselineId],
+  );
+  const { rows, maxContentChars } = useDiffRows(
+    diff ?? EMPTY_DIFF,
+    contextualComments.length > 0 ? contextualComments : NO_COMMENTS,
+  );
 
   if (loading && !diff) {
     return (
@@ -55,7 +101,12 @@ export function InlineDiff({
             : t('messages.noRemainingChanges')}
         </span>
         {actions && actions.showToolbar !== false && (
-          <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => actions.openSnapshots(baselineId)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 text-[11px]"
+            onClick={() => actions.openSnapshots(globalBaselineId ?? baselineId)}
+          >
             {t('messages.viewSnapshot')}
           </Button>
         )}

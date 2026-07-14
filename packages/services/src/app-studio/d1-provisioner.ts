@@ -6,7 +6,7 @@
  *                                `wrangler d1 migrations apply DB --local`
  *                                (estado em .wrangler/state, o MESMO que o
  *                                vite dev server lê) + grava
- *                                .app-studio/db.json p/ o gate da etapa.
+ *                                .app-studio/db.json como evidência do card.
  *   - `provisionRemote`        → EXCLUSIVO da launch chain (conta CF do
  *                                usuário): `d1 create`, resolve o uuid via
  *                                `d1 list --json` (find por nome — robusto
@@ -20,7 +20,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { listSqlMigrations, sqlHasStatements } from '@mcp/app-studio/pipeline/gate-checks.js';
+import { listSqlMigrations, sqlHasStatements } from '@mcp/app-studio/verification/workspace-checks.js';
 import { appMigrationHazards } from '@mcp/app-studio/database/migration.js';
 import { validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
 import { readDbStatus, writeDbStatus } from '@mcp/app-studio/status-files.js';

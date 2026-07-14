@@ -74,6 +74,7 @@ export function estimatePendingPayload(args: EstimatePendingPayloadArgs): number
 
 export interface ShouldCompactPreEmitInputs extends EstimatePendingPayloadArgs {
   model: string;
+  contextWindow?: number | null;
   /** Trigger ratio applied to TOTAL effective context. Default 0.90. */
   triggerRatio?: number;
   /**
@@ -107,7 +108,7 @@ export function shouldCompactPreEmit(inp: ShouldCompactPreEmitInputs): PreEmitCo
   if (inp.messages.length <= 1) {
     return { shouldCompact: false, projectedTokens: 0, effective: 0, ratio: 0 };
   }
-  const limits = deriveTokenLimits(inp.model);
+  const limits = deriveTokenLimits(inp.model, inp.contextWindow);
   const triggerRatio = inp.triggerRatio ?? DEFAULT_PRE_EMIT_RATIO;
   const calibration =
     inp.calibration != null && Number.isFinite(inp.calibration) && inp.calibration > 0

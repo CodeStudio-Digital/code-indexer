@@ -68,9 +68,9 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   // App Studio planner/executor control plane. These tools are registered only
   // in app workspaces, so protecting them has zero cost in generic sessions.
   'app_get_context',
-  'app_get_stage_briefing',
+  'app_get_workflow',
   'app_get_spec',
-  'app_submit_stage',
+  'app_dispatch_ready_work',
 ]);
 
 /**
@@ -83,10 +83,9 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
 const HOT_RANK: readonly string[] = [
   'code_exec',
   'app_get_context',
-  'app_get_stage_briefing',
-  'app_get_pipeline',
+  'app_get_workflow',
   'app_get_spec',
-  'app_submit_stage',
+  'app_dispatch_ready_work',
   'read_file',
   'mcp__search',
   'mcp__grep_code',

@@ -71,11 +71,18 @@ export function installKeymapDispatcher(): () => void {
   let lastShiftUpAt = 0;
   let shiftTapPure = false;
 
-  const setPending = (prefix: string | null): void => {
+  let pendingExactId: string | null = null;
+
+  const setPending = (prefix: string | null, exactId: string | null = null): void => {
     pendingPrefix = prefix;
+    pendingExactId = exactId;
     if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
     if (prefix) {
-      pendingTimer = setTimeout(() => setPending(null), 1200);
+      pendingTimer = setTimeout(() => {
+        const fallback = pendingExactId;
+        setPending(null);
+        if (fallback) void executeCommand(fallback);
+      }, 1200);
     }
     for (const fn of pendingListeners) {
       try { fn(prefix); } catch { /* ignore */ }
@@ -85,6 +92,7 @@ export function installKeymapDispatcher(): () => void {
   const tryExecute = (sequence: string, e: KeyboardEvent): boolean => {
     const index = bindingIndex();
     const ids = index.get(sequence);
+    const isPrefix = [...index.keys()].some((key) => key.startsWith(`${sequence} `));
     if (ids) {
       for (const id of ids) {
         const cmd = getCommand(id);
@@ -93,19 +101,20 @@ export function installKeymapDispatcher(): () => void {
         if (cmd.when && !cmd.when()) continue;
         e.preventDefault();
         e.stopPropagation();
-        setPending(null);
-        void executeCommand(id);
+        if (isPrefix) setPending(sequence, id);
+        else {
+          setPending(null);
+          void executeCommand(id);
+        }
         return true;
       }
     }
     // Prefix of a two-chord binding?
-    for (const key of index.keys()) {
-      if (key.startsWith(`${sequence} `)) {
-        e.preventDefault();
-        e.stopPropagation();
-        setPending(sequence);
-        return true;
-      }
+    if (isPrefix) {
+      e.preventDefault();
+      e.stopPropagation();
+      setPending(sequence);
+      return true;
     }
     return false;
   };
@@ -125,7 +134,11 @@ export function installKeymapDispatcher(): () => void {
     if (pendingPrefix) {
       const seq = `${pendingPrefix} ${chord}`;
       const fired = tryExecute(seq, e);
-      if (!fired) setPending(null); // broken chord — swallow nothing further
+      if (!fired) {
+        const fallback = pendingExactId;
+        setPending(null);
+        if (fallback) void executeCommand(fallback);
+      }
       return;
     }
     tryExecute(chord, e);

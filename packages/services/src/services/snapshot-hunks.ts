@@ -391,3 +391,95 @@ export function applyHunkRevert(
   const result = [...cur.slice(0, start), ...replacement, ...cur.slice(end)];
   return result.join('\n') + (currentContent.endsWith('\n') ? '\n' : '');
 }
+
+/**
+ * Conflict-safe variant used by historical round rollback. It first tries the
+ * original position, then relocates the exact after-side projection only when
+ * it occurs once in the current file. This preserves later edits that merely
+ * shifted the hunk while refusing ambiguous/overlapping changes.
+ */
+export function applyHunkRevertFlexible(
+  baselineContent: string | null,
+  currentContent: string,
+  hunk: Hunk,
+): string | null {
+  const positional = applyHunkRevert(baselineContent, currentContent, hunk);
+  if (positional != null) return positional;
+
+  const cur = splitLines(normalizeForDiff(currentContent));
+  const firstChange = hunk.lines.findIndex((line) => line.type !== 'context');
+  let lastChange = -1;
+  for (let index = hunk.lines.length - 1; index >= 0; index--) {
+    if (hunk.lines[index].type !== 'context') {
+      lastChange = index;
+      break;
+    }
+  }
+  if (firstChange < 0 || lastChange < firstChange) return null;
+  // Ignore leading/trailing display context when locating the actual edited
+  // span. A later round may legitimately change an adjacent context line;
+  // that must not turn a non-overlapping rollback into a false conflict.
+  const changeRegion = hunk.lines.slice(firstChange, lastChange + 1);
+  const expectedAfter = changeRegion
+    .filter((line) => line.type === 'context' || line.type === 'add')
+    .map((line) => line.content);
+  const replacement = changeRegion
+    .filter((line) => line.type === 'context' || line.type === 'remove')
+    .map((line) => line.content);
+
+  if (expectedAfter.length === 0) {
+    // Pure deletion: relocate the insertion boundary using the strongest
+    // surviving context on either side. Requiring one unique best boundary
+    // prevents a common line elsewhere in the file from receiving the text.
+    const leading = hunk.lines.slice(0, firstChange).map((line) => line.content);
+    const trailing = hunk.lines.slice(lastChange + 1).map((line) => line.content);
+    let bestScore = 0;
+    const bestBoundaries: number[] = [];
+    for (let boundary = 0; boundary <= cur.length; boundary++) {
+      let leftScore = 0;
+      for (let size = 1; size <= Math.min(leading.length, boundary); size++) {
+        const anchor = leading.slice(leading.length - size);
+        if (anchor.every((line, index) => cur[boundary - size + index] === line)) {
+          leftScore = size;
+        }
+      }
+      let rightScore = 0;
+      for (let size = 1; size <= Math.min(trailing.length, cur.length - boundary); size++) {
+        if (trailing.slice(0, size).every((line, index) => cur[boundary + index] === line)) {
+          rightScore = size;
+        }
+      }
+      const score = leftScore + rightScore;
+      if (score > bestScore) {
+        bestScore = score;
+        bestBoundaries.length = 0;
+        bestBoundaries.push(boundary);
+      } else if (score > 0 && score === bestScore) {
+        bestBoundaries.push(boundary);
+      }
+    }
+    if (bestScore === 0 || bestBoundaries.length !== 1) return null;
+    const boundary = bestBoundaries[0];
+    const result = [...cur.slice(0, boundary), ...replacement, ...cur.slice(boundary)];
+    return result.join('\n') + (currentContent.endsWith('\n') ? '\n' : '');
+  }
+  if (expectedAfter.length > cur.length) return null;
+
+  const matches: number[] = [];
+  outer: for (let start = 0; start <= cur.length - expectedAfter.length; start++) {
+    for (let offset = 0; offset < expectedAfter.length; offset++) {
+      if (cur[start + offset] !== expectedAfter[offset]) continue outer;
+    }
+    matches.push(start);
+    if (matches.length > 1) return null;
+  }
+  if (matches.length !== 1) return null;
+
+  const start = matches[0];
+  const result = [
+    ...cur.slice(0, start),
+    ...replacement,
+    ...cur.slice(start + expectedAfter.length),
+  ];
+  return result.join('\n') + (currentContent.endsWith('\n') ? '\n' : '');
+}

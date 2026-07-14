@@ -14,7 +14,7 @@
 export type Zone = 'work' | 'build' | 'data';
 
 export type WorkTab = 'board' | 'kanban' | 'memory' | 'pipelines';
-export type BuildTab = 'docs' | 'tests' | 'files' | 'git' | 'api' | 'terminal' | 'runners';
+export type BuildTab = 'docs' | 'tests' | 'files' | 'git' | 'api';
 export type DataTab = 'drive' | 'snapshots' | 'archived';
 
 export type ZoneTab =
@@ -24,7 +24,7 @@ export type ZoneTab =
 
 export const ZONE_TABS: { [Z in Zone]: readonly Extract<ZoneTab, { zone: Z }>['tab'][] } = {
   work: ['board', 'kanban', 'memory', 'pipelines'] as const,
-  build: ['docs', 'tests', 'files', 'git', 'api', 'terminal', 'runners'] as const,
+  build: ['docs', 'tests', 'files', 'git', 'api'] as const,
   data: ['drive', 'snapshots', 'archived'] as const,
 };
 

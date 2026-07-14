@@ -5,20 +5,19 @@
  *   1. User types intent ("crie branch X partindo de main e
  *       dê cherry-pick do último commit de release/2.0").
  *   2. Click "Gerar plano" → backend asks the AI for a structured plan
- *       of git commands + descriptions + danger flags.
+ *       of typed operations + server-derived risk.
  *   3. UI lists each step. Dangerous steps (reset --hard, branch -D,
  *       force push) get a warning tint. User reviews.
  *   4. Click "Executar" → backend runs the steps sequentially, stopping
  *       at the first non-zero exit. Per-step results stream back into
  *       the same list (success / failure + stderr excerpt).
  *
- * Safety: the backend re-validates `command === 'git'` for every step
- * before spawning, so we never execute arbitrary shell — even if the
- * AI tries to inject one. The UI's role is the human-in-the-loop:
- * surface what's about to happen + require an explicit click.
+ * Safety: the renderer only sends the opaque planId back. The backend executes
+ * its immutable typed copy once; previews are never parsed as commands.
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -33,29 +32,7 @@ import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
 import { toast } from '../../../../../components/ui/prompt-dialog.js';
 import { cn } from '../../../../../lib/utils.js';
-
-interface GitPlanStep {
-  command: string;
-  args: string[];
-  description: string;
-  dangerous: boolean;
-}
-
-interface GitPlan {
-  intent: string;
-  steps: GitPlanStep[];
-  summary: string;
-  refusal?: string;
-}
-
-interface GitRunResult {
-  command: string;
-  args: string[];
-  ok: boolean;
-  code: number;
-  stdout: string;
-  stderr: string;
-}
+import type { GitPlan, GitRunResult } from '@mcp/api-bus';
 
 interface GitPromptViewProps {
   projectId: number;
@@ -64,14 +41,9 @@ interface GitPromptViewProps {
   onMutated: () => void;
 }
 
-const SUGGESTIONS = [
-  'Crie uma branch feature/x partindo de main e troque pra ela',
-  'Faça merge de develop em main com no-ff',
-  'Cherry-pick os últimos 3 commits de release/2.0 pra branch atual',
-  'Desfaz o último commit mantendo as mudanças staged',
-];
-
 export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewProps) {
+  const { t } = useTranslation('workspace');
+  const suggestions = [1, 2, 3, 4].map((index) => t(`git.ai.suggestion${index}`));
   const [intent, setIntent] = useState('');
   const [plan, setPlan] = useState<GitPlan | null>(null);
   const [results, setResults] = useState<GitRunResult[] | null>(null);
@@ -79,9 +51,10 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
   const [planning, setPlanning] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [aiConsent, setAiConsent] = useState(false);
 
   const generatePlan = async () => {
-    if (!intent.trim()) return;
+    if (!intent.trim() || !aiConsent) return;
     setPlanning(true);
     setPlan(null);
     setResults(null);
@@ -92,6 +65,7 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
         projectId,
         repoPath,
         intent: intent.trim(),
+        consent: true,
       });
       setPlan(p);
     } catch (e) {
@@ -109,17 +83,17 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
     try {
       const r = await apiCall<{ results: GitRunResult[]; aborted: boolean }>(
         'projectGit.aiExecute',
-        { projectId, repoPath, steps: plan.steps },
+        { projectId, repoPath, planId: plan.planId },
       );
       setResults(r.results);
       setAborted(r.aborted);
       if (r.aborted) {
-        toast.error('Plan stopped after a failing step', {
-          description: 'Review the output below; nothing after the red row was attempted.',
+        toast.error(t('git.ai.stopped'), {
+          description: t('git.ai.stoppedDescription'),
         });
       } else {
-        toast.success('Plan executed', {
-          description: `${r.results.length} step${r.results.length === 1 ? '' : 's'} completed.`,
+        toast.success(t('git.ai.executed'), {
+          description: t('git.ai.completedSteps', { count: r.results.length }),
         });
       }
       onMutated();
@@ -137,16 +111,14 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
     setError(null);
   };
 
-  const dangerousCount = plan?.steps.filter((s) => s.dangerous).length ?? 0;
+  const dangerousCount = plan?.steps.filter((s) => s.risk === 'destructive').length ?? 0;
 
   return (
     <div className="h-full flex flex-col min-h-0 overflow-y-auto">
       <div className="shrink-0 px-3 py-2 border-b">
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <Sparkles className="h-3 w-3 text-primary" />
-          <span>
-            Descreva em português o que você quer fazer no git. A IA monta um plano de comandos pra você revisar antes de executar.
-          </span>
+          <span>{t('git.ai.intro')}</span>
         </div>
       </div>
 
@@ -154,15 +126,25 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
         <textarea
           value={intent}
           onChange={(e) => setIntent(e.target.value)}
-          placeholder={SUGGESTIONS[0]}
+          placeholder={suggestions[0]}
           className="w-full min-h-[80px] rounded-md border bg-card px-3 py-2 text-[12px] focus:outline-none focus:ring-2 focus:ring-ring/40 resize-y"
           disabled={planning || executing}
         />
+        <label className="flex items-start gap-2 text-[10.5px] text-muted-foreground cursor-pointer">
+          <input
+            type="checkbox"
+            checked={aiConsent}
+            onChange={(event) => setAiConsent(event.target.checked)}
+            disabled={planning || executing}
+            className="mt-0.5"
+          />
+          <span>{t('git.ai.consent')}</span>
+        </label>
         <div className="flex items-center gap-1.5 flex-wrap">
           <Button
             size="sm"
             onClick={() => void generatePlan()}
-            disabled={!intent.trim() || planning || executing}
+            disabled={!intent.trim() || !aiConsent || planning || executing}
             className="h-7 text-[11.5px]"
           >
             {planning ? (
@@ -170,7 +152,7 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
             ) : (
               <Wand2 className="h-3 w-3 mr-1" />
             )}
-            Gerar plano
+            {t('git.ai.generate')}
           </Button>
           {(plan || results) && (
             <Button
@@ -180,12 +162,12 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
               disabled={planning || executing}
               className="h-7 text-[11.5px]"
             >
-              Limpar
+              {t('git.ai.clear')}
             </Button>
           )}
           {!plan && !results && (
             <div className="flex items-center gap-1 flex-wrap ml-auto">
-              {SUGGESTIONS.slice(0, 2).map((s) => (
+              {suggestions.slice(0, 2).map((s) => (
                 <button
                   key={s}
                   type="button"
@@ -206,7 +188,7 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
         <div className="m-3 p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-[11.5px] text-amber-700 dark:text-amber-300">
           <div className="font-medium mb-1 inline-flex items-center gap-1">
             <AlertTriangle className="h-3 w-3" />
-            A IA recusou
+            {t('git.ai.refused')}
           </div>
           <div className="leading-snug">{plan.refusal}</div>
         </div>
@@ -222,10 +204,10 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
               const result = results?.[i];
               return (
                 <div
-                  key={i}
+                  key={s.id}
                   className={cn(
                     'flex items-start gap-2 px-3 py-2 border-b last:border-b-0',
-                    s.dangerous && !result && 'bg-amber-500/5',
+                    s.risk === 'destructive' && !result && 'bg-amber-500/5',
                     result?.ok === true && 'bg-emerald-500/5',
                     result?.ok === false && 'bg-destructive/10',
                   )}
@@ -236,12 +218,12 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1 flex-wrap">
                       <code className="font-mono text-[11.5px] bg-muted/60 rounded px-1.5 py-0.5">
-                        git {s.args.join(' ')}
+                        {s.preview}
                       </code>
-                      {s.dangerous && !result && (
+                      {s.risk === 'destructive' && !result && (
                         <span className="inline-flex items-center gap-0.5 text-[9.5px] text-amber-600 dark:text-amber-400 font-medium">
                           <AlertTriangle className="h-2.5 w-2.5" />
-                          DESTRUTIVO
+                          {t('git.ai.destructive')}
                         </span>
                       )}
                       {result?.ok === true && (
@@ -279,8 +261,8 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
                 ) : (
                   <Play className="h-3 w-3 mr-1" />
                 )}
-                Executar {plan.steps.length} passo{plan.steps.length === 1 ? '' : 's'}
-                {dangerousCount > 0 && ` (${dangerousCount} destrutivo${dangerousCount === 1 ? '' : 's'})`}
+                {t('git.ai.executeSteps', { count: plan.steps.length })}
+                {dangerousCount > 0 && ` (${t('git.ai.destructiveSteps', { count: dangerousCount })})`}
               </Button>
               <Button
                 size="sm"
@@ -290,13 +272,13 @@ export function GitPromptView({ projectId, repoPath, onMutated }: GitPromptViewP
                 className="h-7 text-[11.5px]"
               >
                 <Trash2 className="h-3 w-3 mr-1" />
-                Descartar
+                {t('git.ai.discardPlan')}
               </Button>
             </div>
           )}
           {aborted && (
             <div className="text-[11.5px] text-amber-600 dark:text-amber-400">
-              Plano interrompido após o primeiro passo com falha. Resolva e tente outro plano.
+              {t('git.ai.aborted')}
             </div>
           )}
         </div>

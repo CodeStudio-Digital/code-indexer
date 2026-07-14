@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createEditorHandlers } from '../index.js';
+import { createEditorHandlers, __resetCompletionRequestsForTests, __seedCompletionRequestForTests } from '../index.js';
 import { computeEditorStats, __resetStatsCacheForTests } from '../stats.js';
 
 type Row = {
@@ -34,10 +34,57 @@ const ctx = {} as never;
 
 beforeEach(() => {
   __resetStatsCacheForTests();
+  __resetCompletionRequestsForTests();
+  vi.useRealTimers();
 });
 
 describe('feedback action → stage mapping + dedupe', () => {
-  it('maps every lifecycle action and dedupes per (requestId, action)', async () => {
+  it('records the technical delivery funnel separately from user feedback', async () => {
+    const { deps, inserts } = makeDeps();
+    const h = createEditorHandlers(deps);
+    __seedCompletionRequestForTests('delivery-1');
+    await h.delivery({ projectId: 1, clientRequestId: 'client-1', requestId: 'delivery-1', stage: 'received', documentVersion: 4 }, ctx);
+    await h.delivery({ projectId: 1, clientRequestId: 'client-1', requestId: 'delivery-1', stage: 'returned', documentVersion: 4 }, ctx);
+    await h.delivery({ projectId: 1, clientRequestId: 'client-2', requestId: 'delivery-1', stage: 'discarded', reason: 'version_changed' }, ctx);
+    expect(inserts.map((item) => item.stage)).toEqual([
+      'autocomplete_client_received', 'autocomplete_client_returned', 'autocomplete_client_discarded',
+    ]);
+    expect(inserts[2]?.diag).toMatchObject({ reason: 'version_changed', bindingId: 1 });
+  });
+
+  it('accept wins a reject-before-accept race within the correlation window', async () => {
+    vi.useFakeTimers();
+    const { deps, inserts } = makeDeps();
+    const h = createEditorHandlers(deps);
+    __seedCompletionRequestForTests('race');
+    await h.feedback({ projectId: 1, requestId: 'race', action: 'reject', shownForMs: 800 }, ctx);
+    await h.feedback({ projectId: 1, requestId: 'race', action: 'accept' }, ctx);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(inserts.filter((i) => String(i.stage).includes('autocomplete_')).map((i) => i.stage)).toEqual(['autocomplete_accept']);
+  });
+
+  it('ignores reject after accept and emits one terminal outcome', async () => {
+    vi.useFakeTimers();
+    const { deps, inserts } = makeDeps();
+    const h = createEditorHandlers(deps);
+    __seedCompletionRequestForTests('race2');
+    await h.feedback({ projectId: 1, requestId: 'race2', action: 'accept' }, ctx);
+    await h.feedback({ projectId: 1, requestId: 'race2', action: 'reject', shownForMs: 800 }, ctx);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(inserts.map((i) => i.stage)).toEqual(['autocomplete_accept']);
+  });
+
+  it('commits a reject when no accept arrives during the correlation window', async () => {
+    vi.useFakeTimers();
+    const { deps, inserts } = makeDeps();
+    const h = createEditorHandlers(deps);
+    __seedCompletionRequestForTests('reject-only');
+    await h.feedback({ projectId: 1, requestId: 'reject-only', action: 'reject', shownForMs: 800 }, ctx);
+    await vi.advanceTimersByTimeAsync(501);
+    expect(inserts.map((i) => i.stage)).toEqual(['autocomplete_reject']);
+  });
+
+  it('maps lifecycle actions and emits only one terminal outcome per requestId', async () => {
     const { deps, inserts } = makeDeps();
     const h = createEditorHandlers(deps);
     // Unknown requestId still records with model 'unknown'.
@@ -46,9 +93,7 @@ describe('feedback action → stage mapping + dedupe', () => {
     await h.feedback({ projectId: 1, requestId: 'r1', action: 'reject', shownForMs: 900 }, ctx);
     await h.feedback({ projectId: 1, requestId: 'r1', action: 'partial', acceptedChars: 7, partialKind: 'word' }, ctx);
     const stages = inserts.map((i) => i.stage);
-    expect(stages).toEqual([
-      'autocomplete_shown', 'autocomplete_accept', 'autocomplete_reject', 'autocomplete_partial',
-    ]);
+    expect(stages).toEqual(['autocomplete_shown', 'autocomplete_accept', 'autocomplete_partial']);
     expect(inserts.every((i) => i.component_name === 'unknown')).toBe(true);
   });
 
@@ -70,6 +115,44 @@ describe('feedback action → stage mapping + dedupe', () => {
 });
 
 describe('computeEditorStats', () => {
+  it('separates the current binding from global historical metrics', async () => {
+    const rows: Row[] = [
+      row({ component_name: 'current', duration_ms: 300, diag_json: JSON.stringify({ status: 'ok', endpoint: 'fim', bindingId: 9 }) }),
+      row({ component_name: 'old', duration_ms: 900, diag_json: JSON.stringify({ status: 'ok', endpoint: 'chat', bindingId: 2 }) }),
+      row({ stage: 'autocomplete_shown', component_name: 'current', diag_json: JSON.stringify({ bindingId: 9 }) }),
+      row({ stage: 'autocomplete_accept', component_name: 'current', diag_json: JSON.stringify({ bindingId: 9 }) }),
+    ];
+    const binding = {
+      bindingId: 9, modelId: 'current', modelMode: '', config: { fim: true },
+      provider: { id: 'p', kind: 'mistral', name: 'P' },
+      pipelineName: 'editor', bindingRole: 'autocomplete', resolvedFrom: 'global',
+    };
+    const { deps } = makeDeps(rows, binding);
+    const stats = await computeEditorStats(deps, 7);
+    expect(stats.requests).toBe(2);
+    expect(stats.current).toMatchObject({ bindingId: 9, requests: 1, shown: 1, accepted: 1, acceptRate: 1 });
+    expect(stats.current.latency.p50).toBe(300);
+    expect(stats.route?.suitability).toBe('native-fim');
+  });
+
+  it('aggregates delivery stages and discard reasons for the current binding', async () => {
+    const rows: Row[] = [
+      row({ stage: 'autocomplete_client_received', diag_json: JSON.stringify({ bindingId: 9 }) }),
+      row({ stage: 'autocomplete_client_returned', diag_json: JSON.stringify({ bindingId: 9 }) }),
+      row({ stage: 'autocomplete_client_discarded', diag_json: JSON.stringify({ bindingId: 9, reason: 'version_changed' }) }),
+      row({ stage: 'autocomplete_client_discarded', diag_json: JSON.stringify({ bindingId: 2, reason: 'cancelled' }) }),
+    ];
+    const binding = {
+      bindingId: 9, modelId: 'current', modelMode: '', config: { fim: true },
+      provider: { id: 'p', kind: 'mistral', name: 'P' },
+      pipelineName: 'editor', bindingRole: 'autocomplete', resolvedFrom: 'global',
+    };
+    const { deps } = makeDeps(rows, binding);
+    const stats = await computeEditorStats(deps, 7);
+    expect(stats.delivery).toEqual({ received: 1, returned: 1, discarded: 2, discardReasons: { version_changed: 1, cancelled: 1 } });
+    expect(stats.current.delivery).toEqual({ received: 1, returned: 1, discarded: 1, discardReasons: { version_changed: 1 } });
+  });
+
   it('aggregates counts, accept rate, latency percentiles, per-model and daily', async () => {
     const rows: Row[] = [
       ...Array.from({ length: 10 }, (_, i) => row({ duration_ms: 100 + i * 100 })),

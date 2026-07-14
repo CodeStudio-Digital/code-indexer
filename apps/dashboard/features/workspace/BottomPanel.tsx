@@ -19,7 +19,6 @@ import {
   ChevronUp,
   X,
   Puzzle,
-  Server,
 } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
@@ -39,14 +38,10 @@ const RunnersTab = lazy(() =>
   import('../project/tabs/RunnersTab.js').then((m) => ({ default: m.RunnersTab })),
 );
 
-// SSH é uma aba pesada (xterm + ssh2): LAZY, baixada só quando aberta.
-const SshPanel = lazy(() => import('../ssh/SshPanel.js').then((m) => ({ default: m.SshPanel })));
-
-type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'find' | 'runners' | 'ssh';
+type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'find' | 'runners';
 
 const TABS: Array<{ id: BuiltinTabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'terminal', label: 'Terminal', icon: TerminalSquare },
-  { id: 'ssh', label: 'SSH', icon: Server },
   { id: 'runners', label: 'Runners', icon: Play },
   { id: 'problems', label: 'Problems', icon: AlertCircle },
   { id: 'output', label: 'Output', icon: FileText },
@@ -93,8 +88,8 @@ export function BottomPanel({
   const problemCount = diagnostics.errorCount + diagnostics.warningCount;
 
   return (
-    <div className="h-full flex flex-col bg-card/40 border-t min-h-0">
-      <div className="h-8 shrink-0 border-b flex items-center px-1 gap-0.5">
+    <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
+      <div className="h-8 shrink-0 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] flex items-center px-1 gap-0.5">
         <div className="flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto">
           {TABS.map((def) => {
             const Icon = def.icon;
@@ -111,8 +106,8 @@ export function BottomPanel({
                 className={cn(
                   'flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors',
                   active
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+                    ? 'bg-[var(--workbench-active)] text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-[var(--workbench-hover)]',
                 )}
               >
                 <Icon className="h-3 w-3" />
@@ -146,8 +141,8 @@ export function BottomPanel({
                 className={cn(
                   'flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors',
                   active
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+                    ? 'bg-[var(--workbench-active)] text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-[var(--workbench-hover)]',
                 )}
               >
                 <Puzzle className="h-3 w-3" />
@@ -184,17 +179,6 @@ export function BottomPanel({
               switching tabs clears a stuck error. */}
           <ErrorBoundary label={tab} resetKey={tab}>
             {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
-            {tab === 'ssh' && !activePlugin && (
-              <Suspense
-                fallback={
-                  <div className="h-full grid place-items-center">
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  </div>
-                }
-              >
-                <SshPanel projectId={projectId} />
-              </Suspense>
-            )}
             {tab === 'runners' && !activePlugin && (
               <Suspense
                 fallback={

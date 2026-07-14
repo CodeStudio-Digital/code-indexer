@@ -4,7 +4,7 @@ import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import { appMigrationHazards } from '@mcp/app-studio/database/migration.js';
 import { appSeedHash, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
-import { listSqlMigrations } from '@mcp/app-studio/pipeline/gate-checks.js';
+import { listSqlMigrations } from '@mcp/app-studio/verification/workspace-checks.js';
 import { readDbStatus } from '@mcp/app-studio/status-files.js';
 import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';

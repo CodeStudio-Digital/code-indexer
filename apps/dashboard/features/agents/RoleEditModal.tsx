@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Crown, Server, Sparkles } from 'lucide-react';
+import { Crown, Server } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -8,6 +8,7 @@ import { FallbackPicker } from '../../components/FallbackPicker.js';
 import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
 import { useAdminMcpServers } from '../admin/hooks/useAdminMcpServers.js';
+import { AgentRuntimeFields, SkillAssignmentEditor, type SkillAssignmentOption } from '../../components/agent-config/index.js';
 
 export interface RoleConfig {
   role: string;
@@ -42,16 +43,7 @@ export interface RoleConfig {
   thinkingBudgetTokens?: number;
 }
 
-export interface SkillDef {
-  id: string;
-  name: string;
-  description: string;
-  context_mode: string;
-  enabled: boolean;
-  slash_command: string | null;
-  author?: string | null;
-  source?: 'user' | 'builtin' | 'imported';
-}
+export type SkillDef = SkillAssignmentOption & { enabled: boolean; source: 'user' | 'builtin' | 'imported' };
 
 interface RoleEditModalProps {
   role: RoleConfig;
@@ -82,7 +74,6 @@ export function RoleEditModal({
   onCancel,
 }: RoleEditModalProps) {
   const { t } = useTranslation(['agents', 'common']);
-  const models = getModelsForProvider(role.provider);
   const { servers: mcpServers } = useAdminMcpServers();
   const enabledMcpServers = mcpServers.filter((s) => s.enabled);
   const isMasterRole = role.role === 'master';
@@ -96,14 +87,6 @@ export function RoleEditModal({
   function handlePromptChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setSystemPrompt(e.target.value);
     onUpdate({ systemPromptOverride: e.target.value || undefined });
-  }
-
-  function toggleSkill(skillId: string) {
-    const current = role.skills ?? [];
-    const next = current.includes(skillId)
-      ? current.filter((s) => s !== skillId)
-      : [...current, skillId];
-    onUpdate({ skills: next.length > 0 ? next : undefined });
   }
 
   return (
@@ -140,44 +123,12 @@ export function RoleEditModal({
             />
           </div>
 
-          {/* Provider + Model */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">{t('agents:role.provider')}</label>
-              <select
-                value={role.provider}
-                onChange={(e) => onUpdate({ provider: e.target.value })}
-                className="w-full rounded-md border bg-background px-3 py-1.5 text-sm"
-              >
-                {providerOptions.map((p) => (
-                  <option key={p.id} value={p.id}>{p.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">{t('agents:role.model')}</label>
-              {models.length > 0 ? (
-                <select
-                  value={role.model}
-                  onChange={(e) => onUpdate({ model: e.target.value })}
-                  className="w-full rounded-md border bg-background px-3 py-1.5 text-sm font-mono"
-                >
-                  {models.map((m) => (
-                    <option key={m.mode ? `${m.id}::${m.mode}` : m.id} value={m.id}>
-                      {m.name}{m.mode ? ` (${m.mode})` : ''}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={role.model}
-                  onChange={(e) => onUpdate({ model: e.target.value })}
-                  className="w-full rounded-md border bg-background px-3 py-1.5 text-sm font-mono"
-                  placeholder="model-name"
-                />
-              )}
-            </div>
-          </div>
+          <AgentRuntimeFields
+            value={{ provider: role.provider, model: role.model, reasoningEffort: role.reasoningEffort }}
+            providerOptions={providerOptions}
+            getModelsForProvider={getModelsForProvider}
+            onChange={(patch) => onUpdate(patch)}
+          />
 
           {/* Fallback provider+model */}
           <FallbackPicker
@@ -227,35 +178,6 @@ export function RoleEditModal({
               className="rounded-md border bg-background px-3 py-1.5 text-sm font-mono w-32"
             />
           </div>
-
-          {/* Reasoning effort — orthogonal to thinking. Only shown when this
-              role's model exposes discrete effort levels (Codex/GPT-5 family). */}
-          {(() => {
-            const selected = models.find((m) => m.id === role.model);
-            const levels = selected?.supported_reasoning_levels ?? [];
-            if (levels.length === 0) return null;
-            return (
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
-                  {t('agents:role.effort', { defaultValue: 'Reasoning effort' })}
-                </label>
-                <select
-                  value={role.reasoningEffort ?? ''}
-                  onChange={(e) =>
-                    onUpdate({ reasoningEffort: e.target.value === '' ? undefined : e.target.value })
-                  }
-                  className="rounded-md border bg-background px-3 py-1.5 text-sm w-40"
-                >
-                  <option value="">{t('agents:role.effortAuto', { defaultValue: 'auto (model default)' })}</option>
-                  {levels.map((lv) => (
-                    <option key={lv} value={lv}>
-                      {lv}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            );
-          })()}
 
           {/* Extended thinking — Phase E */}
           <div
@@ -316,60 +238,7 @@ export function RoleEditModal({
             )}
           </div>
 
-          {/* Skills — grouped by author/namespace */}
-          {availableSkills.length > 0 && (() => {
-            const groups = new Map<string, SkillDef[]>();
-            for (const s of availableSkills) {
-              const key =
-                s.source === 'imported' && s.author
-                  ? s.author
-                  : s.source === 'builtin'
-                    ? 'builtin'
-                    : 'user';
-              const arr = groups.get(key) ?? [];
-              arr.push(s);
-              groups.set(key, arr);
-            }
-            const order = ['user', 'builtin', ...Array.from(groups.keys()).filter((k) => k !== 'user' && k !== 'builtin').sort()];
-            return (
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                  <Sparkles className="h-3 w-3" /> {t('agents:role.skills')}
-                </label>
-                {order.filter((k) => groups.has(k)).map((key) => (
-                  <div key={key} className="space-y-1">
-                    <div className="flex items-center gap-1.5">
-                      <Badge variant="outline" className="text-[10px] h-4">
-                        {key}
-                      </Badge>
-                      <span className="text-[10px] text-muted-foreground">
-                        {(groups.get(key) ?? []).length}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(groups.get(key) ?? []).map((skill) => {
-                        const active = role.skills?.includes(skill.id) ?? false;
-                        return (
-                          <button
-                            key={skill.id}
-                            onClick={() => toggleSkill(skill.id)}
-                            className={`px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
-                              active
-                                ? 'bg-primary/10 text-primary border-primary/30'
-                                : 'bg-muted text-muted-foreground border-border hover:border-foreground/30'
-                            }`}
-                            title={skill.description}
-                          >
-                            {skill.slash_command ? `/${skill.slash_command}` : skill.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+          <SkillAssignmentEditor skills={availableSkills} selected={role.skills ?? []} onChange={(skills) => onUpdate({ skills: skills.length > 0 ? skills : undefined })} />
 
           {/* Available MCP packs — read-only. Subordinates auto-receive every
               enabled server as an opt-in custom tier (named by server id) and

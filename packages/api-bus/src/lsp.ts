@@ -39,6 +39,11 @@ export interface CodeActionDTO {
   kind: string;
   isPreferred?: boolean;
   edit?: WorkspaceEditDTO;
+  command?: { command: string; arguments?: unknown[] };
+  /** Exact server that produced the opaque action; resolve/execute are pinned to it. */
+  originServerId?: string;
+  raw?: unknown;
+  needsResolve?: boolean;
 }
 
 /**
@@ -101,6 +106,22 @@ export interface CompletionItem {
   commitCharacters?: string[];
   /** Server-chosen replace range (1-based) — authoritative for `::`/`->`. */
   textEdit?: { range: { start: Position; end: Position }; newText: string };
+  /** Insert/replace fidelity for servers that distinguish typed span vs replacement span. */
+  insertReplaceEdit?: {
+    insert: { start: Position; end: Position };
+    replace: { start: Position; end: Position };
+    newText: string;
+  };
+  /** Deprecated marker/tags from the producing server. */
+  deprecated?: boolean;
+  tags?: number[];
+  /** Shown in the completion details and useful for deterministic diagnostics. */
+  origin?: 'ts' | 'lsp' | 'index';
+}
+
+export interface LspCompletionList {
+  items: CompletionItem[];
+  isIncomplete: boolean;
 }
 
 export interface HoverInfo {
@@ -232,7 +253,7 @@ export interface LspApi {
       context?: { triggerKind: number; triggerCharacter?: string };
     },
     ctx: ApiContext,
-  ): Promise<CompletionItem[]>;
+  ): Promise<LspCompletionList>;
 
   /**
    * Lazy `completionItem/resolve` — servers (Intelephense/Pyright) only
@@ -372,6 +393,16 @@ export interface LspApi {
     input: { projectId: number; file: string; range: { start: Position; end: Position } },
     ctx: ApiContext,
   ): Promise<CodeActionDTO[]>;
+
+  resolveCodeAction(
+    input: { projectId: number; file: string; action: CodeActionDTO },
+    ctx: ApiContext,
+  ): Promise<CodeActionDTO | null>;
+
+  executeCodeAction(
+    input: { projectId: number; action: CodeActionDTO },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
 
   /**
    * Document (or range) formatting via the language server owning the file's

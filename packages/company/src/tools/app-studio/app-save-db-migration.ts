@@ -2,8 +2,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
-import { currentStage, parsePipelineState } from '@mcp/app-studio/pipeline/stages.js';
-import { listSqlMigrations } from '@mcp/app-studio/pipeline/gate-checks.js';
+import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
+import { listSqlMigrations } from '@mcp/app-studio/verification/workspace-checks.js';
 import { nextMigrationFilename, normalizeMigrationSlug, validateAppMigrationSql } from '@mcp/app-studio/database/migration.js';
 import { replaceAppSeedFile, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
 import { readDbStatus } from '@mcp/app-studio/status-files.js';
@@ -34,7 +34,7 @@ export function appSaveDbMigration(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_save_db_migration',
     description:
-      'Persist one NEW additive D1/SQLite schema migration during the current database stage. Destructive rebuilds are refused. Never edits an applied migration. Use app_save_db_seed when only example data changed.',
+      'Persist one NEW additive D1/SQLite schema migration for an active Blueprint or Build card. Destructive rebuilds are refused. Never edits an applied migration. Use app_save_db_seed when only example data changed.',
     parameters: PARAMETERS,
     source: 'native',
     riskLevel: 'write',
@@ -53,14 +53,12 @@ export function appSaveDbMigration(binding: AppToolBinding): CoderTool {
         const store = getAppStudioStore();
         if (!store) return err('app_save_db_migration: AppStudioStore not wired. Restart the API worker and retry once.');
         const session = binding.resolveAppSession(store);
-        if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}. Open the database specialist from App Studio.`);
-        const state = parsePipelineState(session.pipeline_json);
-        const current = state ? currentStage(state) : null;
-        if (current?.id !== 'database') {
-          return err(`Database migrations are locked while the current stage is '${current?.id ?? 'none'}'. Refine the spec/version first, then reopen or reach the database stage.`);
-        }
-        if (current.status === 'review') {
-          return err("The database stage is awaiting user approval. Ask the user to reopen it before creating another migration.");
+        if (!session) return err(`No AppStudioSession bound to ${binding.describeBinding()}. Use the persistent App Studio coordinator.`);
+        const state = parseAppWorkflowState(session.pipeline_json);
+        const blueprint = state?.phases.find((phase) => phase.id === 'blueprint');
+        const build = state?.phases.find((phase) => phase.id === 'build');
+        if (!state || (blueprint?.status !== 'active' && blueprint?.status !== 'attention' && build?.status !== 'active')) {
+          return err('Database migrations are available only inside an active Blueprint or Build card.');
         }
 
         const resolved = resolveHostPath('.', ctx);
@@ -97,7 +95,7 @@ export function appSaveDbMigration(binding: AppToolBinding): CoderTool {
           created,
           seed_replaced: seedResult?.changed ?? false,
           seed_backup: seedResult?.backup_path ?? null,
-          next: 'Call app_provision_db. Then call db_schema and a small db_query to verify the real local database before submitting the database stage.',
+          next: 'Call app_provision_db. Then use db_schema and a small db_query to verify the real local database and record the proof on the related card.',
         });
       } catch (e) {
         return err(`app_save_db_migration failed: ${(e as Error).message}`);

@@ -61,6 +61,11 @@ export interface UseDbClient {
   reorderTab: (id: string, beforeId: string | null) => void;
 }
 
+export interface UseDbClientOptions {
+  /** Mirrors a DB work item into the host IDE's editor tab strip. */
+  onOpenWorkTab?: (tab: WorkTab) => void;
+}
+
 function connNode(conn: DbConnection): DbTreeNode {
   return {
     id: `conn:${conn.id}`,
@@ -104,7 +109,7 @@ function leaf(parent: DbTreeNode, kind: DbTreeNode['kind'], name: string, label:
   };
 }
 
-export function useDbClient(projectId: number): UseDbClient {
+export function useDbClient(projectId: number, options: UseDbClientOptions = {}): UseDbClient {
   const [connections, setConnections] = useState<DbConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +130,12 @@ export function useDbClient(projectId: number): UseDbClient {
   connectionsRef.current = connections;
   /** Cache TableInfo so columns + Indexes + FKs folders don't each refetch. */
   const tableInfoRef = useRef<Map<string, DbTableInfo>>(new Map());
+  const onOpenWorkTabRef = useRef(options.onOpenWorkTab);
+  onOpenWorkTabRef.current = options.onOpenWorkTab;
+
+  const publishWorkTab = useCallback((tab: WorkTab) => {
+    onOpenWorkTabRef.current?.(tab);
+  }, []);
 
   const refresh = useCallback(async (changedConnectionId?: number) => {
     setLoading(true);
@@ -530,7 +541,8 @@ export function useDbClient(projectId: number): UseDbClient {
     setWorkTabs((tabs) => [...tabs, tab]);
     setActiveTabId(id);
     setActiveConnectionId(connectionId);
-  }, [connKeyFor]);
+    publishWorkTab(tab);
+  }, [connKeyFor, publishWorkTab]);
 
   const openTableData = useCallback(
     async (node: DbTreeNode) => {
@@ -544,26 +556,25 @@ export function useDbClient(projectId: number): UseDbClient {
       const prefix = ek === 'document' ? 'docs' : ek === 'keyvalue' ? 'kv' : 'data';
       const kind: WorkTab['kind'] = ek === 'document' ? 'documents' : ek === 'keyvalue' ? 'keyvalue' : 'data';
       const id = `${prefix}:${connKey}:${node.database ?? ''}:${node.schema ?? ''}:${node.table ?? ''}`;
+      const tab: WorkTab = {
+        id,
+        kind,
+        title: node.table ?? node.label,
+        connectionId: node.connectionId,
+        connKey,
+        database: node.database,
+        schema: node.schema,
+        table: node.table,
+      };
       setWorkTabs((tabs) => {
         if (tabs.some((t) => t.id === id)) return tabs;
-        return [
-          ...tabs,
-          {
-            id,
-            kind,
-            title: node.table ?? node.label,
-            connectionId: node.connectionId,
-            connKey,
-            database: node.database,
-            schema: node.schema,
-            table: node.table,
-          },
-        ];
+        return [...tabs, tab];
       });
       setActiveTabId(id);
       setActiveConnectionId(node.connectionId);
+      publishWorkTab(tab);
     },
-    [connKeyFor, ensureDbConnected],
+    [connKeyFor, ensureDbConnected, publishWorkTab],
   );
 
   const openStructureTab = useCallback(
@@ -572,17 +583,16 @@ export function useDbClient(projectId: number): UseDbClient {
       const connKey = connKeyFor(node.connectionId, node.database);
       if (!(await ensureDbConnected(connKey))) return;
       const id = `structure:${connKey}:${node.schema ?? ''}:${node.table ?? ''}`;
+      const tab: WorkTab = { id, kind: 'structure', title: node.table ?? node.label, connectionId: node.connectionId, connKey, schema: node.schema, table: node.table };
       setWorkTabs((tabs) => {
         if (tabs.some((t) => t.id === id)) return tabs;
-        return [
-          ...tabs,
-          { id, kind: 'structure', title: node.table ?? node.label, connectionId: node.connectionId, connKey, schema: node.schema, table: node.table },
-        ];
+        return [...tabs, tab];
       });
       setActiveTabId(id);
       setActiveConnectionId(node.connectionId);
+      publishWorkTab(tab);
     },
-    [connKeyFor, ensureDbConnected],
+    [connKeyFor, ensureDbConnected, publishWorkTab],
   );
 
   const openNewTable = useCallback(
@@ -590,14 +600,13 @@ export function useDbClient(projectId: number): UseDbClient {
       const connKey = connKeyFor(connectionId, database);
       if (!(await ensureDbConnected(connKey))) return;
       const id = `structure:new:${connKey}:${schema ?? ''}:${Date.now()}`;
-      setWorkTabs((tabs) => [
-        ...tabs,
-        { id, kind: 'structure', title: '', connectionId, connKey, schema, table: '' },
-      ]);
+      const tab: WorkTab = { id, kind: 'structure', title: '', connectionId, connKey, schema, table: '' };
+      setWorkTabs((tabs) => [...tabs, tab]);
       setActiveTabId(id);
       setActiveConnectionId(connectionId);
+      publishWorkTab(tab);
     },
-    [connKeyFor, ensureDbConnected],
+    [connKeyFor, ensureDbConnected, publishWorkTab],
   );
 
   const openErDiagram = useCallback(
@@ -605,14 +614,16 @@ export function useDbClient(projectId: number): UseDbClient {
       const connKey = connKeyFor(connectionId, database);
       if (!(await ensureDbConnected(connKey))) return;
       const id = `er:${connKey}:${schema ?? ''}`;
+      const tab: WorkTab = { id, kind: 'er', title: `ER · ${schema ?? ''}`, connectionId, connKey, schema };
       setWorkTabs((tabs) => {
         if (tabs.some((t) => t.id === id)) return tabs;
-        return [...tabs, { id, kind: 'er', title: `ER · ${schema ?? ''}`, connectionId, connKey, schema }];
+        return [...tabs, tab];
       });
       setActiveTabId(id);
       setActiveConnectionId(connectionId);
+      publishWorkTab(tab);
     },
-    [connKeyFor, ensureDbConnected],
+    [connKeyFor, ensureDbConnected, publishWorkTab],
   );
 
   const requestImportCsv = useCallback((node: DbTreeNode) => {

@@ -2,53 +2,21 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Background, Controls, ReactFlow, type Edge, type Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Bot, Check, CircleDot, ListChecks, Loader2, Palette, RotateCcw, Workflow } from 'lucide-react';
+import { Check, CircleDot, ListChecks, Palette, Workflow } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
-import { prompt } from '../../../components/ui/prompt-dialog.js';
 import { cn } from '../../../lib/utils.js';
-import { patchAppStage, patchBuildGroup, type AppStudioSessionDetail } from '../app-studio-api.js';
-import { ApproveBar } from '../guide/ApproveBar.js';
+import type { AppStudioSessionDetail } from '../app-studio-api.js';
 
 type ExperienceView = 'direction' | 'flows' | 'wireframes' | 'plan';
 
-export function ExperiencePanel({
-  detail,
-  onChanged,
-  onOpenUxAgent,
-  onOpenWireframeAgent,
-}: {
+export function ExperiencePanel({ detail }: {
   detail: AppStudioSessionDetail;
   onChanged: () => void;
-  onOpenUxAgent?: (prompt: string) => void;
-  onOpenWireframeAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
   const [view, setView] = useState<ExperienceView>('direction');
   const [selectedFlow, setSelectedFlow] = useState(detail.wireframe?.plan.flows[0]?.id ?? null);
   const [selectedScreen, setSelectedScreen] = useState(detail.wireframe?.plan.screens[0]?.screen_id ?? null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const uxStage = detail.pipeline?.stages.find((stage) => stage.id === 'ux');
-  const wireframeStage = detail.pipeline?.stages.find((stage) => stage.id === 'wireframe');
-
-  async function stageAction(stage: 'ux' | 'wireframe', action: 'approve' | 'reopen', feedback?: string) {
-    setBusy(true); setError(null);
-    try { await patchAppStage(detail.session.id, stage, action, feedback); onChanged(); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
-  }
-
-  async function groupAction(groupId: string, action: 'approve' | 'reopen') {
-    let feedback: string | undefined;
-    if (action === 'reopen') {
-      feedback = await prompt({ title: t('experience.changeGroup'), description: t('experience.changeGroupHint'), placeholder: t('pipeline.feedbackPlaceholder'), confirmLabel: t('pipeline.reopenConfirm') }) ?? undefined;
-      if (!feedback) return;
-    }
-    setBusy(true); setError(null);
-    try { await patchBuildGroup(detail.session.id, groupId, action, feedback); onChanged(); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
-  }
 
   const flow = detail.wireframe?.plan.flows.find((item) => item.id === selectedFlow) ?? detail.wireframe?.plan.flows[0];
   const flowGraph = useMemo(() => {
@@ -62,6 +30,11 @@ export function ExperiencePanel({
     return { nodes, edges };
   }, [flow]);
   const wireframe = detail.wireframe?.plan.screens.find((item) => item.screen_id === selectedScreen) ?? detail.wireframe?.plan.screens[0];
+  const buildSlices = detail.workflow.work_items.filter((item) => item.phase === 'build').reduce<Record<string, typeof detail.workflow.work_items>>((groups, item) => {
+    const key = item.slice_id ?? t('workflow.unsliced');
+    (groups[key] ??= []).push(item);
+    return groups;
+  }, {});
 
   const views: Array<{ id: ExperienceView; label: string; icon: typeof Palette }> = [
     { id: 'direction', label: t('experience.direction'), icon: Palette },
@@ -78,11 +51,7 @@ export function ExperiencePanel({
             <Icon className="mr-1 h-3.5 w-3.5" />{label}
           </Button>
         ))}
-        <div className="min-w-2 flex-1" />
-        {view === 'direction' && <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => onOpenUxAgent?.(t('stageMessage.ux'))}><Bot className="mr-1 h-3.5 w-3.5" />{t('experience.openUxAgent')}</Button>}
-        {(view === 'flows' || view === 'wireframes' || view === 'plan') && <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => onOpenWireframeAgent?.(t('stageMessage.wireframe'))}><Bot className="mr-1 h-3.5 w-3.5" />{t('experience.openWireframeAgent')}</Button>}
       </header>
-      {error && <div className="border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
       <div className="min-h-0 flex-1 overflow-hidden">
         {view === 'direction' && (
           <div className="h-full overflow-auto p-4">
@@ -104,7 +73,6 @@ export function ExperiencePanel({
                 <div><h3 className="text-xs font-semibold uppercase text-muted-foreground">{t('experience.principles')}</h3><ul className="mt-1 space-y-1 text-sm">{detail.ux.brief.principles.map((item) => <li key={item}>• {item}</li>)}</ul></div>
                 <div><h3 className="text-xs font-semibold uppercase text-muted-foreground">{t('experience.accessibility')}</h3><p className="mt-1 text-sm">{detail.ux.brief.accessibility.standard} · {detail.ux.brief.accessibility.contrast}</p></div>
               </section>
-              {uxStage?.status === 'review' && <div className="mt-4 border-t pt-4"><ApproveBar busy={busy} onApprove={() => void stageAction('ux', 'approve')} onReopen={(feedback) => void stageAction('ux', 'reopen', feedback)} /></div>}
             </>}
           </div>
         )}
@@ -122,12 +90,7 @@ export function ExperiencePanel({
           </div>
         )}
         {view === 'plan' && (
-          <div className="h-full overflow-auto p-4">{!detail.wireframe ? <Empty text={t('experience.noPlan')} /> : <div className="space-y-3">{[...detail.wireframe.plan.build_groups].sort((a, b) => a.sequence - b.sequence).map((group) => {
-            const state = detail.build_groups.find((item) => item.group_id === group.id);
-            const tasks = detail.wireframe!.plan.tasks.filter((task) => task.group_id === group.id).sort((a, b) => a.sequence - b.sequence);
-            const done = tasks.filter((task) => detail.build_tasks.find((item) => item.task_id === task.id)?.status === 'done').length;
-            return <section key={group.id} className="rounded-md border"><header className="flex items-center gap-3 border-b px-3 py-2"><span className="grid h-6 w-6 place-items-center rounded bg-muted text-xs font-semibold">{group.sequence}</span><div className="min-w-0 flex-1"><h3 className="text-sm font-semibold">{group.name}</h3><p className="text-xs text-muted-foreground">{group.goal}</p></div><span className="text-xs text-muted-foreground">{done}/{tasks.length} · {group.complexity}</span><span className={cn('rounded px-2 py-0.5 text-[11px]', state?.status === 'approved' ? 'bg-green-500/15 text-green-600' : state?.status === 'review' ? 'bg-amber-500/15 text-amber-600' : 'bg-muted text-muted-foreground')}>{state?.status ?? 'pending'}</span></header><div className="divide-y">{tasks.map((task) => { const evidence = detail.build_tasks.find((item) => item.task_id === task.id); return <div key={task.id} className="flex items-center gap-2 px-3 py-2 text-xs">{evidence?.status === 'done' ? <Check className="h-3.5 w-3.5 text-green-600" /> : <CircleDot className="h-3.5 w-3.5 text-muted-foreground" />}<span className="flex-1">{task.title}</span><span className="text-muted-foreground">{task.kind}</span></div>; })}</div>{state?.status === 'review' && <footer className="flex justify-end gap-2 border-t p-2"><Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={() => void groupAction(group.id, 'reopen')}><RotateCcw className="mr-1 h-3 w-3" />{t('pipeline.requestChanges')}</Button><Button size="sm" className="h-7 text-xs" disabled={busy} onClick={() => void groupAction(group.id, 'approve')}>{busy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />}{t('pipeline.approve')}</Button></footer>}</section>;
-          })}{wireframeStage?.status === 'review' && <div className="border-t pt-4"><ApproveBar busy={busy} onApprove={() => void stageAction('wireframe', 'approve')} onReopen={(feedback) => void stageAction('wireframe', 'reopen', feedback)} /></div>}</div>}</div>
+          <div className="h-full overflow-auto p-4">{Object.keys(buildSlices).length === 0 ? <Empty text={t('experience.noPlan')} /> : <div className="space-y-3">{Object.entries(buildSlices).map(([slice, tasks]) => <section key={slice} className="rounded-md border"><header className="border-b px-3 py-2"><h3 className="text-sm font-semibold">{slice}</h3><p className="text-xs text-muted-foreground">{tasks.filter((item) => item.status === 'done').length}/{tasks.length}</p></header><div className="divide-y">{tasks.map((task) => <div key={task.id} className="flex items-center gap-2 px-3 py-2 text-xs">{task.status === 'done' ? <Check className="h-3.5 w-3.5 text-green-600" /> : <CircleDot className="h-3.5 w-3.5 text-muted-foreground" />}<span className="flex-1">{task.title}</span><span className="text-muted-foreground">{task.status}</span></div>)}</div></section>)}</div>}</div>
         )}
       </div>
     </div>

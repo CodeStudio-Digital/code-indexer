@@ -451,6 +451,11 @@ export type { RunnerEvents };
 export class CoderRunner extends EventEmitter {
   readonly messages: AgentMessage[];
   private opts: RunnerOptions;
+
+  /** Effective sticky reasoning effort inherited by delegated subagents. */
+  getReasoningEffort(): string | undefined {
+    return this.opts.reasoningEffort;
+  }
   private readonly maxTurns: number;
   private aborted = false;
   /**
@@ -489,7 +494,15 @@ export class CoderRunner extends EventEmitter {
   private readonly inFlightTools: Map<string, AbortController> = new Map();
   private readonly injectedToolErrors: Map<string, string> = new Map();
   private static readonly DEFAULT_INPUT_KEY = '__default__';
-  private pendingUserMessages: Array<{ text: string; selectedSkillIds?: string[] }> = [];
+  private pendingUserMessages: Array<{
+    text: string;
+    selectedSkillIds?: string[];
+    roundMessageId?: number;
+  }> = [];
+  /** Persisted user-message id owning edits in the current conversational round. */
+  public roundMessageId: number | null = null;
+  /** Coalesced lifecycle milestone awaiting a safe compaction boundary. */
+  private pendingMilestoneCompaction: string | null = null;
   /** Resolvers woken when a user message is queued — lets the background-job
    *  parking gate wake the instant the user speaks (not just on job settle). */
   private pendingMessageWaiters: Array<() => void> = [];
@@ -1208,6 +1221,12 @@ export class CoderRunner extends EventEmitter {
 
   constructor(opts: RunnerOptions) {
     super();
+    // `context_window` predates the runner-wide compaction plumbing. Keep one
+    // resolved value internally so direct/subagent callers that still pass the
+    // legacy spelling receive the same thresholds as runCoder.
+    if (opts.contextWindow == null && opts.context_window != null) {
+      opts.contextWindow = opts.context_window;
+    }
     this.opts = opts;
     this.sessionId = opts.sessionId;
     this.isSubagent = opts.isSubagent ?? false;
@@ -1261,9 +1280,14 @@ export class CoderRunner extends EventEmitter {
 
   /** Install the DB-backed compaction sink after the host writer is ready. */
   setCompactionCheckpointHandler(
-    handler: ((checkpoint: CompactionCheckpoint) => Promise<void>) | undefined,
+    handler: RunnerOptions['onCompactionCheckpoint'],
   ): void {
     this.opts.onCompactionCheckpoint = handler;
+  }
+
+  /** Queue a semantic milestone; repeated signals coalesce until consumed. */
+  requestMilestoneCompaction(trigger: string): void {
+    if (!this.pendingMilestoneCompaction) this.pendingMilestoneCompaction = trigger;
   }
 
   /**
@@ -1747,8 +1771,15 @@ export class CoderRunner extends EventEmitter {
    * assistant tool_use block and its tool_result — which would produce an
    * invalid message sequence for the LLM API.
    */
-  pushUserMessage(text: string, extras?: { selectedSkillIds?: string[] }): void {
-    this.pendingUserMessages.push({ text, selectedSkillIds: extras?.selectedSkillIds });
+  pushUserMessage(
+    text: string,
+    extras?: { selectedSkillIds?: string[]; roundMessageId?: number },
+  ): void {
+    this.pendingUserMessages.push({
+      text,
+      selectedSkillIds: extras?.selectedSkillIds,
+      roundMessageId: extras?.roundMessageId,
+    });
     this.wakePendingMessageWaiters();
   }
 
@@ -1791,12 +1822,20 @@ export class CoderRunner extends EventEmitter {
 
 
   /** Append a user message with arbitrary content blocks (text + image + document). */
-  pushUserContent(blocks: ContentBlock[], extras?: { selectedSkillIds?: string[] }): void {
+  pushUserContent(
+    blocks: ContentBlock[],
+    extras?: { selectedSkillIds?: string[]; roundMessageId?: number },
+  ): void {
     const msg: AgentMessage = { role: 'user', content: blocks };
     if (extras?.selectedSkillIds && extras.selectedSkillIds.length > 0) {
       msg.selectedSkillIds = extras.selectedSkillIds;
     }
+    if (extras?.roundMessageId != null) this.roundMessageId = extras.roundMessageId;
     this.messages.push(msg);
+  }
+
+  setRoundMessageId(roundMessageId: number | null): void {
+    this.roundMessageId = roundMessageId;
   }
 
   /**
@@ -2120,6 +2159,8 @@ export class CoderRunner extends EventEmitter {
         // `flushPendingTurn` in `index.ts` (which reads
         // `runner.lastTurnTelemetryId`) keeps working unchanged.
         persistTurnTelemetry: (input) => this.persistTurnTelemetryWrapper(input),
+        peekMilestoneCompaction: () => this.pendingMilestoneCompaction,
+        clearMilestoneCompaction: () => { this.pendingMilestoneCompaction = null; },
       },
     });
   }
@@ -2140,6 +2181,7 @@ export class CoderRunner extends EventEmitter {
       if (pending.selectedSkillIds && pending.selectedSkillIds.length > 0) {
         msg.selectedSkillIds = pending.selectedSkillIds;
       }
+      if (pending.roundMessageId != null) this.roundMessageId = pending.roundMessageId;
       this.messages.push(msg);
     }
   }
@@ -2503,7 +2545,7 @@ export class CoderRunner extends EventEmitter {
     const userCap = this.shouldPreserveToolOutput(args.toolName)
       ? Math.max(this.effectivePushTimeCap, this.opts.preservedToolOutputCap ?? PRESERVED_TOOL_OUTPUT_CAP)
       : this.effectivePushTimeCap;
-    const cap = resolveFinalizeCap(userCap, this.opts.provider.model);
+    const cap = resolveFinalizeCap(userCap, this.opts.provider.model, this.opts.contextWindow);
     return finalizeToolOutput({
       toolName: args.toolName,
       rawContent: args.rawContent,

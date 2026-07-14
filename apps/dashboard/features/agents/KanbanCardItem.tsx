@@ -4,6 +4,7 @@ import { Lock, CheckSquare, Users, Sparkles, Zap, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import type { KanbanCardFull } from '@mcp/company/types.js';
 import { isAutoDispatched } from './kanban-card-flags.js';
+import { WorkBoardCard, WorkBoardCardContent } from '../../components/work-board/index.js';
 
 const TAG_COLORS: Record<string, string> = {
   bug: 'bg-red-500/20 text-red-400 border-red-500/30',
@@ -62,42 +63,16 @@ export const KanbanCardItem = React.memo(function KanbanCardItem({
     !!suggestedRole && !!onQuickDispatch && activeAgents.length === 0 && !isBlocked;
 
   return (
-    <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData('text/plain', String(card.id));
-        e.dataTransfer.effectAllowed = 'move';
-      }}
-      onClick={onClick}
-      className={`
-        group relative rounded-lg border bg-card p-3 cursor-pointer transition-all
-        hover:border-primary/40 hover:shadow-md
-        ${isBlocked ? 'border-red-500/40 opacity-80' : 'border-border'}
-      `}
-    >
-      {/* Priority badge (top-right, only when computed). Dot rating so it's
-          glanceable; tooltip shows the raw score for the curious. */}
-      {priorityScore !== undefined && (
-        <div
-          className="absolute top-2 right-2 flex items-center gap-0.5 text-[10px] text-amber-400"
-          title={t('kanban.card.priorityScore', { score: priorityScore.toFixed(3) })}
-        >
-          <Sparkles className="h-3 w-3" />
-          <span>{'•'.repeat(scoreToDots(priorityScore))}</span>
-        </div>
-      )}
-
-      {/* Title */}
-      <h4 className="text-sm font-medium leading-tight mb-1.5 pr-12 line-clamp-2">
-        {card.title}
-      </h4>
-
-      {/* Description preview */}
-      {card.description && (
-        <p className="text-xs text-muted-foreground line-clamp-2 mb-2">
-          {card.description}
-        </p>
-      )}
+    <WorkBoardCard dragId={card.id} onClick={onClick} blocked={isBlocked}>
+      <WorkBoardCardContent
+        title={card.title}
+        description={card.description || undefined}
+        trailing={priorityScore !== undefined ? (
+          <div className="flex shrink-0 items-center gap-0.5 text-[10px] text-amber-400" title={t('kanban.card.priorityScore', { score: priorityScore.toFixed(3) })}>
+            <Sparkles className="h-3 w-3" /><span>{'•'.repeat(scoreToDots(priorityScore))}</span>
+          </div>
+        ) : undefined}
+      />
 
       {/* Blocked-by chips — clickable, open the blocker's modal (C3). */}
       {isBlocked && (
@@ -186,6 +161,6 @@ export const KanbanCardItem = React.memo(function KanbanCardItem({
           </span>
         )}
       </div>
-    </div>
+    </WorkBoardCard>
   );
 });

@@ -15,6 +15,7 @@ import { Loader2, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { useConfirm, useNotify } from '../../components/ui/dialog-provider.js';
+import { WorkbenchPanelHeader } from '../../components/workbench/index.js';
 import {
   deleteCollection,
   listSources,
@@ -61,8 +62,8 @@ export function CollectionDetail({ collection, onChanged }: Props) {
 
   if (!collection) {
     return (
-      <div className="rounded-md border border-dashed bg-muted/20 p-10 text-center text-sm text-muted-foreground">
-        {t('detail.empty')}
+      <div className="flex h-full items-center justify-center bg-[var(--workbench-canvas)] p-8 text-center">
+        <div className="max-w-sm text-xs text-muted-foreground">{t('detail.empty')}</div>
       </div>
     );
   }
@@ -103,21 +104,14 @@ export function CollectionDetail({ collection, onChanged }: Props) {
   }
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">{collection.name}</h2>
-          {collection.description && (
-            <p className="text-sm text-muted-foreground mt-1">{collection.description}</p>
-          )}
-          <div className="text-xs text-muted-foreground mt-1">
-            {t('detail.summary', { sources: collection.source_count, chunks: collection.chunk_count })}
-          </div>
-          {collection.status === 'error' && collection.status_message && (
-            <div className="mt-2 text-xs text-destructive">{collection.status_message}</div>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <WorkbenchPanelHeader
+        title={collection.name}
+        actions={(
+          <div className="flex items-center gap-1">
+            <span className="mr-1 hidden font-mono text-[10px] text-muted-foreground lg:inline">
+              {t('detail.summary', { sources: collection.source_count, chunks: collection.chunk_count })}
+            </span>
           <AddSourceDialog
             collection={collection}
             onAdded={async () => {
@@ -125,20 +119,30 @@ export function CollectionDetail({ collection, onChanged }: Props) {
               await onChanged();
             }}
           />
-          <Button size="sm" variant="ghost" onClick={onDeleteCollection} disabled={busy}>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={onDeleteCollection} disabled={busy}>
             {busy ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1 text-red-500" />}
             {t('detail.delete')}
           </Button>
-        </div>
-      </header>
+          </div>
+        )}
+      />
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="sources">{t('detail.tabsSources')}</TabsTrigger>
-          <TabsTrigger value="search">{t('detail.tabsSearch')}</TabsTrigger>
+      {(collection.description || (collection.status === 'error' && collection.status_message)) && (
+        <div className="shrink-0 border-b border-[var(--workbench-border)] bg-[var(--workbench-surface)] px-3 py-1.5 text-[11px] text-muted-foreground">
+          {collection.description}
+          {collection.status === 'error' && collection.status_message && (
+            <span className="ml-2 text-destructive">{collection.status_message}</span>
+          )}
+        </div>
+      )}
+
+      <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
+        <TabsList className="h-8 w-full shrink-0 justify-start gap-0 rounded-none border-b border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-0">
+          <TabsTrigger value="sources" className="h-8 rounded-none border-b-2 border-transparent px-3 text-[11px] data-[state=active]:border-violet-400 data-[state=active]:bg-transparent data-[state=active]:shadow-none">{t('detail.tabsSources')}</TabsTrigger>
+          <TabsTrigger value="search" className="h-8 rounded-none border-b-2 border-transparent px-3 text-[11px] data-[state=active]:border-violet-400 data-[state=active]:bg-transparent data-[state=active]:shadow-none">{t('detail.tabsSearch')}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="sources" className="space-y-3 mt-3">
+        <TabsContent value="sources" className="m-0 min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
           <ProjectLinks collectionId={collection.id} />
           <SourceList
             collection={collection}
@@ -150,7 +154,7 @@ export function CollectionDetail({ collection, onChanged }: Props) {
           />
         </TabsContent>
 
-        <TabsContent value="search" className="space-y-3 mt-3">
+        <TabsContent value="search" className="m-0 min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
           <SearchTestPanel collection={collection} />
         </TabsContent>
       </Tabs>

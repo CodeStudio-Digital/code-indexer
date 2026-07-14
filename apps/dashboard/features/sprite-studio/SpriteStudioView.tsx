@@ -1,8 +1,7 @@
 /**
- * Sprite Studio — top-level route view (`/sprites`). A standalone surface
- * like the DS Studio (NOT a ProjectView tab): it carries its own project
- * selector in the header, a CTA to initialize `.sprite-studio/` on first
- * use, and then the studio shell (toolbar + library | center | inspector).
+ * Sprite Studio — top-level route view (`/sprites`) hosted by the shared
+ * workbench chrome. It carries its own project selector, a CTA to initialize
+ * `.sprite-studio/` on first use, then the studio tool windows.
  * Deep-link: `/sprites?project=<id>`; the last project is remembered.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -10,6 +9,8 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, FolderOpen, ImagePlay, Loader2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { StatusBarShell } from '../../components/chrome/index.js';
+import { WorkbenchShell } from '../../components/workbench/index.js';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu.js';
@@ -315,16 +316,13 @@ export function SpriteStudioView() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-card">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 text-xs">
-        <ImagePlay className="h-4 w-4 shrink-0" />
-        <span className="font-medium">{t('title')}</span>
-        <span className="h-4 w-px bg-border" />
-        <span className="text-muted-foreground">{t('header.projectLabel')}</span>
+    <WorkbenchShell className="bg-[var(--workbench-canvas)]">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2 text-xs">
+        <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="text-[11px] text-muted-foreground">{t('header.projectLabel')}</span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="outline" className="h-7 max-w-[240px] gap-1">
-              <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+            <Button size="sm" variant="ghost" className="h-6 max-w-[260px] gap-1 bg-[var(--workbench-surface)] px-2 hover:bg-[var(--workbench-hover)]">
               <span className="truncate">{projectName ?? t('header.selectProject')}</span>
               <ChevronDown className="h-3 w-3 shrink-0" />
             </Button>
@@ -341,7 +339,7 @@ export function SpriteStudioView() {
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-muted-foreground">{t('model.label')}</span>
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">{t('model.label')}</span>
           <ModelSelector />
         </div>
       </div>
@@ -349,11 +347,11 @@ export function SpriteStudioView() {
       {projectId == null ? (
         <CenterCard icon={FolderOpen} title={t('header.selectProject')} body={t('header.selectProjectHint')} />
       ) : state.loading ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center text-muted-foreground" aria-busy="true">
           <Loader2 className="h-5 w-5 animate-spin" />
         </div>
       ) : state.error ? (
-        <div className="m-3 rounded border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-400">
+        <div className="m-1.5 rounded border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-400">
           {state.error}
         </div>
       ) : !state.initialized ? (
@@ -475,7 +473,30 @@ export function SpriteStudioView() {
           )}
         </>
       )}
-    </div>
+      <StatusBarShell>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${state.initialized ? 'bg-emerald-400' : 'bg-muted-foreground/50'}`} />
+          <span className="max-w-[220px] truncate">{projectName ?? t('header.selectProject')}</span>
+        </span>
+        {state.initialized && (
+          <>
+            <span className="text-foreground/70">
+              {state.mode === 'generate'
+                ? t('toolbar.generate')
+                : state.mode === 'animate'
+                  ? t('toolbar.animate')
+                  : t('toolbar.edit')}
+            </span>
+            <span>{state.assets.length} · {t('library.title')}</span>
+            <span className="ml-auto max-w-[260px] truncate">
+              {c.activeAsset
+                ? `${c.activeAsset.name} · ${c.activeAsset.width}×${c.activeAsset.height}`
+                : t('toolbar.noAsset')}
+            </span>
+          </>
+        )}
+      </StatusBarShell>
+    </WorkbenchShell>
   );
 }
 
@@ -493,8 +514,10 @@ function CenterCard({
 }) {
   return (
     <div className="flex flex-1 items-center justify-center p-6">
-      <div className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-dashed p-8 text-center">
-        <Icon className="h-8 w-8 text-muted-foreground/40" />
+      <div className="flex max-w-md flex-col items-center gap-3 text-center">
+        <span className="grid h-12 w-12 place-items-center rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-raised)]">
+          <Icon className="h-6 w-6 text-muted-foreground" />
+        </span>
         <div className="text-sm font-medium">{title}</div>
         <div className="text-xs text-muted-foreground">{body}</div>
         {children}

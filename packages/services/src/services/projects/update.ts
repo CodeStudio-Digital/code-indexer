@@ -2,6 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { Project, SearchMode } from '@mcp/shared/types.js';
+import type { EditorSettingsOverride } from '@mcp/shared/editor-settings.js';
 import { parseRuntimeVersions } from '@mcp/shared/utils/runtime-versions.js';
 import { PHP_LEVELS, PYTHON_LEVELS, snapToLevels, writeLanguageLevel } from '@mcp/shared/utils/language-levels.js';
 import { serializeIndexIgnorePatterns, parseIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
@@ -29,6 +30,7 @@ export interface UpdateProjectInput {
   wsl_package_managers?: string | null;
   /** LSP language level JSON (migration 157) — set here when synced from a runtime change. */
   language_levels?: string | null;
+  editor_settings?: EditorSettingsOverride | null;
 }
 
 /** "8.3" out of a runtime id like 'managed:8.3.7' / 'homebrew:8.3.7'; undefined for 'system'. */
@@ -181,6 +183,15 @@ export class UpdateProjectService {
       // Dedicated column setter (not part of the generic `updates` whitelist);
       // safe alongside an empty `updates` since updateProject no-ops on [].
       this.db.setProjectMemoryEnabled(id, patch.memory_enabled);
+    }
+
+    if (patch.editor_settings !== undefined) {
+      if (patch.editor_settings !== null && (typeof patch.editor_settings !== 'object' || Array.isArray(patch.editor_settings))) {
+        throw new ProjectError('invalid_input', 'editor_settings must be an object or null');
+      }
+      const encoded = JSON.stringify(patch.editor_settings);
+      if (encoded.length > 16_384) throw new ProjectError('invalid_input', 'editor_settings is too large');
+      updates.editor_settings = patch.editor_settings;
     }
 
     this.db.updateProject(id, updates);

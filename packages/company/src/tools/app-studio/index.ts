@@ -7,18 +7,15 @@
  * coder-worker/company-worker por causa de worker_threads).
  *
  * The agent-facing tools are:
- *   - app_get_pipeline    — etapas + corrente + roadmap + resumo da spec.
+ *   - app_get_workflow    — macrofases + aprovações assíncronas + Kanban.
  *   - app_get_spec        — a AppSpec completa.
  *   - app_get_spec_history— revisões/evoluções da spec.
- *   - app_save_spec       — valida e grava a spec da entrevista (+roadmap).
+ *   - app_save_spec       — valida e grava a spec da fase Definir.
  *   - app_propose_spec_revision — evolução versionada (auto-abre a evolução).
  *     (app_create_evolution NÃO é tool de agente: redundante com a rota HTTP
  *      da UI e com o auto-create do propose; modelos fracos a confundiam com
  *      app_provision_db e entravam em loop. Criação de evolução: só UI/rota.)
  *   - app_spec_audit      — auditoria deterministica da qualidade da spec.
- *   - app_submit_stage    — gate determinístico → review → STOP.
- *   - app_record_feature  — registra deliverable (cobertura do roadmap).
- *   - app_list_features   — cobertura registrados × roadmap.
  *   - app_get_db_assets   — estado real dos assets de migração e seed.
  *   - app_save_db_migration — uma evolução aditiva e versionada do schema.
  *   - app_save_db_seed    — substitui o seed canônico com backup.
@@ -27,15 +24,11 @@
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { appStudioBinding } from '@mcp/company/tools/app-studio/binding.js';
-import { appGetPipeline } from '@mcp/company/tools/app-studio/app-get-pipeline.js';
 import { appGetSpec } from '@mcp/company/tools/app-studio/app-get-spec.js';
 import { appGetSpecHistory } from '@mcp/company/tools/app-studio/app-get-spec-history.js';
 import { appSaveSpec } from '@mcp/company/tools/app-studio/app-save-spec.js';
 import { appProposeSpecRevision } from '@mcp/company/tools/app-studio/app-propose-spec-revision.js';
 import { appSpecAudit } from '@mcp/company/tools/app-studio/app-spec-audit.js';
-import { appSubmitStage } from '@mcp/company/tools/app-studio/app-submit-stage.js';
-import { appRecordFeature } from '@mcp/company/tools/app-studio/app-record-feature.js';
-import { appListFeatures } from '@mcp/company/tools/app-studio/app-list-features.js';
 import { appProvisionDb } from '@mcp/company/tools/app-studio/app-provision-db.js';
 import { appGetArchitecture } from '@mcp/company/tools/app-studio/app-get-architecture.js';
 import { appSaveArchitecture } from '@mcp/company/tools/app-studio/app-save-architecture.js';
@@ -48,12 +41,15 @@ import { appGetDbAssets } from '@mcp/company/tools/app-studio/app-get-db-assets.
 import { appSaveDbSeed } from '@mcp/company/tools/app-studio/app-save-db-seed.js';
 import { appSaveTddTest } from '@mcp/company/tools/app-studio/app-save-tdd-test.js';
 import { appGetUx, appGetWireframe, appSaveUx, appSaveWireframe, appUxAudit, appWireframeAudit } from '@mcp/company/tools/app-studio/app-experience.js';
-import { appCompleteBuildTask, appGetBuildPlan, appSubmitBuildGroup } from '@mcp/company/tools/app-studio/app-build-plan.js';
 import { appFetchUxReference } from '@mcp/company/tools/app-studio/app-ux-reference.js';
 import {
-  appGetProductModel, appGetStageBriefing, appProductAudit, appResearchProductDomain, appSetProductScope,
+  appGetProductModel, appProductAudit, appResearchProductDomain, appSetProductScope,
   appUpsertProductCapability, appUpsertProductDomain, appUpsertProductResearchSource, appUpsertProductScenario,
 } from '@mcp/company/tools/app-studio/app-product.js';
+import {
+  appDispatchReadyWork, appGetWorkflow, appRecordWorkEvidence, appRequestApproval,
+  appRequestDecision, appUpsertWorkItems,
+} from '@mcp/company/tools/app-studio/app-workflow.js';
 
 export { setAppStudioStore, getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 export {
@@ -68,10 +64,9 @@ export function buildAppStudioTools(projectId: number): CoderTool[] {
   const binding = appStudioBinding(projectId);
   return [
     appGetContext(binding),
-    appGetPipeline(binding),
+    appGetWorkflow(binding),
     appGetSpec(binding),
     appGetSpecHistory(binding),
-    appGetStageBriefing(binding),
     appGetProductModel(binding),
     appUpsertProductDomain(binding),
     appUpsertProductCapability(binding),
@@ -96,16 +91,15 @@ export function buildAppStudioTools(projectId: number): CoderTool[] {
     appGetWireframe(binding),
     appSaveWireframe(binding),
     appWireframeAudit(binding),
-    appGetBuildPlan(binding),
-    appCompleteBuildTask(binding),
-    appSubmitBuildGroup(binding),
     appGetDbAssets(binding),
     appSaveDbMigration(binding),
     appSaveDbSeed(binding),
     appSaveTddTest(binding),
-    appSubmitStage(binding),
-    appRecordFeature(binding),
-    appListFeatures(binding),
     appProvisionDb(binding),
+    appUpsertWorkItems(binding),
+    appRequestDecision(binding),
+    appRequestApproval(binding),
+    appDispatchReadyWork(binding),
+    appRecordWorkEvidence(binding),
   ];
 }

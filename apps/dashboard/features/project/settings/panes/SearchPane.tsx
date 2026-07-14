@@ -12,15 +12,10 @@ import {
 } from '@mcp/shared/utils/index-ignore.js';
 import { apiPost } from '../../../../hooks/useApi.js';
 import { Button } from '../../../../components/ui/button.js';
+import { Combobox } from '../../../../components/ui/combobox.js';
 import { Input } from '../../../../components/ui/input.js';
 import { Switch } from '../../../../components/ui/switch.js';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../../../components/ui/select.js';
+import { confirm } from '../../../../components/ui/prompt-dialog.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
 
 interface PurgeIgnoredResult {
@@ -36,6 +31,11 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
   const embeddings = project.embeddings_enabled !== 0;
   const searchMode = project.search_mode ?? 'hybrid';
   const patterns = useMemo(() => projectIndexIgnorePatterns(project), [project]);
+  const searchModeOptions = useMemo(() => [
+    { value: 'hybrid', label: t('edit.searchModeHybrid') },
+    { value: 'fts', label: t('edit.searchModeFts') },
+    { value: 'vector', label: t('edit.searchModeVector') },
+  ], [t]);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [purging, setPurging] = useState(false);
@@ -68,6 +68,12 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
   };
 
   const purgeIgnored = async () => {
+    if (!(await confirm({
+      title: t('edit.indexIgnorePurgeConfirmTitle'),
+      description: t('edit.indexIgnorePurgeConfirmBody'),
+      confirmLabel: t('edit.indexIgnorePurge'),
+      tone: 'destructive',
+    }))) return;
     setPurging(true);
     setLocalError(null);
     setNotice(null);
@@ -86,8 +92,7 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
   };
 
   return (
-    <div className="space-y-5 max-w-xl">
-      <h3 className="text-sm font-semibold">{t('settings.nav.search')}</h3>
+    <div className="w-full max-w-3xl space-y-5">
 
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-0.5">
@@ -99,16 +104,14 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
 
       <div className="space-y-1.5">
         <label className="text-sm font-medium">{t('edit.searchModeLabel')}</label>
-        <Select value={searchMode} onValueChange={(v) => void patch({ search_mode: v })}>
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="hybrid">{t('edit.searchModeHybrid')}</SelectItem>
-            <SelectItem value="fts">{t('edit.searchModeFts')}</SelectItem>
-            <SelectItem value="vector">{t('edit.searchModeVector')}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Combobox
+          value={searchMode}
+          onChange={(value) => void patch({ search_mode: value })}
+          options={searchModeOptions}
+          searchPlaceholder={t('settings.select.search')}
+          emptyLabel={t('settings.select.empty')}
+          size="md"
+        />
         <p className="text-xs text-muted-foreground">{t('edit.searchModeHint')}</p>
       </div>
 

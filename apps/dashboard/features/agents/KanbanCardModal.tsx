@@ -4,11 +4,11 @@ import {
   CheckSquare, Square, Plus, X, Link2, Unlink, Users, Clock,
   MessageSquare, Tag, ArrowRight,
 } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
+import { WorkBoardBadge, WorkBoardDetailDialog } from '../../components/work-board/index.js';
 import type {
   KanbanCardFull,
   KanbanTag,
@@ -72,52 +72,24 @@ export function KanbanCardModal({
   const availableDeps = allCards.filter((c) => c.id !== card.id && !existingDepIds.has(c.id));
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-[10px]">
-              #{card.id}
-            </Badge>
-            <Badge variant="outline" className="text-[10px]">
-              {t(`agents:${COLUMN_LABEL_KEYS[card.column]}`)}
-            </Badge>
-            {card.blocked_by.length > 0 && (
-              <Badge variant="destructive" className="text-[10px]">
-                {t('agents:kanban.card.blocked')}
-              </Badge>
-            )}
-          </div>
-
-          {/* Title */}
-          {editingTitle ? (
-            <div className="flex gap-2 mt-1">
-              <Input
-                value={titleValue}
-                onChange={(e) => setTitleValue(e.target.value)}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter') {
-                    await onUpdate(card.id, { title: titleValue });
-                    setEditingTitle(false);
-                  }
-                  if (e.key === 'Escape') {
-                    setTitleValue(card.title);
-                    setEditingTitle(false);
-                  }
-                }}
-                autoFocus
-                className="text-lg font-semibold"
-              />
-            </div>
-          ) : (
-            <DialogTitle
-              className="cursor-pointer hover:text-primary transition-colors"
-              onClick={() => setEditingTitle(true)}
-            >
-              {card.title}
-            </DialogTitle>
-          )}
-        </DialogHeader>
+    <WorkBoardDetailDialog
+      open={open}
+      onClose={onClose}
+      badges={<><WorkBoardBadge>#{card.id}</WorkBoardBadge><WorkBoardBadge tone={card.column === 'done' ? 'green' : card.column === 'review' ? 'violet' : 'blue'}>{t(`agents:${COLUMN_LABEL_KEYS[card.column]}`)}</WorkBoardBadge>{card.blocked_by.length > 0 && <WorkBoardBadge tone="red">{t('agents:kanban.card.blocked')}</WorkBoardBadge>}</>}
+      title={editingTitle ? (
+        <Input
+          value={titleValue}
+          onChange={(e) => setTitleValue(e.target.value)}
+          onKeyDown={async (e) => {
+            if (e.key === 'Enter') { await onUpdate(card.id, { title: titleValue }); setEditingTitle(false); }
+            if (e.key === 'Escape') { setTitleValue(card.title); setEditingTitle(false); }
+          }}
+          autoFocus
+          className="text-lg font-semibold"
+        />
+      ) : <button type="button" className="text-left transition-colors hover:text-primary" onClick={() => setEditingTitle(true)}>{card.title}</button>}
+      footer={<><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{t('agents:kanban.card.createdBy', { author: card.created_by, date: new Date(card.created_at).toLocaleString() })}</span><Button size="sm" variant="destructive" onClick={async () => { if (confirm(`Delete card "${card.title}"?`)) { await onDelete(card.id); onClose(); } }}>{t('agents:kanban.card.deleteCard')}</Button></>}
+    >
 
         {/* Tag selector */}
         <div className="flex items-center gap-2 mt-2">
@@ -417,25 +389,6 @@ export function KanbanCardModal({
           </div>
         </div>
 
-        {/* Footer: delete */}
-        <div className="mt-4 pt-3 border-t flex justify-between items-center">
-          <span className="text-xs text-muted-foreground">
-            {t('agents:kanban.card.createdBy', { author: card.created_by, date: new Date(card.created_at).toLocaleString() })}
-          </span>
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={async () => {
-              if (confirm(`Delete card "${card.title}"?`)) {
-                await onDelete(card.id);
-                onClose();
-              }
-            }}
-          >
-            {t('agents:kanban.card.deleteCard')}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+    </WorkBoardDetailDialog>
   );
 }

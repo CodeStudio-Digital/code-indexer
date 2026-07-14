@@ -17,7 +17,7 @@ import { Button } from '../../../../components/ui/button.js';
 import { cn } from '../../../../lib/utils.js';
 import { apiCall } from '../../../../lib/api-client.js';
 import type { EditorStatsResult } from '@mcp/api-bus';
-import { useAiCompleteStore } from '../../editor/inlineCompletionProvider.js';
+import { useAiCompleteStore } from '../../editor/ai-complete-store.js';
 import { AutocompleteSetupDialog } from '../../editor/AutocompleteSetupDialog.js';
 
 // Module-level 60s memo — tooltip hovers must not hammer SQLite.
@@ -46,6 +46,11 @@ function pct(v: number | null): string {
   return v === null ? '—' : `${Math.round(v * 100)}%`;
 }
 
+function topDiscardReason(reasons: Record<string, number>): string | null {
+  const first = Object.entries(reasons).sort((a, b) => b[1] - a[1])[0];
+  return first ? `${first[0]} (${first[1]})` : null;
+}
+
 export function AiCompleteChip() {
   const enabled = useAiCompleteStore((s) => s.enabled);
   const busy = useAiCompleteStore((s) => s.busy);
@@ -57,6 +62,9 @@ export function AiCompleteChip() {
   const [hovered, setHovered] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const stats = useAiCompleteStats(hovered);
+  const currentDelivery = stats?.current.delivery
+    ?? { received: 0, returned: 0, discarded: 0, discardReasons: {} };
+  const discardReason = topDiscardReason(currentDelivery.discardReasons);
 
   // Nudge auto-dismiss.
   useEffect(() => {
@@ -75,6 +83,8 @@ export function AiCompleteChip() {
     ? 'AI completion is off — click to enable ghost-text suggestions.'
     : issue?.kind === 'unconfigured'
       ? 'AI completion is enabled but no model is bound. Click to set one up.'
+      : issue?.kind === 'manual_only'
+        ? `The bound chat model is manual-only: ${issue.message ?? 'run the completion probe or use Alt+\\.'}`
       : issue?.kind === 'timeout'
         ? `Last completion timed out: ${issue.message ?? 'the bound model is too slow for ghost text — bind a fast model or raise timeout_ms.'}`
         : issue?.kind === 'provider_error'
@@ -82,7 +92,7 @@ export function AiCompleteChip() {
           : 'AI completion is on — code near the cursor is sent to the configured provider. Click to disable.';
 
   const onClick = () => {
-    if (enabled && issue?.kind === 'unconfigured') {
+    if (enabled && (issue?.kind === 'unconfigured' || issue?.kind === 'manual_only')) {
       setSetupOpen(true);
       return;
     }
@@ -128,11 +138,23 @@ export function AiCompleteChip() {
                   <div>{hint}</div>
                   {stats?.configured && (
                     <div className="mt-1.5 border-t border-border/40 pt-1.5 text-muted-foreground">
-                      <div>{stats.model} · last {stats.windowDays}d</div>
                       <div>
-                        accept {pct(stats.acceptRate)} · p50 {stats.latency.p50 ?? '—'}ms
-                        · {stats.requests} requests
+                        {stats.model} · {stats.route?.suitability ?? 'unknown'} · {stats.route?.health ?? 'unknown'}
                       </div>
+                      <div>
+                        current: accept {pct(stats.current.acceptRate)} · p50 {stats.current.latency.p50 ?? '—'}ms
+                        · {stats.current.requests} requests
+                      </div>
+                      <div>
+                        delivery: {currentDelivery.received} received → {currentDelivery.returned} returned
+                        → {stats.current.shown} shown → {stats.current.accepted} accepted
+                      </div>
+                      {currentDelivery.discarded > 0 && (
+                        <div className="text-amber-300">
+                          discarded {currentDelivery.discarded}{discardReason ? ` · ${discardReason}` : ''}
+                        </div>
+                      )}
+                      {stats.route?.reason && <div className="mt-1 text-amber-300">{stats.route.reason}</div>}
                       <div className="mt-1 opacity-80">{KEY_HINTS}</div>
                     </div>
                   )}

@@ -1,5 +1,6 @@
-import type { AppStageId } from '../pipeline/stages.js';
+import type { AppWorkflowPhaseId } from '../workflow/types.js';
 import type { AppSpec } from './types.js';
+import { stableRequirementSourceIds, upgradeAppSpecToV2, type AppRequirementKind } from './stable-ids.js';
 
 export type AppSpecDiffKind =
   | 'summary'
@@ -28,12 +29,42 @@ export interface AppSpecDiff {
   features: AppSpecCollectionDiff;
   entities: AppSpecCollectionDiff;
   behaviors: AppSpecCollectionDiff;
+  /** Exact stable source ids changed by this revision. */
+  changed_source_ids: string[];
 }
 
 export interface AppSpecImpact {
   level: 'none' | 'low' | 'medium' | 'high';
-  stage_ids: AppStageId[];
+  affected_phases: AppWorkflowPhaseId[];
+  /** Exact ids or prefix selectors ending in `*`; used for selective invalidation. */
+  source_ids: string[];
   reasons: string[];
+}
+
+/** Parse the canonical v5 impact payload without trusting persisted JSON. */
+export function parseAppSpecImpact(raw: unknown): AppSpecImpact | null {
+  let value = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const level = record.level;
+  if (level !== 'none' && level !== 'low' && level !== 'medium' && level !== 'high') return null;
+
+  const affected_phases = uniqueStrings(record.affected_phases)
+    .filter((phase): phase is AppWorkflowPhaseId => phase in PHASE_ORDER)
+    .sort((left, right) => PHASE_ORDER[left] - PHASE_ORDER[right]);
+  return {
+    level,
+    affected_phases,
+    source_ids: uniqueStrings(record.source_ids),
+    reasons: uniqueStrings(record.reasons),
+  };
 }
 
 export function createEmptySpecDiff(): AppSpecDiff {
@@ -47,6 +78,7 @@ export function createEmptySpecDiff(): AppSpecDiff {
     features: emptyCollectionDiff(),
     entities: emptyCollectionDiff(),
     behaviors: emptyCollectionDiff(),
+    changed_source_ids: [],
   };
 }
 
@@ -76,6 +108,7 @@ export function diffAppSpecs(base: AppSpec | null, next: AppSpec): AppSpecDiff {
     diff.features.added = next.features.map((f) => f.name || f.id);
     diff.entities.added = next.database.entities.map((e) => e.label || e.name);
     diff.behaviors.added = (next.behaviors ?? []).map((b) => b.trigger_label || b.id);
+    diff.changed_source_ids = allSpecSourceIds(next);
     return diff;
   }
 
@@ -88,43 +121,57 @@ export function diffAppSpecs(base: AppSpec | null, next: AppSpec): AppSpecDiff {
   diff.features = compareByKey(base.features, next.features, (f) => f.id, (f) => f.name || f.id);
   diff.entities = compareByKey(base.database.entities, next.database.entities, (e) => e.name, (e) => e.label || e.name);
   diff.behaviors = compareByKey(base.behaviors ?? [], next.behaviors ?? [], (b) => b.id, (b) => b.trigger_label || b.id);
+  const changedSources = new Set<string>();
+  if (diff.summaryChanged) changedSources.add('spec:summary');
+  if (diff.audienceChanged) changedSources.add('spec:audience');
+  if (diff.authChanged) changedSources.add('auth');
+  if (diff.designChanged) changedSources.add('design');
+  addChangedKeys(changedSources, base.screens, next.screens, (item) => item.id, 'screen');
+  addChangedKeys(changedSources, base.features, next.features, (item) => item.id, 'feature');
+  addChangedKeys(changedSources, base.database.entities, next.database.entities, (item) => item.name, 'entity');
+  addChangedKeys(changedSources, base.behaviors ?? [], next.behaviors ?? [], (item) => item.id, 'behavior');
+  addChangedRequirementSources(changedSources, upgradeAppSpecToV2(base), upgradeAppSpecToV2(next));
+  diff.changed_source_ids = [...changedSources].sort();
   return diff;
 }
 
 export function impactFromSpecDiff(diff: AppSpecDiff): AppSpecImpact {
-  const stages = new Set<AppStageId>();
+  const phases = new Set<AppWorkflowPhaseId>();
+  const sourceIds = new Set<string>();
   const reasons: string[] = [];
 
   if (specDiffHasChanges(diff)) {
-    stages.add('product');
-    reasons.push('O plano mudou; profundidade, horizontes e cenarios do produto precisam ser confirmados novamente antes da arquitetura.');
+    phases.add('define');
+    reasons.push('O escopo mudou; o novo pacote precisa ser rastreado antes de atualizar os trabalhos dependentes.');
   }
+  for (const sourceId of diff.changed_source_ids) sourceIds.add(sourceId);
 
   if (collectionHasChanges(diff.entities)) {
-    addStages(stages, ['database', 'ux', 'wireframe', 'design', 'backend', 'review']);
+    addPhases(phases, ['blueprint', 'build', 'deliver']);
     reasons.push('Dados/tabelas mudaram; a estrutura do banco e as regras por tras das telas precisam ser revisitadas.');
   }
   if (collectionHasChanges(diff.screens) || collectionHasChanges(diff.features) || diff.designChanged) {
-    addStages(stages, ['ux', 'wireframe', 'design', 'backend', 'review']);
+    addPhases(phases, ['blueprint', 'build', 'deliver']);
     reasons.push('Telas, recursos ou direcao visual mudaram; a interface e a ligacao com dados podem precisar de ajuste.');
   }
   if (collectionHasChanges(diff.behaviors)) {
-    addStages(stages, ['wireframe', 'design', 'backend', 'review']);
+    addPhases(phases, ['blueprint', 'build', 'deliver']);
     reasons.push('Acoes do app mudaram; botoes, formularios ou avisos precisam ser conferidos.');
   }
   if (diff.authChanged) {
-    addStages(stages, ['ux', 'wireframe', 'design', 'backend', 'review']);
+    addPhases(phases, ['blueprint', 'build', 'deliver']);
     reasons.push('Login ou telas protegidas mudaram; regras de acesso precisam ser conferidas.');
   }
   if (diff.summaryChanged || diff.audienceChanged || diff.requirementsChanged) {
-    addStages(stages, ['ux', 'wireframe', 'design', 'review']);
+    addPhases(phases, ['blueprint', 'build', 'deliver']);
     reasons.push('Objetivo, publico ou criterios de aceite mudaram; a revisao final precisa considerar o novo combinado.');
   }
 
-  const stage_ids = [...stages].sort((a, b) => STAGE_ORDER[a] - STAGE_ORDER[b]);
+  const affected_phases = [...phases].sort((a, b) => PHASE_ORDER[a] - PHASE_ORDER[b]);
   return {
-    level: impactLevel(stage_ids, diff),
-    stage_ids,
+    level: impactLevel(affected_phases, diff),
+    affected_phases,
+    source_ids: [...sourceIds].sort(),
     reasons,
   };
 }
@@ -143,18 +190,12 @@ export function summarizeSpecDiff(diff: AppSpecDiff): string[] {
   return lines.length ? lines : ['Nenhuma mudanca estrutural detectada.'];
 }
 
-const STAGE_ORDER: Record<AppStageId, number> = {
-  discovery: 0,
-  product: 1,
-  architecture: 2,
-  database: 3,
-  ux: 4,
-  wireframe: 5,
-  design: 6,
-  backend: 7,
-  review: 8,
-  launch: 9,
-};
+const PHASE_ORDER: Record<AppWorkflowPhaseId, number> = { define: 0, blueprint: 1, build: 2, deliver: 3 };
+
+function uniqueStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))];
+}
 
 function emptyCollectionDiff(): AppSpecCollectionDiff {
   return { added: [], removed: [], changed: [] };
@@ -164,14 +205,14 @@ function collectionHasChanges(diff: AppSpecCollectionDiff): boolean {
   return diff.added.length > 0 || diff.removed.length > 0 || diff.changed.length > 0;
 }
 
-function addStages(target: Set<AppStageId>, stages: AppStageId[]): void {
-  for (const stage of stages) target.add(stage);
+function addPhases(target: Set<AppWorkflowPhaseId>, phases: AppWorkflowPhaseId[]): void {
+  for (const phase of phases) target.add(phase);
 }
 
-function impactLevel(stageIds: AppStageId[], diff: AppSpecDiff): AppSpecImpact['level'] {
-  if (stageIds.length === 0) return 'none';
+function impactLevel(phases: AppWorkflowPhaseId[], diff: AppSpecDiff): AppSpecImpact['level'] {
+  if (phases.length === 0) return 'none';
   if (collectionHasChanges(diff.entities) || diff.authChanged || hasRemovals(diff)) return 'high';
-  if (stageIds.includes('backend') || stageIds.includes('design')) return 'medium';
+  if (phases.includes('build')) return 'medium';
   return 'low';
 }
 
@@ -213,6 +254,55 @@ function compareByKey<T>(
     if (!afterMap.has(key)) removed.push(labelOf(value));
   }
   return { added, removed, changed };
+}
+
+function addChangedKeys<T>(
+  target: Set<string>,
+  before: T[],
+  after: T[],
+  keyOf: (value: T) => string,
+  prefix: string,
+): void {
+  const beforeMap = new Map(before.map((value) => [keyOf(value), value]));
+  const afterMap = new Map(after.map((value) => [keyOf(value), value]));
+  for (const key of new Set([...beforeMap.keys(), ...afterMap.keys()])) {
+    if (stableStringify(beforeMap.get(key)) !== stableStringify(afterMap.get(key))) target.add(`${prefix}:${key}`);
+  }
+}
+
+const REQUIREMENT_KINDS: AppRequirementKind[] = ['goal', 'rule', 'acceptance', 'out-of-scope', 'assumption', 'risk'];
+
+function requirementValues(spec: AppSpec, kind: AppRequirementKind): string[] {
+  return kind === 'goal' ? spec.requirements?.goals ?? []
+    : kind === 'rule' ? spec.requirements?.business_rules ?? []
+      : kind === 'acceptance' ? spec.requirements?.acceptance_criteria ?? []
+        : kind === 'out-of-scope' ? spec.requirements?.out_of_scope ?? []
+          : kind === 'assumption' ? spec.requirements?.assumptions ?? []
+            : spec.requirements?.risks ?? [];
+}
+
+function addChangedRequirementSources(target: Set<string>, before: AppSpec, after: AppSpec): void {
+  for (const kind of REQUIREMENT_KINDS) {
+    const beforeIds = stableRequirementSourceIds(before, kind);
+    const afterIds = stableRequirementSourceIds(after, kind);
+    const beforeMap = new Map(beforeIds.map((id, index) => [id, requirementValues(before, kind)[index] ?? '']));
+    const afterMap = new Map(afterIds.map((id, index) => [id, requirementValues(after, kind)[index] ?? '']));
+    for (const id of new Set([...beforeMap.keys(), ...afterMap.keys()])) {
+      if (beforeMap.get(id) !== afterMap.get(id)) target.add(id);
+    }
+  }
+}
+
+function allSpecSourceIds(spec: AppSpec): string[] {
+  const ids = new Set<string>([
+    'spec:summary', 'spec:audience', 'auth', 'design',
+    ...spec.screens.map((item) => `screen:${item.id}`),
+    ...spec.features.map((item) => `feature:${item.id}`),
+    ...spec.database.entities.map((item) => `entity:${item.name}`),
+    ...(spec.behaviors ?? []).map((item) => `behavior:${item.id}`),
+  ]);
+  for (const kind of REQUIREMENT_KINDS) for (const id of stableRequirementSourceIds(spec, kind)) ids.add(id);
+  return [...ids].sort();
 }
 
 function stableStringify(value: unknown): string {
