@@ -209,13 +209,15 @@ export async function dispatchHono(
   app: Hono,
   methodPath: string,
   input: unknown,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const spec = DISPATCH_TABLE[methodPath];
   if (!spec) {
     throw new Error(`dispatcher: no Hono route mapped for "${methodPath}"`);
   }
   const inputObj = (input ?? undefined) as Record<string, unknown> | undefined;
-  const req = buildRequest(spec, inputObj);
+  const baseRequest = buildRequest(spec, inputObj);
+  const req = signal ? new Request(baseRequest, { signal }) : baseRequest;
   const res = await app.fetch(req);
   if (!res.ok) {
     const text = await safeText(res);

@@ -5,7 +5,7 @@
  * own private copies to avoid churning a known-good file.)
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
@@ -43,6 +43,16 @@ export function minorOf(version: string): string {
 export function probe(exe: string, args: string[]): string {
   try {
     return execFileSync(exe, args, { timeout: 2500, encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Run a probe and return both stdout and stderr (Java reports version on stderr). */
+export function probeOutput(exe: string, args: string[]): string {
+  try {
+    const got = spawnSync(exe, args, { timeout: 2500, encoding: 'utf8', windowsHide: true });
+    return `${got.stdout ?? ''}\n${got.stderr ?? ''}`.trim();
   } catch {
     return '';
   }

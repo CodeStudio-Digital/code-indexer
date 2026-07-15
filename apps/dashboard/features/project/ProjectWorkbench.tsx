@@ -20,13 +20,12 @@ import { TransientSurface } from './tabs/TransientSurface.js';
 import { ProjectPrimarySurface } from './ProjectPrimarySurface.js';
 import { ProjectRail } from './ProjectRail.js';
 import { ProjectRightRail } from './ProjectRightRail.js';
-import { ProjectSurfaceBar } from './ProjectSurfaceBar.js';
 import type { TabDef } from './tabs-config.js';
 import { pluginWindowIcon } from '../workspace/plugin-icon.js';
 import type { AgentChatWorkbenchSlots } from '../chat/types.js';
 import type { ApiClientWorkbenchSlots } from '../api-client/workbench-slots.js';
 import { DatabaseToolWindow } from '../db-client/DatabaseToolWindow.js';
-import { API_RIGHT_TOOL, projectToolAvailableInContext } from './tabs-config.js';
+import { API_RIGHT_TOOL } from './tabs-config.js';
 
 interface ProjectWorkbenchProps {
   projectId: number;
@@ -58,52 +57,40 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const [gitHost, setGitHost] = useState<HTMLDivElement | null>(null);
   const [apiLeftHost, setApiLeftHost] = useState<HTMLDivElement | null>(null);
   const [apiRightHost, setApiRightHost] = useState<HTMLDivElement | null>(null);
+  const [apiLeftOpen, setApiLeftOpen] = useState(true);
+  const [apiRightOpen, setApiRightOpen] = useState(true);
   const [sessionRightPanelHost, setSessionRightPanelHost] = useState<HTMLDivElement | null>(null);
   const [sessionRightRailHost, setSessionRightRailHost] = useState<HTMLDivElement | null>(null);
   const [sessionState, setSessionState] = useState({ hasSession: !!props.initialSessionId, rightPanelOpen: false });
   const sessionsMode = layout.primarySurface === 'sessions';
   const apiMode = layout.primarySurface === 'api';
+  const editorMode = layout.primarySurface === 'editor';
   const handleSessionStateChange = useCallback((next: { hasSession: boolean; rightPanelOpen: boolean }) => {
     setSessionState((current) =>
       current.hasSession === next.hasSession && current.rightPanelOpen === next.rightPanelOpen ? current : next,
     );
   }, []);
   const handleSessionSelected = useCallback(() => {
-    const state = useWorkspaceLayout.getState();
-    state.setPrimarySurface('sessions');
-    if (state.activeRight === 'chat') state.setActiveRight(null);
+    useWorkspaceLayout.getState().setPrimarySurface('sessions');
   }, []);
   const handleToggleLeft = useCallback((id: string) => {
     const state = useWorkspaceLayout.getState();
-    const opening = state.activeLeft !== id;
-    state.toggleLeft(id);
-    if (id === 'sessions' && opening) {
-      state.setPrimarySurface('sessions');
-      if (state.activeRight === 'chat') state.setActiveRight(null);
-    } else if (id === 'databases' && opening) {
+    if (state.primarySurface !== 'editor' || state.activeLeft !== id) {
       state.setPrimarySurface('editor');
-    } else if (id === 'api-navigation' && opening) {
-      state.setPrimarySurface('api');
-      state.setActiveRight('api-inspector');
-    }
-  }, []);
-  const handlePrimarySelect = useCallback((id: string) => {
-    const state = useWorkspaceLayout.getState();
-    state.setPrimarySurface(id);
-    if (id === 'api') {
-      state.setActiveLeft('api-navigation');
-      state.setActiveRight('api-inspector');
+      state.setActiveLeft(id);
       return;
     }
-    if (state.activeLeft === 'api-navigation') state.setActiveLeft(null);
-    if (state.activeRight === 'api-inspector') state.setActiveRight(null);
-    if (id === 'sessions') {
-      state.setActiveLeft('sessions');
-      if (state.activeRight === 'chat') state.setActiveRight(null);
-    }
+    state.toggleLeft(id);
   }, []);
-  const closeApiLeft = useCallback(() => useWorkspaceLayout.getState().setActiveLeft(null), []);
-  const closeApiRight = useCallback(() => useWorkspaceLayout.getState().setActiveRight(null), []);
+  const handleWorkspaceSelect = useCallback((id: string) => {
+    if (id === 'api') {
+      setApiLeftOpen(true);
+      setApiRightOpen(true);
+    }
+    useWorkspaceLayout.getState().setPrimarySurface(id);
+  }, []);
+  const closeApiLeft = useCallback(() => setApiLeftOpen(false), []);
+  const closeApiRight = useCallback(() => setApiRightOpen(false), []);
   const apiWorkbenchSlots = useMemo<ApiClientWorkbenchSlots>(() => ({
     leftHost: apiLeftHost,
     rightHost: apiRightHost,
@@ -132,18 +119,15 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
   const activeLeftPlugin = leftPlugins.find((window) => window.id === layout.activeLeft);
   const activeRightPlugin = rightPlugins.find((window) => window.id === layout.activeRight);
-  const leftKnown =
+  const codeLeftKnown =
     layout.activeLeft === 'files' ||
-    layout.activeLeft === 'sessions' ||
-    layout.activeLeft === 'api-navigation' ||
     layout.activeLeft === 'databases' ||
     layout.activeLeft === 'git' ||
     !!activeLeftPlugin;
-  const rightKnown =
+  const codeRightKnown =
     layout.activeRight === 'chat' ||
     layout.activeRight === 'snapshots' ||
     layout.activeRight === 'memory' ||
-    layout.activeRight === 'api-inspector' ||
     !!activeRightPlugin;
   const bottomKnown = !!layout.activeBottom && (
     BOTTOM_BUILTIN_TAB_IDS.has(layout.activeBottom) ||
@@ -151,24 +135,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   );
 
   useEffect(() => {
-    if (layout.activeLeft && !leftKnown) layout.setActiveLeft(null);
-  }, [layout.activeLeft, leftKnown, layout.setActiveLeft]);
+    if (layout.activeLeft && !codeLeftKnown) layout.setActiveLeft(null);
+  }, [codeLeftKnown, layout.activeLeft, layout.setActiveLeft]);
   useEffect(() => {
-    if (layout.activeRight && !rightKnown) layout.setActiveRight(null);
-  }, [layout.activeRight, rightKnown, layout.setActiveRight]);
+    if (layout.activeRight && !codeRightKnown) layout.setActiveRight(null);
+  }, [codeRightKnown, layout.activeRight, layout.setActiveRight]);
   useEffect(() => {
     if (layout.activeBottom && !bottomKnown) layout.setActiveBottom(null);
   }, [bottomKnown, layout.activeBottom, layout.setActiveBottom]);
-  useEffect(() => {
-    const state = useWorkspaceLayout.getState();
-    if (layout.primarySurface === 'api') {
-      if (state.activeLeft !== 'api-navigation') state.setActiveLeft('api-navigation');
-      if (state.activeRight !== 'api-inspector') state.setActiveRight('api-inspector');
-      return;
-    }
-    if (state.activeLeft === 'api-navigation') state.setActiveLeft(null);
-    if (state.activeRight === 'api-inspector') state.setActiveRight(null);
-  }, [layout.primarySurface]);
   useEffect(() => {
     if (layout.primarySurface === 'preview' && !props.previewEnabled) layout.setPrimarySurface('editor');
   }, [layout.primarySurface, layout.setPrimarySurface, props.previewEnabled]);
@@ -179,13 +153,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     layout.setPrimarySurface('editor');
     layout.setActiveLeft('databases');
   }, [layout.primarySurface, layout.setActiveLeft, layout.setPrimarySurface]);
-  useEffect(() => {
-    if ((sessionsMode || sessionState.hasSession) && layout.activeRight === 'chat') {
-      layout.setActiveRight(null);
-    }
-  }, [layout.activeRight, layout.setActiveRight, sessionState.hasSession, sessionsMode]);
-
   const renderLeft = () => {
+    if (sessionsMode) {
+      return <div key="sessions" ref={setSessionsHost} className="h-full min-h-0 overflow-hidden" />;
+    }
+    if (apiMode) {
+      return <div key="api-navigation" ref={setApiLeftHost} className="h-full min-h-0 overflow-hidden" />;
+    }
+    if (!editorMode) return null;
     if (layout.activeLeft === 'files') {
       return (
         <FileTreeView
@@ -200,12 +175,6 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     }
     if (layout.activeLeft === 'git') {
       return <div key="git" ref={setGitHost} className="h-full min-h-0 overflow-hidden" />;
-    }
-    if (layout.activeLeft === 'sessions') {
-      return <div key="sessions" ref={setSessionsHost} className="h-full min-h-0 overflow-hidden" />;
-    }
-    if (layout.activeLeft === 'api-navigation') {
-      return <div key="api-navigation" ref={setApiLeftHost} className="h-full min-h-0 overflow-hidden" />;
     }
     if (layout.activeLeft === 'databases') {
       return <div key="databases" ref={setDatabaseHost} className="h-full min-h-0 overflow-hidden" />;
@@ -231,6 +200,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (apiMode) {
       return <div key="api-inspector" ref={setApiRightHost} className="h-full min-h-0 overflow-hidden" />;
     }
+    if (!editorMode) return null;
     if (layout.activeRight === 'chat') {
       return (
         <EditorChatRail
@@ -276,17 +246,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     return null;
   };
 
-  const leftOpen = !!layout.activeLeft
-    && leftKnown
-    && projectToolAvailableInContext(layout.activeLeft, layout.primarySurface);
+  const leftOpen = sessionsMode
+    || (apiMode && apiLeftOpen)
+    || (editorMode && !!layout.activeLeft && codeLeftKnown);
   const rightOpen = sessionsMode
     ? sessionState.hasSession && sessionState.rightPanelOpen
     : apiMode
-      ? layout.activeRight === 'api-inspector'
-    : !!layout.activeRight
-      && rightKnown
-      && projectToolAvailableInContext(layout.activeRight, layout.primarySurface)
-      && layout.activeRight !== 'api-inspector';
+      ? apiRightOpen
+      : editorMode && !!layout.activeRight && codeRightKnown;
 
   return (
     <WorkbenchShell>
@@ -300,22 +267,36 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         key={`git-${props.projectId}`}
         projectId={props.projectId}
         host={gitHost}
-        active={layout.activeLeft === 'git'}
+        active={editorMode && layout.activeLeft === 'git'}
         onClose={() => layout.setActiveLeft(null)}
       />
       <div className="flex min-h-0 flex-1">
         <ProjectRail
           projectId={props.projectId}
-          activeTool={layout.activeLeft}
+          activeTool={editorMode ? layout.activeLeft : null}
+          activeSurface={layout.primarySurface}
           onToggle={handleToggleLeft}
-          bottomOpen={layout.activeBottom !== null}
-          onToggleBottom={() => layout.toggleBottom('terminal')}
+          onSelectSurface={handleWorkspaceSelect}
+          previewEnabled={props.previewEnabled}
+          bottomOpen={editorMode && layout.activeBottom !== null}
+          onToggleBottom={() => {
+            const state = useWorkspaceLayout.getState();
+            if (state.primarySurface !== 'editor') {
+              state.setPrimarySurface('editor');
+              state.setActiveBottom('terminal');
+              return;
+            }
+            state.toggleBottom('terminal');
+          }}
           pluginTabs={leftPlugins.map(pluginTab)}
         />
         <div className="min-w-0 flex-1 p-1.5">
           <PanelGroup direction="vertical" autoSaveId={`mcp-workbench-vertical-${props.projectId}`}>
             <Panel id="workbench-main" order={1} minSize={28} className="min-h-0">
-              <PanelGroup direction="horizontal" autoSaveId={`mcp-workbench-horizontal-${props.projectId}`}>
+              <PanelGroup
+                direction="horizontal"
+                autoSaveId={`mcp-workbench-horizontal-${props.projectId}-${layout.primarySurface}`}
+              >
                 {leftOpen && (
                   <>
                     <Panel id="left-dock" order={1} defaultSize={20} minSize={12} maxSize={38} className="min-w-0">
@@ -325,27 +306,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   </>
                 )}
                 <Panel id="primary" order={2} minSize={34} className="min-w-0">
-                  <WorkbenchSurface className="flex h-full flex-col">
-                    <ProjectSurfaceBar
-                      active={layout.primarySurface}
-                      onSelect={handlePrimarySelect}
+                  <WorkbenchSurface className="h-full">
+                    <ProjectPrimarySurface
+                      surface={layout.primarySurface}
+                      projectId={props.projectId}
+                      projectName={props.projectName}
+                      initialSessionId={props.initialSessionId}
+                      contribWindows={props.contribWindows}
+                      builderJson={props.builderJson}
                       previewEnabled={props.previewEnabled}
+                      framework={props.framework}
+                      sessionWorkbenchSlots={sessionWorkbenchSlots}
+                      apiWorkbenchSlots={apiWorkbenchSlots}
                     />
-                    <div className="min-h-0 flex-1">
-                      <ProjectPrimarySurface
-                        surface={layout.primarySurface}
-                        projectId={props.projectId}
-                        projectName={props.projectName}
-                        initialSessionId={props.initialSessionId}
-                        contribWindows={props.contribWindows}
-                        builderJson={props.builderJson}
-                        previewEnabled={props.previewEnabled}
-                        framework={props.framework}
-                        sessionsRequested={layout.activeLeft === 'sessions'}
-                        sessionWorkbenchSlots={sessionWorkbenchSlots}
-                        apiWorkbenchSlots={apiWorkbenchSlots}
-                      />
-                    </div>
                   </WorkbenchSurface>
                 </Panel>
                 {rightOpen && (
@@ -358,7 +331,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                 )}
               </PanelGroup>
             </Panel>
-            {layout.activeBottom && bottomKnown && (
+            {editorMode && layout.activeBottom && bottomKnown && (
               <>
                 <WorkbenchResizeHandle direction="vertical" />
                 <Panel id="bottom-dock" order={2} defaultSize={28} minSize={12} maxSize={62} className="min-h-0">
@@ -381,19 +354,18 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           sessionState.hasSession && <div ref={setSessionRightRailHost} className="contents" />
         ) : apiMode ? (
           <ProjectRightRail
-            activeTool={layout.activeRight}
-            onToggle={layout.toggleRight}
+            activeTool={apiRightOpen ? API_RIGHT_TOOL.id : null}
+            onToggle={() => setApiRightOpen((open) => !open)}
             pluginTabs={[]}
             tabs={[API_RIGHT_TOOL]}
           />
-        ) : (
+        ) : editorMode ? (
           <ProjectRightRail
             activeTool={layout.activeRight}
             onToggle={layout.toggleRight}
             pluginTabs={rightPlugins.map(pluginTab)}
-            hideChat={sessionState.hasSession}
           />
-        )}
+        ) : null}
       </div>
       <StatusBar projectId={props.projectId} projectName={props.projectName} />
     </WorkbenchShell>

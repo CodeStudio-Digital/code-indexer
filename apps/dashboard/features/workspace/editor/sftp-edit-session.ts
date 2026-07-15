@@ -24,16 +24,15 @@ let subscribed = false;
 function ensureJanitor(): void {
   if (subscribed) return;
   subscribed = true;
-  const openKeys = (): Set<string> =>
-    new Set(
-      useWorkspaceStore
-        .getState()
-        .openFiles.filter((f) => f.kind === 'sftp')
-        .map((f) => keyOf(f.projectId, f.path)),
-    );
-  let prev = openKeys();
-  useWorkspaceStore.subscribe(() => {
-    const now = openKeys();
+  const openKeys = (state: ReturnType<typeof useWorkspaceStore.getState>): string[] =>
+    state.openFiles
+      .filter((f) => f.kind === 'sftp')
+      .map((f) => keyOf(f.projectId, f.path));
+  let prev = openKeys(useWorkspaceStore.getState());
+  useWorkspaceStore.subscribe((state) => {
+    const next = openKeys(state);
+    if (next.length === prev.length && next.every((key, index) => key === prev[index])) return;
+    const now = new Set(next);
     for (const k of prev) {
       if (now.has(k)) continue;
       const h = handles.get(k);
@@ -46,7 +45,7 @@ function ensureJanitor(): void {
         handles.delete(k);
       }
     }
-    prev = now;
+    prev = next;
   });
 }
 

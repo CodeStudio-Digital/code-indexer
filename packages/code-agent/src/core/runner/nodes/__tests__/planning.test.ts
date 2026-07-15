@@ -48,6 +48,33 @@ describe('PlanningNode', () => {
     expect(ctx.failureStreaks.streaks.size).toBe(0);
   });
 
+  it('clears unchanged-result observations after a loop reflection', async () => {
+    const { ctx } = makeTestContext();
+    const observation = (turn: number) => ctx.noProgressTracker.observe({
+      name: 'app_get_workflow',
+      normalizedInput: { view: 'summary' },
+      content: 'unchanged',
+      isError: false,
+      turn,
+      toolUseId: `u${turn}`,
+      repeatPolicy: 'volatile',
+      resultNovel: false,
+      productive: false,
+    });
+    expect(observation(1)).toBeNull();
+    expect(observation(2)).toBeNull();
+    expect(observation(3)).toMatchObject({ wouldBlock: true });
+
+    await new PlanningNode().execute(ctx, {
+      kind: 'ToolLoopDetected',
+      guard: 'doom-loop',
+      toolName: 'app_get_workflow',
+      count: 3,
+    });
+
+    expect(observation(4)).toBeNull();
+  });
+
   it('yields TurnSucceeded so the run continues into Executing', async () => {
     const { ctx } = makeTestContext();
     const event = await new PlanningNode().execute(ctx, null);

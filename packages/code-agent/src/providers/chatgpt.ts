@@ -23,10 +23,39 @@
  * `input` array and emits our ChatDelta union as events stream in.
  */
 import OpenAI from 'openai';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import { renderTextDocument, safeDocumentFilename } from './document-utils.js';
+
+const GPT_56_PROMPT_CACHE_MODELS = new Set([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+]);
+
+// RFC 9562 UUID v5 uses SHA-1(namespace UUID + name). The fixed URL namespace
+// keeps the transport header opaque while making it stable across provider
+// recreation/resume for the same local coder session.
+const CHATGPT_SESSION_UUID_NAMESPACE = Buffer.from(
+  '6ba7b8119dad11d180b400c04fd430c8',
+  'hex',
+);
+
+function transportSessionId(sessionId: string | number): string {
+  const bytes = Buffer.from(
+    createHash('sha1')
+      .update(CHATGPT_SESSION_UUID_NAMESPACE)
+      .update(`coder-session-${sessionId}`)
+      .digest()
+      .subarray(0, 16),
+  );
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 /**
  * Extract the chatgpt_account_id from an id_token JWT. Codex gates requests
@@ -257,12 +286,18 @@ export class ChatGPTCodexProvider implements ChatProvider {
     // when the model supports it (or capability is unknown); otherwise we fall
     // back to the derived behaviour so an invalid override never breaks a turn.
     const reasoningEffort = this.resolveReasoningEffort(req);
+    const promptCacheKey =
+      req.sessionId != null && GPT_56_PROMPT_CACHE_MODELS.has(this.model.toLowerCase())
+        ? `coder-session-${req.sessionId}`
+        : null;
+    const stableTransportSessionId =
+      req.sessionId != null ? transportSessionId(req.sessionId) : null;
 
     const stream = (await (this.client as unknown as {
       responses: {
         create: (
           args: Record<string, unknown>,
-          opts?: { signal?: AbortSignal },
+          opts?: { signal?: AbortSignal; headers?: Record<string, string> },
         ) => Promise<AsyncIterable<Record<string, unknown>>>;
       };
     }).responses.create(
@@ -270,6 +305,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
         model: this.model,
         instructions: req.system,
         input,
+        ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
         ...(tools.length > 0 ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}),
         stream: true,
         // store: opt-in. When CODEX_STORE_RESPONSES=1 we persist server-side
@@ -290,7 +326,14 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // fetch when the runner aborts (e.g. user-initiated cancellation
       // or an internal timeout). Without this, an idle stream can wedge
       // for the full HTTP read timeout.
-      req.signal ? { signal: req.signal } : undefined,
+      req.signal || stableTransportSessionId
+        ? {
+            ...(req.signal ? { signal: req.signal } : {}),
+            ...(stableTransportSessionId
+              ? { headers: { session_id: stableTransportSessionId } }
+              : {}),
+          }
+        : undefined,
     )) as AsyncIterable<Record<string, unknown>>;
 
     // Track tool calls across streaming events. Keyed by item_id because
@@ -522,7 +565,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
               usage?: {
                 input_tokens?: number;
                 output_tokens?: number;
-                input_tokens_details?: { cached_tokens?: number };
+                input_tokens_details?: {
+                  cached_tokens?: number;
+                  cache_write_tokens?: number;
+                };
               };
               status?: string;
             }
@@ -540,10 +586,11 @@ export class ChatGPTCodexProvider implements ChatProvider {
         if (u) {
           const inputTokens = u.input_tokens ?? 0;
           const cachedTokens = u.input_tokens_details?.cached_tokens ?? 0;
+          const cacheWriteTokens = u.input_tokens_details?.cache_write_tokens ?? 0;
           if (inputTokens > 0) {
             const ratio = Math.round((cachedTokens / inputTokens) * 100);
             console.log(
-              `[chatgpt] turn cache: input=${inputTokens} cached=${cachedTokens} ratio=${ratio}% model=${this.model}`,
+              `[chatgpt] turn cache: input=${inputTokens} cached=${cachedTokens} written=${cacheWriteTokens} ratio=${ratio}% model=${this.model}`,
             );
           }
           yield {
@@ -552,6 +599,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
               input_tokens: inputTokens,
               output_tokens: u.output_tokens ?? 0,
               cache_read_input_tokens: cachedTokens,
+              cache_creation_input_tokens: cacheWriteTokens,
               // Responses API: input_tokens already INCLUDES cached tokens.
               prompt_tokens_total: inputTokens,
             },
@@ -581,12 +629,13 @@ type ResponsesInputItem =
         | { type: 'input_text'; text: string }
         | { type: 'output_text'; text: string }
         | { type: 'input_image'; image_url: string }
+        | { type: 'input_file'; filename: string; file_data: string; detail?: 'auto' | 'low' | 'high' }
       >;
     }
   | { type: 'function_call'; call_id: string; name: string; arguments: string }
   | { type: 'function_call_output'; call_id: string; output: string };
 
-function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[] {
+export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[] {
   const out: ResponsesInputItem[] = [];
 
   for (const m of messages) {
@@ -607,6 +656,7 @@ function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[] {
       const parts: Array<
         | { type: 'input_text'; text: string }
         | { type: 'input_image'; image_url: string }
+        | { type: 'input_file'; filename: string; file_data: string; detail?: 'auto' | 'low' | 'high' }
       > = [];
       for (const b of m.content) {
         if (b.type === 'text' && b.text) {
@@ -616,10 +666,17 @@ function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[] {
             type: 'input_image',
             image_url: `data:${b.mediaType};base64,${b.base64}`,
           });
+        } else if (b.type === 'document' && b.base64) {
+          parts.push({
+            type: 'input_file',
+            filename: safeDocumentFilename(b),
+            file_data: `data:${b.mediaType};base64,${b.base64}`,
+            ...(b.mediaType === 'application/pdf' ? { detail: 'auto' as const } : {}),
+          });
         } else if (b.type === 'document' && b.text) {
           parts.push({
             type: 'input_text',
-            text: `<document name="${b.name}" mediaType="${b.mediaType}">\n${b.text}\n</document>`,
+            text: renderTextDocument(b),
           });
         }
       }

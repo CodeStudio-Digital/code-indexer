@@ -63,6 +63,11 @@ export interface ActiveIndexRun {
   costUsd?: number;
 }
 
+export interface ScheduledIndexRun {
+  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch';
+  dueAt: number;
+}
+
 export interface ProjectIndexStatus {
   projectId: number;
   phase: ProjectIndexPhase;
@@ -73,6 +78,8 @@ export interface ProjectIndexStatus {
   semanticStaleCount: number;
   /** The live pass — undefined when idle. Survives renderer remounts. */
   activeRun?: ActiveIndexRun;
+  /** Deferred structural reconciliation; it is not consuming CPU yet. */
+  scheduledRun?: ScheduledIndexRun;
   /** @deprecated Use {@link activeRun}. Kept in sync for the StatusBar chip. */
   progress?: { current: number; total: number };
   lastStructuralAt: string | null;
@@ -207,6 +214,15 @@ export interface ProjectsApi {
    *  folders (mig 176), minus the synthetic unions. Superset of `list`. */
   listForGlobalPicker(input: void, ctx: ApiContext): Promise<Project[]>;
   get(input: { id: number }, ctx: ApiContext): Promise<Project>;
+  /** Project-view lifecycle. Unlike `get`, activation may schedule background work. */
+  activate(
+    input: { id: number; activationId: string; clientId: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true; scheduled: boolean; delayMs: number | null; largeProject: boolean }>;
+  deactivate(
+    input: { id: number; activationId: string; clientId: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
   create(input: CreateProjectInput, ctx: ApiContext): Promise<Project>;
   update(input: { id: number } & UpdateProjectInput, ctx: ApiContext): Promise<Project>;
   delete(

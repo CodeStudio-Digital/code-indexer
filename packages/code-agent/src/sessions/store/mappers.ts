@@ -1,12 +1,14 @@
 import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
 
-export type SessionRow = Omit<CoderSession, 'is_archived' | 'is_favorite' | 'is_global' | 'unrestricted_tool_output'> & {
+export type SessionRow = Omit<CoderSession, 'is_archived' | 'is_favorite' | 'is_global' | 'unrestricted_tool_output' | 'thinking_enabled'> & {
   is_archived: number;
   is_favorite: number;
   /** Migration 152 — SQLite INTEGER 0|1, coerced to boolean at map time. */
   is_global: number;
   /** SQLite stores INTEGER 0|1|NULL — coerced to boolean|null at map time. */
   unrestricted_tool_output: number | null;
+  /** Migration 226 — SQLite INTEGER 0|1, coerced to boolean at map time. */
+  thinking_enabled: number;
 };
 
 export function mapSessionRow(row: SessionRow | undefined | null): CoderSession | null {
@@ -20,5 +22,8 @@ export function mapSessionRow(row: SessionRow | undefined | null): CoderSession 
     // is false, which is the correct default (non-global).
     is_global: !!row.is_global,
     unrestricted_tool_output: unrestricted == null ? null : !!unrestricted,
+    // A row read during a rolling upgrade may not expose the new column yet;
+    // false is the migration default and preserves the legacy behaviour.
+    thinking_enabled: !!row.thinking_enabled,
   } as CoderSession;
 }

@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import { renderTextDocument } from './document-utils.js';
 import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
 import {
   kimiDebugEnabled,
@@ -436,7 +437,7 @@ function appendUserMessage(out: KimiMsg[], blocks: ContentBlock[]): void {
     } else if (b.type === 'document' && b.text) {
       parts.push({
         type: 'text',
-        text: `<document name="${b.name}" mediaType="${b.mediaType}">\n${b.text}\n</document>`,
+        text: renderTextDocument(b),
       });
     } else if (b.type === 'tool_result') {
       toolResults.push(b);

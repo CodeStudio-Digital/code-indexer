@@ -17,16 +17,34 @@ import type { FileDiff } from './session-snapshots.js';
 import { MAX_CONTEXT_CHARS } from './snapshot-review-context.js';
 import { buildMessages } from './snapshot-review-prompt.js';
 import { filterReviewableDiffs } from './snapshot-review-ignore.js';
+import { renderReviewPayload } from './review-payload.js';
 
 export type SnapshotReviewSeverity = 'critical' | 'high' | 'medium' | 'low';
+/** Unified finding taxonomy:
+ *  - `defect` — a problem in the changed lines (the classic finding);
+ *  - `missing_change` — an UNTOUCHED file listed in the absences section
+ *    (review-absences.ts), the one sanctioned exception to "findings only on
+ *    diff lines";
+ *  - `unfulfilled_obligation` — a must-have obligation of the intent contract
+ *    (intent-contract.ts) with no corresponding change;
+ *  - `scope_creep` — a deliberate change no obligation explains. */
+export type SnapshotReviewFindingKind =
+  | 'defect'
+  | 'missing_change'
+  | 'unfulfilled_obligation'
+  | 'scope_creep';
 
 export interface SnapshotReviewFinding {
   severity: SnapshotReviewSeverity;
+  /** Absent/undefined means `defect` (pre-kind producers). */
+  kind?: SnapshotReviewFindingKind;
   filePath: string;
   baselineId?: number | null;
   hunkFingerprint?: string | null;
   oldLine?: number | null;
   newLine?: number | null;
+  /** Intent-contract obligation this finding maps to (e.g. "OB1"). */
+  obligationId?: string | null;
   body: string;
   suggestedFix?: string | null;
   diffExcerpt?: string | null;
@@ -50,6 +68,12 @@ export interface SnapshotReviewInput {
   /** Optional pre-rendered context block (snapshot-review-context.ts),
    *  prepended before the diffs in the reviewer prompt. Capped defensively. */
   contextText?: string | null;
+  /** Optional pre-rendered "references to verify" section
+   *  (review-absences.ts) — untouched call sites of contract-changed symbols. */
+  absencesText?: string | null;
+  /** Optional pre-rendered intent-contract obligations section
+   *  (intent-contract.ts) — enables unfulfilled_obligation / scope_creep. */
+  contractText?: string | null;
 }
 
 const PIPELINE_NAME = 'snapshot_review';
@@ -63,44 +87,6 @@ function toNumber(value: unknown): number | undefined {
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n...[truncated]`;
-}
-
-function linePrefix(type: 'context' | 'add' | 'remove'): string {
-  if (type === 'add') return '+';
-  if (type === 'remove') return '-';
-  return ' ';
-}
-
-function renderHunk(diff: FileDiff, hunk: FileDiff['hunks'][number]): string {
-  const header = [
-    `file=${diff.baseline.filePath}`,
-    `baselineId=${diff.baseline.id}`,
-    `hunkFingerprint=${hunk.fingerprint}`,
-    `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
-  ].join(' ');
-  const body = hunk.lines
-    .map((line) => {
-      const oldPart = line.oldLine == null ? ' ' : String(line.oldLine);
-      const newPart = line.newLine == null ? ' ' : String(line.newLine);
-      return `${oldPart.padStart(5)} ${newPart.padStart(5)} ${linePrefix(line.type)}${line.content}`;
-    })
-    .join('\n');
-  return `${header}\n${body}`;
-}
-
-function renderDiffs(diffs: FileDiff[]): { text: string; pendingHunks: number } {
-  const chunks: string[] = [];
-  let pendingHunks = 0;
-  for (const diff of diffs) {
-    if (diff.diffDisabled) {
-      chunks.push(`FILE ${diff.baseline.filePath} baselineId=${diff.baseline.id}: diff disabled`);
-      continue;
-    }
-    const hunks = diff.hunks.filter((h) => h.decision === 'pending');
-    pendingHunks += hunks.length;
-    for (const hunk of hunks) chunks.push(renderHunk(diff, hunk));
-  }
-  return { text: truncate(chunks.join('\n\n'), MAX_DIFF_CHARS), pendingHunks };
 }
 
 function extractJson(raw: string): unknown {
@@ -124,6 +110,12 @@ function normalizeSeverity(value: unknown): SnapshotReviewSeverity {
     : 'medium';
 }
 
+function normalizeKind(value: unknown): SnapshotReviewFindingKind {
+  return value === 'missing_change' || value === 'unfulfilled_obligation' || value === 'scope_creep'
+    ? value
+    : 'defect';
+}
+
 function toOptionalNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -144,11 +136,13 @@ function parseFindings(raw: string): SnapshotReviewFinding[] {
     if (!filePath || !body) continue;
     findings.push({
       severity: normalizeSeverity(row.severity),
+      kind: normalizeKind(row.kind),
       filePath,
       baselineId: toOptionalNumber(row.baselineId),
       hunkFingerprint: toOptionalString(row.hunkFingerprint, 200),
       oldLine: toOptionalNumber(row.oldLine),
       newLine: toOptionalNumber(row.newLine),
+      obligationId: toOptionalString(row.obligationId, 100),
       body,
       suggestedFix: toOptionalString(row.suggestedFix, 4000),
       diffExcerpt: toOptionalString(row.diffExcerpt, 4000),
@@ -183,11 +177,15 @@ export class SnapshotReviewPipeline {
         });
       }
 
-      const rendered = renderDiffs(filterReviewableDiffs(input.diffs));
+      const rendered = renderReviewPayload(filterReviewableDiffs(input.diffs), {
+        maxChars: MAX_DIFF_CHARS,
+      });
       pendingHunks = rendered.pendingHunks;
       const messages = buildMessages(
         rendered.text,
         input.contextText ? truncate(input.contextText, MAX_CONTEXT_CHARS) : undefined,
+        input.absencesText,
+        input.contractText,
       );
       const failover = await callChatWithFailover(
         chain,

@@ -278,7 +278,7 @@ export interface DispatchResult {
    * orchestrator and dashboard see WHICH guard fired (not just THAT
    * one did).
    */
-  loopGuard?: 'tuple-hash' | 'failure-streak';
+  loopGuard?: 'tuple-hash' | 'doom-loop' | 'failure-streak';
   /**
    * A1 — tool + repetition count behind the most recent refusal in this
    * batch (mirrors `loopGuard`: last one wins). Threaded into
@@ -893,8 +893,29 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       productive: stateChangingSuccess || ledgerEntry?.productive,
       stateEpoch: args.noProgressTracker.stateEpoch,
     }) ?? null;
+    // Most unchanged reads remain observation-only: a later user request may
+    // legitimately ask for the same snapshot. A small set of control-plane
+    // tools can opt in when repeating an unchanged result inside the current
+    // run is itself the failure mode (App Studio's workflow snapshot is the
+    // motivating case). The successful third result is delivered, but the BT
+    // is routed through Planning before another provider continuation.
+    const stopRepeatedUnchangedResult =
+      tool?.stopOnRepeatedUnchangedResult === true && noProgressVerdict?.wouldBlock === true;
+    const effectiveNoProgressVerdict = stopRepeatedUnchangedResult
+      ? {
+          ...noProgressVerdict,
+          action: 'block' as const,
+          reason: 'cross-turn-no-progress-blocked',
+          shouldReflect: true,
+        }
+      : noProgressVerdict;
+    if (stopRepeatedUnchangedResult) {
+      toolLoopDetected = true;
+      loopGuard = 'doom-loop';
+      loopDetail = { toolName: tu.name, count: noProgressVerdict.count ?? 3 };
+    }
     const selectedGuardVerdict = invocationGuardVerdict
-      ?? noProgressVerdict
+      ?? effectiveNoProgressVerdict
       ?? (verdict.action === 'allow' ? undefined : verdict);
     const finalGuardVerdict = selectedGuardVerdict && stateChangingSuccess
       ? { ...selectedGuardVerdict, stateEpoch: invocationGuard.stateEpoch }

@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import type { ServerDeps } from '../../deps.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
@@ -20,8 +21,15 @@ import {
 } from '../../../sse/runtime-event-log.js';
 import { resolveAndRunMaster } from './master-resolve.js';
 import { ensureCompanyMasterLive } from './ensure-master-live.js';
-import { normalizeAttachmentsForModel, pdfHandledNatively } from '@mcp/services/services/docs/attachment-extract.js';
+import {
+  binaryDocumentsHandledNatively,
+  normalizeAttachmentsForModel,
+  pdfHandledNatively,
+} from '@mcp/services/services/docs/attachment-extract.js';
+import { validateAttachments } from '@mcp/services/services/docs/attachment-validation.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
+import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
+import { getDefinition } from '@mcp/services/providers/registry.js';
 
 /**
  * Backoff before retrying a resume that hit `port_closed`. The default
@@ -63,48 +71,13 @@ interface StartBody {
   client_msg_id?: string;
 }
 
-const MAX_ATTACHMENTS = 4;
-// 14 MB base64 ≈ 10 MB raw — generous for UI screenshots, hard cap for safety.
-const MAX_ATTACHMENT_BASE64_BYTES = 14 * 1024 * 1024;
-
-function validateAttachments(input: unknown): { ok: true; value: AttachmentBody[] | undefined } | { ok: false; error: string } {
-  if (input === undefined || input === null) return { ok: true, value: undefined };
-  if (!Array.isArray(input)) return { ok: false, error: 'attachments must be an array' };
-  if (input.length === 0) return { ok: true, value: undefined };
-  if (input.length > MAX_ATTACHMENTS) {
-    return { ok: false, error: `attachments: at most ${MAX_ATTACHMENTS} items` };
-  }
-  const out: AttachmentBody[] = [];
-  for (let i = 0; i < input.length; i++) {
-    const att = input[i];
-    if (!att || typeof att !== 'object') {
-      return { ok: false, error: `attachments[${i}] must be an object` };
-    }
-    const a = att as Record<string, unknown>;
-    if (typeof a.mediaType !== 'string' || a.mediaType.length === 0) {
-      return { ok: false, error: `attachments[${i}].mediaType is required` };
-    }
-    // Images AND documents are allowed (docx/xlsx/pptx/odt/pdf…). An item must
-    // carry a payload: base64 (images, binary docs) or pre-decoded text. The
-    // extractor (normalizeAttachmentsForModel) turns office base64 → text so
-    // the master and its subordinates actually see the content.
-    const hasBase64 = typeof a.base64 === 'string' && a.base64.length > 0;
-    const hasText = typeof a.text === 'string' && a.text.length > 0;
-    if (!hasBase64 && !hasText) {
-      return { ok: false, error: `attachments[${i}] must have base64 or text` };
-    }
-    if (hasBase64 && (a.base64 as string).length > MAX_ATTACHMENT_BASE64_BYTES) {
-      return { ok: false, error: `attachments[${i}] is too large (max ~10 MB)` };
-    }
-    out.push({
-      name: typeof a.name === 'string' && a.name ? a.name : `attachment-${i + 1}`,
-      mediaType: a.mediaType,
-      ...(hasBase64 ? { base64: a.base64 as string } : {}),
-      ...(hasText ? { text: a.text as string } : {}),
-    });
-  }
-  return { ok: true, value: out };
-}
+const attachmentBodyLimit = bodyLimit({
+  maxSize: MAX_ATTACHMENT_REQUEST_BYTES,
+  onError: (c) => c.json(
+    { error: 'request body is too large', code: 'ATTACHMENT_REQUEST_TOO_LARGE' },
+    413,
+  ),
+});
 
 interface PlanResponseBody {
   approved: boolean;
@@ -124,7 +97,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   // master can see images, and extract PDF text (dropping base64) unless the
   // master's adapter reads PDF natively. Defaults to the vision-capable,
   // PDF-native Anthropic master when the config is missing/unparseable.
-  function masterAttachmentOpts(id: number): { extractImages: boolean; extractPdfText: boolean } {
+  // General file transports also keep Office/OpenDocument bytes native.
+  function masterAttachmentOpts(id: number): {
+    extractImages: boolean;
+    extractPdfText: boolean;
+    keepBinaryDocuments: boolean;
+  } {
     let providerName = 'anthropic';
     let modelId = 'claude-sonnet-4-6';
     try {
@@ -139,9 +117,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       /* defaults */
     }
     const providerKind = providerStore.getProvider(providerName)?.kind ?? providerName;
+    const modelRow = providerStore.getProvider(providerName)
+      ? providerStore.listModels(providerName).find((m) => m.model_id === modelId)
+      : undefined;
+    const fileHandling = {
+      mode: getDefinition(providerKind)?.capabilities?.fileInput,
+      modelId,
+      supportsAttachments: modelRow?.supports_attachments,
+    };
     return {
       extractImages: modelSupportsVision({ providerKind, modelId }) === true,
-      extractPdfText: !pdfHandledNatively(providerKind),
+      extractPdfText: !pdfHandledNatively(fileHandling),
+      keepBinaryDocuments: binaryDocumentsHandledNatively(fileHandling),
     };
   }
 
@@ -170,21 +157,21 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * The subscribe with sinceSeq=-1 replays ALL buffered events, so
    * events emitted during startMaster() are never lost.
    */
-  app.post('/api/company/sessions/:id/start', async (c) => {
+  app.post('/api/company/sessions/:id/start', attachmentBodyLimit, async (c) => {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
 
     const body = await parseJsonBody<StartBody>(c);
-    if (!body.user_message) {
-      return c.json({ error: 'user_message required' }, 400);
-    }
     const attachmentsCheck = validateAttachments(body.attachments);
     if (!attachmentsCheck.ok) {
-      return c.json({ error: attachmentsCheck.error }, 400);
+      return c.json({ error: attachmentsCheck.error, code: attachmentsCheck.code }, attachmentsCheck.status);
     }
     // Capture into a local const so TS narrowing survives the async closure below.
-    const userMessage = body.user_message;
+    const userMessage = body.user_message?.trim()
+      ? body.user_message
+      : (attachmentsCheck.value?.length ? DEFAULT_ATTACHMENT_PROMPT : '');
+    if (!userMessage) return c.json({ error: 'user_message required' }, 400);
     const maxTurnsRequested = body.max_turns;
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     const attachments = await normalizeAttachmentsForModel(
@@ -321,18 +308,21 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * Creates a new orchestrator but resumes the master from the EXISTING coder
    * session, preserving full conversation history and board context.
    */
-  app.post('/api/company/sessions/:id/resume', async (c) => {
+  app.post('/api/company/sessions/:id/resume', attachmentBodyLimit, async (c) => {
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ message: string; attachments?: AttachmentBody[]; thinking?: boolean; client_msg_id?: string }>(c);
     const attachmentsCheck = validateAttachments(body.attachments);
     if (!attachmentsCheck.ok) {
-      return c.json({ error: attachmentsCheck.error }, 400);
+      return c.json({ error: attachmentsCheck.error, code: attachmentsCheck.code }, attachmentsCheck.status);
     }
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     const attachments = await normalizeAttachmentsForModel(
       attachmentsCheck.value,
       masterAttachmentOpts(id),
     );
+    const message = body.message?.trim()
+      ? body.message
+      : (attachments?.length ? DEFAULT_ATTACHMENT_PROMPT : '');
 
     // Serialize the "is there an existing orchestrator?" decision so two
     // concurrent /resume calls can't both observe registry-empty and each
@@ -358,15 +348,15 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }
       const existing = getCompanyOrchestrator(id);
       if (existing) {
-        if (body.message) existing.sendMessageToMaster(body.message, { attachments, thinking: body.thinking });
+        if (message) existing.sendMessageToMaster(message, { attachments, thinking: body.thinking });
         if (dedupeKey) recentMessageKeys.record(id, dedupeKey, existing.metaBus, parseLastEventId(c));
         return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c), bus: existing.metaBus };
       }
 
       const session = companyStore.getCompanySession(id);
       if (!session) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
-      if (!body.message) return { kind: 'reject', status: 400, body: { error: 'message required' } };
-      const userMessage = body.message;
+      if (!message) return { kind: 'reject', status: 400, body: { error: 'message required' } };
+      const userMessage = message;
 
       // Sub-sessions (migration 067): a brand-new tab has no master_run
       // yet, so we cold-start instead of trying to resume.
@@ -617,17 +607,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * break the wait and inject the message anyway — useful when the human
    * wants to redirect the conversation mid-loop.
    */
-  app.post('/api/company/sessions/:id/message', async (c) => {
+  app.post('/api/company/sessions/:id/message', attachmentBodyLimit, async (c) => {
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ message: string; interject?: boolean; attachments?: AttachmentBody[]; thinking?: boolean }>(c);
-    if (!body.message) {
-      return c.json({ error: 'message required' }, 400);
-    }
     const attachmentsCheck = validateAttachments(body.attachments);
     if (!attachmentsCheck.ok) {
-      return c.json({ error: attachmentsCheck.error }, 400);
+      return c.json({ error: attachmentsCheck.error, code: attachmentsCheck.code }, attachmentsCheck.status);
     }
     const attachments = await normalizeAttachmentsForModel(attachmentsCheck.value, masterAttachmentOpts(id));
+    const message = body.message?.trim()
+      ? body.message
+      : (attachments?.length ? DEFAULT_ATTACHMENT_PROMPT : '');
+    if (!message) return c.json({ error: 'message required' }, 400);
 
     // Live path.
     const orchestrator = getCompanyOrchestrator(id);
@@ -635,7 +626,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       if (orchestrator.metaBus.ended) {
         return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
       }
-      const result = orchestrator.sendMessageToMaster(body.message, {
+      const result = orchestrator.sendMessageToMaster(message, {
         interject: body.interject,
         attachments,
         thinking: body.thinking,
@@ -655,7 +646,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // Dead orchestrator: re-spawn + resume the master with this message instead
     // of 404ing (idle eviction / process restart should be invisible).
     const res = await ensureCompanyMasterLive(id, deps, {
-      message: body.message,
+      message,
       attachments,
       thinking: body.thinking,
     });

@@ -30,8 +30,6 @@ export interface TabDef {
 export const LEFT_TOOL_TABS: TabDef[] = [
   { id: 'files', label: 'Files', icon: FileCode2, kind: 'left', group: 'core' },
   { id: 'git', label: 'Git', icon: GitBranch, kind: 'left', group: 'core' },
-  { id: 'sessions', label: 'Sessions', icon: MessageSquareCode, kind: 'left', group: 'core', separatorBefore: true },
-  { id: 'api-navigation', label: 'API', icon: Webhook, kind: 'left', group: 'core' },
   { id: 'databases', label: 'Databases', icon: Database, kind: 'left', group: 'core' },
 ];
 
@@ -60,6 +58,11 @@ export const PRIMARY_SURFACES: TabDef[] = [
   { id: 'preview', label: 'Preview', icon: Monitor, kind: 'primary', group: 'core' },
 ];
 
+/** Dedicated workspaces exposed on the activity rail. Code is entered by its tools. */
+export const WORKSPACE_SURFACES: TabDef[] = PRIMARY_SURFACES
+  .filter((surface) => surface.id !== 'editor')
+  .map((surface, index) => ({ ...surface, separatorBefore: index === 0 }));
+
 /**
  * Compatibility catalog consumed by pins and deep links. `editor` is omitted
  * from old rail pin affordances by their callers, but remains discoverable.
@@ -77,10 +80,4 @@ export function projectSurface(id: string): TabDef | undefined {
 
 export function projectSurfacesFor(kind: ProjectSurfaceKind): TabDef[] {
   return TABS.filter((surface) => surface.kind === kind);
-}
-
-/** Context-owned docks must never survive after their primary surface closes. */
-export function projectToolAvailableInContext(toolId: string | null, primarySurface: string): boolean {
-  if (toolId === 'api-navigation' || toolId === 'api-inspector') return primarySurface === 'api';
-  return true;
 }

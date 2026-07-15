@@ -103,7 +103,7 @@ export interface DbConnectSpec {
   connectionString?: string;
   ssl?: { mode?: DbSslMode; ca?: string; cert?: string; key?: string };
   options?: Record<string, unknown>;
-  /** Server-enforced safety valve — when true, non-SELECT statements are rejected. */
+  /** App + driver safety valve — mutating statements/commands are rejected. */
   readOnly?: boolean;
 }
 
@@ -298,6 +298,8 @@ export interface DbClientApi {
       sql: string;
       params?: unknown[];
       maxRows?: number;
+      /** Per-statement execution deadline in milliseconds. */
+      timeoutMs?: number;
       queryId?: string;
       /** Scope this console to a schema (pg search_path / mysql USE). */
       schema?: string;

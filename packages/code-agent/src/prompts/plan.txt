@@ -18,6 +18,8 @@ Investigate until the verifiable hypotheses are exhausted, in roughly this order
 5. **Decision gate** — check whether the task has a genuine FORK: 2+ viable approaches a competent engineer could reasonably pick between that lead to materially different plans (extend vs rewrite, add a dependency vs hand-roll, where the logic lives, migrate now vs later, a UX behavior). If you find one, you **MUST** call `decision_gate` (or `ask_user` for a single quick fork) BEFORE writing the plan — 1–4 questions, each option with a one-line `summary` + `tradeoffs`. A fork is NOT genuine if you can verify it yourself (READ it), if the evidence already settles it, or if it's a trivial detail (naming, placement) — decide those yourself and record the call in the **Decisions** section. Don't invent a fork to look thorough; most `simple`-depth tasks have none.
 6. **Design** — with forks resolved, settle on ONE concrete approach (the user's picks where they chose, your judgment elsewhere); the **Approach** and **Decisions** sections must reflect it.
 
+`submit_plan` is the human review gate, not a fork detector: once called with a valid plan it is shown immediately for Approve / Revise / Reject. It will not infer alternatives from the plan prose, so resolve every genuine fork with `decision_gate` before submission.
+
 ## The plan document
 Deliver the plan (the `submit_plan` markdown) with these sections:
 - **Context** — what the change is and why (1–3 lines).

@@ -3,7 +3,7 @@ import type { ProviderSpec } from '@mcp/provider-sdk';
 /**
  * Declarative spec for the AWS Bedrock built-in. credKind='aws' — creds come
  * from `creds.aws` (access key / secret / session token / region). No
- * `defaultModel`, `capabilities`, or `defaultBaseURL` are declared.
+ * `defaultModel` or `defaultBaseURL` are declared.
  */
 export const bedrockSpec: ProviderSpec = {
   kind: 'bedrock',
@@ -23,6 +23,10 @@ export const bedrockSpec: ProviderSpec = {
     'anthropic.claude-3-opus-20240229-v1:0': { inputPer1M: 15.0, outputPer1M: 75.0 },
     'meta.llama3-70b-instruct-v1:0': { inputPer1M: 2.65, outputPer1M: 3.5 },
   },
+  // Converse accepts document blocks, but support is model-specific. The HTTP
+  // route currently enables native PDF for the Claude-on-Bedrock family and
+  // extracts text for unknown/unsupported models.
+  capabilities: { supportsVision: true, fileInput: 'model-dependent' },
   wire: 'bedrock',
   discovery: { from: 'sdk:bedrock' },
   test: { from: 'unsupported', message: 'bedrock test not implemented' },

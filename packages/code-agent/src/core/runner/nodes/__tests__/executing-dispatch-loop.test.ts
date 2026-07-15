@@ -121,6 +121,40 @@ describe('dispatchTools — local repeat protection', () => {
     expect(invoked).toBe(3);
   });
 
+  it('actively breaks repeated unchanged control-plane snapshots when the tool opts in', async () => {
+    let invoked = 0;
+    const registry = registryWith({
+      name: 'app_get_workflow',
+      mutates: false,
+      executionClass: 'read',
+      repeatPolicy: 'volatile',
+      stopOnRepeatedUnchangedResult: true,
+    }, () => { invoked++; });
+    const noProgressTracker = new NoProgressTracker();
+    const context = { ...toolContext, toolCallLedger: new ToolCallLedger() } as ToolContext;
+    const run = (turn: number) => dispatchTools({
+      ...batch(registry, 'app_get_workflow', [{ x: 1 }], turn),
+      toolContext: context,
+      noProgressTracker,
+    });
+
+    expect((await run(1)).toolLoopDetected).toBe(false);
+    expect((await run(2)).toolLoopDetected).toBe(false);
+    const third = await run(3);
+    expect(third.results[0].guardVerdict).toMatchObject({
+      action: 'block',
+      reason: 'cross-turn-no-progress-blocked',
+      wouldBlock: true,
+    });
+    expect(third).toMatchObject({
+      toolLoopDetected: true,
+      loopGuard: 'doom-loop',
+      loopDetail: { toolName: 'app_get_workflow', count: 3 },
+    });
+    expect(third.results[0].isError).toBe(false);
+    expect(invoked).toBe(3);
+  });
+
   it('force_reread bypasses same-batch stable result reuse', async () => {
     let invoked = 0;
     const registry = registryWith({

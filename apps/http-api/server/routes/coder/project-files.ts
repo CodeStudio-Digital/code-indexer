@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
+import { getProjectIgnoreRules, projectIgnorePatterns } from '@mcp/shared/utils/project-ignore.js';
 
 export interface ProjectTreeEntry {
   name: string;
@@ -23,7 +24,7 @@ interface IgnoreCacheEntry {
 }
 
 const IGNORE_TTL_MS = 30_000;
-const ALWAYS_IGNORE = ['.git/', 'node_modules/'];
+const ALWAYS_IGNORE = ['.git/', '.mcp-indexer/', 'node_modules/'];
 
 const cache = new Map<string, IgnoreCacheEntry>();
 
@@ -81,6 +82,7 @@ export async function loadIgnore(rootAbs: string): Promise<Ignore> {
 
   const ig = ignore();
   ig.add(ALWAYS_IGNORE);
+  ig.add(projectIgnorePatterns(getProjectIgnoreRules(rootAbs)));
   if (gitContent) ig.add(gitContent);
   if (mcpContent) ig.add(mcpContent);
 

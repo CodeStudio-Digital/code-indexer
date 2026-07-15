@@ -9,6 +9,7 @@ export {
   type ProjectIndexPhase,
   type ProjectIndexSettings,
   type ProjectIndexStatus,
+  type ScheduledIndexRun,
   type StructuralExecutor,
   type StructuralProgressFrame,
   type StructuralRunSummary,

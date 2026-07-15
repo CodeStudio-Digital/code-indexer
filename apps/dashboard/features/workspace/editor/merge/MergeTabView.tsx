@@ -7,7 +7,6 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import * as monaco from 'monaco-editor';
 import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { ArrowDown, ArrowLeftToLine, ArrowRightToLine, ArrowUp, Check, Loader2, Wand2, X } from 'lucide-react';
@@ -22,8 +21,7 @@ import { computeMergeRegions } from './model/merge-regions.js';
 import { buildInitialResult, detectEol } from './model/build-result.js';
 import { mountThreePane, type ThreePaneHandles } from './three-pane-models.js';
 import { createMergeController, type MergeController } from './merge-controller.js';
-
-const detectDark = () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+import { sharedMonacoThemeId } from '../../../../lib/monaco-theme.js';
 
 export function MergeTabView({ tab }: { tab: OpenMerge }) {
   const { t } = useTranslation('workspace');
@@ -38,14 +36,6 @@ export function MergeTabView({ tab }: { tab: OpenMerge }) {
   const resultRef = useRef<HTMLDivElement>(null);
   const theirsRef = useRef<HTMLDivElement>(null);
   const ctrlRef = useRef<MergeController | null>(null);
-
-  // The panes bake the theme at mount (imperative monaco.editor.create); re-apply
-  // on a runtime light/dark toggle. setTheme is global → one call themes all panes.
-  useEffect(() => {
-    const obs = new MutationObserver(() => monaco.editor.setTheme(detectDark() ? 'vs-dark' : 'vs'));
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    return () => obs.disconnect();
-  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -65,7 +55,13 @@ export function MergeTabView({ tab }: { tab: OpenMerge }) {
     const seed = buildInitialResult(model, eol).text;
     const handles: ThreePaneHandles = mountThreePane(
       { ours: els.ours, result: els.result, theirs: els.theirs },
-      { file: tab.file, ours: data.ours ?? '', theirs: data.theirs ?? '', result: seed, dark: detectDark() },
+      {
+        file: tab.file,
+        ours: data.ours ?? '',
+        theirs: data.theirs ?? '',
+        result: seed,
+        theme: sharedMonacoThemeId(),
+      },
     );
     const tt = tRef.current;
     const ctrl = createMergeController(handles, model, eol, {

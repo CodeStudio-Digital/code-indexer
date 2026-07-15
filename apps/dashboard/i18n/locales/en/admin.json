@@ -295,6 +295,11 @@
   "skills.builtin": "builtin",
   "skills.imported": "imported",
   "skills.project": "project:",
+  "skills.namespaceUpdateFailed": "Could not update skill namespace",
+  "skills.namespaceUninstallFailed": "Could not uninstall skill namespace",
+  "skills.namespaceUninstallTitle": "Uninstall skill namespace?",
+  "skills.namespaceUninstallConfirm": "All skills from “{{namespace}}” will be uninstalled.",
+  "skills.namespaceUninstallAction": "Uninstall",
   "skillEdit.createTitle": "Create Skill",
   "skillEdit.editTitle": "Edit \"{{name}}\"",
   "skillEdit.name": "Name",
@@ -694,5 +699,6 @@
   "perf.tools.longTasksEmpty": "No long tasks observed in this session.",
   "perf.tools.when": "When",
   "perf.tools.durationMs": "Duration (ms)",
-  "perf.tools.attribution": "Attribution"
+  "perf.tools.attribution": "Attribution",
+  "lspServers.emptyInstances": "None — lightweight servers may warm when a file opens; heavy servers start on the first interactive use, and all stop after inactivity."
 }

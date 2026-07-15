@@ -1,0 +1,8 @@
+{"type":"system","subtype":"compact_boundary","sessionId":"claude-session-1","cwd":"D:\\MCP","compactMetadata":{"summary":"Implemented the parser; tests remain."},"timestamp":"2026-07-14T10:00:00.000Z"}
+{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"claude-session-1","cwd":"D:\\MCP","timestamp":"2026-07-14T10:01:00.000Z","message":{"role":"user","content":"<system-reminder>private runtime instruction</system-reminder>\nBuild the importer"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"claude-session-1","cwd":"D:\\MCP","timestamp":"2026-07-14T10:02:00.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private"},{"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"README.md"}}]}}
+{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"claude-session-1","cwd":"D:\\MCP","timestamp":"2026-07-14T10:03:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"contents"}]}}
+{"type":"assistant","uuid":"a2","parentUuid":"u2","sessionId":"claude-session-1","cwd":"D:\\MCP","timestamp":"2026-07-14T10:04:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Parser implemented"}]}}
+{"type":"user","uuid":"fork-u","parentUuid":"a1","sessionId":"claude-session-1","cwd":"D:\\MCP","timestamp":"2026-07-14T10:05:00.000Z","message":{"role":"user","content":"Abandoned fork"}}
+{"type":"last-prompt","leafUuid":"a2","sessionId":"claude-session-1"}
+{"incomplete":

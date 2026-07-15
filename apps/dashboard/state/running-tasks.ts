@@ -13,7 +13,7 @@
  */
 
 import { create } from 'zustand';
-import type { RunnerTask } from '@mcp/api-bus';
+import type { RunnerTask, RuntimeTarget } from '@mcp/api-bus';
 import { isDevServerCommand } from '@mcp/shared/utils/dev-server-url.js';
 import { apiCall, apiStream, electronApi } from '../lib/api-client.js';
 
@@ -81,6 +81,7 @@ export async function startTask(input: {
   manager: RunnerTask['manager'];
   /** Project-relative working dir (defaults to project root); for nested manifests. */
   cwd?: string;
+  target?: RuntimeTarget;
 }): Promise<RunnerTask> {
   return apiCall<RunnerTask>('runner.start', input);
 }

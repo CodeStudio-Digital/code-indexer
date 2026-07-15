@@ -208,6 +208,7 @@ function PromptDialogBody({
   request: PromptRequest;
   onResolve: (value: string | null) => void;
 }) {
+  const { t } = useTranslation('common');
   const { opts } = request;
   const [value, setValue] = useState(opts.defaultValue ?? '');
   const [error, setError] = useState<string | null>(null);
@@ -272,10 +273,10 @@ function PromptDialogBody({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onResolve(null)}>
-            {opts.cancelLabel ?? 'Cancel'}
+            {opts.cancelLabel ?? t('actions.cancel')}
           </Button>
           <Button onClick={submit} disabled={!value.trim()}>
-            {opts.confirmLabel ?? 'OK'}
+            {opts.confirmLabel ?? t('actions.confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -284,31 +285,45 @@ function PromptDialogBody({
 }
 
 export function ConfirmDialogHost() {
+  const { t } = useTranslation('common');
   const active = useConfirmStore((s) => s.active);
   const resolve = useConfirmStore((s) => s.resolve);
   if (!active) return null;
   const { opts } = active;
   const destructive = opts.tone === 'destructive';
+  const Icon = destructive ? AlertCircle : Info;
   return (
     <Dialog open onOpenChange={(o) => !o && resolve(false)}>
       <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle className={cn('text-[14px]', destructive && 'text-destructive')}>
-            {opts.title}
-          </DialogTitle>
-          {opts.description && (
-            <DialogDescription className="text-[12px]">{opts.description}</DialogDescription>
-          )}
-        </DialogHeader>
+        <div className="flex items-start gap-3">
+          <div className={cn(
+            'mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full border',
+            destructive
+              ? 'border-destructive/25 bg-destructive/10 text-destructive'
+              : 'border-primary/20 bg-primary/10 text-primary',
+          )}>
+            <Icon className="h-4 w-4" aria-hidden="true" />
+          </div>
+          <DialogHeader className="min-w-0 flex-1 pt-0.5 text-left">
+            <DialogTitle className={cn('text-[14px]', destructive && 'text-destructive')}>
+              {opts.title}
+            </DialogTitle>
+            {opts.description && (
+              <DialogDescription className="whitespace-pre-line text-[12px] leading-relaxed">
+                {opts.description}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+        </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => resolve(false)} autoFocus>
-            {opts.cancelLabel ?? 'Cancel'}
+            {opts.cancelLabel ?? t('actions.cancel')}
           </Button>
           <Button
             className={cn(destructive && 'bg-destructive text-destructive-foreground hover:bg-destructive/90')}
             onClick={() => resolve(true)}
           >
-            {opts.confirmLabel ?? 'Confirm'}
+            {opts.confirmLabel ?? t('actions.confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>

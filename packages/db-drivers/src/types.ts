@@ -54,6 +54,12 @@ export interface DbConnectConfig {
   options?: Record<string, unknown>;
   /** Back-compat: a full connection URL. When set it wins over the fields above. */
   connectionString?: string;
+  /**
+   * Defense-in-depth read-only mode. The factory rejects mutating SQL/commands
+   * before they reach a driver; engines with a native/session read-only mode
+   * also enable it. This never grants permissions the database user lacks.
+   */
+  readOnly?: boolean;
 }
 
 export interface QueryField {
@@ -143,6 +149,8 @@ export interface RunQueryOptions {
   params?: unknown[];
   /** Hard cap on rows returned to the client. Excess rows set `truncated`. */
   maxRows?: number;
+  /** Per-statement execution deadline in milliseconds. */
+  timeoutMs?: number;
   /** Abort signal — drivers cancel the in-flight query when it fires. */
   signal?: AbortSignal;
   /**

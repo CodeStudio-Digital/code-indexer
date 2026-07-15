@@ -15,10 +15,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function fakeDb(
   project: { structural_indexed_at: string | null; last_indexed: string | null },
   synthetic = false,
+  fileCount = 2,
 ): CodeIndexDB {
   return {
     getProject: () => ({
-      id: 1, root_path: 'D:/fake', file_count: 2, symbol_count: 5,
+      id: 1, root_path: 'D:/fake', file_count: fileCount, symbol_count: 5,
       is_synthetic: synthetic,
       structural_indexed_at: project.structural_indexed_at,
       last_indexed: project.last_indexed,
@@ -181,6 +182,52 @@ describe('ProjectIndexService', () => {
     await sleep(80);
     expect(exec.runs).toBe(1);
     await svc.dispose();
+  });
+
+  it('activation is idempotent and deactivation cancels a deferred reconciliation', async () => {
+    const exec = new FakeExecutor();
+    const svc = makeService(exec, undefined, { ...SETTINGS, openDelayMs: 40 });
+
+    const first = svc.activate(1, 'view-a');
+    const duplicate = svc.activate(1, 'view-a');
+    expect(first).toMatchObject({ scheduled: true, delayMs: 40, largeProject: false });
+    expect(duplicate.scheduled).toBe(true);
+    expect(svc.getStatus(1).scheduledRun?.reason).toBe('activation');
+
+    expect(svc.deactivate(1, 'view-a')).toBe(true);
+    await sleep(60);
+    expect(exec.runs).toBe(0);
+    expect(svc.getStatus(1).scheduledRun).toBeUndefined();
+    await svc.dispose();
+  });
+
+  it('reports final deactivation only after the last project view leaves', async () => {
+    const svc = makeService(new FakeExecutor(), undefined, { ...SETTINGS, openDelayMs: 40 });
+    svc.activate(1, 'view-a');
+    svc.activate(1, 'view-b');
+
+    expect(svc.deactivate(1, 'view-a')).toBe(false);
+    expect(svc.deactivate(1, 'view-b')).toBe(true);
+    expect(svc.deactivate(1, 'unknown-view')).toBe(true);
+    await svc.dispose();
+  });
+
+  it('uses the large-project delay and never schedules a second run for another view', async () => {
+    const previous = process.env.MCP_INDEX_LARGE_OPEN_DELAY_MS;
+    process.env.MCP_INDEX_LARGE_OPEN_DELAY_MS = '40';
+    const exec = new FakeExecutor();
+    const db = fakeDb({ structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null }, false, 15_000);
+    const svc = makeService(exec, db, { ...SETTINGS, openDelayMs: 0 });
+    try {
+      expect(svc.activate(1, 'view-a')).toMatchObject({ scheduled: true, delayMs: 40, largeProject: true });
+      expect(svc.activate(1, 'view-b')).toMatchObject({ scheduled: true, delayMs: null, largeProject: true });
+      await sleep(60);
+      expect(exec.runs).toBe(1);
+    } finally {
+      if (previous === undefined) delete process.env.MCP_INDEX_LARGE_OPEN_DELAY_MS;
+      else process.env.MCP_INDEX_LARGE_OPEN_DELAY_MS = previous;
+      await svc.dispose();
+    }
   });
 
   it('marks a deferred synthetic workspace busy before the composer can send', async () => {

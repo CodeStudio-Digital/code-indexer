@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { COMMAND_CATALOG, registerCommandHandlers } from '../commands.js';
 import { contextsOverlap, effectiveBindings, migrateKeymapState, useKeymapStore } from '../keymap-store.js';
-import { eventToChord, installKeymapDispatcher } from '../dispatcher.js';
+import { eventToChord, eventToMouseChord, installKeymapDispatcher } from '../dispatcher.js';
+import { installShortcutRecorder } from '../recorder.js';
 import { bindingToMonaco, buildManagedMonacoRules } from '../../features/workspace/editor/monaco-keymap.js';
 
 const fakeMonaco = {
@@ -58,6 +59,19 @@ describe('professional keymap core', () => {
     expect(eventToChord(event('Slash'))).toBe('Ctrl+/');
     expect(eventToChord(event('IntlRo'))).toBe('Ctrl+/');
     expect(eventToChord(event('NumpadDivide'))).toBe('Ctrl+/');
+  });
+
+  it('maps middle, back, forward, and additional mouse buttons while excluding left/right', () => {
+    const event = (button: number, altKey = false) => ({
+      button, ctrlKey: false, metaKey: false, altKey, shiftKey: false,
+    }) as MouseEvent;
+    expect(eventToMouseChord(event(0))).toBeNull();
+    expect(eventToMouseChord(event(2))).toBeNull();
+    expect(eventToMouseChord(event(1))).toBe('Mouse3');
+    expect(eventToMouseChord(event(3))).toBe('Mouse4');
+    expect(eventToMouseChord(event(4))).toBe('Mouse5');
+    expect(eventToMouseChord(event(5))).toBe('Mouse6');
+    expect(eventToMouseChord(event(3, true))).toBe('Alt+Mouse4');
   });
 
   it('generates Monaco bindings for all slash keys and applies overrides live', () => {
@@ -120,5 +134,80 @@ describe('professional keymap core', () => {
     listeners.get('keyup')?.forEach((fn) => fn(shift()));
     expect(fired).toEqual(['search']);
     uninstall(); unregister();
+  });
+
+  it('dispatches a configured side button and suppresses Chromium navigation events', () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, EventListener[]>();
+    vi.stubGlobal('window', {
+      addEventListener: (type: string, fn: EventListener) => listeners.set(type, [...(listeners.get(type) ?? []), fn]),
+      removeEventListener: (type: string, fn: EventListener) => listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== fn)),
+    });
+    useKeymapStore.getState().setBindings('navigate.back', ['Mouse4']);
+    const fired: string[] = [];
+    const unregister = registerCommandHandlers([{ id: 'navigate.back', run: () => fired.push('back') }]);
+    const uninstall = installKeymapDispatcher();
+    const mouse = (type: string) => ({
+      type, button: 3, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
+      target: null, preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    }) as unknown as MouseEvent;
+    const down = mouse('mousedown');
+    listeners.get('mousedown')?.forEach((fn) => fn(down));
+    expect(fired).toEqual(['back']);
+    expect(down.preventDefault).toHaveBeenCalled();
+    const up = mouse('mouseup');
+    listeners.get('mouseup')?.forEach((fn) => fn(up));
+    expect(up.preventDefault).toHaveBeenCalled();
+    const aux = mouse('auxclick');
+    listeners.get('auxclick')?.forEach((fn) => fn(aux));
+    expect(aux.preventDefault).toHaveBeenCalled();
+    uninstall(); unregister();
+  });
+
+  it('records Alt plus a key as soon as the complete gesture is released', () => {
+    const listeners = new Map<string, EventListener[]>();
+    vi.stubGlobal('window', {
+      addEventListener: (type: string, fn: EventListener) => listeners.set(type, [...(listeners.get(type) ?? []), fn]),
+      removeEventListener: (type: string, fn: EventListener) => listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== fn)),
+    });
+    const committed: string[] = [];
+    const dispose = installShortcutRecorder({ onCommit: (binding) => committed.push(binding), onCancel: vi.fn() });
+    const key = (type: string, code: string, altKey: boolean) => ({
+      type, code, key: code === 'AltLeft' ? 'Alt' : 'k', altKey,
+      ctrlKey: false, metaKey: false, shiftKey: false, repeat: false, isComposing: false,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(), stopImmediatePropagation: vi.fn(),
+    }) as unknown as KeyboardEvent;
+    listeners.get('keydown')?.forEach((fn) => fn(key('keydown', 'AltLeft', true)));
+    listeners.get('keydown')?.forEach((fn) => fn(key('keydown', 'KeyK', true)));
+    listeners.get('keyup')?.forEach((fn) => fn(key('keyup', 'KeyK', true)));
+    expect(committed).toEqual([]);
+    listeners.get('keyup')?.forEach((fn) => fn(key('keyup', 'AltLeft', false)));
+    expect(committed).toEqual(['Alt+K']);
+    dispose();
+  });
+
+  it('records Mouse3+ and blocks its full auxiliary-click lifecycle', () => {
+    const listeners = new Map<string, EventListener[]>();
+    vi.stubGlobal('window', {
+      addEventListener: (type: string, fn: EventListener) => listeners.set(type, [...(listeners.get(type) ?? []), fn]),
+      removeEventListener: (type: string, fn: EventListener) => listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== fn)),
+    });
+    const committed: string[] = [];
+    const dispose = installShortcutRecorder({ onCommit: (binding) => committed.push(binding), onCancel: vi.fn() });
+    const mouse = (type: string, button: number) => ({
+      type, button, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(), stopImmediatePropagation: vi.fn(),
+    }) as unknown as MouseEvent;
+    const down = mouse('mousedown', 4);
+    listeners.get('mousedown')?.forEach((fn) => fn(down));
+    const up = mouse('mouseup', 4);
+    listeners.get('mouseup')?.forEach((fn) => fn(up));
+    const aux = mouse('auxclick', 4);
+    listeners.get('auxclick')?.forEach((fn) => fn(aux));
+    expect(committed).toEqual(['Mouse5']);
+    expect(down.preventDefault).toHaveBeenCalled();
+    expect(up.preventDefault).toHaveBeenCalled();
+    expect(aux.preventDefault).toHaveBeenCalled();
+    dispose();
   });
 });

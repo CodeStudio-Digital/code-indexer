@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { Play, Square, Loader2, Save, Network, WandSparkles } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Button } from '../../../components/ui/button.js';
+import { Input } from '../../../components/ui/input.js';
 import { prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import * as api from '../api.js';
 import { VirtualResultGrid } from '../grid/VirtualResultGrid.js';
@@ -20,6 +21,12 @@ import { SubTabs } from '../../api-client/SubTabs.js';
 import { SqlEditor } from './SqlEditor.js';
 import { splitStatements } from './sql-split.js';
 import { formatSql } from './format-sql.js';
+import {
+  DEFAULT_QUERY_TIMEOUT_SECONDS,
+  MAX_QUERY_TIMEOUT_SECONDS,
+  MIN_QUERY_TIMEOUT_SECONDS,
+  queryTimeoutMsFromSeconds,
+} from './query-timeout.js';
 import type { DbEngine, DbQueryResult } from '../types.js';
 
 interface ResultSet {
@@ -57,6 +64,7 @@ export function QueryConsole({
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<ResultSet[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
+  const [timeoutSeconds, setTimeoutSeconds] = useState(String(DEFAULT_QUERY_TIMEOUT_SECONDS));
   const queryIdRef = useRef<string | null>(null);
   const runningRef = useRef(false);
 
@@ -65,6 +73,11 @@ export function QueryConsole({
       if (connectionId == null || runningRef.current) return;
       const statements = splitStatements(text);
       if (statements.length === 0) return;
+      const timeoutMs = queryTimeoutMsFromSeconds(timeoutSeconds);
+      if (timeoutMs == null) {
+        toast.error(t('query.timeoutInvalid', { min: MIN_QUERY_TIMEOUT_SECONDS, max: MAX_QUERY_TIMEOUT_SECONDS }));
+        return;
+      }
       runningRef.current = true;
       setRunning(true);
       const cid = connKey ?? String(connectionId);
@@ -77,7 +90,7 @@ export function QueryConsole({
           const queryId = crypto.randomUUID();
           queryIdRef.current = queryId;
           try {
-            const res = await api.runQuery(cid, stmt, { queryId, schema });
+            const res = await api.runQuery(cid, stmt, { queryId, schema, timeoutMs });
             out.push({ sql: stmt, result: res });
             totalRows += res.rowCount;
           } catch (e) {
@@ -103,7 +116,7 @@ export function QueryConsole({
         })
         .catch(() => void 0);
     },
-    [connectionId, connKey, projectId, schema],
+    [connectionId, connKey, projectId, schema, t, timeoutSeconds],
   );
 
   const cancel = useCallback(() => {
@@ -172,6 +185,21 @@ export function QueryConsole({
         <Button size="sm" variant="ghost" onClick={() => void save()} disabled={!sql.trim()} title={t('query.saveTitle')}>
           <Save className="h-3 w-3" />
         </Button>
+        <label className="ml-auto flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
+          {t('query.timeout')}
+          <Input
+            aria-label={t('query.timeout')}
+            className="h-7 w-16 px-2 text-xs"
+            disabled={running}
+            inputMode="numeric"
+            max={MAX_QUERY_TIMEOUT_SECONDS}
+            min={MIN_QUERY_TIMEOUT_SECONDS}
+            step={1}
+            type="number"
+            value={timeoutSeconds}
+            onChange={(event) => setTimeoutSeconds(event.target.value)}
+          />
+        </label>
       </div>
 
       <PanelGroup direction="vertical" className="min-h-0 flex-1">

@@ -131,6 +131,7 @@ export function DatabaseToolWindow({
           prompt,
           newSession: true,
           title: t('specialist.sessionTitle', { name: specialistConnection.label }),
+          agent: 'app_db',
         },
       }));
     }, 0);

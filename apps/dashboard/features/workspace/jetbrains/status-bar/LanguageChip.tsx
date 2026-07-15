@@ -8,6 +8,7 @@
  * late-spawning server becomes ready, instead of staying stale.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Activity, Database, Languages as LanguagesIcon, TriangleAlert } from 'lucide-react';
 import { apiCall } from '../../../../lib/api-client.js';
 import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
@@ -22,9 +23,10 @@ const INDEXED_LANGS = new Set([
   'yaml', 'shell', 'lua', 'dart', 'scala',
 ]);
 
-type Tier = 'lsp' | 'failed' | 'index' | 'syntax';
+type Tier = 'lsp' | 'idle' | 'failed' | 'index' | 'syntax';
 
 export function LanguageChip({ projectId, activeFilePath }: { projectId: number; activeFilePath: string | null }) {
+  const { t } = useTranslation('workspace');
   const language = activeFilePath ? languageIdForPath(activeFilePath) : null;
   const builtin = language === 'typescript' || language === 'javascript';
   const server = useServerStatus(projectId, !language || builtin || language === 'plaintext' ? null : language);
@@ -36,19 +38,21 @@ export function LanguageChip({ projectId, activeFilePath }: { projectId: number;
 
   const tier: Tier = builtin || server?.state === 'ready'
     ? 'lsp'
-    : server?.state === 'failed'
-      ? 'failed'
-      : INDEXED_LANGS.has(language)
-        ? 'index'
-        : 'syntax';
+    : server?.state === 'idle'
+      ? 'idle'
+      : server?.state === 'failed'
+        ? 'failed'
+        : INDEXED_LANGS.has(language)
+          ? 'index'
+          : 'syntax';
 
   const label = language === 'plaintext' ? 'Plain text' : language;
   const tone =
     tier === 'lsp' ? 'text-emerald-500/90'
-      : tier === 'index' ? 'text-sky-400/90'
+      : tier === 'idle' || tier === 'index' ? 'text-sky-400/90'
         : 'text-amber-500/80'; // failed + syntax
-  const Icon = tier === 'lsp' ? Activity : tier === 'index' ? Database : tier === 'failed' ? TriangleAlert : LanguagesIcon;
-  const suffix = tier === 'lsp' ? ' · LSP' : tier === 'index' ? ' · index' : tier === 'failed' ? ' · LSP falhou' : ' · syntax only';
+  const Icon = tier === 'lsp' ? Activity : tier === 'idle' || tier === 'index' ? Database : tier === 'failed' ? TriangleAlert : LanguagesIcon;
+  const suffix = tier === 'lsp' ? ' · LSP' : tier === 'idle' ? ` · ${t('lspStatus.onDemandSuffix')}` : tier === 'index' ? ' · index' : tier === 'failed' ? ' · LSP falhou' : ' · syntax only';
 
   const retry = async () => {
     if (!server?.server) return;
@@ -74,6 +78,8 @@ export function LanguageChip({ projectId, activeFilePath }: { projectId: number;
             Full IntelliSense — completion · hover · Ctrl+Click · diagnostics
             {server?.server ? ` (via ${server.server.label}).` : ' (built-in TypeScript service).'}
           </span>
+        ) : tier === 'idle' ? (
+          <span>{t('lspStatus.idleDescription', { server: server?.server?.label ?? 'LSP' })}</span>
         ) : tier === 'failed' ? (
           <div className="space-y-1.5">
             <div>

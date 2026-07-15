@@ -24,8 +24,8 @@ const PERSIST_PREFIX = 'mcp-ide:file-tree:';
 // ordenação por profundidade, os visíveis chegam nas 1ªs waves.
 const MAX_PERSISTED = 200;
 
-// Concorrência do restore da árvore. O cap antigo (5) era margem de 2022; kernels
-// modernos absorvem ~12 readdirs paralelos sem travar. Ajustável em runtime via
+// Concorrência do restore da árvore. Quatro leituras mantêm o Explorer ágil sem
+// competir com o LSP/indexador durante a abertura. Ajustável em runtime via
 // `window.__MCP_TREE_QUEUE_CONCURRENCY__` para medir (espelha __MCP_API_BASE__).
 // Identical concurrent dir loads já colapsam no `dedupeInflight` de files.tree.
 function treeQueueConcurrency(): number {
@@ -33,7 +33,7 @@ function treeQueueConcurrency(): number {
     typeof window !== 'undefined'
       ? (window as unknown as { __MCP_TREE_QUEUE_CONCURRENCY__?: number }).__MCP_TREE_QUEUE_CONCURRENCY__
       : undefined;
-  return typeof override === 'number' && override > 0 ? override : 12;
+  return typeof override === 'number' && override > 0 ? override : 4;
 }
 
 // Fila ÚNICA do restore da árvore (W2): cap de concorrência mata o thundering herd.
@@ -42,10 +42,15 @@ const loaderQueue = createBoundedQueue(treeQueueConcurrency());
 /** Enfileira o restore (root + dirs persistidos, rasos primeiro) na fila bounded. */
 function queueTreeRestore(expanded: Set<string>, load: (dir: string) => Promise<void>): void {
   const depthOf = (p: string): number => (p === '' ? 0 : p.split('/').length);
-  loaderQueue.push('', 0, () => load(''));
-  for (const dir of [...expanded].sort((a, b) => depthOf(a) - depthOf(b))) {
-    loaderQueue.push(dir, depthOf(dir) + 1, () => load(dir));
-  }
+  const persisted = [...expanded].sort((a, b) => depthOf(a) - depthOf(b));
+  // Root first: do not spend all slots restoring invisible old expansions
+  // before the user can see the project at all.
+  loaderQueue.push('', 0, async () => {
+    await load('');
+    for (const dir of persisted) {
+      loaderQueue.push(dir, depthOf(dir) + 1, () => load(dir));
+    }
+  });
 }
 
 function parentOf(p: string): string {

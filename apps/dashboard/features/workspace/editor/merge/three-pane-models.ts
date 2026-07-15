@@ -21,7 +21,8 @@ export interface ThreePaneInit {
   theirs: string;
   /** Marker-free seed for the editable Result pane (from buildInitialResult). */
   result: string;
-  dark: boolean;
+  /** Process-wide theme snapshot; all Monaco surfaces must use the same id. */
+  theme: string;
 }
 
 export interface ThreePaneHandles {
@@ -50,13 +51,12 @@ export function mountThreePane(
   init: ThreePaneInit,
 ): ThreePaneHandles {
   const lang = languageIdForPath(init.file);
-  const theme = init.dark ? 'vs-dark' : 'vs';
 
   const make = (role: 'ours' | 'result' | 'theirs', value: string, readOnly: boolean): Pane => {
     const uri = monaco.Uri.from({ scheme: 'inmemory', path: `/merge-${role}/${init.file}` });
     monaco.editor.getModel(uri)?.dispose(); // stale model from a reopened tab
     const model = monaco.editor.createModel(value, lang, uri);
-    const editor = monaco.editor.create(els[role], { ...BASE_OPTS, model, readOnly, theme });
+    const editor = monaco.editor.create(els[role], { ...BASE_OPTS, model, readOnly, theme: init.theme });
     return { model, editor };
   };
 

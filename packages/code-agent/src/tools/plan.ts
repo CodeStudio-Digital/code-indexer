@@ -3,16 +3,15 @@ import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { SUBMIT_PLAN_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
-import { maybeDecisionGateNudge } from '@mcp/code-agent/core/runner/nodes/executing-plan-gate.js';
 
 /**
- * Per-runner short-lived ledger of plans the user already rejected. Stops
+ * Per-runner short-lived ledger of plans the user requested revisions for. Stops
  * the model from re-submitting the same prose with cosmetic tweaks after a
- * rejection — common doom-loop pattern. Cleared automatically when a plan
+ * revision request — common doom-loop pattern. Cleared automatically when a plan
  * is approved (the agent has moved on; a future re-submission would be a
  * legitimately new plan).
  */
-const REJECTED_PLAN_HASHES = new WeakMap<object, Set<string>>();
+const REVISE_REQUESTED_PLAN_HASHES = new WeakMap<object, Set<string>>();
 function hashPlan(text: string): string {
   return createHash('sha1').update(text.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
 }
@@ -27,7 +26,7 @@ export function formatPlanResult(approved: boolean, feedback?: string): string {
   if (approved) {
     return `Plan approved by user.${feedback ? ` Feedback: ${feedback}` : ''} You may now proceed with mutating tools.`;
   }
-  return `Plan rejected by user.${feedback ? ` Feedback: ${feedback}` : ''} Revise the plan and call submit_plan again before mutating tools.`;
+  return `Plan revision requested by user.${feedback ? ` Feedback: ${feedback}` : ''} Revise the plan and call submit_plan again before mutating tools.`;
 }
 
 /**
@@ -102,41 +101,23 @@ export const submitPlan: CoderTool = {
     const runner = ctx.runner;
     if (!runner) return err('plan tool requires runner context');
 
-    // Idempotency guard: if the user already rejected this exact plan in
+    // Idempotency guard: if the user already requested revisions to this exact plan in
     // this session, refuse the resubmission instead of pausing the runner
     // again. The model should read the prior feedback (already in history)
     // and produce a materially different plan, not retry with cosmetic
     // edits.
     const hash = hashPlan(plan);
-    let rejected = REJECTED_PLAN_HASHES.get(runner as unknown as object);
-    if (!rejected) {
-      rejected = new Set();
-      REJECTED_PLAN_HASHES.set(runner as unknown as object, rejected);
+    let reviseRequested = REVISE_REQUESTED_PLAN_HASHES.get(runner as unknown as object);
+    if (!reviseRequested) {
+      reviseRequested = new Set();
+      REVISE_REQUESTED_PLAN_HASHES.set(runner as unknown as object, reviseRequested);
     }
-    if (rejected.has(hash)) {
+    if (reviseRequested.has(hash)) {
       return err(
-        `This plan was already rejected by the user in this session (hash=${hash}). ` +
+        `The user already requested revisions to this plan in this session (hash=${hash}). ` +
           `Read the feedback in the prior submit_plan tool_result and submit a materially different plan ` +
           `that addresses it — do not re-submit with cosmetic tweaks.`,
       );
-    }
-
-    // Soft-mandatory decision gate: if the plan prose exposes an unasked fork
-    // and the user wasn't consulted this run, nudge ONCE to run `decision_gate`
-    // before pausing for approval. Returning err (not a pause) keeps it
-    // one-shot and deadlock-free — the model re-submits and proceeds. Skipped
-    // for simple-depth tasks and when the user was already consulted.
-    const decisionNudge = maybeDecisionGateNudge({
-      planMode: runner.isPlanMode(),
-      planDepth: runner.planDepth,
-      enabled: process.env.CODER_DECISION_GATE !== 'off',
-      decisionAsks: runner.decisionAskCount,
-      decisionGateNudges: runner.decisionGateNudgeCount,
-      planText: plan,
-    });
-    if (decisionNudge) {
-      runner.noteDecisionGateNudge();
-      return err(decisionNudge);
     }
 
     // No auto-approve shortcut: every plan, informational or not, pauses
@@ -174,25 +155,21 @@ export const submitPlan: CoderTool = {
     }
     if (parsed.aborted) {
       ctx.resolvePlan?.(id, 'aborted', parsed.feedback);
-      return err('Plan review aborted by user.');
+      return err(`Plan rejected by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} Planning review ended.`);
     }
     if (parsed.approved) {
       ctx.resolvePlan?.(id, 'approved', parsed.feedback);
-      // A new approval clears prior rejections — the model has moved on, and
+      // A new approval clears prior revision requests — the model has moved on, and
       // any future plan with the same text would be a legitimately new ask.
-      rejected.clear();
+      reviseRequested.clear();
       // Auto plan→build after approval: unlock this run, persist `build` for
       // the next runner, and inject a <system-reminder> so the live model
       // switches gears immediately. See applyPlanApproval.
       const extras = applyPlanApproval(runner, ctx);
       return { content: formatPlanResult(true, parsed.feedback), ...extras };
     }
-    rejected.add(hash);
+    reviseRequested.add(hash);
     ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
-    // Re-arm the decision-gate nudge: the model will revise and re-submit, and a
-    // still-unconsulted fork in the revised plan should nudge again (one-shot per
-    // submission, not per run).
-    runner.resetDecisionGateNudges();
     return ok(formatPlanResult(false, parsed.feedback));
   },
 };

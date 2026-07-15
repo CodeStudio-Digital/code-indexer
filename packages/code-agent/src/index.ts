@@ -49,6 +49,8 @@ import {
 } from '@mcp/code-agent/ports/index.js';
 import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
 import { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
+import { SessionSnapshotService } from '@mcp/services/services/session-snapshots.js';
+import { filterReviewableDiffs } from '@mcp/services/services/snapshot-review-ignore.js';
 import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox-filesystem-adapter.js';
 import { SandboxShellAdapter } from '@mcp/services/sandbox/adapters/sandbox-shell-adapter.js';
 import { planTools } from '@mcp/code-agent/tools/plan.js';
@@ -957,6 +959,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       sessionId: session.id,
       projectRoot: workspace.rootPath,
       secondaryRoots: secondaryRoots.map((r) => ({ projectId: r.projectId, rootPath: r.rootPath })),
+      // Same-registry access so absence detection resolves references through
+      // the project's mcp__find_references (registered above with MCP tools).
+      registry,
+      projectId: workspace.projectId,
     }),
   );
 
@@ -998,6 +1004,35 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Session-persistent stash for code_exec scripts (P1a pivot) — one per
     // session so content carried in `stash` survives across script calls.
     codeExecStash: createCodeExecStash(),
+    // Interrogable diff (`change` global inside code_exec): read-only access
+    // to this session's pending snapshot diffs. Built lazily per query so a
+    // session that never calls `change.*` pays nothing.
+    sessionChanges: {
+      getDiffs: async () => {
+        const service = new SessionSnapshotService(snapshotStore, (kind, sid, projectId) => {
+          if (kind !== 'coder' || sid !== session.id) return null;
+          if (projectId != null) {
+            const sec = secondaryRoots.find((r) => r.projectId === projectId);
+            if (sec) return sec.rootPath;
+          }
+          return workspace.rootPath;
+        });
+        const diffs = [];
+        for (const baselineId of snapshotStore.listActiveBaselineIds('coder', session.id)) {
+          const diff = await service.getDiff(baselineId, { context: 3 });
+          if (diff) diffs.push(diff);
+        }
+        return filterReviewableDiffs(diffs);
+      },
+      getBeforeContent: async (baselineId) => {
+        const row = snapshotStore.getBaselineById(baselineId);
+        if (!row || row.session_kind !== 'coder' || row.session_id !== session.id) return null;
+        // content_before is NULL for oversized/binary baselines even when the
+        // file existed — report "unavailable" (null), never a fake empty file.
+        if (!row.existed_before) return null;
+        return row.content_before;
+      },
+    },
     toolOutputCapLevel:
       parseToolOutputCapLevel(session.tool_output_cap_level) ??
       levelFromLegacyBoolean(session.unrestricted_tool_output),
@@ -1762,6 +1797,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // via `expand_toolset('diagram')`.
   if (effectiveAgentId === 'diagram') {
     activeTiers.add('diagram');
+  }
+  // Database analysis is the purpose of the dedicated app_db preset, so its
+  // driver-backed tools must be present on turn 1 instead of requiring the
+  // specialist to discover and expand its own defining capability.
+  if (effectiveAgentId === 'app_db') {
+    activeTiers.add('db');
   }
   // Sticky extra tiers (mig 142): master/preview/custom tiers this session
   // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that

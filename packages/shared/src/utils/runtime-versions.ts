@@ -1,5 +1,5 @@
 /**
- * Runtime de execução por projeto (PHP/Python) — fonte ÚNICA de parsing e escrita.
+ * Runtime de execução por projeto (PHP/Python/Java/.NET) — fonte ÚNICA de parsing e escrita.
  * Persistido em `projects.runtime_versions` (JSON, migration 167). É o
  * INTERPRETADOR que o terminal/runner usam (PATH), distinto do `language_levels`
  * (migration 157), que é o alvo de análise do LSP. Sem deps de DB — reusado pela
@@ -10,10 +10,10 @@
  * sistema" (sem injeção de PATH). Node fica na coluna própria `node_version`.
  */
 
-export type RuntimeVersionKey = 'php' | 'python';
+export type RuntimeVersionKey = 'php' | 'python' | 'java' | 'dotnet';
 export type RuntimeVersions = Partial<Record<RuntimeVersionKey, string>>;
 
-const KEYS: readonly RuntimeVersionKey[] = ['php', 'python'];
+const KEYS: readonly RuntimeVersionKey[] = ['php', 'python', 'java', 'dotnet'];
 
 /** JSON → mapa, tolerante a corrupção/shape inválido (sempre devolve um objeto). */
 export function parseRuntimeVersions(json: string | null | undefined): RuntimeVersions {

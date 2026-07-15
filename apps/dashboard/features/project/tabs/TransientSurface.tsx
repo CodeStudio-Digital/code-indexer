@@ -4,8 +4,9 @@
  * client é chamado pelo keep-alive de TabContent. As pesadas
  * (charts/diff/drawio/http/xterm) seguem em chunks LAZY — fora do chunk inicial.
  */
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect, useState, type ComponentType } from 'react';
 import { Loader2 } from 'lucide-react';
+import { ErrorBoundary } from '../../../components/ErrorBoundary.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { ProjectTabId } from '../tabs-config.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
@@ -21,7 +22,54 @@ const IndexWorkspace = lazy(() => import('./index-workspace/IndexWorkspace.js').
 const ApiClientTab = lazy(() => import('../../api-client/ApiClientTab.js').then((m) => ({ default: m.ApiClientTab })));
 const DbClientTab = lazy(() => import('../../db-client/DbClientTab.js').then((m) => ({ default: m.DbClientTab })));
 const DiagramsView = lazy(() => import('../diagrams/DiagramsView.js').then((m) => ({ default: m.DiagramsView })));
-const SshPanel = lazy(() => import('../../ssh/SshPanel.js').then((m) => ({ default: m.SshPanel })));
+
+type SshPanelComponent = ComponentType<{ projectId: number }>;
+
+const loadSshPanel = (): Promise<SshPanelComponent> =>
+  import('../../ssh/SshPanel.js').then((module) => module.SshPanel);
+
+const SSH_PANEL_LOAD_TIMEOUT_MS = 30_000;
+
+/**
+ * Load SSH outside React.lazy/Suspense. A component-local lazy type can leave a
+ * retained surface suspended after Fast Refresh even though Vite has already
+ * resolved the module. Explicit state makes completion observable and lets the
+ * error boundary remount/retry a failed or genuinely stalled chunk.
+ */
+function AsyncSshPanel({ projectId }: { projectId: number }) {
+  const [Panel, setPanel] = useState<SshPanelComponent | null>(null);
+  const [loadError, setLoadError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const timeout = globalThis.setTimeout(() => {
+      if (active) setLoadError(new Error('SSH panel loading timed out.'));
+    }, SSH_PANEL_LOAD_TIMEOUT_MS);
+
+    void loadSshPanel().then(
+      (LoadedPanel) => {
+        if (!active) return;
+        globalThis.clearTimeout(timeout);
+        // Components are functions; wrap the value so React does not treat it
+        // as a functional state updater.
+        setPanel(() => LoadedPanel);
+      },
+      (error: unknown) => {
+        if (!active) return;
+        globalThis.clearTimeout(timeout);
+        setLoadError(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+
+    return () => {
+      active = false;
+      globalThis.clearTimeout(timeout);
+    };
+  }, []);
+
+  if (loadError) throw loadError;
+  return Panel ? <Panel projectId={projectId} /> : <TabSpinner />;
+}
 
 /** Fallback dos chunks lazy de aba. */
 function TabSpinner() {
@@ -67,7 +115,11 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
     // The primary workbench keeps this surface mounted while navigating so
     // shells, SFTP directories and in-flight transfers survive tab switches.
     // The key still hard-isolates that live state when the project changes.
-    return <Suspense fallback={<TabSpinner />}><SshPanel key={projectId} projectId={projectId} /></Suspense>;
+    return (
+      <ErrorBoundary label="SSH" resetKey={projectId}>
+        <AsyncSshPanel key={projectId} projectId={projectId} />
+      </ErrorBoundary>
+    );
   }
 
   // Preview tab — the live dev-server preview, full-width.

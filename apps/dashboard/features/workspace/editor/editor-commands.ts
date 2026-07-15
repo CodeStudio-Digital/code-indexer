@@ -12,6 +12,7 @@ import { getActiveEditor } from './editor-models.js';
 import { registerNavCommands } from './nav-commands.js';
 import { registerAiCompleteCommands } from './ai-complete-commands.js';
 import { organizeImportsInActiveEditor } from './lsp/organize-imports.js';
+import { navigateDiagnostic } from './diagnostic-navigation.js';
 
 function trigger(actionId: string): void {
   const editor = getActiveEditor();
@@ -68,8 +69,6 @@ export function registerEditorCommands(): () => void {
     'editor.implementation': 'editor.action.goToImplementation',
     'editor.references': 'editor.action.goToReferences',
     'editor.rename': 'editor.action.rename',
-    'editor.nextProblem': 'editor.action.marker.next',
-    'editor.previousProblem': 'editor.action.marker.prev',
     'editor.fold': 'editor.fold',
     'editor.unfold': 'editor.unfold',
     'editor.foldAll': 'editor.foldAll',
@@ -87,6 +86,20 @@ export function registerEditorCommands(): () => void {
     {
       id: 'editor.organizeImports',
       run: () => void organizeImportsInActiveEditor(),
+    },
+    {
+      id: 'editor.nextProblem',
+      run: () => {
+        const editor = getActiveEditor();
+        if (editor) navigateDiagnostic(editor, 'next');
+      },
+    },
+    {
+      id: 'editor.previousProblem',
+      run: () => {
+        const editor = getActiveEditor();
+        if (editor) navigateDiagnostic(editor, 'previous');
+      },
     },
     {
       id: 'editor.format',

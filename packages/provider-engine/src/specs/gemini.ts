@@ -20,7 +20,7 @@ export const geminiSpec: ProviderSpec = {
     'gemini-2.5-flash': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'gemini-2.5-flash-lite': { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
-  capabilities: { supportsThinking: true, supportsVision: true, supportsImageGen: true },
+  capabilities: { supportsThinking: true, supportsVision: true, supportsImageGen: true, fileInput: 'pdf-only' },
   wire: 'gemini',
   discovery: { from: 'gemini-models' },
   test: { from: 'gemini-key' },

@@ -10,7 +10,7 @@
 import type * as MonacoNs from 'monaco-editor';
 import type { DocumentSymbolDTO } from '@mcp/api-bus';
 import { logLsp } from '../lsp-log.js';
-import { relPath, type Monaco } from './dto.js';
+import { modelBelongsToProject, relPath, type Monaco } from './dto.js';
 import { documentSymbolsForModel } from './symbol-navigation-ui.js';
 
 // Monaco SymbolKind por LITERAL numérico (const enum pode faltar no runtime).
@@ -45,14 +45,17 @@ function toMonacoSymbol(monaco: Monaco, dto: DocumentSymbolDTO): MonacoNs.langua
 export function registerDocumentSymbolProviders(
   monaco: Monaco,
   projectId: number,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void> = async () => undefined,
 ): MonacoNs.IDisposable[] {
   const provider: MonacoNs.languages.DocumentSymbolProvider = {
     async provideDocumentSymbols(model) {
+      if (!modelBelongsToProject(model, projectId)) return [];
       const versionId = model.getVersionId();
       const file = relPath(model);
       const lang = model.getLanguageId();
       const t0 = performance.now();
       try {
+        await ensureSynced(model);
         const dtos = await documentSymbolsForModel(model, projectId);
         if (model.isDisposed() || model.getVersionId() !== versionId) return [];
         const result = (dtos ?? []).map((d) => toMonacoSymbol(monaco, d));

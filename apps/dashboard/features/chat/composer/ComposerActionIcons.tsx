@@ -82,7 +82,7 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
         <input
           type="file"
           multiple
-          accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
+          accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.svg,.ts,.tsx,.js,.jsx,.py,.rb,.go,.rs,.java,.kt,.c,.cpp,.h,.hpp,.sh,.bash,.sql,.toml,.ini,.env,.log"
           className="hidden"
           onChange={(e) => {
             handleFiles(e.target.files);

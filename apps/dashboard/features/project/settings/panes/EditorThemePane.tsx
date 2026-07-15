@@ -14,6 +14,7 @@ import { setupMonaco } from '../../../../lib/monaco-setup.js';
 import { useEditorTheme, resolveThemeId } from '../../../../state/editor-theme.js';
 import { THEME_OPTIONS } from '../../../workspace/editor/themes/index.js';
 import { Combobox } from '../../../../components/ui/combobox.js';
+import { reapplySharedMonacoTheme } from '../../../../lib/monaco-theme.js';
 
 const DARK_THEMES = THEME_OPTIONS.filter((t) => t.appearance === 'dark');
 const LIGHT_THEMES = THEME_OPTIONS.filter((t) => t.appearance === 'light');
@@ -72,7 +73,13 @@ export function EditorThemePane() {
   // The preview <Editor> needs Monaco bundled + our custom themes registered.
   // setupMonaco is idempotent; run it before the child editor's loader inits.
   setupMonaco();
-  useEffect(() => { setupMonaco(); }, []);
+  useEffect(() => {
+    setupMonaco();
+    // The preview's `theme` prop calls Monaco's process-global setTheme. The
+    // workspace surface stays mounted behind this settings pane, so restore
+    // its shared owner when the pane closes or the user changes section.
+    return () => reapplySharedMonacoTheme();
+  }, []);
 
   const previewTheme = resolveThemeId({
     appearance: isDark() ? 'dark' : 'light',

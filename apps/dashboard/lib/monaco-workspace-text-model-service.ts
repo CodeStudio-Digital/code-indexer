@@ -26,13 +26,16 @@ interface WorkspaceTarget {
 }
 
 class ResolvedTextModel {
-  private readonly disposed = new this.monaco.Emitter<void>();
-  readonly onWillDispose = this.disposed.event;
+  private readonly disposed: MonacoNs.Emitter<void>;
+  readonly onWillDispose: MonacoNs.IEvent<void>;
 
   constructor(
-    private readonly monaco: Monaco,
+    monaco: Monaco,
     readonly textEditorModel: MonacoNs.editor.ITextModel,
-  ) {}
+  ) {
+    this.disposed = new monaco.Emitter<void>();
+    this.onWillDispose = this.disposed.event;
+  }
 
   dispose(): void {
     this.disposed.fire();

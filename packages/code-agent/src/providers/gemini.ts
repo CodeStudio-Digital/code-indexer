@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import type { Content, Part, Tool, FunctionDeclaration } from '@google/genai';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import { renderTextDocument } from './document-utils.js';
 import { randomUUID } from 'node:crypto';
 import {
   createAuthClient,
@@ -539,7 +540,7 @@ function toGeminiContents(messages: AgentMessage[]): Content[] {
           parts.push({ inlineData: { mimeType: b.mediaType, data: b.base64 } });
         } else if (b.type === 'document' && b.text) {
           parts.push({
-            text: `<document name="${b.name}" mediaType="${b.mediaType}">\n${b.text}\n</document>`,
+            text: renderTextDocument(b),
           });
         } else if (b.type === 'document' && b.base64) {
           parts.push({ inlineData: { mimeType: b.mediaType, data: b.base64 } });

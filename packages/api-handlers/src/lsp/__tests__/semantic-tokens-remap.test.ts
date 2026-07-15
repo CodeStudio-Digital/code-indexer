@@ -17,6 +17,7 @@ const SERVER: SemanticTokensLegend = {
   tokenTypes: [
     'comment', 'keyword', 'string', 'number', // 0..3 → dropped
     'class', 'function', 'method', 'property', 'variable', 'parameter', // 4..9 → kept
+    'struct', 'event', 'member', // 10..12 → C# types kept
   ],
   tokenModifiers: ['declaration', 'readonly', 'static', 'deprecated', 'defaultLibrary'],
 };
@@ -32,6 +33,18 @@ describe('remapSemanticTokens', () => {
   it('remaps a single kept token type index', () => {
     // line +2, char 4, len 6, type 5 (function), no mods
     expect(remapSemanticTokens([2, 4, 6, 5, 0], SERVER)).toEqual([2, 4, 6, T('function'), 0]);
+  });
+
+  it('preserves C#-specific semantic classifications', () => {
+    expect(remapSemanticTokens([
+      0, 0, 6, 10, 0,
+      0, 7, 5, 11, 0,
+      0, 6, 4, 12, 0,
+    ], SERVER)).toEqual([
+      0, 0, 6, T('struct'), 0,
+      0, 7, 5, T('event'), 0,
+      0, 6, 4, T('member'), 0,
+    ]);
   });
 
   it('drops an unrepresentable type and folds its char offset into the next token', () => {

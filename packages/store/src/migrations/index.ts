@@ -236,6 +236,9 @@ import { appStudioImpactV5220 } from './220_app_studio_impact_v5.js';
 import { appStudioAgentConfig221 } from './221_app_studio_agent_config.js';
 import { coderRoundFileSnapshots222 } from './222_coder_round_file_snapshots.js';
 import { projectEditorConfig223 } from './223_project_editor_config.js';
+import { reviewAiNative224 } from './224_review_ai_native.js';
+import { externalSessionImports225 } from './225_external_session_imports.js';
+import { sessionThinkingEnabled226 } from './226_session_thinking_enabled.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -488,6 +491,9 @@ export const MIGRATIONS: Migration[] = [
   appStudioAgentConfig221,
   coderRoundFileSnapshots222,
   projectEditorConfig223,
+  reviewAiNative224,
+  externalSessionImports225,
+  sessionThinkingEnabled226,
 ];
 
 /**

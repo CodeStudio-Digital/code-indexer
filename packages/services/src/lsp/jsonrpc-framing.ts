@@ -25,29 +25,44 @@ export class FrameParser {
 
   constructor(private onError?: (err: Error) => void) {}
 
-  push(chunk: Buffer): unknown[] {
+  append(chunk: Buffer): void {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
-    const messages: unknown[] = [];
+  }
 
-    for (;;) {
+  hasCompleteMessage(): boolean {
+    if (this.expectedLength !== null) return this.buffer.length >= this.expectedLength;
+    const headerEnd = this.buffer.indexOf('\r\n\r\n');
+    if (headerEnd === -1) return false;
+    const match = /content-length:\s*(\d+)/i.exec(this.buffer.subarray(0, headerEnd).toString('ascii'));
+    if (!match) return true; // drain() can discard the malformed header and resync.
+    return this.buffer.length >= headerEnd + 4 + Number(match[1]);
+  }
+
+  drain(maxMessages = Number.POSITIVE_INFINITY, maxBytes = Number.POSITIVE_INFINITY): unknown[] {
+    const messages: unknown[] = [];
+    let bytesProcessed = 0;
+
+    for (; messages.length < maxMessages && bytesProcessed < maxBytes;) {
       if (this.expectedLength === null) {
         const headerEnd = this.buffer.indexOf('\r\n\r\n');
         if (headerEnd === -1) break;
         const header = this.buffer.subarray(0, headerEnd).toString('ascii');
         const match = /content-length:\s*(\d+)/i.exec(header);
         if (!match) {
-          // Unparseable header — resync by dropping it.
           this.onError?.(new Error(`LSP frame without Content-Length: ${header.slice(0, 120)}`));
           this.buffer = this.buffer.subarray(headerEnd + 4);
+          bytesProcessed += headerEnd + 4;
           continue;
         }
         this.expectedLength = Number(match[1]);
         this.buffer = this.buffer.subarray(headerEnd + 4);
+        bytesProcessed += headerEnd + 4;
       }
 
       if (this.buffer.length < this.expectedLength) break;
       const body = this.buffer.subarray(0, this.expectedLength);
       this.buffer = this.buffer.subarray(this.expectedLength);
+      bytesProcessed += this.expectedLength;
       this.expectedLength = null;
       try {
         messages.push(JSON.parse(body.toString('utf-8')));
@@ -57,5 +72,10 @@ export class FrameParser {
     }
 
     return messages;
+  }
+
+  push(chunk: Buffer): unknown[] {
+    this.append(chunk);
+    return this.drain();
   }
 }

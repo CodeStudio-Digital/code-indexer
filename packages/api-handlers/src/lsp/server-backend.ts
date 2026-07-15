@@ -17,22 +17,22 @@ import type {
   WorkspaceEditDTO,
 } from '@mcp/api-bus';
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
+import { parseRuntimeVersions } from '@mcp/shared/utils/runtime-versions.js';
 // Canonicalizador ÚNICO (W3): didOpen e completion passam a usar a MESMA chave de path
 // (forward-slash + drive lowercase), senão o intelephense não reconhece o arquivo no Windows.
 import {
   canonicalAbs as normAbs,
   relToAbsCanonical as relToAbs,
-  absToRelCanonical as absToRel,
 } from '@mcp/shared/utils/fs-canonical.js';
 import {
   getLspServerManager,
+  type LspAcquireIntent,
   type LspServerManager,
 } from '@mcp/services/lsp/lsp-server-manager.js';
 import {
   fromLsp,
   hoverToMarkdown,
   mapCompletionKind,
-  mapSeverity,
   uriToPath,
   type LspCompletionItem,
   type LspCodeAction,
@@ -49,13 +49,17 @@ import { mapLspConfigSection, languageLevelForServer } from '@mcp/services/lsp/l
 import { parseLanguageLevels } from '@mcp/shared/utils/language-levels.js';
 import { detectLanguageLevel } from './language-level-detect.js';
 import { resolveProjectNodeBinDir } from '../runtime/node-manager.js';
+import { loadedExtensionsForRuntimeId } from '../runtime/php-manager.js';
 import { docsForProject, getDoc, onDocEvent } from './document-store.js';
-import { publishDiagnostics } from './diagnostics-hub.js';
+import { createServerDiagnosticsBatcher, type ServerDiagnosticsBatcher } from './diagnostics-batcher.js';
 import { publishServerStatus } from './server-status-hub.js';
+import { resolveLspRuntime } from './lsp-runtime.js';
 
 let wired = false;
+/** Module singleton (dual handler factories) — resolves roots ONCE per flush. */
+let diagBatcher: ServerDiagnosticsBatcher | null = null;
 
-// normAbs / absToRel / relToAbs vêm do canonicalizador único (@mcp/shared/utils/fs-canonical),
+// normAbs / relToAbs vêm do canonicalizador único (@mcp/shared/utils/fs-canonical),
 // importados com alias acima — a chave de path agora é idêntica em didOpen e completion.
 
 function rangeFrom(r?: LspRange0): { start: { line: number; column: number }; end: { line: number; column: number } } {
@@ -79,6 +83,7 @@ export function mapServerWorkspaceEdit(edit: LspWorkspaceEdit | undefined): Work
   if (!edit) return undefined;
   const changes: Record<string, TextEditDTO[]> = {};
   const push = (uri: string, edits: LspTextEdit[]): void => {
+    if (!uri.toLowerCase().startsWith('file:')) return;
     const file = uriToPath(uri);
     const mapped = edits.map(textEditFrom);
     if (mapped.length > 0) changes[file] = [...(changes[file] ?? []), ...mapped];
@@ -103,7 +108,15 @@ export function mapServerCodeActions(raw: unknown, originServerId?: string): Cod
     if (typeof action.title !== 'string' || !action.title.trim()) continue;
     if (action.disabled) continue;
     const edit = mapServerWorkspaceEdit(action.edit);
-    const command = action.command?.command ? { command: action.command.command, arguments: action.command.arguments } : undefined;
+    // textDocument/codeAction returns `(Command | CodeAction)[]`. A bare
+    // Command carries its command id directly as a string, while a CodeAction
+    // nests it in `action.command`.
+    const direct = entry as { command?: unknown; arguments?: unknown[] };
+    const command = typeof direct.command === 'string'
+      ? { command: direct.command, arguments: direct.arguments }
+      : action.command?.command
+        ? { command: action.command.command, arguments: action.command.arguments }
+        : undefined;
     if (!edit && !command && action.data === undefined) continue;
     out.push({
       title: action.title,
@@ -113,7 +126,7 @@ export function mapServerCodeActions(raw: unknown, originServerId?: string): Cod
       command,
       originServerId,
       raw: action,
-      needsResolve: !edit && action.data !== undefined,
+      needsResolve: !edit && !command && action.data !== undefined,
     });
   }
   return out;
@@ -138,35 +151,41 @@ export function ensureLspManager(db: CodeIndexDB): LspServerManager {
     }
     return merged;
   };
+  const phpExtensionsFor = (projectId: number): string[] => {
+    const project = db.getProject(projectId);
+    const runtimeId = parseRuntimeVersions(project?.runtime_versions ?? null).php;
+    return loadedExtensionsForRuntimeId(runtimeId, mcpDataDir());
+  };
   const manager = getLspServerManager({
     resolveNodeBin: (projectId) => {
       try { return resolveProjectNodeBinDir(db, projectId, mcpDataDir()); } catch { return null; }
     },
     resolveRoot: (projectId) => db.getProject(projectId)?.root_path ?? null,
+    listProjectRoots: () => db.listProjects().map((project) => project.root_path),
+    resolveRuntime: (projectId, requirement) => resolveLspRuntime(db, projectId, requirement),
     resolveLanguageLevel: (projectId, serverId) => languageLevelForServer(serverId, levelsFor(projectId)),
-    resolveLspConfig: (projectId, serverId, section) => mapLspConfigSection(serverId, section, levelsFor(projectId)),
+    resolveLspConfig: (projectId, serverId, section) => mapLspConfigSection(
+      serverId,
+      section,
+      levelsFor(projectId),
+      serverId === 'intelephense' ? { phpExtensions: phpExtensionsFor(projectId) } : {},
+    ),
     docsForReplay: (projectId, languages) =>
       docsForProject(projectId)
         .filter(({ doc }) => languages.includes(doc.languageId))
         .map(({ file, doc }) => ({ file, languageId: doc.languageId, version: doc.version, content: doc.content })),
+    // Per-file forwarding is the flood path (OmniSharp can publish for
+    // thousands of files after a solution load) — enqueue into the batcher,
+    // which resolves the root once and emits ONE hub batch per flush window.
     onDiagnostics: (projectId, absPath, serverId, diagnostics) => {
-      const root = db.getProject(projectId)?.root_path;
-      if (!root) return;
-      const rel = absToRel(root, absPath);
-      if (!rel) return;
-      publishDiagnostics(projectId, { file: rel, source: 'syntax', diagnostics: [] });
-      publishDiagnostics(projectId, {
-        file: rel,
-        source: `lsp:${serverId}`,
-        diagnostics: diagnostics.map((d) => ({
-          file: rel,
-          range: rangeFrom(d.range),
-          severity: mapSeverity(d.severity),
-          message: d.message,
-          source: d.source ?? serverId,
-          code: d.code,
-        })),
+      diagBatcher ??= createServerDiagnosticsBatcher({
+        resolveRoot: (id) => db.getProject(id)?.root_path ?? null,
+        includeFile: (id, file, originServerId) => {
+          if (originServerId !== 'omnisharp') return true;
+          return getDoc(id, file)?.languageId === 'csharp';
+        },
       });
+      diagBatcher.enqueue(projectId, absPath, serverId, diagnostics);
     },
     // Lifecycle transitions → the live chip. Translate serverId → its
     // primary language (the chip subscribes per languageId) and surface
@@ -191,9 +210,9 @@ export function ensureLspManager(db: CodeIndexDB): LspServerManager {
       if (!root) return;
       const abs = relToAbs(root, file);
       if (kind === 'open') {
-        // Lazy-spawn on first file of the language; the post-spawn replay
-        // covers THIS doc too (the store registered it before emitting).
-        void manager.acquire(projectId, doc.languageId).then((acq) => {
+        // Forward to a warm server, but let heavy interactive-only servers
+        // remain cold. A later user-driven spawn replays this stored buffer.
+        void manager.acquire(projectId, doc.languageId, 'open').then((acq) => {
           if (acq && acq.handle.state === 'ready') {
             // ensureOpen (not didOpen): on a FRESH spawn the replay already
             // sent didOpen for this doc — ensureOpen is a no-op then (URI já no
@@ -217,6 +236,55 @@ export function ensureLspManager(db: CodeIndexDB): LspServerManager {
     });
   }
   return manager;
+}
+
+const _interactiveDeadlineRaw = Number(process.env.MCP_LSP_INTERACTIVE_DEADLINE_MS);
+export const INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS = Number.isFinite(_interactiveDeadlineRaw)
+  ? Math.max(0, _interactiveDeadlineRaw)
+  : 750;
+
+/**
+ * Start/warm a cold language server without pinning an automatic editor RPC to
+ * its whole initialize + project-load cycle. Explicit operations such as
+ * rename/format still use `manager.acquire()` directly and are allowed to wait.
+ */
+export async function acquireLspWithDeadline(
+  db: CodeIndexDB,
+  projectId: number,
+  languageId: string,
+  deadlineMs = INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS,
+  signal?: AbortSignal,
+  intent: LspAcquireIntent = 'interactive',
+): Promise<Awaited<ReturnType<LspServerManager['acquire']>>> {
+  if (signal?.aborted) return null;
+  const pending = ensureLspManager(db).acquire(projectId, languageId, intent);
+  const timedOut = Symbol('lsp-acquire-deadline');
+  const cancelled = Symbol('lsp-acquire-cancelled');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const contenders: Array<Promise<Awaited<ReturnType<LspServerManager['acquire']>> | typeof timedOut | typeof cancelled>> = [pending];
+  if (deadlineMs > 0) {
+    contenders.push(new Promise<typeof timedOut>((resolve) => {
+      timer = setTimeout(() => resolve(timedOut), deadlineMs);
+      timer.unref?.();
+    }));
+  }
+  if (signal) {
+    contenders.push(new Promise<typeof cancelled>((resolve) => {
+      onAbort = () => resolve(cancelled);
+      signal.addEventListener('abort', onAbort, { once: true });
+    }));
+  }
+  const result = await Promise.race(contenders);
+  if (timer) clearTimeout(timer);
+  if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+  if (result === timedOut || result === cancelled) {
+    // The shared manager spawn remains useful: the next invocation will find
+    // the server warm. Observe rejection so abandoning this caller is safe.
+    void pending.catch(() => undefined);
+    return null;
+  }
+  return result;
 }
 
 // ─── Position ops (null = no server answered → router falls back) ──
@@ -272,12 +340,38 @@ export function mapServerCompletionItem(i: LspCompletionItem): CompletionItem {
   };
 }
 
+const MAX_SERVER_COMPLETIONS = 500;
+
+function localCompletionPrefix(content: string, position: { line: number; column: number }): string {
+  const line = content.split(/\r?\n/, position.line)[position.line - 1] ?? '';
+  const beforeCursor = line.slice(0, Math.max(0, position.column - 1));
+  return beforeCursor.match(/[$\p{L}\p{N}_]+$/u)?.[0] ?? '';
+}
+
+/** Filter before truncation while retaining the language server's exact ranking. */
+export function filterServerCompletionItems(
+  items: LspCompletionItem[],
+  content: string,
+  position: { line: number; column: number },
+): { items: LspCompletionItem[]; truncated: boolean } {
+  const rawPrefix = localCompletionPrefix(content, position).toLocaleLowerCase();
+  const prefix = rawPrefix.replace(/^\$/, '');
+  const filtered = prefix
+    ? items.filter((item) => {
+      const candidate = (item.filterText ?? item.label).toLocaleLowerCase();
+      return candidate.startsWith(rawPrefix) || candidate.replace(/^\$/, '').startsWith(prefix);
+    })
+    : items;
+  return { items: filtered.slice(0, MAX_SERVER_COMPLETIONS), truncated: filtered.length > MAX_SERVER_COMPLETIONS };
+}
+
 export async function serverCompletion(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
   position: { line: number; column: number },
   context?: { triggerKind: number; triggerCharacter?: string },
+  signal?: AbortSignal,
 ): Promise<LspCompletionList | null> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const acq = await acquireLspWithDeadline(db, projectId, languageId, INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS, signal);
   if (!acq) return null;
   const abs = relToAbs(root, file);
   // W3: garante o didOpen (buffer vivo) ANTES da completion — senão o server responde
@@ -285,14 +379,15 @@ export async function serverCompletion(
   const liveDoc = getDoc(projectId, file);
   if (liveDoc) acq.handle.ensureOpen(abs, liveDoc.languageId, liveDoc.version, liveDoc.content);
   try {
-    const raw = await acq.handle.completion(abs, position, context);
+    const raw = await acq.handle.completion(abs, position, context, signal);
     const items: LspCompletionItem[] = Array.isArray(raw)
       ? raw as LspCompletionItem[]
       : ((raw as { items?: LspCompletionItem[] })?.items ?? []);
+    const selected = filterServerCompletionItems(items, liveDoc?.content ?? '', position);
     return {
-      items: items.slice(0, 120).map(mapServerCompletionItem),
+      items: selected.items.map(mapServerCompletionItem),
       isIncomplete:
-        items.length > 120
+        selected.truncated
         || (!Array.isArray(raw) && (raw as { isIncomplete?: boolean })?.isIncomplete === true),
     };
   } catch (err) {
@@ -308,13 +403,13 @@ export async function serverCompletion(
 
 /** `completionItem/resolve` round-trip; null = nothing extra to apply. */
 export async function serverResolveCompletion(
-  db: CodeIndexDB, projectId: number, languageId: string, item: unknown,
+  db: CodeIndexDB, projectId: number, languageId: string, item: unknown, signal?: AbortSignal,
 ): Promise<CompletionItem | null> {
   if (!item || typeof item !== 'object') return null;
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const acq = await acquireLspWithDeadline(db, projectId, languageId, 0, signal, 'manual');
   if (!acq) return null;
   try {
-    const resolved = await acq.handle.resolveCompletion(item);
+    const resolved = await acq.handle.resolveCompletion(item, signal);
     if (!resolved || typeof resolved !== 'object') return null;
     return mapServerCompletionItem(resolved as LspCompletionItem);
   } catch {
@@ -325,11 +420,12 @@ export async function serverResolveCompletion(
 export async function serverHover(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
   position: { line: number; column: number },
+  signal?: AbortSignal,
 ): Promise<HoverInfo | null | undefined> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const acq = await acquireLspWithDeadline(db, projectId, languageId, INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS, signal);
   if (!acq) return undefined; // undefined = no server (fallback); null = server said nothing
   try {
-    const raw = (await acq.handle.hover(relToAbs(root, file), position)) as LspHover | null;
+    const raw = (await acq.handle.hover(relToAbs(root, file), position, signal)) as LspHover | null;
     const md = hoverToMarkdown(raw);
     return md ? { contents: md } : null;
   } catch {
@@ -343,7 +439,7 @@ export function toLocations(raw: unknown): LspLocation[] {
   return arr
     .map((l) => {
       const uri = l.targetUri ?? l.uri;
-      if (!uri) return null;
+      if (!uri || !uri.toLowerCase().startsWith('file:')) return null;
       return { file: uriToPath(uri), range: rangeFrom(l.targetSelectionRange ?? l.range) };
     })
     .filter((x): x is LspLocation => !!x);
@@ -352,11 +448,12 @@ export function toLocations(raw: unknown): LspLocation[] {
 export async function serverDefinition(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
   position: { line: number; column: number },
+  signal?: AbortSignal,
 ): Promise<LspLocation[] | null> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const acq = await acquireLspWithDeadline(db, projectId, languageId, 0, signal, 'manual');
   if (!acq) return null;
   try {
-    return toLocations(await acq.handle.definition(relToAbs(root, file), position));
+    return toLocations(await acq.handle.definition(relToAbs(root, file), position, signal));
   } catch {
     return null;
   }
@@ -365,11 +462,12 @@ export async function serverDefinition(
 export async function serverReferences(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
   position: { line: number; column: number },
+  signal?: AbortSignal,
 ): Promise<LspLocation[] | null> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const acq = await acquireLspWithDeadline(db, projectId, languageId, 0, signal, 'manual');
   if (!acq) return null;
   try {
-    return toLocations(await acq.handle.references(relToAbs(root, file), position));
+    return toLocations(await acq.handle.references(relToAbs(root, file), position, signal));
   } catch {
     return null;
   }
@@ -383,8 +481,11 @@ export async function serverReferences(
  */
 export async function serverSemanticTokens(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
+  signal?: AbortSignal,
 ): Promise<{ data: number[] } | null> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const acq = await acquireLspWithDeadline(
+    db, projectId, languageId, INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS, signal, 'background',
+  );
   if (!acq) return null;
   const legend = acq.handle.semanticTokensLegend();
   if (!legend) return null; // server doesn't advertise semantic tokens
@@ -394,7 +495,7 @@ export async function serverSemanticTokens(
   const live = getDoc(projectId, file);
   if (live) acq.handle.ensureOpen(abs, live.languageId, live.version, live.content);
   try {
-    const raw = (await acq.handle.semanticTokens(abs)) as { data?: number[] } | null;
+    const raw = (await acq.handle.semanticTokens(abs, signal)) as { data?: number[] } | null;
     if (!raw?.data || raw.data.length === 0) return null;
     return { data: remapSemanticTokens(raw.data, legend, MONACO_SEMANTIC_LEGEND) };
   } catch {
@@ -408,70 +509,87 @@ const CODEACTION_DEADLINE_MS = Number.isFinite(_deadlineRaw) ? _deadlineRaw : 60
 export async function serverCodeActions(
   db: CodeIndexDB, projectId: number, root: string, file: string, languageId: string,
   range: { start: { line: number; column: number }; end: { line: number; column: number } },
+  origin: 'auto' | 'invoke' = 'invoke',
+  signal?: AbortSignal,
 ): Promise<CodeActionDTO[] | null> {
+  const automaticController = origin === 'auto' ? new AbortController() : null;
+  const forwardAbort = automaticController && signal
+    ? () => automaticController.abort(signal.reason)
+    : undefined;
+  if (forwardAbort) signal!.addEventListener('abort', forwardAbort, { once: true });
+  if (automaticController && signal?.aborted) automaticController.abort(signal.reason);
+  const budget = automaticController ? setTimeout(() => automaticController.abort(), 750) : undefined;
+  budget?.unref?.();
+  const requestSignal = automaticController?.signal ?? signal;
   // A cold server spawn+init is 1-2s; don't let it freeze the lightbulb.
   // Race `acquire` against a short deadline — on timeout return null (empty
   // lightbulb) while the spawn keeps running in the background, so the NEXT
   // invocation hits a warm server. Mirrors completion()'s soft deadline.
-  const acqP = ensureLspManager(db).acquire(projectId, languageId);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const TIMED_OUT = Symbol('lsp-codeaction-deadline');
-  const raced = await Promise.race([
-    acqP,
-    new Promise<typeof TIMED_OUT>((r) => { timer = setTimeout(() => r(TIMED_OUT), CODEACTION_DEADLINE_MS); }),
-  ]);
-  if (timer) clearTimeout(timer);
-  if (raced === TIMED_OUT) {
-    void acqP.catch(() => undefined); // keep warming; abandon this invocation
-    return null;
-  }
-  const acq = raced;
-  if (!acq) return null;
-  const abs = relToAbs(root, file);
-  const liveDoc = getDoc(projectId, file);
-  if (liveDoc) acq.handle.ensureOpen(abs, liveDoc.languageId, liveDoc.version, liveDoc.content);
   try {
-    return mapServerCodeActions(await acq.handle.codeActions(abs, range), acq.def.id);
+    const acq = await acquireLspWithDeadline(
+      db,
+      projectId,
+      languageId,
+      CODEACTION_DEADLINE_MS,
+      requestSignal,
+      origin === 'auto' ? 'background' : 'manual',
+    );
+    if (!acq) return null;
+    const abs = relToAbs(root, file);
+    const liveDoc = getDoc(projectId, file);
+    if (liveDoc) acq.handle.ensureOpen(abs, liveDoc.languageId, liveDoc.version, liveDoc.content);
+    return mapServerCodeActions(
+      await acq.handle.codeActions(abs, range, undefined, { origin, signal: requestSignal }),
+      acq.def.id,
+    );
   } catch {
     return null;
+  } finally {
+    if (budget) clearTimeout(budget);
+    if (forwardAbort) signal!.removeEventListener('abort', forwardAbort);
   }
 }
 
 export async function serverResolveCodeAction(
-  db: CodeIndexDB, projectId: number, action: CodeActionDTO,
+  db: CodeIndexDB, projectId: number, action: CodeActionDTO, signal?: AbortSignal,
 ): Promise<CodeActionDTO | null> {
   if (!action.originServerId || !action.raw || !action.needsResolve) return action;
-  const acq = await ensureLspManager(db).acquireById(projectId, action.originServerId);
+  const acq = await ensureLspManager(db).acquireById(projectId, action.originServerId, 'manual');
   if (!acq || !acq.handle.supportsCodeActionResolve()) return action;
   try {
-    const resolved = await acq.handle.resolveCodeAction(action.raw);
+    const resolved = await acq.handle.resolveCodeAction(action.raw, signal);
     return mapServerCodeActions([resolved], acq.def.id)[0] ?? null;
   } catch { return null; }
 }
 
 export async function serverExecuteCodeAction(
   db: CodeIndexDB, projectId: number, action: CodeActionDTO,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true; edit?: WorkspaceEditDTO }> {
   const command = action.command;
   if (!action.originServerId || !command?.command || command.command.length > 256) throw new Error('invalid LSP command');
   if (JSON.stringify(command.arguments ?? []).length > 64_000) throw new Error('LSP command arguments too large');
-  const acq = await ensureLspManager(db).acquireById(projectId, action.originServerId);
+  const acq = await ensureLspManager(db).acquireById(projectId, action.originServerId, 'manual');
   if (!acq) throw new Error('origin LSP server unavailable');
-  await acq.handle.executeCommand(command.command, command.arguments);
-  return { ok: true };
+  const executed = await acq.handle.executeCommand(command.command, command.arguments);
+  const changes: WorkspaceEditDTO['changes'] = {};
+  for (const rawEdit of executed.workspaceEdits) {
+    const mapped = mapServerWorkspaceEdit(rawEdit as LspWorkspaceEdit);
+    for (const [file, edits] of Object.entries(mapped?.changes ?? {})) {
+      changes[file] = [...(changes[file] ?? []), ...edits];
+    }
+  }
+  const edit = Object.keys(changes).length > 0 ? { changes } : undefined;
+  return { ok: true, edit };
 }
 
 /** Language status for the editor CTA / StatusBar chip. */
 export function serverStatusFor(db: CodeIndexDB, projectId: number, languageId: string) {
   const manager = ensureLspManager(db);
   const s = manager.status(projectId, languageId);
-  // Warm-spawn: a 'starting' status with a real server means nothing has
-  // acquired yet. Kick the spawn fire-and-forget so merely opening a file
-  // (the chip polls on activation) reliably starts the server, even if no
-  // completion is invoked. acquire de-dupes via entry.spawning; it's a
-  // cheap no-op during the failed window (returns null without spawning).
-  if (s.state === 'starting' && s.server) {
-    void manager.acquire(projectId, languageId).catch(() => undefined);
+  // Status may warm lightweight servers, but the manager's activation policy
+  // keeps heavy interactive-only servers (OmniSharp) installed and idle.
+  if (s.state === 'idle' && s.server) {
+    void manager.acquire(projectId, languageId, 'status').catch(() => undefined);
   }
   return {
     state: s.state,
@@ -479,7 +597,18 @@ export function serverStatusFor(db: CodeIndexDB, projectId: number, languageId: 
       ? { id: s.server.id, label: s.server.label, version: s.server.install.version, sizeLabel: s.server.sizeLabel }
       : undefined,
     reason: s.reason,
+    runtime: s.runtime
+      ? {
+          kind: s.runtime.kind,
+          minMajor: s.runtime.minMajor,
+          satisfied: s.runtime.satisfied,
+          version: s.runtime.version,
+          reason: s.runtime.reason,
+        }
+      : undefined,
     autoPrompt: process.env.MCP_LSP_AUTO_PROMPT !== '0',
+    workspaceMode: s.workspaceMode,
+    workspaceReason: s.workspaceReason,
   };
 }
 

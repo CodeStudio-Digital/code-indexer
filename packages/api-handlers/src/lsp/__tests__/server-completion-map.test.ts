@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapServerCodeActions, mapServerCompletionItem, mapServerWorkspaceEdit } from '../server-backend.js';
+import { filterServerCompletionItems, mapServerCodeActions, mapServerCompletionItem, mapServerWorkspaceEdit } from '../server-backend.js';
 import type { LspCompletionItem } from '@mcp/services/lsp/lsp-protocol.js';
 
 describe('mapServerCompletionItem', () => {
@@ -103,6 +103,27 @@ describe('mapServerCompletionItem', () => {
   });
 });
 
+describe('filterServerCompletionItems', () => {
+  it('filters before the cap and preserves a match beyond the former item 120 cutoff', () => {
+    const items = Array.from({ length: 620 }, (_, index) => ({
+      label: index === 180 ? 'IEnumerable' : `Other${index}`,
+      sortText: String(index).padStart(4, '0'),
+    }));
+    const result = filterServerCompletionItems(items, 'IEnumera', { line: 1, column: 9 });
+    expect(result.items.map((item) => item.label)).toEqual(['IEnumerable']);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('caps a broad ranked list at 500 and reports truncation', () => {
+    const items = Array.from({ length: 501 }, (_, index) => ({ label: `Item${index}` }));
+    const result = filterServerCompletionItems(items, '', { line: 1, column: 1 });
+    expect(result.items).toHaveLength(500);
+    expect(result.items[0]?.label).toBe('Item0');
+    expect(result.items[499]?.label).toBe('Item499');
+    expect(result.truncated).toBe(true);
+  });
+});
+
 describe('mapServerWorkspaceEdit', () => {
   it('converts changes from URI keys into absolute-path contract edits', () => {
     expect(mapServerWorkspaceEdit({
@@ -138,6 +159,20 @@ describe('mapServerWorkspaceEdit', () => {
       },
     });
   });
+
+  it('ignores non-file URIs from either workspace edit shape', () => {
+    expect(mapServerWorkspaceEdit({
+      changes: {
+        'untitled:Scratch.java': [
+          { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'x' },
+        ],
+      },
+      documentChanges: [{
+        textDocument: { uri: 'jdt://contents/java.base/java/lang/String.class', version: 1 },
+        edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'x' }],
+      }],
+    })).toBeUndefined();
+  });
 });
 
 describe('mapServerCodeActions', () => {
@@ -156,6 +191,7 @@ describe('mapServerCodeActions', () => {
         },
       },
       { title: 'Run server command', command: { command: 'x', arguments: [1] } },
+      { title: 'Bare LSP command', command: 'omnisharp.applyCodeAction', arguments: [{ id: 9 }] },
       { title: 'Resolve later', data: { id: 7 } },
     ], 'intelephense');
 
@@ -180,6 +216,11 @@ describe('mapServerCodeActions', () => {
         title: 'Run server command', kind: 'quickfix', isPreferred: undefined, edit: undefined,
         command: { command: 'x', arguments: [1] }, originServerId: 'intelephense',
         raw: expect.any(Object), needsResolve: false,
+      },
+      {
+        title: 'Bare LSP command', kind: 'quickfix', isPreferred: undefined, edit: undefined,
+        command: { command: 'omnisharp.applyCodeAction', arguments: [{ id: 9 }] },
+        originServerId: 'intelephense', raw: expect.any(Object), needsResolve: false,
       },
       {
         title: 'Resolve later', kind: 'quickfix', isPreferred: undefined, edit: undefined,

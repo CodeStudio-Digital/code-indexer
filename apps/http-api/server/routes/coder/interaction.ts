@@ -376,7 +376,7 @@ export function mountCoderInteractionRoutes(
       return c.json({ error: 'no pending plan' }, 404);
     }
     const resultText = aborted
-      ? `Plan review aborted by user.${body.feedback ? ` Feedback: ${body.feedback}` : ''}`
+      ? `Plan rejected by user.${body.feedback ? ` Feedback: ${body.feedback}` : ''} Planning review ended.`
       : formatPlanResult(approved, body.feedback);
     const toolMsg: AgentMessage = {
       role: 'tool',
@@ -384,6 +384,10 @@ export function mountCoderInteractionRoutes(
         type: 'tool_result',
         tool_use_id: pending.toolUseId,
         content: resultText,
+        // Rejection ends the review and is error-shaped in the live tool path.
+        // Persist the same bit so history reconstruction can distinguish it
+        // from the legacy non-error Revise result.
+        ...(aborted ? { is_error: true } : {}),
       }],
     };
     sessionStore.appendMessage(id, toolMsg);

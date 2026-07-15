@@ -17,12 +17,12 @@ async function* events(...evts: Record<string, unknown>[]): AsyncIterable<Record
   for (const e of evts) yield e;
 }
 
-function makeProvider(stream: AsyncIterable<Record<string, unknown>>) {
+function makeProvider(stream: AsyncIterable<Record<string, unknown>>, model = 'gpt-5.5') {
   const provider = new ChatGPTCodexProvider({
     apiKey: 'tok',
     baseURL: 'https://chatgpt.com/backend-api/codex',
     accountId: 'acct',
-    model: 'gpt-5.5',
+    model,
   });
   // Swap the inner SDK client with a stub. Cast through unknown because the
   // real OpenAI SDK type carries far more surface than we exercise.
@@ -196,6 +196,144 @@ describe('ChatGPTCodexProvider stream handler', () => {
     const deltas = await collect(makeProvider(stream));
     const texts = deltas.filter((d) => d.type === 'text_delta').map((d) => (d as { text: string }).text);
     expect(texts.join('')).toBe('hello world');
+  });
+
+  // ─── GPT-5.6 prompt-cache affinity + usage ──────────────────
+
+  it.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])(
+    'sends a stable prompt_cache_key for %s',
+    async (model) => {
+      const provider = makeProvider(
+        events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+        model,
+      );
+      const create = (
+        provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
+      ).client.responses.create;
+
+      for await (const _ of provider.chat({ ...baseReq, sessionId: 1249 })) void _;
+
+      const args = create.mock.calls[0][0] as Record<string, unknown>;
+      expect(args.prompt_cache_key).toBe('coder-session-1249');
+      expect(args.prompt_cache_options).toBeUndefined();
+    },
+  );
+
+  it('keeps the transport session_id stable across provider recreation', async () => {
+    const provider1 = makeProvider(
+      events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+      'gpt-5.6-sol',
+    );
+    const provider2 = makeProvider(
+      events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+      'gpt-5.6-sol',
+    );
+    const provider3 = makeProvider(
+      events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+      'gpt-5.6-sol',
+    );
+
+    for await (const _ of provider1.chat({ ...baseReq, sessionId: 1249 })) void _;
+    for await (const _ of provider2.chat({ ...baseReq, sessionId: 1249 })) void _;
+    for await (const _ of provider3.chat({ ...baseReq, sessionId: 1250 })) void _;
+
+    const createOptions = (provider: ChatGPTCodexProvider) => {
+      const create = (
+        provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
+      ).client.responses.create;
+      return create.mock.calls[0][1] as { headers?: Record<string, string> };
+    };
+    const session1 = createOptions(provider1).headers?.session_id;
+    const session2 = createOptions(provider2).headers?.session_id;
+    const otherSession = createOptions(provider3).headers?.session_id;
+
+    expect(session1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(session2).toBe(session1);
+    expect(otherSession).not.toBe(session1);
+  });
+
+  it.each(['gpt-5.5', 'gpt-5.3-codex', 'gpt-5-codex', 'gpt-4o'])(
+    'does not send prompt_cache_key for non-5.6 model %s',
+    async (model) => {
+      const provider = makeProvider(
+        events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+        model,
+      );
+      const create = (
+        provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
+      ).client.responses.create;
+
+      for await (const _ of provider.chat({ ...baseReq, sessionId: 1249 })) void _;
+
+      const args = create.mock.calls[0][0] as Record<string, unknown>;
+      expect(args.prompt_cache_key).toBeUndefined();
+    },
+  );
+
+  it('does not send prompt_cache_key for GPT-5.6 without a local session id', async () => {
+    const provider = makeProvider(
+      events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+      'gpt-5.6-sol',
+    );
+    const create = (
+      provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
+    ).client.responses.create;
+
+    await collect(provider);
+
+    const args = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(args.prompt_cache_key).toBeUndefined();
+  });
+
+  it('re-evaluates GPT-5.6 cache affinity after setModel()', async () => {
+    const provider = makeProvider(
+      events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+      'gpt-5.5',
+    );
+    provider.setModel('gpt-5.6-terra');
+    const create = (
+      provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
+    ).client.responses.create;
+
+    for await (const _ of provider.chat({ ...baseReq, sessionId: 'session-a' })) void _;
+
+    const args = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(args.prompt_cache_key).toBe('coder-session-session-a');
+  });
+
+  it('normalizes GPT-5.6 cache reads and writes from Responses usage', async () => {
+    const provider = makeProvider(
+      events({
+        type: 'response.completed',
+        response: {
+          usage: {
+            input_tokens: 100_000,
+            output_tokens: 500,
+            input_tokens_details: {
+              cached_tokens: 80_000,
+              cache_write_tokens: 16_384,
+            },
+          },
+          status: 'completed',
+        },
+      }),
+      'gpt-5.6-luna',
+    );
+
+    const deltas: ChatDelta[] = [];
+    for await (const delta of provider.chat({ ...baseReq, sessionId: 1249 })) deltas.push(delta);
+    const usage = deltas.find((delta) => delta.type === 'usage');
+
+    expect(usage).toEqual({
+      type: 'usage',
+      usage: {
+        input_tokens: 100_000,
+        output_tokens: 500,
+        cache_read_input_tokens: 80_000,
+        cache_creation_input_tokens: 16_384,
+        prompt_tokens_total: 100_000,
+      },
+    });
   });
 
   // ─── P0: store + previous_response_id (opt-in via CODEX_STORE_RESPONSES=1)

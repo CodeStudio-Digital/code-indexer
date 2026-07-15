@@ -29,6 +29,9 @@ interface MssqlQueryOutput {
   recordset?: Array<Record<string, unknown>> & { columns?: Record<string, unknown> };
   rowsAffected?: number[];
 }
+interface MssqlRequestOverrides {
+  requestTimeout?: number;
+}
 interface MssqlRequest {
   input(name: string, value: unknown): MssqlRequest;
   query(sql: string): Promise<MssqlQueryOutput>;
@@ -36,7 +39,7 @@ interface MssqlRequest {
 }
 interface MssqlPool {
   connect(): Promise<MssqlPool>;
-  request(): MssqlRequest;
+  request(overrides?: MssqlRequestOverrides): MssqlRequest;
   close(): Promise<void>;
 }
 /** node-mssql Transaction — drives an explicit BEGIN/COMMIT on one connection. */
@@ -49,7 +52,13 @@ interface MssqlTransaction {
 interface MssqlApi {
   ConnectionPool: new (c: unknown) => MssqlPool;
   Transaction: new (pool: MssqlPool) => MssqlTransaction;
-  Request: new (txn: MssqlTransaction) => MssqlRequest;
+  Request: new (txn: MssqlTransaction, overrides?: MssqlRequestOverrides) => MssqlRequest;
+}
+
+/** node-mssql reads per-request deadlines only from the creation overrides. */
+export function mssqlRequestOverrides(timeoutMs: number | undefined): MssqlRequestOverrides | undefined {
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return undefined;
+  return { requestTimeout: Math.trunc(timeoutMs) };
 }
 
 /**
@@ -148,22 +157,47 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
-    const request = pool.request();
+    // SQL Server has no per-session `SET TRANSACTION READ ONLY`. For a saved
+    // read-only connection, execute inside a pinned transaction and always roll
+    // it back. The shared factory classifier still rejects writes before this.
+    const txn = config.readOnly ? new mssql.Transaction(pool) : null;
+    let inTxn = false;
     let onAbort: (() => void) | null = null;
     try {
+      if (txn) {
+        await txn.begin();
+        inTxn = true;
+      }
+      // node-mssql defaults to 15 seconds. Its Request instance reads a
+      // per-query override ONLY at construction, under `requestTimeout`.
+      // Supplying it here keeps the console setting isolated to this statement.
+      const overrides = mssqlRequestOverrides(opts.timeoutMs);
+      const request: MssqlRequest = txn ? new mssql.Request(txn, overrides) : pool.request(overrides);
       if (opts.signal) {
         if (opts.signal.aborted) throw new Error('query cancelled');
         onAbort = (): void => request.cancel();
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
       (opts.params ?? []).forEach((p, i) => request.input(`p${i}`, p ?? null));
-      return shapeMssqlResult(await request.query(sql), max);
+      const result = shapeMssqlResult(await request.query(sql), max);
+      if (txn && inTxn) {
+        await txn.rollback();
+        inTxn = false;
+      }
+      return result;
+    } catch (err) {
+      if (txn && inTxn) {
+        await txn.rollback().catch(() => void 0);
+        inTxn = false;
+      }
+      throw err;
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
     }
   }
 
   async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // A node-mssql Transaction pins a single connection for begin→commit; every
     // Request built from it runs there. SQL Server rolls back DDL too, so a

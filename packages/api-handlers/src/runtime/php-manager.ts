@@ -15,8 +15,9 @@ import { managedRuntimeRoot } from './runtime-shared.js';
 import { minorOf } from './detect-shared.js';
 import * as winZip from './installers/php-win-zip.js';
 import { installViaBrew } from './installers/brew-installer.js';
-import { listExtensions as listExt, setExtension as setExt } from './php-extensions.js';
+import { listExtensions as listExt, loadedExtensionNames, setExtension as setExt } from './php-extensions.js';
 import { installPeclExtension as installPecl } from './php-pecl.js';
+import { managedVersionFromId } from './runtime-version.js';
 
 const isWin = process.platform === 'win32';
 /** Homebrew PHP formula lines we offer on macOS/Linux. */
@@ -62,6 +63,23 @@ export function listExtensions(version: string, managedDir: string): PhpExtensio
     throw new ApiError('unsupported', 400, 'extension management is only available for managed PHP installs');
   }
   return listExt(installDir);
+}
+
+/**
+ * Loaded modules for an opaque project runtime id. System/Homebrew installs
+ * are deliberately ignored because their ini is not managed by this UI.
+ */
+export function loadedExtensionsForRuntimeId(id: string | null | undefined, managedDir: string): string[] {
+  let version: string | null;
+  try {
+    version = managedVersionFromId(id);
+  } catch {
+    return [];
+  }
+  if (!version) return [];
+  const installDir = join(managedRuntimeRoot(managedDir, 'php'), version);
+  if (!existsSync(installDir)) return [];
+  return loadedExtensionNames(listExt(installDir));
 }
 
 export function setExtension(version: string, name: string, enabled: boolean, managedDir: string): void {

@@ -62,22 +62,28 @@ export const WorkerLogRow = memo(function WorkerLogRow({
   );
   return (
     <div className="border-b border-border/50 px-2 py-1 hover:bg-muted/30">
-      <button
-        type="button"
-        onClick={() => onToggle(rowKey)}
-        className="flex w-full items-start gap-1.5 text-left"
-      >
-        {expanded ? (
-          <ChevronDown className="mt-0.5 h-2.5 w-2.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="mt-0.5 h-2.5 w-2.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className="text-muted-foreground">{formatTime(entry.ts)}</span>
-        <span className={cn('rounded px-1 font-mono text-[9px]', CATEGORY_COLORS[entry.category])}>
-          {entry.category}
-        </span>
-        <span className={cn('flex-1 truncate', LEVEL_TEXT[entry.level])}>{headline}</span>
-      </button>
+      <div className="flex w-full items-start gap-1.5 text-left">
+        <button
+          type="button"
+          onClick={() => onToggle(rowKey)}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Collapse log entry' : 'Expand log entry'}
+          className="grid h-4 w-3 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          {expanded ? (
+            <ChevronDown className="h-2.5 w-2.5" />
+          ) : (
+            <ChevronRight className="h-2.5 w-2.5" />
+          )}
+        </button>
+        <div data-text-selectable className="flex min-w-0 flex-1 items-start gap-1.5">
+          <span className="text-muted-foreground">{formatTime(entry.ts)}</span>
+          <span className={cn('rounded px-1 font-mono text-[9px]', CATEGORY_COLORS[entry.category])}>
+            {entry.category}
+          </span>
+          <span className={cn('min-w-0 flex-1 truncate', LEVEL_TEXT[entry.level])}>{headline}</span>
+        </div>
+      </div>
       {expanded && (
         <pre className="ml-4 mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-background/60 p-1.5 text-[10px]">
           {json}

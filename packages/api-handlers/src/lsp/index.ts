@@ -29,7 +29,7 @@ import {
 import { isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
 import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
 import type { HandlerDeps } from '../types.js';
-import { openDoc, changeDoc, closeDoc, getDoc } from './document-store.js';
+import { openDoc, changeDocWithSession, closeDoc, documentSyncCounters, getDoc } from './document-store.js';
 import { publishDiagnostics, subscribeDiagnostics } from './diagnostics-hub.js';
 import { subscribeServerStatus } from './server-status-hub.js';
 import {
@@ -47,6 +47,7 @@ import {
 } from './server-backend.js';
 import { installServer, listServers as listLspServers, removeServer as removeLspServer } from '@mcp/services/lsp/server-installer.js';
 import { serverForLanguage } from '@mcp/services/lsp/server-registry.js';
+import { invalidateLspRuntimeCache } from './lsp-runtime.js';
 import { writeLanguageLevel, parseLanguageLevels, defaultLevelFor } from '@mcp/shared/utils/language-levels.js';
 import { detectLanguageLevel } from './language-level-detect.js';
 import { createInProcessLspExecutor } from './executor-inproc.js';
@@ -179,28 +180,30 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
   }
 
   const base = {
-    async didOpen({ projectId, file, languageId, version, content }) {
+    async didOpen({ projectId, file, languageId, version, content, syncSessionId }) {
       const root = requireProjectRoot(projectId);
       const lang = languageId || languageIdForPath(file);
-      openDoc(projectId, file, lang, version, content);
+      const accepted = openDoc(projectId, file, lang, version, content, syncSessionId);
+      if (!accepted) return { ok: true as const };
       // No eager TS sync here — every executor op syncs the live buffer at
       // use time, and the diagnostics tick below does too.
       if (isTsFile(file)) scheduleTsDiagnostics(projectId, root, file);
       else {
         scheduleSyntaxDiagnostics(projectId, file, lang);
-        // Warm the language server in the background so the first lightbulb /
-        // completion lands on a ready server instead of a cold spawn. acquire
-        // de-dupes and is a cheap no-op when no server is configured for `lang`.
+        // Warm lightweight servers only. Heavy interactive-only servers such
+        // as OmniSharp reject the `open` intent and stay cold until user input.
         if (process.env.MCP_LSP_WARM_ON_OPEN !== '0') {
-          void ensureLspManager(db).acquire(projectId, lang).catch(() => undefined);
+          void ensureLspManager(db).acquire(projectId, lang, 'open').catch(() => undefined);
         }
       }
       return { ok: true as const };
     },
 
-    async didChange({ projectId, file, version, changes }) {
+    async didChange({ projectId, file, version, changes, syncSessionId }) {
       const root = requireProjectRoot(projectId);
-      if (!changeDoc(projectId, file, version, changes)) return { resync: true as const };
+      const changed = changeDocWithSession(projectId, file, version, changes, syncSessionId);
+      if (changed === 'stale-session') return { ok: true as const };
+      if (changed === 'resync') return { resync: true as const };
       if (isTsFile(file)) scheduleTsDiagnostics(projectId, root, file);
       else {
         const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
@@ -209,8 +212,9 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       return { ok: true as const };
     },
 
-    async didClose({ projectId, file }) {
-      closeDoc(projectId, file);
+    async didClose({ projectId, file, syncSessionId }) {
+      const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      if (!closeDoc(projectId, file, syncSessionId)) return { ok: true as const };
       const k = `${projectId}:${file}`;
       const timer = tsDiagTimers.get(k);
       if (timer) { clearTimeout(timer); tsDiagTimers.delete(k); }
@@ -219,6 +223,8 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       // Clear markers on the renderer side too.
       publishDiagnostics(projectId, { file, source: 'ts', diagnostics: [] });
       publishDiagnostics(projectId, { file, source: 'syntax', diagnostics: [] });
+      const server = serverForLanguage(languageId);
+      if (server) publishDiagnostics(projectId, { file, source: `lsp:${server.id}`, diagnostics: [] });
       return { ok: true as const };
     },
 
@@ -227,7 +233,7 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       return subscribeDiagnostics(projectId);
     },
 
-    async completion({ projectId, file, position, content, context }) {
+    async completion({ projectId, file, position, content, context }, ctx) {
       const root = requireProjectRoot(projectId);
       if (!isTsFile(file)) {
         const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
@@ -240,7 +246,7 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
         // é que dispara o acquire). Usado só para o log de diagnóstico do P2.
         const serverState = ensureLspManager(db).status(projectId, lang).state;
         const t0 = Date.now();
-        const serverP = serverCompletion(db, projectId, root, file, lang, position, context);
+        const serverP = serverCompletion(db, projectId, root, file, lang, position, context, ctx.signal);
         let timer: ReturnType<typeof setTimeout> | undefined;
         const SOFT = Symbol('lsp-soft-deadline');
         const raced = await Promise.race([
@@ -286,7 +292,7 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       return { items: mergeCompletions(tsItems, fbItems.map((item) => ({ ...item, origin: 'index' as const }))), isIncomplete: false };
     },
 
-    async resolveCompletion({ projectId, file, item }) {
+    async resolveCompletion({ projectId, file, item }, ctx) {
       const root = requireProjectRoot(projectId);
       if (isTsFile(file)) {
         // TS/JS auto-import: `item` é o `raw` que guardamos na completion
@@ -311,16 +317,17 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
         };
       }
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      return serverResolveCompletion(db, projectId, lang, item);
+      return serverResolveCompletion(db, projectId, lang, item, ctx.signal);
     },
 
-    async hover({ projectId, file, position, content }) {
+    async hover({ projectId, file, position, content }, ctx) {
       const root = requireProjectRoot(projectId);
       if (!isTsFile(file)) {
         const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
         // undefined = no server reachable → index fallback; null = the
         // server answered "nothing here" (authoritative).
-        const viaServer = await serverHover(db, projectId, root, file, lang, position);
+        const viaServer = await serverHover(db, projectId, root, file, lang, position, ctx.signal);
+        if (ctx.signal.aborted) return null;
         if (viaServer !== undefined) return viaServer;
         return exec().fallbackHover(opCtx(projectId, root, file, position, undefined, lang));
       }
@@ -333,11 +340,12 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       return hover;
     },
 
-    async definition({ projectId, file, position, content }) {
+    async definition({ projectId, file, position, content }, ctx) {
       const root = requireProjectRoot(projectId);
       if (!isTsFile(file)) {
         const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-        const viaServer = await serverDefinition(db, projectId, root, file, lang, position);
+        const viaServer = await serverDefinition(db, projectId, root, file, lang, position, ctx.signal);
+        if (ctx.signal.aborted) return [];
         if (viaServer && viaServer.length > 0) return viaServer;
         return exec().fallbackDefinition(opCtx(projectId, root, file, position));
       }
@@ -348,11 +356,12 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       }));
     },
 
-    async references({ projectId, file, position, content }) {
+    async references({ projectId, file, position, content }, ctx) {
       const root = requireProjectRoot(projectId);
       if (!isTsFile(file)) {
         const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-        const viaServer = await serverReferences(db, projectId, root, file, lang, position);
+        const viaServer = await serverReferences(db, projectId, root, file, lang, position, ctx.signal);
+        if (ctx.signal.aborted) return [];
         if (viaServer && viaServer.length > 0) return viaServer;
         return exec().fallbackReferences(opCtx(projectId, root, file, position));
       }
@@ -384,7 +393,7 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       }));
     },
 
-    async semanticTokens({ projectId, file, content }) {
+    async semanticTokens({ projectId, file, content }, ctx) {
       const root = requireProjectRoot(projectId);
       // TS/JS → the in-process TS service (its tokens already match Monaco's legend).
       if (isTsFile(file)) {
@@ -395,7 +404,7 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       // cold/absent server returns null → empty (Monarch keeps colouring) and
       // Monaco re-requests once the server warms (or on the next edit).
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const viaServer = await serverSemanticTokens(db, projectId, root, file, lang);
+      const viaServer = await serverSemanticTokens(db, projectId, root, file, lang, ctx.signal);
       return viaServer ?? { data: [] };
     },
 
@@ -417,21 +426,41 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
     },
 
     async instances() {
-      return ensureLspManager(db).listInstances();
+      const counters = documentSyncCounters();
+      return ensureLspManager(db).listInstances().map((instance) => ({ ...instance, counters }));
     },
 
     installServerStream({ serverId }) {
       // AsyncGenerator IS an AsyncIterable — streamed as-is (MessagePort on
       // Electron via the Stream suffix; SSE route for browser dev).
-      return installServer(serverId);
+      const manager = ensureLspManager(db);
+      return (async function* installAndRestart() {
+        for await (const frame of installServer(serverId)) {
+          // JVM agents are startup-only. Restart every live instance before
+          // publishing `done`, so the install CTA's ready poll cannot reuse a
+          // pre-Lombok JDT LS process.
+          if (frame.phase === 'done') {
+            invalidateLspRuntimeCache();
+            const projects = manager.listInstances()
+              .filter((instance) => instance.serverId === serverId)
+              .map((instance) => instance.projectId);
+            await Promise.allSettled(projects.map((projectId) => manager.restart(projectId, serverId)));
+          }
+          yield frame;
+        }
+      })();
     },
 
     async removeServer({ serverId }) {
-      return { ok: removeLspServer(serverId) };
+      const manager = ensureLspManager(db);
+      return { ok: await manager.uninstallServer(serverId, () => removeLspServer(serverId)) };
     },
 
     async restartServer({ projectId, serverId }) {
       requireProjectRoot(projectId);
+      // Manual restart is the user's "try again" after fixing the toolchain —
+      // re-detect runtimes instead of serving a cached (possibly stale) miss.
+      invalidateLspRuntimeCache();
       await ensureLspManager(db).restart(projectId, serverId);
       return { ok: true as const };
     },
@@ -462,19 +491,19 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       return { php: compute('php'), python: compute('python') };
     },
 
-    async codeActions({ projectId, file, range }) {
+    async codeActions({ projectId, file, range, trigger }, ctx) {
       const root = requireProjectRoot(projectId);
       if (isTsFile(file)) {
         return exec().tsCodeActions(opCtx(projectId, root, file, undefined, undefined, languageIdForPath(file), range));
       }
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const viaServer = await serverCodeActions(db, projectId, root, file, lang, range);
+      const viaServer = await serverCodeActions(db, projectId, root, file, lang, range, trigger ?? 'invoke', ctx.signal);
       return (viaServer ?? []) satisfies CodeActionDTO[];
     },
 
-    async resolveCodeAction({ projectId, action }) {
+    async resolveCodeAction({ projectId, action }, ctx) {
       requireProjectRoot(projectId);
-      return serverResolveCodeAction(db, projectId, action);
+      return serverResolveCodeAction(db, projectId, action, ctx.signal);
     },
 
     async executeCodeAction({ projectId, action }) {

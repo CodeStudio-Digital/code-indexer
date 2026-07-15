@@ -7,12 +7,20 @@
 import { describe, it, expect } from 'vitest';
 import { EDITOR_THEMES } from '../catalog.js';
 
-const REQUIRED_TOKENS = [
+const REQUIRED_SYNTAX_TOKENS = [
   'entity.name.function',
   'entity.name.function.member',
   'variable.other.property',
   'variable',
+  'identifier',
+  'annotation',
   'entity.name.type',
+];
+
+const REQUIRED_SEMANTIC_TOKENS = [
+  'function', 'method', 'class', 'enum', 'interface', 'struct', 'type',
+  'typeParameter', 'namespace', 'property', 'event', 'member', 'parameter',
+  'variable', 'enumMember',
 ];
 
 describe('editor theme catalog', () => {
@@ -28,7 +36,9 @@ describe('editor theme catalog', () => {
 
     it(`${theme.id}: carries the differentiating token rules`, () => {
       const tokens = new Set(theme.data!.rules.map((r) => r.token));
-      for (const t of REQUIRED_TOKENS) expect(tokens.has(t)).toBe(true);
+      for (const t of [...REQUIRED_SYNTAX_TOKENS, ...REQUIRED_SEMANTIC_TOKENS]) {
+        expect(tokens.has(t), `${theme.id} missing ${t}`).toBe(true);
+      }
     });
 
     it(`${theme.id}: colors the suggest icons + popup chrome`, () => {
@@ -49,6 +59,17 @@ describe('editor theme catalog', () => {
       // otherwise coloring them is pointless.
       expect(colors['symbolIcon.methodForeground'])
         .not.toBe(colors['symbolIcon.propertyForeground']);
+    });
+  }
+
+  for (const id of ['codestudio-dark', 'codestudio-light']) {
+    it(`${id}: keeps the main Java/C# symbol roles visually distinct`, () => {
+      const theme = EDITOR_THEMES.find((entry) => entry.id === id)!;
+      const colors = new Map(theme.data!.rules.map((entry) => [entry.token, entry.foreground]));
+      const roles = ['class', 'namespace', 'method', 'property', 'parameter', 'variable'];
+
+      for (const role of roles) expect(colors.get(role), `${id} missing ${role}`).toBeTruthy();
+      expect(new Set(roles.map((role) => colors.get(role))).size).toBe(roles.length);
     });
   }
 });

@@ -9,8 +9,8 @@
 
 import type * as MonacoNs from 'monaco-editor';
 import { useWorkspaceStore } from '../../../../state/workspace.js';
-import { fileRunCommand, runnableForFile } from '../../../../lib/run-target.js';
-import { launchRun } from '../../../../state/run-launch.js';
+import { isProjectRunFile, runnableForFile } from '../../../../lib/run-target.js';
+import { launchFileRun } from '../../../../state/run-launch.js';
 
 function activeFilePath(): { projectId: number; path: string } | null {
   const ws = useWorkspaceStore.getState();
@@ -28,17 +28,14 @@ export function registerRunActions(
     id: 'mcp.runFile',
     // Editor-internal label (command palette) — not scanned JSX.
     label: 'Run File',
-    run: () => {
+    run: async () => {
       const file = activeFilePath();
       if (!file) return;
-      const target = runnableForFile(file.path);
-      if (!target) return;
-      const base = file.path.split('/').pop() ?? file.path;
-      void launchRun({
+      if (!isProjectRunFile(file.path) && !runnableForFile(file.path)) return;
+      await launchFileRun({
         projectId: file.projectId,
-        command: fileRunCommand(file.path, target.runtime),
-        label: `Run ${base}`,
-        manager: target.manager,
+        file: file.path,
+        content: editor.getModel()?.getValue(),
       });
     },
   });

@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { prompt } from '../../../components/ui/prompt-dialog.js';
+import { confirm, prompt } from '../../../components/ui/prompt-dialog.js';
 import { KNOWN_STACKS, type ServiceRow } from './types.js';
 
 export interface UseServiceActionsParams {
@@ -67,11 +67,20 @@ export function useServiceActions({
     const attached = !!svc?.is_attached;
     const external = svc?.mount_kind === 'external';
     const message = attached
-      ? `Detach external container '${serviceId}'? The container keeps running; only the session binding is removed.`
+      ? t('services.attached.removeConfirm', { serviceId })
       : external
-        ? `Remove external service '${serviceId}'? Project files are preserved on disk.`
-        : `Remove microservice '${serviceId}'? The container and its generated files will be destroyed.`;
-    if (!confirm(message)) return;
+        ? t('services.external.removeConfirm', { serviceId })
+        : t('services.removeConfirm', { serviceId });
+    if (!(await confirm({
+      title: attached
+        ? t('services.attached.removeTitle')
+        : external
+          ? t('services.external.removeTitle')
+          : t('services.removeTitle'),
+      description: message,
+      confirmLabel: t('services.removeAction'),
+      tone: 'destructive',
+    }))) return;
     await fetch(`/api/company/sessions/${sessionId}/services/${encodeURIComponent(serviceId)}`, {
       method: 'DELETE',
     });
@@ -238,7 +247,12 @@ export function useServiceActions({
    * processes in v1).
    */
   async function stopLocalProject(): Promise<void> {
-    if (!confirm(t('services.local.stopConfirm'))) {
+    if (!(await confirm({
+      title: t('services.local.stopAction'),
+      description: t('services.local.stopConfirm'),
+      confirmLabel: t('services.local.stopAction'),
+      tone: 'destructive',
+    }))) {
       return;
     }
     setError(null);

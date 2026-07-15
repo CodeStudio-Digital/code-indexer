@@ -10,12 +10,19 @@
  */
 
 import type * as MonacoNs from 'monaco-editor';
-import type { DetectedRunners, RunnerManager } from '@mcp/api-bus';
+import type { FileRunTarget, RunnerManager } from '@mcp/api-bus';
 import type { OpenFile } from '../../../../state/workspace.js';
 import { snippetRunFor } from '@mcp/api-bus';
 import { apiCall } from '../../../../lib/api-client.js';
-import { launchRun, launchSnippet } from '../../../../state/run-launch.js';
-import { fileRunCommand, findCodeBlocks, findPythonMainLine, findScriptLines } from '../../../../lib/run-target.js';
+import { launchFileRun, launchRun, launchSnippet } from '../../../../state/run-launch.js';
+import {
+  findCodeBlocks,
+  findCsharpMainLine,
+  findJavaMainLine,
+  findProjectRunLine,
+  findPythonMainLine,
+  findScriptLines,
+} from '../../../../lib/run-target.js';
 
 interface RunCmd {
   /** Shell command (manifests/files); empty for snippets — the backend builds it. */
@@ -26,17 +33,48 @@ interface RunCmd {
   cwd?: string;
   /** A markdown code block to run (the backend materialises + executes it). */
   snippet?: { language: string; code: string };
+  /** Manifest script name; resolved/quoted by the backend only when clicked. */
+  manifestScript?: string;
+  reason?: string;
 }
 
-type Kind = 'npm-manifest' | 'composer-manifest' | 'python' | 'markdown';
+type Kind =
+  | 'npm-manifest'
+  | 'composer-manifest'
+  | 'maven-project'
+  | 'gradle-project'
+  | 'dotnet-project'
+  | 'python'
+  | 'java'
+  | 'csharp'
+  | 'markdown';
 
 function kindFor(path: string): Kind | null {
   const base = (path.split(/[\\/]/).pop() ?? '').toLowerCase();
   if (base === 'package.json') return 'npm-manifest';
   if (base === 'composer.json') return 'composer-manifest';
+  if (base === 'pom.xml') return 'maven-project';
+  if (base === 'build.gradle' || base === 'build.gradle.kts') return 'gradle-project';
+  if (base.endsWith('.csproj')) return 'dotnet-project';
   if (base.endsWith('.py')) return 'python';
+  if (base.endsWith('.java')) return 'java';
+  if (base.endsWith('.cs')) return 'csharp';
   if (base.endsWith('.md') || base.endsWith('.markdown')) return 'markdown';
   return null;
+}
+
+function isProjectKind(kind: Kind): boolean {
+  return kind === 'maven-project' || kind === 'gradle-project' || kind === 'dotnet-project';
+}
+
+function managerForKind(kind: Kind): RunnerManager {
+  if (kind === 'maven-project') return 'maven';
+  if (kind === 'gradle-project') return 'gradle';
+  if (kind === 'dotnet-project' || kind === 'csharp') return 'dotnet';
+  if (kind === 'java') return 'java';
+  if (kind === 'python') return 'python';
+  if (kind === 'composer-manifest') return 'composer';
+  return 'npm';
 }
 
 /** Project-relative directory of a file path ('' for a root-level file). */
@@ -57,9 +95,8 @@ export function attachRunGutter(
 
   const collection = editor.createDecorationsCollection([]);
   let lineMap = new Map<number, RunCmd>();
-  // npm manager is resolved async from runner.detect; composer/python are fixed.
-  let manager: RunnerManager = kind === 'composer-manifest' ? 'composer' : 'npm';
   let disposed = false;
+  let sourceTarget: FileRunTarget | null = null;
 
   const build = (): void => {
     const text = model.getValue();
@@ -78,17 +115,49 @@ export function attachRunGutter(
       }
     } else if (kind === 'python') {
       const line = findPythonMainLine(text);
-      if (line) {
-        const base = file.path.split('/').pop() ?? file.path;
-        map.set(line, { command: fileRunCommand(file.path, 'python'), label: `Run ${base}`, manager: 'python' });
+      if (line && sourceTarget) {
+        map.set(line, {
+          command: sourceTarget.command ?? '',
+          label: sourceTarget.label,
+          manager: sourceTarget.manager,
+          cwd: sourceTarget.cwd,
+          reason: sourceTarget.reason,
+        });
+      }
+    } else if (kind === 'java' || kind === 'csharp') {
+      const line = kind === 'java' ? findJavaMainLine(text) : findCsharpMainLine(text);
+      if (line && sourceTarget) {
+        map.set(line, {
+          command: sourceTarget.command ?? '',
+          label: sourceTarget.label,
+          manager: sourceTarget.manager,
+          cwd: sourceTarget.cwd,
+          reason: sourceTarget.reason,
+        });
+      }
+    } else if (isProjectKind(kind)) {
+      const line = findProjectRunLine(text);
+      if (line && sourceTarget) {
+        map.set(line, {
+          command: sourceTarget.command ?? '',
+          label: sourceTarget.label,
+          manager: sourceTarget.manager,
+          cwd: sourceTarget.cwd,
+          reason: sourceTarget.reason,
+        });
       }
     } else {
       // Nested manifest → run in its OWN folder so `composer run` / `npm run`
       // find it (the runner defaults cwd to the project root otherwise).
       const cwd = dirOf(file.path) || undefined;
       for (const [line, name] of findScriptLines(text)) {
-        const command = manager === 'composer' ? `composer run ${name}` : `${manager} run ${name}`;
-        map.set(line, { command, label: name, manager, cwd });
+        map.set(line, {
+          command: '',
+          label: name,
+          manager: kind === 'composer-manifest' ? 'composer' : 'npm',
+          cwd,
+          manifestScript: name,
+        });
       }
     }
     lineMap = map;
@@ -96,23 +165,33 @@ export function attachRunGutter(
       [...map.entries()].map(([line, cmd]) => ({
         range: new monaco.Range(line, 1, line, 1),
         options: {
-          glyphMarginClassName: 'mcp-run-glyph',
-          glyphMarginHoverMessage: { value: cmd.snippet ? `Run \`${cmd.snippet.language}\` block` : '`' + cmd.command + '`' },
+          glyphMarginClassName: cmd.reason ? 'mcp-run-glyph mcp-run-glyph-disabled' : 'mcp-run-glyph',
+          glyphMarginHoverMessage: { value: cmd.reason ?? (cmd.snippet
+            ? `Run \`${cmd.snippet.language}\` block`
+            : cmd.manifestScript ? `Run \`${cmd.manifestScript}\`` : '`' + cmd.command + '`') },
           stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         },
       })),
     );
   };
 
-  // Resolve the JS package manager once, then paint; composer/python paint now.
-  if (kind === 'npm-manifest') {
-    void apiCall<DetectedRunners>('runner.detect', { projectId: file.projectId })
-      .then((d) => {
-        if (disposed) return;
-        manager = d.groups.find((g) => g.source === 'package.json')?.manager ?? 'npm';
-        build();
-      })
-      .catch(() => { if (!disposed) build(); });
+  const resolveSource = (): void => {
+    void apiCall<FileRunTarget>('runner.fileRunTarget', {
+      projectId: file.projectId,
+      file: file.path,
+      content: model.getValue(),
+    }).then((target) => {
+      if (disposed) return;
+      sourceTarget = target;
+      build();
+    }).catch((err) => {
+      if (disposed) return;
+      sourceTarget = { label: `Run ${file.path.split('/').pop() ?? file.path}`, manager: managerForKind(kind), reason: err instanceof Error ? err.message : String(err) };
+      build();
+    });
+  };
+  if (kind === 'java' || kind === 'csharp' || kind === 'python' || isProjectKind(kind)) {
+    resolveSource();
   } else {
     build();
   }
@@ -124,8 +203,17 @@ export function attachRunGutter(
     if (line == null) return;
     const cmd = lineMap.get(line);
     if (!cmd) return;
+    if (cmd.reason || (!cmd.command && !cmd.snippet && !cmd.manifestScript)) return;
     if (cmd.snippet) {
       void launchSnippet({ projectId: file.projectId, language: cmd.snippet.language, code: cmd.snippet.code, label: cmd.label });
+    } else if (cmd.manifestScript) {
+      void launchFileRun({
+        projectId: file.projectId,
+        file: file.path,
+        content: model.getValue(),
+        script: cmd.manifestScript,
+        label: cmd.label,
+      });
     } else {
       void launchRun({ projectId: file.projectId, command: cmd.command, label: cmd.label, manager: cmd.manager, cwd: cmd.cwd });
     }
@@ -134,7 +222,11 @@ export function attachRunGutter(
   let timer: ReturnType<typeof setTimeout> | null = null;
   const sub = model.onDidChangeContent(() => {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { if (!disposed) build(); }, 300);
+    timer = setTimeout(() => {
+      if (disposed) return;
+      if (kind === 'java' || kind === 'csharp' || kind === 'python' || isProjectKind(kind)) resolveSource();
+      else build();
+    }, 300);
   });
 
   return {

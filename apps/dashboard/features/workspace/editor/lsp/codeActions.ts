@@ -7,10 +7,13 @@
  */
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../../lib/api-client.js';
+import { toast } from '../../../../components/ui/prompt-dialog.js';
 import { logLsp } from '../lsp-log.js';
+import { cancelledWithin, withMonacoCancellation } from './cancellation.js';
+import { applyWorkspaceEditToProject } from './apply-workspace-edit.js';
 import {
   relPath,
-  toWorkspaceEdit,
+  modelBelongsToProject,
   type CodeActionDTO,
   type Monaco,
 } from './dto.js';
@@ -23,27 +26,45 @@ const EXECUTE_COMMAND_ID = 'mcp.lsp.executeCodeAction';
 let executeCommandRegistered = false;
 type MonacoCodeAction = MonacoNs.languages.CodeAction & { _dto: CodeActionDTO; _file: string };
 
-/** Resolve true if `token` cancels within `ms` (or is already cancelled). */
-function cancelledWithin(ms: number, token: MonacoNs.CancellationToken): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (token.isCancellationRequested) return resolve(true);
-    const timer = setTimeout(() => { sub.dispose(); resolve(false); }, ms);
-    const sub = token.onCancellationRequested(() => { clearTimeout(timer); resolve(true); });
-  });
-}
-
 export function registerCodeActionProvider(
   monaco: Monaco,
   projectId: number,
-  flushDoc: (rel: string) => Promise<void>,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void>,
 ): MonacoNs.IDisposable {
   if (!executeCommandRegistered) {
     executeCommandRegistered = true;
-    monaco.editor.registerCommand(EXECUTE_COMMAND_ID, (_accessor, payload: { projectId: number; action: CodeActionDTO }) => {
-      if (!payload?.action?.originServerId) return;
-      void apiCall('lsp.executeCodeAction', payload).catch((error) => {
-        console.error('[lsp] command-backed code action failed', error);
-      });
+    monaco.editor.registerCommand(EXECUTE_COMMAND_ID, async (_accessor, payload: { projectId: number; action: CodeActionDTO }) => {
+      if (!payload?.action) return;
+      try {
+        const apply = async (edit: NonNullable<CodeActionDTO['edit']>): Promise<void> => {
+          const result = await applyWorkspaceEditToProject(monaco, payload.projectId, edit);
+          if (result.skipped.length || result.outside.length) {
+            toast.warning('Code action applied partially', {
+              description: [
+                result.skipped.length ? `${result.skipped.length} unsaved or unreadable file(s)` : '',
+                result.outside.length ? `${result.outside.length} file(s) outside the project` : '',
+              ].filter(Boolean).join('; '),
+            });
+          }
+        };
+
+        // Monaco standalone cannot apply absolute LSP URIs to our
+        // project-namespaced models, so all edits go through the workspace
+        // applicator instead of CodeAction.edit / StandaloneBulkEditService.
+        if (payload.action.edit) await apply(payload.action.edit);
+        if (payload.action.command) {
+          if (!payload.action.originServerId) throw new Error('Code action has no origin language server.');
+          const executed = await apiCall<{ ok: true; edit?: NonNullable<CodeActionDTO['edit']> }>(
+            'lsp.executeCodeAction',
+            payload,
+          );
+          if (executed.edit) await apply(executed.edit);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[lsp] code action failed', error);
+        toast.error('Code action failed', { description: message });
+      }
     });
   }
 
@@ -51,8 +72,10 @@ export function registerCodeActionProvider(
     title: action.title,
     kind: action.kind,
     isPreferred: action.isPreferred,
-    edit: toWorkspaceEdit(monaco, action.edit),
-    command: action.command ? {
+    // Always execute through our command bridge. StandaloneBulkEditService
+    // only looks up exact URIs and therefore cannot see namespaced models.
+    edit: undefined,
+    command: action.edit || action.command ? {
       id: EXECUTE_COMMAND_ID,
       title: action.title,
       arguments: [{ projectId, action }],
@@ -63,6 +86,7 @@ export function registerCodeActionProvider(
 
   return monaco.languages.registerCodeActionProvider('*', {
     async provideCodeActions(model, range, context, token) {
+      if (!modelBelongsToProject(model, projectId)) return EMPTY;
       const file = relPath(model);
       const lang = model.getLanguageId();
       // Debounce ONLY the auto-trigger (lightbulb on cursor/marker churn):
@@ -73,16 +97,18 @@ export function registerCodeActionProvider(
       if (isAuto && (await cancelledWithin(DEBOUNCE_MS, token))) return EMPTY;
       const t0 = performance.now();
       try {
-        await flushDoc(file);
+        await ensureSynced(model);
         if (token.isCancellationRequested) return EMPTY;
-        const actions = await apiCall<CodeActionDTO[]>('lsp.codeActions', {
-          projectId,
-          file,
-          range: {
-            start: { line: range.startLineNumber, column: range.startColumn },
-            end: { line: range.endLineNumber, column: range.endColumn },
-          },
-        });
+        const actions = await withMonacoCancellation(token, (signal) =>
+          apiCall<CodeActionDTO[]>('lsp.codeActions', {
+            projectId,
+            file,
+            trigger: isAuto ? 'auto' : 'invoke',
+            range: {
+              start: { line: range.startLineNumber, column: range.startColumn },
+              end: { line: range.endLineNumber, column: range.endColumn },
+            },
+          }, { signal }));
         if (token.isCancellationRequested) return EMPTY;
         logLsp({
           op: 'codeActions',
@@ -111,9 +137,10 @@ export function registerCodeActionProvider(
     async resolveCodeAction(action, token) {
       const current = action as MonacoCodeAction;
       if (!current._dto.needsResolve || token.isCancellationRequested) return action;
-      const resolved = await apiCall<CodeActionDTO | null>('lsp.resolveCodeAction', {
-        projectId, file: current._file, action: current._dto,
-      }).catch(() => null);
+      const resolved = await withMonacoCancellation(token, (signal) =>
+        apiCall<CodeActionDTO | null>('lsp.resolveCodeAction', {
+          projectId, file: current._file, action: current._dto,
+        }, { signal })).catch(() => null);
       if (!resolved || token.isCancellationRequested) return action;
       return mapAction(resolved, current._file);
     },

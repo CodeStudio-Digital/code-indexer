@@ -16,16 +16,12 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as MonacoNs from 'monaco-editor';
 import { useTranslation } from 'react-i18next';
-import { languageIdForPath as inferLanguage } from '@mcp/shared/utils/language-id.js';
+import { languageIdForDocument as inferLanguage } from '@mcp/shared/utils/language-id.js';
 import { useWorkspaceStore, type OpenSftpFile } from '../../../state/workspace.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { registerSftpEdit } from '../../workspace/editor/sftp-edit-session.js';
 import { sftpWriteFile } from '../api.js';
-
-function detectDark(): boolean {
-  if (typeof document === 'undefined') return true;
-  return document.documentElement.classList.contains('dark');
-}
+import { useSharedMonacoTheme } from '../../../lib/monaco-theme.js';
 
 const baseName = (p: string): string => p.split('/').pop() || p;
 
@@ -49,12 +45,12 @@ export function SftpEditMount({ tab }: { tab: OpenSftpFile }) {
     lastSavedRef.current = tab.content;
   }, [tab.content]);
 
-  const language = inferLanguage(tab.remotePath);
-  const dark = detectDark();
+  const language = inferLanguage(tab.remotePath, tab.content);
+  const theme = useSharedMonacoTheme();
   const modelPath = sftpModelPath(tab.projectId, tab.path);
 
   const handleMount = useCallback<OnMount>(
-    (editor, monaco) => {
+    (editor) => {
       editorRef.current = editor;
       const model = editor.getModel();
       if (model) {
@@ -80,8 +76,6 @@ export function SftpEditMount({ tab }: { tab: OpenSftpFile }) {
         };
         registerSftpEdit(tab.projectId, tab.path, { model, save });
       }
-      // Theme baked at create; track runtime light/dark toggles.
-      monaco.editor.setTheme(detectDark() ? 'vs-dark' : 'vs');
       editor.focus();
     },
     // tab identity is stable per mount; store actions are stable refs.
@@ -132,7 +126,7 @@ export function SftpEditMount({ tab }: { tab: OpenSftpFile }) {
           keepCurrentModel
           defaultLanguage={language}
           language={language}
-          theme={dark ? 'vs-dark' : 'vs'}
+          theme={theme}
           onMount={handleMount}
           onChange={handleChange}
           options={options}

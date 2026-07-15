@@ -41,7 +41,7 @@ export function CellValuePanel({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent data-text-selectable className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">{column}</DialogTitle>
         </DialogHeader>

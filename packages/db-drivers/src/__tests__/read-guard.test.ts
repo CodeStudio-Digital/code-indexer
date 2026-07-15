@@ -23,6 +23,20 @@ describe('isReadStatement', () => {
     expect(isReadStatement('WITH x AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM x')).toBe(false);
   });
 
+  it('rejects read-shaped statements that create, export, lock, or mutate state', () => {
+    // SQL Server/Postgres table creation; MySQL server-side file export.
+    expect(isReadStatement('SELECT * INTO archived_users FROM users')).toBe(false);
+    expect(isReadStatement(`SELECT * FROM users INTO OUTFILE '/tmp/users.csv'`)).toBe(false);
+    expect(isReadStatement('WITH x AS (SELECT 1) SELECT * INTO copied FROM x')).toBe(false);
+    // Locks and sequence state are writes/side effects for a strict read-only connection.
+    expect(isReadStatement('SELECT * FROM users FOR UPDATE')).toBe(false);
+    expect(isReadStatement('SELECT * FROM users LOCK IN SHARE MODE')).toBe(false);
+    expect(isReadStatement('SELECT NEXT VALUE FOR order_seq')).toBe(false);
+    expect(isReadStatement(`SELECT nextval('order_seq')`)).toBe(false);
+    expect(isReadStatement(`SELECT setval('order_seq', 42)`)).toBe(false);
+    expect(isReadStatement(`SELECT dblink_exec('DELETE FROM users')`)).toBe(false);
+  });
+
   it('EXPLAIN ANALYZE executes the statement → write; bare EXPLAIN is a read', () => {
     expect(isReadStatement('EXPLAIN ANALYZE SELECT * FROM t')).toBe(false);
     expect(isReadStatement('EXPLAIN SELECT * FROM t')).toBe(true);

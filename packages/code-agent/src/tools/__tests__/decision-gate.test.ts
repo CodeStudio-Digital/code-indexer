@@ -3,7 +3,6 @@ import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { planTools, submitPlan } from '@mcp/code-agent/tools/plan.js';
 import { interactionTools, decisionGate, formatDecisionGateResult } from '@mcp/code-agent/tools/interaction.js';
-import { maybeDecisionGateNudge } from '@mcp/code-agent/core/runner/nodes/executing-plan-gate.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 
@@ -97,7 +96,7 @@ describe('formatDecisionGateResult', () => {
 });
 
 describe('decision_gate tool', () => {
-  it('emits decision_posted, counts the ask, and returns the formatted result', async () => {
+  it('emits decision_posted and returns the formatted result', async () => {
     const r = makeRunner({ planMode: true, planDepth: 'normal' });
     let posted: { questions: Array<{ id: string }> } | null = null;
     r.on('decision_posted', (b) => { posted = b as typeof posted; });
@@ -105,7 +104,6 @@ describe('decision_gate tool', () => {
     const resultP = decisionGate.handler({ questions: QUESTIONS }, ctx(r));
     await flush();
     expect(posted!.questions[0].id).toBe('approach');
-    expect(r.decisionAskCount).toBe(1);
 
     r.provideUserInput(JSON.stringify({ answers: { approach: { selected: ['reuse'] } } }));
     const result = await resultP;
@@ -152,140 +150,23 @@ describe('decision_gate tool', () => {
   });
 });
 
-describe('maybeDecisionGateNudge', () => {
-  const base = {
-    planMode: true,
-    planDepth: 'normal',
-    enabled: true,
-    decisionAsks: 0,
-    decisionGateNudges: 0,
-    planText: 'We could either extend the module or rewrite it. Two approaches...',
-  };
-
-  it('fires when a fork is present and the user was not consulted', () => {
-    expect(maybeDecisionGateNudge(base)).toMatch(/decision_gate/);
-  });
-
+describe('submit_plan does not infer forks from plan prose', () => {
   it.each([
-    'We could either extend the module or rewrite it.',
-    'Two approaches: a thin adapter or a full port.',
-    'Option A keeps it inline; option B extracts a module.',
-    'On the other hand, a background job avoids the stall.',
-    'Two viable approaches exist; pick one.',
-  ])('fires on genuine fork phrasing: %s', (planText) => {
-    expect(maybeDecisionGateNudge({ ...base, planText })).toMatch(/decision_gate/);
-  });
-
-  it('fires when either…or spans 40–80 chars (widened window)', () => {
-    // ~50 chars between "either" and "or": inside the new 80-char window, but
-    // outside the old 40-char one — a real fork the tightened regex used to miss.
-    const planText = 'We can either reuse the existing pipeline helper for this path or hand-roll a new one.';
-    expect(maybeDecisionGateNudge({ ...base, planText })).toMatch(/decision_gate/);
-  });
-
-  it('stays silent when either…or are far apart (>80 chars, likely unrelated)', () => {
-    const planText =
-      'Loop over either the left rows sourced from the primary datastore replica cluster instance node group or the cache.';
-    expect(maybeDecisionGateNudge({ ...base, planText })).toBeNull();
-  });
-
-  it.each([
-    'Add a null check in foo() and a test.',
-    'Use the shared validator instead of the inline check.',
-    'We could not find an existing helper, so add one.',
-    'The trade-offs of caching here are minimal.',
-    'Iterate over either side of the join.',
-    'Wire input vs. output streams.',
-  ])('stays silent on benign single-approach prose: %s', (planText) => {
-    // These contain lone idioms (instead of / trade-offs / either / vs / we could)
-    // that the OLD regex false-positived on — the tightened one must not fire.
-    expect(maybeDecisionGateNudge({ ...base, planText })).toBeNull();
-  });
-
-  it('skips simple-depth tasks', () => {
-    expect(maybeDecisionGateNudge({ ...base, planDepth: 'simple' })).toBeNull();
-  });
-
-  it('is suppressed once the user was consulted this run', () => {
-    expect(maybeDecisionGateNudge({ ...base, decisionAsks: 1 })).toBeNull();
-  });
-
-  it('is one-shot (suppressed after the first nudge)', () => {
-    expect(maybeDecisionGateNudge({ ...base, decisionGateNudges: 1 })).toBeNull();
-  });
-
-  it('is suppressed outside plan mode and when disabled', () => {
-    expect(maybeDecisionGateNudge({ ...base, planMode: false })).toBeNull();
-    expect(maybeDecisionGateNudge({ ...base, enabled: false })).toBeNull();
-  });
-});
-
-describe('submit_plan ↔ decision-gate nudge integration', () => {
-  const FORKED_PLAN = 'We could either extend the existing module or rewrite it. Two approaches exist.';
-
-  it('nudges once on a forked plan, then proceeds on re-submit', async () => {
+    '## Approach\n\n1. Extend the existing module.\n2. Run tests.',
+    'We could either extend the existing module or rewrite it. Two approaches exist.',
+    'Option A keeps it inline; option B extracts a module. On the other hand, both are valid.',
+  ])('posts on the first submission and waits for the user: %s', async (plan) => {
     const r = makeRunner({ planMode: true, planDepth: 'normal' });
-    // 1st submit → nudge (err), no pause.
-    const res1 = await submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
-    expect(res1.isError).toBe(true);
-    expect(res1.content).toMatch(/decision_gate/);
-    expect(r.decisionGateNudgeCount).toBe(1);
-
-    // 2nd submit (same plan) → no nudge (one-shot), pauses for approval.
     let posted = false;
     r.on('plan_posted', () => { posted = true; });
-    const res2P = submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
+
+    const resultP = submitPlan.handler({ plan }, ctx(r));
     await flush();
+
     expect(posted).toBe(true);
     r.provideUserInput(JSON.stringify({ approved: true }));
-    const res2 = await res2P;
-    expect(res2.content).toMatch(/approved/i);
-  });
-
-  it('does not nudge when the user was already consulted via decision_gate', async () => {
-    const r = makeRunner({ planMode: true, planDepth: 'normal' });
-    r.noteDecisionAsk(); // simulate a decision_gate call earlier in the run
-    let posted = false;
-    r.on('plan_posted', () => { posted = true; });
-    const resP = submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
-    await flush();
-    expect(posted).toBe(true); // straight to pause, no nudge
-    r.provideUserInput(JSON.stringify({ approved: true }));
-    await resP;
-    expect(r.decisionGateNudgeCount).toBe(0);
-  });
-
-  it('does not nudge a simple-depth plan', async () => {
-    const r = makeRunner({ planMode: true, planDepth: 'simple' });
-    let posted = false;
-    r.on('plan_posted', () => { posted = true; });
-    const resP = submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
-    await flush();
-    expect(posted).toBe(true);
-    r.provideUserInput(JSON.stringify({ approved: true }));
-    await resP;
-    expect(r.decisionGateNudgeCount).toBe(0);
-  });
-
-  it('re-arms the nudge after the user rejects a plan', async () => {
-    const r = makeRunner({ planMode: true, planDepth: 'normal' });
-    // 1st submit → nudge (err), count=1.
-    await submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
-    expect(r.decisionGateNudgeCount).toBe(1);
-    // 2nd submit → one-shot, no nudge, pauses → user REJECTS → reset on reject.
-    const res2P = submitPlan.handler({ plan: FORKED_PLAN }, ctx(r));
-    await flush();
-    r.provideUserInput(JSON.stringify({ approved: false, feedback: 'reconsider' }));
-    await res2P;
-    expect(r.decisionGateNudgeCount).toBe(0);
-    // 3rd submit (a DIFFERENT forked plan, to dodge the rejection ledger) →
-    // nudge fires again because reject re-armed it.
-    const res3 = await submitPlan.handler(
-      { plan: 'Either add a cache layer or restructure the query pipeline for the hot path here.' },
-      ctx(r),
-    );
-    expect(res3.isError).toBe(true);
-    expect(res3.content).toMatch(/decision_gate/);
-    expect(r.decisionGateNudgeCount).toBe(1);
+    const result = await resultP;
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toMatch(/approved/i);
   });
 });

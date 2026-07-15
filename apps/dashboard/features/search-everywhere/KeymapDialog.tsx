@@ -7,7 +7,7 @@ import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
 import { confirm as confirmDialog } from '../../components/ui/prompt-dialog.js';
 import { listCommands, onCommandsChanged } from '../../keymap/commands.js';
-import { eventToChord } from '../../keymap/dispatcher.js';
+import { installShortcutRecorder } from '../../keymap/recorder.js';
 import {
   bindingIndex,
   conflictingCommands,
@@ -38,8 +38,6 @@ export function KeymapPane({ className }: { className?: string }) {
 
   useEffect(() => {
     if (!capturing) return;
-    let first: string | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const commit = async (binding: string) => {
       const conflicts = conflictingCommands(binding, capturing);
       if (conflicts.length) {
@@ -58,25 +56,10 @@ export function KeymapPane({ className }: { className?: string }) {
       }
       setCapturing(null);
     };
-    const onKey = (event: KeyboardEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.key === 'Escape') { setCapturing(null); return; }
-      const chord = eventToChord(event);
-      if (!chord) return;
-      if (!first) {
-        first = chord;
-        timer = setTimeout(() => void commit(first!), 1200);
-      } else {
-        if (timer) clearTimeout(timer);
-        void commit(`${first} ${chord}`);
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      if (timer) clearTimeout(timer);
-    };
+    return installShortcutRecorder({
+      onCommit: commit,
+      onCancel: () => setCapturing(null),
+    });
   }, [addBinding, capturing, pt, replaceConflict]);
 
   const conflictIds = useMemo(() => {

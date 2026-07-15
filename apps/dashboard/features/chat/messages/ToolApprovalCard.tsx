@@ -5,6 +5,7 @@ import type { PendingToolApproval } from '../../../hooks/agent-stream/types.js';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { cn } from '../../../lib/utils.js';
+import { DbQueryToolView } from './DbQueryToolView.js';
 
 export type ToolApprovalVerdict = { approved: boolean; note?: string; alwaysAllow?: boolean };
 
@@ -50,6 +51,7 @@ function ApprovalRow({
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   const [resolving, setResolving] = useState(false);
   const isDatabaseWrite = approval.approvalKind === 'database_write';
+  const hasDbQueryDetails = approval.toolName === 'db_query' && approval.input;
 
   const respond = async (approved: boolean) => {
     if (resolving) return;
@@ -82,7 +84,11 @@ function ApprovalRow({
           </span>
         )}
       </div>
-      {!compact && approval.argsSummary && (
+      {!compact && hasDbQueryDetails ? (
+        <div className="mb-2">
+          <DbQueryToolView input={approval.input} variant="approval" gateRisk={approval.riskClass} />
+        </div>
+      ) : !compact && approval.argsSummary && (
         <pre className="font-mono text-[11px] bg-card border rounded-md p-2 mb-2 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
           {approval.argsSummary}
         </pre>

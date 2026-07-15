@@ -6,7 +6,13 @@
 import { describe, expect, it } from 'vitest';
 import type { PipelineProviderResolver, ResolvedBinding } from '../../../pipelines/index.js';
 import { TaskPreflightService, type TaskPreflightDeps } from '../preflight-pipeline.js';
-import { buildPreflightMessages, parsePreflightOutput } from '../preflight-prompt.js';
+import {
+  buildPreflightMessages,
+  cleanSessionTitle,
+  cleanSessionTitleSeed,
+  isAutomaticSessionTitle,
+  parsePreflightOutput,
+} from '../preflight-prompt.js';
 
 const CATALOG = [
   { name: 'read_file', tier: 'bootstrap', description: 'Read file contents' },
@@ -79,6 +85,7 @@ function okFetch(content: string): typeof fetch {
 }
 
 const VALID_OUTPUT = JSON.stringify({
+  session_title: 'Corrigir autenticação de login',
   task_kind: 'bugfix',
   profile: 'navigate',
   tools: [{ name: 'read_file', why: 'inspect' }, { name: 'edit_file', why: 'fix' }],
@@ -89,6 +96,7 @@ describe('parsePreflightOutput', () => {
   it('parses clean JSON and canonicalizes memory titles case-insensitively', () => {
     const seed = parsePreflightOutput(VALID_OUTPUT, PARSE_CTX);
     expect(seed).toEqual({
+      sessionTitle: 'Corrigir autenticação de login',
       profile: 'navigate',
       taskKind: 'bugfix',
       pinTools: ['read_file', 'edit_file'],
@@ -193,6 +201,20 @@ describe('parsePreflightOutput', () => {
     expect(parsePreflightOutput(JSON.stringify({ tools: [{ name: 'nope' }] }), PARSE_CTX)).toBeNull();
     expect(parsePreflightOutput(JSON.stringify({ skills: ['nope'] }), PARSE_CTX)).toBeNull();
   });
+
+  it('accepts a title-only result and sanitizes common model wrappers', () => {
+    expect(parsePreflightOutput(JSON.stringify({ session_title: '"Corrigir login quebrado."' }), PARSE_CTX)).toEqual({
+      sessionTitle: 'Corrigir login quebrado',
+    });
+    expect(cleanSessionTitle('{"title":"Revisar pipeline de build!"}')).toBe('Revisar pipeline de build');
+  });
+
+  it('recognizes automatic placeholders and strips context from title seeds', () => {
+    expect(isAutomaticSessionTitle('Nova sessão')).toBe(true);
+    expect(isAutomaticSessionTitle('New session')).toBe(true);
+    expect(isAutomaticSessionTitle('Minha tarefa')).toBe(false);
+    expect(cleanSessionTitleSeed('<file_refs>x</file_refs> Corrija o login')).toBe('Corrija o login');
+  });
 });
 
 describe('buildPreflightMessages', () => {
@@ -210,6 +232,7 @@ describe('buildPreflightMessages', () => {
     expect(messages[0]!.role).toBe('system');
     expect(messages[0]!.content).toContain('AT MOST 12 tools');
     expect(messages[0]!.content).toContain('AT MOST 3 skills');
+    expect(messages[0]!.content).toContain('session_title');
     const user = messages[1]!.content;
     expect(user).toContain('<task>');
     expect(user).toContain('...[truncated]');
@@ -262,6 +285,23 @@ describe('TaskPreflightService.run', () => {
     const result = await service.run({ ...INPUT, fetchFn: okFetch(VALID_OUTPUT) });
     expect(result.status).toBe('ok');
     expect(result.seed?.profile).toBe('navigate');
+    expect(result.seed?.sessionTitle).toBe('Corrigir autenticação de login');
+  });
+
+  it('generates a title through the configured preflight pipeline binding', async () => {
+    const result = await makeService(makeBinding()).generateSessionTitle({
+      userMessage: '<file_refs>ignore</file_refs> Corrija o erro de autenticação',
+      fetchFn: okFetch('"Corrigir erro de autenticação."'),
+    });
+    expect(result.status).toBe('ok');
+    expect(result.title).toBe('Corrigir erro de autenticação');
+    expect(result.providerId).toBe('cf-1');
+  });
+
+  it('reports an unconfigured title pipeline without throwing', async () => {
+    const result = await makeService(null).generateSessionTitle({ userMessage: 'corrija o login' });
+    expect(result.status).toBe('unconfigured');
+    expect(result.title).toBeUndefined();
   });
 
   it('runs with getSkillCatalog omitted (skill catalog falls back to empty)', async () => {

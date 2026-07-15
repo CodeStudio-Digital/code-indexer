@@ -31,8 +31,8 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { useWorkspaceStore, isVirtualTab, type OpenTab } from '../../state/workspace.js';
-import { fileRunCommand, runnableForFile } from '../../lib/run-target.js';
-import { launchRun } from '../../state/run-launch.js';
+import { isProjectRunFile, runnableForFile } from '../../lib/run-target.js';
+import { launchFileRun } from '../../state/run-launch.js';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/context-menu.js';
 import {
   DropdownMenu,
@@ -45,6 +45,8 @@ import { Input } from '../../components/ui/input.js';
 import { FileIcon } from '../../components/FileIcon.js';
 import { reloadFromDisk } from './editor/reload-from-disk.js';
 import { hasTabPayload, readTabPayload, setTabPayload } from './editor/tab-dnd.js';
+import { modelFor } from './editor/editor-models.js';
+import { tabBarFileEqual } from './editor/active-file-render.js';
 
 /** Icon for a tab — virtual surfaces get their own glyph; files use Material icons. */
 function TabIcon({ file, className }: { file: OpenTab; className?: string }) {
@@ -64,7 +66,18 @@ interface EditorTabBarProps {
 }
 
 export function EditorTabBar({ paneId }: EditorTabBarProps) {
-  const openFiles = useWorkspaceStore((s) => s.openFiles);
+  const selectTabFiles = useMemo(() => {
+    let previous: OpenTab[] = [];
+    return (state: ReturnType<typeof useWorkspaceStore.getState>) => {
+      const next = state.openFiles;
+      if (previous.length === next.length && previous.every((file, index) => tabBarFileEqual(file, next[index]))) {
+        return previous;
+      }
+      previous = next;
+      return next;
+    };
+  }, []);
+  const openFiles = useWorkspaceStore(selectTabFiles);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const pane = useWorkspaceStore((s) => s.panes.find((p) => p.id === paneId));
   const splitDir = useWorkspaceStore((s) => s.splitDir);
@@ -230,8 +243,8 @@ function RunFileButton({ file }: { file: OpenTab | undefined }) {
   const { t } = useTranslation('workspace');
   // Remote (sftp) tabs have no local file to run — the path is synthetic.
   if (!file || isVirtualTab(file) || file.kind === 'sftp') return null;
-  const target = runnableForFile(file.path);
-  if (!target) return null;
+  const runnable = Boolean(runnableForFile(file.path)) || isProjectRunFile(file.path);
+  if (!runnable) return null;
   const base = file.path.split('/').pop() ?? file.path;
   return (
     <button
@@ -239,14 +252,19 @@ function RunFileButton({ file }: { file: OpenTab | undefined }) {
       className="h-8 px-2.5 shrink-0 border-l grid place-items-center text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors"
       title={t('run.runFile')}
       aria-label={t('run.runFile')}
-      onClick={() =>
-        void launchRun({
+      onClick={() => {
+        const latest = useWorkspaceStore.getState().openFiles.find(
+          (candidate) => candidate.projectId === file.projectId && candidate.path === file.path,
+        );
+        const liveContent = modelFor(file.projectId, file.path)?.getValue()
+          ?? (latest && (!latest.kind || latest.kind === 'file') ? latest.content ?? undefined : undefined);
+        void launchFileRun({
           projectId: file.projectId,
-          command: fileRunCommand(file.path, target.runtime),
+          file: file.path,
+          content: liveContent,
           label: `Run ${base}`,
-          manager: target.manager,
-        })
-      }
+        });
+      }}
     >
       <Play className="h-3.5 w-3.5" />
     </button>

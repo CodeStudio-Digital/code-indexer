@@ -44,6 +44,10 @@ function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
   // Never wait forever on a black-holed host (pg default is 0 = infinite).
   extra.connectionTimeoutMillis = typeof opts.connectTimeoutMs === 'number' ? opts.connectTimeoutMs : 10_000;
   if (typeof opts.applicationName === 'string' && opts.applicationName) extra.application_name = opts.applicationName;
+  // Server-side default for every pooled session. The factory guard remains the
+  // first boundary; this stops local table changes even if a read-shaped SQL
+  // construct slips past classification.
+  if (config.readOnly) extra.options = '-c default_transaction_read_only=on';
   if (config.connectionString) return { connectionString: config.connectionString, ...extra };
   const ssl = sslConfig(config);
   return {
@@ -114,6 +118,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
   }
 
   async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pinned client for the whole batch — a runQuery loop could hand each
     // statement a different pooled backend, so BEGIN/COMMIT wouldn't share one

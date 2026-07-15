@@ -10,21 +10,31 @@
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import { ApiError } from '@mcp/api-bus';
 import type { InstallProgress, Runtime, RuntimeApi, RuntimeKind, RuntimeRelease, RuntimeTarget } from '@mcp/api-bus';
+import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import type { HandlerDeps } from '../types.js';
 import { detectNodeRuntimes } from './detect-node.js';
+import { detectJavaRuntimes } from './detect-java.js';
+import { detectDotnetRuntimes } from './detect-dotnet.js';
 import * as nodeManager from './node-manager.js';
 import * as phpManager from './php-manager.js';
 import * as pythonManager from './python-manager.js';
+import * as jdkManager from './jdk-manager.js';
+import * as dotnetManager from './dotnet-manager.js';
 import { detectWslRuntimes } from './wsl-runtime.js';
 import { installWslRuntime, listWslReleases, uninstallWslRuntime } from './wsl-install.js';
+import { assertRuntimeVersion } from './runtime-version.js';
+import { invalidateLspRuntimeCache } from '../lsp/lsp-runtime.js';
+import { refreshAfterSuccessfulPhpExtensionInstall, refreshRunningIntelephense } from './php-lsp-sync.js';
 
-export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
+export function createRuntimeHandlers(deps: HandlerDeps): RuntimeApi {
   const dir = (): string => ensureDataDir();
 
   function listFor(kind: RuntimeKind): Runtime[] {
     if (kind === 'node') return detectNodeRuntimes(dir());
     if (kind === 'php') return phpManager.detect(dir());
     if (kind === 'python') return pythonManager.detect(dir());
+    if (kind === 'java') return detectJavaRuntimes(dir());
+    if (kind === 'dotnet') return detectDotnetRuntimes(dir());
     throw new ApiError('unsupported', 400, `unknown runtime kind: ${kind}`);
   }
 
@@ -32,6 +42,8 @@ export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
     if (kind === 'node') return nodeManager.listAvailable();
     if (kind === 'php') return phpManager.listReleases();
     if (kind === 'python') return pythonManager.listReleases();
+    if (kind === 'java') return jdkManager.listReleases();
+    if (kind === 'dotnet') return dotnetManager.listReleases();
     throw new ApiError('unsupported', 400, `unknown runtime kind: ${kind}`);
   }
 
@@ -39,6 +51,8 @@ export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
     if (kind === 'node') return nodeManager.download(version, dir());
     if (kind === 'php') return phpManager.install(version, dir());
     if (kind === 'python') return pythonManager.install(version, dir());
+    if (kind === 'java') return jdkManager.install(version, dir());
+    if (kind === 'dotnet') return dotnetManager.install(version, dir());
     throw new ApiError('unsupported', 400, `unknown runtime kind: ${kind}`);
   }
 
@@ -46,6 +60,8 @@ export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
     if (kind === 'node') return nodeManager.remove(version, dir());
     if (kind === 'php') return phpManager.uninstall(version, dir());
     if (kind === 'python') return pythonManager.uninstall(version, dir());
+    if (kind === 'java') return jdkManager.uninstall(version, dir());
+    if (kind === 'dotnet') return dotnetManager.uninstall(version, dir());
     throw new ApiError('unsupported', 400, `unknown runtime kind: ${kind}`);
   }
 
@@ -64,13 +80,25 @@ export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
       return distro ? listWslReleases(kind, distro) : releasesFor(kind);
     },
     install({ kind, version, target }) {
+      assertRuntimeVersion(version);
       const distro = wslDistro(target);
-      return distro ? installWslRuntime(kind, version, distro) : installFor(kind, version);
+      const progress = distro ? installWslRuntime(kind, version, distro) : installFor(kind, version);
+      // The LSP runtime resolver caches "no usable SDK" — a fresh install must
+      // be visible on the very next acquire, not after the TTL.
+      return (async function* invalidateAfter() {
+        try {
+          yield* progress;
+        } finally {
+          invalidateLspRuntimeCache();
+        }
+      })();
     },
     async uninstall({ kind, version, target }) {
+      assertRuntimeVersion(version);
       const distro = wslDistro(target);
       if (distro) await uninstallWslRuntime(kind, version, distro);
       else await uninstallFor(kind, version);
+      invalidateLspRuntimeCache();
     },
 
     // ── PHP extensions ──
@@ -79,9 +107,13 @@ export function createRuntimeHandlers(_deps: HandlerDeps): RuntimeApi {
     },
     async setExtension({ version, name, enabled }) {
       phpManager.setExtension(version, name, enabled, dir());
+      await refreshRunningIntelephense(deps.db, getLspServerManager(), version);
     },
     installPeclExtension({ version, name }) {
-      return phpManager.installPeclExtension(version, name, dir());
+      return refreshAfterSuccessfulPhpExtensionInstall(
+        phpManager.installPeclExtension(version, name, dir()),
+        () => refreshRunningIntelephense(deps.db, getLspServerManager(), version),
+      );
     },
   };
 }

@@ -8,7 +8,7 @@
  * resto → fallback do índice estrutural).
  *
  * Lifecycle: a registração é DIRIGIDA pelo efeito project-scoped do MonacoMount —
- * registerLspProviders ao montar/trocar de projeto, unregisterLspProviders no
+ * registerLspProviders ao montar/trocar de projeto e descarta o lease retornado no
  * cleanup (desmontar/trocar). Sem esse par, os providers (documentSync, stream de
  * diagnósticos, completion/nav) vazavam a cada troca de projeto. registerLspProviders
  * é idempotente por projectId (re-mounts/troca de aba no mesmo projeto são baratos) e
@@ -32,6 +32,7 @@ import {
   registerNavProviders,
   registerSemanticTokenProviders,
 } from './lsp/navigation.js';
+import { startLspServerReadyStream } from './lsp/server-ready.js';
 
 type Monaco = typeof MonacoNs;
 
@@ -42,19 +43,45 @@ type Monaco = typeof MonacoNs;
 // providers the surviving pane still needs; ref-counting holds them until the
 // LAST pane of the project goes away. We still only ever have ONE project with
 // live panes at a time, so registering a NEW project force-disposes the others.
-const registrations = new Map<number, { disposers: MonacoNs.IDisposable[]; refs: number }>();
+interface ProviderRegistration {
+  generation: number;
+  disposers: MonacoNs.IDisposable[];
+  refs: number;
+  disposed: boolean;
+}
 
-export function registerLspProviders(monaco: Monaco, projectId: number): void {
+const registrations = new Map<number, ProviderRegistration>();
+let nextGeneration = 1;
+
+function disposeRegistration(projectId: number, registration: ProviderRegistration): void {
+  if (registration.disposed) return;
+  registration.disposed = true;
+  registration.disposers.forEach((d) => d.dispose());
+  if (registrations.get(projectId) === registration) registrations.delete(projectId);
+}
+
+export function registerLspProviders(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
   // Same project, another pane — just bump the ref count (idempotent wiring).
   const existing = registrations.get(projectId);
   if (existing) {
     existing.refs += 1;
-    return;
+    const generation = existing.generation;
+    let disposed = false;
+    return {
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        // Identity (and therefore generation) is load-bearing: a delayed cleanup
+        // from A1 must never decrement/dispose a later A2 registration.
+        if (registrations.get(projectId) !== existing || existing.generation !== generation || existing.disposed) return;
+        existing.refs -= 1;
+        if (existing.refs === 0) disposeRegistration(projectId, existing);
+      },
+    };
   }
   // New project — tear down every other project's providers (one project at a time).
   for (const [otherId, reg] of registrations) {
-    reg.disposers.forEach((d) => d.dispose());
-    registrations.delete(otherId);
+    disposeRegistration(otherId, reg);
   }
 
   const disposers: MonacoNs.IDisposable[] = [];
@@ -65,36 +92,47 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
   const docSync = startDocumentSync(monaco, projectId);
   disposers.push(docSync);
   disposers.push(startDiagnosticsStream(monaco, projectId));
-  disposers.push(...registerSemanticTokenProviders(monaco, projectId));
-  disposers.push(...registerCompletionProviders(monaco, projectId, docSync.flush));
-  disposers.push(registerCodeActionProvider(monaco, projectId, docSync.flush));
-  disposers.push(...registerRenameProviders(monaco, projectId, docSync.flush));
-  disposers.push(...registerSignatureHelpProviders(monaco, projectId, docSync.flush));
-  disposers.push(...registerDocumentSymbolProviders(monaco, projectId));
-  disposers.push(...registerSymbolNavigationCodeLensProvider(monaco, projectId));
+  disposers.push(...registerSemanticTokenProviders(monaco, projectId, docSync.ensureSynced));
+  disposers.push(...registerCompletionProviders(monaco, projectId, docSync.ensureSynced));
+  disposers.push(registerCodeActionProvider(monaco, projectId, docSync.ensureSynced));
+  disposers.push(...registerRenameProviders(monaco, projectId, docSync.ensureSynced));
+  disposers.push(...registerSignatureHelpProviders(monaco, projectId, docSync.ensureSynced));
+  disposers.push(...registerDocumentSymbolProviders(monaco, projectId, docSync.ensureSynced));
+  disposers.push(...registerSymbolNavigationCodeLensProvider(monaco, projectId, docSync.ensureSynced));
   // Server-backed formatting (php) — NOT '*', keeps Monaco's built-ins visible.
-  disposers.push(...registerFormattingProviders(monaco, projectId, docSync.flush));
-  disposers.push(...registerNavProviders(monaco, projectId));
+  disposers.push(...registerFormattingProviders(monaco, projectId, docSync.ensureSynced));
+  disposers.push(...registerNavProviders(monaco, projectId, docSync.ensureSynced));
   disposers.push(registerEditorOpener(monaco, projectId));
   // AI ghost text — heavily gated (default OFF; see inlineCompletionProvider).
   disposers.push(registerInlineCompletions(monaco, projectId));
+  // Start after consumers subscribed so the backend's replayed ready snapshot
+  // cannot race past semantic-token / CodeLens listeners.
+  disposers.push(startLspServerReadyStream(projectId));
 
-  registrations.set(projectId, { disposers, refs: 1 });
-}
+  const registration: ProviderRegistration = {
+    generation: nextGeneration++,
+    disposers,
+    refs: 1,
+    disposed: false,
+  };
+  registrations.set(projectId, registration);
+  const generation = registration.generation;
 
-export function unregisterLspProviders(projectId: number): void {
-  const reg = registrations.get(projectId);
-  if (!reg) return;
-  reg.refs -= 1;
-  if (reg.refs > 0) return; // another pane of this project still needs them
-  reg.disposers.forEach((d) => d.dispose());
-  registrations.delete(projectId);
+  let disposed = false;
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      if (registrations.get(projectId) !== registration || registration.generation !== generation || registration.disposed) return;
+      registration.refs -= 1;
+      if (registration.refs === 0) disposeRegistration(projectId, registration);
+    },
+  };
 }
 
 /** Test-only: dispose & clear the whole registry (ref counts can be >1 with splits). */
 export function __resetLspRegistryForTests(): void {
   for (const [id, reg] of registrations) {
-    reg.disposers.forEach((d) => d.dispose());
-    registrations.delete(id);
+    disposeRegistration(id, reg);
   }
 }

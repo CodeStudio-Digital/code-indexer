@@ -22,7 +22,11 @@ export interface StoredDoc {
   content: string;
   version: number;
   languageId: string;
+  /** Optional only for legacy test/fallback producers; renderer sessions always set it. */
+  syncSessionId?: string;
 }
+
+export type DocChangeResult = 'ok' | 'resync' | 'stale-session';
 
 export type DocListener = (e: {
   projectId: number;
@@ -33,9 +37,24 @@ export type DocListener = (e: {
 }) => void;
 
 const docs = new Map<string, StoredDoc>();
+// Kept after close as a tombstone: an obsolete session's delayed didOpen must
+// not resurrect itself after the newer document was already opened/closed.
+const latestSessions = new Map<string, string>();
 const listeners = new Set<DocListener>();
+const counters = { resync: 0, staleSessionIgnored: 0 };
+
+export function documentSyncCounters(): Readonly<typeof counters> {
+  return { ...counters };
+}
 
 const key = (projectId: number, file: string) => `${projectId}:${file}`;
+
+function sessionIsOlder(candidate: string, latest: string): boolean {
+  // New renderer sessions start with fixed-width base36 time + sequence.
+  // Legacy callers remain accepted; they have no comparable generation.
+  const ordered = /^[0-9a-z]{10}-[0-9a-z]{6}-/;
+  return ordered.test(candidate) && ordered.test(latest) && candidate < latest;
+}
 
 function emit(projectId: number, file: string, doc: StoredDoc, kind: 'open' | 'change' | 'close', changes?: DocChange[]): void {
   for (const fn of listeners) {
@@ -49,37 +68,96 @@ export function onDocEvent(fn: DocListener): () => void {
   return () => listeners.delete(fn);
 }
 
-export function openDoc(projectId: number, file: string, languageId: string, version: number, content: string): void {
-  const doc: StoredDoc = { content, version, languageId };
-  docs.set(key(projectId, file), doc);
+export function openDoc(
+  projectId: number,
+  file: string,
+  languageId: string,
+  version: number,
+  content: string,
+  syncSessionId = 'legacy',
+): boolean {
+  const k = key(projectId, file);
+  const latest = latestSessions.get(k);
+  if (latest && syncSessionId !== latest && sessionIsOlder(syncSessionId, latest)) {
+    counters.staleSessionIgnored += 1;
+    return false;
+  }
+  const previous = docs.get(k);
+  // Re-open is an authoritative full resync. Explicit close+open prevents a
+  // server handle's URI de-duplication from retaining the previous contents.
+  if (previous) emit(projectId, file, previous, 'close');
+  const doc: StoredDoc = { content, version, languageId, syncSessionId };
+  latestSessions.set(k, syncSessionId);
+  docs.set(k, doc);
   emit(projectId, file, doc, 'open');
+  return true;
 }
 
-/** Returns false when versions diverged — caller must answer {resync:true}. */
-export function changeDoc(projectId: number, file: string, version: number, changes: DocChange[]): boolean {
+export function changeDocWithSession(
+  projectId: number,
+  file: string,
+  version: number,
+  changes: DocChange[],
+  syncSessionId: string,
+): DocChangeResult {
   const doc = docs.get(key(projectId, file));
-  if (!doc) return false;
+  if (!doc) {
+    const latest = latestSessions.get(key(projectId, file));
+    if (latest && sessionIsOlder(syncSessionId, latest)) {
+      counters.staleSessionIgnored += 1;
+      return 'stale-session';
+    }
+    counters.resync += 1;
+    return 'resync';
+  }
+  if ((doc.syncSessionId ?? 'legacy') !== syncSessionId) {
+    counters.staleSessionIgnored += 1;
+    return 'stale-session';
+  }
   // Monaco versions are strictly increasing per model. Equal or older means
   // a duplicate/out-of-order delivery; a gap means we missed a frame. Both
   // are unrecoverable without the full text.
-  if (version <= doc.version) return false;
+  if (version <= doc.version) { counters.resync += 1; return 'resync'; }
   let content = doc.content;
   for (const c of changes) {
-    if (c.rangeOffset < 0 || c.rangeOffset + c.rangeLength > content.length) return false;
+    if (c.rangeOffset < 0 || c.rangeOffset + c.rangeLength > content.length) {
+      counters.resync += 1;
+      return 'resync';
+    }
     content = content.slice(0, c.rangeOffset) + c.text + content.slice(c.rangeOffset + c.rangeLength);
   }
   doc.content = content;
   doc.version = version;
   emit(projectId, file, doc, 'change', changes);
+  return 'ok';
+}
+
+/** Legacy/test facade: false means the caller must full-resync. */
+export function changeDoc(projectId: number, file: string, version: number, changes: DocChange[]): boolean {
+  return changeDocWithSession(projectId, file, version, changes, docs.get(key(projectId, file))?.syncSessionId ?? 'legacy') === 'ok';
+}
+
+export function closeDoc(projectId: number, file: string, syncSessionId?: string): boolean {
+  const k = key(projectId, file);
+  const doc = docs.get(k);
+  if (!doc) return false;
+  if (syncSessionId !== undefined && (doc.syncSessionId ?? 'legacy') !== syncSessionId) {
+    counters.staleSessionIgnored += 1;
+    return false;
+  }
+  docs.delete(k);
+  emit(projectId, file, doc, 'close');
   return true;
 }
 
-export function closeDoc(projectId: number, file: string): void {
-  const k = key(projectId, file);
-  const doc = docs.get(k);
-  if (!doc) return;
-  docs.delete(k);
-  emit(projectId, file, doc, 'close');
+/** Close every live buffer owned by a project and forward didClose events. */
+export function closeProjectDocs(projectId: number): number {
+  const files = docsForProject(projectId).map(({ file }) => file);
+  for (const file of files) closeDoc(projectId, file);
+  for (const k of latestSessions.keys()) {
+    if (k.startsWith(`${projectId}:`)) latestSessions.delete(k);
+  }
+  return files.length;
 }
 
 export function getDoc(projectId: number, file: string): StoredDoc | undefined {

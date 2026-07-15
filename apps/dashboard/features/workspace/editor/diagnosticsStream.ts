@@ -1,31 +1,19 @@
 /**
  * Diagnostics PUSH consumer — replaces the 1s polling loop. One stream per
  * project: Electron rides the auto-mounted MessagePort
- * (`lsp.diagnosticsStream`); browser-dev uses the SSE route. Frames are
- * per-(file, source) and `diagnostics: []` clears — markers are owned per
+ * (`lsp.diagnosticsStream`); browser-dev uses the SSE route. Each message
+ * carries a batch of per-(file, source) frames; `diagnostics: []` clears — markers are owned per
  * source (`mcp-lsp:ts`, `mcp-lsp:lsp:intelephense`, …) so backends never
  * clobber each other.
  */
 import type * as MonacoNs from 'monaco-editor';
+import type { DiagnosticsBatch, DiagnosticsFrame } from '@mcp/api-bus';
 import { apiStream, electronApi } from '../../../lib/api-client.js';
 import { parseModelPath } from './editor-models-path.js';
 
 type Monaco = typeof MonacoNs;
 
-interface PositionDTO { line: number; column: number }
-interface DiagnosticsFrameDTO {
-  file: string;
-  source: string;
-  diagnostics: Array<{
-    range: { start: PositionDTO; end: PositionDTO };
-    severity: 'error' | 'warning' | 'info' | 'hint';
-    message: string;
-    source?: string;
-    code?: string | number;
-  }>;
-}
-
-function applyFrame(monaco: Monaco, projectId: number, frame: DiagnosticsFrameDTO): void {
+function applyFrame(monaco: Monaco, projectId: number, frame: DiagnosticsFrame): void {
   // frame.file é o relpath limpo (chave do modelo no backend); parseModelPath faz o
   // strip do prefixo de namespacing por projectId (W1b) para casar. Casa TAMBÉM pelo
   // projectId (não só relpath): dois projetos podem ter o mesmo relpath em modelos
@@ -56,6 +44,10 @@ function applyFrame(monaco: Monaco, projectId: number, frame: DiagnosticsFrameDT
   );
 }
 
+function applyBatch(monaco: Monaco, projectId: number, batch: DiagnosticsBatch): void {
+  for (const frame of batch.frames) applyFrame(monaco, projectId, frame);
+}
+
 export function startDiagnosticsStream(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
   let stopped = false;
   let es: EventSource | null = null;
@@ -65,14 +57,14 @@ export function startDiagnosticsStream(monaco: Monaco, projectId: number): Monac
   const connect = (): void => {
     if (stopped) return;
     if (electronApi()) {
-      const it = apiStream<DiagnosticsFrameDTO>('lsp.diagnosticsStream', { projectId })[Symbol.asyncIterator]();
+      const it = apiStream<DiagnosticsBatch>('lsp.diagnosticsStream', { projectId })[Symbol.asyncIterator]();
       closeIterator = () => { void it.return?.(); };
       void (async () => {
         try {
           while (!stopped) {
             const r = await it.next();
             if (r.done || stopped) break;
-            applyFrame(monaco, projectId, r.value);
+            applyBatch(monaco, projectId, r.value);
           }
         } catch { /* stream dropped */ }
         // Producer side restarted (backend reload) — reconnect with backoff.
@@ -82,7 +74,7 @@ export function startDiagnosticsStream(monaco: Monaco, projectId: number): Monac
       es = new EventSource(`/api/lsp/${projectId}/diagnostics/stream`);
       es.addEventListener('diagnostics', (ev) => {
         if (stopped) return;
-        try { applyFrame(monaco, projectId, JSON.parse((ev as MessageEvent).data) as DiagnosticsFrameDTO); } catch { /* bad frame */ }
+        try { applyBatch(monaco, projectId, JSON.parse((ev as MessageEvent).data) as DiagnosticsBatch); } catch { /* bad batch */ }
       });
       // EventSource auto-reconnects.
     }

@@ -23,6 +23,8 @@ export const MAX_SYMBOLS_CHARS = 24_000;
 export const MAX_FOCUS_CHARS = 600;
 /** Max chars for the session-intent block (title + first message + tasks). */
 export const MAX_INTENT_CHARS = 2_500;
+/** Max chars for the recorded verification-evidence block. */
+export const MAX_EVIDENCE_CHARS = 2_000;
 /** Hard cap for the final assembled context text. */
 export const MAX_CONTEXT_CHARS = 30_000;
 /** Skip enclosing-symbol extraction for files bigger than this (split cost). */
@@ -99,12 +101,20 @@ export interface ReviewContextParts {
   intent?: string | null;
   /** Output of `buildEnclosingSymbolContext`. */
   symbols?: string | null;
+  /** Recorded verification evidence (review-evidence.ts in code-agent):
+   *  which verify commands actually ran, their outcome, and which files were
+   *  edited AFTER the last run — replaces author-claimed test summaries. */
+  evidence?: string | null;
+  /** Calibration priors learned from finding fates (review-fates.ts):
+   *  suppression nudges + recent dismissals as few-shot negatives. */
+  priors?: string | null;
 }
 
 /**
  * Assemble the final context text (section order: task context, author
- * focus, enclosing code). Returns null when every part is empty so callers
- * can keep the no-context prompt byte-identical to the legacy one.
+ * focus, verification evidence, enclosing code). Returns null when every
+ * part is empty so callers can keep the no-context prompt byte-identical to
+ * the legacy one.
  */
 export function formatReviewContext(parts: ReviewContextParts): string | null {
   const sections: string[] = [];
@@ -112,6 +122,17 @@ export function formatReviewContext(parts: ReviewContextParts): string | null {
   if (intent) sections.push('## Task context\n' + cap(intent, MAX_INTENT_CHARS));
   const focus = parts.focus?.trim();
   if (focus) sections.push('## Author focus\n' + cap(focus, MAX_FOCUS_CHARS));
+  const evidence = parts.evidence?.trim();
+  if (evidence) {
+    sections.push(
+      '## Verification evidence (recorded command runs, not author claims)\n' +
+        cap(evidence, MAX_EVIDENCE_CHARS),
+    );
+  }
+  const priors = parts.priors?.trim();
+  if (priors) {
+    sections.push('## Review calibration for this repo (learned from finding outcomes)\n' + priors);
+  }
   const symbols = parts.symbols?.trim();
   if (symbols) {
     sections.push(

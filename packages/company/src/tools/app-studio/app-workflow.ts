@@ -41,6 +41,9 @@ const WORKFLOW_READ_SCHEMA: JsonSchema = {
   additionalProperties: false,
 };
 
+const WORKFLOW_READ_GUIDANCE =
+  'Reuse this snapshot for the current user request. A tool result is not a new request: do not call app_get_workflow again until a workflow write, a new user message, an approval/decision update, a resume or a compaction changes what you need to know.';
+
 type BoundApp = { ok: false; error: string } | { ok: true; store: AppStudioStore; session: AppStudioSession };
 
 function bound(binding: AppToolBinding): BoundApp {
@@ -54,8 +57,9 @@ function bound(binding: AppToolBinding): BoundApp {
 export function appGetWorkflow(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_get_workflow',
-    description: 'Read the authoritative App Studio v5 workflow progressively: summary, attention, paginated board or one full card.',
+    description: 'Read the authoritative App Studio v5 workflow once per new user request or resume: summary, attention, paginated board or one full card. Reuse the result after tool continuations; reread only after workflow state can have changed.',
     parameters: WORKFLOW_READ_SCHEMA, source: 'native', mutates: false, parallelSafe: true,
+    stopOnRepeatedUnchangedResult: true,
     handler: async (args) => {
       const value = bound(binding); if (!value.ok) return err(value.error);
       const state = parseAppWorkflowState(value.session.pipeline_json);
@@ -73,14 +77,17 @@ export function appGetWorkflow(binding: AppToolBinding): CoderTool {
       if (view === 'attention') return appResult('App workflow — attention', {
         approvals: approvals.filter((item) => item.status === 'pending'),
         decisions: decisions.filter((item) => item.status === 'open'),
-        guidance: 'Only linked cards are blocked. Continue independent ready work.',
+        guidance: `${WORKFLOW_READ_GUIDANCE} Only linked cards are blocked; continue independent ready work.`,
       });
       if (view === 'card') {
         const id = typeof args.work_item_id === 'string' ? args.work_item_id : '';
         const item = items.find((candidate) => candidate.id === id);
         return item ? appResult(`App workflow — ${id}`, item) : err(`Unknown work item '${id || '(missing work_item_id)'}'.`);
       }
-      if (view === 'board') return appResult('App workflow — board', pageItems(items, args, (item) => item.id));
+      if (view === 'board') return appResult('App workflow — board', {
+        ...pageItems(items, args, (item) => item.id),
+        guidance: WORKFLOW_READ_GUIDANCE,
+      });
       return appResult('App workflow v5', {
         coordinator_session_id: value.session.coordinator_session_id,
         coordinator_instruction: agentConfig.coordinator_prompt || null,
@@ -90,7 +97,7 @@ export function appGetWorkflow(binding: AppToolBinding): CoderTool {
           decisions: decisions.filter((item) => item.status === 'open').length,
         },
         board: Object.fromEntries(['backlog', 'ready', 'running', 'review', 'done', 'blocked', 'stale', 'cancelled'].map((status) => [status, items.filter((item) => item.status === status).length])),
-        guidance: 'Approval is asynchronous. Continue every independent ready card.',
+        guidance: `${WORKFLOW_READ_GUIDANCE} Approval is asynchronous; continue every independent ready card.`,
       });
     },
   };

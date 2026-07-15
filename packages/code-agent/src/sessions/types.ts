@@ -1,4 +1,14 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { ExternalSessionSource } from './import/types.js';
+
+export type {
+  ExternalSessionSource,
+  ExternalSessionCandidate,
+  ExternalSessionPreview,
+  ImportExternalSessionInput,
+  ImportExternalSessionResult,
+  PersistExternalSessionInput,
+} from './import/types.js';
 
 export interface CoderSession {
   id: number;
@@ -46,6 +56,13 @@ export interface CoderSession {
   fallback_model: string | null;
   /** CloudCode session UUID — persisted so the same ID is reused across reconnects. */
   cloudcode_session_id: string | null;
+  /** External snapshot identity. Null for native MCP sessions and their forks/duplicates. */
+  import_source: ExternalSessionSource | null;
+  import_external_id: string | null;
+  import_fingerprint: string | null;
+  import_source_updated_at: string | null;
+  import_metadata_json: string | null;
+  imported_at: string | null;
   /** Most recent turn's input_tokens — represents actual context window usage. */
   last_turn_input_tokens: number;
   /** Selected agent preset (explore | plan | build | admin). Sticky across turns so resume paths honour the user's choice. */
@@ -79,6 +96,12 @@ export interface CoderSession {
    * models exposing `supported_reasoning_levels`.
    */
   reasoning_effort_override: string | null;
+  /**
+   * Sticky extended-thinking toggle for this conversation (migration 226).
+   * The dashboard persists every manual change and hydrates it when the
+   * session is reopened. Defaults to false for existing and new sessions.
+   */
+  thinking_enabled: boolean;
   /**
    * Per-session sticky plan-depth override (migration 151) for the `plan`
    * agent: `simple` | `normal` | `complex`. Drives how deeply the planning
@@ -259,7 +282,7 @@ export interface CoderMessageRow {
 }
 
 /** Provenance of an append-only conversation chapter (migration 208). */
-export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild';
+export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild' | 'import';
 export type ConversationChapterKind = 'context' | 'milestone' | 'rebuild';
 
 /**
@@ -383,7 +406,7 @@ export interface CommitConversationChapterInput {
   expectedBoundaryId: number;
   startMessageId: number;
   endMessageId: number;
-  source: Extract<ConversationChapterSource, 'auto' | 'manual'>;
+  source: Extract<ConversationChapterSource, 'auto' | 'manual' | 'import'>;
   chapterKind?: Exclude<ConversationChapterKind, 'rebuild'>;
   trigger: string;
   title: string;

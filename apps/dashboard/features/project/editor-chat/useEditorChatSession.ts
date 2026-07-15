@@ -18,7 +18,7 @@ import { useAgentStream, type AgentAttachment } from '../../../hooks/useAgentStr
 import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
-import { PROVIDERS } from '../../chat/constants.js';
+import type { SessionLaunchConfig } from '../../chat/SessionLaunchDialog.js';
 import { fetchSnapshotList } from '../../snapshots/api.js';
 import type { SnapshotFileSummary } from '../../snapshots/types.js';
 import { buildSnapshotFileMap, type SnapshotActions } from '../../chat/messages/snapshot-files-context.js';
@@ -43,6 +43,10 @@ import {
 
 type AgentId = AgentPreset;
 
+type PendingAutoTitleSessions = Set<number> & {
+  creationInFlight?: boolean;
+};
+
 interface EditorChatSessionOptions {
   initialSessionId?: number;
   initialAgent?: AgentId;
@@ -56,7 +60,7 @@ interface EditorChatSessionOptions {
   initialReasoningEffort?: string | null;
 }
 
-const VALID_AGENT_IDS = new Set<AgentId>(['explore', 'plan', 'build', 'admin', 'spec', 'app_orchestrator', 'api', 'diagram', 'builder']);
+const VALID_AGENT_IDS = new Set<AgentId>(['explore', 'plan', 'build', 'admin', 'spec', 'app_orchestrator', 'app_db', 'api', 'diagram', 'builder']);
 
 function isValidAgentId(agent: unknown): agent is AgentId {
   return typeof agent === 'string' && VALID_AGENT_IDS.has(agent as AgentId);
@@ -94,7 +98,9 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(initialReasoningEffort ?? null);
   const [planDepth, setPlanDepth] = useState<string | null>(null);
   const [thinking, setThinking] = useState(initialThinking ?? false);
-  const pendingAutoTitle = useRef<Set<number>>(new Set());
+  // Keep the creation lock on this pre-existing ref. Adding a separate hook in
+  // the middle of this shared hook corrupts Fast Refresh's preserved hook slots.
+  const pendingAutoTitle = useRef<PendingAutoTitleSessions>(new Set());
   const [snapshotFiles, setSnapshotFiles] = useState<Map<string, SnapshotFileSummary>>(new Map());
   const [snapshotRefreshNonce, setSnapshotRefreshNonce] = useState(0);
 
@@ -263,13 +269,15 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   // column, it's a per-send param, so the "50" placeholder is correct.
   useEffect(() => {
     const s = sessionData?.session;
+    if (!s || s.id !== selectedId) return;
     const tmp = (s as { temperature_override?: number | null } | undefined)?.temperature_override;
     setTemperature(typeof tmp === 'number' ? tmp : null);
     const eff = s?.reasoning_effort_override;
     setReasoningEffort(typeof eff === 'string' && eff.length > 0 ? eff : null);
     const dep = s?.plan_depth_override;
     setPlanDepth(typeof dep === 'string' && dep.length > 0 ? dep : null);
-  }, [sessionData?.session]);
+    setThinking(s.thinking_enabled === true);
+  }, [selectedId, sessionData?.session]);
 
   // Persist a manual dropdown pick immediately (applies to the next run).
   const handleAgentChange = useCallback((next: AgentId) => {
@@ -348,31 +356,63 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     };
   }, [selectedId, snapshotTick, snapshotRefreshNonce, doneReason]);
 
-  const createSession = useCallback(async (): Promise<number | null> => {
+  const createSession = useCallback(async (
+    config: Partial<SessionLaunchConfig> & { useLastModel?: boolean } = {},
+  ): Promise<number | null> => {
+    if (pendingAutoTitle.current.creationInFlight) return null;
+    pendingAutoTitle.current.creationInFlight = true;
     setCreating(true);
     try {
-      const firstModel = currentProviderModels[0];
+      const selectedProvider = config.provider || provider;
+      const firstModel = getModelsForProvider(selectedProvider)[0];
       const fallbackModel = firstModel
         ? firstModel.mode ? `${firstModel.id}::${firstModel.mode}` : firstModel.id
-        : PROVIDERS.find((p) => p.id === provider)?.defaultModel;
+        : '';
+      const selectedModel = config.model || model || fallbackModel;
+      const selectedAgent = agentLock ?? config.agent ?? agent;
+      const selectedReasoningEffort = config.useLastModel
+        ? null
+        : (config.reasoningEffort === undefined ? reasoningEffort : config.reasoningEffort);
+      const selectedThinking = config.useLastModel ? false : (config.thinking ?? thinking);
+      const selectedMaxTurns = config.useLastModel
+        ? null
+        : (config.maxTurns === undefined ? maxTurns : config.maxTurns);
+      const selectedTemperature = config.useLastModel
+        ? null
+        : (config.temperature === undefined ? temperature : config.temperature);
+      const explicitTitle = config.title?.trim();
+
       const created = await apiPost<CoderSession>('/coder/sessions', {
         project_id: projectId,
-        title: newSessionTitle,
-        provider,
-        model: model || fallbackModel,
-        agent: agentLock ?? agent,
-        reasoning_effort: reasoningEffort || null,
+        title: (explicitTitle || newSessionTitle).slice(0, 80),
+        provider: selectedProvider,
+        model: selectedModel,
+        use_last_model: config.useLastModel === true,
+        agent: selectedAgent,
+        reasoning_effort: selectedReasoningEffort || null,
+        thinking_enabled: selectedThinking,
       });
-      pendingAutoTitle.current.add(created.id);
+      if (selectedTemperature !== null) {
+        await apiPatch(`/coder/sessions/${created.id}/temperature`, { temperature: selectedTemperature }).catch(() => {});
+      }
+      setProvider(created.provider);
+      setModel(created.model);
+      setAgent(selectedAgent);
+      setReasoningEffort(selectedReasoningEffort);
+      setThinking(selectedThinking);
+      setMaxTurns(selectedMaxTurns);
+      setTemperature(selectedTemperature);
+      if (!explicitTitle) pendingAutoTitle.current.add(created.id);
       updateSessions((prev) => [created, ...prev.filter((session) => session.id !== created.id)]);
       refetchSessions();
       setSelectedId(created.id);
       window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
       return created.id;
     } finally {
+      pendingAutoTitle.current.creationInFlight = false;
       setCreating(false);
     }
-  }, [projectId, newSessionTitle, provider, model, currentProviderModels, agentLock, agent, reasoningEffort, updateSessions, refetchSessions]);
+  }, [projectId, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, thinking, maxTurns, temperature, updateSessions, refetchSessions]);
 
   const archiveSession = useCallback(async (id: number, archived = true) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
@@ -538,6 +578,12 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     try { await apiPatch(`/coder/sessions/${selectedId}/reasoning-effort`, { effort: next }); } catch { /* optimistic */ }
   }, [selectedId]);
 
+  const handleThinkingChange = useCallback(async (next: boolean) => {
+    setThinking(next);
+    if (!selectedId) return;
+    try { await apiPatch(`/coder/sessions/${selectedId}/thinking`, { thinking: next }); } catch { /* optimistic */ }
+  }, [selectedId]);
+
   const handlePlanDepthChange = useCallback(async (next: string | null) => {
     setPlanDepth(next);
     if (!selectedId) return;
@@ -584,7 +630,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     planDepth, setPlanDepth: handlePlanDepthChange,
     reasoningLevels: resolveReasoningLevels(provider, providerOptions, model),
     providerOptions, currentProviderModels, getModelsForProvider,
-    thinking, setThinking, supportsThinking: providerSupportsThinking(provider, providerOptions, model),
+    thinking, setThinking: handleThinkingChange, supportsThinking: providerSupportsThinking(provider, providerOptions, model),
     ...settings,
   };
 }

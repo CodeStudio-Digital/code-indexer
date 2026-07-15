@@ -9,6 +9,54 @@ const assignedSkills = (config: ReturnType<typeof parseAppAgentConfig>): Set<str
   ...Object.values(config.profiles).flatMap((profile) => profile.skills),
 ]);
 
+export type ActivateAppCoordinatorResult =
+  | { ok: true; coordinator_session_id: number }
+  | { ok: false; status: 404 | 409; error: string };
+
+/**
+ * Rebind the durable App Studio coordinator to an existing conversation.
+ * Keeping this server-side prevents workflow wake-ups from targeting a stale
+ * chat after the user switches conversations in the guided UI.
+ */
+export function activateAppCoordinatorConversation(
+  deps: ServerDeps,
+  appSessionId: number,
+  coderSessionId: number,
+): ActivateAppCoordinatorResult {
+  const appSession = deps.appStudioStore.getSession(appSessionId);
+  if (!appSession) return { ok: false, status: 404, error: 'App Studio session not found' };
+
+  const candidate = deps.sessionStore.getSession(coderSessionId);
+  if (!candidate || candidate.project_id !== appSession.project_id) {
+    return { ok: false, status: 404, error: 'Conversation not found for this app' };
+  }
+  if (candidate.is_archived || candidate.is_global || candidate.agent !== 'app_orchestrator') {
+    return { ok: false, status: 409, error: 'Only active App Studio conversations can become the coordinator' };
+  }
+
+  const previousId = appSession.coordinator_session_id;
+  if (previousId === coderSessionId) return { ok: true, coordinator_session_id: coderSessionId };
+
+  const previous = previousId ? deps.sessionStore.getSession(previousId) : null;
+  if (previous?.status === 'running') {
+    return { ok: false, status: 409, error: 'Wait for the current coordinator to finish before switching conversations' };
+  }
+
+  const config = parseAppAgentConfig(appSession.agent_config_json);
+  for (const skillId of assignedSkills(config)) {
+    deps.skillStore.setSessionSkillEnabled(coderSessionId, skillId, true);
+  }
+  deps.appStudioStore.setCoordinatorSessionId(appSessionId, coderSessionId);
+  deps.appStudioStore.appendWorkflowEvent(
+    appSessionId,
+    'agents.coordinator_changed',
+    'coder_session',
+    String(coderSessionId),
+    JSON.stringify({ previous_coordinator_session_id: previousId, coordinator_session_id: coderSessionId }),
+  );
+  return { ok: true, coordinator_session_id: coderSessionId };
+}
+
 function availableSkills(deps: ServerDeps, projectId: number) {
   const byId = new Map([
     ...deps.skillStore.listSkills({ scope: 'global' }),
@@ -117,6 +165,18 @@ export function mountAppStudioAgentRoutes(app: Hono, deps: ServerDeps): void {
     deps.sessionStore.setSessionReasoningEffort(coordinatorId, reasoningEffort);
     deps.appStudioStore.appendWorkflowEvent(id, 'agents.runtime_configured', 'agents', String(coordinatorId), JSON.stringify({ provider, model, reasoning_effort: reasoningEffort }));
     return c.json({ runtime: { provider, model, reasoning_effort: reasoningEffort } });
+  });
+
+  app.patch('/api/app-studio/sessions/:id/agents/coordinator', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ coder_session_id?: unknown }>(c);
+    const coderSessionId = body.coder_session_id;
+    if (typeof coderSessionId !== 'number' || !Number.isInteger(coderSessionId) || coderSessionId <= 0) {
+      return c.json({ error: 'coder_session_id must be a positive integer' }, 400);
+    }
+    const result = activateAppCoordinatorConversation(deps, id, coderSessionId);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json(result);
   });
 
   app.patch('/api/app-studio/sessions/:id/agents/config', async (c) => {

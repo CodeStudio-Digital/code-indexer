@@ -70,6 +70,12 @@ export interface CoderSession {
   /** Count of linked projects — only on the global-sessions list payload. */
   linked_count?: number;
   title: string;
+  /** Present only on a one-way snapshot imported from another coding agent. */
+  import_source?: 'claude-code' | 'codex' | null;
+  import_external_id?: string | null;
+  import_fingerprint?: string | null;
+  import_source_updated_at?: string | null;
+  imported_at?: string | null;
   provider: string;
   model: string;
   /** Added by migration 006. '' when provider doesn't distinguish modes. */
@@ -123,6 +129,8 @@ export interface CoderSession {
    * Composer (only for models exposing supported_reasoning_levels).
    */
   reasoning_effort_override?: string | null;
+  /** Sticky extended-thinking toggle for this conversation (migration 226). */
+  thinking_enabled?: boolean;
   /**
    * Per-session sticky plan-depth (migration 151): 'simple' | 'normal' |
    * 'complex'. NULL → 'normal'. Surfaced as the depth selector in the Composer
@@ -236,6 +244,9 @@ export interface SessionData {
   total_messages?: number;
   /** Count of messages hidden behind a manual "summarize & clear" boundary. 0 = none. */
   archived_count?: number;
+  /** User message immediately before the loaded window. It owns an assistant
+   *  tail that starts mid-turn after compaction or pagination. */
+  preceding_user_message_id?: number | null;
   /** Status fallback for tool calls whose tool_result block is missing. Absent/empty for healthy sessions. */
   tool_results?: ToolResultFallback[];
   /** Linked projects for a global session (migration 152). Empty for normal sessions. */
@@ -246,10 +257,11 @@ export interface SessionData {
 export interface MessagePage {
   messages: PersistedMessage[];
   message_rows: MessageRow[];
+  preceding_user_message_id?: number | null;
   tool_results?: ToolResultFallback[];
 }
 
-export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild';
+export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild' | 'import';
 
 export interface ConversationChapterFile {
   path: string;

@@ -215,6 +215,14 @@ export class PermissionGate {
         parentToolUseId: req.parentToolUseId,
         toolName: req.toolName,
         argsSummary: approvalArgsSummary(req.input),
+        // Database approvals need the exact SQL/command, not the compact
+        // 600-character summary, so the user can make an informed decision.
+        // Keep other tools summary-only to avoid duplicating arbitrarily large
+        // file contents in the SSE stream.
+        ...((req.toolName === 'db_query' || req.toolName === 'db_command')
+          && req.input && typeof req.input === 'object'
+          ? { input: req.input }
+          : {}),
         riskClass,
         approvalKind,
         turn: req.turn,

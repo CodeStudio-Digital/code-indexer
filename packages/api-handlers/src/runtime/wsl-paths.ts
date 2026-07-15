@@ -12,18 +12,34 @@
  */
 
 import type { RuntimeKind } from '@mcp/api-bus';
+import { assertRuntimeVersion, managedVersionFromId } from './runtime-version.js';
 
 /** Distro-side managed root (literal `$HOME`, expanded by bash). */
 export const WSL_MANAGED_ROOT = '$HOME/.mcp/runtimes';
 
 /** `$HOME/.mcp/runtimes/<kind>/<version>` — install destination + uninstall target. */
 export function wslManagedDir(kind: RuntimeKind, version: string): string {
-  return `${WSL_MANAGED_ROOT}/${kind}/${version}`;
+  return `${WSL_MANAGED_ROOT}/${kind}/${assertRuntimeVersion(version)}`;
 }
 
-/** `$HOME/.mcp/runtimes/<kind>/<version>/bin` — dir prepended to the distro PATH. */
+/**
+ * Dir prepended to the distro PATH. Stripped tarballs (node/python/java) put
+ * binaries under `<version>/bin`; the .NET SDK archive is FLAT (dotnet at the
+ * root), so its version dir IS the bin dir.
+ */
 export function wslManagedBinDir(kind: RuntimeKind, version: string): string {
-  return `${wslManagedDir(kind, version)}/bin`;
+  const dir = wslManagedDir(kind, version);
+  return kind === 'dotnet' ? dir : `${dir}/bin`;
+}
+
+/**
+ * Managed install dir for a stored selection id (`managed:<version>`), or null
+ * for the system default / an unrecognised id. This is the value JAVA_HOME /
+ * DOTNET_ROOT point at inside the distro.
+ */
+export function wslManagedDirForId(kind: RuntimeKind, id: string | null | undefined): string | null {
+  const version = managedVersionFromId(id);
+  return version ? wslManagedDir(kind, version) : null;
 }
 
 /**
@@ -32,9 +48,8 @@ export function wslManagedBinDir(kind: RuntimeKind, version: string): string {
  * toolchain is used).
  */
 export function wslBinDirForId(kind: RuntimeKind, id: string | null | undefined): string | null {
-  if (!id || id === 'system') return null;
-  const m = /^managed:(.+)$/.exec(id);
-  return m ? wslManagedBinDir(kind, m[1]) : null;
+  const version = managedVersionFromId(id);
+  return version ? wslManagedBinDir(kind, version) : null;
 }
 
 /**

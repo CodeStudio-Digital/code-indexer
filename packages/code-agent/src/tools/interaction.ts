@@ -127,11 +127,6 @@ export const askUser: CoderTool = {
     // multi_select is only meaningful with buttons; ignored for free-form-only.
     const multiSelect = Boolean(args.multi_select) && !!options && options.length > 0;
 
-    // A button-backed ask in plan mode counts as a genuine decision put to the
-    // user — it suppresses the one-shot decision-gate nudge. Free-form-only
-    // clarifications do NOT count (they'd be a loophole around the gate).
-    if (options && options.length > 0) runner.noteDecisionAsk();
-
     const id = `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     runner.emit('question_posted', {
       type: 'question',
@@ -332,9 +327,6 @@ export const decisionGate: CoderTool = {
     }
 
     const allowFreeform = Boolean(args.allow_freeform);
-
-    // Asking the user about real forks suppresses the one-shot decision-gate nudge.
-    runner.noteDecisionAsk();
 
     const id = `dg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     runner.emit('decision_posted', {

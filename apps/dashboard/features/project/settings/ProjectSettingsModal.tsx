@@ -13,7 +13,7 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ALargeSmall, Blocks, Braces, Code2, Hexagon, Keyboard, ListTree, Loader2, MemoryStick, Palette, Search, Settings2, Sparkles, TerminalSquare, Trash2 } from 'lucide-react';
+import { ALargeSmall, Blocks, Braces, Code2, Coffee, Hash, Hexagon, Keyboard, ListTree, Loader2, MemoryStick, Palette, Search, Settings2, Sparkles, TerminalSquare, Trash2 } from 'lucide-react';
 import type { Project } from '@mcp/shared/types.js';
 import type { RuntimeTarget, TerminalShell } from '@mcp/api-bus';
 import { cn } from '../../../lib/utils.js';
@@ -44,6 +44,8 @@ export type SettingsSection =
   | 'node'
   | 'php'
   | 'python'
+  | 'java'
+  | 'dotnet'
   | 'terminal'
   | 'memory'
   | 'appearance'
@@ -84,7 +86,7 @@ export function ProjectSettingsModal({
   const [runtimeEnv, setRuntimeEnv] = useState<RuntimeTarget>({ kind: 'host' });
   const [wslDistros, setWslDistros] = useState<string[]>([]);
   const [wslStatus, setWslStatus] = useState<'idle' | 'loading' | 'loaded'>('idle');
-  const isRuntimeSection = section === 'node' || section === 'php' || section === 'python';
+  const isRuntimeSection = section === 'node' || section === 'php' || section === 'python' || section === 'java' || section === 'dotnet';
 
   // Re-hydrate the freshest project (persisted values) every time we open, and
   // honour the requested entry section.
@@ -152,6 +154,8 @@ export function ProjectSettingsModal({
         { id: 'node' as const, label: 'Node.js', Icon: Hexagon },
         { id: 'php' as const, label: 'PHP', Icon: Blocks },
         { id: 'python' as const, label: 'Python', Icon: Braces },
+        { id: 'java' as const, label: 'Java (JDK)', Icon: Coffee },
+        { id: 'dotnet' as const, label: '.NET SDK', Icon: Hash },
         { id: 'terminal' as const, label: t('settings.nav.terminal'), Icon: TerminalSquare },
       ],
     },
@@ -277,6 +281,8 @@ export function ProjectSettingsModal({
                 {section === 'node' && <RuntimePane kind="node" project={project} patch={patch} target={runtimeEnv} />}
                 {section === 'php' && <RuntimePane kind="php" project={project} patch={patch} target={runtimeEnv} />}
                 {section === 'python' && <RuntimePane kind="python" project={project} patch={patch} target={runtimeEnv} />}
+                {section === 'java' && <RuntimePane kind="java" project={project} patch={patch} target={runtimeEnv} />}
+                {section === 'dotnet' && <RuntimePane kind="dotnet" project={project} patch={patch} target={runtimeEnv} />}
                 {section === 'terminal' && <TerminalPane project={project} patch={patch} />}
                 {section === 'memory' && <MemoryPane project={project} patch={patch} />}
                 {section === 'appearance' && <AppearancePane />}

@@ -31,6 +31,12 @@ export interface ActiveIndexRun {
   costUsd?: number;
 }
 
+/** A deferred structural reconciliation that has not started yet. */
+export interface ScheduledIndexRun {
+  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch';
+  dueAt: number;
+}
+
 export interface ProjectIndexStatus {
   projectId: number;
   phase: ProjectIndexPhase;
@@ -43,6 +49,8 @@ export interface ProjectIndexStatus {
   semanticStaleCount: number;
   /** The live pass (structural/semantic/embeddings) — undefined when idle. */
   activeRun?: ActiveIndexRun;
+  /** Deferred structural reconciliation, kept separate from active work. */
+  scheduledRun?: ScheduledIndexRun;
   /** @deprecated Use {@link activeRun}. Kept in sync for the StatusBar chip. */
   progress?: { current: number; total: number };
   lastStructuralAt: string | null;

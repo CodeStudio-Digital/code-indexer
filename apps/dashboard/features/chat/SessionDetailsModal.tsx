@@ -39,7 +39,7 @@ const INPUT_KIND_STYLES: Record<SessionInputKind, string> = {
   preflight: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400',
 };
 
-interface SessionStatsLike {
+export interface SessionStatsLike {
   message_count: number;
   assistant_turns: number;
   tool_call_count: number;
@@ -52,7 +52,7 @@ interface SessionStatsLike {
   context_window?: number | null;
 }
 
-interface SessionLike {
+export interface SessionLike {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cache_read_tokens?: number;
@@ -66,6 +66,11 @@ interface SessionDetailsModalProps {
   sessionId: number | null;
   session: SessionLike | null;
   stats: SessionStatsLike | null;
+}
+
+function useSessionInputs(sessionId: number | null, active: boolean) {
+  const inputsUrl = active && sessionId ? `/coder/sessions/${sessionId}/inputs` : '';
+  return useApi<SessionInputRow[]>(inputsUrl);
 }
 
 /**
@@ -86,8 +91,7 @@ export function SessionDetailsView({
   active: boolean;
 }) {
   const { t } = useTranslation(['chat', 'common']);
-  const inputsUrl = active && sessionId ? `/coder/sessions/${sessionId}/inputs` : '';
-  const { data: inputs, loading: inputsLoading } = useApi<SessionInputRow[]>(inputsUrl);
+  const { data: inputs, loading: inputsLoading } = useSessionInputs(sessionId, active);
   return (
     <Tabs defaultValue="summary" className="flex-1 flex flex-col min-h-0">
       {/* Compact tab strip tuned for the right-rail width: smaller text,
@@ -111,22 +115,14 @@ export function SessionDetailsView({
 
       <TabsContent value="summary" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
         {session ? (
-          <SummaryTab session={session} stats={stats} />
+          <SessionSummaryView session={session} stats={stats} />
         ) : (
           <div className="text-xs text-muted-foreground">{t('chat:details.noData')}</div>
         )}
       </TabsContent>
 
       <TabsContent value="inputs" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
-        {inputsLoading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
-        {!inputsLoading && (!inputs || inputs.length === 0) && (
-          <div className="text-xs text-muted-foreground py-8 text-center">
-            {t('chat:details.noInputs')}
-          </div>
-        )}
-        <div className="space-y-2">
-          {inputs?.map((entry) => <InputItem key={entry.id} entry={entry} />)}
-        </div>
+        <SessionInputsContent inputs={inputs} loading={inputsLoading} />
       </TabsContent>
     </Tabs>
   );
@@ -164,7 +160,7 @@ function formatK(n: number): string {
   return String(n);
 }
 
-function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionStatsLike | null }) {
+export function SessionSummaryView({ session, stats }: { session: SessionLike; stats: SessionStatsLike | null }) {
   const { t } = useTranslation('chat');
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
@@ -257,6 +253,45 @@ function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionSt
         </section>
       )}
     </div>
+  );
+}
+
+/** Captured model inputs as a standalone surface for the unified Insights panel. */
+export function SessionInputsView({
+  sessionId,
+  active,
+}: {
+  sessionId: number | null;
+  active: boolean;
+}) {
+  const { data: inputs, loading } = useSessionInputs(sessionId, active);
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3">
+      <SessionInputsContent inputs={inputs} loading={loading} />
+    </div>
+  );
+}
+
+function SessionInputsContent({
+  inputs,
+  loading,
+}: {
+  inputs: SessionInputRow[] | null | undefined;
+  loading: boolean;
+}) {
+  const { t } = useTranslation(['chat', 'common']);
+  return (
+    <>
+      {loading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
+      {!loading && (!inputs || inputs.length === 0) && (
+        <div className="text-xs text-muted-foreground py-8 text-center">
+          {t('chat:details.noInputs')}
+        </div>
+      )}
+      <div className="space-y-2">
+        {inputs?.map((entry) => <InputItem key={entry.id} entry={entry} />)}
+      </div>
+    </>
   );
 }
 

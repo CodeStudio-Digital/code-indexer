@@ -5,15 +5,31 @@
  * and (2) the differentiator regexes must classify the constructs the user cares
  * about — function call vs method vs property vs class.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { compile } from 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js';
-import { enrichedPhp, PHP_EXTRA_RULES } from '../php-highlight.js';
+import { enrichPhpHighlighting, enrichedPhp, PHP_EXTRA_RULES } from '../php-highlight.js';
 
 // The function-call rule is the last EXTRA rule; its `cases` decide keyword vs
 // construct vs function for an identifier before `(`.
 const callRuleCases = (PHP_EXTRA_RULES[PHP_EXTRA_RULES.length - 1] as [RegExp, { cases: Record<string, string> }])[1].cases;
 
 describe('enriched PHP grammar', () => {
+  it('replaces the lazy tokenizer factory exactly once per Monaco instance', () => {
+    const registerTokensProviderFactory = vi.fn(() => ({ dispose() {} }));
+    const monaco = { languages: { registerTokensProviderFactory } } as never;
+
+    enrichPhpHighlighting(monaco);
+    enrichPhpHighlighting(monaco);
+
+    expect(registerTokensProviderFactory).toHaveBeenCalledTimes(1);
+    expect(registerTokensProviderFactory).toHaveBeenCalledWith(
+      'php',
+      expect.objectContaining({ create: expect.any(Function) }),
+    );
+    const factory = registerTokensProviderFactory.mock.calls[0][1] as { create(): unknown };
+    expect(factory.create()).toMatchObject({ tokenizer: expect.any(Object) });
+  });
+
   it('compiles through Monaco without structural errors', () => {
     const lexer = compile('php', enrichedPhp() as never) as { tokenizer: Record<string, unknown>; start: string };
     expect(Object.keys(lexer.tokenizer).length).toBeGreaterThan(0);

@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { runCoder } from '@mcp/code-agent/index.js';
 import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
@@ -8,6 +9,7 @@ import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
+import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import {
   createBus,
@@ -28,7 +30,17 @@ import {
 import { parseIdParam, notFound } from '../_helpers.js';
 import { normalizeDedupeKey, syntheticDoneSSE } from '../recent-message-keys.js';
 import { withSessionLock } from './sessionLock.js';
-import { normalizeAttachmentsForModel, pdfHandledNatively } from '@mcp/services/services/docs/attachment-extract.js';
+import {
+  binaryDocumentsHandledNatively,
+  normalizeAttachmentsForModel,
+  pdfHandledNatively,
+} from '@mcp/services/services/docs/attachment-extract.js';
+import { validateAttachments } from '@mcp/services/services/docs/attachment-validation.js';
+import { getDefinition } from '@mcp/services/providers/registry.js';
+import {
+  cleanSessionTitleSeed,
+  isAutomaticSessionTitle,
+} from '@mcp/services/services/task-preflight/index.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { getGlobalMcpExternalPool } from '../../../sse/McpExternalPool.js';
 import { listEnabledPluginRuntime, buildPluginTools } from '@mcp/plugin-host';
@@ -138,6 +150,14 @@ interface ContinueBody {
   client_msg_id?: string;
 }
 
+const attachmentBodyLimit = bodyLimit({
+  maxSize: MAX_ATTACHMENT_REQUEST_BYTES,
+  onError: (c) => c.json(
+    { error: 'request body is too large', code: 'ATTACHMENT_REQUEST_TOO_LARGE' },
+    413,
+  ),
+});
+
 export function mountCoderStreamRoutes(
   app: Hono,
   deps: ServerDeps,
@@ -184,6 +204,19 @@ export function mountCoderStreamRoutes(
     return providerStore.getProvider(session.provider)?.kind;
   }
 
+  function resolveFileHandling(id: number) {
+    const session = sessionStore.getSession(id);
+    const providerKind = resolveProviderKind(id);
+    const row = session?.provider && session.model
+      ? providerStore.listModels(session.provider).find((m) => m.model_id === session.model)
+      : undefined;
+    return {
+      mode: providerKind ? getDefinition(providerKind)?.capabilities?.fileInput : undefined,
+      modelId: session?.model,
+      supportsAttachments: row?.supports_attachments,
+    };
+  }
+
   /**
    * Whether the `preview` DevTools tier should auto-activate for this session.
    * True for any PROJECT-scoped coder session — opening/inspecting/driving the
@@ -196,6 +229,34 @@ export function mountCoderStreamRoutes(
     const session = sessionStore.getSession(id);
     if (!session) return undefined;
     return session.project_id != null ? true : undefined;
+  }
+
+  function applyGeneratedSessionTitle(id: number, title: string | undefined): boolean {
+    if (!title) return false;
+    const current = sessionStore.getSession(id);
+    if (!current || !isAutomaticSessionTitle(current.title)) return false;
+    sessionStore.setSessionTitle(id, title);
+    return true;
+  }
+
+  const sessionTitleJobs = new Map<number, Promise<void>>();
+
+  function scheduleGeneratedSessionTitle(id: number, userMessage: string): void {
+    if (sessionTitleJobs.has(id)) return;
+    const job = deps.taskPreflight.generateSessionTitle({ userMessage })
+      .then((result) => {
+        if (result.status === 'ok') applyGeneratedSessionTitle(id, result.title);
+        else if (result.status !== 'unconfigured') {
+          console.warn(`[session-title] session=${id}: ${result.error ?? result.status}`);
+        }
+      })
+      .catch((error) => {
+        console.warn(`[session-title] session=${id}: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        sessionTitleJobs.delete(id);
+      });
+    sessionTitleJobs.set(id, job);
   }
 
   /**
@@ -276,6 +337,7 @@ export function mountCoderStreamRoutes(
         try {
           const cached = JSON.parse(session.preflight_seed_json) as { h?: string; seed?: PreflightSeed };
           if (cached && cached.seed && cached.h === cacheHash) {
+            applyGeneratedSessionTitle(id, cached.seed.sessionTitle);
             return cached.seed;
           }
         } catch { /* fall through to clear + recompute */ }
@@ -284,6 +346,10 @@ export function mountCoderStreamRoutes(
 
       const result = await deps.taskPreflight.run(preflightInput);
       if (result.status === 'unconfigured') return undefined;
+
+      if (result.status === 'ok') {
+        applyGeneratedSessionTitle(id, result.seed?.sessionTitle);
+      }
 
       // Input-tab trail (kind 'preflight') — hint body on success, short
       // diagnostic on failure; meta feeds the effectiveness funnel.
@@ -301,6 +367,7 @@ export function mountCoderStreamRoutes(
             provider_id: result.providerId ?? null,
             model_id: result.modelId ?? null,
             resolved_from: result.resolvedFrom ?? null,
+            session_title: result.seed?.sessionTitle ?? null,
             task_kind: result.seed?.taskKind ?? null,
             profile: result.seed?.profile ?? null,
             tools: result.seed?.pinTools ?? [],
@@ -415,15 +482,30 @@ export function mountCoderStreamRoutes(
     return c.json(summarizeRuntimeEvents(getRuntimeEventLog('coder', id)));
   });
 
-  app.post('/api/coder/sessions/:id/messages', async (c) => {
+  app.post('/api/coder/sessions/:id/messages', attachmentBodyLimit, async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<SendMessageBody>();
+    const attachmentsCheck = validateAttachments(body.attachments);
+    if (!attachmentsCheck.ok) {
+      return c.json(
+        { error: attachmentsCheck.error, code: attachmentsCheck.code },
+        attachmentsCheck.status,
+      );
+    }
+    body.attachments = attachmentsCheck.value;
+    if (!body.resume && !body.content?.trim() && body.attachments?.length) {
+      body.content = DEFAULT_ATTACHMENT_PROMPT;
+    }
     // Apêndice 4 Fase 2 — resume-mode skips the content check: the
     // dashboard sends `{resume: true, content: ''}` after an
     // /answer-via-worker fallback, where the tool_result is already in
     // history and there's no new user message to attach.
     if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
     const runAgent = resolveRunAgent(id, body.agent);
+    // The request keeps precedence for explicit callers. When omitted (for
+    // example during a remount race), fall back to the conversation's sticky
+    // toggle so the next run cannot silently lose the user's last choice.
+    const thinking = body.thinking ?? sessionStore.getSession(id)?.thinking_enabled ?? false;
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Log the route hit. The bus may not exist yet (fresh session) —
     // emitWorkerLog no-ops in that case, but if a worker is still alive
@@ -454,10 +536,10 @@ export function mountCoderStreamRoutes(
         ? body.selected_skill_ids
         : undefined;
 
-    // Documents (docx/xlsx/pptx/odt…) arrive as base64, but every provider
-    // adapter only serializes a DocumentBlock's `text` — a base64 office doc is
-    // silently dropped. Extract to text up-front so the model actually sees it.
-    // No-op for images, pre-decoded text and PDF (Anthropic-native). Embedded
+    // Office/OpenDocument files stay native on general file-input transports
+    // (OpenAI/Codex/OpenRouter) and use a portable local text extraction path
+    // elsewhere. PDFs similarly follow the declarative transport/model
+    // capability. Embedded
     // figures are pulled out as image blocks only when the model has vision (or
     // the user forced the vision-fallback), so a blind model doesn't pay surprise
     // describe-image cost. Mutating `body` here covers both the worker and legacy
@@ -465,12 +547,12 @@ export function mountCoderStreamRoutes(
     if (body.attachments && body.attachments.length > 0) {
       const extractImages =
         resolveModelSupportsVision(id) === true || body.describe_images === true;
-      // Non-native PDF providers (everyone but Anthropic/Gemini) get the PDF
-      // text-extracted; the base64 is dropped so it isn't carried unused.
-      const extractPdfText = !pdfHandledNatively(resolveProviderKind(id));
+      const fileHandling = resolveFileHandling(id);
+      const extractPdfText = !pdfHandledNatively(fileHandling);
       body.attachments = await normalizeAttachmentsForModel(body.attachments, {
         extractImages,
         extractPdfText,
+        keepBinaryDocuments: binaryDocumentsHandledNatively(fileHandling),
       });
     }
 
@@ -521,6 +603,18 @@ export function mountCoderStreamRoutes(
     // Task preflight (fresh sessions only) — deliberately OUTSIDE the lock
     // so a slow analyzer (≤ ~4s) never serializes an attach to a live run.
     const preflight = await maybeRunPreflight(id, body);
+
+    // Normally the preflight JSON already carries `sessionTitle`, making title
+    // generation free. If preflight is disabled, unconfigured, timed out, or an
+    // older cached seed lacks that field, run a non-blocking title-only call via
+    // the SAME pipeline binding. Re-check-before-write protects manual renames.
+    if (!preflight?.sessionTitle) {
+      const titleSeed = cleanSessionTitleSeed(body.content ?? '');
+      const current = sessionStore.getSession(id);
+      if (titleSeed && current && isAutomaticSessionTitle(current.title)) {
+        scheduleGeneratedSessionTitle(id, titleSeed);
+      }
+    }
 
     // Serialize the "do we have an active run?" decision per session so two
     // concurrent POSTs cannot both observe `activeRuns.get(id) === undefined`
@@ -589,7 +683,7 @@ export function mountCoderStreamRoutes(
           agent: runAgent,
           profile: body.profile,
           worktree: body.worktree,
-          thinking: body.thinking,
+          thinking,
           modelSupportsVision: resolveModelSupportsVision(id),
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),
@@ -781,7 +875,7 @@ export function mountCoderStreamRoutes(
           agent: runAgent,
           profile: body.profile,
           worktree: body.worktree,
-          thinking: body.thinking,
+          thinking,
           modelSupportsVision: resolveModelSupportsVision(id),
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),

@@ -42,6 +42,10 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   'read_file',
   'glob',
   'ask_user',
+  // plan.txt requires this for genuine multi-option forks. If the catalog cap
+  // trims it, the planner can discover the name but cannot emit the required
+  // top-level interactive call.
+  'decision_gate',
   'ask_master',
   'task_complete',
   'submit_plan',

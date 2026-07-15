@@ -11,6 +11,11 @@ import { Check, ChevronDown, ChevronRight, Copy } from 'lucide-react';
 import { useApi } from '../../../hooks/useApi.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { cn, formatRelativeTime } from '../../../lib/utils.js';
+import {
+  persistedPlanDisplayStatus,
+  type PersistedPlanDisplayStatus,
+  type PersistedPlanStatus,
+} from '../messages/plan-card-state.js';
 
 interface CoderPlanRow {
   id: number;
@@ -18,17 +23,17 @@ interface CoderPlanRow {
   tool_use_id: string;
   message_id: number | null;
   plan_text: string;
-  status: 'pending' | 'approved' | 'rejected' | 'aborted';
+  status: PersistedPlanStatus;
   feedback: string | null;
   created_at: string;
   resolved_at: string | null;
 }
 
-const STATUS_STYLES: Record<CoderPlanRow['status'], string> = {
+const STATUS_STYLES: Record<PersistedPlanDisplayStatus, string> = {
   pending: 'bg-muted text-muted-foreground',
   approved: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  revision_requested: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
   rejected: 'bg-red-500/15 text-red-600 dark:text-red-400',
-  aborted: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
 };
 
 export function PlansPanel({ sessionId, active }: { sessionId: number | null; active: boolean }) {
@@ -60,6 +65,7 @@ function PlanItem({ plan }: { plan: CoderPlanRow }) {
   };
 
   const preview = plan.plan_text.split('\n').find((l) => l.trim()) ?? '';
+  const displayStatus = persistedPlanDisplayStatus(plan.status);
 
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -75,8 +81,8 @@ function PlanItem({ plan }: { plan: CoderPlanRow }) {
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
-            <span className={cn('text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded', STATUS_STYLES[plan.status])}>
-              {t(`details.planStatus.${plan.status}`)}
+            <span className={cn('text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded', STATUS_STYLES[displayStatus])}>
+              {t(`details.planStatus.${displayStatus}`)}
             </span>
             <span className="text-[11px] text-muted-foreground">{formatRelativeTime(plan.created_at)}</span>
             {plan.resolved_at && plan.resolved_at !== plan.created_at && (

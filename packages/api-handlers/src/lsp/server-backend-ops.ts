@@ -20,8 +20,15 @@ import {
   type LspTextEdit,
   type LspWorkspaceEdit,
 } from '@mcp/services/lsp/lsp-protocol.js';
+import type { LspAcquireIntent } from '@mcp/services/lsp/lsp-server-manager.js';
 import { getDoc } from './document-store.js';
-import { ensureLspManager, mapServerWorkspaceEdit, toLocations } from './server-backend.js';
+import {
+  acquireLspWithDeadline,
+  ensureLspManager,
+  INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS,
+  mapServerWorkspaceEdit,
+  toLocations,
+} from './server-backend.js';
 
 /**
  * `textDocument/rename` via the language server owning `languageId`.
@@ -42,9 +49,14 @@ async function acquireWithDoc(
   file: string,
   languageId: string,
   serverId?: string,
+  acquireDeadlineMs?: number,
+  signal?: AbortSignal,
+  intent: LspAcquireIntent = 'manual',
 ): Promise<{ acq: Acquired; abs: string } | null> {
   const manager = ensureLspManager(db);
-  const acq = serverId ? await manager.acquireById(projectId, serverId) : await manager.acquire(projectId, languageId);
+  const acq = serverId
+    ? await manager.acquireById(projectId, serverId, intent)
+    : await acquireLspWithDeadline(db, projectId, languageId, acquireDeadlineMs ?? 0, signal, intent);
   if (!acq) return null;
   const abs = relToAbs(root, file);
   const live = getDoc(projectId, file);
@@ -69,8 +81,9 @@ export async function serverRename(
   languageId: string,
   position: { line: number; column: number },
   newName: string,
+  signal?: AbortSignal,
 ): Promise<WorkspaceEditDTO | null> {
-  const acq = await ensureLspManager(db).acquire(projectId, languageId);
+  const acq = await acquireLspWithDeadline(db, projectId, languageId, 0, signal, 'manual');
   if (!acq) return null;
   const abs = relToAbs(root, file);
   // Mirror serverCompletion (W3): guarantee the live buffer is open on the
@@ -78,7 +91,7 @@ export async function serverRename(
   const live = getDoc(projectId, file);
   if (live) acq.handle.ensureOpen(abs, live.languageId, live.version, live.content);
   try {
-    const raw = (await acq.handle.rename(abs, position, newName)) as LspWorkspaceEdit | null;
+    const raw = (await acq.handle.rename(abs, position, newName, signal)) as LspWorkspaceEdit | null;
     return mapServerWorkspaceEdit(raw ?? undefined) ?? { changes: {} };
   } catch (err) {
     debugLog('serverRename', projectId, languageId, err, acq);
@@ -128,11 +141,14 @@ export async function serverSignatureHelp(
   file: string,
   languageId: string,
   position: { line: number; column: number },
+  signal?: AbortSignal,
 ): Promise<SignatureHelpDTO | null> {
-  const got = await acquireWithDoc(db, projectId, root, file, languageId);
+  const got = await acquireWithDoc(
+    db, projectId, root, file, languageId, undefined, INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS, signal, 'interactive',
+  );
   if (!got) return null;
   try {
-    return mapServerSignatureHelp(await got.acq.handle.signatureHelp(got.abs, position));
+    return mapServerSignatureHelp(await got.acq.handle.signatureHelp(got.abs, position, signal));
   } catch (err) {
     debugLog('serverSignatureHelp', projectId, languageId, err, got.acq);
     return null;
@@ -211,11 +227,14 @@ export async function serverDocumentSymbols(
   root: string,
   file: string,
   languageId: string,
+  signal?: AbortSignal,
 ): Promise<DocumentSymbolDTO[] | null> {
-  const got = await acquireWithDoc(db, projectId, root, file, languageId);
+  const got = await acquireWithDoc(
+    db, projectId, root, file, languageId, undefined, INTERACTIVE_LSP_ACQUIRE_DEADLINE_MS, signal, 'background',
+  );
   if (!got) return null;
   try {
-    const mapped = mapServerDocumentSymbols(await got.acq.handle.documentSymbol(got.abs));
+    const mapped = mapServerDocumentSymbols(await got.acq.handle.documentSymbol(got.abs, signal));
     return mapped.length > 0 ? mapped : null; // empty → let the router fall back to the index
   } catch (err) {
     debugLog('serverDocumentSymbols', projectId, languageId, err, got.acq);
@@ -251,13 +270,14 @@ export async function serverFormatting(
   options: { tabSize: number; insertSpaces: boolean },
   range?: { start: { line: number; column: number }; end: { line: number; column: number } },
   serverId?: string,
+  signal?: AbortSignal,
 ): Promise<TextEditDTO[] | null> {
-  const got = await acquireWithDoc(db, projectId, root, file, languageId, serverId);
+  const got = await acquireWithDoc(db, projectId, root, file, languageId, serverId, undefined, signal, 'manual');
   if (!got) return null;
   try {
     const raw = range
-      ? await got.acq.handle.rangeFormatting(got.abs, range, options)
-      : await got.acq.handle.formatting(got.abs, options);
+      ? await got.acq.handle.rangeFormatting(got.abs, range, options, signal)
+      : await got.acq.handle.formatting(got.abs, options, signal);
     return mapServerTextEdits(raw);
   } catch (err) {
     debugLog('serverFormatting', projectId, languageId, err, got.acq);
@@ -312,15 +332,21 @@ export async function serverOrganizeImports(
   root: string,
   file: string,
   languageId: string,
+  signal?: AbortSignal,
 ): Promise<FlatEdit[] | null> {
-  const got = await acquireWithDoc(db, projectId, root, file, languageId);
+  const got = await acquireWithDoc(db, projectId, root, file, languageId, undefined, undefined, signal, 'manual');
   if (!got) return null;
   let content = getDoc(projectId, file)?.content;
   if (content === undefined) {
     try { content = readFileSync(got.abs, 'utf-8'); } catch { content = ''; }
   }
   try {
-    const raw = await got.acq.handle.codeActions(got.abs, fullDocRange(content), ['source.organizeImports']);
+    const raw = await got.acq.handle.codeActions(
+      got.abs,
+      fullDocRange(content),
+      ['source.organizeImports'],
+      { origin: 'invoke', signal },
+    );
     return pickOrganizeImportsEdits(raw);
   } catch (err) {
     debugLog('serverOrganizeImports', projectId, languageId, err, got.acq);
@@ -339,11 +365,12 @@ export async function serverImplementation(
   file: string,
   languageId: string,
   position: { line: number; column: number },
+  signal?: AbortSignal,
 ): Promise<LspLocation[] | null> {
-  const got = await acquireWithDoc(db, projectId, root, file, languageId);
+  const got = await acquireWithDoc(db, projectId, root, file, languageId, undefined, undefined, signal, 'manual');
   if (!got) return null;
   try {
-    return toLocations(await got.acq.handle.implementation(got.abs, position));
+    return toLocations(await got.acq.handle.implementation(got.abs, position, signal));
   } catch (err) {
     debugLog('serverImplementation', projectId, languageId, err, got.acq);
     return null;

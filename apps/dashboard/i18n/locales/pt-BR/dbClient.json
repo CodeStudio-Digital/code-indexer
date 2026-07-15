@@ -76,6 +76,8 @@
   },
   "specialist": {
     "open": "Especialista",
+    "configureTitle": "Configurar especialista de banco",
+    "configureDescription": "Escolha o modelo e o nível de raciocínio antes de abrir a sessão especializada.",
     "selectConnection": "Escolha o banco",
     "searchConnection": "Buscar conexão...",
     "noConnections": "Nenhuma conexão",
@@ -101,7 +103,9 @@
     "idle": "Pronto",
     "explain": "Explain",
     "plan": "Plano",
-    "format": "Formatar SQL"
+    "format": "Formatar SQL",
+    "timeout": "Timeout (s)",
+    "timeoutInvalid": "Informe um timeout inteiro entre {{min}} e {{max}} segundos."
   },
   "aux": {
     "history": "Histórico",

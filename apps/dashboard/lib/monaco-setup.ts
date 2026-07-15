@@ -32,9 +32,12 @@ import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import { defineEditorThemes } from '../features/workspace/editor/themes/index.js';
 import { enrichPhpHighlighting, registerPhpConstructHover } from '../features/workspace/editor/php-highlight.js';
+import { registerGroovyHighlighting } from '../features/workspace/editor/groovy-highlight.js';
+import { enrichJavaCsharpHighlighting } from '../features/workspace/editor/java-csharp-highlight.js';
 import { applyLanguageConfigOverlays } from '../features/workspace/editor/language-configs/index.js';
 import { createMonacoClipboardService } from './monaco-clipboard-service.js';
 import { createWorkspaceTextModelService } from './monaco-workspace-text-model-service.js';
+import { setupSharedMonacoTheme } from './monaco-theme.js';
 
 let initialized = false;
 
@@ -92,10 +95,19 @@ export function setupMonaco(): void {
   // Darcula, …) so any editor can `setTheme` to them. Must run before the first
   // mount; the built-in vs/vs-dark need no registration.
   defineEditorThemes(monaco);
+  setupSharedMonacoTheme(monaco);
 
   // Language-configuration overlays: docblock Enter-continuation and
   // surrounding pairs the bundled basic-languages confs are missing.
   applyLanguageConfigOverlays(monaco);
+
+  // Monaco does not ship a Groovy grammar. Gradle build files otherwise land
+  // in plaintext even when their path is recognized correctly.
+  registerGroovyHighlighting(monaco);
+
+  // Java/C# bundled grammars flatten most symbols to `identifier`; keep a rich
+  // syntax fallback while their language servers warm up semantic tokens.
+  enrichJavaCsharpHighlighting(monaco);
 
   // Enrich PHP highlighting so functions/methods/properties/classes get
   // distinct colours from syntax (free intelephense gives no semantic tokens).

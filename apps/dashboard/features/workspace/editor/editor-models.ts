@@ -22,6 +22,7 @@ const MAX_INACTIVE_MODELS = 20;
 let monacoRef: Monaco | null = null;
 let activeEditor: MonacoNs.editor.IStandaloneCodeEditor | null = null;
 let storeSubscribed = false;
+const externalContentPatches = new WeakSet<MonacoNs.editor.ITextModel>();
 
 /** The mounted editor instance (commands: go-to-line, format, …). */
 export function setActiveEditor(editor: MonacoNs.editor.IStandaloneCodeEditor | null): void {
@@ -63,15 +64,15 @@ export function initEditorModels(monaco: Monaco): void {
   // Keyed por uriKey (modelPathFor) — abas de projetos diferentes com o mesmo path
   // relativo têm chaves distintas, então o setProject (que dropa as abas do projeto
   // que sai) dispõe os modelos do projeto antigo via este janitor.
-  const openKeys = (): Set<string> =>
-    new Set(
-      useWorkspaceStore.getState().openFiles
-        .filter((f) => f.kind === undefined || f.kind === 'file')
-        .map((f) => modelPathFor(f.projectId, f.path)),
-    );
-  let prev = openKeys();
-  useWorkspaceStore.subscribe(() => {
-    const now = openKeys();
+  const openKeys = (state: ReturnType<typeof useWorkspaceStore.getState>): string[] =>
+    state.openFiles
+      .filter((f) => f.kind === undefined || f.kind === 'file')
+      .map((f) => modelPathFor(f.projectId, f.path));
+  let prev = openKeys(useWorkspaceStore.getState());
+  useWorkspaceStore.subscribe((state) => {
+    const next = openKeys(state);
+    if (next.length === prev.length && next.every((key, index) => key === prev[index])) return;
+    const now = new Set(next);
     for (const key of prev) {
       if (now.has(key)) continue;
       // Tab closed — free the model (undo stack included) + view state.
@@ -79,7 +80,7 @@ export function initEditorModels(monaco: Monaco): void {
       viewStates.delete(key);
       mru = mru.filter((p) => p !== key);
     }
-    prev = now;
+    prev = next;
   });
 }
 
@@ -130,6 +131,11 @@ export function getModelStats(): { models: number; totalChars: number; viewState
   return { models: models.length, totalChars, viewStates: viewStates.size };
 }
 
+/** True only during the synchronous model patch performed below. */
+export function isApplyingExternalContent(model: MonacoNs.editor.ITextModel | null): boolean {
+  return model !== null && externalContentPatches.has(model);
+}
+
 /**
  * External (disk) content for a tab: patch the live model preserving undo,
  * mirror into the store. Single entry point used by the fetch-on-activate
@@ -138,11 +144,16 @@ export function getModelStats(): { models: number; totalChars: number; viewState
 export function applyExternalContent(projectId: number, path: string, content: string, lastModified: string | null): void {
   const model = modelFor(projectId, path);
   if (model && model.getValue() !== content) {
-    model.pushEditOperations(
-      [],
-      [{ range: model.getFullModelRange(), text: content }],
-      () => null,
-    );
+    externalContentPatches.add(model);
+    try {
+      model.pushEditOperations(
+        [],
+        [{ range: model.getFullModelRange(), text: content }],
+        () => null,
+      );
+    } finally {
+      externalContentPatches.delete(model);
+    }
   }
   useWorkspaceStore.getState().applyExternalContent(projectId, path, content, lastModified);
 }

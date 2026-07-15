@@ -145,6 +145,79 @@ describe('code_exec structured tool compatibility', () => {
     expect(result.content).toContain('"id": 7');
     expect(result.content).toContain('"status": "ok"');
   });
+
+  it('keeps an explicitly optional probe from aborting its Promise.all siblings', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...slowTool('read_file', 1),
+      parallelSafe: true,
+    });
+    registry.register({
+      name: 'mcp__get_symbol_body',
+      description: 'symbol probe',
+      source: 'mcp',
+      mutates: false,
+      parallelSafe: true,
+      parameters: { type: 'object', properties: {} },
+      handler: async () => ({
+        content: '[SYMBOL_NOT_FOUND] Symbol "buildAnnotations" not found. Use get_file_skeleton.',
+        isError: true,
+      }),
+    });
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `
+        const [file, symbol] = await Promise.all([
+          tools.read_file({}),
+          attempt(tools.mcp__get_symbol_body({symbol_name:'buildAnnotations'}))
+        ]);
+        return { file, symbol };
+      `,
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('read_file-done');
+    expect(result.content).toContain('"ok": false');
+    expect(result.content).toContain('"code": "SYMBOL_NOT_FOUND"');
+    expect(result.content).toContain('"kind": "not_found"');
+    expect(result.content).toContain('get_file_skeleton');
+  });
+
+  it('does not let attempt downgrade a timeout into a best-effort result', async () => {
+    const registry = new ToolRegistry();
+    registry.register(hangTool('probe', 20));
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await attempt(tools.probe({}));`,
+    }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.error).toMatchObject({ code: 'TOOL_TIMEOUT', kind: 'timeout' });
+    expect(result.content).toContain('nested call summary');
+    expect(result.content).toContain('failed=1');
+  });
+
+  it('does not let attempt hide a plan-mode refusal', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('edit_file'));
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await attempt(tools.edit_file({path:'blocked.ts'}));`,
+    }, {
+      ...makeCtx(),
+      runner: {
+        isPlanApproved: () => false,
+        currentTaskScopeId: () => null,
+        currentTaskScopeFiles: () => null,
+        opts: { planMode: true },
+      } as never,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.error).toMatchObject({ code: 'TOOL_CALL_REFUSED', kind: 'refusal' });
+    expect(result.guardVerdict).toMatchObject({ action: 'block', reason: 'policy-gate' });
+    expect(result.content).toContain('refused=1');
+  });
 });
 
 describe('code_exec ReferenceError hints', () => {
@@ -682,6 +755,13 @@ describe('code_exec metadata safety and scheduling', () => {
       expect(siblingSettled).toBe(true);
       expect(result.content).toContain('output_id:"abc123def456"');
       expect(put).toHaveBeenCalledWith(expect.stringContaining('sibling-read-result'));
+      expect(result.content).toContain('nested call summary');
+      expect(result.content).toContain('succeeded=3');
+      expect(result.content).toContain('refused=1');
+      expect(result.structuredData).toMatchObject({
+        kind: 'code_exec_failure',
+        nested: { summary: { total: 4, succeeded: 3, refused: 1 } },
+      });
       expect(result.content.match(/\[loop-refused:/g)).toHaveLength(1);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -839,7 +919,7 @@ describe('code_exec nested-failure try/catch hint (telemetry: create_file killed
     expect(res.isError).toBe(true);
     expect(res.content).toContain('tool create_file: File a.md already exists');
     expect(res.content).toContain('aborted the WHOLE script');
-    expect(res.content).toContain('wrap THAT call in try/catch');
+    expect(res.content).toContain('attempt(...)');
   });
 
   it('a script that already uses try/catch survives and finishes', async () => {
@@ -917,21 +997,34 @@ describe('code_exec tier-agnostic discovery (list_tools / tool_schema)', () => {
     expect(res.content).toContain('"name":"edit_file"');
     expect(res.content).toContain('"schema"');
     expect(res.content).toContain('"type":"object"');
+    expect(res.content).toContain('"callableInsideCodeExec":true');
+    expect(res.content).toContain('"invokeAs":"code_exec"');
   });
 
-  it('tool_schema steers a sandbox-excluded control tool to a direct call', async () => {
+  it('tool_schema introspects a sandbox-excluded control tool without exposing it', async () => {
     const registry = new ToolRegistry();
     registry.register(noopTool('read_file'));
-    registry.register(noopTool('task_complete')); // registered but isSafeTool=false
+    registry.register(noopTool('decision_gate')); // interactive via resolved policy metadata
     const codeExec = buildCodeExecTool(registry);
 
     const res = await codeExec.handler(
-      { code: `try { tool_schema('task_complete'); } catch (e) { return String(e); } return 'no throw';` },
+      { code: `return JSON.stringify(tool_schema('decision_gate'));` },
       makeCtx(),
     );
 
     expect(res.isError).toBeFalsy();
-    expect(res.content).toContain('NOT callable inside code_exec');
+    expect(res.content).toContain('"name":"decision_gate"');
+    expect(res.content).toContain('"schema"');
+    expect(res.content).toContain('"callableInsideCodeExec":false');
+    expect(res.content).toContain('"invokeAs":"top_level"');
+    expect(_exposedToolNames(registry)).not.toContain('decision_gate');
+
+    const nestedCall = await codeExec.handler(
+      { code: `return await tools.decision_gate({ questions: [] });` },
+      makeCtx(),
+    );
+    expect(nestedCall.isError).toBe(true);
+    expect(nestedCall.content).toContain('decision_gate is not an available tool in this code_exec');
   });
 
   it('tool_schema suggests the closest name on a typo', async () => {

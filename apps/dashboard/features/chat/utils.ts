@@ -1,4 +1,13 @@
 import type { AssistantTurn, StreamBlock } from '../../hooks/useAgentStream.js';
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_TOTAL_BYTES,
+  MAX_ATTACHMENT_TEXT_CHARS,
+  MAX_ATTACHMENTS_TOTAL_TEXT_CHARS,
+  attachmentPayloadBytes,
+  classifyAttachment,
+} from '@mcp/shared/attachments/policy.js';
 import { TEXT_LIKE_EXTS } from './constants.js';
 import type { AgentAttachment, MessageRow, PersistedMessage, VisualGroup } from './types.js';
 
@@ -29,6 +38,13 @@ export function readDataUrlBase64(blob: Blob): Promise<string> {
 
 export function fileToAttachment(file: File): Promise<AgentAttachment> {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const kind = classifyAttachment(file.name, file.type);
+  if (kind === 'unsupported') {
+    return Promise.reject(new Error(`Unsupported attachment type: ${file.name}`));
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    return Promise.reject(new Error(`${file.name} exceeds the 10 MB attachment limit.`));
+  }
   const isImage = file.type.startsWith('image/');
   // RTF must reach the server-side office extractor as base64. Some browsers
   // report it as `text/rtf`, which would otherwise hit the text branch and
@@ -41,8 +57,14 @@ export function fileToAttachment(file: File): Promise<AgentAttachment> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(reader.error);
-      reader.onload = () =>
-        resolve({ name: file.name, mediaType: file.type || 'text/plain', text: String(reader.result ?? '') });
+      reader.onload = () => {
+        const text = String(reader.result ?? '');
+        if (text.length > MAX_ATTACHMENT_TEXT_CHARS) {
+          reject(new Error(`${file.name} exceeds the 200,000 character text limit.`));
+          return;
+        }
+        resolve({ name: file.name, mediaType: file.type || 'text/plain', text });
+      };
       reader.readAsText(file);
     });
   }
@@ -51,6 +73,41 @@ export function fileToAttachment(file: File): Promise<AgentAttachment> {
     mediaType: file.type || (isImage ? 'image/png' : 'application/octet-stream'),
     base64,
   }));
+}
+
+/** Validate a complete selection before allocating base64 strings in the renderer. */
+export async function filesToAttachments(
+  files: FileList | File[],
+  existing: AgentAttachment[] = [],
+): Promise<AgentAttachment[]> {
+  const selected = Array.from(files);
+  if (existing.length + selected.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    throw new Error(`You can attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
+  }
+
+  let totalBytes = existing.reduce((sum, att) => sum + attachmentPayloadBytes(att), 0);
+  for (const file of selected) {
+    if (classifyAttachment(file.name, file.type) === 'unsupported') {
+      throw new Error(`Unsupported attachment type: ${file.name}`);
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`${file.name} exceeds the 10 MB attachment limit.`);
+    }
+    totalBytes += file.size;
+  }
+  if (totalBytes > MAX_ATTACHMENTS_TOTAL_BYTES) {
+    throw new Error('Attachments exceed the 25 MB combined limit.');
+  }
+
+  const converted = await Promise.all(selected.map(fileToAttachment));
+  const totalTextChars = [...existing, ...converted].reduce(
+    (sum, att) => sum + (att.text?.length ?? 0),
+    0,
+  );
+  if (totalTextChars > MAX_ATTACHMENTS_TOTAL_TEXT_CHARS) {
+    throw new Error('Text attachments exceed the 400,000 character combined limit.');
+  }
+  return converted;
 }
 
 export function getPersistedAssistantText(message: PersistedMessage): string {

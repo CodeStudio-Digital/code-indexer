@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeIgnored } from '../watcher.js';
 
@@ -49,5 +51,39 @@ describe('makeIgnored', () => {
 
   it('ignores paths outside the root (conservative: returns false)', () => {
     expect(ig(join('C:', 'projects', 'other', 'node_modules'))).toBe(false);
+  });
+
+  it('prunes Unity caches/generated files without dropping project inputs', () => {
+    const unityRoot = mkdtempSync(join(tmpdir(), 'watcher-unity-'));
+    try {
+      mkdirSync(join(unityRoot, 'Assets'), { recursive: true });
+      mkdirSync(join(unityRoot, 'Packages'), { recursive: true });
+      mkdirSync(join(unityRoot, 'ProjectSettings'), { recursive: true });
+      writeFileSync(join(unityRoot, 'ProjectSettings', 'ProjectVersion.txt'), 'm_EditorVersion: 6000.0');
+      const unityIg = makeIgnored(unityRoot);
+
+      for (const rel of [
+        'Library/PackageCache/pkg/file.cs', 'Temp/cache', 'Logs/Editor.log',
+        'UserSettings/EditorUserSettings.asset', 'Assembly-CSharp.csproj',
+        'Assets/Player.prefab.meta',
+      ]) expect(unityIg(join(unityRoot, ...rel.split('/')))).toBe(true);
+
+      for (const rel of [
+        'Assets/Scripts/Player.cs', 'Assets/Main.unity', 'Packages/manifest.json',
+        'ProjectSettings/TagManager.asset',
+      ]) expect(unityIg(join(unityRoot, ...rel.split('/')))).toBe(false);
+    } finally {
+      rmSync(unityRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a non-Unity source directory named Library', () => {
+    const ordinaryRoot = mkdtempSync(join(tmpdir(), 'watcher-library-'));
+    try {
+      const ordinaryIg = makeIgnored(ordinaryRoot);
+      expect(ordinaryIg(join(ordinaryRoot, 'Library', 'domain', 'catalog.ts'))).toBe(false);
+    } finally {
+      rmSync(ordinaryRoot, { recursive: true, force: true });
+    }
   });
 });

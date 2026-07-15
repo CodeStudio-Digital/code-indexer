@@ -14,6 +14,58 @@ import type {
 const TASK_KINDS = new Set(['bugfix', 'feature', 'refactor', 'explore', 'docs', 'config', 'test', 'other']);
 const PROFILES = new Set(['bootstrap', 'navigate', 'full']);
 const MAX_REASON_CHARS = 120;
+const AUTOMATIC_SESSION_TITLES = new Set([
+  'nova sessao',
+  'nova sessao global',
+  'new session',
+  'new global session',
+]);
+
+function titleKey(title: string): string {
+  return title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+export function isAutomaticSessionTitle(title: string | null | undefined): boolean {
+  return !title?.trim() || AUTOMATIC_SESSION_TITLES.has(titleKey(title));
+}
+
+export function cleanSessionTitleSeed(text: string): string {
+  return text
+    .replace(/<file_refs>[\s\S]*?<\/file_refs>/gi, '')
+    .replace(/<active_skills>[\s\S]*?<\/active_skills>/gi, '')
+    .replace(/<active-context>[\s\S]*?<\/active-context>/gi, '')
+    .replace(/<ide_context>[\s\S]*?<\/ide_context>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
+
+export function cleanSessionTitle(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  let text = raw.trim();
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as { session_title?: unknown; title?: unknown };
+    const nested = parsed?.session_title ?? parsed?.title;
+    if (typeof nested === 'string') text = nested;
+  } catch { /* plain-text title */ }
+  const title = text
+    .replace(/^```(?:text)?\s*|\s*```$/gi, '')
+    .split(/\r?\n/, 1)[0]!
+    .replace(/^(?:session\s+title|title|titulo|título)\s*:\s*/i, '')
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?;:]+$/g, '')
+    .trim()
+    .slice(0, 80)
+    .trim();
+  return title || undefined;
+}
 
 function extractJson(raw: string): unknown {
   const trimmed = raw.trim();
@@ -60,6 +112,9 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
   }
 
   const seed: PreflightSeed = {};
+
+  const sessionTitle = cleanSessionTitle(parsed.session_title);
+  if (sessionTitle) seed.sessionTitle = sessionTitle;
 
   if (typeof parsed.profile === 'string' && PROFILES.has(parsed.profile)) {
     seed.profile = parsed.profile as PreflightSeed['profile'];
@@ -146,7 +201,8 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
     if (memories.length > 0) seed.memories = memories;
   }
 
-  const usable = seed.profile !== undefined
+  const usable = seed.sessionTitle !== undefined
+    || seed.profile !== undefined
     || (seed.pinTools?.length ?? 0) > 0
     || (seed.targetProjects?.length ?? 0) > 0
     || (seed.suggestedSkills?.length ?? 0) > 0

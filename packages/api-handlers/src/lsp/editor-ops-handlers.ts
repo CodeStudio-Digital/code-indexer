@@ -59,33 +59,35 @@ export function createEditorOpsHandlers(
   };
 
   return {
-    async signatureHelp({ projectId, file, position }) {
+    async signatureHelp({ projectId, file, position }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
       if (isTsFile(file)) {
         return helpers.exec().tsSignatureHelp(helpers.opCtx(projectId, root, file, position));
       }
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
-        const viaServer = await serverSignatureHelp(db, projectId, root, file, lang, position);
+        const viaServer = await serverSignatureHelp(db, projectId, root, file, lang, position, ctx.signal);
+        if (ctx.signal.aborted) return null;
         if (viaServer) return viaServer;
       }
       const content = contentFor(projectId, root, file);
       return content ? fallbackSignatureHelp(db, projectId, content, position) : null;
     },
 
-    async documentSymbols({ projectId, file }) {
+    async documentSymbols({ projectId, file }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
       if (isTsFile(file)) {
         return helpers.exec().tsDocumentSymbols(helpers.opCtx(projectId, root, file));
       }
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
-        const viaServer = await serverDocumentSymbols(db, projectId, root, file, lang);
+        const viaServer = await serverDocumentSymbols(db, projectId, root, file, lang, ctx.signal);
+        if (ctx.signal.aborted) return [];
         if (viaServer && viaServer.length > 0) return viaServer;
       }
       return fallbackDocumentSymbols(db, projectId, file);
     },
-    async rename({ projectId, file, position, newName }) {
+    async rename({ projectId, file, position, newName }, ctx) {
       if (process.env.MCP_EDITOR_RENAME === '0') {
         throw new ApiError(
           'feature_disabled', 503,
@@ -108,7 +110,7 @@ export function createEditorOpsHandlers(
       // Languages with a real server (php/python/json/css/html) → textDocument/rename.
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
-        const edit = await serverRename(db, projectId, root, file, lang, position, trimmed);
+        const edit = await serverRename(db, projectId, root, file, lang, position, trimmed, ctx.signal);
         if (!edit) {
           throw new ApiError(
             'server_unavailable', 503,
@@ -132,7 +134,7 @@ export function createEditorOpsHandlers(
       );
     },
 
-    async formatting({ projectId, file, range, options }) {
+    async formatting({ projectId, file, range, options }, ctx) {
       // NOT routed for ts/js/json/css/html on purpose — Monaco's built-in
       // workers already format those client-side; the provider only registers
       // for server languages (php today).
@@ -146,7 +148,7 @@ export function createEditorOpsHandlers(
           '(TS/JS/JSON/CSS/HTML format via the editor’s built-in workers).',
         );
       }
-      const edits = await serverFormatting(db, projectId, root, file, lang, options, range, formatterServerId);
+      const edits = await serverFormatting(db, projectId, root, file, lang, options, range, formatterServerId, ctx.signal);
       if (!edits) {
         throw new ApiError(
           'server_unavailable', 503,
@@ -157,7 +159,7 @@ export function createEditorOpsHandlers(
       return edits;
     },
 
-    async organizeImports({ projectId, file }) {
+    async organizeImports({ projectId, file }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
       // TS/JS → the TS service's organizeImports via the executor.
       if (isTsFile(file)) {
@@ -166,7 +168,7 @@ export function createEditorOpsHandlers(
       }
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
-        const edits = await serverOrganizeImports(db, projectId, root, file, lang);
+        const edits = await serverOrganizeImports(db, projectId, root, file, lang, ctx.signal);
         if (edits === null) {
           throw new ApiError(
             'server_unavailable', 503,
@@ -191,7 +193,7 @@ export function createEditorOpsHandlers(
       );
     },
 
-    async implementation({ projectId, file, position }) {
+    async implementation({ projectId, file, position }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
       if (isTsFile(file)) {
         const { targets } = await helpers.exec().tsImplementation(
@@ -204,7 +206,8 @@ export function createEditorOpsHandlers(
       }
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
-        const viaServer = await serverImplementation(db, projectId, root, file, lang, position);
+        const viaServer = await serverImplementation(db, projectId, root, file, lang, position, ctx.signal);
+        if (ctx.signal.aborted) return [];
         if (viaServer && viaServer.length > 0) return viaServer;
       }
       // Structural-index fallback: implementors of an interface + subclasses

@@ -6,7 +6,7 @@
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../../lib/api-client.js';
 import { logLsp } from '../lsp-log.js';
-import { relPath, type Monaco } from './dto.js';
+import { modelBelongsToProject, relPath, type Monaco } from './dto.js';
 
 interface SignatureHelpDTO {
   signatures: Array<{
@@ -21,17 +21,18 @@ interface SignatureHelpDTO {
 export function registerSignatureHelpProviders(
   monaco: Monaco,
   projectId: number,
-  flushDoc: (rel: string) => Promise<void>,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void>,
 ): MonacoNs.IDisposable[] {
   const provider: MonacoNs.languages.SignatureHelpProvider = {
     signatureHelpTriggerCharacters: ['(', ','],
     signatureHelpRetriggerCharacters: [')'],
     async provideSignatureHelp(model, position) {
+      if (!modelBelongsToProject(model, projectId)) return null;
       const file = relPath(model);
       const lang = model.getLanguageId();
       const t0 = performance.now();
       try {
-        await flushDoc(file);
+        await ensureSynced(model);
         const dto = await apiCall<SignatureHelpDTO | null>('lsp.signatureHelp', {
           projectId,
           file,

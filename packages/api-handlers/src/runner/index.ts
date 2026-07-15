@@ -11,21 +11,26 @@
 
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import { ApiError, type RunnerApi, type RunnerManager, type RunnerTask, type RuntimeTarget, snippetRunFor } from '@mcp/api-bus';
 import { parsePackageManagers } from '@mcp/shared/utils/package-managers.js';
 import { parseWslPackageManagers } from '@mcp/shared/utils/wsl-package-managers.js';
 import type { Project } from '@mcp/shared/types.js';
 import type { HandlerDeps } from '../types.js';
-import { sharedPtyManager } from '../terminal/pty-manager.js';
+import { defaultShell, sharedPtyManager } from '../terminal/pty-manager.js';
+import { shellFamilyForExecutable } from '../terminal/shell-quote.js';
 import { resolveShellById, targetForShell } from '../terminal/shells.js';
 import { resolveProjectRuntimeEnv } from '../runtime/runtime-resolve.js';
 import { detectRunners, type DetectOptions } from './detect.js';
 import { probeManagerStatus, probeWslManagerStatus } from './manager-status.js';
+import { searchPackages as searchPackageRegistry } from './package-search.js';
+import { addDependency } from './dependency-ops.js';
+import { resolveFileRunTarget } from './file-run-target.js';
 
 const VALID_NODE_MANAGERS: ReadonlySet<string> = new Set(['npm', 'yarn', 'pnpm', 'bun']);
 const VALID_PY_MANAGERS: ReadonlySet<string> = new Set(['pip', 'poetry']);
+const VALID_JAVA_MANAGERS: ReadonlySet<string> = new Set(['maven', 'gradle']);
 
 /**
  * The temp-file path form a snippet interpreter expects. On Windows, Git Bash's
@@ -111,9 +116,18 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       target.kind === 'wsl'
         ? parseWslPackageManagers(p.wsl_package_managers)[target.distro] ?? {}
         : parsePackageManagers(p.package_managers);
+    const configuredShell = resolveShellById(p.runner_shell);
+    const shellFile = target.kind === 'wsl'
+      ? 'wsl.exe'
+      : configuredShell && targetForShell(configuredShell).kind !== 'wsl'
+        ? configuredShell.file
+        : defaultShell();
+    const shellFamily = shellFamilyForExecutable(shellFile, target.kind === 'wsl');
     return {
       nodeManager: VALID_NODE_MANAGERS.has(pm.node ?? '') ? (pm.node as RunnerManager) : undefined,
       pythonManager: VALID_PY_MANAGERS.has(pm.python ?? '') ? (pm.python as RunnerManager) : undefined,
+      javaManager: VALID_JAVA_MANAGERS.has(pm.java ?? '') ? (pm.java as RunnerManager) : undefined,
+      shellFamily,
     };
   }
 
@@ -131,18 +145,26 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     label: string;
     manager: RunnerTask['manager'];
     cwd?: string;
+    target?: RuntimeTarget;
   }): RunnerTask {
     const p = project(input.projectId);
     // Per-project runner shell — resolve the stored id to a spawnable
     // {file,args}; null falls back to the system default shell. The shell
     // decides the runtime target: a WSL distro gets its Linux managed runtimes
     // on the POSIX PATH, everything else (incl. Git Bash) the Windows ones.
-    const shellSel = resolveShellById(p.runner_shell);
+    const configuredShell = resolveShellById(p.runner_shell);
+    const configuredTarget = targetForShell(configuredShell);
+    const runTarget = input.target ?? configuredTarget;
+    const shellSel = input.target?.kind === 'wsl'
+      ? { id: `wsl:${input.target.distro}`, label: `WSL: ${input.target.distro}`, file: 'wsl.exe', args: ['-d', input.target.distro] }
+      : input.target?.kind === 'host' && configuredTarget.kind === 'wsl'
+        ? null
+        : configuredShell;
     const { pathPrepend, extraEnv, posixPathPrepend, posixExtraEnv } = resolveProjectRuntimeEnv(
       db,
       input.projectId,
       ensureDataDir(),
-      { target: targetForShell(shellSel) },
+      { target: runTarget },
     );
     const { id: terminalId } = manager.spawn({
       command: input.command,
@@ -165,6 +187,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       command: input.command,
       manager: input.manager,
       cwd: input.cwd,
+      target: input.target,
       status: 'running',
       exitCode: null,
       startedAt: Date.now(),
@@ -199,11 +222,40 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       const p = project(projectId);
       const rt = effectiveTarget(p, target);
       if (rt.kind === 'wsl') {
-        const { posixPathPrepend } = resolveProjectRuntimeEnv(db, projectId, ensureDataDir(), { target: rt });
-        return probeWslManagerStatus(manager, rt.distro, posixPathPrepend);
+        const env = resolveProjectRuntimeEnv(db, projectId, ensureDataDir(), { target: rt });
+        return probeWslManagerStatus(manager, rt.distro, env, p.root_path);
       }
-      const { pathPrepend } = resolveProjectRuntimeEnv(db, projectId, ensureDataDir());
-      return probeManagerStatus(manager, pathPrepend);
+      const env = resolveProjectRuntimeEnv(db, projectId, ensureDataDir());
+      return probeManagerStatus(manager, env, p.root_path);
+    },
+
+    async searchPackages({ projectId, manager, query, limit }) {
+      project(projectId);
+      return searchPackageRegistry(manager, query, limit);
+    },
+
+    async addDependency({ projectId, manager, packageId, version, projectFile, target }) {
+      const p = project(projectId);
+      const rt = effectiveTarget(p, target);
+      const env = resolveProjectRuntimeEnv(db, projectId, ensureDataDir(), { target: rt });
+      return addDependency({ root: p.root_path, manager, packageId, version, projectFile, target: rt, env });
+    },
+
+    async fileRunTarget({ projectId, file, content, script, target }) {
+      const p = project(projectId);
+      const rt = effectiveTarget(p, target);
+      const options = detectOptionsFor(p, rt);
+      let detectionRoot = p.root_path;
+      const base = basename(file).toLowerCase();
+      if ((script && ['package.json', 'composer.json'].includes(base))
+        || ['pom.xml', 'build.gradle', 'build.gradle.kts'].includes(base)) {
+        const absolute = resolve(p.root_path, file);
+        const rel = relative(p.root_path, absolute);
+        if (rel.startsWith('..') || isAbsolute(rel)) throw new ApiError('invalid_input', 400, 'file escapes the project root');
+        detectionRoot = dirname(absolute);
+      }
+      const groups = detectRunners(detectionRoot, options).groups;
+      return resolveFileRunTarget(p.root_path, file, content, groups, options.shellFamily, script);
     },
 
     async start(input) {
@@ -280,6 +332,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
         label: task.label,
         manager: task.manager,
         cwd: task.cwd,
+        target: task.target,
       });
       return next;
     },

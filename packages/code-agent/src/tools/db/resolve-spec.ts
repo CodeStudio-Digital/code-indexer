@@ -2,7 +2,8 @@
  * Saved `db_connections` row → live driver config, decrypting secrets
  * just-in-time via the injected decryptor. Faithful port of the dashboard's
  * `resolveSpec` (apps/dashboard/features/db-client/api.ts) minus the renderer
- * concerns (no dbOverride browsing; `readOnly` lives in pool meta, not here).
+ * concerns (no dbOverride browsing). `readOnly` is carried both in the driver
+ * config (last enforcement boundary) and pool metadata (fast handler guard).
  *
  * SSH-tunneled connections are REFUSED: the agent process cannot open
  * tunnels — that path belongs to the Databases tab UI.
@@ -87,7 +88,13 @@ export async function resolveConnConfig(
   const secrets = [secret, ssl?.key ?? ''].filter((s) => s.length > 0);
   if (options.urlMode === true) {
     return {
-      config: { engine: conn.engine, ssl, options: connectOptions, connectionString: secret || undefined },
+      config: {
+        engine: conn.engine,
+        ssl,
+        options: connectOptions,
+        connectionString: secret || undefined,
+        readOnly: conn.is_read_only === 1,
+      },
       secrets,
     };
   }
@@ -102,6 +109,7 @@ export async function resolveConnConfig(
       filePath: conn.file_path ?? undefined,
       ssl,
       options: connectOptions,
+      readOnly: conn.is_read_only === 1,
     },
     secrets,
   };

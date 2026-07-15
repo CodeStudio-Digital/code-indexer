@@ -5,7 +5,11 @@
  * independência da ordem de chegada dos edits.
  */
 import { describe, it, expect } from 'vitest';
-import { applyEditsToContent, type ContentEdit } from '../apply-workspace-edit.js';
+import {
+  absoluteToProjectRelative,
+  applyEditsToContent,
+  type ContentEdit,
+} from '../apply-workspace-edit.js';
 
 const edit = (
   startLine: number, startCol: number, endLine: number, endCol: number, newText: string,
@@ -65,5 +69,18 @@ describe('applyEditsToContent', () => {
   it('clamps out-of-bounds positions instead of corrupting the buffer', () => {
     // Edit no fim do arquivo com end além do conteúdo — vira append seguro.
     expect(applyEditsToContent('ab', [edit(9, 1, 9, 99, '!')])).toBe('ab!');
+  });
+});
+
+describe('absoluteToProjectRelative', () => {
+  it('maps Windows LSP paths to namespaced-editor relative paths case-insensitively', () => {
+    expect(absoluteToProjectRelative(
+      'D:\\Projects\\Game',
+      'd:/projects/Game/Assets/Scripts/Player.cs',
+    )).toBe('Assets/Scripts/Player.cs');
+  });
+
+  it('rejects edits outside the active project', () => {
+    expect(absoluteToProjectRelative('/workspace/game', '/workspace/shared/Player.cs')).toBeNull();
   });
 });

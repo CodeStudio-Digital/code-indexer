@@ -35,16 +35,20 @@ export interface PendingToolApproval {
   parentToolUseId?: string;
   toolName: string;
   argsSummary: string;
+  /** Exact structured args for database approvals; generic tools remain summary-only. */
+  input?: Record<string, unknown>;
   riskClass: 'write' | 'execute' | 'admin';
   approvalKind: 'standard' | 'database_write';
   nested?: boolean;
   receivedAt: number;
 }
 
+export type PlanResolution = 'approved' | 'revision_requested' | 'rejected' | 'validation_error';
+
 export interface PlanPrompt {
   id: string;
   plan: string;
-  resolved?: 'approved' | 'rejected';
+  resolved?: PlanResolution;
   /**
    * Hint emitted by the coder when calling submit_plan: 'informational'
    * means the plan is an answer-only deliverable (no edit/shell follow-up).
@@ -235,6 +239,34 @@ export interface AgentsGroup {
   background?: boolean;
   /** Background job handle — for collect/notification correlation. */
   jobId?: string;
+}
+
+// ─── Transient active processes ────────────────────────────────────────
+
+export type ActiveProcessSource = 'provider' | 'tool' | 'activity' | 'agent' | 'task';
+export type ActiveProcessStatus = 'running' | 'waiting';
+
+/**
+ * A currently-live piece of work shown in the Session state rail. This is
+ * deliberately separate from `currentTurn`: fire-and-forget subagents can
+ * outlive the assistant turn that spawned them. Entries exist only while
+ * active and are removed as soon as their terminal SSE event arrives.
+ */
+export interface ActiveProcess {
+  id: string;
+  source: ActiveProcessSource;
+  kind: StreamActivityKind;
+  label: string;
+  status: ActiveProcessStatus;
+  startedAt: number;
+  updatedAt: number;
+  phase?: string;
+  note?: string;
+  elapsedMs?: number;
+  parentId?: string;
+  groupId?: string;
+  /** Fire-and-forget work survives per-turn `message_complete` boundaries. */
+  background?: boolean;
 }
 
 // ─── Stream blocks ────────────────────────────────────────────
@@ -462,6 +494,8 @@ export interface SessionState {
    * states so the user can read the final outcome until they dismiss.
    */
   pipelineRuntime: PipelineRuntimeState | null;
+  /** Live-only processes rendered in the right Session state rail. */
+  activeProcesses: ActiveProcess[];
   /**
    * Monotonic counter bumped on every event that mutates the live goal /
    * tasks / todos state (tasks_posted, task_started, task_finished,
@@ -559,6 +593,7 @@ export const EMPTY_STATE: SessionState = {
   indexStatus: null,
   interactionPending: null,
   pipelineRuntime: null,
+  activeProcesses: [],
   sidebarRefreshTick: 0,
   tasksRefreshTick: 0,
   snapshotTick: 0,

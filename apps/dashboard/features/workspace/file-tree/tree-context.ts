@@ -23,8 +23,8 @@ import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js'
 import type { TreeEntry } from '../../../state/file-tree.js';
 import { useLocalHistory } from '../../../state/local-history-store.js';
 import { openDetached } from '../../popout/openDetached.js';
-import { fileRunCommand, runnableForFile, type FileRuntime } from '../../../lib/run-target.js';
-import { launchRun } from '../../../state/run-launch.js';
+import { runnableForFile, type FileRuntime } from '../../../lib/run-target.js';
+import { launchFileRun } from '../../../state/run-launch.js';
 import {
   githubUrlFor,
   repoRelativePosix,
@@ -35,7 +35,13 @@ import { buildFileGitActions } from './file-git-actions.js';
 import { deleteSelection } from './delete-selection.js';
 
 /** Display name for the "Run with <runtime>" menu label. */
-const RUNTIME_LABEL: Record<FileRuntime, string> = { node: 'Node', php: 'PHP', python: 'Python' };
+const RUNTIME_LABEL: Record<FileRuntime, string> = {
+  node: 'Node',
+  php: 'PHP',
+  python: 'Python',
+  java: 'Java',
+  dotnet: '.NET',
+};
 
 /** Seleção viva (count para o rótulo; getPaths lido no clique). */
 export interface MenuSelection {
@@ -180,11 +186,10 @@ export function buildContextItems(
         label: i18n.t('workspace:fileTree.runWith', { runtime: RUNTIME_LABEL[run.runtime] }),
         icon: Play,
         onSelect: () =>
-          void launchRun({
+          void launchFileRun({
             projectId,
-            command: fileRunCommand(entry.path, run.runtime),
+            file: entry.path,
             label: i18n.t('workspace:fileTree.runLabel', { file: posixBasename(entry.path) }),
-            manager: run.manager,
           }),
       }]
     : [];

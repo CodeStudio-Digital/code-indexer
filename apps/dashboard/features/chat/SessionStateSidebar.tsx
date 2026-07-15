@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { AlertCircle, Check, Circle, ListChecks, Loader2, Target } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import type {
+  ActiveProcess,
   PipelineRuntimeState,
   TodoItem,
 } from '../../hooks/agent-stream/types.js';
+import { ActiveProcessesSection } from './sidebar/ActiveProcessesSection.js';
 import { CollapsibleSection } from './sidebar/CollapsibleSection.js';
 import { ProjectFilesSection } from './sidebar/ProjectFilesSection.js';
 import { SkillsSection } from './sidebar/SkillsSection.js';
@@ -62,6 +64,8 @@ interface SessionStateSidebarProps {
    * `usePipelineStream` in AgentChat.
    */
   pipelineRuntime?: PipelineRuntimeState | null;
+  /** Transient processes from the live session stream. */
+  activeProcesses?: ActiveProcess[];
   /**
    * When true, the sidebar drops its own `<aside>` wrapper (with border-l
    * + w-64 + hidden lg:block) and renders as a plain scrollable block so
@@ -87,6 +91,7 @@ export function SessionStateSidebar({
   skillPicks,
   onToggleSkillPick,
   pipelineRuntime,
+  activeProcesses = [],
   embedded,
 }: SessionStateSidebarProps) {
   const { t } = useTranslation(['chat', 'common']);
@@ -132,6 +137,7 @@ export function SessionStateSidebar({
   // "Maximum update depth exceeded" guard.
   const sections = (
     <>
+      <ActiveProcessesSection sessionId={sessionId} processes={activeProcesses} />
       {/* Always mounted: self-hides when the session has no pipeline run.
           DB-driven so past/running executions persist across reload/restart
           even when no live SSE runtime exists. */}

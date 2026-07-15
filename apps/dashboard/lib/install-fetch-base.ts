@@ -31,7 +31,7 @@ let installed = false;
 
 const MCP_BASE = 'mcp://app';
 
-function isElectronRenderer(): boolean {
+export function isElectronRenderer(): boolean {
   if (typeof window === 'undefined') return false;
   // Electron's chromium fork stamps "Electron/<version>" into the UA.
   // Examples from Electron 33: "...Electron/33.4.0 Safari/537.36".

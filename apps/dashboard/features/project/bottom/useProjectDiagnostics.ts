@@ -8,10 +8,10 @@
  * `editor/diagnosticsStream.ts` (Electron MessagePort + browser SSE fallback).
  */
 import { useEffect, useMemo, useState } from 'react';
-import type { DiagnosticsFrame } from '@mcp/api-bus';
+import type { DiagnosticsBatch } from '@mcp/api-bus';
 import { apiStream, electronApi } from '../../../lib/api-client.js';
 import {
-  applyFrame,
+  applyFrames,
   emptyDiagnosticsState,
   flatten,
   type DiagnosticsState,
@@ -32,22 +32,22 @@ export function useProjectDiagnostics(projectId: number, enabled = true): FlatDi
     let closeIterator: (() => void) | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
 
-    const onFrame = (frame: DiagnosticsFrame): void => {
+    const onBatch = (batch: DiagnosticsBatch): void => {
       if (stopped) return;
-      setState((prev) => applyFrame(prev, frame));
+      setState((prev) => applyFrames(prev, batch.frames));
     };
 
     const connect = (): void => {
       if (stopped) return;
       if (electronApi()) {
-        const it = apiStream<DiagnosticsFrame>('lsp.diagnosticsStream', { projectId })[Symbol.asyncIterator]();
+        const it = apiStream<DiagnosticsBatch>('lsp.diagnosticsStream', { projectId })[Symbol.asyncIterator]();
         closeIterator = () => { void it.return?.(); };
         void (async () => {
           try {
             while (!stopped) {
               const r = await it.next();
               if (r.done || stopped) break;
-              onFrame(r.value);
+              onBatch(r.value);
             }
           } catch { /* stream dropped */ }
           // Producer restarted (backend reload) — reconnect with backoff.
@@ -57,7 +57,7 @@ export function useProjectDiagnostics(projectId: number, enabled = true): FlatDi
         es = new EventSource(`/api/lsp/${projectId}/diagnostics/stream`);
         es.addEventListener('diagnostics', (ev) => {
           if (stopped) return;
-          try { onFrame(JSON.parse((ev as MessageEvent).data) as DiagnosticsFrame); } catch { /* bad frame */ }
+          try { onBatch(JSON.parse((ev as MessageEvent).data) as DiagnosticsBatch); } catch { /* bad batch */ }
         });
         // EventSource auto-reconnects.
       }

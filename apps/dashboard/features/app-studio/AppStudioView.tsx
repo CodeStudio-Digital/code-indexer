@@ -103,9 +103,9 @@ export function AppStudioView({
   const chip = statusChip(detail, t as never);
   const attentionCount = workflow.attention.approval_ids.length + workflow.attention.decision_ids.length;
   const coordinatorSessionId = workflow.coordinator_session_id ?? session.coordinator_session_id ?? initialCoderSessionId ?? null;
-  const agentRefreshKey = workflow.work_items.map((item) => `${item.id}:${item.status}:${item.updated_at}`).join('|');
+  const agentRefreshKey = `${coordinatorSessionId ?? 'none'}|${workflow.work_items.map((item) => `${item.id}:${item.status}:${item.updated_at}`).join('|')}`;
   const toggleSidePanel = (panel: AppStudioSidePanel) => setSidePanel((current) => current === panel ? null : panel);
-  const rightPanel = sidePanel ? <AppStudioRightPanel active={sidePanel} appSessionId={sessionId} projectId={project.id} projectName={project.name} coordinatorSessionId={coordinatorSessionId} initialPrompt={initialIdeaPrompt} refreshKey={agentRefreshKey} /> : null;
+  const rightPanel = sidePanel ? <AppStudioRightPanel active={sidePanel} appSessionId={sessionId} projectId={project.id} projectName={project.name} coordinatorSessionId={coordinatorSessionId} initialPrompt={initialIdeaPrompt} refreshKey={agentRefreshKey} onCoordinatorChanged={() => refresh()} /> : null;
 
   return (
     <WorkbenchShell>

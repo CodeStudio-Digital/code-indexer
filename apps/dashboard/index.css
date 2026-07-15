@@ -180,6 +180,59 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Electron text-selection policy
+   --------------------------------
+   Desktop chrome behaves like a native application: navigation, rails,
+   headers, empty states and other UI copy are not accidentally selectable.
+   Content surfaces opt back in through semantic elements or the shared
+   `data-text-selectable` contract. The browser dashboard keeps normal web
+   selection because every rule is runtime-gated on the <html> marker. */
+html[data-app-runtime='electron'] body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html[data-app-runtime='electron'] :where(
+  input:not([type]),
+  input[type='text'],
+  input[type='search'],
+  input[type='email'],
+  input[type='url'],
+  input[type='tel'],
+  input[type='password'],
+  input[type='number'],
+  textarea,
+  [contenteditable]:not([contenteditable='false']),
+  [role='textbox'],
+  pre,
+  code,
+  .prose,
+  .diff-block,
+  [data-text-selectable]
+) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* A selectable content container can include controls (session cards, JSON
+   trees, log rows). Reassert native-control behaviour so dragging a label or
+   icon never paints browser-style selection across the application chrome. */
+html[data-app-runtime='electron'] :where(
+  button,
+  label,
+  summary,
+  nav,
+  [role='button'],
+  [role='tab'],
+  [role='menuitem'],
+  [role='option'],
+  [role='treeitem'],
+  [draggable='true']
+) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* ── AI-first workbench chrome ─────────────────────────────── */
 .workbench-shell {
   background: var(--workbench-canvas);
@@ -372,6 +425,9 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .mcp-run-glyph { cursor: pointer; text-align: center; }
 .mcp-run-glyph::before { content: '\25B6'; color: var(--success); font-size: 10px; opacity: 0.85; }
 .mcp-run-glyph:hover::before { color: var(--foreground); opacity: 1; }
+.mcp-run-glyph-disabled { cursor: not-allowed; }
+.mcp-run-glyph-disabled::before { color: var(--muted-foreground); opacity: 0.45; }
+.mcp-run-glyph-disabled:hover::before { color: var(--muted-foreground); opacity: 0.45; }
 
 /* Symbol navigation: right glyph lane stays independent from run/conflict markers. */
 .mcp-symbol-implementation-glyph,
@@ -481,6 +537,90 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
   white-space: nowrap;
 }
 .mcp-symbol-navigation-popup__empty { padding: 18px 12px; color: var(--muted-foreground); text-align: center; }
+
+/* Floating problem navigator. It deliberately shares the usages popup shell
+   instead of Monaco's full-width marker zone, while severity remains visible
+   through the border, header count and leading status icon. */
+.mcp-diagnostic-navigation-popup {
+  --diagnostic-accent: #f14c4c;
+  width: min(640px, calc(100vw - 80px));
+  border-color: color-mix(in srgb, var(--diagnostic-accent) 58%, var(--border));
+  box-shadow:
+    0 14px 38px rgb(0 0 0 / 42%),
+    0 2px 8px rgb(0 0 0 / 28%),
+    0 0 0 1px color-mix(in srgb, var(--diagnostic-accent) 12%, transparent);
+}
+.mcp-diagnostic-navigation-popup[data-severity="warning"] { --diagnostic-accent: var(--warning, #f59e0b); }
+.mcp-diagnostic-navigation-popup[data-severity="info"] { --diagnostic-accent: var(--info, #3794ff); }
+.mcp-diagnostic-navigation-popup[data-severity="hint"] { --diagnostic-accent: var(--muted-foreground); }
+.mcp-diagnostic-navigation-popup__header {
+  grid-template-columns: minmax(0, 1fr) auto 26px;
+  border-bottom-color: color-mix(in srgb, var(--diagnostic-accent) 30%, var(--border));
+}
+.mcp-diagnostic-navigation-popup__controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.mcp-diagnostic-navigation-popup__count {
+  margin-right: 5px;
+  color: color-mix(in srgb, var(--diagnostic-accent) 78%, var(--foreground));
+}
+.mcp-diagnostic-navigation-popup__nav {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.mcp-diagnostic-navigation-popup__nav:hover,
+.mcp-diagnostic-navigation-popup__nav:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+  outline: none;
+}
+.mcp-diagnostic-navigation-popup__body {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px 14px 13px;
+}
+.mcp-diagnostic-navigation-popup__icon {
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  border: 1.5px solid var(--diagnostic-accent);
+  border-radius: 50%;
+  color: var(--diagnostic-accent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.mcp-diagnostic-navigation-popup__content { min-width: 0; }
+.mcp-diagnostic-navigation-popup__message {
+  color: var(--popover-foreground, var(--foreground));
+  font: 12.5px/1.5 var(--font-mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-diagnostic-navigation-popup__meta {
+  margin-top: 5px;
+  color: color-mix(in srgb, var(--diagnostic-accent) 70%, var(--muted-foreground));
+  font-size: 11px;
+}
 
 /* IntelliJ-style git change markers in the lines-decorations gutter. A thin
    vertical bar marks added (green) / modified (blue) lines vs the file's HEAD

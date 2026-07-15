@@ -328,7 +328,11 @@
   "chatRail": {
     "sessions": "Conversas",
     "open": "Abrir chat",
-    "collapse": "Recolher chat"
+    "collapse": "Recolher chat",
+    "history": "Ver histórico de conversas",
+    "backToConversation": "Voltar à conversa",
+    "newConversation": "Nova conversa",
+    "waitUntilIdle": "Aguarde o coordenador terminar antes de iniciar outra conversa"
   },
   "surfaceFind": {
     "title": "Pesquisar nesta página",

@@ -58,7 +58,12 @@ describe('KimiCodeChatProvider stream handler', () => {
     const usage = deltas.find((d) => d.type === 'usage');
     expect(usage).toEqual({
       type: 'usage',
-      usage: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 4 },
+      usage: {
+        input_tokens: 10,
+        output_tokens: 3,
+        cache_read_input_tokens: 4,
+        prompt_tokens_total: 10,
+      },
     });
   });
 

@@ -16,7 +16,6 @@ const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks')!;
 class FakeRunner extends EventEmitter {
   private queue: string[] = [];
   approved = false;
-  decisionGateNudges = 0;
   enqueue(response: string) {
     this.queue.push(response);
   }
@@ -26,13 +25,8 @@ class FakeRunner extends EventEmitter {
     return Promise.resolve(next);
   }
   approvePlan() { this.approved = true; }
-  // Surface the plan-mode / decision-gate API the submit_plan handler touches.
+  // Surface the plan-mode API the interactive tools touch.
   isPlanMode(): boolean { return false; }
-  get planDepth(): string { return 'normal'; }
-  get decisionAskCount(): number { return 0; }
-  get decisionGateNudgeCount(): number { return this.decisionGateNudges; }
-  noteDecisionGateNudge(): void { this.decisionGateNudges += 1; }
-  resetDecisionGateNudges(): void { this.decisionGateNudges = 0; }
 }
 
 function ctx(runner: FakeRunner): ToolContext {
@@ -44,40 +38,51 @@ function ctx(runner: FakeRunner): ToolContext {
 }
 
 describe('submit_plan idempotency', () => {
-  it('rejects re-submission of the same plan after the user rejected it', async () => {
+  it('rejects re-submission of the same plan after the user requested revisions', async () => {
     const runner = new FakeRunner();
 
     runner.enqueue(JSON.stringify({ approved: false, feedback: 'no' }));
     const r1 = await submitPlan.handler({ plan: '1. Touch foo.ts\n2. Run tests' }, ctx(runner));
     expect(r1.isError).toBeFalsy();
-    expect(r1.content).toContain('Plan rejected');
+    expect(r1.content).toContain('Plan revision requested');
 
     // No new input queued: re-submission should short-circuit before pausing
     const r2 = await submitPlan.handler({ plan: '1. Touch foo.ts\n2. Run tests' }, ctx(runner));
     expect(r2.isError).toBe(true);
-    expect(r2.content).toContain('already rejected');
+    expect(r2.content).toContain('already requested revisions');
   });
 
-  it('clears the rejection ledger after a plan is approved', async () => {
+  it('clears the revision-request ledger after a plan is approved', async () => {
     const runner = new FakeRunner();
     runner.enqueue(JSON.stringify({ approved: false }));
     runner.enqueue(JSON.stringify({ approved: true }));
     runner.enqueue(JSON.stringify({ approved: true }));
 
-    await submitPlan.handler({ plan: 'A' }, ctx(runner));    // rejected
+    await submitPlan.handler({ plan: 'A' }, ctx(runner));    // revision requested
     await submitPlan.handler({ plan: 'B' }, ctx(runner));    // approved → clears ledger
     const r = await submitPlan.handler({ plan: 'A' }, ctx(runner)); // accepts again
     expect(r.isError).toBeFalsy();
     expect(runner.approved).toBe(true);
   });
 
-  it('whitespace-normalises the hash so trivial reformat reuses the rejection', async () => {
+  it('whitespace-normalises the hash so trivial reformat reuses the revision request', async () => {
     const runner = new FakeRunner();
     runner.enqueue(JSON.stringify({ approved: false }));
     await submitPlan.handler({ plan: '1. Step\n2. Step' }, ctx(runner));
     const r = await submitPlan.handler({ plan: '1.  Step\n  2. Step' }, ctx(runner));
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('already rejected');
+    expect(r.content).toContain('already requested revisions');
+  });
+
+  it('labels an explicit abort as a user rejection, not a validation failure', async () => {
+    const runner = new FakeRunner();
+    runner.enqueue(JSON.stringify({ approved: false, aborted: true, feedback: 'stop here' }));
+
+    const result = await submitPlan.handler({ plan: 'Do not execute this plan' }, ctx(runner));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Plan rejected by user.');
+    expect(result.content).toContain('stop here');
   });
 
   it('returns interrupted envelope when waitForUserInput resolves with interrupted', async () => {

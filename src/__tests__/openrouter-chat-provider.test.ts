@@ -75,6 +75,7 @@ describe('OpenAIChatProvider — OpenRouter mode', () => {
         output_tokens: 3,
         cache_read_input_tokens: 0,
         thinking_tokens: 2,
+        prompt_tokens_total: 10,
       },
     });
   });

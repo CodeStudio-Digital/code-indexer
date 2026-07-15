@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Plus } from 'lucide-react';
+import { Loader2, Plus, Search } from 'lucide-react';
 import type { InstallProgress, PhpExtension, Runtime } from '@mcp/api-bus';
 import { Button } from '../../../components/ui/button.js';
 import { Combobox } from '../../../components/ui/combobox.js';
@@ -14,17 +14,23 @@ import { Input } from '../../../components/ui/input.js';
 import { Switch } from '../../../components/ui/switch.js';
 import { ScrollArea } from '../../../components/ui/scroll-area.js';
 import { apiCall, apiStream } from '../../../lib/api-client.js';
+import { filterPhpExtensions } from './php-extension-search.js';
 
 export function PhpExtensionsSection({ installs }: { installs: Runtime[] }) {
   const { t } = useTranslation(['projects', 'common']);
   const [version, setVersion] = useState<string>('');
   const [exts, setExts] = useState<PhpExtension[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [extensionQuery, setExtensionQuery] = useState('');
   const [peclName, setPeclName] = useState('');
   const [busy, setBusy] = useState(false);
   const installOptions = useMemo(
     () => installs.map((install) => ({ value: install.version, label: install.version })),
     [installs],
+  );
+  const filteredExts = useMemo(
+    () => filterPhpExtensions(exts, extensionQuery),
+    [exts, extensionQuery],
   );
 
   // Default to the first managed install; keep it valid as installs change.
@@ -45,6 +51,7 @@ export function PhpExtensionsSection({ installs }: { installs: Runtime[] }) {
   }
 
   useEffect(() => {
+    setExtensionQuery('');
     void reload(version);
   }, [version]);
 
@@ -105,36 +112,63 @@ export function PhpExtensionsSection({ installs }: { installs: Runtime[] }) {
         )}
       </div>
 
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={extensionQuery}
+          onChange={(event) => setExtensionQuery(event.target.value)}
+          placeholder={t('runtime.extensionSearch')}
+          aria-label={t('runtime.extensionSearch')}
+          className="h-8 pl-8 text-xs"
+        />
+      </div>
+
       <ScrollArea className="h-40 rounded border">
-        <ul className="divide-y">
-          {exts.map((ext) => (
-            <li key={ext.name} className="flex items-center justify-between gap-2 px-2 py-1.5 text-sm">
-              <span className="flex items-center gap-1.5 font-mono text-xs">
-                {ext.name}
-                {ext.loaded && <span className="text-[10px] text-emerald-500">●</span>}
-              </span>
-              <Switch
-                checked={ext.enabled}
-                disabled={busy}
-                onCheckedChange={(v: boolean) => void toggle(ext.name, v)}
-                aria-label={ext.name}
-              />
-            </li>
-          ))}
-        </ul>
+        {extensionQuery.trim() && filteredExts.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-3 text-center text-xs text-muted-foreground">
+            {t('runtime.extensionsNoMatch')}
+          </div>
+        ) : (
+          <ul className="divide-y">
+            {filteredExts.map((ext) => (
+              <li key={ext.name} className="flex items-center justify-between gap-2 px-2 py-1.5 text-sm">
+                <span className="flex items-center gap-1.5 font-mono text-xs">
+                  {ext.name}
+                  {ext.loaded && <span className="text-[10px] text-emerald-500">●</span>}
+                </span>
+                <Switch
+                  checked={ext.enabled}
+                  disabled={busy}
+                  onCheckedChange={(v: boolean) => void toggle(ext.name, v)}
+                  aria-label={ext.name}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
       </ScrollArea>
 
-      <div className="flex items-center gap-2">
-        <Input
-          value={peclName}
-          onChange={(e) => setPeclName(e.target.value)}
-          placeholder={t('runtime.extensionPlaceholder')}
-          className="h-8 flex-1 text-xs"
-          disabled={busy}
-        />
-        <Button type="button" size="sm" onClick={() => void addPecl()} disabled={!peclName.trim() || busy}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-        </Button>
+      <div className="space-y-1.5 border-t pt-2.5">
+        <label className="text-xs font-medium">{t('runtime.extensionPeclLabel')}</label>
+        <div className="flex items-center gap-2">
+          <Input
+            value={peclName}
+            onChange={(e) => setPeclName(e.target.value)}
+            placeholder={t('runtime.extensionPlaceholder')}
+            aria-label={t('runtime.extensionPeclLabel')}
+            className="h-8 flex-1 text-xs"
+            disabled={busy}
+          />
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void addPecl()}
+            disabled={!peclName.trim() || busy}
+            aria-label={t('runtime.extensionPeclInstall')}
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
       <p className="text-[11px] text-muted-foreground">{t('runtime.extensionsHint')}</p>
 

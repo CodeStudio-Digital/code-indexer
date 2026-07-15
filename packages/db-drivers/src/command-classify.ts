@@ -25,13 +25,39 @@ const REDIS_READ_CMDS = new Set([
   'LRANGE', 'LINDEX', 'LLEN',
   'SMEMBERS', 'SISMEMBER', 'SCARD', 'SSCAN', 'SRANDMEMBER',
   'ZRANGE', 'ZRANGEBYSCORE', 'ZREVRANGE', 'ZSCORE', 'ZCARD', 'ZRANK', 'ZREVRANK', 'ZSCAN', 'ZCOUNT',
-  'GETRANGE', 'BITCOUNT', 'GETBIT', 'MEMORY', 'OBJECT', 'DEBUG', 'INFO', 'PING', 'ECHO', 'XRANGE', 'XLEN', 'XREVRANGE',
+  // DEBUG and MEMORY are deliberately absent: their subcommands include
+  // server-mutating operations (for example DEBUG RELOAD / MEMORY PURGE).
+  'GETRANGE', 'BITCOUNT', 'GETBIT', 'OBJECT', 'INFO', 'PING', 'ECHO', 'XRANGE', 'XLEN', 'XREVRANGE',
 ]);
+
+/** `$out` / `$merge` make an aggregation pipeline write to a collection. */
+function mongoAggregateWrites(payload: unknown): boolean {
+  const stack: unknown[] = [payload];
+  const seen = new WeakSet<object>();
+  let inspected = 0;
+  while (stack.length > 0) {
+    if (++inspected > 10_000) return true; // fail closed on pathological input
+    const value = stack.pop();
+    if (!value || typeof value !== 'object') continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (key === '$out' || key === '$merge') return true;
+      stack.push(child);
+    }
+  }
+  return false;
+}
 
 /** True when a non-relational command MUTATES state (used by the read-only guard). */
 export function isWriteCommand(command: DbCommand): boolean {
   if (command.kind === 'document') {
     const op = (command.op ?? '').toLowerCase();
+    if (op === 'aggregate') return mongoAggregateWrites(command.payload);
     return !MONGO_READ_OPS.has(op);
   }
   if (command.kind === 'keyvalue') {

@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronRight, Loader2, ShieldQuestion, Wrench, X } from 'lucide-react';
+import { Check, ChevronRight, Database, Loader2, ShieldQuestion, Wrench, X } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
 import { ToolApprovalCard, type ToolApprovalVerdict } from './ToolApprovalCard.js';
+import { DbQueryToolView } from './DbQueryToolView.js';
+import { analyzeSqlForDisplay, parseDbQueryInput } from './db-query-view.js';
 
 interface ToolCallBlockProps {
   call: ToolCallEvent;
@@ -54,9 +56,12 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
 
 function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockProps) {
   const { t } = useTranslation('chat');
-  const [open, setOpen] = useState(false);
+  const isDbQuery = call.name === 'db_query';
+  const [open, setOpen] = useState(() => isDbQuery && (call.status === 'running' || call.status === 'awaiting_approval'));
   const isMcp = call.name.startsWith('mcp__');
   const display = isMcp ? call.name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '') : call.name;
+  const dbQuery = isDbQuery ? parseDbQueryInput(call.input) : null;
+  const dbAnalysis = dbQuery ? analyzeSqlForDisplay(dbQuery.sql) : null;
 
   // Local 1-second tick while the tool is running, so "running Xs" advances
   // smoothly between the 5s server-side heartbeats. Disabled (and cleaned up)
@@ -111,8 +116,33 @@ function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockPro
         <div className={cn('h-5 w-5 rounded-md flex items-center justify-center shrink-0', statusColor)}>
           <StatusIcon className={cn('h-3 w-3', call.status === 'running' && 'animate-spin')} />
         </div>
-        <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
+        {isDbQuery
+          ? <Database className="h-3.5 w-3.5 shrink-0 text-primary" />
+          : <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />}
         <span className="font-mono font-medium text-foreground truncate">{display}</span>
+        {dbQuery && dbAnalysis && (
+          <>
+            <span className="shrink-0 rounded border bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {dbQuery.connection}
+            </span>
+            <span className={cn(
+              'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+              dbAnalysis.risk === 'read'
+                ? 'bg-success/10 text-success'
+                : dbAnalysis.risk === 'destructive'
+                  ? 'bg-destructive/10 text-destructive'
+                  : 'bg-warning/10 text-warning',
+            )}>
+              {t(`dbQuery.risk.${dbAnalysis.risk}`)}
+            </span>
+            <span
+              aria-hidden="true"
+              className="hidden min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground sm:inline"
+            >
+              {dbAnalysis.preview}
+            </span>
+          </>
+        )}
         {isMcp && (
           <Badge variant="info" className="shrink-0">
             mcp
@@ -137,7 +167,7 @@ function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockPro
           <ToolApprovalCard approvals={call.approvals} onRespond={onToolApproval} />
         </div>
       )}
-      {open && (
+      {open && !(isDbQuery && call.approvals && call.approvals.length > 0) && (
         <div className="px-3 pb-3 pt-1 space-y-2 border-t bg-background/50">
           {isRunning && call.progressNote && (
             <div className="mt-2 rounded-md border border-warning/30 bg-warning/[0.06] px-2 py-1.5 font-mono text-[11px] text-warning-foreground">
@@ -147,6 +177,10 @@ function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockPro
           {/* Rich detail slot — replaces the raw input/result dump when provided. */}
           {children ? (
             <div className="mt-1">{children}</div>
+          ) : isDbQuery ? (
+            <div className="mt-1">
+              <DbQueryToolView input={call.input} result={call.result} />
+            </div>
           ) : (
             <>
           {call.input !== undefined && call.input !== null && (

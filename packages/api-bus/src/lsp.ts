@@ -160,9 +160,19 @@ export interface DiagnosticsFrame {
   diagnostics: DiagnosticItem[];
 }
 
+/**
+ * Wire unit of `diagnosticsStream` — one message carries MANY per-file
+ * frames. External LSP servers can publish diagnostics for thousands of
+ * files back-to-back (e.g. OmniSharp after a solution load); batching keeps
+ * that a handful of IPC messages instead of one per file.
+ */
+export interface DiagnosticsBatch {
+  frames: DiagnosticsFrame[];
+}
+
 // ─── External LSP servers (tier 1: PHP / Python / JSON-CSS-HTML) ───
 
-export type LspServerState = 'no-server' | 'not-installed' | 'starting' | 'ready' | 'failed' | 'disabled';
+export type LspServerState = 'no-server' | 'not-installed' | 'idle' | 'starting' | 'ready' | 'failed' | 'disabled';
 
 export interface LspServerStatus {
   state: LspServerState;
@@ -171,6 +181,16 @@ export interface LspServerStatus {
   autoPrompt?: boolean;
   /** Short human-readable cause when state==='failed' (stderr tail / timeout). */
   reason?: string;
+  /** External runtime required by the server and its current resolution. */
+  runtime?: {
+    kind: 'java' | 'dotnet';
+    minMajor: number;
+    satisfied: boolean;
+    version?: string;
+    reason?: string;
+  };
+  workspaceMode?: 'project' | 'generated-unity' | 'generated-basic' | 'loose';
+  workspaceReason?: string;
 }
 
 /**
@@ -218,7 +238,7 @@ export interface LspApi {
    * the live buffer to the TS service / LSP servers / index fallback.
    */
   didOpen(
-    input: { projectId: number; file: string; languageId: string; version: number; content: string },
+    input: { projectId: number; file: string; languageId: string; version: number; content: string; syncSessionId: string },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
@@ -227,24 +247,24 @@ export interface LspApi {
    * means the backend lost track of versions — re-send a full didOpen.
    */
   didChange(
-    input: { projectId: number; file: string; version: number; changes: DocChange[] },
+    input: { projectId: number; file: string; version: number; changes: DocChange[]; syncSessionId: string },
     ctx: ApiContext,
   ): Promise<{ ok: true } | { resync: true }>;
 
   didClose(
-    input: { projectId: number; file: string },
+    input: { projectId: number; file: string; syncSessionId: string },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
   /**
-   * Push diagnostics — one frame per (file, source) update, coalesced per
+   * Push diagnostics — batches of (file, source) frames, coalesced per
    * file. Replaces the renderer's 1s polling loop. The `Stream` suffix is
    * load-bearing (auto MessagePort on Electron; SSE route on Hono).
    */
   diagnosticsStream(
     input: { projectId: number },
     ctx: ApiContext,
-  ): AsyncStream<DiagnosticsFrame>;
+  ): AsyncStream<DiagnosticsBatch>;
 
   completion(
     input: {
@@ -337,6 +357,19 @@ export interface LspApi {
     lastExitReason?: string;
     /** Tail of the server's stderr ring — surfaced in the Doctor for P2 diagnosis. */
     stderrTail?: string;
+    /** Per-server admission-control counters for performance diagnosis. */
+    requests?: {
+      queued: number;
+      inFlight: number;
+      backgroundInFlight: number;
+      cancelled: number;
+      superseded: number;
+    };
+    inactive?: boolean;
+    lruEvictions?: number;
+    workspaceMode?: 'project' | 'generated-unity' | 'generated-basic' | 'loose';
+    workspaceReason?: string;
+    counters?: { resync: number; staleSessionIgnored: number };
   }>>;
 
   /** Consent-gated npm install with streamed progress (log tail). */
@@ -390,7 +423,13 @@ export interface LspApi {
   ): Promise<DocumentSymbolDTO[]>;
 
   codeActions(
-    input: { projectId: number; file: string; range: { start: Position; end: Position } },
+    input: {
+      projectId: number;
+      file: string;
+      range: { start: Position; end: Position };
+      /** Monaco trigger origin: automatic lightbulb work is lower priority. */
+      trigger?: 'auto' | 'invoke';
+    },
     ctx: ApiContext,
   ): Promise<CodeActionDTO[]>;
 
@@ -402,7 +441,7 @@ export interface LspApi {
   executeCodeAction(
     input: { projectId: number; action: CodeActionDTO },
     ctx: ApiContext,
-  ): Promise<{ ok: true }>;
+  ): Promise<{ ok: true; edit?: WorkspaceEditDTO }>;
 
   /**
    * Document (or range) formatting via the language server owning the file's

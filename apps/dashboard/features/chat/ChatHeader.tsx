@@ -130,6 +130,11 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
           <Badge variant="muted" className="h-4">
             {providerLabel(session.provider)}
           </Badge>
+          {session.import_source && (
+            <Badge variant="outline" className="h-4 border-primary/30 text-primary" title={t('chat:sessionImport.importedBadge')}>
+              {session.import_source === 'claude-code' ? 'Claude Code' : 'Codex'}
+            </Badge>
+          )}
           <span className="font-mono">{session.model}</span>
           {/* Generic "N projects" chip — only when we can't render the richer
               per-project colored chips (no linked-projects payload yet). */}

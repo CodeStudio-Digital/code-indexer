@@ -4,7 +4,7 @@
  * sha256 verification exercised in both the happy and mismatch paths.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -18,6 +18,8 @@ import type { LspServerDef, LspTargetKey } from '../server-registry.js';
 const PAYLOAD = Buffer.from('#!/bin/sh\necho fake-lsp-server\n');
 const GZ = gzipSync(PAYLOAD);
 const GZ_SHA256 = createHash('sha256').update(GZ).digest('hex');
+const COMPANION = Buffer.from('fake-java-agent');
+const COMPANION_SHA256 = createHash('sha256').update(COMPANION).digest('hex');
 
 const ALL_TARGETS: LspTargetKey[] = [
   'win32-x64', 'win32-arm64', 'darwin-x64', 'darwin-arm64', 'linux-x64', 'linux-arm64',
@@ -32,6 +34,9 @@ beforeAll(async () => {
     if (req.url === '/ok.gz') {
       res.writeHead(200, { 'content-type': 'application/gzip', 'content-length': String(GZ.length) });
       res.end(GZ);
+    } else if (req.url === '/companion.jar') {
+      res.writeHead(200, { 'content-type': 'application/java-archive', 'content-length': String(COMPANION.length) });
+      res.end(COMPANION);
     } else {
       res.writeHead(404);
       res.end('not found');
@@ -92,6 +97,23 @@ describe('installBinaryServer', () => {
     const frames = await collect(installBinaryServer(defFor(`${baseUrl}/ok.gz`, GZ_SHA256), dir));
     expect(frames.at(-1)).toEqual({ phase: 'done', installDir: dir });
     expect(frames.some((f) => f.phase === 'log' && /sha256 verified/.test(f.line))).toBe(true);
+  });
+
+  it('installs a verified companion without redownloading an existing server', async () => {
+    const dir = freshDir();
+    writeFileSync(join(dir, 'fake-bin'), PAYLOAD);
+    const def = defFor(`${baseUrl}/ok.gz`);
+    if (def.install.kind !== 'binary') throw new Error('expected binary def');
+    def.install.companions = [{
+      url: `${baseUrl}/companion.jar`,
+      sha256: COMPANION_SHA256,
+      relPath: 'agents/fake-agent.jar',
+    }];
+    const frames = await collect(installBinaryServer(def, dir));
+    expect(frames.at(-1)).toEqual({ phase: 'done', installDir: dir });
+    expect(readFileSync(join(dir, 'agents', 'fake-agent.jar'))).toEqual(COMPANION);
+    expect(frames).toContainEqual({ phase: 'log', line: 'using existing fake-bin' });
+    expect(frames.some((frame) => frame.phase === 'log' && frame.line === 'extracting (gz)')).toBe(false);
   });
 
   it('fails cleanly on sha256 mismatch — no binary, temp removed', async () => {

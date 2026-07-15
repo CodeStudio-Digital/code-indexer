@@ -12,7 +12,7 @@
  * only the new handler factory entry below.
  */
 
-import { ipcMain, MessageChannelMain, type IpcMainEvent } from 'electron';
+import { ipcMain, MessageChannelMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { createHandlers, createContext } from '@mcp/api-handlers';
 import type { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
@@ -27,6 +27,55 @@ import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
 
 type AnyFn = (...args: unknown[]) => unknown;
 type AnyRecord = Record<string, unknown>;
+
+interface CancellableInvokeEnvelope {
+  __mcpInvokeV1: true;
+  requestId: string;
+  payload: unknown;
+}
+
+const activeInvokes = new Map<string, AbortController>();
+let cancelInvokeMounted = false;
+
+function invokeKey(senderId: number, requestId: string): string {
+  return `${senderId}:${requestId}`;
+}
+
+function decodeInvoke(input: unknown): { payload: unknown; requestId?: string } {
+  const value = input as Partial<CancellableInvokeEnvelope> | null;
+  if (value?.__mcpInvokeV1 === true && typeof value.requestId === 'string') {
+    return { payload: value.payload, requestId: value.requestId };
+  }
+  return { payload: input };
+}
+
+async function runInvoke(
+  event: IpcMainInvokeEvent,
+  input: unknown,
+  run: (payload: unknown, signal: AbortSignal) => Promise<unknown>,
+): Promise<unknown> {
+  const decoded = decodeInvoke(input);
+  const controller = new AbortController();
+  const key = decoded.requestId ? invokeKey(event.sender.id, decoded.requestId) : null;
+  const onDestroyed = () => controller.abort(new Error('renderer closed'));
+  if (key) activeInvokes.set(key, controller);
+  event.sender.once('destroyed', onDestroyed);
+  try {
+    return await run(decoded.payload, controller.signal);
+  } finally {
+    event.sender.removeListener('destroyed', onDestroyed);
+    if (key) activeInvokes.delete(key);
+  }
+}
+
+function ensureCancelInvokeMounted(): void {
+  if (cancelInvokeMounted) return;
+  cancelInvokeMounted = true;
+  ipcMain.on('api:cancel-invoke', (event, requestId: unknown) => {
+    if (typeof requestId !== 'string') return;
+    activeInvokes.get(invokeKey(event.sender.id, requestId))?.abort(new Error('request cancelled'));
+  });
+}
 
 function isApiError(err: unknown): err is ApiError {
   return !!err && typeof err === 'object' && 'code' in err && 'status' in err && err instanceof Error;
@@ -84,12 +133,16 @@ function bind(handlers: AnyRecord, basePath: string[], boundChannels: Set<string
 }
 
 function mountInvoke(channel: string, fn: AnyFn) {
-  ipcMain.handle(channel, async (_event, input: unknown) => {
+  ipcMain.handle(channel, async (event, input: unknown) => {
     try {
       // Slow-call instrumentation: calls >50ms aggregate per channel in
       // the perf monitor (Admin → Performance → Chamadas lentas).
-      const result = await timeCall(channel, () =>
-        fn(input as never, createContext({ clientInfo: { sourceType: 'electron', origin: channel } })),
+      const result = await timeCall(channel, () => runInvoke(event, input, (payload, signal) =>
+        Promise.resolve(fn(payload as never, createContext({
+          signal,
+          clientInfo: { sourceType: 'electron', origin: channel },
+        }))),
+      ),
       );
       return { ok: true, value: result };
     } catch (err) {
@@ -134,6 +187,7 @@ async function pumpStream(port: Electron.MessagePortMain, fn: AnyFn, payload: un
  * empty task list and never see the dashboard's running dev servers).
  */
 export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): ReturnType<typeof createHandlers> {
+  ensureCancelInvokeMounted();
   const handlers = createHandlers(deps);
   const boundChannels = new Set<string>();
   bind(handlers as AnyRecord, [], boundChannels);
@@ -165,9 +219,13 @@ export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): ReturnType<t
 }
 
 function mountHonoInvoke(channel: string, methodPath: string, app: Hono) {
-  ipcMain.handle(channel, async (_event, input: unknown) => {
+  ipcMain.handle(channel, async (event, input: unknown) => {
     try {
-      const result = await timeCall(channel, () => dispatchHono(app, methodPath, input));
+      const result = await timeCall(channel, () => runInvoke(
+        event,
+        input,
+        (payload, signal) => dispatchHono(app, methodPath, payload, signal),
+      ));
       return { ok: true, value: result };
     } catch (err) {
       return { ok: false, error: serializeError(err) };

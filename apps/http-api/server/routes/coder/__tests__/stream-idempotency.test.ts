@@ -96,7 +96,10 @@ function setup(
         phase: 'structural_ready' as const,
       })),
     },
-    taskPreflight: { run: async () => ({ status: 'unconfigured' }) },
+    taskPreflight: {
+      run: async () => ({ status: 'unconfigured' }),
+      generateSessionTitle: async () => ({ status: 'unconfigured' }),
+    },
     buildAgentDecisionRuntimeOptions: () => ({}),
     buildToolSelectionFilter: () => undefined,
   } as unknown as ServerDeps;

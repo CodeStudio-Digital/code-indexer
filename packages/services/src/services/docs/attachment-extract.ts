@@ -2,13 +2,11 @@
  * attachment-extract — server-side text (and embedded-image) extraction for
  * document attachments BEFORE they become model blocks.
  *
- * Why this exists: every provider adapter (anthropic/gemini/chatgpt/openai/
- * kimi/bedrock) only serializes a DocumentBlock's `text` field (PDF base64 is
- * the lone exception, native on Anthropic/Gemini). A base64 Office/OpenDocument
- * file (docx/xlsx/pptx/odt/ods/odp/rtf) is therefore SILENTLY DROPPED — the
- * model never sees it. Here we decode those formats to plain text up-front so
- * the existing `<document>…</document>` serialization carries them across EVERY
- * provider, with zero adapter changes.
+ * Why this exists: Office/OpenDocument files still need a portable text
+ * fallback for providers that only accept PDF natively. Without normalization,
+ * a base64 Office/OpenDocument file can be silently dropped by a text-only
+ * adapter. Here we preserve it for general native-file transports and decode it
+ * to text everywhere else.
  *
  * Embedded images (`opts.extractImages`): when the active model can see images,
  * we also pull the figures out of the document and emit them as separate image
@@ -20,9 +18,9 @@
  * Format routing (see `extractAttachmentText`):
  *   - image/*                          → passthrough (vision path owns it)
  *   - already has `text`               → passthrough
- *   - docx/xlsx/pptx/odt/ods/odp/rtf   → officeparser → text (+ images) ; base64 cleared
- *   - pdf                              → passthrough base64 (Anthropic native)
- *   - any other base64                 → passthrough (let the adapter decide)
+ *   - docx/xlsx/pptx/odt/ods/odp/rtf   → native bytes or officeparser text (+ images)
+ *   - pdf                              → native base64 or local text, capability-driven
+ *   - any other base64                 → explicit unreadable note (never silent)
  *
  * officeparser is pure JS (no native deps; OCR is off, so no tesseract workers).
  * The dynamic `import()` keeps it off the cold-start path for sessions that
@@ -30,6 +28,12 @@
  */
 
 import { parsePdf } from './pdf-parser.js';
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_TEXT_CHARS,
+  decodedBase64Bytes,
+} from '@mcp/shared';
+import type { ProviderCapabilities } from '@mcp/provider-sdk';
 
 /** Loose input shape — matches CoderAttachment / company AttachmentBody. */
 export interface RawAttachment {
@@ -57,12 +61,14 @@ export interface ExtractOptions {
    * a silently-dropped block — and we don't keep dead base64 in history.
    */
   extractPdfText?: boolean;
+  /** Preserve Office/OpenDocument bytes for transports with general file input. */
+  keepBinaryDocuments?: boolean;
 }
 
 /** Raw decoded ceiling. Above this we skip parsing (OOM / abuse guard). */
-export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+export const ATTACHMENT_MAX_BYTES = MAX_ATTACHMENT_BYTES;
 /** Extracted-text cap — a huge spreadsheet must not blow up the context. */
-export const ATTACHMENT_MAX_TEXT_CHARS = 200_000;
+export const ATTACHMENT_MAX_TEXT_CHARS = MAX_ATTACHMENT_TEXT_CHARS;
 /** Embedded-image guards: only raster the providers can see, skip icons, cap. */
 const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const IMAGE_MIN_BYTES = 4 * 1024;
@@ -81,17 +87,29 @@ const PARSEABLE_MIME = new Set([
   'text/rtf',
 ]);
 
-/**
- * Provider kinds whose chat adapter natively renders a base64 PDF
- * (`anthropic.ts` document source / `gemini.ts` inlineData). For every other
- * provider the PDF base64 block is silently dropped, so the route must extract
- * the text instead. Default (unknown kind) → NOT native → extract (safe).
- */
-const PDF_NATIVE_KINDS = new Set(['anthropic', 'claude-code', 'gemini', 'google-oauth']);
+export interface PdfHandlingContext {
+  mode?: ProviderCapabilities['fileInput'];
+  modelId?: string | null;
+  supportsAttachments?: boolean | null;
+}
 
-/** True when the provider's adapter reads a base64 PDF directly. */
-export function pdfHandledNatively(providerKind?: string | null): boolean {
-  return PDF_NATIVE_KINDS.has((providerKind ?? '').toLowerCase());
+/**
+ * Resolve the declarative provider capability to a concrete model decision.
+ * `model-dependent` is currently used by Bedrock Converse: Claude models are
+ * known to accept PDF document blocks; a live model row may also opt in via
+ * `supports_attachments`. Unknown capability always takes the safe text path.
+ */
+export function pdfHandledNatively(ctx?: PdfHandlingContext): boolean {
+  if (ctx?.mode === 'native' || ctx?.mode === 'pdf-only') return true;
+  if (ctx?.mode !== 'model-dependent') return false;
+  if (ctx.supportsAttachments === true) return true;
+  const model = (ctx.modelId ?? '').toLowerCase();
+  return model.includes('claude') || model.startsWith('anthropic.');
+}
+
+/** True when the transport accepts supported non-PDF documents as files. */
+export function binaryDocumentsHandledNatively(ctx?: PdfHandlingContext): boolean {
+  return ctx?.mode === 'native';
 }
 
 /**
@@ -119,7 +137,7 @@ export async function extractAttachmentText(
     if (!opts?.extractPdfText) {
       return [{ name, mediaType: att.mediaType, base64: att.base64 }];
     }
-    if (Math.floor((att.base64.length * 3) / 4) > ATTACHMENT_MAX_BYTES) {
+    if (decodedBase64Bytes(att.base64) > ATTACHMENT_MAX_BYTES) {
       return [note(name, att.mediaType, `too large (> ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB)`)];
     }
     try {
@@ -133,15 +151,20 @@ export async function extractAttachmentText(
   }
 
   const parseable = PARSEABLE_EXTS.has(ext) || PARSEABLE_MIME.has(att.mediaType);
-  // Unknown binaries pass through untouched.
+  // Unknown binaries must never survive only to be silently dropped by an
+  // adapter. HTTP routes reject them earlier; internal callers get a visible
+  // note in the model context instead of a false-success attachment.
   if (!parseable) {
-    return [{ name, mediaType: att.mediaType, base64: att.base64 }];
+    return [note(name, att.mediaType, 'unsupported binary file type')];
   }
 
   // Estimate decoded size from the base64 length BEFORE allocating the buffer,
   // so an oversized payload is skipped without the large heap allocation.
-  if (Math.floor((att.base64.length * 3) / 4) > ATTACHMENT_MAX_BYTES) {
+  if (decodedBase64Bytes(att.base64) > ATTACHMENT_MAX_BYTES) {
     return [note(name, att.mediaType, `too large (> ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB)`)];
+  }
+  if (opts?.keepBinaryDocuments) {
+    return [{ name, mediaType: att.mediaType, base64: att.base64 }];
   }
   const buf = Buffer.from(att.base64, 'base64');
 
@@ -160,9 +183,9 @@ export async function extractAttachmentText(
 
 /**
  * Normalize a whole attachment array for the model. Preserves `undefined`
- * (callers forward it verbatim). Per-item failures degrade to a passthrough
- * rather than failing the batch. The result is flattened — one document may
- * expand into a text part plus several image parts.
+ * (callers forward it verbatim). Per-item failures become an explicit model
+ * note rather than silently carrying unreadable bytes. The result is flattened:
+ * one document may expand into a text part plus several image parts.
  */
 export async function normalizeAttachmentsForModel<T extends RawAttachment>(
   atts: ReadonlyArray<T> | undefined,
@@ -172,12 +195,11 @@ export async function normalizeAttachmentsForModel<T extends RawAttachment>(
   const groups = await Promise.all(
     atts.map((a) =>
       extractAttachmentText(a, opts).catch(() => [
-        {
-          name: a.name && a.name.trim() ? a.name : 'attachment',
-          mediaType: a.mediaType,
-          base64: a.base64,
-          text: a.text,
-        } as NormalizedAttachment,
+        note(
+          a.name && a.name.trim() ? a.name : 'attachment',
+          a.mediaType,
+          'attachment normalization failed',
+        ),
       ]),
     ),
   );

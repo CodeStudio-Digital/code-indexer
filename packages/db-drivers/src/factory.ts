@@ -10,26 +10,75 @@ import { createOracleDriver } from './oracle.js';
 import { createPostgresDriver } from './postgres.js';
 import { createRedisDriver } from './redis.js';
 import { createSqliteDriver } from './sqlite.js';
+import { isWriteCommand } from './command-classify.js';
+import { isReadStatement } from './sql/read-guard.js';
 import type { DatabaseDriver, DbConnectConfig } from './types.js';
 
 export async function createDriver(config: DbConnectConfig): Promise<DatabaseDriver> {
+  let driver: DatabaseDriver;
   switch (config.engine) {
     case 'postgres':
-      return createPostgresDriver(config);
+      driver = await createPostgresDriver(config);
+      break;
     case 'mysql':
     case 'mariadb':
-      return createMysqlDriver(config);
+      driver = await createMysqlDriver(config);
+      break;
     case 'sqlite':
-      return createSqliteDriver(config);
+      driver = createSqliteDriver(config);
+      break;
     case 'mssql':
-      return createMssqlDriver(config);
+      driver = await createMssqlDriver(config);
+      break;
     case 'oracle':
-      return createOracleDriver(config);
+      driver = await createOracleDriver(config);
+      break;
     case 'mongodb':
-      return createMongoDriver(config);
+      driver = await createMongoDriver(config);
+      break;
     case 'redis':
-      return createRedisDriver(config);
+      driver = await createRedisDriver(config);
+      break;
     default:
       throw new Error(`Unsupported database engine: ${String(config.engine)}`);
   }
+  return config.readOnly ? protectReadOnly(driver) : driver;
+}
+
+/**
+ * Last enforcement boundary before engine code. UI and agent handlers guard
+ * too, but keeping this at the factory means any future consumer of a saved
+ * read-only connection inherits the same fail-closed behavior automatically.
+ */
+function protectReadOnly(driver: DatabaseDriver): DatabaseDriver {
+  const deny = (): never => {
+    throw new Error('Connection is read-only — writes are blocked.');
+  };
+  const protectedDriver: DatabaseDriver = {
+    ...driver,
+    async runQuery(sql, opts) {
+      if (!isReadStatement(sql)) deny();
+      return driver.runQuery(sql, opts);
+    },
+    async query(sql, params) {
+      if (!isReadStatement(sql)) deny();
+      return driver.query(sql, params);
+    },
+    ...(driver.runBatch
+      ? {
+          runBatch() {
+            return Promise.reject(new Error('Connection is read-only — batch execution is blocked.'));
+          },
+        }
+      : {}),
+    ...(driver.runCommand
+      ? {
+          async runCommand(command, opts) {
+            if (isWriteCommand(command)) deny();
+            return driver.runCommand!(command, opts);
+          },
+        }
+      : {}),
+  };
+  return protectedDriver;
 }

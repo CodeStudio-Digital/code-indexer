@@ -30,6 +30,18 @@ describe('jsonrpc framing', () => {
     expect(out).toEqual([{ id: 1 }, { id: 2, result: 'ok' }]);
   });
 
+  it('drains a buffered burst in bounded slices without losing order', () => {
+    const parser = new FrameParser();
+    parser.append(Buffer.concat(Array.from({ length: 5 }, (_, id) => encodeMessage({ id }))));
+
+    expect(parser.hasCompleteMessage()).toBe(true);
+    expect(parser.drain(2)).toEqual([{ id: 0 }, { id: 1 }]);
+    expect(parser.hasCompleteMessage()).toBe(true);
+    expect(parser.drain(2)).toEqual([{ id: 2 }, { id: 3 }]);
+    expect(parser.drain(2)).toEqual([{ id: 4 }]);
+    expect(parser.hasCompleteMessage()).toBe(false);
+  });
+
   it('skips a malformed body without killing the stream', () => {
     const errors: string[] = [];
     const parser = new FrameParser((e) => errors.push(e.message));

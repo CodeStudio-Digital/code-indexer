@@ -317,14 +317,14 @@ export function AppShell() {
         )}
         {isProjectView && view.projectId && <ProjectBranchControl projectId={view.projectId} />}
         {!isWorkbenchView && <span className="mx-0.5 h-4 w-px bg-border" />}
-        {/* Center: primary nav (interactive → carved out of the drag region) */}
+        {/* Center: only the actual controls are carved out of the drag region. */}
         {isWorkbenchView ? (
-          <div className="no-drag flex min-w-0 flex-1 justify-center px-3">
+          <div className="flex min-w-0 flex-1 justify-center px-3">
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
               aria-label={t('commandPalette.open')}
-              className="flex h-7 w-full max-w-md items-center gap-2 rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)] px-2 text-[11px] text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
+              className="no-drag flex h-7 w-full max-w-md items-center gap-2 rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)] px-2 text-[11px] text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
             >
               <Search className="h-3.5 w-3.5" />
               <span className="truncate">Search Everywhere</span>

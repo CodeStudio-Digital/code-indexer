@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FolderGit2, X } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
+import { toast } from '../../../components/ui/prompt-dialog.js';
 
 interface ProjectBadgeProps {
   projectId: number;
@@ -30,6 +32,7 @@ export function ProjectBadge({
   onDelete,
   canDelete,
 }: ProjectBadgeProps) {
+  const { t } = useTranslation('agents');
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(name);
   const [saving, setSaving] = useState(false);
@@ -55,7 +58,9 @@ export function ProjectBadge({
         setEditing(false);
       } else {
         const body = (await r.json().catch(() => ({}))) as { error?: string };
-        alert(body.error ?? `HTTP ${r.status}`);
+        toast.error(t('company.renameProjectFailed'), {
+          description: body.error ?? `HTTP ${r.status}`,
+        });
         setValue(name);
       }
     } finally {

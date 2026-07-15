@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const disposer = () => ({ dispose: vi.fn() });
 
 vi.mock('../documentSync.js', () => ({
-  startDocumentSync: vi.fn(() => ({ dispose: vi.fn(), flush: vi.fn() })),
+  startDocumentSync: vi.fn(() => ({ dispose: vi.fn(), flush: vi.fn(), ensureSynced: vi.fn() })),
 }));
 vi.mock('../diagnosticsStream.js', () => ({
   startDiagnosticsStream: vi.fn(() => disposer()),
@@ -50,7 +50,7 @@ vi.mock('../lsp/navigation.js', () => ({
   registerEditorOpener: vi.fn(() => disposer()),
 }));
 
-import { registerLspProviders, unregisterLspProviders, __resetLspRegistryForTests } from '../lspProvider.js';
+import { registerLspProviders, __resetLspRegistryForTests } from '../lspProvider.js';
 import { startDocumentSync } from '../documentSync.js';
 import { startDiagnosticsStream } from '../diagnosticsStream.js';
 import { registerInlineCompletions } from '../inlineCompletionProvider.js';
@@ -115,8 +115,8 @@ describe('lspProvider registry', () => {
     expect(startDocumentSync).toHaveBeenCalledTimes(1);
     expect(startDocumentSync).toHaveBeenCalledWith(monaco, 1);
     expect(startDiagnosticsStream).toHaveBeenCalledWith(monaco, 1);
-    expect(registerSemanticTokenProviders).toHaveBeenCalledWith(monaco, 1);
-    expect(registerNavProviders).toHaveBeenCalledWith(monaco, 1);
+    expect(registerSemanticTokenProviders).toHaveBeenCalledWith(monaco, 1, expect.any(Function));
+    expect(registerNavProviders).toHaveBeenCalledWith(monaco, 1, expect.any(Function));
     expect(registerEditorOpener).toHaveBeenCalledWith(monaco, 1);
     expect(registerInlineCompletions).toHaveBeenCalledWith(monaco, 1);
     // completion + code actions also receive docSync.flush.
@@ -136,17 +136,17 @@ describe('lspProvider registry', () => {
     const projectOne = allDisposers();
     expect(projectOne.length).toBeGreaterThan(0);
 
-    registerLspProviders(monaco, 2);
+    const lease = registerLspProviders(monaco, 2);
     for (const d of projectOne) expect(d.dispose).toHaveBeenCalledTimes(1);
     expect(startDocumentSync).toHaveBeenCalledWith(monaco, 2);
   });
 
   it('unregister disposes the project and empties the registry', () => {
-    registerLspProviders(monaco, 2);
+    const lease = registerLspProviders(monaco, 2);
     const projectTwo = allDisposers();
     expect(projectTwo.length).toBeGreaterThan(0);
 
-    unregisterLspProviders(2);
+    lease.dispose();
     for (const d of projectTwo) expect(d.dispose).toHaveBeenCalledTimes(1);
 
     // Registry now empty → re-opening registers fresh (not idempotent-skipped).
@@ -155,22 +155,31 @@ describe('lspProvider registry', () => {
     expect(startDocumentSync).toHaveBeenCalledTimes(1);
   });
 
-  it('unregister is a no-op for a project that was never registered', () => {
-    expect(() => unregisterLspProviders(999)).not.toThrow();
-  });
-
-  it('ref-counts the same project (split view) — providers survive until the last pane unregisters', () => {
-    registerLspProviders(monaco, 1); // pane A
+  it('ref-counts the same project (split view) — providers survive until the last lease is disposed', () => {
+    const paneA = registerLspProviders(monaco, 1);
     const projectOne = allDisposers();
     expect(projectOne.length).toBeGreaterThan(0);
 
-    registerLspProviders(monaco, 1); // pane B — same project, no re-wiring
+    const paneB = registerLspProviders(monaco, 1);
     // First pane unmounts: providers MUST stay alive for the surviving pane.
-    unregisterLspProviders(1);
+    paneA.dispose();
     for (const d of projectOne) expect(d.dispose).not.toHaveBeenCalled();
 
     // Last pane unmounts: now they tear down.
-    unregisterLspProviders(1);
+    paneB.dispose();
     for (const d of projectOne) expect(d.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('an obsolete A lease cannot dispose a fresh A generation after A → B → A', () => {
+    const staleA = registerLspProviders(monaco, 1);
+    registerLspProviders(monaco, 2);
+    const freshA = registerLspProviders(monaco, 1);
+    const freshDisposers = allDisposers().filter((d) => d.dispose.mock.calls.length === 0);
+
+    staleA.dispose();
+    for (const d of freshDisposers) expect(d.dispose).not.toHaveBeenCalled();
+
+    freshA.dispose();
+    for (const d of freshDisposers) expect(d.dispose).toHaveBeenCalledTimes(1);
   });
 });

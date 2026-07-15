@@ -5,7 +5,7 @@
  *
  * Snapshots is intentionally NOT in this union: its content (file diff
  * viewer) needs the full viewport width to be useful, so its rail button
- * opens a full-screen modal instead of a sidebar panel. The other six
+ * opens a full-screen modal instead of a sidebar panel. The remaining
  * tools fit comfortably in a 320-600px resizable panel.
  */
 export type BuiltinRightPanelId =
@@ -13,10 +13,8 @@ export type BuiltinRightPanelId =
   | 'drive'       // Session Drive: working memory (map/notes/investigations/plans)
   | 'chapters'    // Navigable context/milestone/rebuild chapter history
   | 'config'      // Per-session Skills + Tools enable/disable, tabbed (was 'skills' + 'tools')
-  | 'metrics'     // Token / cost / turn metrics (was SessionMetricsModal)
-  | 'tool-stats'  // Aggregated coder_tool_calls breakdown (was ToolStatsModal)
+  | 'insights'    // Summary + token/cost metrics + tool stats + captured inputs
   | 'plans'       // submit_plan history (was the Details "Planos" tab)
-  | 'details'     // Session summary + inputs (was SessionDetailsModal; plans split out)
   | 'diagram'     // Live embedded draw.io editor (wide panel) for the diagram agent
   | 'notifications' // Session notification center: loop/run/quality notices + history
   | 'worker-log'; // Endpoint/hook/tool inspector (was WorkerLogPanel inline 440px)

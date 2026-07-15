@@ -5,7 +5,7 @@
  * the chat primitives via `useEditorChatSession`; sessions are shared with
  * the full Chat tab.
  */
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight, FilePlus2, FileText, FolderPlus, Loader2, Plus } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
@@ -16,9 +16,15 @@ import { editorChatContextActions, useEditorChatContext } from '../../../state/e
 import { MessageList } from '../../chat/messages/MessageList.js';
 import { Composer } from '../../chat/composer/Composer.js';
 import { QueuedMessages } from '../../chat/composer/QueuedMessages.js';
+import {
+  firstModelValue,
+  SessionLaunchDialog,
+  type SessionLaunchConfig,
+} from '../../chat/SessionLaunchDialog.js';
 import { SelectionChips } from './SelectionChips.js';
 import { SessionPickerDropdown } from './SessionPickerDropdown.js';
 import { useEditorChatSession } from './useEditorChatSession.js';
+import type { AgentPreset } from '@mcp/api-bus';
 
 interface Props {
   projectId: number;
@@ -27,35 +33,56 @@ interface Props {
 }
 
 export function EditorChatRail({ projectId, projectName, onClose }: Props) {
-  const { t } = useTranslation(['workspace', 'chat', 'common']);
+  const { t } = useTranslation(['workspace', 'chat', 'common', 'dbClient']);
   const s = useEditorChatSession(projectId);
   const { fileRefs } = useEditorChatContext(projectId);
   const removeFileRef = (p: string) => editorChatContextActions().removeFileRef(projectId, p);
   const pendingExternalPrompt = useRef<{ prompt: string; title?: string } | null>(null);
+  const [launchRequest, setLaunchRequest] = useState<{
+    config: SessionLaunchConfig;
+    prompt?: string;
+    lockedAgent?: AgentPreset;
+    dialogTitle?: string;
+    dialogDescription?: string;
+  } | null>(null);
+
+  const buildLaunchConfig = useCallback((title = '', agent?: AgentPreset): SessionLaunchConfig => {
+    const models = s.getModelsForProvider(s.provider);
+    const availableModelValues = models.map((candidate) => candidate.mode ? `${candidate.id}::${candidate.mode}` : candidate.id);
+    const model = availableModelValues.includes(s.model) ? s.model : firstModelValue(models);
+    return {
+      title,
+      agent: agent ?? s.agent,
+      provider: s.provider,
+      model,
+      reasoningEffort: s.reasoningEffort,
+      thinking: s.thinking,
+      maxTurns: s.maxTurns,
+      temperature: s.temperature,
+    };
+  }, [s.agent, s.getModelsForProvider, s.maxTurns, s.model, s.provider, s.reasoningEffort, s.temperature, s.thinking]);
 
   useEffect(() => {
     const onExternalPrompt = (event: Event) => {
-      const detail = (event as CustomEvent<{ prompt?: string; newSession?: boolean; title?: string }>).detail;
+      const detail = (event as CustomEvent<{ prompt?: string; newSession?: boolean; title?: string; agent?: AgentPreset }>).detail;
       const promptText = detail?.prompt?.trim();
       if (!promptText) return;
       if (s.selectedId != null && !detail.newSession) {
         void s.handleSend(promptText, []);
         return;
       }
-      pendingExternalPrompt.current = { prompt: promptText, title: detail.title };
-      void s.createSession()
-        .then((id) => {
-          if (id == null) {
-            pendingExternalPrompt.current = null;
-            return undefined;
-          }
-          return detail.title ? s.renameSession(id, detail.title) : undefined;
-        })
-        .catch(() => { pendingExternalPrompt.current = null; });
+      const isDatabaseSpecialist = detail.agent === 'app_db';
+      setLaunchRequest({
+        config: buildLaunchConfig(detail.title ?? '', detail.agent),
+        prompt: promptText,
+        lockedAgent: detail.agent,
+        dialogTitle: isDatabaseSpecialist ? t('dbClient:specialist.configureTitle') : undefined,
+        dialogDescription: isDatabaseSpecialist ? t('dbClient:specialist.configureDescription') : undefined,
+      });
     };
     window.addEventListener('mcp:editor-chat-prompt', onExternalPrompt);
     return () => window.removeEventListener('mcp:editor-chat-prompt', onExternalPrompt);
-  }, [s.createSession, s.handleSend, s.renameSession, s.selectedId]);
+  }, [buildLaunchConfig, s.handleSend, s.selectedId, t]);
 
   useEffect(() => {
     if (s.selectedId == null || !pendingExternalPrompt.current) return;
@@ -64,12 +91,52 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
     void s.handleSend(promptText, []);
   }, [s.handleSend, s.selectedId]);
 
-  const activeFilePath = useWorkspaceStore((st) => st.activeFilePath);
-  const openFiles = useWorkspaceStore((st) => st.openFiles);
-  const active = openFiles.find(
-    (f) => f.path === activeFilePath && f.kind !== 'git-log' && f.kind !== 'git-stash' && f.kind !== 'diff' && f.kind !== 'database',
-  );
-  const addablePath = active ? active.path : null;
+  const createConfiguredSession = async (config: SessionLaunchConfig) => {
+    if (!launchRequest) return;
+    if (launchRequest.prompt) {
+      pendingExternalPrompt.current = { prompt: launchRequest.prompt, title: config.title || undefined };
+    }
+    try {
+      const id = await s.createSession(config);
+      if (id == null) pendingExternalPrompt.current = null;
+      setLaunchRequest(null);
+    } catch {
+      pendingExternalPrompt.current = null;
+    }
+  };
+
+  const launchDialog = launchRequest ? (
+    <SessionLaunchDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) {
+          pendingExternalPrompt.current = null;
+          setLaunchRequest(null);
+        }
+      }}
+      value={launchRequest.config}
+      onChange={(config) => setLaunchRequest((current) => current ? { ...current, config } : current)}
+      onCreate={createConfiguredSession}
+      providerOptions={s.providerOptions}
+      getModelsForProvider={s.getModelsForProvider}
+      creating={s.creating}
+      lockedAgent={launchRequest.lockedAgent}
+      title={launchRequest.dialogTitle}
+      description={launchRequest.dialogDescription}
+    />
+  ) : null;
+
+  // Select the stable path instead of the entire openFiles array. The Monaco
+  // buffer mirrors content into that array on every key; the rail does not need
+  // the text and must not rerender its conversation tree while typing.
+  const addablePath = useWorkspaceStore((st) => st.openFiles.find(
+    (file) => file.projectId === st.activeProjectId
+      && file.path === st.activeFilePath
+      && file.kind !== 'git-log'
+      && file.kind !== 'git-stash'
+      && file.kind !== 'diff'
+      && file.kind !== 'database',
+  )?.path ?? null);
   const addableName = addablePath ? addablePath.split('/').pop() ?? addablePath : null;
   const alreadyAdded = addablePath != null && fileRefs.includes(addablePath);
 
@@ -108,7 +175,9 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
 
   if (s.selectedId == null) {
     return (
-      <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
+      <>
+        {launchDialog}
+        <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
         <RailHeader
           title={t('chat.title')}
           onClose={onClose}
@@ -128,7 +197,11 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
                 variant="ghost"
                 size="icon"
                 className="h-5 w-5 text-muted-foreground hover:text-foreground"
-                onClick={() => void s.createSession()}
+                onClick={() => {
+                  void s.createSession({ useLastModel: true }).catch((error) => {
+                    console.warn('[editor-chat] new session creation failed:', error);
+                  });
+                }}
                 disabled={s.creating}
                 aria-label={t('chat.new')}
                 title={t('chat.new')}
@@ -152,13 +225,16 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
             onMoveToGroup={s.moveSessionToGroup}
           />
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
+      <>
+        {launchDialog}
+        <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
         <RailHeader
           title={s.sessionData?.session.title ?? t('chat.title')}
           onBack={() => s.setSelectedId(null)}
@@ -247,7 +323,8 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
           onQueue={s.handleQueue}
           queuedStrip={<QueuedMessages items={s.queue.items} onPromote={s.queue.promote} onRemove={s.queue.remove} />}
         />
-      </div>
+        </div>
+      </>
     </TooltipProvider>
   );
 }

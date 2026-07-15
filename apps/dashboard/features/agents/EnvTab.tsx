@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import { EnvRowEditor, type EnvAutoKind, type EnvRow, type EnvSource } from './EnvRowEditor.js';
 import { EnvScopeSelector, type EnvServiceOption } from './EnvScopeSelector.js';
 
@@ -124,7 +125,10 @@ export default function EnvTab({ companySessionId }: EnvTabProps) {
   }, [companySessionId, revealed]);
 
   async function deleteEnv(key: string) {
-    if (!confirm(t('env.confirmDelete', { key }))) {
+    if (!(await confirm({
+      title: t('env.confirmDelete', { key }),
+      tone: 'destructive',
+    }))) {
       return;
     }
     await fetch(`/api/company/sessions/${companySessionId}/envs/${encodeURIComponent(key)}`, {

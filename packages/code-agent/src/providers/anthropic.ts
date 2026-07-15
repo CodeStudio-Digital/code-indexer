@@ -8,6 +8,7 @@ import type {
   ContentBlock,
 } from '@mcp/code-agent/core/messages.js';
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@mcp/code-agent/core/system-prompt.js';
+import { renderTextDocument } from './document-utils.js';
 
 type AnthropicResolvedRequestModel = {
   apiModel: string;
@@ -555,7 +556,7 @@ function toAnthropicMessage(m: AgentMessage): Anthropic.MessageParam | null {
           }];
         }
         if (b.text) {
-          return [{ type: 'text' as const, text: `<document name="${b.name}" mediaType="${b.mediaType}">\n${b.text}\n</document>` }];
+          return [{ type: 'text' as const, text: renderTextDocument(b) }];
         }
         return [];
       }

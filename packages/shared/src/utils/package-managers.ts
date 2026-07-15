@@ -5,15 +5,16 @@
  * settings (install/update) and overrides the runner's lockfile auto-detect.
  *
  * Value = the manager id ('npm'|'yarn'|'pnpm'|'bun' for Node; 'pip'|'poetry'
- * for Python). Missing key or NULL = "auto" (the runner picks it from the
- * lockfile/manifest, the default behaviour). PHP is fixed (composer) so it has
- * no key here. No DB deps — reused by the UI and the runner backend.
+ * for Python; 'maven'|'gradle' for Java). Missing key or NULL = "auto" (the
+ * runner picks it from the lockfile/manifest, the default behaviour). PHP
+ * (composer) and .NET (dotnet CLI) are fixed so they have no key here. No DB
+ * deps — reused by the UI and the runner backend.
  */
 
-export type PackageManagerKey = 'node' | 'python';
+export type PackageManagerKey = 'node' | 'python' | 'java';
 export type PackageManagers = Partial<Record<PackageManagerKey, string>>;
 
-const KEYS: readonly PackageManagerKey[] = ['node', 'python'];
+const KEYS: readonly PackageManagerKey[] = ['node', 'python', 'java'];
 
 /** JSON → map, tolerant of corruption/invalid shape (always returns an object). */
 export function parsePackageManagers(json: string | null | undefined): PackageManagers {

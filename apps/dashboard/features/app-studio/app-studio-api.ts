@@ -524,6 +524,18 @@ export async function saveAppAgentRuntime(sessionId: number, input: { provider: 
   return result.runtime;
 }
 
+export async function activateAppCoordinatorConversation(sessionId: number, coderSessionId: number): Promise<number> {
+  const result = await unwrap<{ ok: true; coordinator_session_id: number }>(await fetch(
+    `/api/app-studio/sessions/${sessionId}/agents/coordinator`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ coder_session_id: coderSessionId }),
+    },
+  ));
+  return result.coordinator_session_id;
+}
+
 export async function proposeAppEvolution(
   sessionId: number,
   evolutionId: number,

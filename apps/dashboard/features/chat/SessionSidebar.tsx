@@ -10,6 +10,7 @@ import {
   Copy,
   FolderPlus,
   FolderX,
+  FileInput,
   Inbox,
   MessageSquareCode,
   MoreHorizontal,
@@ -53,6 +54,7 @@ interface SessionSidebarProps {
   onViewChange: (view: SessionView) => void;
   onSelect: (id: number) => void;
   onNew: () => void;
+  onImport?: () => void;
   onDelete: (id: number) => void;
   onRename: (id: number, currentTitle: string) => void;
   onDuplicate: (id: number) => Promise<void> | void;
@@ -83,9 +85,26 @@ interface SessionSidebarProps {
   mobileOpen?: boolean;
   /** Called when the mobile drawer should close (backdrop tap, X button). */
   onMobileClose?: () => void;
+  /** Fill a permanent workbench dock instead of becoming a viewport-sized drawer. */
+  docked?: boolean;
 }
 
 const UNGROUPED_KEY = '__ungrouped__';
+
+export function sessionSidebarClassName(docked: boolean, mobileOpen: boolean): string {
+  return cn(
+    'flex flex-col bg-[var(--workbench-surface)] overflow-hidden @container',
+    docked
+      ? 'static inset-auto z-auto h-full w-full max-w-none translate-x-0 rounded-none border-0 border-r shadow-none transition-none'
+      : cn(
+          'fixed inset-y-0 left-0 z-50 w-[85%] max-w-[320px] rounded-r-xl border shadow-2xl',
+          'transition-transform duration-200 ease-out',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          'lg:static lg:inset-auto lg:z-auto lg:h-full lg:w-full lg:max-w-none lg:translate-x-0',
+          'lg:rounded-none lg:border-0 lg:border-r lg:shadow-none lg:transition-none',
+        ),
+  );
+}
 
 // React.memo: the parent (AgentChat) re-renders on every click / stream frame,
 // but the sidebar only depends on the session list + stable handlers. With all
@@ -101,6 +120,7 @@ export const SessionSidebar = memo(function SessionSidebar({
   onViewChange,
   onSelect,
   onNew,
+  onImport,
   onDelete,
   onRename,
   onDuplicate,
@@ -120,6 +140,7 @@ export const SessionSidebar = memo(function SessionSidebar({
   groupBy = 'group',
   mobileOpen = false,
   onMobileClose,
+  docked = false,
 }: SessionSidebarProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [selectMode, setSelectMode] = useState(false);
@@ -129,13 +150,13 @@ export const SessionSidebar = memo(function SessionSidebar({
 
   // Close the drawer on Escape so mobile users aren't trapped.
   useEffect(() => {
-    if (!mobileOpen || !onMobileClose) return;
+    if (docked || !mobileOpen || !onMobileClose) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onMobileClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mobileOpen, onMobileClose]);
+  }, [docked, mobileOpen, onMobileClose]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
@@ -229,7 +250,7 @@ export const SessionSidebar = memo(function SessionSidebar({
   return (
     <>
       {/* Mobile backdrop — only visible below lg when the drawer is open. */}
-      {mobileOpen && (
+      {!docked && mobileOpen && (
         <div
           className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 lg:hidden"
           onClick={onMobileClose}
@@ -237,25 +258,7 @@ export const SessionSidebar = memo(function SessionSidebar({
         />
       )}
       <aside
-        className={cn(
-          'flex flex-col bg-[var(--workbench-surface)] overflow-hidden',
-          // `@container`: os cards/rows reagem à largura REAL desta barra
-          // (não à do viewport) — via container queries do Tailwind v4. É o
-          // que o `lg:` abaixo não faz: no App Studio/ProjectView a janela é
-          // larga mas este painel pode ter 90–150px, então o conteúdo precisa
-          // compactar pela largura do container, não da tela.
-          '@container',
-          // Mobile: fixed slide-in drawer from the left.
-          'fixed inset-y-0 left-0 z-50 w-[85%] max-w-[320px] rounded-r-xl shadow-2xl border',
-          'transition-transform duration-200 ease-out',
-          mobileOpen ? 'translate-x-0' : '-translate-x-full',
-          // Desktop (lg+): fill the host `<Panel>` from react-resizable-panels.
-          // Width is owned by the panel — we just expand to it. The right
-          // border still belongs to us (not to the panel) so the resize
-          // handle stays visually attached to the divider.
-          'lg:static lg:inset-auto lg:z-auto lg:w-full lg:h-full lg:max-w-none lg:translate-x-0',
-          'lg:rounded-none lg:shadow-none lg:transition-none lg:border-0 lg:border-r',
-        )}
+        className={sessionSidebarClassName(docked, mobileOpen)}
       >
       {/* Thin single-row header — matches the system's section strips
           (icon + compact title on the left, action icons on the right). */}
@@ -347,7 +350,7 @@ export const SessionSidebar = memo(function SessionSidebar({
               <TooltipContent>{t('chat:sidebar.deleteAll')}</TooltipContent>
             </Tooltip>
           )}
-          {onMobileClose && (
+          {!docked && onMobileClose && (
             <Button
               size="icon"
               variant="ghost"
@@ -357,6 +360,22 @@ export const SessionSidebar = memo(function SessionSidebar({
             >
               <X className="h-3.5 w-3.5" />
             </Button>
+          )}
+          {onImport && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  onClick={onImport}
+                  aria-label={t('chat:sessionImport.title')}
+                >
+                  <FileInput className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t('chat:sessionImport.title')}</TooltipContent>
+            </Tooltip>
           )}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -703,6 +722,11 @@ const SessionRow = memo(function SessionRow({
         {/* Line 2: model · relative time, all mono so it reads as metadata.
             Colapsa a barra para 1 linha (título só) abaixo de ~210px. */}
         <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground tabular-nums min-w-0 @max-[210px]:hidden">
+          {s.import_source && (
+            <span className="shrink-0 rounded border px-1 text-[9px] uppercase tracking-wide text-primary/80">
+              {s.import_source === 'claude-code' ? 'Claude' : 'Codex'}
+            </span>
+          )}
           <span className="text-muted-foreground/80 truncate min-w-0">{s.model}</span>
           <span className="text-muted-foreground/40 shrink-0">·</span>
           <span className="shrink-0">{formatRelativeTime(s.updated_at)}</span>

@@ -23,7 +23,15 @@ import {
 } from '@mcp/services/services/docs/index.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import { clearProjectEdits } from '../editor/completion/snippets/edit-tracker.js';
+import { closeProjectDocs } from '../lsp/document-store.js';
+import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import type { HandlerDeps } from '../types.js';
+
+/** Process-global: survives dual handler factories and dev HMR module reloads. */
+const activationGlobal = globalThis as typeof globalThis & {
+  __mcpProjectClientActivations?: Map<string, { projectId: number; activationId: string }>;
+};
+const clientActivations = activationGlobal.__mcpProjectClientActivations ??= new Map();
 
 /**
  * Translate a domain `ProjectError` to the structured `ApiError` the
@@ -57,6 +65,18 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
 
   const createService = new CreateProjectService(db);
   const updateService = new UpdateProjectService(db);
+
+  async function parkProjectLanguageServices(projectId: number): Promise<void> {
+    // closeProjectDocs forwards didClose to ready servers before the manager
+    // parks the processes for fast return. The manager enforces the warm LRU.
+    closeProjectDocs(projectId);
+    await getLspServerManager()?.parkProject(projectId);
+  }
+
+  async function stopProjectLanguageServices(projectId: number): Promise<void> {
+    closeProjectDocs(projectId);
+    await getLspServerManager()?.stopProject(projectId);
+  }
   const indexUseCase = new IndexProjectUseCase({
     db,
     providerStore: deps.providerStore,
@@ -131,13 +151,42 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     async get({ id }) {
       const project = db.getProject(id);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
-      // "Project opened" — the ProjectView mount lands here in both
-      // transports (HTTP + Electron IPC). Fire-and-forget: memory-only
-      // checks inside; never delays the GET.
-      deps.projectIndexService.ensureFresh(id, 'open');
       // Cheap package.json read — classifies the framework so the preview pane
       // can auto-pick the React-native element picker over the universal one.
       return { ...project, framework: detectProjectFramework(project.root_path) };
+    },
+
+    async activate({ id, activationId, clientId }) {
+      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      if (!activationId || activationId.length > 128) {
+        throw new ApiError('invalid_activation_id', 400, 'activationId is required');
+      }
+      if (!clientId || clientId.length > 128) {
+        throw new ApiError('invalid_client_id', 400, 'clientId is required');
+      }
+      const previous = clientActivations.get(clientId);
+      if (previous && (previous.projectId !== id || previous.activationId !== activationId)) {
+        const lastPreviousView = deps.projectIndexService.deactivate(previous.projectId, previous.activationId);
+        if (lastPreviousView && previous.projectId !== id) {
+          await parkProjectLanguageServices(previous.projectId);
+        }
+      }
+      clientActivations.set(clientId, { projectId: id, activationId });
+      getLspServerManager()?.activateProject(id);
+      const result = deps.projectIndexService.activate(id, activationId);
+      return { ok: true as const, ...result };
+    },
+
+    async deactivate({ id, activationId, clientId }) {
+      const current = clientActivations.get(clientId);
+      // Delayed cleanup from a superseded navigation/HMR generation.
+      if (!current || current.projectId !== id || current.activationId !== activationId) {
+        return { ok: true as const };
+      }
+      clientActivations.delete(clientId);
+      const lastView = deps.projectIndexService.deactivate(id, activationId);
+      if (lastView) await parkProjectLanguageServices(id);
+      return { ok: true as const };
     },
 
     async create(input) {
@@ -158,6 +207,10 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       if (!project) throw new ApiError('not_found', 404, 'project not found');
 
       await deps.projectIndexService.stopWatching(id).catch(() => undefined);
+      await stopProjectLanguageServices(id);
+      for (const [clientId, activation] of clientActivations) {
+        if (activation.projectId === id) clientActivations.delete(clientId);
+      }
       clearProjectEdits(id); // completion edit-tracker: drop the project's ring
       const v = await clearProjectVectors(project);
       db.deleteProject(id);

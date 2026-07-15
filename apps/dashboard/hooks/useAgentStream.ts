@@ -15,6 +15,7 @@ export type {
   ParallelAgent,
   PipelineNodeRuntimeStatus,
   PipelineRuntimeState,
+  PlanResolution,
   PlanPrompt,
   QuestionPrompt,
   RunDelta,

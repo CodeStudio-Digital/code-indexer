@@ -76,6 +76,8 @@
   },
   "specialist": {
     "open": "Specialist",
+    "configureTitle": "Configure database specialist",
+    "configureDescription": "Choose the model and reasoning level before opening the specialist session.",
     "selectConnection": "Choose database",
     "searchConnection": "Search connection...",
     "noConnections": "No connection",
@@ -101,7 +103,9 @@
     "idle": "Ready",
     "explain": "Explain",
     "plan": "Plan",
-    "format": "Format SQL"
+    "format": "Format SQL",
+    "timeout": "Timeout (s)",
+    "timeoutInvalid": "Enter a whole-number timeout between {{min}} and {{max}} seconds."
   },
   "aux": {
     "history": "History",

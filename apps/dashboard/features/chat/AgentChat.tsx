@@ -24,6 +24,11 @@ import { Input } from '../../components/ui/input.js';
 import { ChatHeader } from './ChatHeader.js';
 import { ChatRightRail } from './right-panel/ChatRightRail.js';
 import { RightPanelHost } from './right-panel/RightPanelHost.js';
+import {
+  SESSION_INSIGHTS_TAB_EVENT,
+  SESSION_INSIGHTS_TAB_STORAGE_KEY,
+  type SessionInsightsTab,
+} from './right-panel/SessionInsightsPanel.js';
 import { usePluginPanels } from './right-panel/usePluginPanels.js';
 import { setDiagramXml, getDiagram } from './right-panel/diagram/diagram-store.js';
 import type { RightPanelId } from './right-panel/types.js';
@@ -39,11 +44,15 @@ import { StuckBanner } from './StuckBanner.js';
 import { ApprovalBanner } from './ApprovalBanner.js';
 import { NotificationBanner } from './notifications/NotificationBanner.js';
 import { useUnreadNotificationCount } from './notifications/session-notifications-store.js';
-// The five ex-modals (Skills/Tools/Metrics/ToolStats/Details) and the
-// WorkerLog/SessionState panels are now routed through `RightPanelHost`
-// — only Snapshots stays as a true Dialog because its diff viewer needs
-// the full viewport width.
+// Former modal surfaces and the WorkerLog/SessionState panels are now routed
+// through `RightPanelHost`; metrics/details/tool stats share Insights. Only
+// Snapshots stays as a true Dialog because its diff viewer needs full width.
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
+import { SessionImportDialog } from './SessionImportDialog.js';
+import {
+  firstModelValue,
+  type SessionLaunchConfig,
+} from './SessionLaunchDialog.js';
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
 import { buildSessionPin } from '../../state/pinned-tabs-describe.js';
 import { sessionPinId as makeSessionPinId } from '../../state/pinned-tabs-types.js';
@@ -121,7 +130,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         && next !== agent
         && (
           next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' ||
-          next === 'spec' || next === 'app_orchestrator' || next === 'api' || next === 'diagram' || next === 'builder'
+          next === 'spec' || next === 'app_orchestrator' || next === 'app_db' || next === 'api' || next === 'diagram' || next === 'builder'
         )
       ) {
         setAgent(next);
@@ -194,8 +203,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
   }, [chatAreaWidth, sidebarCollapsed]);
   const pendingAutoTitle = useRef<Set<number>>(new Set());
-  const [newSessionOpen, setNewSessionOpen] = useState(false);
-  const [newSessionTitle, setNewSessionTitle] = useState('');
+  const creatingSessionRef = useRef(false);
+  const [sessionImportOpen, setSessionImportOpen] = useState(false);
   // Global mode: the multi-project create dialog (project multi-select).
   const [globalNewOpen, setGlobalNewOpen] = useState(false);
   // Global mode: the "manage workspace projects" dialog (attach/remove after create).
@@ -207,9 +216,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const [renameSessionTarget, setRenameSessionTarget] = useState<{ id: number; title: string } | null>(null);
   const [renameSessionTitle, setRenameSessionTitle] = useState('');
   // Snapshots is the only surface that stays as a modal — its content
-  // (file diff viewer) needs the full viewport width. The other five
-  // ex-modals (skills, tools, metrics, tool-stats, details) live in the
-  // right rail now and are switched via `activeRightPanelId`.
+  // (file diff viewer) needs the full viewport width. The former metrics,
+  // tool-stats and details surfaces share one tabbed Insights panel.
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [snapshotPending, setSnapshotPending] = useState(0);
   // Session snapshot file list (by path) shared with the chat's file-edit blocks
@@ -222,8 +230,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 
   /**
    * Single active right-rail panel id. Replaces the boolean pair
-   * `metaSidebarOpen` + `workerLogOpen` and the four modal-open flags
-   * (skillConfig/toolConfig/metrics/toolStats/details). `null` collapses
+   * `metaSidebarOpen` + `workerLogOpen` and the former modal-open flags.
+   * `null` collapses
    * the right panel entirely; the activity rail itself stays visible.
    *
    * Persisted so the user's preferred default panel survives reloads.
@@ -241,6 +249,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (saved === 'null') return null;
     // Migrate the old split Skills/Tools panels into the merged config cog.
     if (saved === 'skills' || saved === 'tools') return 'config';
+    // Metrics, details and tool stats now share one session-insights surface.
+    if (saved === 'metrics' || saved === 'details' || saved === 'tool-stats') {
+      const migratedTab: SessionInsightsTab = saved === 'metrics'
+        ? 'usage'
+        : saved === 'tool-stats'
+          ? 'tools'
+          : 'overview';
+      localStorage.setItem(SESSION_INSIGHTS_TAB_STORAGE_KEY, migratedTab);
+      return 'insights';
+    }
     return saved as RightPanelId;
   });
   useEffect(() => {
@@ -339,6 +357,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     lastUsage,
     runDelta,
     todos,
+    activeProcesses,
     contextStatus,
     indexStatus,
     sidebarRefreshTick,
@@ -570,20 +589,57 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setSkillPicks([]);
   }, [selectedId]);
 
-  const createSession = useCallback(async (title?: string) => {
-    const created = await apiPost<CoderSession>('/coder/sessions', {
-      project_id: projectId,
-      title: (title ?? 'Nova sessão').slice(0, 80),
-      provider,
-      model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
-      agent,
-    });
-    if (!title) pendingAutoTitle.current.add(created.id);
-    refetchSessions();
-    setSelectedId(created.id);
-    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
-    return created;
-  }, [projectId, provider, model, agent, refetchSessions]);
+  const createSession = useCallback(async (
+    config: Partial<SessionLaunchConfig> & { useLastModel?: boolean } = {},
+  ) => {
+    if (creatingSessionRef.current) return null;
+    creatingSessionRef.current = true;
+    try {
+      const selectedProvider = config.provider || provider;
+      const selectedModels = getModelsForProvider(selectedProvider);
+      const selectedModel = config.model || model || firstModelValue(selectedModels)
+        || PROVIDERS.find((candidate) => candidate.id === selectedProvider)?.defaultModel;
+      const selectedAgent = config.agent ?? agent;
+      const selectedReasoningEffort = config.useLastModel
+        ? null
+        : (config.reasoningEffort === undefined ? reasoningEffort : config.reasoningEffort);
+      const selectedThinking = config.useLastModel ? false : (config.thinking ?? thinking);
+      const selectedMaxTurns = config.useLastModel
+        ? null
+        : (config.maxTurns === undefined ? maxTurns : config.maxTurns);
+      const selectedTemperature = config.useLastModel
+        ? null
+        : (config.temperature === undefined ? sessionTemperature : config.temperature);
+      const explicitTitle = config.title?.trim();
+      const created = await apiPost<CoderSession>('/coder/sessions', {
+        project_id: projectId,
+        title: (explicitTitle || 'Nova sessão').slice(0, 80),
+        provider: selectedProvider,
+        model: selectedModel,
+        use_last_model: config.useLastModel === true,
+        agent: selectedAgent,
+        reasoning_effort: selectedReasoningEffort || null,
+        thinking_enabled: selectedThinking,
+      });
+      if (selectedTemperature !== null) {
+        await apiPatch(`/coder/sessions/${created.id}/temperature`, { temperature: selectedTemperature }).catch(() => {});
+      }
+      setProvider(created.provider);
+      setModel(created.model);
+      setAgent(selectedAgent);
+      setReasoningEffort(selectedReasoningEffort);
+      setThinking(selectedThinking);
+      setMaxTurns(selectedMaxTurns);
+      setSessionTemperature(selectedTemperature);
+      if (!explicitTitle) pendingAutoTitle.current.add(created.id);
+      refetchSessions();
+      setSelectedId(created.id);
+      window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+      return created;
+    } finally {
+      creatingSessionRef.current = false;
+    }
+  }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, thinking, maxTurns, sessionTemperature, refetchSessions]);
 
   const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseProjectId?: number }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
@@ -609,14 +665,17 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       setGlobalNewOpen(true);
       return;
     }
-    void createSession();
+    void createSession({ useLastModel: true }).catch((error) => {
+      console.warn('[new-session] creation failed:', error);
+    });
   }, [isGlobal, createSession]);
 
-  const confirmNewSession = async () => {
-    const title = newSessionTitle.trim();
-    setNewSessionOpen(false);
-    await createSession(title || undefined);
-  };
+  const handleOpenImport = useCallback(() => setSessionImportOpen(true), []);
+  const handleImportedSession = useCallback((sessionId: number) => {
+    refetchSessions();
+    setSelectedId(sessionId);
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  }, [refetchSessions]);
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
@@ -747,6 +806,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         ...prev,
         messages: [...page.messages, ...prev.messages],
         message_rows: [...page.message_rows, ...prev.message_rows],
+        preceding_user_message_id: page.preceding_user_message_id,
         tool_results: [...(page.tool_results ?? []), ...(prev.tool_results ?? [])],
       }));
       return page.message_rows.length;
@@ -807,6 +867,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setReasoningEffort(typeof e === 'string' && e.length > 0 ? e : null);
   }, [sessionData?.session]);
 
+  // Extended thinking (migration 226). Hydrate only after the payload for the
+  // currently selected conversation arrives; useApi intentionally retains the
+  // previous payload during a switch, and applying that stale row would make
+  // the icon flash the wrong session's state.
+  useEffect(() => {
+    const session = sessionData?.session;
+    if (!session || session.id !== selectedId) return;
+    setThinking(session.thinking_enabled === true);
+  }, [selectedId, sessionData?.session]);
+
   // Plan-depth override (migration 151). Sticky per session; only surfaced in
   // the composer when the `plan` agent is active. NULL → `normal` at runtime.
   useEffect(() => {
@@ -857,7 +927,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (
       a && (
         a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' ||
-        a === 'spec' || a === 'app_orchestrator' || a === 'api' || a === 'diagram' || a === 'builder'
+        a === 'spec' || a === 'app_orchestrator' || a === 'app_db' || a === 'api' || a === 'diagram' || a === 'builder'
       )
     ) {
       setAgent(a);
@@ -890,6 +960,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       await apiPatch(`/coder/sessions/${selectedId}/reasoning-effort`, { effort: next });
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  }, [selectedId]);
+
+  const handleThinkingChange = useCallback(async (next: boolean) => {
+    setThinking(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/thinking`, { thinking: next });
+    } catch {
+      /* optimistic; the persisted value is restored on the next session load */
     }
   }, [selectedId]);
 
@@ -1220,7 +1300,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 && s.agent !== agent
                 && (
                   s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'app_db' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
                 )
               ) {
                 setAgent(s.agent);
@@ -1247,7 +1327,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 && s.agent !== agent
                 && (
                   s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
+                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'app_db' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
                 )
               ) {
                 setAgent(s.agent);
@@ -1270,7 +1350,13 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Stable handlers for the memoized children (ChatHeader / ChatRightRail) and
   // the sidebar — all are pure setState calls (deps []), so a composer or
   // right-panel click no longer allocates a fresh arrow per child each render.
-  const openDetailsPanel = useCallback(() => setActiveRightPanelId('details'), []);
+  const openDetailsPanel = useCallback(() => {
+    localStorage.setItem(SESSION_INSIGHTS_TAB_STORAGE_KEY, 'overview');
+    window.dispatchEvent(new CustomEvent<SessionInsightsTab>(SESSION_INSIGHTS_TAB_EVENT, {
+      detail: 'overview',
+    }));
+    setActiveRightPanelId('insights');
+  }, []);
   const openMobileSidebar = useCallback(() => setMobileSidebarOpen(true), []);
   const toggleCanvasPanel = useCallback(
     () => setActiveRightPanelId((p) => (p === 'diagram' ? null : 'diagram')),
@@ -1313,29 +1399,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     // here was redundant (extra Radix context layer re-rendering on every chat
     // state change). Removed; the remaining rich Radix tooltips still work.
     <>
-      <Dialog open={newSessionOpen} onOpenChange={setNewSessionOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t('chat:newSessionTitle')}</DialogTitle>
-            <DialogDescription>{t('chat:newSessionDescription')}</DialogDescription>
-          </DialogHeader>
-          <Input
-            autoFocus
-            placeholder={t('chat:sessionTitlePlaceholder')}
-            value={newSessionTitle}
-            onChange={(e) => setNewSessionTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') confirmNewSession();
-            }}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setNewSessionOpen(false)}>
-              {t('common:actions.cancel')}
-            </Button>
-            <Button onClick={confirmNewSession}>{t('common:actions.create')}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       {isGlobal && (
         <GlobalNewSessionDialog
           open={globalNewOpen}
@@ -1437,9 +1500,21 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* Snapshots is the only ex-modal that stays modal — full-width
-          diff viewer needs the viewport. The other five (skills, tools,
-          metrics, tool-stats, details) live in the right rail as panels. */}
+      {!isGlobal && projectId != null && (
+        <SessionImportDialog
+          open={sessionImportOpen}
+          onOpenChange={setSessionImportOpen}
+          projectId={projectId}
+          projectName={projectName ?? ''}
+          provider={provider}
+          model={model || PROVIDERS.find((item) => item.id === provider)?.defaultModel || ''}
+          agent={agent}
+          providerOptions={providerOptions}
+          onImported={handleImportedSession}
+        />
+      )}
+      {/* Snapshots is the only ex-modal that stays modal — its full-width
+          diff viewer needs the viewport. The remaining surfaces live in the rail. */}
       <div ref={chatAreaRef} className="flex h-full min-h-0">
         {/* `agent-chat-cols-v2` bumps the persisted-storage key so the
             three-panel layout (sessions / chat / right-rail) gets a fresh
@@ -1470,6 +1545,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           mobileOpen={mobileSidebarOpen}
           onMobileClose={closeMobileSidebar}
           onNew={handleNewSession}
+          onImport={isGlobal ? undefined : handleOpenImport}
           onDelete={handleDelete}
           onRename={handleRenameSession}
           onDuplicate={handleDuplicate}
@@ -1525,8 +1601,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   stats={stats}
                   contextStatus={contextStatus}
                   indexStatus={indexStatus}
-                  // Details/Tools/Skills/Metrics/ToolStats live in the right
-                  // rail now — the header only handles mobile sidebar toggle
+                  // Session insights/configuration live in the right rail —
+                  // the header only handles mobile sidebar toggle
                   // and the tokens widget. The activity rail (rendered next
                   // to the right panel) owns those buttons.
                   onOpenDetails={openDetailsPanel}
@@ -1605,7 +1681,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 setMaxTurns={setMaxTurns}
                 sessionId={selectedId}
                 thinking={thinking}
-                setThinking={setThinking}
+                setThinking={handleThinkingChange}
                 supportsThinking={providerSupportsThinking(provider, providerOptions, model)}
                 describeImages={describeImages}
                 setDescribeImages={setDescribeImages}
@@ -1676,6 +1752,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 skillPicks={skillPicks}
                 onToggleSkillPick={toggleSkillPick}
                 pipelineRuntime={pipelineRuntime}
+                activeProcesses={activeProcesses}
                 pluginWindows={pluginPanelWindows}
                 onClose={() => setActiveRightPanelId(null)}
               />
@@ -1702,6 +1779,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       </div>
       {workbenchSlots?.sessionsHost && createPortal(
         <SessionSidebar
+          docked
           sessions={sessions ?? null}
           groups={groups ?? null}
           view={view}
@@ -1711,6 +1789,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           mobileOpen={mobileSidebarOpen}
           onMobileClose={closeMobileSidebar}
           onNew={handleNewSession}
+          onImport={isGlobal ? undefined : handleOpenImport}
           onDelete={handleDelete}
           onRename={handleRenameSession}
           onDuplicate={handleDuplicate}
@@ -1748,6 +1827,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           skillPicks={skillPicks}
           onToggleSkillPick={toggleSkillPick}
           pipelineRuntime={pipelineRuntime}
+          activeProcesses={activeProcesses}
           pluginWindows={pluginPanelWindows}
           onClose={() => setActiveRightPanelId(null)}
         />,

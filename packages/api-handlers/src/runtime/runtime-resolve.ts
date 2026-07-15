@@ -16,7 +16,9 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import { resolveProjectNodeBinDir } from './node-manager.js';
 import { resolveBinDir as resolvePhpBinDir } from './php-manager.js';
 import { resolveBinDirs as resolvePythonBinDirs } from './python-manager.js';
-import { wslBinDirForId } from './wsl-paths.js';
+import { resolveJavaEnv } from './jdk-manager.js';
+import { resolveDotnetRoot } from './dotnet-manager.js';
+import { wslBinDirForId, wslManagedDirForId } from './wsl-paths.js';
 
 export interface RuntimeEnv {
   /**
@@ -118,10 +120,21 @@ export function resolveProjectRuntimeEnv(
   // deterministic path — prepend them on the POSIX PATH. No Windows injection.
   if (target.kind === 'wsl') {
     const wv = parseWslRuntimeVersions(project.wsl_runtime_versions ?? null)[target.distro] ?? {};
-    const kinds: RuntimeKind[] = includeNode ? ['node', 'php', 'python'] : ['php', 'python'];
+    const kinds: RuntimeKind[] = includeNode
+      ? ['node', 'php', 'python', 'java', 'dotnet']
+      : ['php', 'python', 'java', 'dotnet'];
     for (const k of kinds) {
       const bin = wslBinDirForId(k, wv[k]);
       if (bin) out.posixPathPrepend.push(bin);
+    }
+    // JAVA_HOME / DOTNET_ROOT inside the distro (literal $HOME, expanded by
+    // bash at spawn, same as the PATH prepends).
+    const javaHome = wslManagedDirForId('java', wv.java);
+    if (javaHome) out.posixExtraEnv.JAVA_HOME = javaHome;
+    const dotnetRoot = wslManagedDirForId('dotnet', wv.dotnet);
+    if (dotnetRoot) {
+      out.posixExtraEnv.DOTNET_ROOT = dotnetRoot;
+      out.posixExtraEnv.DOTNET_MULTILEVEL_LOOKUP = '0';
     }
     return out;
   }
@@ -145,6 +158,22 @@ export function resolveProjectRuntimeEnv(
 
   // Python — bin dir (+ Scripts on Windows).
   for (const dir of resolvePythonBinDirs(rv.python, managedDir)) out.pathPrepend.push(dir);
+
+  // Java — bin dir + JAVA_HOME (Maven/Gradle resolve the JDK through it).
+  const java = resolveJavaEnv(rv.java, managedDir);
+  if (java) {
+    out.pathPrepend.push(java.binDir);
+    out.extraEnv.JAVA_HOME = java.home;
+  }
+
+  // .NET — the SDK root is the bin dir; DOTNET_ROOT pins the host resolution
+  // and MULTILEVEL_LOOKUP=0 stops .NET 6-era hosts falling back to Program Files.
+  const dotnetRoot = resolveDotnetRoot(rv.dotnet, managedDir);
+  if (dotnetRoot) {
+    out.pathPrepend.push(dotnetRoot);
+    out.extraEnv.DOTNET_ROOT = dotnetRoot;
+    out.extraEnv.DOTNET_MULTILEVEL_LOOKUP = '0';
+  }
 
   return out;
 }

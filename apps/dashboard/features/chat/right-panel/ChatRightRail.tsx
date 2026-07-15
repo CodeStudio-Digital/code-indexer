@@ -1,7 +1,7 @@
 /**
  * Vertical activity rail on the RIGHT of an open coder session — the
  * counterpart to the VS Code activity bar. Each icon either toggles a
- * panel (Skills, Tools, Metrics, etc.) or fires a one-shot action
+ * panel (Session state, Insights, Configuration, etc.) or fires a one-shot action
  * (Snapshots opens a modal directly).
  *
  * Layout: 40px width, sticky to the viewport right. Active icon shows a
@@ -12,15 +12,13 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  BarChart3,
   Bell,
   BookOpen,
+  ChartNoAxesCombined,
   ClipboardList,
   Compass,
-  Gauge,
   GitCompare,
   HardDrive,
-  Info,
   ScrollText,
   Settings,
   Workflow,
@@ -117,9 +115,7 @@ export const ChatRightRail = memo(function ChatRightRail({
         kind: 'panel',
         badge: unreadNotifications,
       },
-      { id: 'metrics', icon: Gauge, labelKey: 'rightRail.metrics', kind: 'panel' },
-      { id: 'details', icon: Info, labelKey: 'rightRail.details', kind: 'panel' },
-      { id: 'tool-stats', icon: BarChart3, labelKey: 'rightRail.toolStats', kind: 'panel' },
+      { id: 'insights', icon: ChartNoAxesCombined, labelKey: 'rightRail.insights', kind: 'panel' },
       { id: 'worker-log', icon: ScrollText, labelKey: 'rightRail.workerLog', kind: 'panel' },
       {
         id: 'snapshots',

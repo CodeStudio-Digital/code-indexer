@@ -124,6 +124,30 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  app.post('/api/projects/:id/activation', async (c) => {
+    try {
+      const id = parseIdParam(c);
+      const body = await parseJsonBody<{ activationId: string; clientId: string }>(c);
+      if (typeof body.activationId !== 'string') throw new ApiError('invalid_activation_id', 400);
+      if (typeof body.clientId !== 'string') throw new ApiError('invalid_client_id', 400);
+      return c.json(await h.activate({ id, activationId: body.activationId, clientId: body.clientId }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.delete('/api/projects/:id/activation', async (c) => {
+    try {
+      const id = parseIdParam(c);
+      const body = await parseJsonBody<{ activationId: string; clientId: string }>(c);
+      if (typeof body.activationId !== 'string') throw new ApiError('invalid_activation_id', 400);
+      if (typeof body.clientId !== 'string') throw new ApiError('invalid_client_id', 400);
+      return c.json(await h.deactivate({ id, activationId: body.activationId, clientId: body.clientId }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   app.post('/api/projects/:id/index-ignore/purge', async (c) => {
     try {
       const id = parseIdParam(c);

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Download, Languages, Loader2, RefreshCw, RotateCw, Trash2 } from 'lucide-react';
 import { apiCall, apiStream, electronApi } from '../../lib/api-client.js';
 import { Button } from '../../components/ui/button.js';
+import { useTranslation } from 'react-i18next';
 
 interface ServerInfo {
   id: string;
@@ -24,6 +25,7 @@ type InstallFrame =
   | { phase: 'error'; message: string };
 
 export function LspServersPanel() {
+  const { t } = useTranslation('admin');
   const [servers, setServers] = useState<ServerInfo[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -79,9 +81,16 @@ export function LspServersPanel() {
 
   const remove = async (serverId: string): Promise<void> => {
     setBusy(serverId);
-    try { await apiCall('lsp.removeServer', { serverId }); } catch { /* refresh shows truth */ }
-    setBusy(null);
-    void refresh();
+    setError(null);
+    try {
+      const result = await apiCall<{ ok: boolean }>('lsp.removeServer', { serverId });
+      if (!result.ok) throw new Error('Não foi possível remover o language server. Verifique se o processo ainda está em uso.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+      void refresh();
+    }
   };
 
   const restart = async (inst: Instance): Promise<void> => {
@@ -145,7 +154,7 @@ export function LspServersPanel() {
         <h3 className="text-xs font-semibold text-muted-foreground mb-2">Instâncias em execução</h3>
         {instances.length === 0 ? (
           <div className="text-[11px] text-muted-foreground">
-            Nenhuma — servers sobem sob demanda ao abrir um arquivo da linguagem e param após inatividade.
+            {t('lspServers.emptyInstances')}
           </div>
         ) : (
           <div className="space-y-1">

@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import { WorkBoardBadge, WorkBoardDetailDialog } from '../../components/work-board/index.js';
 import type {
   KanbanCardFull,
@@ -88,7 +89,7 @@ export function KanbanCardModal({
           className="text-lg font-semibold"
         />
       ) : <button type="button" className="text-left transition-colors hover:text-primary" onClick={() => setEditingTitle(true)}>{card.title}</button>}
-      footer={<><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{t('agents:kanban.card.createdBy', { author: card.created_by, date: new Date(card.created_at).toLocaleString() })}</span><Button size="sm" variant="destructive" onClick={async () => { if (confirm(`Delete card "${card.title}"?`)) { await onDelete(card.id); onClose(); } }}>{t('agents:kanban.card.deleteCard')}</Button></>}
+      footer={<><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{t('agents:kanban.card.createdBy', { author: card.created_by, date: new Date(card.created_at).toLocaleString() })}</span><Button size="sm" variant="destructive" onClick={async () => { if (await confirm({ title: t('agents:kanban.card.deleteCard'), description: t('agents:kanban.card.deleteConfirm', { title: card.title }), confirmLabel: t('agents:kanban.card.deleteCard'), tone: 'destructive' })) { await onDelete(card.id); onClose(); } }}>{t('agents:kanban.card.deleteCard')}</Button></>}
     >
 
         {/* Tag selector */}

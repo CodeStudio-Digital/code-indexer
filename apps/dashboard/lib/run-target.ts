@@ -7,7 +7,7 @@
 
 import { type RunnerManager, snippetRunFor } from '@mcp/api-bus';
 
-export type FileRuntime = 'node' | 'php' | 'python';
+export type FileRuntime = 'node' | 'php' | 'python' | 'java' | 'dotnet';
 
 /** Extension → runtime. `.ts` is intentionally absent (needs a loader). */
 const EXT_RUNTIME: Record<string, FileRuntime> = {
@@ -16,9 +16,9 @@ const EXT_RUNTIME: Record<string, FileRuntime> = {
   js: 'node',
   mjs: 'node',
   cjs: 'node',
+  java: 'java',
+  cs: 'dotnet',
 };
-
-const BIN: Record<FileRuntime, string> = { node: 'node', php: 'php', python: 'python' };
 
 export interface RunTarget {
   runtime: FileRuntime;
@@ -37,9 +37,40 @@ export function runnableForFile(path: string): RunTarget | null {
   return rt ? { runtime: rt, manager: rt } : null;
 }
 
-/** The shell command to run a file with its runtime (cwd = project root). */
-export function fileRunCommand(relPath: string, runtime: FileRuntime): string {
-  return `${BIN[runtime]} "${relPath}"`;
+/** Build/project manifests that can resolve one project-level Run target. */
+export function isProjectRunFile(path: string): boolean {
+  const base = (path.split(/[\\/]/).pop() ?? '').toLowerCase();
+  return base === 'pom.xml' || base === 'build.gradle' || base === 'build.gradle.kts' || base.endsWith('.csproj');
+}
+
+/** First meaningful declaration line used for a project-level gutter glyph. */
+export function findProjectRunLine(text: string): number | null {
+  const lines = text.split(/\r?\n/);
+  let inBlockComment = false;
+  let inXmlComment = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (inXmlComment) {
+      if (line.includes('-->')) inXmlComment = false;
+      continue;
+    }
+    if (line.startsWith('<!--')) {
+      if (!line.includes('-->', 4)) inXmlComment = true;
+      continue;
+    }
+    if (inBlockComment) {
+      if (line.includes('*/')) inBlockComment = false;
+      continue;
+    }
+    if (line.startsWith('/*')) {
+      if (!line.includes('*/', 2)) inBlockComment = true;
+      continue;
+    }
+    if (line.startsWith('//') || line.startsWith('#') || line.startsWith('<?xml')) continue;
+    return i + 1;
+  }
+  return null;
 }
 
 /**
@@ -148,6 +179,29 @@ export function findPythonMainLine(text: string): number | null {
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     if (/^\s*if\s+__name__\s*==\s*['"]__main__['"]\s*:/.test(lines[i])) return i + 1;
+  }
+  return null;
+}
+
+/** 1-based line of a Java `public static void main` declaration. */
+export function findJavaMainLine(text: string): number | null {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (/\bpublic\s+static\s+void\s+main\s*\(/.test(lines[i])) return i + 1;
+  }
+  return null;
+}
+
+/** C# Main declaration, or the first statement of a top-level-program file. */
+export function findCsharpMainLine(text: string): number | null {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (/\bstatic\s+(?:async\s+)?(?:void|int|Task|Task<int>)\s+Main\s*\(/.test(lines[i])) return i + 1;
+  }
+  if (/\b(?:class|struct|interface|namespace)\b/.test(text)) return null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line && !line.startsWith('//') && !line.startsWith('/*') && !/^using\s/.test(line)) return i + 1;
   }
   return null;
 }

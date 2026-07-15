@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { delimiter } from 'node:path';
 import { ApiError, type TerminalOutputChunk } from '@mcp/api-bus';
 import { OutputCoalescer, trimReplayBuffer } from './output-coalescer.js';
+import { shValue } from './shell-quote.js';
 
 export interface IPty {
   pid: number;
@@ -130,7 +131,7 @@ export class PtyManager {
     const posix = { prepend: opts.posixPathPrepend ?? [], env: opts.posixExtraEnv ?? {} };
     const { file, args } = opts.command
       ? commandInvocation(shell, opts.shellArgs, opts.command, posix)
-      : { file: shell, args: opts.shellArgs ?? defaultShellArgs(shell) };
+      : interactiveInvocation(shell, opts.shellArgs, posix);
     // Build a CLEAN env for the user's process — strip the dev-only
     // vars our parent process sets (NODE_OPTIONS injects tsx/esm,
     // ELECTRON_RUN_AS_NODE flags the electron binary as a Node interpreter,
@@ -346,36 +347,55 @@ export function defaultShellArgs(shell: string): string[] {
  * the interactive launch args (e.g. WSL's `-d <distro>`) so we can prefix
  * them before the command.
  */
-/** Single-quote a value for a POSIX `export` (handles embedded quotes). */
-function shSingleQuote(v: string): string {
-  return `'${v.replace(/'/g, `'\\''`)}'`;
-}
-
 /**
  * Build the `export …; ` prefix that injects a WSL distro's MCP-managed
  * runtimes BEFORE the command runs — inside the login shell so it wins over
  * the distro default. PATH dirs stay in double quotes so `$HOME` expands.
  */
 export function posixExportPrefix(prepend: string[], env: Record<string, string>): string {
-  const parts = Object.entries(env).map(([k, v]) => `export ${k}=${shSingleQuote(v)}`);
-  if (prepend.length > 0) parts.push(`export PATH="${prepend.join(':')}:$PATH"`);
+  const parts = Object.entries(env).map(([k, v]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new Error(`invalid POSIX env key: ${k}`);
+    return `export ${k}=${shValue(v)}`;
+  });
+  if (prepend.length > 0) parts.push(`export PATH=${prepend.map(shValue).join(':')}:"$PATH"`);
   return parts.length > 0 ? `${parts.join('; ')}; ` : '';
 }
 
-function commandInvocation(
+/** Build the invocation for an interactive terminal, including WSL runtimes. */
+export function interactiveInvocation(
+  shell: string,
+  shellArgs: string[] | undefined,
+  posix: { prepend: string[]; env: Record<string, string> } = { prepend: [], env: {} },
+): { file: string; args: string[] } {
+  if (/wsl(\.exe)?$/i.test(shell) && (posix.prepend.length > 0 || Object.keys(posix.env).length > 0)) {
+    const cmd = `${posixExportPrefix(posix.prepend, posix.env)}exec "\${SHELL:-/bin/bash}" -il`;
+    return { file: shell, args: [...(shellArgs ?? []), '--', 'bash', '-lc', cmd] };
+  }
+  return { file: shell, args: shellArgs ?? defaultShellArgs(shell) };
+}
+
+export function commandInvocation(
   shell: string,
   shellArgs: string[] | undefined,
   command: string,
   posix: { prepend: string[]; env: Record<string, string> } = { prepend: [], env: {} },
-): { file: string; args: string[] } {
+): { file: string; args: string[] | string } {
   const base = shell.toLowerCase();
   // PowerShell / PowerShell 7.
   if (/(powershell|pwsh)(\.exe)?$/.test(base)) {
     return { file: shell, args: ['-NoLogo', '-NoProfile', '-Command', command] };
   }
-  // cmd.exe — /d skip AutoRun, /s preserve quotes, /c run-and-exit.
+  // cmd.exe — /d skips AutoRun, /s preserves quotes, /c runs-and-exits.
+  //
+  // IMPORTANT: node-pty accepts either argv[] or an already escaped Windows
+  // command line. Its argv[] path serialises values with the C/C++
+  // CommandLineToArgvW rules, but cmd.exe does NOT parse those rules. Passing
+  // `['/c', 'php "file.php"']` therefore turns the quotes around file.php into
+  // literal bytes on Windows (PHP reports `Could not open input file:
+  // "file.php"`). The string form is appended verbatim by node-pty, leaving
+  // cmd.exe to parse the command with its own grammar.
   if (/cmd(\.exe)?$/.test(base)) {
-    return { file: shell, args: ['/d', '/s', '/c', command] };
+    return { file: shell, args: `/d /s /c ${command}` };
   }
   // WSL — run inside the selected distro's shell. `--` ends wsl's own options;
   // we invoke bash -lc so PATH/profile load, then prepend the project's chosen

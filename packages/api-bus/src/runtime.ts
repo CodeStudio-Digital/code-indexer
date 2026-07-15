@@ -11,7 +11,7 @@ import type { ApiContext, AsyncStream } from './common.js';
  * the concrete detection/install strategy living per-kind in the backend.
  */
 
-export type RuntimeKind = 'node' | 'php' | 'python';
+export type RuntimeKind = 'node' | 'php' | 'python' | 'java' | 'dotnet';
 
 /**
  * Execution target a runtime is detected/installed/injected for. `host` is the
@@ -39,7 +39,12 @@ export type RuntimeSource =
   | 'pylauncher'
   | 'pythonorg'
   | 'scoop'
-  | 'choco';
+  | 'choco'
+  // java / dotnet
+  | 'javahome'
+  | 'jvmdir'
+  | 'sdkman'
+  | 'dotnetroot';
 
 /** Back-compat alias — detect-node.ts still imports `NodeSource`. */
 export type NodeSource = RuntimeSource;

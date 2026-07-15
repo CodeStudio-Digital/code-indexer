@@ -5,7 +5,9 @@
  * the handle only reports its exit.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { setPriority } from 'node:os';
 import { LspRpcClient } from './lsp-client.js';
+import { LspRequestScheduler, type LspRequestPriority, type LspRequestSchedulerStats } from './lsp-request-scheduler.js';
 import {
   pathToUri,
   uriToPath,
@@ -22,8 +24,13 @@ export interface LspSpawnSpec {
   args: string[];
   cwd: string;
   env?: Record<string, string>;
+  /** Best-effort OS scheduling priority applied immediately after spawn. */
+  priority?: number;
   rootPath: string;
   initializationOptions?: unknown;
+  workspaceFolders?: boolean;
+  /** Heavy project systems (OmniSharp/Unity) may legitimately exceed 30s. */
+  initializeTimeoutMs?: number;
   /** Config dinâmica per-projeto para `workspace/configuration` (language level). */
   resolveConfig?: (section: string | null) => unknown;
 }
@@ -56,7 +63,10 @@ export class LspServerHandle {
   private opened = new Set<string>();
   private child: ChildProcessWithoutNullStreams;
   private rpc: LspRpcClient;
+  private scheduler = new LspRequestScheduler();
   private readyPromise: Promise<void>;
+  /** Edits emitted by the server during the active workspace/executeCommand. */
+  private commandWorkspaceEdits: unknown[] | null = null;
 
   constructor(
     private spec: LspSpawnSpec,
@@ -70,8 +80,12 @@ export class LspServerHandle {
     // NODE_OPTIONS=--import tsx — the child node then tries to resolve
     // 'tsx' from the PROJECT cwd and exits 1 before speaking a byte of
     // LSP. Language servers never want our loaders; drop them.
-    const env: NodeJS.ProcessEnv = { ...process.env, ...spec.env };
-    delete env.NODE_OPTIONS;
+    const inherited: NodeJS.ProcessEnv = { ...process.env };
+    delete inherited.NODE_OPTIONS;
+    delete inherited.JAVA_TOOL_OPTIONS;
+    delete inherited._JAVA_OPTIONS;
+    delete inherited.JDK_JAVA_OPTIONS;
+    const env: NodeJS.ProcessEnv = { ...inherited, ...spec.env };
     this.child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
       env,
@@ -79,7 +93,18 @@ export class LspServerHandle {
       windowsHide: true,
       shell: false, // absolute command path — never .cmd shims here
     });
-    this.rpc = new LspRpcClient(this.child, hooks.log, spec.resolveConfig);
+    if (spec.priority !== undefined && this.child.pid !== undefined) {
+      try {
+        setPriority(this.child.pid, spec.priority);
+      } catch (err) {
+        hooks.log(`could not lower process priority: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    this.rpc = new LspRpcClient(this.child, hooks.log, spec.resolveConfig, (edit) => {
+      if (!this.commandWorkspaceEdits) return false;
+      this.commandWorkspaceEdits.push(edit);
+      return true;
+    });
 
     this.child.stderr.on('data', (chunk: Buffer) => {
       this.stderrTail = (this.stderrTail + chunk.toString('utf-8')).slice(-STDERR_RING);
@@ -101,6 +126,10 @@ export class LspServerHandle {
       const p = params as { uri: string; diagnostics: LspDiagnostic[] };
       if (p?.uri) hooks.onDiagnostics(uriToPath(p.uri), p.diagnostics ?? []);
     });
+    this.rpc.onNotification('window/logMessage', (params) => {
+      const message = (params as { message?: unknown })?.message;
+      if (typeof message === 'string') hooks.log(message);
+    });
 
     this.readyPromise = this.initialize();
   }
@@ -115,11 +144,17 @@ export class LspServerHandle {
       processId: process.pid,
       clientInfo: { name: 'codestudio', version: '0.1' },
       rootUri,
-      workspaceFolders: [{ uri: rootUri, name: 'workspace' }],
+      workspaceFolders: this.spec.workspaceFolders === false ? null : [{ uri: rootUri, name: 'workspace' }],
       initializationOptions: this.spec.initializationOptions,
       capabilities: {
         general: { positionEncodings: ['utf-16'] },
-        workspace: { configuration: true, workspaceFolders: true, didChangeConfiguration: { dynamicRegistration: false } },
+        workspace: {
+          applyEdit: true,
+          configuration: true,
+          workspaceFolders: this.spec.workspaceFolders !== false,
+          workspaceEdit: { documentChanges: true },
+          didChangeConfiguration: { dynamicRegistration: false },
+        },
         textDocument: {
           synchronization: { didSave: false, dynamicRegistration: false },
           publishDiagnostics: { relatedInformation: false },
@@ -200,7 +235,7 @@ export class LspServerHandle {
           },
         },
       },
-    }, INIT_TIMEOUT_MS);
+    }, this.spec.initializeTimeoutMs ?? INIT_TIMEOUT_MS);
     this.capabilities = result?.capabilities ?? {};
     this.rpc.notify('initialized', {});
     this.state = 'ready';
@@ -253,18 +288,39 @@ export class LspServerHandle {
     this.rpc.notify('textDocument/didClose', { textDocument: { uri } });
   }
 
+  requestStats(): LspRequestSchedulerStats {
+    return this.scheduler.stats();
+  }
+
+  private request<T = unknown>(
+    method: string,
+    params: unknown,
+    timeoutMs: number,
+    priority: LspRequestPriority,
+    key?: string,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.scheduler.schedule({
+      priority,
+      key,
+      signal,
+      run: (scheduledSignal) => this.rpc.request<T>(method, params, timeoutMs, scheduledSignal),
+    });
+  }
+
   completion(
     absPath: string,
     position: { line: number; column: number },
     context?: { triggerKind: number; triggerCharacter?: string },
+    signal?: AbortSignal,
   ): Promise<unknown> {
-    return this.rpc.request('textDocument/completion', {
+    return this.request('textDocument/completion', {
       textDocument: { uri: pathToUri(absPath) },
       position: toLsp(position),
       // LSP CompletionTriggerKind: 1=Invoked, 2=TriggerCharacter,
       // 3=TriggerForIncompleteCompletions. Intelephense ranks/filters by it.
       ...(context ? { context: { triggerKind: context.triggerKind, triggerCharacter: context.triggerCharacter } } : {}),
-    }, REQ_TIMEOUT_MS.completion);
+    }, REQ_TIMEOUT_MS.completion, 'interactive', `completion:${absPath}`, signal);
   }
 
   /**
@@ -272,30 +328,30 @@ export class LspServerHandle {
    * crucially `additionalTextEdits` (the auto-import use/import statement)
    * is usually ONLY present after resolve. Echo the full original item.
    */
-  resolveCompletion(item: unknown): Promise<unknown> {
-    return this.rpc.request('completionItem/resolve', item, REQ_TIMEOUT_MS.resolve);
+  resolveCompletion(item: unknown, signal?: AbortSignal): Promise<unknown> {
+    return this.request('completionItem/resolve', item, REQ_TIMEOUT_MS.resolve, 'interactive', undefined, signal);
   }
 
-  hover(absPath: string, position: { line: number; column: number }): Promise<unknown> {
-    return this.rpc.request('textDocument/hover', {
+  hover(absPath: string, position: { line: number; column: number }, signal?: AbortSignal): Promise<unknown> {
+    return this.request('textDocument/hover', {
       textDocument: { uri: pathToUri(absPath) },
       position: toLsp(position),
-    }, REQ_TIMEOUT_MS.hover);
+    }, REQ_TIMEOUT_MS.hover, 'background', `hover:${absPath}`, signal);
   }
 
-  definition(absPath: string, position: { line: number; column: number }): Promise<unknown> {
-    return this.rpc.request('textDocument/definition', {
+  definition(absPath: string, position: { line: number; column: number }, signal?: AbortSignal): Promise<unknown> {
+    return this.request('textDocument/definition', {
       textDocument: { uri: pathToUri(absPath) },
       position: toLsp(position),
-    }, REQ_TIMEOUT_MS.definition);
+    }, REQ_TIMEOUT_MS.definition, 'manual', undefined, signal);
   }
 
-  references(absPath: string, position: { line: number; column: number }): Promise<unknown> {
-    return this.rpc.request('textDocument/references', {
+  references(absPath: string, position: { line: number; column: number }, signal?: AbortSignal): Promise<unknown> {
+    return this.request('textDocument/references', {
       textDocument: { uri: pathToUri(absPath) },
       position: toLsp(position),
       context: { includeDeclaration: true },
-    }, REQ_TIMEOUT_MS.references);
+    }, REQ_TIMEOUT_MS.references, 'manual', undefined, signal);
   }
 
   /** `textDocument/rename` — the server computes the full WorkspaceEdit. */
@@ -303,27 +359,28 @@ export class LspServerHandle {
     absPath: string,
     position: { line: number; column: number },
     newName: string,
+    signal?: AbortSignal,
   ): Promise<unknown> {
-    return this.rpc.request('textDocument/rename', {
+    return this.request('textDocument/rename', {
       textDocument: { uri: pathToUri(absPath) },
       position: toLsp(position),
       newName,
-    }, REQ_TIMEOUT_MS.rename);
+    }, REQ_TIMEOUT_MS.rename, 'manual', undefined, signal);
   }
 
   /** `textDocument/signatureHelp` — parameter hints at a call site. */
-  signatureHelp(absPath: string, position: { line: number; column: number }): Promise<unknown> {
-    return this.rpc.request('textDocument/signatureHelp', {
+  signatureHelp(absPath: string, position: { line: number; column: number }, signal?: AbortSignal): Promise<unknown> {
+    return this.request('textDocument/signatureHelp', {
       textDocument: { uri: pathToUri(absPath) },
       position: toLsp(position),
-    }, REQ_TIMEOUT_MS.signatureHelp);
+    }, REQ_TIMEOUT_MS.signatureHelp, 'interactive', `signature:${absPath}`, signal);
   }
 
   /** `textDocument/documentSymbol` — DocumentSymbol[] (hierarchical) or SymbolInformation[] (flat). */
-  documentSymbol(absPath: string): Promise<unknown> {
-    return this.rpc.request('textDocument/documentSymbol', {
+  documentSymbol(absPath: string, signal?: AbortSignal): Promise<unknown> {
+    return this.request('textDocument/documentSymbol', {
       textDocument: { uri: pathToUri(absPath) },
-    }, REQ_TIMEOUT_MS.documentSymbol);
+    }, REQ_TIMEOUT_MS.documentSymbol, 'background', `symbols:${absPath}`, signal);
   }
 
   codeActions(
@@ -331,12 +388,14 @@ export class LspServerHandle {
     range: { start: { line: number; column: number }; end: { line: number; column: number } },
     /** LSP CodeActionContext.only — restrict to kinds like 'source.organizeImports'. */
     only?: string[],
+    options: { origin?: 'auto' | 'invoke'; signal?: AbortSignal } = {},
   ): Promise<unknown> {
-    return this.rpc.request('textDocument/codeAction', {
+    const automatic = options.origin === 'auto';
+    return this.request('textDocument/codeAction', {
       textDocument: { uri: pathToUri(absPath) },
       range: { start: toLsp(range.start), end: toLsp(range.end) },
       context: { diagnostics: [], ...(only ? { only } : {}) },
-    }, REQ_TIMEOUT_MS.codeAction);
+    }, REQ_TIMEOUT_MS.codeAction, automatic ? 'background' : 'manual', automatic ? `codeAction:${absPath}` : undefined, options.signal);
   }
 
   supportsCodeActionResolve(): boolean {
@@ -344,35 +403,59 @@ export class LspServerHandle {
     return typeof provider === 'object' && provider.resolveProvider === true;
   }
 
-  resolveCodeAction(action: unknown): Promise<unknown> {
-    return this.rpc.request('codeAction/resolve', action, REQ_TIMEOUT_MS.codeAction);
+  resolveCodeAction(action: unknown, signal?: AbortSignal): Promise<unknown> {
+    return this.request('codeAction/resolve', action, REQ_TIMEOUT_MS.codeAction, 'manual', undefined, signal);
   }
 
-  executeCommand(command: string, args?: unknown[]): Promise<unknown> {
+  async executeCommand(
+    command: string,
+    args?: unknown[],
+    signal?: AbortSignal,
+  ): Promise<{ result: unknown; workspaceEdits: unknown[] }> {
     const advertised = this.capabilities.executeCommandProvider?.commands ?? [];
     if (advertised.length > 0 && !advertised.includes(command)) {
       return Promise.reject(new Error(`LSP command not advertised: ${command}`));
     }
-    return this.rpc.request('workspace/executeCommand', { command, arguments: args ?? [] }, REQ_TIMEOUT_MS.codeAction);
+    // A server→client applyEdit request has no parent request id. Serialize
+    // command capture so every edit is associated with exactly one click.
+    if (this.commandWorkspaceEdits) {
+      throw new Error('another LSP code-action command is already running');
+    }
+    const workspaceEdits: unknown[] = [];
+    this.commandWorkspaceEdits = workspaceEdits;
+    try {
+      const result = await this.request(
+        'workspace/executeCommand',
+        { command, arguments: args ?? [] },
+        REQ_TIMEOUT_MS.codeAction,
+        'manual',
+        undefined,
+        signal,
+      );
+      return { result, workspaceEdits };
+    } finally {
+      this.commandWorkspaceEdits = null;
+    }
   }
 
   /** `textDocument/implementation` — Location[] / LocationLink[] like definition. */
-  implementation(absPath: string, position: { line: number; column: number }): Promise<unknown> {
-    return this.rpc.request('textDocument/implementation', {
+  implementation(absPath: string, position: { line: number; column: number }, signal?: AbortSignal): Promise<unknown> {
+    return this.request('textDocument/implementation', {
       textDocument: { uri: pathToUri(absPath) },
       position: toLsp(position),
-    }, REQ_TIMEOUT_MS.implementation);
+    }, REQ_TIMEOUT_MS.implementation, 'manual', undefined, signal);
   }
 
   /** `textDocument/formatting` — whole-document TextEdit[]. */
   formatting(
     absPath: string,
     options: { tabSize: number; insertSpaces: boolean },
+    signal?: AbortSignal,
   ): Promise<unknown> {
-    return this.rpc.request('textDocument/formatting', {
+    return this.request('textDocument/formatting', {
       textDocument: { uri: pathToUri(absPath) },
       options,
-    }, REQ_TIMEOUT_MS.formatting);
+    }, REQ_TIMEOUT_MS.formatting, 'manual', undefined, signal);
   }
 
   /** `textDocument/rangeFormatting` — TextEdit[] for a 1-based range (toLsp → 0-based). */
@@ -380,20 +463,21 @@ export class LspServerHandle {
     absPath: string,
     range: { start: { line: number; column: number }; end: { line: number; column: number } },
     options: { tabSize: number; insertSpaces: boolean },
+    signal?: AbortSignal,
   ): Promise<unknown> {
-    return this.rpc.request('textDocument/rangeFormatting', {
+    return this.request('textDocument/rangeFormatting', {
       textDocument: { uri: pathToUri(absPath) },
       range: { start: toLsp(range.start), end: toLsp(range.end) },
       options,
-    }, REQ_TIMEOUT_MS.formatting);
+    }, REQ_TIMEOUT_MS.formatting, 'manual', undefined, signal);
   }
 
   /** `textDocument/semanticTokens/full` — tokens encoded against the server's
    *  own legend (see `semanticTokensLegend`). Returns `{ data: number[] }`. */
-  semanticTokens(absPath: string): Promise<unknown> {
-    return this.rpc.request('textDocument/semanticTokens/full', {
+  semanticTokens(absPath: string, signal?: AbortSignal): Promise<unknown> {
+    return this.request('textDocument/semanticTokens/full', {
       textDocument: { uri: pathToUri(absPath) },
-    }, REQ_TIMEOUT_MS.semanticTokens);
+    }, REQ_TIMEOUT_MS.semanticTokens, 'background', `semanticTokens:${absPath}`, signal);
   }
 
   /** The server's semantic-token legend (from the init handshake), or null if
@@ -406,6 +490,7 @@ export class LspServerHandle {
   async stop(): Promise<void> {
     if (this.state === 'stopped' || this.state === 'crashed') return;
     this.state = 'stopped';
+    this.scheduler.dispose();
     try {
       await this.rpc.request('shutdown', null, 3_000);
       this.rpc.notify('exit', null);

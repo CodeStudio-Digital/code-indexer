@@ -36,7 +36,7 @@ export const MONACO_SEMANTIC_LEGEND: SemanticTokensLegend = {
   tokenTypes: [
     'class', 'enum', 'interface', 'namespace', 'typeParameter',
     'type', 'parameter', 'variable', 'enumMember', 'property',
-    'function', 'method',
+    'function', 'method', 'struct', 'event', 'member',
   ],
   tokenModifiers: [
     'declaration', 'static', 'async', 'readonly', 'defaultLibrary', 'local',

@@ -48,4 +48,25 @@ describe('workspace layout v3', () => {
       activeLeft: 'databases',
     });
   });
+
+  it('migrates contextual Session and API docks into isolated workspaces', () => {
+    expect(normalizeWorkspaceLayout({ primarySurface: 'editor', activeLeft: 'sessions', activeRight: null })).toMatchObject({
+      primarySurface: 'sessions',
+      activeLeft: 'files',
+      activeRight: null,
+    });
+    expect(normalizeWorkspaceLayout({ primarySurface: 'editor', activeLeft: 'api-navigation', activeRight: 'api-inspector' })).toMatchObject({
+      primarySurface: 'api',
+      activeLeft: 'files',
+      activeRight: 'chat',
+    });
+  });
+
+  it('does not persist API-owned docks as Code workspace state', () => {
+    expect(normalizeWorkspaceLayout({ primarySurface: 'api', activeLeft: 'files', activeRight: 'api-inspector' })).toMatchObject({
+      primarySurface: 'api',
+      activeLeft: 'files',
+      activeRight: 'chat',
+    });
+  });
 });

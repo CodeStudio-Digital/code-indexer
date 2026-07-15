@@ -5,13 +5,12 @@
  * differentiates functions, methods, properties, parameters, classes, etc. —
  * for BOTH the Monarch tokenizer and LSP semantic tokens.
  *
- * Why the scopes below work for semantic tokens: Monaco maps each semantic
- * token type to a default TextMate scope (function→entity.name.function,
- * method→entity.name.function.member, property→variable.other.property,
- * parameter→variable.parameter, class→entity.name.type.class, …) and resolves
- * the colour from these rules by longest-prefix match. So a method rule
- * (entity.name.function.member) wins over the function rule for methods, while
- * short scopes (keyword, string, comment) also catch the Monarch output.
+ * Monaco standalone does not translate semantic token types to TextMate scopes:
+ * a semantic `method` is matched against a `method` theme rule directly. The
+ * catalog therefore carries BOTH direct semantic selectors and the TextMate /
+ * Monarch scopes emitted by syntax tokenizers. Longest-prefix matching still
+ * lets the more specific syntax scopes win (for example a member method over a
+ * generic function).
  */
 import type * as MonacoNs from 'monaco-editor';
 import type { EditorThemeDef, Palette } from './types.js';
@@ -24,6 +23,21 @@ const rule = (token: string, foreground: string, fontStyle?: string): Rule =>
 
 function rulesFromPalette(p: Palette): Rule[] {
   return [
+    // ── LSP semantic tokens (direct Monaco selectors) ───────────────
+    rule('function', p.function),
+    rule('method', p.method),
+    rule('class', p.klass),
+    rule('enum', p.klass),
+    rule('interface', p.klass),
+    rule('struct', p.klass),
+    rule('type', p.type),
+    rule('typeParameter', p.parameter),
+    rule('namespace', p.namespace),
+    rule('property', p.property),
+    rule('event', p.property),
+    rule('member', p.property),
+    rule('parameter', p.parameter),
+    rule('enumMember', p.constant),
     // ── Monarch + generic ───────────────────────────────────────────
     rule('comment', p.comment, 'italic'),
     rule('keyword', p.keyword),
@@ -42,6 +56,9 @@ function rulesFromPalette(p: Palette): Rule[] {
     rule('constant', p.constant),
     rule('regexp', p.regexp),
     rule('constant.regexp', p.regexp),
+    rule('identifier', p.variable),
+    rule('type.identifier', p.type),
+    rule('annotation', p.decorator),
     // ── functions / methods ─────────────────────────────────────────
     rule('entity.name.function', p.function),
     rule('support.function', p.function),
@@ -189,8 +206,8 @@ const intellijDarcula: Palette = {
 const codeStudioDark: Palette = {
   background: '050a16', foreground: 'e8ecfa', comment: '5b6a7f', keyword: 'c084fc',
   string: '7ee787', number: 'c4b5fd', operator: '67e8f9', function: '818cf8',
-  method: '818cf8', property: 'a5b4fc', variable: 'f0abf7', parameter: 'ddd6fe',
-  type: '67e8f9', klass: '67e8f9', namespace: '67e8f9', constant: 'c4b5fd',
+  method: '60a5fa', property: 'a5b4fc', variable: 'f0abf7', parameter: 'ddd6fe',
+  type: '67e8f9', klass: '22d3ee', namespace: '94a3b8', constant: 'c4b5fd',
   decorator: 'e879f9', regexp: '7ee787', tag: 'f0abf7', attribute: '67e8f9',
   punctuation: '9ca3af', lineHighlight: '0d1629', selection: '26307a',
   lineNumber: '2a3550', lineNumberActive: '9ca3af',
@@ -199,8 +216,8 @@ const codeStudioDark: Palette = {
 const codeStudioLight: Palette = {
   background: 'f7f8fc', foreground: '0f1b35', comment: '5b6a7f', keyword: '7c3aed',
   string: '15803d', number: '6d28d9', operator: '0891b2', function: '4f46e5',
-  method: '4f46e5', property: '1d4ed8', variable: '9f5dea', parameter: '7c3aed',
-  type: '0e7490', klass: '0e7490', namespace: '0e7490', constant: '6d28d9',
+  method: '2563eb', property: '1d4ed8', variable: '9f5dea', parameter: '7c3aed',
+  type: '0e7490', klass: '0369a1', namespace: '64748b', constant: '6d28d9',
   decorator: 'c026d3', regexp: '15803d', tag: 'c026d3', attribute: '0891b2',
   punctuation: '5b6a7f', lineHighlight: 'eef2ff', selection: 'c7d2fe',
   lineNumber: '9ca3af', lineNumberActive: '0f1b35',

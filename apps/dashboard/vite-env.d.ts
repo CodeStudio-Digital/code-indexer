@@ -21,7 +21,9 @@ declare global {
      * the bridge translates to the colon channel internally. Returns the
      * `{ok, value, error}` envelope produced by handlers-mount.ts.
      */
-    invoke: (methodPath: string, payload: unknown) => Promise<unknown>;
+    invoke: (methodPath: string, payload: unknown, requestId?: string) => Promise<unknown>;
+    /** Abort a one-shot IPC call previously started with `requestId`. */
+    cancelInvoke?: (requestId: string) => void;
     /**
      * AsyncIterable-backed stream call. Same path format as `invoke`.
      * Returns immediately; iteration waits on a MessagePort transferred
@@ -37,6 +39,8 @@ declare global {
     };
     /** Native folder picker. Returns the chosen path, or null if canceled. */
     openDirectory?: () => Promise<string | null>;
+    /** Native multi-file picker. Used by desktop-first JSONL session import. */
+    openFiles?: () => Promise<string[]>;
     /** Open a URL in the user's default browser. */
     openExternal?: (url: string) => void;
     /** Reveal a local folder/file in the OS file manager. */

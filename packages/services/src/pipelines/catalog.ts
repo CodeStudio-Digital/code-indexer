@@ -248,6 +248,23 @@ const CATALOG_SEED: CatalogSeed[] = [
     },
     introducedInPhase: 'snapshot-review',
   },
+  // Compiles the session intent (title + first message + task list) into
+  // structured, verifiable obligations the snapshot review joins against the
+  // hunks — detecting unfulfilled work and scope creep. One cheap call,
+  // cached per intent hash (session_intent_contracts, migration 224).
+  {
+    pipelineName: 'intent_contract',
+    bindingRole: 'reviewer',
+    description:
+      'Compiles the session intent into verifiable obligations for the snapshot review ' +
+      '(unfulfilled_obligation / scope_creep detection). Cheap call, cached per intent hash.',
+    recommendedDefault: {
+      providerKind: 'anthropic',
+      modelHint: 'claude-haiku-4-5-20251001',
+      config: { temperature: 0, max_tokens: 1200, json_mode: true },
+    },
+    introducedInPhase: 'review-ai-native',
+  },
 
   // ─── Documentação (RAG) pipelines (Phase 9) ──────────────────────────────
   // Backs the "Documentação" sidebar feature: per-collection RAG over

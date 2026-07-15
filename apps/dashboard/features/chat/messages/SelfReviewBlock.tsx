@@ -23,7 +23,11 @@ interface Finding {
   loc: string;
   body: string;
   fix?: string;
+  /** Non-defect kinds (formatFindingsForAgent location tags). */
+  tag?: 'missing change' | 'unfulfilled obligation' | 'scope creep';
 }
+
+const KIND_TAG_RE = /\s*\[(missing change|unfulfilled obligation|scope creep)[^\]]*\]\s*$/i;
 
 const HEADER_RE = /^- \[([^\]]+)\]\s+(.+)$/gm;
 
@@ -50,7 +54,15 @@ function parseReview(text: string): { noIssues: boolean; findings: Finding[] } {
     } else {
       body = rest.trim();
     }
-    findings.push({ severity: m[1].trim().toLowerCase(), loc: m[2].trim(), body, fix });
+    const rawLoc = m[2].trim();
+    const tagMatch = KIND_TAG_RE.exec(rawLoc);
+    findings.push({
+      severity: m[1].trim().toLowerCase(),
+      loc: rawLoc.replace(KIND_TAG_RE, ''),
+      body,
+      fix,
+      tag: tagMatch ? (tagMatch[1].toLowerCase() as Finding['tag']) : undefined,
+    });
   }
   return { noIssues: false, findings };
 }
@@ -100,6 +112,18 @@ export function SelfReviewBlock({ text }: { text: string }) {
               {f.severity}
             </span>
             <span className="font-mono text-[11px] text-foreground/80 break-all">{f.loc}</span>
+            {f.tag && (
+              <span
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide border',
+                  f.tag === 'scope creep'
+                    ? 'text-violet-600 dark:text-violet-400 bg-violet-500/10 border-violet-500/30'
+                    : 'text-sky-600 dark:text-sky-400 bg-sky-500/10 border-sky-500/30',
+                )}
+              >
+                {f.tag}
+              </span>
+            )}
           </div>
           <div className="text-xs text-foreground/80">
             <Markdown text={f.body} />

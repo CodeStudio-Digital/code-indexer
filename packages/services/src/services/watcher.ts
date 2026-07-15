@@ -2,6 +2,7 @@ import { watch, type FSWatcher } from 'chokidar';
 import { relative } from 'node:path';
 import ignore from 'ignore';
 import { normalizeIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
+import { getProjectIgnoreRules, shouldIgnoreProjectPath } from '@mcp/shared/utils/project-ignore.js';
 
 export interface WatcherFileEvent {
   /** Absolute path as emitted by chokidar (backslashes on win32 — callers normalize). */
@@ -105,9 +106,11 @@ const IGNORED_DIRS = new Set<string>([
 export function makeIgnored(rootPath: string, extraPatterns: string[] = []): (p: string) => boolean {
   const extra = normalizeIndexIgnorePatterns(extraPatterns);
   const ig = extra.length > 0 ? ignore().add(extra) : null;
+  const projectIgnore = getProjectIgnoreRules(rootPath);
   return (p: string): boolean => {
     const rel = relative(rootPath, p).replace(/\\/g, '/');
     if (!rel || rel.startsWith('..')) return false; // the root itself / outside it
+    if (shouldIgnoreProjectPath(projectIgnore, rel)) return true;
     if (ig?.ignores(rel) || ig?.ignores(`${rel}/`)) return true;
     let start = 0;
     for (let i = 0; i <= rel.length; i++) {

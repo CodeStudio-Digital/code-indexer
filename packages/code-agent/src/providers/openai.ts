@@ -2,6 +2,11 @@ import OpenAI from 'openai';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import {
+  renderTextDocument,
+  safeDocumentFilename,
+  unsupportedBinaryDocumentText,
+} from './document-utils.js';
 
 /**
  * OpenAI-compatible chat adapter (works with OpenAI, OpenRouter, ZAI/GLM, DeepSeek and any
@@ -290,7 +295,7 @@ export class OpenAIChatProvider implements ChatProvider {
 
 type OAIMsg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
-function toOpenAIMessages(system: string, messages: AgentMessage[], vendor?: OpenAICompatVendor): OAIMsg[] {
+export function toOpenAIMessages(system: string, messages: AgentMessage[], vendor?: OpenAICompatVendor): OAIMsg[] {
   const out: OAIMsg[] = [{ role: 'system', content: system }];
 
   for (const m of messages) {
@@ -312,6 +317,7 @@ function toOpenAIMessages(system: string, messages: AgentMessage[], vendor?: Ope
       const parts: Array<
         | { type: 'text'; text: string }
         | { type: 'image_url'; image_url: { url: string } }
+        | { type: 'file'; file: { filename: string; file_data: string } }
       > = [];
       for (const b of m.content) {
         if (b.type === 'text' && b.text) parts.push({ type: 'text', text: b.text });
@@ -320,11 +326,25 @@ function toOpenAIMessages(system: string, messages: AgentMessage[], vendor?: Ope
             type: 'image_url',
             image_url: { url: `data:${b.mediaType};base64,${b.base64}` },
           });
+        } else if (
+          b.type === 'document'
+          && b.base64
+          && (vendor === 'openai' || vendor === 'openrouter')
+        ) {
+          parts.push({
+            type: 'file',
+            file: {
+              filename: safeDocumentFilename(b),
+              file_data: `data:${b.mediaType};base64,${b.base64}`,
+            },
+          });
         } else if (b.type === 'document' && b.text) {
           parts.push({
             type: 'text',
-            text: `<document name="${b.name}" mediaType="${b.mediaType}">\n${b.text}\n</document>`,
+            text: renderTextDocument(b),
           });
+        } else if (b.type === 'document' && b.base64) {
+          parts.push({ type: 'text', text: unsupportedBinaryDocumentText(b) });
         }
       }
       const toolResults = m.content.filter((b): b is Extract<ContentBlock, { type: 'tool_result' }> => b.type === 'tool_result');

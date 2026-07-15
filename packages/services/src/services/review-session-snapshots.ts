@@ -19,13 +19,18 @@
  */
 import type { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
 import type { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
+import type { ReviewIntelStore } from '@mcp/store/review-intel-store.js';
 import type { FileDiff, SessionSnapshotService } from './session-snapshots.js';
 import type {
   SnapshotReviewFinding,
   SnapshotReviewPipeline,
 } from './snapshot-review-pipeline.js';
-import { buildEnclosingSymbolContext, formatReviewContext } from './snapshot-review-context.js';
 import { filterReviewableDiffs } from './snapshot-review-ignore.js';
+import { parseDeclarationName, type ReviewReferenceLookup } from './review-absences.js';
+import { findEnclosingDeclLine } from './code-reader.js';
+import { buildReviewBundle } from './review-bundle.js';
+import type { IntentContractCompiler, IntentObligation } from './intent-contract.js';
+import { buildReviewPriors, recordSessionFates } from './review-fates.js';
 
 export interface ReviewSessionDeps {
   snapshotStore: SessionFileSnapshotStore;
@@ -33,12 +38,28 @@ export interface ReviewSessionDeps {
   pipeline: SnapshotReviewPipeline;
   /** When present, persists the run + comments so the Snapshots panel shows them. */
   reviewStore?: SessionFileReviewStore;
+  /** When present, absence detection runs (review-absences.ts): untouched
+   *  call sites of contract-changed symbols become a "references to verify"
+   *  prompt section + kind=missing_change findings. Failures are swallowed —
+   *  an index hiccup must never break the review. */
+  referenceLookup?: ReviewReferenceLookup;
+  /** When present (with reviewStore), finding fates are observed before the
+   *  run and calibration priors are injected into the prompt (review-fates). */
+  intelStore?: ReviewIntelStore;
+  /** Scopes the calibration priors to this project — without it the
+   *  aggregates would cross every project on the machine. */
+  projectId?: number;
+  /** When present, the session intent is compiled into obligations and the
+   *  review judges alignment too (intent-contract.ts). */
+  intentCompiler?: IntentContractCompiler;
 }
 
 export interface ReviewSessionOutcome {
   ok: boolean;
   pendingHunks: number;
   findings: SnapshotReviewFinding[];
+  /** Compiled intent contract used by this review (null = contract-less). */
+  obligations?: IntentObligation[] | null;
   providerId?: string;
   modelId?: string;
   errorCode?: string;
@@ -51,6 +72,9 @@ export interface ReviewSessionOptions {
   /** Session intent (title + original request + task list), built by the
    *  entrypoint — services cannot read coder session messages itself. */
   intent?: string | null;
+  /** Recorded verification evidence (code-agent review-evidence.ts), built by
+   *  the entrypoint — services cannot read the tool-call history itself. */
+  evidence?: string | null;
 }
 
 const DIFF_CONTEXT = 3;
@@ -92,6 +116,19 @@ function excerptFor(diff: FileDiff, fingerprint?: string | null): string | null 
   ].join('\n');
 }
 
+/** Enclosing-symbol name for a finding's line — an anchor that survives the
+ *  fingerprint invalidation a re-edit causes. Best-effort. */
+function symbolAnchorFor(diff: FileDiff, line: number | null | undefined): string | null {
+  if (line == null || diff.currentContent == null) return null;
+  try {
+    const declLine = findEnclosingDeclLine(diff.currentContent, line);
+    const text = diff.currentContent.split('\n')[declLine - 1];
+    return text ? parseDeclarationName(text) : null;
+  } catch {
+    return null;
+  }
+}
+
 function persistComments(
   reviewStore: SessionFileReviewStore,
   runId: number,
@@ -99,23 +136,44 @@ function persistComments(
   findings: SnapshotReviewFinding[],
 ): void {
   for (const finding of findings) {
-    const diff = diffs.find(
+    const kind = finding.kind ?? 'defect';
+    let diff = diffs.find(
       (d) => d.baseline.id === finding.baselineId || d.baseline.filePath === finding.filePath,
     );
+    // unfulfilled_obligation may reference a file that does not exist yet —
+    // anchor it on the first baseline so it still reaches the panel.
+    if (!diff && kind === 'unfulfilled_obligation') diff = diffs[0];
     if (!diff) continue;
+    // Findings pointing OUTSIDE the diff (missing_change → untouched file,
+    // unfulfilled_obligation → expected file): anchor the comment on the
+    // motivating baseline, carry the real location in the body, and drop
+    // line anchors that belong to the other file.
+    const external = kind === 'missing_change' || kind === 'unfulfilled_obligation';
+    const prefix =
+      kind === 'missing_change'
+        ? `[missing change → ${finding.filePath}${finding.newLine != null ? `:${finding.newLine}` : ''}] `
+        : kind === 'unfulfilled_obligation'
+          ? `[unfulfilled obligation${finding.obligationId ? ` ${finding.obligationId}` : ''}] `
+          : kind === 'scope_creep'
+            ? '[scope creep] '
+            : '';
     reviewStore.createComment({
       run_id: runId,
       baseline_id: diff.baseline.id,
       source: 'auto',
       status: 'open',
       file_path: diff.baseline.filePath,
-      hunk_fingerprint: finding.hunkFingerprint ?? null,
-      old_line: finding.oldLine ?? null,
-      new_line: finding.newLine ?? null,
+      hunk_fingerprint: external ? null : finding.hunkFingerprint ?? null,
+      old_line: external ? null : finding.oldLine ?? null,
+      new_line: external ? null : finding.newLine ?? null,
       severity: finding.severity,
-      body: finding.body,
+      kind,
+      obligation_id: finding.obligationId ?? null,
+      symbol_anchor: external ? null : symbolAnchorFor(diff, finding.newLine ?? finding.oldLine),
+      body: prefix + finding.body,
       suggested_fix: finding.suggestedFix ?? null,
-      diff_excerpt: finding.diffExcerpt ?? excerptFor(diff, finding.hunkFingerprint),
+      diff_excerpt:
+        finding.diffExcerpt ?? (external ? null : excerptFor(diff, finding.hunkFingerprint)),
     });
   }
 }
@@ -143,16 +201,47 @@ export async function reviewSessionSnapshots(
     return { ok: true, pendingHunks: 0, findings: [] };
   }
 
+  // Close the learning loop BEFORE the new run: observe the fate of prior
+  // findings (accepted / dismissed / region re-edited / ignored) and turn the
+  // aggregate into calibration priors for this review. Best-effort.
+  let priors: string | null = null;
+  if (deps.intelStore && reviewStore) {
+    recordSessionFates(reviewStore, deps.intelStore, 'coder', coderSessionId, diffs);
+    priors = buildReviewPriors(deps.intelStore, deps.projectId);
+  }
+
+  // Compile the intent contract (cached per intent hash) — null degrades to
+  // a contract-less review.
+  let obligations: IntentObligation[] | null = null;
+  if (deps.intentCompiler && opts.intent?.trim()) {
+    obligations = await deps.intentCompiler.compile({
+      sessionKind: 'coder',
+      sessionId: coderSessionId,
+      resolveContext: { sessionId: coderSessionId },
+      intentSource: opts.intent,
+    });
+  }
+
+  const bundle = await buildReviewBundle({
+    sessionKind: 'coder',
+    sessionId: coderSessionId,
+    diffs,
+    focus: opts.focus,
+    intent: opts.intent,
+    evidence: opts.evidence,
+    priors,
+    referenceLookup: deps.referenceLookup,
+    obligations,
+  });
+
   const result = await pipeline.review({
     sessionKind: 'coder',
     sessionId: coderSessionId,
     resolveContext: { sessionId: coderSessionId },
     diffs,
-    contextText: formatReviewContext({
-      focus: opts.focus,
-      intent: opts.intent,
-      symbols: buildEnclosingSymbolContext(diffs),
-    }),
+    contextText: bundle.contextText,
+    absencesText: bundle.absencesText,
+    contractText: bundle.contractText,
   });
 
   if (!result.ok) {
@@ -190,6 +279,7 @@ export async function reviewSessionSnapshots(
     ok: true,
     pendingHunks,
     findings: result.findings,
+    obligations,
     providerId: result.providerId,
     modelId: result.modelId,
   };

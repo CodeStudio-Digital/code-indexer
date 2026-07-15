@@ -1,7 +1,11 @@
-import { memo } from 'react';
+import { isValidElement, memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Check, Copy, Maximize2, Minimize2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { copyText } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
+import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 
 interface MarkdownProps {
   text: string;
@@ -16,8 +20,155 @@ const defaultClasses =
 
 export const Markdown = memo(function Markdown({ text, className }: MarkdownProps) {
   return (
-    <div className={cn(baseClasses, !className && defaultClasses, className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    <div data-text-selectable className={cn(baseClasses, !className && defaultClasses, className)}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+        {text}
+      </ReactMarkdown>
     </div>
   );
 });
+
+const MAX_HIGHLIGHT_BYTES = 200_000;
+const COLLAPSED_CODE_MAX_LINES = 24;
+const COLLAPSED_CODE_MAX_CHARS = 3_500;
+
+/** Render fenced and indented code with syntax highlighting and per-block copy. */
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const { t } = useTranslation('chat');
+  const { code, lang } = codeBlockDetails(children);
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lineCount = code.split(/\r?\n/).length;
+  const collapsible = lineCount > COLLAPSED_CODE_MAX_LINES
+    || (lineCount > 12 && code.length > COLLAPSED_CODE_MAX_CHARS);
+  const collapsed = collapsible && !expanded;
+
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
+
+  async function handleCopy() {
+    if (!(await copyText(code))) return;
+    setCopied(true);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => {
+      setCopied(false);
+      resetTimer.current = null;
+    }, 1500);
+  }
+
+  return (
+    <div className="not-prose relative my-2 overflow-hidden rounded-md border bg-card text-foreground">
+      <div className="flex items-center justify-between border-b bg-muted/30 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span>{lang}</span>
+        <div className="flex items-center gap-1">
+          {collapsible && (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 normal-case transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-expanded={expanded}
+              data-code-expand
+            >
+              {expanded ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+              <span>{expanded ? t('dbQuery.collapse') : t('dbQuery.expand')}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 normal-case transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            aria-label={copied ? t('messages.codeCopied') : t('messages.copyCode')}
+            title={copied ? t('messages.codeCopied') : t('messages.copyCode')}
+            data-code-copy
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            <span>{copied ? t('messages.copied') : t('messages.copyCode')}</span>
+          </button>
+        </div>
+      </div>
+      <div className={cn('relative', collapsed && 'max-h-80 overflow-hidden')}>
+        <HighlightedCode code={code} lang={lang} />
+        {collapsed && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-card to-transparent"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HighlightedCode({ code, lang }: { code: string; lang: string }) {
+  const dark = useIsDark();
+  const theme = dark ? 'github-dark' : 'github-light';
+  const [html, setHtml] = useState<string | null>(null);
+  const tooLarge = code.length > MAX_HIGHLIGHT_BYTES;
+
+  useEffect(() => {
+    if (tooLarge || lang === 'text') {
+      setHtml(null);
+      return;
+    }
+    let cancelled = false;
+    setHtml(null);
+    void (async () => {
+      try {
+        // The highlighter is initialized only for language-tagged code fences,
+        // keeping ordinary streaming messages on the lightweight path.
+        const { ensureLang, getHighlighter } = await import('../../builder/preview/files/viewer/shiki-client.js');
+        const resolvedLang = await ensureLang(lang);
+        if (resolvedLang === 'text') return;
+        const highlighter = await getHighlighter();
+        const nextHtml = highlighter.codeToHtml(code, { lang: resolvedLang, theme });
+        if (!cancelled) setHtml(nextHtml);
+      } catch {
+        if (!cancelled) setHtml(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [code, lang, theme, tooLarge]);
+
+  if (!html) {
+    return (
+      <pre className="m-0 overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre">
+        <code>{code}</code>
+      </pre>
+    );
+  }
+
+  return (
+    <div
+      className="overflow-auto font-mono text-[12px] leading-5 [&_pre]:m-0 [&_pre]:min-w-full [&_pre]:p-3"
+      // Shiki creates this HTML from the code text itself, escaping user input
+      // while adding syntax-token spans and theme colors.
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function codeBlockDetails(children: ReactNode): { code: string; lang: string } {
+  const child = Array.isArray(children) && children.length === 1 ? children[0] : children;
+  if (isValidElement(child)) {
+    const props = child.props as { className?: string; children?: ReactNode };
+    const language = /(?:^|\s)language-([^\s]+)/.exec(props.className ?? '')?.[1]?.toLowerCase();
+    return {
+      code: childrenToString(props.children).replace(/\n$/, ''),
+      lang: language ?? 'text',
+    };
+  }
+  return { code: childrenToString(children).replace(/\n$/, ''), lang: 'text' };
+}
+
+function childrenToString(children: ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (typeof children === 'number') return String(children);
+  if (Array.isArray(children)) return children.map(childrenToString).join('');
+  if (children == null || typeof children === 'boolean') return '';
+  const child = children as { props?: { children?: ReactNode } };
+  return child.props?.children === undefined ? '' : childrenToString(child.props.children);
+}

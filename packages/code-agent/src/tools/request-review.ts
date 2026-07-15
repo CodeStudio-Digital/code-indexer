@@ -156,8 +156,13 @@ function formatReviewResult(findings: ReviewFinding[], parsed: boolean, raw: str
       : f.line
         ? `${f.file}:${f.line}`
         : f.file;
-    lines.push(`- [${f.severity}] ${loc} — ${f.issue}`);
+    const verdict = f.verdict ? ` [${f.verdict}]` : '';
+    lines.push(`- [${f.severity}]${verdict} ${loc} — ${f.issue}`);
     if (f.suggested_fix) lines.push(`  fix: ${f.suggested_fix}`);
+    for (const e of f.evidence ?? []) {
+      const exit = e.exit != null ? ` (exit=${e.exit})` : '';
+      lines.push(`  evidence: \`${e.cmd}\`${exit}${e.output_excerpt ? ` → ${e.output_excerpt}` : ''}`);
+    }
   }
   return lines.join('\n');
 }

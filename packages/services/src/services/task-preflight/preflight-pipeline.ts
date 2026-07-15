@@ -20,6 +20,8 @@ import { suppressThinkingFor } from '../../quality/chat-dispatcher.js';
 import type { ChatCallResult } from '../../quality/llm-chat.js';
 import {
   buildPreflightMessages,
+  cleanSessionTitle,
+  cleanSessionTitleSeed,
   parsePreflightOutput,
   type PreflightMemoryEntry,
   type PreflightSeed,
@@ -82,6 +84,22 @@ export interface TaskPreflightInput {
   fetchFn?: typeof fetch;
 }
 
+export interface SessionTitleInput {
+  userMessage: string;
+  timeoutMs?: number;
+  fetchFn?: typeof fetch;
+}
+
+export interface SessionTitleRunResult {
+  status: PreflightStatus;
+  title?: string;
+  latencyMs: number;
+  providerId?: string;
+  modelId?: string;
+  resolvedFrom?: string;
+  error?: string;
+}
+
 function envInt(name: string, fallback: number): number {
   const value = Number.parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -90,9 +108,73 @@ function envInt(name: string, fallback: number): number {
 export class TaskPreflightService {
   constructor(private readonly deps: TaskPreflightDeps) {}
 
+  private resolveBinding() {
+    return this.deps.resolver.resolveOrNull(
+      PIPELINE_NAME,
+      ROLE,
+      {},
+      this.deps.getFallbackDefault?.() ?? undefined,
+    );
+  }
+
   /** Cache fingerprint for project membership + the currently eligible capabilities. */
   getCapabilityFingerprint(input: TaskPreflightInput): string {
     return preflightCapabilityFingerprint(preparePreflightCatalogs(this.deps, input));
+  }
+
+  /**
+   * Title-only fallback through the same configured preflight binding. The
+   * normal path gets a title for free in `run()`; this covers disabled/failed
+   * preflight and sessions created before the browser component mounted.
+   */
+  async generateSessionTitle(input: SessionTitleInput): Promise<SessionTitleRunResult> {
+    const startedAt = performance.now();
+    const done = (partial: Omit<SessionTitleRunResult, 'latencyMs'>): SessionTitleRunResult => ({
+      ...partial,
+      latencyMs: Math.round(performance.now() - startedAt),
+    });
+
+    try {
+      const binding = await this.resolveBinding();
+      if (!binding) return done({ status: 'unconfigured' });
+      const ids = { providerId: binding.provider.id, modelId: binding.modelId };
+      const problem = bindingProblem(binding, { label: `${LABEL} session title`, codePrefix: 'session_title' });
+      if (problem) return done({ status: 'provider_error', ...ids, error: problem.message });
+
+      const userMessage = cleanSessionTitleSeed(input.userMessage);
+      if (!userMessage) return done({ status: 'parse_fail', ...ids, error: 'empty title seed' });
+      const timeoutMs = input.timeoutMs ?? envInt('CODER_PREFLIGHT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+      const result = await callConfiguredChat(binding, [
+        {
+          role: 'system',
+          content: 'Generate a concise 3-7 word chat session title. Return only the title, with no quotes, markdown, or trailing punctuation.',
+        },
+        { role: 'user', content: userMessage },
+      ], {
+        temperature: 0,
+        maxTokens: 48,
+        timeoutMs,
+        disableThinking: suppressThinkingFor(binding),
+        reasoningEffort: 'minimal',
+        fetchFn: input.fetchFn,
+      });
+      if (result.errorBody) {
+        const status = result.finishReason === 'timeout' ? 'timeout' : 'provider_error';
+        return done({
+          status,
+          ...ids,
+          error: friendlyProviderError(binding, result.errorBody, `${LABEL} session title`),
+        });
+      }
+      const title = cleanSessionTitle(result.content);
+      if (!title) return done({ status: 'parse_fail', ...ids, error: 'empty title generated' });
+      return done({ status: 'ok', title, ...ids, resolvedFrom: binding.resolvedFrom });
+    } catch (error) {
+      return done({
+        status: 'provider_error',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async run(input: TaskPreflightInput): Promise<PreflightRunResult> {
@@ -108,10 +190,7 @@ export class TaskPreflightService {
       // analysis, not a session-bound call. A configured `code-agent/preflight`
       // binding wins; otherwise fall back to the general default model so
       // preflight runs zero-config.
-      const binding = await this.deps.resolver.resolveOrNull(
-        PIPELINE_NAME, ROLE, {},
-        this.deps.getFallbackDefault?.() ?? undefined,
-      );
+      const binding = await this.resolveBinding();
       if (!binding) return done({ status: 'unconfigured' });
 
       const ids = { providerId: binding.provider.id, modelId: binding.modelId };

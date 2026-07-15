@@ -20,10 +20,17 @@ describe('parseWslRuntimeVersions', () => {
 
   it('keeps only known kinds with non-empty string values, pruning empty distros', () => {
     const json = JSON.stringify({
-      Ubuntu: { node: 'managed:20.11.0', python: 'managed:3.12.3', java: 'x', bogus: 1 },
+      Ubuntu: { node: 'managed:20.11.0', python: 'managed:3.12.3', java: 'managed:21.0.7', dotnet: 'managed:10.0.301', bogus: 1 },
       Debian: { node: '' },
     });
-    expect(parseWslRuntimeVersions(json)).toEqual({ Ubuntu: { node: 'managed:20.11.0', python: 'managed:3.12.3' } });
+    expect(parseWslRuntimeVersions(json)).toEqual({
+      Ubuntu: {
+        node: 'managed:20.11.0',
+        python: 'managed:3.12.3',
+        java: 'managed:21.0.7',
+        dotnet: 'managed:10.0.301',
+      },
+    });
   });
 });
 

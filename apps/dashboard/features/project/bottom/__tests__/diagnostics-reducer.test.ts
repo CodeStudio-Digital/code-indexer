@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DiagnosticItem, DiagnosticsFrame } from '@mcp/api-bus';
 import {
   applyFrame,
+  applyFrames,
   emptyDiagnosticsState,
   flatten,
   type DiagnosticsState,
@@ -79,9 +80,25 @@ describe('diagnostics-reducer', () => {
     expect(flatten(state).items.map((i) => i.message)).toEqual(['e-l1', 'e-l2', 'w']);
   });
 
-  it('returns a new state reference per frame (React change detection)', () => {
+  it('applies a batch with the same latest-wins and clear semantics as sequential frames', () => {
+    const frames = [
+      frame({ file: 'src/a.ts', source: 'ts', diagnostics: [diag({ message: 'old' })] }),
+      frame({ file: 'src/b.ts', source: 'index', diagnostics: [diag({ file: 'src/b.ts', message: 'b', severity: 'warning' })] }),
+      frame({ file: 'src/a.ts', source: 'ts', diagnostics: [diag({ message: 'new' })] }),
+      frame({ file: 'src/a.ts', source: 'index', diagnostics: [diag({ message: 'index' })] }),
+      frame({ file: 'src/a.ts', source: 'ts', diagnostics: [] }),
+    ];
+    const sequential = reduce(...frames);
+    const batched = applyFrames(emptyDiagnosticsState(), frames);
+
+    expect(batched).toEqual(sequential);
+    expect(flatten(batched)).toEqual(flatten(sequential));
+    expect(flatten(batched).items.map((item) => item.message)).toEqual(['index', 'b']);
+  });
+
+  it('returns the same state for an empty batch and a new state for one frame', () => {
     const empty = emptyDiagnosticsState();
-    const next = applyFrame(empty, frame());
-    expect(next).not.toBe(empty);
+    expect(applyFrames(empty, [])).toBe(empty);
+    expect(applyFrame(empty, frame())).not.toBe(empty);
   });
 });

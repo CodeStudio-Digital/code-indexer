@@ -133,7 +133,7 @@ export function ResponseViewer({ response, error, sending, verifiedStatus, onMar
           );
         })}
       </div>
-      <div className="flex-1 min-h-0">
+      <div data-text-selectable className="flex-1 min-h-0">
         {tab === 'body' && <ResponseBody body={response.body} headers={response.headers} truncated={response.truncated} />}
         {tab === 'headers' && <div className="h-full overflow-auto"><ResponseHeaders headers={response.headers} /></div>}
         {tab === 'tests' && <TestResultsTab tests={response.tests} consoleLogs={response.consoleLogs} scriptError={response.scriptError} updatedVars={response.updatedVars} />}

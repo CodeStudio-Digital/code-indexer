@@ -109,7 +109,10 @@
 // 2026-07-12.1 bump — progressive App Studio reads and Markdown-first native
 // tool results with a hidden structured channel. Specialist prompt behavior and
 // the tool surface changed → invalidate stale fingerprints.
-export const SYSTEM_PROMPT_VERSION = '20260712.1';
+// 2026-07-14.1 bump — request-scoped App Studio workflow reads. Tool-result
+// continuations no longer restart coordination, and the workflow snapshot opts
+// into an active unchanged-result loop break.
+export const SYSTEM_PROMPT_VERSION = '20260714.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

@@ -32,6 +32,7 @@ export type AgentId =
   | 'admin'
   | 'spec'
   | 'app_orchestrator'
+  | 'app_db'
   | 'builder'
   | 'api'
   | 'diagram';
@@ -126,6 +127,16 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     planMode: false,
     maxTurns: 180,
     defaultTemperature: 0.25,
+  },
+  app_db: {
+    id: 'app_db',
+    label: 'Database',
+    description:
+      'Database specialist. Inspects registered connections, explains schemas and data, runs safe read-only analysis, and gates every mutation behind explicit approval.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 100,
+    defaultTemperature: 0.2,
   },
   builder: {
     id: 'builder',

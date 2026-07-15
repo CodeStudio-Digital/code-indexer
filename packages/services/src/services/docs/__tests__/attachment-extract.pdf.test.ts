@@ -52,17 +52,20 @@ describe('extractAttachmentText — PDF provider-aware', () => {
 });
 
 describe('pdfHandledNatively', () => {
-  it('is true only for the adapters that render base64 PDF', () => {
-    for (const k of ['anthropic', 'claude-code', 'gemini', 'google-oauth', 'ANTHROPIC']) {
-      expect(pdfHandledNatively(k)).toBe(true);
-    }
+  it('honours an explicit native provider capability', () => {
+    expect(pdfHandledNatively({ mode: 'native', modelId: 'gpt-5.3-codex' })).toBe(true);
+    expect(pdfHandledNatively({ mode: 'pdf-only', modelId: 'claude-sonnet-4-6' })).toBe(true);
   });
 
-  it('is false for everyone else, unknown, and undefined (safe default → extract)', () => {
-    for (const k of ['chatgpt', 'openai', 'kimi-code', 'bedrock', 'zai', 'openrouter', 'deepseek', '']) {
-      expect(pdfHandledNatively(k)).toBe(false);
-    }
+  it('resolves model-dependent support from the model row or Claude model id', () => {
+    expect(pdfHandledNatively({ mode: 'model-dependent', supportsAttachments: true })).toBe(true);
+    expect(pdfHandledNatively({ mode: 'model-dependent', modelId: 'anthropic.claude-sonnet-4-6-v1' })).toBe(true);
+    expect(pdfHandledNatively({ mode: 'model-dependent', modelId: 'meta.llama-4' })).toBe(false);
+  });
+
+  it('uses text extraction for text-only, unknown, and missing capabilities', () => {
+    expect(pdfHandledNatively({ mode: 'text', modelId: 'anything' })).toBe(false);
+    expect(pdfHandledNatively({ modelId: 'gpt-5.3-codex' })).toBe(false);
     expect(pdfHandledNatively(undefined)).toBe(false);
-    expect(pdfHandledNatively(null)).toBe(false);
   });
 });

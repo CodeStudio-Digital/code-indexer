@@ -9,11 +9,11 @@
  * Sem deps de DB.
  */
 
-export type WslPackageManagerKey = 'node' | 'python';
+export type WslPackageManagerKey = 'node' | 'python' | 'java';
 export type WslDistroManagers = Partial<Record<WslPackageManagerKey, string>>;
 export type WslPackageManagers = Record<string, WslDistroManagers>;
 
-const KEYS: readonly WslPackageManagerKey[] = ['node', 'python'];
+const KEYS: readonly WslPackageManagerKey[] = ['node', 'python', 'java'];
 
 /** JSON → mapa por distro, tolerante a corrupção/shape inválido. */
 export function parseWslPackageManagers(json: string | null | undefined): WslPackageManagers {

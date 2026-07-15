@@ -1,8 +1,8 @@
 /**
  * Live LSP server status for the active file's language.
  *
- * One-shot `lsp.serverStatus` for the first paint (and to warm-spawn the
- * server backend-side), then a project-scoped `serverStatusStream` filtered
+ * One-shot `lsp.serverStatus` for the first paint, then a project-scoped
+ * `serverStatusStream` filtered
  * by languageId — so the chip flips green the moment a late-spawning server
  * becomes ready, instead of staying stale on the initial poll.
  *
@@ -25,7 +25,7 @@ export function useServerStatus(projectId: number, languageId: string | null): L
     let es: EventSource | null = null;
     let closeIterator: (() => void) | null = null;
 
-    // First paint (also warm-spawns the server backend-side).
+    // First paint. Heavy servers may remain installed and idle.
     void apiCall<LspServerStatus>('lsp.serverStatus', { projectId, languageId })
       .then((s) => { if (!cancelled) setStatus(s); })
       .catch(() => undefined);

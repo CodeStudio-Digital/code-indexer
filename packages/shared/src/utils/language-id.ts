@@ -9,7 +9,14 @@
  */
 export function languageIdForPath(path: string): string {
   const base = path.toLowerCase().split(/[\\/]/).pop() ?? '';
-  if (base === 'dockerfile') return 'dockerfile';
+  // Extensionless launchers and convention-based build files need an explicit
+  // mapping: Monaco cannot infer a language from their contents or shebang.
+  if (base === 'dockerfile' || base.startsWith('dockerfile.')) return 'dockerfile';
+  if (base === 'gradlew' || base === 'mvnw' || base === 'configure'
+    || base === '.bashrc' || base === '.bash_profile' || base === '.profile'
+    || base === '.zshrc' || base === '.zprofile') return 'shell';
+  if (base === 'jenkinsfile' || base.endsWith('.gradle')) return 'groovy';
+  if (base === 'gemfile' || base === 'rakefile' || base === 'vagrantfile') return 'ruby';
   const ext = base.includes('.') ? base.split('.').pop() ?? '' : '';
   switch (ext) {
     case 'ts': case 'cts': case 'mts': return 'typescript';
@@ -24,7 +31,8 @@ export function languageIdForPath(path: string): string {
     case 'html': case 'htm': return 'html';
     case 'vue': return 'vue';
     case 'svelte': return 'svelte';
-    case 'xml': return 'xml';
+    case 'xml': case 'csproj': case 'fsproj': case 'vbproj':
+    case 'props': case 'targets': case 'nuspec': case 'resx': case 'xaml': return 'xml';
     case 'yaml': case 'yml': return 'yaml';
     case 'toml': return 'toml';
     case 'py': return 'python';
@@ -42,9 +50,24 @@ export function languageIdForPath(path: string): string {
     case 'dart': return 'dart';
     case 'scala': return 'scala';
     case 'sql': return 'sql';
-    case 'sh': case 'bash': return 'shell';
+    case 'sh': case 'bash': case 'zsh': case 'fish': return 'shell';
+    case 'bat': case 'cmd': return 'bat';
     case 'ps1': return 'powershell';
     case 'dockerfile': return 'dockerfile';
     default: return 'plaintext';
   }
+}
+
+/** Content-aware fallback for extensionless executable scripts. */
+export function languageIdForDocument(path: string, content?: string | null): string {
+  const pathLanguage = languageIdForPath(path);
+  if (pathLanguage !== 'plaintext' || !content?.startsWith('#!')) return pathLanguage;
+  const shebang = content.slice(0, content.indexOf('\n') === -1 ? content.length : content.indexOf('\n')).toLowerCase();
+  if (/\b(?:ba|da|k|z)?sh\b/.test(shebang)) return 'shell';
+  if (/\b(?:python|python\d+(?:\.\d+)?)\b/.test(shebang)) return 'python';
+  if (/\b(?:node|deno|bun)\b/.test(shebang)) return 'javascript';
+  if (/\bruby\b/.test(shebang)) return 'ruby';
+  if (/\bphp\b/.test(shebang)) return 'php';
+  if (/\b(?:pwsh|powershell)\b/.test(shebang)) return 'powershell';
+  return pathLanguage;
 }

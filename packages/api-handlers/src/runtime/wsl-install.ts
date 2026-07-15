@@ -9,6 +9,9 @@
  * Sources (no official portable Linux build from php.net/python.org):
  *   - Node:   official nodejs.org linux tarball.
  *   - Python: python-build-standalone (astral-sh), relocatable `install_only`.
+ *   - Java:   Eclipse Temurin linux tarball (Adoptium API).
+ *   - .NET:   official SDK linux tarball (FLAT archive — extracted WITHOUT
+ *             --strip-components; the version dir is the dotnet root).
  *   - PHP:    deferred (Fase 2b — static-php); throws for now.
  */
 
@@ -20,20 +23,49 @@ import { promisify } from 'node:util';
 import { ApiError, type InstallProgress, type RuntimeKind, type RuntimeRelease } from '@mcp/api-bus';
 import { downloadFile } from './runtime-shared.js';
 import { listAvailable as listNodeReleases } from './node-manager.js';
+import { archiveFor as jdkArchiveFor, listReleases as listJdkReleases } from './jdk-manager.js';
+import { listReleases as listDotnetReleases, sdkArchiveUrl } from './dotnet-manager.js';
 import { detectWslPlatform, detectWslRuntimes, type WslPlatform } from './wsl-runtime.js';
 import { toWslMntPath, wslManagedDir } from './wsl-paths.js';
+import { assertRuntimeVersion } from './runtime-version.js';
+import type { DownloadDigest } from './runtime-shared.js';
 
 const execFileAsync = promisify(execFile);
 const PBS_LATEST = 'https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest';
 
+const WSL_KINDS = new Set<RuntimeKind>(['node', 'python', 'java', 'dotnet']);
+
+/** Adoptium arch token for a distro platform. */
+const jdkArch = (plat: WslPlatform): 'x64' | 'aarch64' => (plat.arch === 'aarch64' ? 'aarch64' : 'x64');
+/** .NET rid for a distro platform (glibc only — musl gated at install). */
+const dotnetRid = (plat: WslPlatform): string => `linux-${plat.arch === 'aarch64' ? 'arm64' : 'x64'}`;
+
 /** Releases of `kind` installable into a WSL distro. */
 export async function listWslReleases(kind: RuntimeKind, distro: string): Promise<RuntimeRelease[]> {
   if (kind === 'node') return listNodeReleases();
-  if (kind === 'python') {
-    const plat = (await detectWslPlatform(distro)) ?? { arch: 'x86_64', libc: 'gnu' };
+  if (kind === 'dotnet') return listDotnetReleases(); // channel list is platform-independent
+  if (kind === 'python' || kind === 'java') {
+    const plat = (await detectWslPlatform(distro)) ?? { arch: 'x86_64' as const, libc: 'gnu' as const };
+    if (kind === 'java') return listJdkReleases('linux', jdkArch(plat));
     return (await pbsAssets(plat)).map((a) => ({ version: a.version, label: `Python ${a.version} (standalone)` }));
   }
   throw new ApiError('unsupported', 400, `WSL ${kind} install is not supported yet`);
+}
+
+/** Archive URL for `kind`@`version` on the distro platform. */
+async function wslArchive(
+  kind: RuntimeKind,
+  version: string,
+  plat: WslPlatform,
+): Promise<{ url: string; digest?: DownloadDigest }> {
+  if (kind === 'node') return { url: nodeUrl(version, plat) };
+  if (kind === 'python') return { url: await pythonUrl(version, plat) };
+  if (kind === 'java') {
+    const asset = await jdkArchiveFor(version, 'linux', jdkArch(plat));
+    return { url: asset.url, digest: { algorithm: 'sha256', expected: asset.sha256 } };
+  }
+  const asset = await sdkArchiveUrl(version, dotnetRid(plat));
+  return { url: asset.url, digest: { algorithm: 'sha512', expected: asset.sha512 } };
 }
 
 /** Download + extract a managed runtime inside the distro, yielding progress. */
@@ -42,45 +74,65 @@ export async function* installWslRuntime(
   version: string,
   distro: string,
 ): AsyncGenerator<InstallProgress> {
-  if (kind !== 'node' && kind !== 'python') {
+  if (!WSL_KINDS.has(kind)) {
     throw new ApiError('unsupported', 400, `WSL ${kind} install is not supported yet`);
   }
+  assertRuntimeVersion(version);
   const plat = await detectWslPlatform(distro);
   if (!plat) throw new ApiError('internal', 500, `could not reach WSL distro "${distro}"`);
   if (plat.libc === 'musl') {
     throw new ApiError('unsupported', 400, `musl/Alpine distros are not supported yet (${distro})`);
   }
 
-  const url = kind === 'node' ? nodeUrl(version, plat) : await pythonUrl(version, plat);
+  const { url, digest } = await wslArchive(kind, version, plat);
   const tmpFile = join(tmpdir(), `mcp-wsl-${kind}-${version}-${process.pid}.tar.gz`);
   const dest = wslManagedDir(kind, version);
   const mnt = toWslMntPath(tmpFile);
 
   try {
-    yield* downloadFile({ url, destFile: tmpFile, kind, version });
+    yield* downloadFile({ url, destFile: tmpFile, kind, version, digest });
     yield { kind, phase: 'extract', version };
     // Extract inside the distro: native fs keeps symlinks/exec bits intact.
     // --strip-components=1 drops the archive's single top folder so binaries
-    // land at `<dest>/bin` deterministically (matches wslManagedBinDir).
+    // land at `<dest>/bin` deterministically (matches wslManagedBinDir) —
+    // EXCEPT .NET, whose archive is flat (dotnet at the root): stripping would
+    // eat real payload dirs, so it extracts as-is into the version dir.
     // For Node, also drop corepack's yarn/pnpm shims into the same bin dir so a
     // `yarn`/`pnpm` script resolves to THIS Node (first on PATH) instead of a
     // Windows package manager leaking in via WSL's PATH interop. Non-fatal.
+    const partial = `${dest}.partial-${process.pid}`;
     const corepack =
       kind === 'node'
-        ? ` && ( "${dest}/bin/corepack" enable --install-directory "${dest}/bin" >/dev/null 2>&1 || true )`
+        ? ` && ( "${partial}/bin/corepack" enable --install-directory "${partial}/bin" >/dev/null 2>&1 || true )`
         : '';
-    const script = `mkdir -p "${dest}" && tar -xzf "${mnt}" -C "${dest}" --strip-components=1${corepack}`;
+    const strip = kind === 'dotnet' ? '' : ' --strip-components=1';
+    const verify = kind === 'java'
+      ? `test -x "$partial/bin/java" && test -x "$partial/bin/javac"`
+      : kind === 'dotnet'
+        ? `test -x "$partial/dotnet" && test -d "$partial/sdk/${version}"`
+        : kind === 'node'
+          ? `test -x "$partial/bin/node"`
+          : `test -x "$partial/bin/python3"`;
+    // Extract into a sibling staging directory. The previous SDK survives a
+    // corrupt archive; EXIT cleanup removes staging on any tar/corepack/mv
+    // failure, and only a complete extraction replaces the destination.
+    const script = `set -e; partial="${partial}"; rm -rf "$partial"; mkdir -p "$partial"; trap 'rm -rf "$partial"' EXIT; tar -xzf "${mnt}" -C "$partial"${strip}${corepack}; ${verify}; rm -rf "${dest}"; mv "$partial" "${dest}"; trap - EXIT`;
     await runInDistro(distro, script);
   } finally {
     await rm(tmpFile, { force: true });
   }
 
   const runtime = (await detectWslRuntimes(kind, distro)).find((r) => r.id === `managed:${version}`);
+  if (!runtime) {
+    await runInDistro(distro, `rm -rf "${dest}"`);
+    throw new Error(`extracted but could not locate ${kind} ${version} in WSL distro "${distro}"`);
+  }
   yield { kind, phase: 'done', version, runtime };
 }
 
 /** Remove a managed runtime from the distro. */
 export async function uninstallWslRuntime(kind: RuntimeKind, version: string, distro: string): Promise<void> {
+  assertRuntimeVersion(version);
   await runInDistro(distro, `rm -rf "${wslManagedDir(kind, version)}"`);
 }
 

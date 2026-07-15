@@ -3,6 +3,10 @@ import type { Migration } from './index.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
+function tableExists(db: DB, table: string): boolean {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+}
+
 function addColumnIfMissing(db: DB, table: string, column: string, definition: string): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((item) => item.name === column)) {
@@ -15,6 +19,10 @@ export const appStudioWorkflowV5218: Migration = {
   version: 218,
   name: 'app_studio_workflow_v5',
   up(db: DB) {
+    // App Studio is central-only. Project DBs run this migration lineage after
+    // their central tables have been trimmed, so the entire migration must no-op.
+    if (!tableExists(db, 'app_studio_sessions')) return;
+
     addColumnIfMissing(db, 'app_studio_sessions', 'coordinator_session_id', 'INTEGER');
 
     db.exec(`

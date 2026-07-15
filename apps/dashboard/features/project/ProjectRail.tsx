@@ -11,12 +11,15 @@ import { buildRailPin } from '../../state/pinned-tabs-describe.js';
 import { railPinId } from '../../state/pinned-tabs-types.js';
 import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
-import { LEFT_TOOL_TABS, type TabDef } from './tabs-config.js';
+import { LEFT_TOOL_TABS, WORKSPACE_SURFACES, type TabDef } from './tabs-config.js';
 
 interface ProjectRailProps {
   projectId: number;
   activeTool: string | null;
+  activeSurface: string;
   onToggle: (id: string) => void;
+  onSelectSurface: (id: string) => void;
+  previewEnabled: boolean;
   bottomOpen: boolean;
   onToggleBottom: () => void;
   pluginTabs: TabDef[];
@@ -25,7 +28,10 @@ interface ProjectRailProps {
 export function ProjectRail({
   projectId,
   activeTool,
+  activeSurface,
   onToggle,
+  onSelectSurface,
+  previewEnabled,
   bottomOpen,
   onToggleBottom,
   pluginTabs,
@@ -66,6 +72,18 @@ export function ProjectRail({
     />
   );
 
+  const renderWorkspace = (tab: TabDef) => (
+    <RailButton
+      key={tab.id}
+      icon={tab.icon}
+      label={tab.label}
+      role="tab"
+      active={activeSurface === tab.id}
+      onClick={() => onSelectSurface(tab.id)}
+      contextItems={railItems(tab)}
+    />
+  );
+
   return (
     <>
       <RailContainer side="left" aria-label="Project tool windows">
@@ -73,6 +91,12 @@ export function ProjectRail({
           <Fragment key={tab.id}>
             {tab.separatorBefore && <RailSeparator />}
             {renderTool(tab)}
+          </Fragment>
+        ))}
+        {WORKSPACE_SURFACES.filter((tab) => tab.id !== 'preview' || previewEnabled).map((tab) => (
+          <Fragment key={tab.id}>
+            {tab.separatorBefore && <RailSeparator />}
+            {renderWorkspace(tab)}
           </Fragment>
         ))}
         {pluginTabs.length > 0 && <RailSeparator />}

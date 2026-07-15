@@ -9,13 +9,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, CheckCircle2, Download, RefreshCw } from 'lucide-react';
-import type { DetectedGroup, DetectedRunners, ManagerStatus, RuntimeKind, RuntimeTarget } from '@mcp/api-bus';
+import { AlertTriangle, CheckCircle2, Download, Plus, RefreshCw, Search } from 'lucide-react';
+import type { DetectedGroup, DetectedRunners, ManagerStatus, PackageSearchResult, RuntimeKind, RuntimeTarget } from '@mcp/api-bus';
 import type { Project } from '@mcp/shared/types.js';
 import { readPackageManager, writePackageManager } from '@mcp/shared/utils/package-managers.js';
 import { readWslPackageManager, writeWslPackageManager, type WslPackageManagerKey } from '@mcp/shared/utils/wsl-package-managers.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Combobox } from '../../../../components/ui/combobox.js';
+import { Input } from '../../../../components/ui/input.js';
 import { apiCall } from '../../../../lib/api-client.js';
 import { launchRun } from '../../../../state/run-launch.js';
 import { MANAGER_KEY, MANAGER_OPTIONS, MANAGERS_FOR_KIND, updateCommand } from '../../../../lib/pkg-manager-cmds.js';
@@ -42,6 +43,11 @@ export function DependenciesSection({
   // override server-side, so re-detecting only on the optimistic prop change
   // could race ahead of the PATCH write and report the old manager.
   const [tick, setTick] = useState(0);
+  const [packageQuery, setPackageQuery] = useState('');
+  const [packageResults, setPackageResults] = useState<PackageSearchResult[]>([]);
+  const [packageBusy, setPackageBusy] = useState(false);
+  const [packageMessage, setPackageMessage] = useState<string | null>(null);
+  const [packageProjectFile, setPackageProjectFile] = useState('');
 
   const isWsl = target.kind === 'wsl';
   const distro = target.kind === 'wsl' ? target.distro : '';
@@ -99,12 +105,61 @@ export function DependenciesSection({
   }
   function install(): void {
     if (group?.installCommand) {
-      void launchRun({ projectId: project.id, command: group.installCommand, label: t('runtime.deps.install'), manager: group.manager });
+      void launchRun({ projectId: project.id, command: group.installCommand, label: t('runtime.deps.install'), manager: group.manager, target });
     }
   }
   function update(): void {
     if (group) {
-      void launchRun({ projectId: project.id, command: updateCommand(group.manager), label: t('runtime.deps.update'), manager: group.manager });
+      void launchRun({ projectId: project.id, command: group.updateCommand ?? updateCommand(group.manager), label: t('runtime.deps.update'), manager: group.manager, target });
+    }
+  }
+  const packageManager = group && (group.manager === 'maven' || group.manager === 'gradle' || group.manager === 'dotnet')
+    ? group.manager
+    : null;
+  const dotnetProjects = useMemo(() => group?.manager === 'dotnet'
+    ? group.runners.flatMap((runner) => runner.id.startsWith('dotnet:run:') ? [runner.id.slice('dotnet:run:'.length)] : [])
+    : [], [group]);
+  const selectedProjectFile = dotnetProjects.length === 1
+    ? dotnetProjects[0]
+    : dotnetProjects.includes(packageProjectFile) ? packageProjectFile : '';
+  const projectFileRequired = packageManager === 'dotnet' && !selectedProjectFile;
+  async function searchPackage(): Promise<void> {
+    if (!packageManager || packageQuery.trim().length < 2) return;
+    setPackageBusy(true);
+    setPackageMessage(null);
+    try {
+      setPackageResults(await apiCall<PackageSearchResult[]>('runner.searchPackages', {
+        projectId: project.id,
+        manager: packageManager,
+        query: packageQuery.trim(),
+      }));
+    } catch (err) {
+      setPackageResults([]);
+      setPackageMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPackageBusy(false);
+    }
+  }
+  async function addPackage(item: PackageSearchResult): Promise<void> {
+    if (!packageManager) return;
+    setPackageBusy(true);
+    setPackageMessage(null);
+    try {
+      const result = await apiCall<{ changed: boolean; manifest: string; message?: string }>('runner.addDependency', {
+        projectId: project.id,
+        manager: packageManager,
+        packageId: item.id,
+        version: item.version,
+        projectFile: packageManager === 'dotnet' ? selectedProjectFile || undefined : undefined,
+        target,
+      });
+      setPackageMessage(result.changed
+        ? t('runtime.deps.packageAdded', { package: item.id, manifest: result.manifest })
+        : (result.message ?? t('runtime.deps.packagePresent')));
+    } catch (err) {
+      setPackageMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPackageBusy(false);
     }
   }
 
@@ -166,6 +221,50 @@ export function DependenciesSection({
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground">{t('runtime.deps.hint')}</p>
+          {packageManager && (
+            <div className="space-y-2 border-t pt-2.5">
+              {packageManager === 'dotnet' && dotnetProjects.length > 1 && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium">{t('runtime.deps.projectFile')}</label>
+                  <Combobox
+                    value={packageProjectFile}
+                    onChange={setPackageProjectFile}
+                    options={dotnetProjects.map((file) => ({ value: file, label: file }))}
+                    searchPlaceholder={t('runtime.deps.projectFileSearch')}
+                    emptyLabel={t('settings.select.empty')}
+                  />
+                </div>
+              )}
+              {packageManager === 'dotnet' && dotnetProjects.length === 0 && (
+                <p className="text-[11px] text-muted-foreground">{t('runtime.deps.noProjectFile')}</p>
+              )}
+              <div className="flex gap-2">
+                <Input
+                  value={packageQuery}
+                  onChange={(event) => setPackageQuery(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter') void searchPackage(); }}
+                  placeholder={t('runtime.deps.packageSearch')}
+                  className="h-8 text-xs"
+                />
+                <Button type="button" size="sm" variant="outline" onClick={() => void searchPackage()} disabled={packageBusy || packageQuery.trim().length < 2}>
+                  <Search className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              {packageResults.slice(0, 8).map((item) => (
+                <div key={`${item.id}@${item.version}`} className="flex items-start gap-2 rounded border p-2 text-[11px]">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono">{item.id}</div>
+                    <div className="text-muted-foreground">{item.version}</div>
+                    {item.description && <div className="line-clamp-2 text-muted-foreground">{item.description}</div>}
+                  </div>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => void addPackage(item)} disabled={packageBusy || projectFileRequired}>
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+              {packageMessage && <p className="text-[11px] text-muted-foreground">{packageMessage}</p>}
+            </div>
+          )}
         </>
       )}
     </div>

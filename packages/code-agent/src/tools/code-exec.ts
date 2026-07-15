@@ -24,9 +24,10 @@
  * the tool's text content, or thrown Error when the tool reports isError.
  */
 import { runInNewContext, type Context } from 'node:vm';
-import type { CoderTool, GuardVerdict, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
 import { evaluateToolInvocation, findScopeViolations, resolveToolMetadata, type PolicyContext } from '@mcp/code-agent/core/policy.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
@@ -35,6 +36,7 @@ import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 import { capToolContent } from '@mcp/code-agent/core/runner/pure-helpers.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
+import { buildChangeSandboxApi } from '@mcp/code-agent/tools/code-exec-change.js';
 import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
@@ -80,19 +82,30 @@ const CODE_EXEC_DESC =
   'Execute a JS snippet that batches tool calls in one turn. Saves round-trips when you need to chain reads/searches/edits with logic, loops, or filtering.\n' +
   '\n' +
   'API inside the snippet:\n' +
-  '  - `tools.<name>(args)` OR `<name>(args)` — both work. Calls ANY registered tool, INCLUDING tools that are NOT in your current visible toolset / tier: code_exec runs against the full tool catalog, so you never need `expand_toolset` to reach a tool from in here (the per-call plan-mode / task-scope policy still applies to each call). The bare-global alias exists for every tool whose name does not collide with a JS builtin (read_file, edit_file, mcp__grep_code, etc). Returns the tool\'s text content (string). Throws on tool error.\n' +
-  '  - `list_tools()` → `[{name, tier, params, description}]` for EVERY callable tool (incl. ones hidden from your visible toolset). `tool_schema(name)` → that tool\'s full JSON Schema. Use these (or `find_tools({query})`) to discover the exact name + args of a tool you cannot see, then call it directly here.\n' +
+  '  - `tools.<name>(args)` OR `<name>(args)` — both work. Calls any registered tool that is callable inside code_exec, INCLUDING non-interactive tools that are NOT in your current visible toolset / tier, so you never need `expand_toolset` to reach those tools from here (the per-call plan-mode / task-scope policy still applies to each call). The bare-global alias exists for every tool whose name does not collide with a JS builtin (read_file, edit_file, mcp__grep_code, etc). Returns the tool\'s text content (string). Throws on tool error.\n' +
+  '  - `attempt(toolPromise)` — use ONLY for one probe that may legitimately fail. Returns `{ok:true,value}` or `{ok:false,error:{tool,code,kind,message,retryable,suggestedAction}}` so the rest of a `Promise.all` batch can finish. Policy refusals, permission errors, timeouts, and cancellations still throw.\n' +
+  '  - `list_tools()` → `[{name, tier, params, description}]` for EVERY tool callable inside code_exec. `tool_schema(name)` introspects ANY registered tool and returns its full JSON Schema plus `callableInsideCodeExec` and `invokeAs`. When `invokeAs` is `top_level`, call that tool directly outside code_exec. Use these (or `find_tools({query})`) to discover exact names and args.\n' +
   '  - `log(...)` — appends to the captured output. JSON-friendly.\n' +
   '  - `stash.set(key, value)` / `stash.get(key)` / `stash.keys()` / `stash.delete(key)` — key-value store that PERSISTS across code_exec calls for the whole session (~2 MB, JSON values). Carry file content or intermediate results into a later script through the stash instead of printing them or re-reading files.\n' +
+  '  - `change.*` — THIS SESSION\'s pending edits as a queryable object (reviewing your own work): `await change.files()` (shape-classified summary), `change.hunks(path)`, `change.raw(path)` → {before, after}, `change.symbol(path, name)` → before/after body, `change.callers(symbolName)`, `change.dependents(path)`, `change.search(regex, {side:"before"|"after"})`, `change.absences()` → untouched references of contract-changed symbols. Prefer these over re-reading files to audit what you changed.\n' +
   '  - `JSON`, `Math`, `String`, `Number`, `Boolean`, `Array`, `Object`, `Promise`, `Set`, `Map` are available.\n' +
   '  - The snippet runs as an async IIFE; use top-level `await` and `return` the result.\n' +
   '  - NO Node runtime: `require`/`import`/`process`/`fs`/`path`/`Buffer` are NOT available (this is a node:vm sandbox, not Node). For file I/O call the registered `write_file`/`create_file` tools; for shell, `exec_command`.\n' +
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
-  'Interactive prompts (submit_plan, submit_tasks, ask_user), orchestration tools (spawn_*, expand_toolset), and task-lifecycle tools (task_complete, execute_task) are NOT exposed — call them directly outside code_exec.\n' +
+  'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and task-lifecycle tools (task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
   'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB output cap.\n' +
+  '\n' +
+  'Example — required reads plus one optional symbol probe:\n' +
+  '```\n' +
+  'const [file, symbol] = await Promise.all([\n' +
+  '  mcp__read_file({file_path:"src/core.ts"}),\n' +
+  '  attempt(mcp__get_symbol_body({symbol_name:"maybeMissing", file_path:"src/core.ts"}))\n' +
+  ']);\n' +
+  'return {file, symbol};\n' +
+  '```\n' +
   '\n' +
   'Example — exploration + batched edit (after plan approval):\n' +
   '```\n' +
@@ -107,6 +120,7 @@ const CODE_EXEC_DESC =
   '```\n' +
   '\n' +
   "USE: when an exploration would otherwise need 3+ sequential tool calls with simple logic between them.\n" +
+  "USE: wrap only uncertain read/probe calls with attempt(...); keep required calls fail-fast.\n" +
   "USE: when a refactor touches many files in the same way — one script beats N edit_file rounds.\n" +
   "DON'T: write large programs here — this is batched orchestration, not implementation. For complex logic, call tools directly across multiple turns.\n" +
   "DON'T: try to bypass plan-mode by calling mutating tools from inside code_exec — the policy applies the same way as direct calls.\n" +
@@ -149,6 +163,67 @@ type NestedRefusalError = Error & {
   detail: string;
   guardVerdict: GuardVerdict;
 };
+
+type NestedToolExecutionError = Error & ToolErrorInfo & {
+  tool: string;
+  detail: string;
+};
+
+interface NestedOutcome {
+  name: string;
+  args: Record<string, unknown>;
+  content: string;
+  isError: boolean;
+  delivered: boolean;
+  durationMs: number;
+  status: 'succeeded' | 'failed' | 'refused' | 'cancelled';
+  refusalKind?: string;
+  error?: ToolErrorInfo;
+}
+
+function nestedToolExecutionError(
+  tool: string,
+  detail: string,
+  info: ToolErrorInfo,
+): NestedToolExecutionError {
+  const error = new Error(`tool ${tool}: ${detail}`) as NestedToolExecutionError;
+  error.name = 'NestedToolExecutionError';
+  error.tool = tool;
+  error.detail = detail;
+  error.code = info.code;
+  error.kind = info.kind;
+  error.retryable = info.retryable;
+  if (info.suggestedAction) error.suggestedAction = info.suggestedAction;
+  return error;
+}
+
+function isNestedToolExecutionError(value: unknown): value is NestedToolExecutionError {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<NestedToolExecutionError>;
+  return candidate.name === 'NestedToolExecutionError' &&
+    typeof candidate.tool === 'string' &&
+    typeof candidate.code === 'string' &&
+    typeof candidate.kind === 'string';
+}
+
+function nestedErrorInfo(value: unknown): ToolErrorInfo | undefined {
+  if (!isNestedToolExecutionError(value)) return undefined;
+  return {
+    code: value.code,
+    kind: value.kind,
+    retryable: value.retryable,
+    ...(value.suggestedAction ? { suggestedAction: value.suggestedAction } : {}),
+  };
+}
+
+function refusalErrorInfo(kind: string): ToolErrorInfo {
+  return {
+    code: 'TOOL_CALL_REFUSED',
+    kind: 'refusal',
+    retryable: false,
+    suggestedAction: `Resolve the ${kind} refusal before issuing another call.`,
+  };
+}
 
 function nestedRefusalError(
   tool: string,
@@ -251,18 +326,25 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       // nobody owns). Idempotent — installs the listener at most once.
       ensureUnhandledHandler();
 
-      // Build the tools proxy: one async function per safe registered tool.
-      const safe = registry.list().filter(isSafeTool);
+      // Snapshot the registry once per invocation. Execution stays restricted
+      // to safe tools, while read-only schema introspection may inspect all of
+      // them (including control/lifecycle tools).
+      const allTools = registry.list();
+      const safe = allTools.filter(isSafeTool);
       const exposedNames = safe.map((t) => t.name).sort();
+      const exposedNameSet = new Set(exposedNames);
+      const allNames = allTools.map((t) => t.name).sort();
+      const allToolsByName = new Map(allTools.map((t) => [t.name, t]));
       // Full registry (incl. sandbox-excluded control/lifecycle tools) so the
       // ReferenceError hint below can tell "exists but not exposed here" apart
       // from "typo / absent Node global".
-      const allToolNames = new Set(registry.list().map((t) => t.name));
+      const allToolNames = new Set(allNames);
       const logBuffer: string[] = [];
       let toolCalls = 0;
       let outputBytes = 0;
       let stateEpoch = 0;
       let executionClosing = false;
+      let executionAborting = false;
       // Both maps are scoped to THIS handler call: no result or counter can
       // leak into a later code_exec script.
       const stableCalls = new Map<string, {
@@ -272,14 +354,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       }>();
       const activeToolPromises = new Set<Promise<unknown>>();
       const activeControllers = new Set<AbortController>();
-      const nestedOutcomes: Array<{
-        name: string;
-        args: Record<string, unknown>;
-        content: string;
-        isError: boolean;
-        delivered: boolean;
-        refusalKind?: string;
-      }> = [];
+      const nestedOutcomes: NestedOutcome[] = [];
       // Reservation chain for mutating / non-parallel-safe tools. A timed-out
       // caller gets its rejection promptly, but the lane is held until the
       // underlying invocation actually settles, preventing late writes from
@@ -378,6 +453,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
             isError: boolean;
             durationMs: number;
             refusalKind?: string;
+            error?: ToolErrorInfo;
             affectsFailureStreak?: boolean;
             guardVerdict?: GuardVerdict;
             delivered?: boolean;
@@ -420,7 +496,17 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               content: input.content,
               isError: input.isError,
               delivered,
+              durationMs: input.durationMs,
+              status: !input.isError
+                ? 'succeeded'
+                : input.error?.kind === 'cancelled' || input.refusalKind === 'abort'
+                  ? 'cancelled'
+                  : input.error?.kind === 'refusal' || input.error?.kind === 'permission' ||
+                      (input.refusalKind && input.refusalKind !== 'timeout')
+                    ? 'refused'
+                    : 'failed',
               ...(input.refusalKind ? { refusalKind: input.refusalKind } : {}),
+              ...(input.error ? { error: input.error } : {}),
             });
             return ledgerEntry;
           };
@@ -449,6 +535,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                 });
                 recordNestedOutcome({
                   content: detail, isError: true, durationMs: 0, refusalKind: 'gate',
+                  error: refusalErrorInfo('gate'),
                   affectsFailureStreak: false, guardVerdict, delivered: false,
                 });
                 throw nestedRefusalError(t.name, 'gate', detail, guardVerdict);
@@ -462,6 +549,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               });
               recordNestedOutcome({
                 content: detail, isError: true, durationMs: 0, refusalKind: 'gate',
+                error: refusalErrorInfo('gate'),
                 affectsFailureStreak: false, guardVerdict, delivered: false,
               });
               throw nestedRefusalError(t.name, 'gate', detail, guardVerdict);
@@ -492,6 +580,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                   isError: true,
                   durationMs: 0,
                   refusalKind: 'user_denied',
+                  error: refusalErrorInfo('user_denied'),
                   affectsFailureStreak: false,
                   guardVerdict,
                   delivered: false,
@@ -523,6 +612,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                 isError: true,
                 durationMs: 0,
                 refusalKind: kind,
+                error: refusalErrorInfo(kind),
                 affectsFailureStreak: guardVerdict.affectsFailureStreak,
                 guardVerdict,
                 delivered: false,
@@ -564,6 +654,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                 const content = e instanceof Error ? e.message : String(e);
                 recordNestedOutcome({
                   content, isError: true, durationMs: Date.now() - started,
+                  error: nestedErrorInfo(e) ?? inferToolErrorInfo(t.name, content),
                   guardVerdict: reuseVerdict, affectsFailureStreak: false,
                 });
                 throw e;
@@ -582,6 +673,18 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                   releaseLane = typeof sharedReserve === 'function'
                     ? await sharedReserve.call(ctx.toolCallLedger)
                     : await reserveLocalUnsafe();
+                }
+                if (executionAborting) {
+                  const content = `tool ${t.name} cancelled because code_exec is aborting`;
+                  const error = inferToolErrorInfo(t.name, content);
+                  recordNestedOutcome({
+                    content,
+                    isError: true,
+                    durationMs: Date.now() - started,
+                    refusalKind: 'abort',
+                    error,
+                  });
+                  throw nestedToolExecutionError(t.name, content, error);
                 }
                 const callAbort = new AbortController();
                 activeControllers.add(callAbort);
@@ -627,14 +730,18 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                   const refusalKind = /timed out/i.test(errorText)
                     ? 'timeout'
                     : callAbort.signal.aborted ? 'abort' : undefined;
+                  const error = refusalKind === 'abort'
+                    ? inferToolErrorInfo(t.name, `tool ${t.name} cancelled`)
+                    : inferToolErrorInfo(t.name, errorText);
                   recordNestedOutcome({
                     content: errorText,
                     isError: true,
                     durationMs: Date.now() - started,
                     ...(refusalKind ? { refusalKind } : {}),
+                    error,
                     guardVerdict: guardVerdict ?? undefined,
                   });
-                  throw e;
+                  throw nestedToolExecutionError(t.name, errorText, error);
                 }
                 let nestedContent = result.content;
                 if (result.structuredData !== undefined) {
@@ -649,10 +756,17 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                   content: nestedContent,
                   isError: !!result.isError,
                   durationMs: Date.now() - started,
+                  ...(result.isError
+                    ? { error: result.error ?? inferToolErrorInfo(t.name, result.content) }
+                    : {}),
                   guardVerdict: guardVerdict ?? undefined,
                 });
                 if (result.isError) {
-                  throw new Error(`tool ${t.name}: ${result.content}`);
+                  throw nestedToolExecutionError(
+                    t.name,
+                    result.content,
+                    result.error ?? inferToolErrorInfo(t.name, result.content),
+                  );
                 }
                 if (
                   metadata.mutates ||
@@ -710,7 +824,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const RESERVED_GLOBALS = new Set([
         'JSON', 'Math', 'Number', 'String', 'Boolean', 'Array', 'Object',
         'Promise', 'Set', 'Map', 'Date', 'RegExp', 'Error', 'console', 'log',
-        'tools', 'list_tools', 'tool_schema', 'stash',
+        'tools', 'list_tools', 'tool_schema', 'attempt', 'stash', 'change',
       ]);
       // Shadow-safe bare-global aliases. Without this, the agent's natural
       // `await edit_file(...)` throws ReferenceError; with this, both
@@ -726,7 +840,8 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       // In-sandbox tool discovery. code_exec is tier-agnostic (it runs the full
       // catalog minus isSafeTool), but the model may not know a hidden tool's
       // name/args. `list_tools()` enumerates the callable surface; `tool_schema`
-      // returns one tool's full schema — no prior `find_tools` turn required.
+      // safely introspects the full registry without making control tools
+      // executable in the sandbox.
       const listTools = (): Array<{ name: string; tier: string; params: string; description: string }> =>
         safe.map((t) => ({
           name: t.name,
@@ -734,25 +849,70 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           params: paramSummary(t.parameters),
           description: (t.description ?? '').split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '',
         }));
-      const toolSchema = (name: unknown): { name: string; tier: string; params: string; schema: unknown } => {
+      const toolSchema = (name: unknown): {
+        name: string;
+        tier: string;
+        params: string;
+        schema: unknown;
+        callableInsideCodeExec: boolean;
+        invokeAs: 'code_exec' | 'top_level';
+      } => {
         const key = String(name ?? '');
-        const t = safe.find((x) => x.name === key);
+        const t = allToolsByName.get(key);
         if (t) {
-          return { name: t.name, tier: getToolTier(t.name), params: paramSummary(t.parameters), schema: t.parameters ?? null };
+          const callableInsideCodeExec = exposedNameSet.has(t.name);
+          return {
+            name: t.name,
+            tier: getToolTier(t.name),
+            params: paramSummary(t.parameters),
+            schema: t.parameters ?? null,
+            callableInsideCodeExec,
+            invokeAs: callableInsideCodeExec ? 'code_exec' : 'top_level',
+          };
         }
-        // Registered but sandbox-excluded (control/lifecycle) → say so instead
-        // of a bare "unknown", mirroring the ReferenceError hint's distinction.
-        if (allToolNames.has(key)) {
-          throw new Error(
-            `tool_schema: "${key}" is registered but NOT callable inside code_exec ` +
-            `(control/lifecycle tool). Call it directly as a top-level tool.`,
-          );
-        }
-        const close = suggestToolName(key, exposedNames);
+        const close = suggestToolName(key, allNames);
         throw new Error(
           `tool_schema: unknown tool "${key}"${close ? ` — did you mean "${close}"?` : ''}. ` +
-          `Call list_tools() to enumerate the ${exposedNames.length} callable tools.`,
+          `Call list_tools() for the ${exposedNames.length} code_exec-callable tools ` +
+          `or find_tools({query}) for the full catalog.`,
         );
+      };
+
+      const attempt = async (operation: unknown): Promise<
+        | { ok: true; value: unknown }
+        | {
+            ok: false;
+            error: {
+              tool: string;
+              code: string;
+              kind: string;
+              message: string;
+              retryable: boolean;
+              suggestedAction?: string;
+            };
+          }
+      > => {
+        try {
+          return { ok: true, value: await operation };
+        } catch (e) {
+          // attempt() is intentionally narrow: it handles an explicitly
+          // optional tool probe, not arbitrary JS bugs or harness controls.
+          if (isNestedRefusal(e) || !isNestedToolExecutionError(e)) throw e;
+          if (e.kind === 'refusal' || e.kind === 'permission' || e.kind === 'timeout' || e.kind === 'cancelled') {
+            throw e;
+          }
+          return {
+            ok: false,
+            error: {
+              tool: e.tool,
+              code: e.code,
+              kind: e.kind,
+              message: e.detail,
+              retryable: e.retryable,
+              ...(e.suggestedAction ? { suggestedAction: e.suggestedAction } : {}),
+            },
+          };
+        }
       };
 
       const sandbox: Context = {
@@ -764,9 +924,26 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         tools: wrapToolsBinding(toolsProxy, exposedNames),
         list_tools: listTools,
         tool_schema: toolSchema,
+        attempt,
         // Session-persistent stash (P1a pivot): ctx-provided in real sessions;
         // ephemeral per-call fallback keeps the API present in tests/subagents.
         stash: buildStashSandboxApi(ctx.codeExecStash ?? createCodeExecStash()),
+        // Interrogable diff over THIS session's pending edits. Reference
+        // queries route through the same nested proxy as any other call, so
+        // guards/permissions/telemetry apply unchanged.
+        ...(ctx.sessionChanges
+          ? {
+              change: buildChangeSandboxApi(
+                ctx.sessionChanges,
+                (name, args) => {
+                  const fn = toolsProxy[name];
+                  if (!fn) throw new Error(`change: tool ${name} is not callable here`);
+                  return fn(args);
+                },
+                ctx.projectName,
+              ),
+            }
+          : {}),
         log: appendLog,
         console: { log: appendLog, warn: appendLog, error: appendLog },
         JSON,
@@ -790,6 +967,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
 
       const closeAndSettle = async (reason?: unknown, abortActive = false): Promise<void> => {
         executionClosing = true;
+        if (abortActive) executionAborting = true;
         pauseClock();
         if (clockTimer) {
           clearTimeout(clockTimer);
@@ -811,23 +989,52 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         }
       };
 
-      const partialResultsNote = (): string => {
-        const completed = nestedOutcomes.filter((entry) => entry.delivered && !entry.isError);
-        if (completed.length === 0) return '';
+      const buildNestedBatchReport = (): {
+        note: string;
+        summary: {
+          total: number;
+          succeeded: number;
+          failed: number;
+          refused: number;
+          cancelled: number;
+          unsettled: number;
+        };
+        outputId: string | null;
+      } => {
+        const summary = {
+          total: toolCalls,
+          succeeded: nestedOutcomes.filter((entry) => entry.status === 'succeeded').length,
+          failed: nestedOutcomes.filter((entry) => entry.status === 'failed').length,
+          refused: nestedOutcomes.filter((entry) => entry.status === 'refused').length,
+          cancelled: nestedOutcomes.filter((entry) => entry.status === 'cancelled').length,
+          unsettled: Math.max(0, toolCalls - nestedOutcomes.length),
+        };
+        if (toolCalls === 0 && nestedOutcomes.length === 0) {
+          return { note: '', summary, outputId: null };
+        }
         const payload = JSON.stringify({
-          kind: 'code_exec_partial_results',
-          count: completed.length,
-          results: completed,
+          kind: 'code_exec_nested_outcomes',
+          summary,
+          results: nestedOutcomes,
         }, null, 2);
         const outputId = ctx.toolOutputStore?.put(payload) ?? null;
+        const counts =
+          `total=${summary.total}, succeeded=${summary.succeeded}, failed=${summary.failed}, ` +
+          `refused=${summary.refused}, cancelled=${summary.cancelled}, unsettled=${summary.unsettled}`;
         if (outputId) {
-          return (
-            `\n\n[nested partial results: ${completed.length} completed sibling call(s) were preserved; ` +
-            `call get_tool_output({output_id:"${outputId}"}) to inspect them.]`
-          );
+          return {
+            note: `\n\n[nested call summary: ${counts}; ` +
+              `full outcomes preserved in get_tool_output({output_id:"${outputId}"}).]`,
+            summary,
+            outputId,
+          };
         }
-        const names = completed.map((entry) => entry.name).slice(0, 8).join(', ');
-        return `\n\n[nested partial results: ${completed.length} completed sibling call(s): ${names}.]`;
+        const names = nestedOutcomes.map((entry) => `${entry.name}:${entry.status}`).slice(0, 8).join(', ');
+        return {
+          note: `\n\n[nested call summary: ${counts}${names ? `; ${names}` : ''}.]`,
+          summary,
+          outputId: null,
+        };
       };
 
       // Arm the JS-time budget BEFORE running: invoking the async IIFE executes
@@ -851,7 +1058,12 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         // Parse-time failures get hints too — `import x from 'y'` dies here
         // ("Cannot use import statement"), never reaching the async catch.
         const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
-        return err(`code_exec parse/sync error: ${msg}${hint}`);
+        return err(`code_exec parse/sync error: ${msg}${hint}`, {
+          code: 'CODE_EXEC_PARSE_ERROR',
+          kind: 'invalid_input',
+          retryable: false,
+          suggestedAction: 'Correct the JavaScript syntax before retrying.',
+        });
       }
 
       let returnValue: unknown;
@@ -869,9 +1081,32 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         // node:vm carry the sandbox realm's constructors.
         const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
         const stderr = logBuffer.length > 0 ? `\n[output before failure]\n${logBuffer.join('\n')}` : '';
+        const batch = buildNestedBatchReport();
+        const errorInfo = isNestedRefusal(e)
+          ? refusalErrorInfo(e.refusalKind)
+          : nestedErrorInfo(e) ?? {
+              code: 'CODE_EXEC_FAILED',
+              kind: 'internal' as const,
+              retryable: false,
+              suggestedAction: 'Inspect the script error and change the failing operation before retrying.',
+            };
         const result: ToolResult = {
-          content: `code_exec failed: ${msg}${hint}${stderr}${partialResultsNote()}`,
+          content: `code_exec failed: ${msg}${hint}${stderr}${batch.note}`,
           isError: true,
+          error: errorInfo,
+          structuredData: {
+            kind: 'code_exec_failure',
+            error: {
+              ...errorInfo,
+              message: isNestedToolExecutionError(e) ? e.detail : msg,
+              ...(isNestedToolExecutionError(e) ? { tool: e.tool } : {}),
+            },
+            nested: {
+              summary: batch.summary,
+              output_id: batch.outputId,
+              outcomes: nestedOutcomes,
+            },
+          },
         };
         if (isNestedRefusal(e)) result.guardVerdict = e.guardVerdict;
         return result;

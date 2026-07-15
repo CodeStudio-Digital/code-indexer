@@ -11,11 +11,11 @@
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../../lib/api-client.js';
 import { logLsp } from '../lsp-log.js';
-import { relPath, toMonacoRange, type Monaco, type Position, type TextEditDTO } from './dto.js';
+import { modelBelongsToProject, relPath, toMonacoRange, type Monaco, type Position, type TextEditDTO } from './dto.js';
 import { toast } from '../../../../components/ui/prompt-dialog.js';
 
 /** Server-backed languages only — keep Monaco's built-in formatters visible. */
-const FORMAT_LANGS = ['php', 'python', 'rust'] as const;
+const FORMAT_LANGS = ['php', 'python', 'rust', 'java', 'csharp'] as const;
 
 function modelOptions(model: MonacoNs.editor.ITextModel): { tabSize: number; insertSpaces: boolean } {
   const o = model.getOptions();
@@ -26,14 +26,15 @@ async function fetchEdits(
   monaco: Monaco,
   projectId: number,
   model: MonacoNs.editor.ITextModel,
-  flushDoc: (rel: string) => Promise<void>,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void>,
   range?: { start: Position; end: Position },
 ): Promise<MonacoNs.languages.TextEdit[] | null> {
   const file = relPath(model);
   const lang = model.getLanguageId();
   const t0 = performance.now();
   try {
-    await flushDoc(file);
+    if (!modelBelongsToProject(model, projectId)) return [];
+    await ensureSynced(model);
     const edits = await apiCall<TextEditDTO[]>('lsp.formatting', {
       projectId,
       file,
@@ -60,19 +61,19 @@ async function fetchEdits(
 export function registerFormattingProviders(
   monaco: Monaco,
   projectId: number,
-  flushDoc: (rel: string) => Promise<void>,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void>,
 ): MonacoNs.IDisposable[] {
   const disposers: MonacoNs.IDisposable[] = [];
   for (const lang of FORMAT_LANGS) {
     disposers.push(
       monaco.languages.registerDocumentFormattingEditProvider(lang, {
         async provideDocumentFormattingEdits(model) {
-          return fetchEdits(monaco, projectId, model, flushDoc);
+          return fetchEdits(monaco, projectId, model, ensureSynced);
         },
       }),
       monaco.languages.registerDocumentRangeFormattingEditProvider(lang, {
         async provideDocumentRangeFormattingEdits(model, range) {
-          return fetchEdits(monaco, projectId, model, flushDoc, {
+          return fetchEdits(monaco, projectId, model, ensureSynced, {
             start: { line: range.startLineNumber, column: range.startColumn },
             end: { line: range.endLineNumber, column: range.endColumn },
           });

@@ -2,11 +2,16 @@ export {
   TaskPreflightService,
   type PreflightRunResult,
   type PreflightStatus,
+  type SessionTitleInput,
+  type SessionTitleRunResult,
   type TaskPreflightDeps,
   type TaskPreflightInput,
 } from './preflight-pipeline.js';
 export {
   buildPreflightMessages,
+  cleanSessionTitle,
+  cleanSessionTitleSeed,
+  isAutomaticSessionTitle,
   parsePreflightOutput,
   type PreflightMemoryEntry,
   type PreflightSeed,

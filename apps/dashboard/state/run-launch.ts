@@ -6,7 +6,8 @@
  * file-tree "Run with" menu.
  */
 
-import type { RunnerManager } from '@mcp/api-bus';
+import type { FileRunTarget, RunnerManager, RuntimeTarget } from '@mcp/api-bus';
+import { apiCall } from '../lib/api-client.js';
 import { startSnippet, startTask } from './running-tasks.js';
 import { useWorkspaceLayout } from './workspace-layout.js';
 import { toast } from '../components/ui/prompt-dialog.js';
@@ -18,6 +19,8 @@ export async function launchRun(input: {
   manager: RunnerManager;
   /** Project-relative working dir (defaults to project root); for nested manifests. */
   cwd?: string;
+  /** Explicit host/WSL environment; omitted to follow the project's runner shell. */
+  target?: RuntimeTarget;
 }): Promise<void> {
   try {
     await startTask(input);
@@ -25,6 +28,34 @@ export async function launchRun(input: {
   } catch (e) {
     // Dynamic message only — no literal so the i18n dialog-literal guard stays green.
     toast.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Resolve repository-controlled paths/script names on the backend, then run. */
+export async function launchFileRun(input: {
+  projectId: number;
+  file: string;
+  content?: string;
+  script?: string;
+  label?: string;
+  target?: RuntimeTarget;
+}): Promise<void> {
+  try {
+    const target = await apiCall<FileRunTarget>('runner.fileRunTarget', input);
+    if (!target.command) {
+      if (target.reason) toast.error(target.reason);
+      return;
+    }
+    await launchRun({
+      projectId: input.projectId,
+      command: target.command,
+      label: input.label ?? target.label,
+      manager: target.manager,
+      cwd: target.cwd,
+      target: input.target,
+    });
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error));
   }
 }
 

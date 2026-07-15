@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Compass, ClipboardList, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
+import { Bot, Compass, ClipboardList, Database, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 import type { AgentPreset } from '@mcp/api-bus';
 
@@ -34,6 +34,7 @@ const AGENT_LABEL: Record<AgentId, string> = {
   admin: 'Ops',
   spec: 'Spec Doc',
   app_orchestrator: 'App Coordinator',
+  app_db: 'Database',
   api: 'API Test',
   diagram: 'Diagram',
   builder: 'UI Builder',
@@ -46,6 +47,7 @@ const AGENT_PROMISE: Record<AgentId, string> = {
   admin: 'Commits, snapshots, ops - asks first',
   spec: 'Writes a spec, waits for approval',
   app_orchestrator: 'Coordinates scope, blueprint, Kanban, verification, and release',
+  app_db: 'Inspects schemas and data safely',
   api: 'Tests the API, fixes the spec',
   diagram: 'Draws .drawio diagrams of the design',
   builder: 'Builds the live app UI',
@@ -58,6 +60,7 @@ const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
   admin: ShieldAlert,
   spec: ScrollText,
   app_orchestrator: Bot,
+  app_db: Database,
   api: Webhook,
   diagram: Workflow,
   builder: Hammer,
@@ -72,6 +75,7 @@ const MODE_TINT: Record<AgentId, string> = {
   admin: 'text-rose-500',
   spec: 'text-amber-500',
   app_orchestrator: 'text-violet-500',
+  app_db: 'text-teal-500',
   api: 'text-cyan-500',
   diagram: 'text-violet-500',
   builder: 'text-fuchsia-500',
@@ -155,6 +159,7 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
         { id: 'admin', label: AGENT_LABEL.admin, description: t('agentPicker.full'), profile: 'full', planMode: false },
         { id: 'spec', label: AGENT_LABEL.spec, description: t('agentPicker.spec', { defaultValue: 'Spec-driven authoring - pauses for human approval before code.' }), profile: 'navigate', planMode: false },
         { id: 'app_orchestrator', label: AGENT_LABEL.app_orchestrator, description: agentPromise('app_orchestrator'), profile: 'navigate', planMode: false },
+        { id: 'app_db', label: AGENT_LABEL.app_db, description: agentPromise('app_db'), profile: 'bootstrap', planMode: false },
         { id: 'builder', label: AGENT_LABEL.builder, description: agentPromise('builder'), profile: 'navigate', planMode: false },
         { id: 'api', label: AGENT_LABEL.api, description: agentPromise('api'), profile: 'navigate', planMode: false },
         { id: 'diagram', label: AGENT_LABEL.diagram, description: agentPromise('diagram'), profile: 'navigate', planMode: false },

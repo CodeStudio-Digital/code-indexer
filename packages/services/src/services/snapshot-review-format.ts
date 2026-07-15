@@ -30,7 +30,15 @@ export function formatFindingsForAgent(findings: SnapshotReviewFinding[]): strin
         : f.oldLine != null
           ? `${f.filePath}:${f.oldLine}`
           : f.filePath;
-    lines.push(`- [${f.severity}] ${loc}`);
+    const tag =
+      f.kind === 'missing_change'
+        ? ' [missing change — file NOT touched this session]'
+        : f.kind === 'unfulfilled_obligation'
+          ? ` [unfulfilled obligation${f.obligationId ? ` ${f.obligationId}` : ''}]`
+          : f.kind === 'scope_creep'
+            ? ' [scope creep — no obligation explains this change]'
+            : '';
+    lines.push(`- [${f.severity}] ${loc}${tag}`);
     lines.push(`  ${f.body.trim()}`);
     if (f.suggestedFix && f.suggestedFix.trim()) {
       lines.push(`  suggested fix: ${f.suggestedFix.trim()}`);

@@ -258,7 +258,7 @@ export const generateSql = (connectionId: string, schema: string | undefined, ta
 export const runQuery = (
   connectionId: string,
   sql: string,
-  opts?: { params?: unknown[]; maxRows?: number; queryId?: string; schema?: string },
+  opts?: { params?: unknown[]; maxRows?: number; timeoutMs?: number; queryId?: string; schema?: string },
 ) => withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.query', { connectionId, sql, ...opts }));
 
 export const cancelQuery = (connectionId: string, queryId: string) =>

@@ -87,6 +87,10 @@ export class ProjectIndexStatusStore {
     this.patch(projectId, { watcherActive: active });
   }
 
+  setScheduledRun(projectId: number, scheduledRun: ProjectIndexStatus['scheduledRun']): void {
+    this.patch(projectId, { scheduledRun });
+  }
+
   setDirtyPending(projectId: number, dirtyPending: number): void {
     this.patch(projectId, { dirtyPending });
   }
@@ -103,6 +107,7 @@ export class ProjectIndexStatusStore {
       // Keep runtime-only bits.
       watcherActive: entry.status.watcherActive,
       dirtyPending: entry.status.dirtyPending,
+      scheduledRun: entry.status.scheduledRun,
       // The run is over — drop the live pass + its chip alias.
       activeRun: undefined,
       progress: undefined,

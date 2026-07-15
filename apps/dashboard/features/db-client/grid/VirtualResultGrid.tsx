@@ -42,6 +42,13 @@ function cmp(a: unknown, b: unknown): number {
   return String(a).localeCompare(String(b));
 }
 
+/** A drag-to-select gesture ends with a click in Chromium. Do not turn that
+ * click into an edit/view action when the user was selecting a cell value. */
+function hasActiveTextSelection(): boolean {
+  const selection = window.getSelection();
+  return !!selection && !selection.isCollapsed && selection.toString().length > 0;
+}
+
 export function VirtualResultGrid({
   result,
   error,
@@ -180,7 +187,7 @@ export function VirtualResultGrid({
         </DropdownMenu>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-auto text-xs">
+      <div ref={scrollRef} data-text-selectable className="flex-1 overflow-auto text-xs">
         <div style={{ width: totalW, position: 'relative' }}>
           {/* Sticky header */}
           <div className="sticky top-0 z-10 flex bg-card" style={{ width: totalW }}>
@@ -416,7 +423,11 @@ function BodyCell({
       )}
       style={{ width }}
       title={cellText(value)}
-      onClick={() => (editable ? onActivate() : onView())}
+      onClick={() => {
+        if (hasActiveTextSelection()) return;
+        if (editable) onActivate();
+        else onView();
+      }}
       onDoubleClick={editable ? onView : undefined}
     >
       {isNull ? '∅' : cellText(value)}

@@ -15,7 +15,7 @@ import { wslManagedBinDir } from './wsl-paths.js';
 
 const execFileAsync = promisify(execFile);
 
-const KIND_LABEL: Record<RuntimeKind, string> = { node: 'Node', php: 'PHP', python: 'Python' };
+const KIND_LABEL: Record<RuntimeKind, string> = { node: 'Node', php: 'PHP', python: 'Python', java: 'JDK', dotnet: '.NET SDK' };
 
 /**
  * Run a bash login command inside `distro`; returns trimmed stdout, or '' on
@@ -65,7 +65,18 @@ export async function detectWslPlatform(distro: string): Promise<WslPlatform | n
  * probe is needed.
  */
 export async function detectWslRuntimes(kind: RuntimeKind, distro: string): Promise<Runtime[]> {
-  const out = await wslBash(distro, `ls -1 "$HOME/.mcp/runtimes/${kind}" 2>/dev/null`);
+  const checks: Record<RuntimeKind, string> = {
+    node: '[ -x "$d/bin/node" ]',
+    php: '[ -x "$d/bin/php" ]',
+    python: '[ -x "$d/bin/python3" ] || [ -x "$d/bin/python" ]',
+    java: '[ -x "$d/bin/java" ] && [ -x "$d/bin/javac" ]',
+    dotnet: '[ -x "$d/dotnet" ] && [ -d "$d/sdk" ]',
+  };
+  const root = `$HOME/.mcp/runtimes/${kind}`;
+  const out = await wslBash(
+    distro,
+    `root="${root}"; [ -d "$root" ] || exit 0; for d in "$root"/*; do [ -d "$d" ] || continue; if ${checks[kind]}; then basename "$d"; fi; done`,
+  );
   if (!out) return [];
   const versions = out
     .split(/\r?\n/)

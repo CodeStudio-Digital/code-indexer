@@ -16,9 +16,9 @@ describe('parseWslPackageManagers', () => {
     expect(parseWslPackageManagers('{"Ubuntu":"x"}')).toEqual({});
   });
 
-  it('keeps only node/python string values, pruning empty distros', () => {
-    const json = JSON.stringify({ Ubuntu: { node: 'npm', python: 'pip', php: 'composer' }, Debian: { node: '' } });
-    expect(parseWslPackageManagers(json)).toEqual({ Ubuntu: { node: 'npm', python: 'pip' } });
+  it('keeps only node/python/java string values, pruning empty distros', () => {
+    const json = JSON.stringify({ Ubuntu: { node: 'npm', python: 'pip', java: 'maven', php: 'composer' }, Debian: { node: '' } });
+    expect(parseWslPackageManagers(json)).toEqual({ Ubuntu: { node: 'npm', python: 'pip', java: 'maven' } });
   });
 });
 
@@ -33,9 +33,10 @@ describe('read/writeWslPackageManager', () => {
   it('merges without clobbering other distros/kinds', () => {
     let json = writeWslPackageManager(null, 'Ubuntu', 'node', 'npm');
     json = writeWslPackageManager(json, 'Ubuntu', 'python', 'pip');
+    json = writeWslPackageManager(json, 'Ubuntu', 'java', 'gradle');
     json = writeWslPackageManager(json, 'Debian', 'node', 'yarn');
     expect(parseWslPackageManagers(json)).toEqual({
-      Ubuntu: { node: 'npm', python: 'pip' },
+      Ubuntu: { node: 'npm', python: 'pip', java: 'gradle' },
       Debian: { node: 'yarn' },
     });
   });

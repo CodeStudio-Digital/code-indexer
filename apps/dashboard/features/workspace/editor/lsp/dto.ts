@@ -13,6 +13,8 @@ export const COMPLETION_TRIGGERS: Record<string, string[]> = {
   javascript: ['.', '"', "'", '/', '@', '<', '#'],
   php: ['$', '>', ':', '\\'],
   python: ['.'],
+  java: ['.', '@'],
+  csharp: ['.'],
 };
 
 export interface Position {
@@ -94,25 +96,6 @@ export function toMonacoRange(monaco: Monaco, r: { start: Position; end: Positio
   return new monaco.Range(r.start.line, r.start.column, r.end.line, r.end.column);
 }
 
-export function toWorkspaceEdit(monaco: Monaco, edit?: WorkspaceEditDTO): MonacoNs.languages.WorkspaceEdit | undefined {
-  if (!edit) return undefined;
-  const edits: MonacoNs.languages.WorkspaceEdit['edits'] = [];
-  for (const [file, fileEdits] of Object.entries(edit.changes)) {
-    const resource = monaco.Uri.file(file);
-    for (const e of fileEdits) {
-      edits.push({
-        resource,
-        textEdit: {
-          range: toMonacoRange(monaco, e.range),
-          text: e.newText,
-        },
-        versionId: undefined,
-      });
-    }
-  }
-  return { edits };
-}
-
 export function mapCompletionKind(monaco: Monaco, kind: string): MonacoNs.languages.CompletionItemKind {
   // Superset of TS ScriptElementKind + the index fallback's symbol kinds.
   const k = monaco.languages.CompletionItemKind;
@@ -148,4 +131,9 @@ export function mapCompletionKind(monaco: Monaco, kind: string): MonacoNs.langua
 /** Strip do prefixo de namespacing por projectId (W1b) → relpath limpo p/ o backend. */
 export function relPath(model: MonacoNs.editor.ITextModel): string {
   return parseModelPath(model.uri.path).relPath;
+}
+
+/** Strict project boundary for every singleton-Monaco provider. */
+export function modelBelongsToProject(model: MonacoNs.editor.ITextModel, projectId: number): boolean {
+  return parseModelPath(model.uri.path).projectId === projectId;
 }

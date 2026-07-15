@@ -12,7 +12,7 @@
  * `code-agent/manage-path`) — contrato diferente (respeitam .gitignore/escopo).
  */
 export const TREE_BLOCK_DIRS: readonly string[] = [
-  'node_modules', '.git', 'dist', 'build', '.next', '.turbo', '.cache',
+  'node_modules', '.git', '.mcp-indexer', 'dist', 'build', '.next', '.turbo', '.cache',
   '.venv', 'venv', '__pycache__', '.pytest_cache', 'target', '.idea',
   '.vscode', '.DS_Store',
 ];

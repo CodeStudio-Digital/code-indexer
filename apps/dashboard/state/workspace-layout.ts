@@ -58,25 +58,34 @@ export function migrateWorkspaceLayoutV2(
   legacy: LegacyWorkspaceLayoutV2 | null | undefined,
 ): PersistedWorkspaceLayout {
   if (!legacy) return { ...DEFAULT_WORKSPACE_LAYOUT };
-  const databaseSurface = legacy.primarySurface === 'databases';
-  return {
-    activeLeft: databaseSurface ? 'databases' : (legacy.activeLeft === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeLeft : legacy.activeLeft),
-    activeRight: legacy.activeRight === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeRight : legacy.activeRight,
-    activeBottom: legacy.activeBottom === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeBottom : legacy.activeBottom,
-    primarySurface: databaseSurface ? 'editor' : (legacy.primarySurface || DEFAULT_WORKSPACE_LAYOUT.primarySurface),
-    previewVisible: legacy.previewVisible ?? DEFAULT_WORKSPACE_LAYOUT.previewVisible,
-  };
+  return normalizeWorkspaceLayout(legacy);
 }
 
 export function normalizeWorkspaceLayout(
   value: Partial<PersistedWorkspaceLayout> | null | undefined,
 ): PersistedWorkspaceLayout {
   const databaseSurface = value?.primarySurface === 'databases';
+  const legacySessionSurface = value?.activeLeft === 'sessions';
+  const legacyApiSurface = value?.activeLeft === 'api-navigation';
+  const requestedSurface = value?.primarySurface || DEFAULT_WORKSPACE_LAYOUT.primarySurface;
+  const primarySurface = databaseSurface
+    ? 'editor'
+    : requestedSurface === 'editor' && legacySessionSurface
+      ? 'sessions'
+      : requestedSurface === 'editor' && legacyApiSurface
+        ? 'api'
+        : requestedSurface;
   return {
-    activeLeft: databaseSurface ? 'databases' : (value?.activeLeft === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeLeft : value.activeLeft),
-    activeRight: value?.activeRight === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeRight : value.activeRight,
+    activeLeft: databaseSurface
+      ? 'databases'
+      : legacySessionSurface || legacyApiSurface
+        ? DEFAULT_WORKSPACE_LAYOUT.activeLeft
+        : (value?.activeLeft === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeLeft : value.activeLeft),
+    activeRight: value?.activeRight === 'api-inspector'
+      ? DEFAULT_WORKSPACE_LAYOUT.activeRight
+      : (value?.activeRight === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeRight : value.activeRight),
     activeBottom: value?.activeBottom === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeBottom : value.activeBottom,
-    primarySurface: databaseSurface ? 'editor' : (value?.primarySurface || DEFAULT_WORKSPACE_LAYOUT.primarySurface),
+    primarySurface,
     previewVisible: value?.previewVisible ?? DEFAULT_WORKSPACE_LAYOUT.previewVisible,
   };
 }

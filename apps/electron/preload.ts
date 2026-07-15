@@ -180,9 +180,16 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
  * to the colon-channel here so the renderer doesn't need to know
  * the wire format.
  */
-function invokeApi(methodPath: string, payload: unknown): Promise<unknown> {
+function invokeApi(methodPath: string, payload: unknown, requestId?: string): Promise<unknown> {
   const channel = `api:${methodPath.split('.').join(':')}`;
-  return ipcRenderer.invoke(channel, payload);
+  return ipcRenderer.invoke(channel, requestId
+    ? { __mcpInvokeV1: true, requestId, payload }
+    : payload);
+}
+
+/** Cancel a cancellable one-shot call in the main process. */
+function cancelInvoke(requestId: string): void {
+  ipcRenderer.send('api:cancel-invoke', requestId);
 }
 
 /**
@@ -346,6 +353,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Primitives — see the IPC primitives section above. The renderer
   // builds a Proxy on top of these (Proxies don't cross contextBridge).
   invoke: invokeApi,
+  cancelInvoke,
   openStream: openApiStream,
   isStreamingPath,
   /** Open a bidirectional MessagePort stream. See openDuplex above. */

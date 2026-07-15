@@ -32,6 +32,7 @@ export type AgentPreset =
   | 'admin'
   | 'spec'
   | 'app_orchestrator'
+  | 'app_db'
   | 'api'
   | 'diagram'
   | 'builder';
@@ -87,11 +88,10 @@ export interface UpdateSessionInput {
  * `CoderAttachment` type in @mcp/code-agent.
  */
 export interface CoderAttachment {
-  type: 'image' | 'document' | 'text';
-  filename?: string;
+  name: string;
+  mediaType: string;
   base64?: string;
   text?: string;
-  mediaType?: string;
 }
 
 /**

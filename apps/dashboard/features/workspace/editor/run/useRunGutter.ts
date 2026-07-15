@@ -1,7 +1,7 @@
 /**
  * React glue that lights up the run gutter inside MonacoMount, for any
- * package.json / composer.json (root or nested), any .py file, and the fenced
- * code blocks of markdown files. Gated on "content loaded"
+ * package.json / composer.json scripts, Maven/Gradle/.NET project manifests,
+ * runnable source files, and fenced code blocks of markdown files. Gated on "content loaded"
  * (a boolean) so it doesn't re-attach on every keystroke — live updates are
  * handled inside attachRunGutter via the model's onDidChangeContent.
  */
@@ -24,7 +24,9 @@ export function useRunGutter(
     const base = (file.path.split('/').pop() ?? '').toLowerCase();
     const eligible =
       base === 'package.json' || base === 'composer.json' ||
-      base.endsWith('.py') || base.endsWith('.md') || base.endsWith('.markdown');
+      base === 'pom.xml' || base === 'build.gradle' || base === 'build.gradle.kts' || base.endsWith('.csproj') ||
+      base.endsWith('.py') || base.endsWith('.java') || base.endsWith('.cs') ||
+      base.endsWith('.md') || base.endsWith('.markdown');
     if (!eligible) return;
     const handle = attachRunGutter(editor, monaco, file);
     return () => handle.dispose();

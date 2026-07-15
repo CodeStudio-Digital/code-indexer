@@ -24,7 +24,7 @@ export interface EditorThemeDef {
 /**
  * Per-theme colour set. The catalog turns this into Monaco token rules that
  * cover BOTH the Monarch tokenizer output (keyword/string/number/comment/…)
- * AND the LSP semantic tokens (function/method/property/parameter/class/…),
+ * AND Monaco's direct LSP semantic selectors (function/method/property/…),
  * so "function ≠ method ≠ property" holds in every theme. Hex strings are
  * 6-digit WITHOUT a leading '#'.
  */

@@ -23,6 +23,8 @@ import {
 import { gitOperationKey, useGitOperationState } from '../state/git-operation-state.js';
 
 type DotPath = string;
+export interface ApiCallOptions { signal?: AbortSignal }
+let cancellableInvokeSeq = 0;
 
 /**
  * Idempotent read verbs whose result is safe to dedup + briefly cache so
@@ -54,14 +56,20 @@ const READ_VERBS = new Set<string>([
  * collapse to one round-trip. They share an in-flight promise only
  * (`dedupeInflight`), never a cached body.
  *
- * `lsp.serverStatus` belongs here, NOT in READ_VERBS: the install prompt polls
- * it in a loop waiting for `starting → ready`, and a TTL cache would serve a
- * stale snapshot for ~half the polls AND skip the backend's warm-spawn nudge.
+ * `lsp.serverStatus` belongs here, NOT in READ_VERBS: the install prompt may
+ * poll it while a lightweight server transitions `idle → starting → ready`,
+ * and a TTL cache would serve a stale snapshot for roughly half the polls.
  */
 const INFLIGHT_VERBS = new Set<string>([
   'files.read',
   'files.tree',
   'files.list',
+  // Project-open surfaces (toolbar, LSP prompt, gutter) mount together and
+  // ask the same filesystem-backed questions. Share only the live promise;
+  // after it settles, manifest/file changes are observed normally.
+  'runner.detect',
+  'runner.fileRunTarget',
+  'editor.resolveConfig',
   'lsp.serverStatus',
   // Git freshness is revision-driven. Share concurrent reads, but never reuse a
   // timed body after an external checkout/index/worktree change.
@@ -201,10 +209,25 @@ export function isElectronRenderer(): boolean {
  * Now we just check whether the primitive `invoke` is present — that's
  * exposed as a plain function in preload, which DOES cross the bridge.
  */
-function electronInvoke(): ((methodPath: string, payload: unknown) => Promise<unknown>) | null {
+function electronInvoke(): ((methodPath: string, payload: unknown, requestId?: string) => Promise<unknown>) | null {
   const electron = typeof window !== 'undefined' ? window.electronAPI : undefined;
   if (!electron || typeof electron.invoke !== 'function') return null;
   return electron.invoke.bind(electron);
+}
+
+function electronCancelInvoke(): ((requestId: string) => void) | null {
+  const electron = typeof window !== 'undefined' ? window.electronAPI : undefined;
+  return electron?.cancelInvoke?.bind(electron) ?? null;
+}
+
+function abortError(): Error {
+  const error = new Error('request cancelled');
+  error.name = 'AbortError';
+  return error;
+}
+
+function nextInvokeId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `renderer-${Date.now()}-${++cancellableInvokeSeq}`;
 }
 
 function electronOpenStream(): (<T>(methodPath: string, payload: unknown) => AsyncIterable<T>) | null {
@@ -238,6 +261,13 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: '/api/projects', init: {} };
     case 'projects.get':
       return { url: `/api/projects/${ip!.id}`, init: {} };
+    case 'projects.activate':
+      return { url: `/api/projects/${ip!.id}/activation`, init: json({ activationId: ip!.activationId, clientId: ip!.clientId }) };
+    case 'projects.deactivate':
+      return {
+        url: `/api/projects/${ip!.id}/activation`,
+        init: { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activationId: ip!.activationId, clientId: ip!.clientId }) },
+      };
     case 'projects.stats':
       return { url: `/api/projects/${ip!.id}/stats`, init: {} };
     case 'files.list':
@@ -375,15 +405,15 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
     case 'lsp.didOpen':
       return {
         url: `/api/lsp/${ip!.projectId}/did-open`,
-        init: json({ file: ip!.file, languageId: ip!.languageId, version: ip!.version, content: ip!.content }),
+        init: json({ file: ip!.file, languageId: ip!.languageId, version: ip!.version, content: ip!.content, syncSessionId: ip!.syncSessionId }),
       };
     case 'lsp.didChange':
       return {
         url: `/api/lsp/${ip!.projectId}/did-change`,
-        init: json({ file: ip!.file, version: ip!.version, changes: ip!.changes }),
+        init: json({ file: ip!.file, version: ip!.version, changes: ip!.changes, syncSessionId: ip!.syncSessionId }),
       };
     case 'lsp.didClose':
-      return { url: `/api/lsp/${ip!.projectId}/did-close`, init: json({ file: ip!.file }) };
+      return { url: `/api/lsp/${ip!.projectId}/did-close`, init: json({ file: ip!.file, syncSessionId: ip!.syncSessionId }) };
     case 'lsp.resolveCompletion':
       return { url: `/api/lsp/${ip!.projectId}/resolve-completion`, init: json({ file: ip!.file, item: ip!.item }) };
     case 'lsp.resolveCodeAction':
@@ -446,7 +476,10 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
  * round-trip); writes (WRITE_VERBS) flush that cache on success; everything
  * else passes straight through.
  */
-export function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
+export function apiCall<T>(path: DotPath, input?: unknown, options: ApiCallOptions = {}): Promise<T> {
+  // Cancellable calls cannot share a cached/in-flight promise: one Monaco
+  // token must never abort another consumer that happens to use the same key.
+  if (options.signal) return apiCallRaw<T>(path, input, options);
   if (READ_VERBS.has(path)) {
     const normalized = normalizeReadInput(path, input);
     const key = callKey(path, normalized);
@@ -478,12 +511,30 @@ export function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
   return apiCallRaw<T>(path, input);
 }
 
-async function apiCallRaw<T>(path: DotPath, input?: unknown): Promise<T> {
+async function apiCallRaw<T>(path: DotPath, input?: unknown, options: ApiCallOptions = {}): Promise<T> {
   const finishSpan = startApiCallRouteSpan(path, input);
   try {
+    if (options.signal?.aborted) throw abortError();
     const invoke = electronInvoke();
     if (invoke) {
-      const wrapped = (await invoke(path, input)) as {
+      const requestId = options.signal ? nextInvokeId() : undefined;
+      const pending = invoke(path, input, requestId);
+      const wrapped = (await (options.signal && requestId
+        ? new Promise<unknown>((resolve, reject) => {
+            const onAbort = () => {
+              electronCancelInvoke()?.(requestId);
+              reject(abortError());
+            };
+            options.signal!.addEventListener('abort', onAbort, { once: true });
+            // The signal can flip after the preflight above but before the
+            // listener is attached. AbortSignal does not replay past events,
+            // so close that narrow race explicitly.
+            if (options.signal!.aborted) onAbort();
+            pending.then(resolve, reject).finally(() => {
+              options.signal!.removeEventListener('abort', onAbort);
+            });
+          })
+        : pending)) as {
         ok: boolean;
         value?: T;
         error?: { message: string; code?: string; status?: number; details?: Record<string, unknown> };
@@ -505,7 +556,7 @@ async function apiCallRaw<T>(path: DotPath, input?: unknown): Promise<T> {
     if (!mapped) {
       throw new Error(`apiCall("${path}"): no HTTP fallback mapped — this method is Electron-only or needs a mapping entry`);
     }
-    const res = await fetch(mapped.url, mapped.init);
+    const res = await fetch(mapped.url, { ...mapped.init, signal: options.signal });
     if (!res.ok) {
       const body = await res.json().catch(() => null) as { error?: string; code?: string; message?: string } | null;
       const e = new Error(body?.message ?? body?.error ?? `HTTP ${res.status} on ${path}`) as Error & { code?: string; status?: number };

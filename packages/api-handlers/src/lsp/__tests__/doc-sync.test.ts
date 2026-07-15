@@ -4,8 +4,8 @@
  * and word extraction (index fallback). No sqlite, no Monaco.
  */
 import { describe, it, expect } from 'vitest';
-import { openDoc, changeDoc, getDoc, closeDoc } from '../document-store.js';
-import { publishDiagnostics, subscribeDiagnostics, hasDiagnosticsSubscribers } from '../diagnostics-hub.js';
+import { openDoc, changeDoc, changeDocWithSession, getDoc, closeDoc, closeProjectDocs } from '../document-store.js';
+import { publishDiagnostics, publishDiagnosticsBatch, subscribeDiagnostics, hasDiagnosticsSubscribers } from '../diagnostics-hub.js';
 import { wordAt } from '../index-fallback.js';
 import type { DiagnosticsFrame } from '@mcp/api-bus';
 
@@ -51,26 +51,52 @@ describe('document-store delta application', () => {
     closeDoc(93, 'c.ts');
     expect(getDoc(93, 'c.ts')).toBeUndefined();
   });
+
+  it('closes every document for one project without touching another project', () => {
+    openDoc(94, 'a.php', 'php', 1, '<?php');
+    openDoc(94, 'b.cs', 'csharp', 1, 'class B {}');
+    openDoc(95, 'keep.py', 'python', 1, 'pass');
+
+    expect(closeProjectDocs(94)).toBe(2);
+    expect(getDoc(94, 'a.php')).toBeUndefined();
+    expect(getDoc(94, 'b.cs')).toBeUndefined();
+    expect(getDoc(95, 'keep.py')).toBeDefined();
+    closeProjectDocs(95);
+  });
+
+  it('accepts a version reset in a newer session and ignores the old change/close/open', () => {
+    const oldSession = '0000000001-000001-old';
+    const newSession = '0000000002-000001-new';
+    expect(openDoc(96, 'restore.cs', 'csharp', 80, 'old', oldSession)).toBe(true);
+    expect(openDoc(96, 'restore.cs', 'csharp', 1, 'fresh', newSession)).toBe(true);
+
+    expect(changeDocWithSession(96, 'restore.cs', 81, [], oldSession)).toBe('stale-session');
+    expect(closeDoc(96, 'restore.cs', oldSession)).toBe(false);
+    expect(getDoc(96, 'restore.cs')?.content).toBe('fresh');
+    expect(openDoc(96, 'restore.cs', 'csharp', 82, 'resurrected', oldSession)).toBe(false);
+    expect(getDoc(96, 'restore.cs')?.content).toBe('fresh');
+    closeDoc(96, 'restore.cs', newSession);
+  });
 });
 
 describe('diagnostics-hub', () => {
-  it('coalesces per file for slow consumers; return() unsubscribes', async () => {
+  it('coalesces per file into one batch for slow consumers; return() unsubscribes', async () => {
     const it1 = subscribeDiagnostics(7)[Symbol.asyncIterator]();
     // Force subscription registration before publishing.
     const first = it1.next();
     expect(hasDiagnosticsSubscribers(7)).toBe(true);
 
     publishDiagnostics(7, frame('a.ts', 'v1'));
-    expect((await first).value.diagnostics[0]?.message).toBe('v1');
+    expect((await first).value.frames[0]?.diagnostics[0]?.message).toBe('v1');
 
     // Two updates for the SAME file before the consumer drains → only the
-    // latest survives; a different file keeps its own slot.
+    // latest survives; a different file shares the same wire batch.
     publishDiagnostics(7, frame('a.ts', 'v2'));
     publishDiagnostics(7, frame('a.ts', 'v3'));
     publishDiagnostics(7, frame('b.ts', 'other'));
     const second = await it1.next();
-    const third = await it1.next();
-    const got = [second.value, third.value].map((f) => `${f.file}:${f.diagnostics[0]?.message}`);
+    const got = second.value.frames.map((f: DiagnosticsFrame) => `${f.file}:${f.diagnostics[0]?.message}`);
+    expect(second.value.frames).toHaveLength(2);
     expect(got).toContain('a.ts:v3');
     expect(got).toContain('b.ts:other');
     expect(got).not.toContain('a.ts:v2');
@@ -80,12 +106,27 @@ describe('diagnostics-hub', () => {
     publishDiagnostics(7, frame('a.ts', 'after-close')); // must not throw
   });
 
-  it('replays the latest frame to subscribers that connect after publish', async () => {
+  it('replays the latest frames as a batch to subscribers that connect after publish', async () => {
     publishDiagnostics(8, frame('late.php', 'already computed'));
     const it = subscribeDiagnostics(8)[Symbol.asyncIterator]();
     const first = await it.next();
-    expect(first.value.file).toBe('late.php');
-    expect(first.value.diagnostics[0]?.message).toBe('already computed');
+    expect(first.value.frames).toHaveLength(1);
+    expect(first.value.frames[0]?.file).toBe('late.php');
+    expect(first.value.frames[0]?.diagnostics[0]?.message).toBe('already computed');
+    await it.return!();
+  });
+
+  it('caps a wire batch at 200 frames without dropping the remainder', async () => {
+    const it = subscribeDiagnostics(9)[Symbol.asyncIterator]();
+    publishDiagnosticsBatch(9, Array.from({ length: 201 }, (_, i) => frame(`file-${i}.ts`, `m${i}`)));
+
+    const first = await it.next();
+    const second = await it.next();
+    expect(first.value.frames).toHaveLength(200);
+    expect(second.value.frames).toHaveLength(1);
+    expect([...first.value.frames, ...second.value.frames].map((f) => f.file)).toEqual(
+      Array.from({ length: 201 }, (_, i) => `file-${i}.ts`),
+    );
     await it.return!();
   });
 });

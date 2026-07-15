@@ -33,18 +33,31 @@ export function emptyDiagnosticsState(): DiagnosticsState {
 }
 
 /**
- * Apply one coalesced frame, returning a NEW state so React sees a fresh
- * reference. `diagnostics: []` removes that source (and the file once it has
- * no sources left).
+ * Apply a wire batch with one outer Map copy and at most one inner copy per
+ * touched file. Frames retain their stream order, so repeated (file, source)
+ * entries remain latest-wins and `diagnostics: []` still clears that source.
  */
-export function applyFrame(state: DiagnosticsState, frame: DiagnosticsFrame): DiagnosticsState {
+export function applyFrames(state: DiagnosticsState, frames: readonly DiagnosticsFrame[]): DiagnosticsState {
+  if (frames.length === 0) return state;
   const next = new Map(state);
-  const bySource = new Map(next.get(frame.file) ?? []);
-  if (frame.diagnostics.length === 0) bySource.delete(frame.source);
-  else bySource.set(frame.source, frame.diagnostics);
-  if (bySource.size === 0) next.delete(frame.file);
-  else next.set(frame.file, bySource);
+  const touched = new Map<string, Map<string, DiagnosticItem[]>>();
+  for (const frame of frames) {
+    let bySource = touched.get(frame.file);
+    if (!bySource) {
+      bySource = new Map(next.get(frame.file) ?? []);
+      touched.set(frame.file, bySource);
+    }
+    if (frame.diagnostics.length === 0) bySource.delete(frame.source);
+    else bySource.set(frame.source, frame.diagnostics);
+    if (bySource.size === 0) next.delete(frame.file);
+    else next.set(frame.file, bySource);
+  }
   return next;
+}
+
+/** Apply one frame while retaining the existing producer/test API. */
+export function applyFrame(state: DiagnosticsState, frame: DiagnosticsFrame): DiagnosticsState {
+  return applyFrames(state, [frame]);
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { error: 0, warning: 1, info: 2, hint: 3 };

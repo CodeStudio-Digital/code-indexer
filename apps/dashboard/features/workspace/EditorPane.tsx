@@ -11,7 +11,7 @@
  * only lands when the user actually opens a file.
  */
 
-import { Suspense, lazy, useCallback, useEffect, useReducer } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -36,12 +36,10 @@ import { EditorTabBar } from './EditorTabBar.js';
 import { ExternalChangeBanner } from './ExternalChangeBanner.js';
 import { executeCommand, getCommand, onCommandsChanged } from '../../keymap/commands.js';
 import { useKeymapStore, bindingLabel } from '../../keymap/keymap-store.js';
+import { activeFileRenderEqual } from './editor/active-file-render.js';
 
 const MonacoMount = lazy(() =>
   import('./editor/MonacoMount.js').then((m) => ({ default: m.MonacoMount })),
-);
-const LspInstallPrompt = lazy(() =>
-  import('./editor/LspInstallPrompt.js').then((m) => ({ default: m.LspInstallPrompt })),
 );
 const DiffMount = lazy(() =>
   import('./editor/DiffMount.js').then((m) => ({ default: m.DiffMount })),
@@ -124,9 +122,18 @@ function EditorPaneView({ paneId }: { paneId: string }) {
   // so when the other pane is typed in, this selector returns the same reference
   // and Zustand's Object.is equality skips re-rendering the idle pane entirely.
   const activePath = pane?.activePath ?? null;
-  const activeFile = useWorkspaceStore(
-    (s) => s.openFiles.find((f) => f.path === activePath && f.projectId === s.activeProjectId) ?? null,
-  );
+  const selectActiveFile = useMemo(() => {
+    let previous: ReturnType<typeof useWorkspaceStore.getState>['openFiles'][number] | null = null;
+    return (state: ReturnType<typeof useWorkspaceStore.getState>) => {
+      const next = state.openFiles.find(
+        (file) => file.path === activePath && file.projectId === state.activeProjectId,
+      ) ?? null;
+      if (activeFileRenderEqual(previous, next)) return previous;
+      previous = next;
+      return next;
+    };
+  }, [activePath]);
+  const activeFile = useWorkspaceStore(selectActiveFile);
 
   // Stable callback so MonacoMount's handleMount deps / props don't churn.
   const onFocusPane = useCallback(() => setActivePane(paneId), [setActivePane, paneId]);
@@ -184,8 +191,6 @@ function EditorPaneView({ paneId }: { paneId: string }) {
                 )}
                 <div className="flex-1 min-h-0 relative">
                   <MonacoMount file={activeFile} isActivePane={isActivePane} onFocusPane={onFocusPane} />
-                  {/* Consent CTA: language has a tier-1 LSP server not yet installed. */}
-                  <LspInstallPrompt projectId={activeFile.projectId} filePath={activeFile.path} />
                 </div>
               </div>
             )}

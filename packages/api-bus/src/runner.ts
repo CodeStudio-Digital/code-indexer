@@ -29,6 +29,7 @@ export type RunnerManager =
   | 'node'
   | 'php'
   | 'python'
+  | 'java'
   // Shell snippet runs (a ```bash/```sh block in a markdown file).
   | 'shell';
 
@@ -87,6 +88,8 @@ export interface DetectedGroup {
   installNeeded: boolean;
   /** Command to install deps, when applicable (e.g. `pnpm install`). */
   installCommand?: string;
+  /** Command to refresh existing dependencies, preserving project wrappers. */
+  updateCommand?: string;
 }
 
 export interface DetectedRunners {
@@ -107,6 +110,8 @@ export interface RunnerTask {
   manager: RunnerManager;
   /** Project-relative working dir the run was launched in (for restart). */
   cwd?: string;
+  /** Explicit execution environment used by settings actions (host/WSL). */
+  target?: RuntimeTarget;
   status: RunnerStatus;
   exitCode: number | null;
   /** Epoch ms when the run started. */
@@ -125,12 +130,35 @@ export interface RunnerStartInput {
    * the project root server-side.
    */
   cwd?: string;
+  /** Override the project's runner shell target (used by host/WSL settings panes). */
+  target?: RuntimeTarget;
 }
 
 /** Whether a package-manager binary is available on the project's PATH. */
 export interface ManagerStatus {
   found: boolean;
   version?: string;
+}
+
+export interface PackageSearchResult {
+  id: string;
+  version: string;
+  description?: string;
+}
+
+export interface AddDependencyResult {
+  changed: boolean;
+  manifest: string;
+  message?: string;
+}
+
+export interface FileRunTarget {
+  label: string;
+  manager: RunnerManager;
+  command?: string;
+  cwd?: string;
+  /** Present instead of command when choosing a target would be ambiguous. */
+  reason?: string;
 }
 
 export interface RunnerApi {
@@ -152,6 +180,31 @@ export interface RunnerApi {
     input: { projectId: number; manager: RunnerManager; target?: RuntimeTarget },
     ctx: ApiContext,
   ): Promise<ManagerStatus>;
+
+  /** Search Maven Central (Maven/Gradle) or NuGet with a bounded result set. */
+  searchPackages(
+    input: { projectId: number; manager: 'maven' | 'gradle' | 'dotnet'; query: string; limit?: number },
+    ctx: ApiContext,
+  ): Promise<PackageSearchResult[]>;
+
+  /** Add one validated package to the detected project manifest. */
+  addDependency(
+    input: {
+      projectId: number;
+      manager: 'maven' | 'gradle' | 'dotnet';
+      packageId: string;
+      version: string;
+      projectFile?: string;
+      target?: RuntimeTarget;
+    },
+    ctx: ApiContext,
+  ): Promise<AddDependencyResult>;
+
+  /** Resolve a source file, project manifest, or manifest script to an honest shell-aware run command. */
+  fileRunTarget(
+    input: { projectId: number; file: string; content?: string; script?: string; target?: RuntimeTarget },
+    ctx: ApiContext,
+  ): Promise<FileRunTarget>;
 
   /** Spawn a command as a tracked run; returns its task + PTY ids. */
   start(input: RunnerStartInput, ctx: ApiContext): Promise<RunnerTask>;

@@ -29,6 +29,11 @@ export interface CreateSessionInput {
   is_global?: boolean;
 }
 
+export interface LastUsedProviderModel {
+  provider: string;
+  model: string;
+}
+
 /**
  * Input for a global session. `project_id` is the SYNTHETIC union project (a
  * directory of junctions to the real projects — built by the caller). The real
@@ -92,6 +97,22 @@ export function createGlobal(db: DB, input: CreateGlobalSessionInput): CoderSess
 export function get(db: DB, id: number): CoderSession | null {
   const row = db.prepare('SELECT * FROM coder_sessions WHERE id = ?').get(id) as SessionRow | undefined;
   return mapSessionRow(row);
+}
+
+/**
+ * Most recently active provider/model pair across the local user's sessions.
+ * This intentionally ignores favorite ordering: `updated_at` is bumped when a
+ * model is switched or a turn runs, so it represents actual recent use.
+ */
+export function getLastUsedProviderModel(db: DB): LastUsedProviderModel | null {
+  const row = db.prepare(`
+    SELECT provider, model
+      FROM coder_sessions
+     WHERE trim(provider) <> '' AND trim(model) <> ''
+     ORDER BY updated_at DESC, id DESC
+     LIMIT 1
+  `).get() as LastUsedProviderModel | undefined;
+  return row ?? null;
 }
 
 /**

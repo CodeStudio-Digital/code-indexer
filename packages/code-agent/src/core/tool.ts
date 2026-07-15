@@ -126,6 +126,14 @@ export interface CoderTool {
    * timeout remains active; only `pollable` opts into unbounded waiting.
    */
   repeatPolicy?: ToolRepeatPolicy;
+  /**
+   * Promote the cross-turn unchanged-result detector from telemetry-only to
+   * an active loop break for this tool. Use sparingly for control-plane
+   * snapshots whose repeated identical result cannot advance the task. The
+   * third unchanged call is still delivered, then the runner forces a
+   * planning turn so the model must choose a different action.
+   */
+  stopOnRepeatedUnchangedResult?: boolean;
   /** Scheduling class used by nested and future parallel dispatchers. */
   executionClass?: ToolExecutionClass;
   /**
@@ -314,6 +322,20 @@ export interface ToolContext {
    * ephemeral per-call store. See tools/code-exec-stash.ts.
    */
   codeExecStash?: import('@mcp/code-agent/tools/code-exec-stash.js').CodeExecStash;
+  /**
+   * Read-only access to THIS session's pending snapshot diffs, backing the
+   * `change` API inside code_exec (tools/code-exec-change.ts) — the
+   * "interrogable diff": scripts query the change (files, hunks, before/after
+   * symbol bodies, absences) instead of receiving diff text. Wired by
+   * runCoder(); absent in tests/subagent-less paths → no `change` global.
+   */
+  sessionChanges?: {
+    /** Reviewable pending diffs (filtered, cumulative baselines). */
+    getDiffs(): Promise<import('@mcp/services/services/session-snapshots.js').FileDiff[]>;
+    /** Pre-edit content of one baseline. Null when the file did not exist OR
+     *  the content is unavailable (oversized/binary baseline) — never ''. */
+    getBeforeContent(baselineId: number): Promise<string | null>;
+  };
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
   /**
@@ -520,9 +542,34 @@ export interface ToolContext {
   subagentCollector?: import('@mcp/code-agent/tools/subagent-collector.js').SubagentCollector;
 }
 
+/** Stable, machine-readable details for an unsuccessful tool result. */
+export type ToolErrorKind =
+  | 'not_found'
+  | 'invalid_input'
+  | 'conflict'
+  | 'permission'
+  | 'timeout'
+  | 'cancelled'
+  | 'network'
+  | 'refusal'
+  | 'tool_error'
+  | 'internal';
+
+export interface ToolErrorInfo {
+  /** Stable code suitable for branching; unlike `content`, it is not prose. */
+  code: string;
+  kind: ToolErrorKind;
+  /** Whether retrying the same operation without changing its inputs may help. */
+  retryable: boolean;
+  /** Concise recovery direction for programmatic consumers such as code_exec. */
+  suggestedAction?: string;
+}
+
 export interface ToolResult {
   content: string;
   isError?: boolean;
+  /** Optional structured failure metadata. `content` remains the display text. */
+  error?: ToolErrorInfo;
   /** Model-facing representation. Providers receive only `content`. */
   contentFormat?: 'text' | 'markdown' | 'json';
   /**
@@ -553,6 +600,6 @@ export function ok(content: string): ToolResult {
   return { content };
 }
 
-export function err(content: string): ToolResult {
-  return { content, isError: true };
+export function err(content: string, error?: ToolErrorInfo): ToolResult {
+  return { content, isError: true, ...(error ? { error } : {}) };
 }

@@ -30,7 +30,7 @@ import { PhpExtensionsSection } from '../../runtime/PhpExtensionsSection.js';
 import { DependenciesSection } from './DependenciesSection.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
 
-const KIND_LABEL: Record<RuntimeKind, string> = { node: 'Node.js', php: 'PHP', python: 'Python' };
+const KIND_LABEL: Record<RuntimeKind, string> = { node: 'Node.js', php: 'PHP', python: 'Python', java: 'Java (JDK)', dotnet: '.NET SDK' };
 const SYSTEM = 'system';
 const HOST: RuntimeTarget = { kind: 'host' };
 

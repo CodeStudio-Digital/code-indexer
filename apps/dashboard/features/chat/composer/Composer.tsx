@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { FileText, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { useConfirm } from '../../../components/ui/dialog-provider.js';
+import { toast } from '../../../components/ui/prompt-dialog.js';
 import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
-import { fileToAttachment } from '../utils.js';
+import { filesToAttachments } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
 import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.js';
@@ -41,6 +42,7 @@ const BORDER_TINT: Record<AgentId, string> = {
   admin: 'border-l-rose-500',
   spec: 'border-l-amber-500',
   app_orchestrator: 'border-l-violet-500',
+  app_db: 'border-l-teal-500',
   api: 'border-l-cyan-500',
   diagram: 'border-l-violet-500',
   builder: 'border-l-fuchsia-500',
@@ -233,9 +235,15 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
 
     const handleFiles = useCallback(async (files: FileList | null) => {
       if (!files || files.length === 0) return;
-      const arr = await Promise.all(Array.from(files).map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...arr]);
-    }, []);
+      try {
+        const arr = await filesToAttachments(files, attachments);
+        setAttachments((prev) => [...prev, ...arr]);
+      } catch (error) {
+        toast.error(t('composer.attachmentRejected', { defaultValue: 'Attachment rejected' }), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }, [attachments, t]);
 
     const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled: streaming });
 
@@ -267,10 +275,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       await handleFiles(dt.files);
     }, [handleFiles]);
 
-    const hasInput = input.trim().length > 0;
+    const hasInput = input.trim().length > 0 || attachments.length > 0;
 
     const handleSend = useCallback(async () => {
-      if (!input.trim()) return;
+      if (!input.trim() && attachments.length === 0) return;
 
       // Admin send-gate (friction-only). Real safety is the runner's
       // confirmBeforeIrreversible — this is just a heads-up on first send.
@@ -287,7 +295,9 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
         sessionStorage.setItem('admin-mode-ack', 'yes');
       }
 
-      const text = input;
+      const text = input.trim()
+        ? input
+        : t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' });
       const picks = props.filePicks ?? [];
       const skillIds = props.skillPicks ?? [];
 
@@ -295,6 +305,12 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       // instead of the chat /messages endpoint. Picks and attachments
       // aren't forwarded — pipelines are always text-driven for MVP.
       if (props.selectedPipelineId != null && props.onRunPipeline) {
+        if (attachments.length > 0) {
+          toast.error(t('composer.pipelineAttachmentsUnsupported', {
+            defaultValue: 'This pipeline only accepts text. Remove the attachments before running it.',
+          }));
+          return;
+        }
         const pid = props.selectedPipelineId;
         setInput('');
         setAttachments([]);
@@ -335,7 +351,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm, clearDraft]);
+    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm, clearDraft, t]);
 
     // Enqueue the composed message while the agent is streaming. Same
     // file_refs prefixing + clears as `handleSend`, but the delivery timing

@@ -3,6 +3,7 @@ import { Loader2, RefreshCcw, Sparkles, Trash2, AlertTriangle, CheckCircle2 } fr
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import {
   cleanupProject,
   clearAllProjectData,
@@ -117,7 +118,12 @@ export function HygienePanel() {
       setLastResult('Nenhum projeto com root_path ausente.');
       return;
     }
-    if (!confirm(`Apagar ${ids.length} projeto(s) cujo diretório sumiu do disco? Vetores correspondentes serão removidos do Cloudflare.`)) {
+    if (!(await confirm({
+      title: `Apagar ${ids.length} projeto(s) ausente(s)?`,
+      description: 'Os diretórios não existem mais no disco e os vetores correspondentes serão removidos do Cloudflare.',
+      confirmLabel: 'Apagar projetos',
+      tone: 'destructive',
+    }))) {
       return;
     }
     await withBusy('purge', () => purgeProjects(ids), (r) => {
@@ -135,11 +141,12 @@ export function HygienePanel() {
       return;
     }
     if (
-      !confirm(
-        `Limpar TODOS os dados de ${n} projeto(s)?\n\n` +
-          `Apaga índice, sessões, snapshots, runs, custos e vetores — mas MANTÉM os ` +
-          `projetos cadastrados (você só precisa re-indexar). Irreversível.`,
-      )
+      !(await confirm({
+        title: `Limpar todos os dados de ${n} projeto(s)?`,
+        description: 'Apaga índice, sessões, snapshots, runs, custos e vetores, mas mantém os projetos cadastrados. Esta ação é irreversível.',
+        confirmLabel: 'Limpar dados',
+        tone: 'destructive',
+      }))
     ) {
       return;
     }
@@ -151,11 +158,12 @@ export function HygienePanel() {
 
   async function clearOne(p: HygieneProject) {
     if (
-      !confirm(
-        `Limpar TODOS os dados do projeto "${p.name}"?\n\n` +
-          `Apaga índice, sessões, snapshots, runs, custos e vetores — mas MANTÉM o ` +
-          `projeto cadastrado (você só precisa re-indexar). Irreversível.`,
-      )
+      !(await confirm({
+        title: `Limpar todos os dados de “${p.name}”?`,
+        description: 'Apaga índice, sessões, snapshots, runs, custos e vetores, mas mantém o projeto cadastrado. Esta ação é irreversível.',
+        confirmLabel: 'Limpar dados',
+        tone: 'destructive',
+      }))
     ) {
       return;
     }

@@ -1,15 +1,14 @@
 /**
  * One file row shared by `FileEditBlock` and `TurnFilesSummary`: A/M/D badge +
- * path + `+added/−removed` from an explicitly supplied snapshot + a chevron
- * that expands the inline diff. Completed-round callers pass the immutable
- * round snapshot; tool-call/legacy rows stay non-actionable rather than
- * falling back to the cumulative global baseline.
+ * path + `+added/−removed` + a chevron that expands the inline diff.
+ * Completed-round callers pass the immutable round snapshot; live/tool rows
+ * use the current session baseline until that frozen envelope is available.
  */
 import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { InlineDiff } from '../../snapshots/diff/InlineDiff.js';
-import { useSnapshotActions, statusKind } from './snapshot-files-context.js';
+import { useSnapshotActions, useSnapshotFile, statusKind } from './snapshot-files-context.js';
 import type { EditFileRef, FileEditOp } from './edit-tools.js';
 import type {
   RoundSnapshotFileSummary,
@@ -43,7 +42,11 @@ export function FileChangeRow({
 }) {
   const [open, setOpen] = useState(false);
   const actions = useSnapshotActions();
-  const summary = snapshot;
+  // A completed turn supplies its immutable round snapshot. Individual edit
+  // cards do not have that envelope yet, so keep them useful with the live
+  // session baseline instead of rendering permanent `--` placeholders.
+  const globalSummary = useSnapshotFile(file.path);
+  const summary = snapshot ?? globalSummary;
 
   const kind = summary ? statusKind(summary) : opToKind(file.op);
   const baselineId = summary?.baselineId;
@@ -86,8 +89,8 @@ export function FileChangeRow({
             scope={actions.scope}
             sessionId={actions.sessionId}
             baselineId={baselineId}
-            roundMessageId={roundMessageId ?? summary.roundMessageId}
-            globalBaselineId={summary.globalBaselineId}
+            roundMessageId={snapshot ? (roundMessageId ?? snapshot.roundMessageId) : undefined}
+            globalBaselineId={snapshot?.globalBaselineId}
             reviewFindings={reviewFindings}
             onMutated={onRoundMutated}
             refreshKey={summary?.lastEditedAt}

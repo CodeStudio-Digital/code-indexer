@@ -1,0 +1,13 @@
+{"timestamp":"2026-07-14T11:00:00.000Z","type":"session_meta","payload":{"id":"codex-session-1","cwd":"D:\\MCP","model_provider":"openai"}}
+{"timestamp":"2026-07-14T11:00:01.000Z","type":"turn_context","payload":{"cwd":"D:\\MCP","model":"gpt-5","summary":"Continue the route implementation."}}
+{"timestamp":"2026-07-14T11:00:02.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"private instructions"}]}}
+{"timestamp":"2026-07-14T11:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Implement the API"}]}}
+{"timestamp":"2026-07-14T11:00:04.000Z","type":"event_msg","payload":{"type":"user_message","message":"Implement the API"}}
+{"timestamp":"2026-07-14T11:00:05.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"private"}]}}
+{"timestamp":"2026-07-14T11:00:06.000Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"pwd\"}","call_id":"call-1"}}
+{"timestamp":"2026-07-14T11:00:07.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"D:\\MCP"}}
+{"timestamp":"2026-07-14T11:00:07.100Z","type":"response_item","payload":{"type":"custom_tool_call","name":"code_exec","input":"echo hi","call_id":"call-2"}}
+{"timestamp":"2026-07-14T11:00:07.200Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-2","output":"hi"}}
+{"timestamp":"2026-07-14T11:00:08.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"API implemented"}]}}
+{"timestamp":"2026-07-14T11:00:09.000Z","type":"compacted","payload":{"message":"The API exists; add UI next.","replacement_history":[{"role":"developer","content":"do not import"}]}}
+{"timestamp":"2026-07-14T11:00:10.000Z","type":"response_item","payload":{"type":"future_item","value":1}}

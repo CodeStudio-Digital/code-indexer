@@ -1,5 +1,6 @@
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import { renderTextDocument } from './document-utils.js';
 
 /**
  * Amazon Bedrock chat adapter using the Converse/ConverseStream API.
@@ -237,12 +238,12 @@ export class BedrockChatProvider implements ChatProvider {
 
 // ─── Message mapping ────────────────────────────────────────────
 
-interface BedrockMessage {
+export interface BedrockMessage {
   role: 'user' | 'assistant';
   content: BedrockContentBlock[];
 }
 
-type BedrockContentBlock =
+export type BedrockContentBlock =
   | { text: string }
   | { toolUse: { toolUseId: string; name: string; input: unknown } }
   | { toolResult: { toolUseId: string; content: Array<{ text: string }>; status?: 'success' | 'error' } }
@@ -258,7 +259,7 @@ type BedrockContentBlock =
  * but Bedrock only needs toolUseId to thread the result back to the matching
  * toolUse block, so that's fine.
  */
-function toBedrockMessages(messages: AgentMessage[]): BedrockMessage[] {
+export function toBedrockMessages(messages: AgentMessage[]): BedrockMessage[] {
   const out: BedrockMessage[] = [];
 
   for (const m of messages) {
@@ -280,6 +281,7 @@ function toBedrockMessages(messages: AgentMessage[]): BedrockMessage[] {
 
     if (m.role === 'user') {
       const content: BedrockContentBlock[] = [];
+      let documentIndex = 0;
       for (const b of m.content as ContentBlock[]) {
         if (b.type === 'text' && b.text) content.push({ text: b.text });
         else if (b.type === 'image' && b.base64) {
@@ -289,9 +291,21 @@ function toBedrockMessages(messages: AgentMessage[]): BedrockMessage[] {
               source: { bytes: base64ToBytes(b.base64) },
             },
           });
+        } else if (b.type === 'document' && b.base64 && b.mediaType === 'application/pdf') {
+          documentIndex++;
+          content.push({
+            document: {
+              // Bedrock warns that document names can be interpreted as prompt
+              // text. Keep its wire name neutral; the canonical block retains
+              // the original display name for the transcript.
+              name: `document-${documentIndex}`,
+              format: 'pdf',
+              source: { bytes: base64ToBytes(b.base64) },
+            },
+          });
         } else if (b.type === 'document' && b.text) {
           content.push({
-            text: `<document name="${b.name}" mediaType="${b.mediaType}">\n${b.text}\n</document>`,
+            text: renderTextDocument(b),
           });
         } else if (b.type === 'tool_result') {
           // Runner quirk — occasionally tool_results ride on a user message.
@@ -303,6 +317,9 @@ function toBedrockMessages(messages: AgentMessage[]): BedrockMessage[] {
             },
           });
         }
+      }
+      if (content.some((b) => 'document' in b) && !content.some((b) => 'text' in b)) {
+        content.unshift({ text: 'Analyze the attached document.' });
       }
       if (content.length > 0) out.push({ role: 'user', content });
       continue;

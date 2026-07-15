@@ -6,15 +6,22 @@
  */
 
 import { execFile } from 'node:child_process';
+import { createHash, type Hash } from 'node:crypto';
 import { createWriteStream, type WriteStream } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
 import type { InstallProgress, RuntimeKind } from '@mcp/api-bus';
+import { assertRuntimeVersion } from './runtime-version.js';
 
 const execFileAsync = promisify(execFile);
+
+export interface DownloadDigest {
+  algorithm: 'sha256' | 'sha512';
+  expected: string;
+}
 
 /** Managed installs live under `<dataDir>/<kind>/...` (e.g. `<dataDir>/php/8.3.7/`). */
 export function managedRuntimeRoot(dataDir: string, kind: RuntimeKind): string {
@@ -57,11 +64,13 @@ async function* streamToFile(
   kind: RuntimeKind,
   version: string,
   totalBytes: number | undefined,
+  hash?: Hash,
 ): AsyncGenerator<InstallProgress> {
   let received = 0;
   try {
     for await (const chunk of body) {
       received += chunk.length;
+      hash?.update(chunk);
       await writeChunk(out, chunk);
       yield { kind, phase: 'download', version, receivedBytes: received, totalBytes };
     }
@@ -82,15 +91,24 @@ export async function* downloadFile(opts: {
   destFile: string;
   kind: RuntimeKind;
   version: string;
+  digest?: DownloadDigest;
 }): AsyncGenerator<InstallProgress> {
   const { url, destFile, kind, version } = opts;
+  assertRuntimeVersion(version);
   const res = await fetch(url);
   if (!res.ok || !res.body) throw new Error(`download failed (${res.status}) for ${url}`);
   const totalBytes = Number(res.headers.get('content-length')) || undefined;
   await mkdir(dirname(destFile), { recursive: true });
 
   const out = createWriteStream(destFile);
-  yield* streamToFile(res.body as unknown as AsyncIterable<Uint8Array>, out, kind, version, totalBytes);
+  const hash = opts.digest ? createHash(opts.digest.algorithm) : undefined;
+  yield* streamToFile(res.body as unknown as AsyncIterable<Uint8Array>, out, kind, version, totalBytes, hash);
+  if (hash) {
+    const actual = hash.digest('hex');
+    if (actual.toLowerCase() !== opts.digest!.expected.toLowerCase()) {
+      throw new Error(`${opts.digest!.algorithm} mismatch for ${url}`);
+    }
+  }
 }
 
 /**
@@ -108,29 +126,51 @@ export async function* downloadAndExtract(opts: {
   version: string;
   /** When true, wipe destDir before extracting (default true). */
   clean?: boolean;
+  digest?: DownloadDigest;
+  /** Validate the staged payload before it is allowed to replace destDir. */
+  validateExtracted?: (stagedDir: string) => boolean;
 }): AsyncGenerator<InstallProgress> {
   const { url, ext, destDir, kind, version } = opts;
+  assertRuntimeVersion(version);
   const tmpFile = join(tmpdir(), `mcp-${kind}-${version}-${process.pid}.${ext}`);
+  const clean = opts.clean ?? true;
+  const extractDir = clean ? `${destDir}.partial-${process.pid}-${Date.now()}` : destDir;
 
   const res = await fetch(url);
   if (!res.ok || !res.body) throw new Error(`download failed (${res.status}) for ${url}`);
   const totalBytes = Number(res.headers.get('content-length')) || undefined;
-  await mkdir(destDir, { recursive: true });
+  await mkdir(dirname(destDir), { recursive: true });
 
   // One try/finally over the whole download+extract so the temp archive is
   // ALWAYS removed — including when the download itself errors mid-transfer.
   try {
     const out = createWriteStream(tmpFile);
-    yield* streamToFile(res.body as unknown as AsyncIterable<Uint8Array>, out, kind, version, totalBytes);
+    const hash = opts.digest ? createHash(opts.digest.algorithm) : undefined;
+    yield* streamToFile(res.body as unknown as AsyncIterable<Uint8Array>, out, kind, version, totalBytes, hash);
+    if (hash) {
+      const actual = hash.digest('hex');
+      if (actual.toLowerCase() !== opts.digest!.expected.toLowerCase()) {
+        throw new Error(`${opts.digest!.algorithm} mismatch for ${url}`);
+      }
+    }
 
     yield { kind, phase: 'extract', version };
+    await mkdir(extractDir, { recursive: true });
     if (ext === 'zip') {
-      extractZipToDir(tmpFile, destDir, { clean: opts.clean ?? true });
+      extractZipToDir(tmpFile, extractDir, { clean });
     } else {
       const flag = ext === 'tar.xz' ? '-xJf' : '-xzf';
-      await execFileAsync('tar', [flag, tmpFile, '-C', destDir], { maxBuffer: 1 << 24 });
+      await execFileAsync('tar', [flag, tmpFile, '-C', extractDir], { maxBuffer: 1 << 24 });
+    }
+    if (opts.validateExtracted && !opts.validateExtracted(extractDir)) {
+      throw new Error(`extracted payload failed validation for ${kind} ${version}`);
+    }
+    if (clean) {
+      await rm(destDir, { recursive: true, force: true });
+      await rename(extractDir, destDir);
     }
   } finally {
     await rm(tmpFile, { force: true });
+    if (clean) await rm(extractDir, { recursive: true, force: true });
   }
 }

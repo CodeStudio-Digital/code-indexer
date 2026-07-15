@@ -321,7 +321,11 @@
   "chatRail": {
     "sessions": "Conversations",
     "open": "Open chat",
-    "collapse": "Collapse chat"
+    "collapse": "Collapse chat",
+    "history": "View conversation history",
+    "backToConversation": "Back to conversation",
+    "newConversation": "New conversation",
+    "waitUntilIdle": "Wait for the coordinator to finish before starting another conversation"
   },
   "surfaceFind": {
     "title": "Find on this page",

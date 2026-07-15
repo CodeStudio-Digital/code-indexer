@@ -23,8 +23,8 @@ export function agentPoolKey(conn: Pick<DbConnection, 'project_id' | 'id'>): str
   return `agent:${conn.project_id}:${conn.id}`;
 }
 
-/** `updated_at` observed at the last acquire, per pool key. */
-const lastSeenUpdatedAt = new Map<string, string>();
+/** Saved-row version observed at the last acquire, per pool key. */
+const lastSeenVersion = new Map<string, string>();
 /** Resolved spec cached per key so error scrubbing keeps its secret list. */
 const specCache = new Map<string, ResolvedDbSpec>();
 
@@ -43,8 +43,11 @@ export async function acquireAgentDriver(conn: DbConnection): Promise<AcquiredDb
   )) as Manager;
   const mgr = sharedDbConnectionManager();
   const key = agentPoolKey(conn);
-  const prev = lastSeenUpdatedAt.get(key);
-  if (prev !== undefined && prev !== conn.updated_at) {
+  // Include the read-only bit explicitly: SQLite timestamps have one-second
+  // precision, so a fast toggle can otherwise reuse a writable native pool.
+  const version = `${conn.updated_at}\u0000${conn.is_read_only}`;
+  const prev = lastSeenVersion.get(key);
+  if (prev !== undefined && prev !== version) {
     // Credential/settings rotation — drop the stale pool (and its cached
     // secrets) so the next acquire reconnects with the fresh row.
     await mgr.closeKey(key);
@@ -57,7 +60,7 @@ export async function acquireAgentDriver(conn: DbConnection): Promise<AcquiredDb
     driver = await mgr.acquire(key, spec.config, { invalidatePrefix: key });
     specCache.set(key, spec);
   }
-  lastSeenUpdatedAt.set(key, conn.updated_at);
+  lastSeenVersion.set(key, version);
   mgr.setMeta(key, {
     engine: conn.engine,
     readOnly: conn.is_read_only === 1,

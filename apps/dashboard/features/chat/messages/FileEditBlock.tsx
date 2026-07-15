@@ -42,9 +42,9 @@ export function FileEditBlock({
         </div>
       )}
       {refs.map((ref) => (
-        // Tool-call rows must never fall back to the cumulative global
-        // baseline. The completed-round summary below the response owns the
-        // frozen diff; the global baseline is actionable only in its modal.
+        // The tool row shows the live session baseline immediately. The
+        // completed-round summary below the response remains the authoritative
+        // frozen diff for undo/review actions.
         <FileChangeRow key={`${ref.path}:${ref.op}`} file={ref} />
       ))}
       {running && (

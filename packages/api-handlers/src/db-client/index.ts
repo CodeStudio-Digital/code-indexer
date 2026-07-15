@@ -48,6 +48,28 @@ function keyFor(connectionId: string): string {
  */
 const inflight = new Map<string, AbortController>();
 
+/** Keep an interactive query bounded while still allowing reports to finish. */
+export const MIN_QUERY_TIMEOUT_MS = 1_000;
+export const MAX_QUERY_TIMEOUT_MS = 60 * 60_000;
+
+/** Validate an untrusted per-query deadline before handing it to a driver. */
+export function parseQueryTimeoutMs(timeoutMs: unknown): number | undefined {
+  if (timeoutMs == null) return undefined;
+  if (
+    typeof timeoutMs !== 'number'
+    || !Number.isSafeInteger(timeoutMs)
+    || timeoutMs < MIN_QUERY_TIMEOUT_MS
+    || timeoutMs > MAX_QUERY_TIMEOUT_MS
+  ) {
+    throw new ApiError(
+      'db_invalid_query_timeout',
+      400,
+      `Query timeout must be an integer between ${MIN_QUERY_TIMEOUT_MS}ms and ${MAX_QUERY_TIMEOUT_MS}ms.`,
+    );
+  }
+  return timeoutMs;
+}
+
 function toConfig(spec: DbConnectSpec): DbConnectConfig {
   return {
     engine: spec.engine,
@@ -60,6 +82,7 @@ function toConfig(spec: DbConnectSpec): DbConnectConfig {
     connectionString: spec.connectionString,
     ssl: spec.ssl,
     options: spec.options,
+    readOnly: !!spec.readOnly,
   };
 }
 
@@ -199,19 +222,33 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return { sql: buildDdl(engine, 'create', { create: { schema: effSchema, table, columns } }).join(';\n') + ';' };
     },
 
-    async query({ connectionId, sql, params, maxRows, queryId, schema }) {
+    async query({ connectionId, sql, params, maxRows, timeoutMs: requestedTimeoutMs, queryId, schema }) {
       const driver = requireDriver(connectionId);
       if (mgr.getMeta(keyFor(connectionId))?.readOnly && !isReadStatement(sql)) {
         throw new ApiError('db_read_only', 403, 'Connection is read-only — only SELECT statements are allowed.');
       }
+      const timeoutMs = parseQueryTimeoutMs(requestedTimeoutMs);
       const controller = new AbortController();
       const inflightKey = queryId ? `${connectionId}:${queryId}` : null;
       if (inflightKey) inflight.set(inflightKey, controller);
       const started = Date.now();
+      let timedOut = false;
+      const timeout = timeoutMs == null
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            controller.abort(new Error(`query timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
       try {
-        const result = await driver.runQuery(sql, { params, maxRows, schema, signal: controller.signal });
+        const result = await driver.runQuery(sql, { params, maxRows, timeoutMs, schema, signal: controller.signal });
         return { ...result, durationMs: Date.now() - started };
+      } catch (err) {
+        if (timedOut) {
+          throw new ApiError('db_query_timeout', 408, `Query timed out after ${timeoutMs}ms.`);
+        }
+        throw err;
       } finally {
+        if (timeout) clearTimeout(timeout);
         if (inflightKey) inflight.delete(inflightKey);
       }
     },

@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
 import { toast } from '../../../../../components/ui/prompt-dialog.js';
+import { readGitAiDiffConsent, writeGitAiDiffConsent } from './git-ai-consent.js';
 
 interface CommitBoxProps {
   projectId: number;
@@ -42,6 +43,7 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
   const [amend, setAmend] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [aiDiffConsent, setAiDiffConsent] = useState(readGitAiDiffConsent);
 
   // The commit handler always reads the message from stdin (`-F -`), so a
   // message is required even when amending. You also need something to
@@ -49,8 +51,7 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
   const canCommit = !committing && !!message.trim() && (amend || stagedCount > 0);
 
   const generate = async () => {
-    if (stagedCount === 0 || generating) return;
-    if (!window.confirm(t('git.aiDiffConsent'))) return;
+    if (stagedCount === 0 || generating || !aiDiffConsent) return;
     setGenerating(true);
     try {
       const r = await apiCall<{ message: string }>('projectGit.aiCommitMessage', { projectId, repoPath, consent: true });
@@ -130,9 +131,9 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
             <button
               type="button"
               onClick={() => void generate()}
-              disabled={stagedCount === 0 || generating || committing}
-              title={t('git.generateWithAi')}
-              aria-label={t('git.generateWithAi')}
+              disabled={stagedCount === 0 || generating || committing || !aiDiffConsent}
+              title={aiDiffConsent ? t('git.generateWithAi') : t('git.aiDiffConsentRequired')}
+              aria-label={aiDiffConsent ? t('git.generateWithAi') : t('git.aiDiffConsentRequired')}
               className="absolute right-1.5 top-1.5 h-6 w-6 grid place-items-center rounded-sm text-muted-foreground hover:text-primary hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
             >
               {generating ? (
@@ -143,16 +144,37 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
             </button>
           </div>
 
-          <label className="flex items-center gap-1.5 w-fit text-[11px] text-muted-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={amend}
-              onChange={(e) => setAmend(e.target.checked)}
-              disabled={committing}
-              className="h-3 w-3 accent-primary"
-            />
-            {t('git.amend')}
-          </label>
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-1.5 w-fit text-[11px] text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={amend}
+                onChange={(e) => setAmend(e.target.checked)}
+                disabled={committing}
+                className="h-3 w-3 accent-primary"
+              />
+              {t('git.amend')}
+            </label>
+            <label className="flex items-start gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={aiDiffConsent}
+                onChange={(e) => {
+                  const granted = e.target.checked;
+                  setAiDiffConsent(granted);
+                  writeGitAiDiffConsent(granted);
+                }}
+                disabled={committing || generating}
+                className="mt-0.5 h-3 w-3 shrink-0 accent-primary"
+              />
+              <span>
+                {t('git.aiDiffConsent')}
+                <span className="block text-[10px] text-muted-foreground/70">
+                  {t('git.aiDiffConsentStored')}
+                </span>
+              </span>
+            </label>
+          </div>
 
           <div className="flex items-center gap-1.5">
             <Button

@@ -83,6 +83,13 @@ describe('dbClient read-only guard', () => {
   const cid = 'test:ro';
 
   it('blocks writes on a read-only connection', async () => {
+    // Native SQLite read-only mode requires an existing file; seed it exactly
+    // as a real saved connection would already exist on disk.
+    const seed = await import('@mcp/db-drivers').then(({ createSqliteDriver }) =>
+      createSqliteDriver({ engine: 'sqlite', filePath }),
+    );
+    await seed.runQuery('CREATE TABLE seed (id INTEGER PRIMARY KEY)');
+    await seed.close();
     await handlers.connect({ spec: { connectionId: cid, engine: 'sqlite', filePath, readOnly: true } }, ctx);
     await handlers.query({ connectionId: cid, sql: 'CREATE TABLE t (id INTEGER PRIMARY KEY)' }, ctx).catch(() => void 0);
 
@@ -94,6 +101,11 @@ describe('dbClient read-only guard', () => {
     // A non-SELECT query is also rejected.
     await expect(
       handlers.query({ connectionId: cid, sql: 'DELETE FROM t' }, ctx),
+    ).rejects.toThrow(/read-only/i);
+
+    // Read-shaped SQL that creates a table (SQL Server/PostgreSQL) is rejected.
+    await expect(
+      handlers.query({ connectionId: cid, sql: 'SELECT * INTO copied FROM seed' }, ctx),
     ).rejects.toThrow(/read-only/i);
 
     // …but a SELECT is allowed.

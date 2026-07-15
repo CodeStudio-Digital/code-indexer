@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { snippetRunFor } from '@mcp/api-bus';
-import { fileRunCommand, findCodeBlocks, findPythonMainLine, findScriptLines, runnableForFile } from '../run-target.js';
+import {
+  findCodeBlocks,
+  findCsharpMainLine,
+  findJavaMainLine,
+  findProjectRunLine,
+  findPythonMainLine,
+  findScriptLines,
+  isProjectRunFile,
+  runnableForFile,
+} from '../run-target.js';
 
 describe('runnableForFile', () => {
   it('maps supported extensions to a runtime', () => {
@@ -9,6 +18,8 @@ describe('runnableForFile', () => {
     expect(runnableForFile('c.js')).toEqual({ runtime: 'node', manager: 'node' });
     expect(runnableForFile('d.mjs')).toEqual({ runtime: 'node', manager: 'node' });
     expect(runnableForFile('e.cjs')).toEqual({ runtime: 'node', manager: 'node' });
+    expect(runnableForFile('src/Main.java')).toEqual({ runtime: 'java', manager: 'java' });
+    expect(runnableForFile('src/Program.cs')).toEqual({ runtime: 'dotnet', manager: 'dotnet' });
   });
   it('returns null for unsupported / extension-less', () => {
     expect(runnableForFile('f.ts')).toBeNull(); // needs a loader
@@ -17,11 +28,20 @@ describe('runnableForFile', () => {
   });
 });
 
-describe('fileRunCommand', () => {
-  it('quotes the path and prefixes the binary', () => {
-    expect(fileRunCommand('src/x.php', 'php')).toBe('php "src/x.php"');
-    expect(fileRunCommand('a/b c.py', 'python')).toBe('python "a/b c.py"');
-    expect(fileRunCommand('s.js', 'node')).toBe('node "s.js"');
+describe('project run manifests', () => {
+  it('recognises Maven, Gradle and C# project files', () => {
+    expect(isProjectRunFile('pom.xml')).toBe(true);
+    expect(isProjectRunFile('app/build.gradle')).toBe(true);
+    expect(isProjectRunFile('app/build.gradle.kts')).toBe(true);
+    expect(isProjectRunFile('src/App/App.csproj')).toBe(true);
+    expect(isProjectRunFile('settings.gradle')).toBe(false);
+  });
+
+  it('places the gutter on the first meaningful project declaration', () => {
+    expect(findProjectRunLine('<?xml version="1.0"?>\n<Project Sdk="Microsoft.NET.Sdk">')).toBe(2);
+    expect(findProjectRunLine('// generated\n\nplugins {')).toBe(3);
+    expect(findProjectRunLine('/* generated\n * file\n */\n<project>')).toBe(4);
+    expect(findProjectRunLine('<!-- generated\n metadata\n-->\n<project>')).toBe(4);
   });
 });
 
@@ -71,6 +91,18 @@ describe('findPythonMainLine', () => {
   });
   it('returns null without a main guard', () => {
     expect(findPythonMainLine('print("hi")')).toBeNull();
+  });
+});
+
+describe('Java/C# main-line detection', () => {
+  it('finds Java and C# entry points', () => {
+    expect(findJavaMainLine('class App {\n  public static void main(String[] args) {}\n}')).toBe(2);
+    expect(findCsharpMainLine('class App {\n  static async Task Main(string[] args) {}\n}')).toBe(2);
+  });
+
+  it('supports C# top-level programs without marking ordinary classes', () => {
+    expect(findCsharpMainLine('using System;\n\nConsole.WriteLine("hi");')).toBe(3);
+    expect(findCsharpMainLine('namespace Demo;\nclass Helper {}')).toBeNull();
   });
 });
 

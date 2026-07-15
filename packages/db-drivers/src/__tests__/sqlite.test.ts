@@ -108,6 +108,27 @@ describe('@mcp/db-drivers factory + manager', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('opens read-only SQLite physically read-only and rejects writes at the factory boundary', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dbdrv-ro-'));
+    const filePath = join(dir, 'ro.sqlite');
+    const seed = createSqliteDriver({ engine: 'sqlite', filePath });
+    await seed.runQuery('CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)');
+    await seed.runQuery(`INSERT INTO items (id, name) VALUES (1, 'safe')`);
+    await seed.close();
+
+    const direct = createSqliteDriver({ engine: 'sqlite', filePath, readOnly: true });
+    expect((await direct.runQuery('SELECT name FROM items')).rows[0].name).toBe('safe');
+    await expect(direct.runQuery(`UPDATE items SET name = 'changed'`)).rejects.toThrow(/read.?only/i);
+    await direct.close();
+
+    const guarded = await createDriver({ engine: 'sqlite', filePath, readOnly: true });
+    await expect(guarded.runQuery('DROP TABLE items')).rejects.toThrow(/read-only/i);
+    await expect(guarded.runQuery('SELECT * INTO copied FROM items')).rejects.toThrow(/read-only/i);
+    expect((await guarded.runQuery('SELECT COUNT(*) AS n FROM items')).rows[0].n).toBe(1);
+    await guarded.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('manager caches by key and closes all', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dbdrv-m-'));
     const mgr = new DbConnectionManager();

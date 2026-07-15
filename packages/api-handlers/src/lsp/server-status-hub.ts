@@ -19,8 +19,16 @@ type Subscriber = {
 };
 
 const subscribers = new Map<number, Set<Subscriber>>();
+/** Replay cache: subscribers must see ready even when it happened before connect. */
+const latestByProject = new Map<number, Map<string, LspServerStatusFrame>>();
 
 export function publishServerStatus(projectId: number, frame: LspServerStatusFrame): void {
+  let latest = latestByProject.get(projectId);
+  if (!latest) {
+    latest = new Map();
+    latestByProject.set(projectId, latest);
+  }
+  latest.set(frame.languageId, frame);
   const subs = subscribers.get(projectId);
   if (!subs || subs.size === 0) return;
   for (const sub of subs) {
@@ -42,7 +50,11 @@ export function hasServerStatusSubscribers(projectId: number): boolean {
 export function subscribeServerStatus(projectId: number): AsyncIterable<LspServerStatusFrame> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<LspServerStatusFrame> {
-      const sub: Subscriber = { pending: new Map(), wake: null, closed: false };
+      const sub: Subscriber = {
+        pending: new Map(latestByProject.get(projectId) ?? []),
+        wake: null,
+        closed: false,
+      };
       let set = subscribers.get(projectId);
       if (!set) { set = new Set(); subscribers.set(projectId, set); }
       set.add(sub);

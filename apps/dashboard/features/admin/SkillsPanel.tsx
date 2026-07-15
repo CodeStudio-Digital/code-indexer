@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { confirm, toast } from '../../components/ui/prompt-dialog.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import {
   Collapsible,
@@ -85,21 +86,30 @@ export function SkillsPanel() {
       await loadNamespaces();
       await reload();
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      toast.error(t('admin:skills.namespaceUpdateFailed'), {
+        description: e instanceof Error ? e.message : String(e),
+      });
     } finally {
       setNsBusy(null);
     }
   };
 
   const handleUninstallNamespace = async (ns: string) => {
-    if (!confirm(`Uninstall all skills from namespace "${ns}"?`)) return;
+    if (!(await confirm({
+      title: t('admin:skills.namespaceUninstallTitle'),
+      description: t('admin:skills.namespaceUninstallConfirm', { namespace: ns }),
+      confirmLabel: t('admin:skills.namespaceUninstallAction'),
+      tone: 'destructive',
+    }))) return;
     setNsBusy(ns);
     try {
       await uninstallSkillNamespace(ns);
       await loadNamespaces();
       await reload();
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      toast.error(t('admin:skills.namespaceUninstallFailed'), {
+        description: e instanceof Error ? e.message : String(e),
+      });
     } finally {
       setNsBusy(null);
     }

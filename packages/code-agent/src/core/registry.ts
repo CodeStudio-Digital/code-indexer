@@ -56,7 +56,16 @@ export class ToolRegistry {
       const discovery = this.tools.has('find_tools')
         ? ' Call find_tools to list available tools.'
         : '';
-      return { content: `Unknown tool: ${name}.${didYouMean}${discovery}`, isError: true };
+      return {
+        content: `Unknown tool: ${name}.${didYouMean}${discovery}`,
+        isError: true,
+        error: {
+          code: 'UNKNOWN_TOOL',
+          kind: 'invalid_input',
+          retryable: false,
+          suggestedAction: 'Use find_tools or list_tools to discover the exact tool name.',
+        },
+      };
     }
     // Tag the recording filesystem port with the current tool name so its
     // audit log shows the actual mutating tool (apply_patch / edit_file /
@@ -74,7 +83,16 @@ export class ToolRegistry {
       return await tool.handler(finalArgs, ctx);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      return { content: `Tool '${name}' failed: ${msg}`, isError: true };
+      return {
+        content: `Tool '${name}' failed: ${msg}`,
+        isError: true,
+        error: {
+          code: 'TOOL_HANDLER_EXCEPTION',
+          kind: 'internal',
+          retryable: false,
+          suggestedAction: 'Inspect the tool error and change approach; do not repeat blindly.',
+        },
+      };
     }
   }
 }

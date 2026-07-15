@@ -78,7 +78,7 @@ export function FindPreview({ projectId, c }: { projectId: number; c: FindCtl })
       <div className="shrink-0 px-2 py-1 border-b text-[10px] text-muted-foreground truncate font-mono" title={sel.path}>
         {sel.path}
       </div>
-      <div className="flex-1 min-h-0 overflow-auto text-[11px] font-mono leading-[1.45]">
+      <div data-text-selectable className="flex-1 min-h-0 overflow-auto text-[11px] font-mono leading-[1.45]">
         {slice.map((text, idx) => {
           const ln = from + idx + 1;
           const isSel = ln === sel.line;

@@ -32,7 +32,7 @@ export const coderSessionChapters208: Migration = {
         ordinal INTEGER NOT NULL CHECK (ordinal > 0),
         start_message_id INTEGER NOT NULL CHECK (start_message_id > 0),
         end_message_id INTEGER NOT NULL CHECK (end_message_id >= start_message_id),
-        source TEXT NOT NULL CHECK (source IN ('auto', 'manual', 'legacy', 'rebuild')),
+        source TEXT NOT NULL CHECK (source IN ('auto', 'manual', 'legacy', 'rebuild', 'import')),
         trigger TEXT NOT NULL DEFAULT '',
         title TEXT NOT NULL,
         chapter_json TEXT NOT NULL,

@@ -10,11 +10,11 @@
  * pelo resolver de PATH.
  */
 
-export type WslRuntimeKind = 'node' | 'php' | 'python';
+export type WslRuntimeKind = 'node' | 'php' | 'python' | 'java' | 'dotnet';
 export type WslDistroVersions = Partial<Record<WslRuntimeKind, string>>;
 export type WslRuntimeVersions = Record<string, WslDistroVersions>;
 
-const KINDS: readonly WslRuntimeKind[] = ['node', 'php', 'python'];
+const KINDS: readonly WslRuntimeKind[] = ['node', 'php', 'python', 'java', 'dotnet'];
 
 /** JSON → mapa por distro, tolerante a corrupção/shape inválido. */
 export function parseWslRuntimeVersions(json: string | null | undefined): WslRuntimeVersions {

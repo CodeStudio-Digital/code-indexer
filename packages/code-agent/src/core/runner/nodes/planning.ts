@@ -15,6 +15,9 @@
  *      crossed the refuse threshold inside a code_exec script was pre-refused
  *      for the rest of the run (it can never succeed to clear itself), so a
  *      later legitimately-needed retry was permanently blocked.
+ *   2c. Clear unchanged-result observations. An active no-progress break has
+ *      already reflected once; retaining it would penalize a later user
+ *      request that legitimately asks for the same snapshot.
  *   3. Record the trigger reason in `ctx.transition` for `RunResult`
  *      attribution.
  */
@@ -41,6 +44,7 @@ export class PlanningNode implements BehaviorNode {
     // succeed and self-clear. The forced re-plan is exactly the moment to give
     // it a clean slate.
     resetFailureStreaks(ctx.failureStreaks);
+    ctx.noProgressTracker.clear();
 
     if (loopEvent) {
       ctx.transition = guardToTransition(loopEvent.guard);

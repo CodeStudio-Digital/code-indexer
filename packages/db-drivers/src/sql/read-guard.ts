@@ -25,6 +25,16 @@ export function hasMultipleStatements(sql: string): boolean {
 export const WRITE_KW = /\b(insert|update|delete|drop|alter|create|truncate|replace|merge|grant|revoke|attach|detach|vacuum|reindex|call)\b/i;
 
 /**
+ * Mutating/locking forms that still begin with a nominally read verb.
+ * `SELECT ... INTO` creates a table on SQL Server/Postgres and writes a server
+ * file on MySQL (`INTO OUTFILE`). Sequence functions also mutate state, and
+ * read-lock clauses are intentionally rejected on a connection advertised as
+ * read-only.
+ */
+const READ_SIDE_EFFECT =
+  /\b(?:into|for\s+(?:no\s+key\s+)?update|lock\s+in\s+share\s+mode|next\s+value\s+for)\b|\b(?:nextval|setval|dblink_exec|lo_(?:create|creat|import|put|unlink|truncate))\s*\(/i;
+
+/**
  * Strict read-only classifier. A statement is read-safe only if it is a SINGLE
  * statement, leads with a read verb, is not `EXPLAIN ANALYZE` (which executes),
  * and contains NO write keyword anywhere (catches data-modifying CTEs like
@@ -39,5 +49,6 @@ export function isReadStatement(sql: string): boolean {
   if (!/^(select|show|explain|describe|desc|with)\b/i.test(s)) return false;
   if (/^explain\b/i.test(s) && /\banalyze\b/i.test(s)) return false; // EXPLAIN ANALYZE runs it
   if (WRITE_KW.test(s)) return false; // writing CTE / any embedded write
+  if (READ_SIDE_EFFECT.test(s)) return false; // SELECT INTO / locks / mutating read-shaped functions
   return true;
 }

@@ -93,7 +93,11 @@ describe('PermissionGate.check with riskOf under mode=ask', () => {
     expect(r.allowed).toBe(false);
     if (!r.allowed) expect(r.refusalText).toContain('[user-denied');
     const req = emit.mock.calls.find((c) => c[0] === 'tool_approval_request');
-    expect(req?.[1]).toMatchObject({ toolName: 'db_query', riskClass: 'write' });
+    expect(req?.[1]).toMatchObject({
+      toolName: 'db_query',
+      riskClass: 'write',
+      input: { sql: 'INSERT INTO t VALUES (1)' },
+    });
   });
 
   it('INSERT approved → allowed', async () => {

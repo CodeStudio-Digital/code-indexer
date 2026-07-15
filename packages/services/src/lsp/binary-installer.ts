@@ -114,26 +114,49 @@ export async function* installBinaryServer(
 
   try {
     mkdirSync(installDir, { recursive: true });
-    yield { phase: 'log', line: `downloading ${asset.url}` };
-    const digest = yield* downloadTo(asset.url, tmpFile, opts.signal);
+    const binAbs = join(installDir, binRelPath);
+    if (!existsSync(binAbs)) {
+      yield { phase: 'log', line: `downloading ${asset.url}` };
+      const digest = yield* downloadTo(asset.url, tmpFile, opts.signal);
 
-    if (asset.sha256) {
-      if (digest !== asset.sha256.toLowerCase()) {
-        yield { phase: 'error', message: `sha256 mismatch for ${asset.url}: expected ${asset.sha256}, got ${digest}` };
-        return;
+      if (asset.sha256) {
+        if (digest !== asset.sha256.toLowerCase()) {
+          yield { phase: 'error', message: `sha256 mismatch for ${asset.url}: expected ${asset.sha256}, got ${digest}` };
+          return;
+        }
+        yield { phase: 'log', line: 'sha256 verified' };
       }
-      yield { phase: 'log', line: 'sha256 verified' };
+
+      yield { phase: 'log', line: `extracting (${asset.archive})` };
+      await extract(asset, tmpFile, installDir, binRelPath);
+    } else {
+      yield { phase: 'log', line: `using existing ${binRelPath}` };
     }
 
-    yield { phase: 'log', line: `extracting (${asset.archive})` };
-    await extract(asset, tmpFile, installDir, binRelPath);
-
-    const binAbs = join(installDir, binRelPath);
     if (!existsSync(binAbs)) {
       yield { phase: 'error', message: `extraction succeeded but the binary was not found at ${binRelPath}` };
       return;
     }
     if (process.platform !== 'win32') chmodSync(binAbs, 0o755);
+
+    for (const [index, companion] of (def.install.companions ?? []).entries()) {
+      const companionAbs = join(installDir, companion.relPath);
+      if (existsSync(companionAbs)) continue;
+      const companionTmp = join(installDir, `_download.companion-${index}`);
+      try {
+        yield { phase: 'log', line: `downloading ${companion.url}` };
+        const digest = yield* downloadTo(companion.url, companionTmp, opts.signal);
+        if (digest !== companion.sha256.toLowerCase()) {
+          yield { phase: 'error', message: `sha256 mismatch for ${companion.url}: expected ${companion.sha256}, got ${digest}` };
+          return;
+        }
+        yield { phase: 'log', line: `sha256 verified (${companion.relPath})` };
+        mkdirSync(dirname(companionAbs), { recursive: true });
+        copyFileSync(companionTmp, companionAbs);
+      } finally {
+        rmSync(companionTmp, { force: true });
+      }
+    }
     yield { phase: 'done', installDir };
   } catch (err) {
     yield { phase: 'error', message: err instanceof Error ? err.message : String(err) };

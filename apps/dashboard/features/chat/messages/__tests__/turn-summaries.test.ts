@@ -34,6 +34,17 @@ describe('computeTurnEditSummaries', () => {
     });
   });
 
+  it('uses the preceding user id when a compacted window starts mid-turn', () => {
+    const groups: VisualGroup[] = [
+      asstGroup([{ name: 'create_file', input: { path: 'compacted.ts', content: '' } }]),
+    ];
+    const out = computeTurnEditSummaries(groups, 774066);
+    expect(out.get(0)).toEqual({
+      roundMessageId: 774066,
+      paths: [{ path: 'compacted.ts', op: 'add' }],
+    });
+  });
+
   it('coalesces consecutive assistant groups into one turn, keyed at the last', () => {
     const groups: VisualGroup[] = [
       userGroup(),

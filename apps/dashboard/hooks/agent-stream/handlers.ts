@@ -23,6 +23,14 @@ import {
   type AgentProgressPayload,
 } from './agents-blocks.js';
 import {
+  AGENT_WRAPPER_TOOLS,
+  removeActiveProcesses,
+  replaceActiveProcesses,
+  retainBackgroundProcesses,
+  upsertActiveProcess,
+  type ActiveProcessPatch,
+} from './active-processes.js';
+import {
   activityPatchFromOperation,
   activityPatchFromProviderCall,
   activityPatchFromToolProgress,
@@ -30,6 +38,7 @@ import {
   finishActivity,
   removeActivity,
   upsertActivity,
+  type ActivityPatch,
   type OperationPayload,
   type ProviderCallPayload,
 } from './activity-blocks.js';
@@ -50,12 +59,41 @@ export type EventHandler = (data: Record<string, unknown>, eventName: string) =>
 
 export function createEventHandlers(ctx: HandlerContext): Record<string, EventHandler> {
   const { sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete } = ctx;
+  const providerProcessIds = new Set<string>();
+  const upsertProcess = (patch: ActiveProcessPatch) => {
+    updateSession(sid, (state) => ({
+      activeProcesses: upsertActiveProcess(state.activeProcesses, patch),
+    }));
+  };
+  const patchProcess = (
+    id: string,
+    patch: Partial<Pick<ActiveProcessPatch, 'status' | 'phase' | 'note' | 'elapsedMs'>>,
+  ) => {
+    updateSession(sid, (state) => ({
+      activeProcesses: state.activeProcesses.map((process) => process.id === id
+        ? { ...process, ...patch, updatedAt: Date.now() }
+        : process),
+    }));
+  };
+  const removeProcesses = (predicate: Parameters<typeof removeActiveProcesses>[1]) => {
+    updateSession(sid, (state) => ({
+      activeProcesses: removeActiveProcesses(state.activeProcesses, predicate),
+    }));
+  };
+  const removeProcess = (id: string) => removeProcesses((process) => process.id === id);
+  const clearProviderProcesses = () => {
+    if (providerProcessIds.size === 0) return;
+    const ids = new Set(providerProcessIds);
+    providerProcessIds.clear();
+    removeProcesses((process) => ids.has(process.id));
+  };
 
   return {
     text: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
       if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
+      clearProviderProcesses();
       const last = blocks[blocks.length - 1];
       if (last && last.type === 'text') {
         last.text += t;
@@ -69,6 +107,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
       if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
+      clearProviderProcesses();
       const last = blocks[blocks.length - 1];
       if (last && last.type === 'thinking') {
         last.text += t;
@@ -83,6 +122,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       if (clearProviderActivities(blocks) || removeActivity(blocks, `tool:${d.id}`)) {
         rebuildToolIndex(blocks, toolIndex);
       }
+      clearProviderProcesses();
       const call: ToolCallEvent = {
         id: d.id,
         name: d.name,
@@ -92,6 +132,16 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       };
       toolIndex.set(d.id, blocks.length);
       blocks.push({ type: 'tool', call });
+      upsertProcess({
+        id: `tool:${d.id}`,
+        source: 'tool',
+        kind: d.name === 'execute_tasks'
+          ? 'task'
+          : AGENT_WRAPPER_TOOLS.has(d.name) ? 'spawn_agent' : 'tool',
+        label: d.name,
+        status: 'running',
+        startedAt: call.startedAt,
+      });
       flush();
       // Tell the in-project preview pane the agent owns a dedicated CDP window
       // now → it swaps to a placeholder + pauses its iframe (frees the process),
@@ -126,6 +176,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         }
       }
       if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
+      removeProcess(`tool:${d.id}`);
       flush();
     },
 
@@ -142,6 +193,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         parentToolUseId?: string;
         toolName: string;
         argsSummary?: string;
+        input?: Record<string, unknown>;
         riskClass?: 'write' | 'execute' | 'admin';
         approvalKind?: 'standard' | 'database_write';
         nested?: boolean;
@@ -152,6 +204,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         parentToolUseId: d.parentToolUseId,
         toolName: String(d.toolName ?? ''),
         argsSummary: String(d.argsSummary ?? ''),
+        input: d.input,
         riskClass: d.riskClass ?? 'write',
         approvalKind: d.approvalKind ?? 'standard',
         nested: !!d.nested,
@@ -172,6 +225,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       updateSession(sid, (s) => ({
         pendingApprovals: [...s.pendingApprovals.filter((a) => a.toolUseId !== d.toolUseId), approval],
       }));
+      patchProcess(`tool:${anchor}`, { status: 'waiting', phase: 'awaiting_approval' });
       flush();
     },
 
@@ -179,6 +233,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     tool_approval_resolved: (data) => {
       const d = data as { toolUseId: string };
       if (!d.toolUseId) return;
+      let resolvedAnchor = d.toolUseId;
+      let resolvedStatus: ActiveProcessPatch['status'] = 'running';
       // The resolved payload has no anchor hint — scan newest-first for the
       // block holding this approval (cheap: blocks is one turn's worth).
       for (let i = blocks.length - 1; i >= 0; i--) {
@@ -195,11 +251,17 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             ? 'running'
             : block.call.status,
         };
+        resolvedAnchor = block.call.id;
+        resolvedStatus = remaining.length > 0 ? 'waiting' : 'running';
         break;
       }
       updateSession(sid, (s) => ({
         pendingApprovals: s.pendingApprovals.filter((a) => a.toolUseId !== d.toolUseId),
       }));
+      patchProcess(`tool:${resolvedAnchor}`, {
+        status: resolvedStatus,
+        phase: resolvedStatus === 'waiting' ? 'awaiting_approval' : 'running',
+      });
       flush();
     },
 
@@ -215,7 +277,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const idx = toolIndex.get(d.id);
       if (idx === undefined) {
         if (isSubagentToolProgress(d)) return;
-        upsertActivity(blocks, activityPatchFromToolProgress(d));
+        const activity = activityPatchFromToolProgress(d);
+        upsertActivity(blocks, activity);
+        upsertProcess(processPatchFromActivity(activity, 'activity'));
         flush();
         return;
       }
@@ -229,32 +293,45 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         elapsedMs: d.elapsedMs,
         ...(d.note !== undefined ? { progressNote: d.note } : {}),
       };
+      patchProcess(`tool:${d.id}`, {
+        elapsedMs: d.elapsedMs,
+        ...(d.note !== undefined ? { note: d.note } : {}),
+      });
       flush();
     },
 
     provider_call: (data) => {
-      upsertActivity(blocks, activityPatchFromProviderCall(data as ProviderCallPayload));
+      const activity = activityPatchFromProviderCall(data as ProviderCallPayload);
+      upsertActivity(blocks, activity);
+      providerProcessIds.add(activity.id);
+      upsertProcess(processPatchFromActivity(activity, 'provider'));
       flush();
     },
 
     operation_started: (data) => {
       const d = data as OperationPayload;
       if (isCoveredToolOperation(d, toolIndex)) return;
-      upsertActivity(blocks, activityPatchFromOperation(d));
+      const activity = activityPatchFromOperation(d);
+      upsertActivity(blocks, activity);
+      upsertProcess(processPatchFromActivity(activity, 'activity'));
       flush();
     },
 
     operation_progress: (data) => {
       const d = data as OperationPayload;
       if (isCoveredToolOperation(d, toolIndex)) return;
-      upsertActivity(blocks, activityPatchFromOperation(d));
+      const activity = activityPatchFromOperation(d);
+      upsertActivity(blocks, activity);
+      upsertProcess(processPatchFromActivity(activity, 'activity'));
       flush();
     },
 
     operation_finished: (data) => {
       const d = data as OperationPayload;
       if (isCoveredToolOperation(d, toolIndex)) return;
-      if (finishActivity(blocks, activityPatchFromOperation(d))) flush();
+      const activity = activityPatchFromOperation(d);
+      removeProcess(activity.id);
+      if (finishActivity(blocks, activity)) flush();
     },
 
     plan: (data) => {
@@ -397,6 +474,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           startedAt: new Date().toISOString(),
         },
       });
+      removeProcesses((process) => process.source === 'tool' && process.label === 'execute_tasks');
       flush();
     },
 
@@ -419,6 +497,17 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         status: 'running',
         startedAt: d.started_at,
       }));
+      const parsedStartedAt = Date.parse(d.started_at);
+      upsertProcess({
+        id: taskProcessId(d.run_id, d.task_id),
+        source: 'task',
+        kind: d.mode === 'subagent' ? 'subagent' : 'task',
+        label: d.title,
+        status: 'running',
+        groupId: d.run_id,
+        phase: d.kind,
+        ...(Number.isFinite(parsedStartedAt) ? { startedAt: parsedStartedAt } : {}),
+      });
       updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
       flush();
     },
@@ -447,6 +536,11 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         ...(d.elapsed_ms != null ? { elapsedMs: d.elapsed_ms } : {}),
         ...(d.stall_ms != null ? { stallMs: d.stall_ms } : {}),
       }));
+      patchProcess(taskProcessId(d.run_id, d.task_id), {
+        ...(d.note ? { note: d.note } : {}),
+        ...(d.phase ? { phase: d.phase } : {}),
+        ...(d.elapsed_ms != null ? { elapsedMs: d.elapsed_ms } : {}),
+      });
       flush();
     },
 
@@ -470,6 +564,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         ...(d.tool_call_count != null ? { toolCallCount: d.tool_call_count } : {}),
         finishedAt: d.finished_at,
       }));
+      removeProcess(taskProcessId(d.run_id, d.task_id));
       updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
       flush();
     },
@@ -487,6 +582,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         run.totalUsage = d.total_usage;
         run.finishedAt = d.finished_at;
       }
+      removeProcesses((process) => process.source === 'task' && process.groupId === d.run_id);
       flush();
     },
 
@@ -534,16 +630,61 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       };
       if (existing >= 0) blocks[existing] = { type: 'agents', group };
       else blocks.push({ type: 'agents', group });
+      const processPatches: ActiveProcessPatch[] = (isTaskWaveGroup(group.groupId) ? [] : group.agents)
+        .filter((agent) => agent.status === 'pending' || agent.status === 'running')
+        .map((agent) => ({
+          id: agentProcessId(group.groupId, agent.index),
+          source: 'agent',
+          kind: 'subagent',
+          label: agent.label,
+          status: 'running',
+          groupId: group.groupId,
+          phase: agent.status === 'pending' ? 'queued' : agent.phase,
+          note: agent.progressNote,
+          elapsedMs: agent.elapsedMs,
+          background: group.background === true,
+        }));
+      updateSession(sid, (state) => ({
+        activeProcesses: replaceActiveProcesses(
+          state.activeProcesses,
+          (process) => (
+            (process.source === 'agent' && process.groupId === group.groupId)
+            || (process.source === 'tool' && AGENT_WRAPPER_TOOLS.has(process.label))
+          ),
+          processPatches,
+        ),
+      }));
       flush();
     },
 
     agent_progress: (data) => {
       const d = data as AgentProgressPayload;
+      const processId = agentProcessId(d.groupId, d.agentIndex);
+      // execute_tasks already owns a user-friendly task process row. Its
+      // internal tasks-wave agent group is the same work, not another row.
+      if (!isTaskWaveGroup(d.groupId)) {
+        if (d.event === 'completed' || d.event === 'error' || d.event === 'timed_out' || d.event === 'aborted') {
+          removeProcess(processId);
+        } else {
+          upsertProcess({
+            id: processId,
+            source: 'agent',
+            kind: 'subagent',
+            label: d.label,
+            status: 'running',
+            groupId: d.groupId,
+            ...(d.phase ? { phase: d.phase } : {}),
+            ...(d.note ? { note: d.note } : {}),
+            ...(d.elapsedMs != null ? { elapsedMs: d.elapsedMs } : {}),
+          });
+        }
+      }
       if (applyAgentProgress(blocks, d)) flush();
     },
 
     agents_group_end: (data) => {
       const d = data as { groupId: string; totalUsage?: Usage; jobId?: string; status?: string; agentCount?: number; successCount?: number };
+      removeProcesses((process) => process.source === 'agent' && process.groupId === d.groupId);
       if (applyAgentsGroupEnd(blocks, d)) flush();
     },
 
@@ -697,7 +838,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // whole run to end.
       updateSession(sid, (cur) => ({
         tasksRefreshTick: cur.tasksRefreshTick + 1,
+        activeProcesses: retainBackgroundProcesses(cur.activeProcesses),
       }));
+      providerProcessIds.clear();
       onMessageComplete?.();
     },
 
@@ -716,7 +859,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         ...(d.error ? { error: d.error } : {}),
         // No run → no resolvable approvals (abort/interrupt denied them).
         pendingApprovals: [],
+        activeProcesses: [],
       });
+      providerProcessIds.clear();
     },
 
     error: (data) => {
@@ -724,7 +869,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       markInFlightBlocksFailed(blocks, message);
       flushNow();
       dispatchAgentPreview(sid, false);
-      updateSession(sid, { error: message });
+      updateSession(sid, { error: message, activeProcesses: [] });
+      providerProcessIds.clear();
     },
   };
 }
@@ -756,6 +902,36 @@ function isCoveredToolOperation(d: OperationPayload, toolIndex: Map<string, numb
   if (d.kind !== 'tool' || typeof d.opId !== 'string') return false;
   const toolUseId = d.opId.startsWith('tool:') ? d.opId.slice('tool:'.length) : d.opId;
   return toolIndex.has(toolUseId);
+}
+
+function processPatchFromActivity(
+  patch: ActivityPatch,
+  source: ActiveProcessPatch['source'],
+): ActiveProcessPatch {
+  return {
+    id: patch.id,
+    source,
+    kind: patch.kind ?? 'operation',
+    label: patch.label ?? patch.id,
+    status: 'running',
+    ...(patch.startedAt != null ? { startedAt: patch.startedAt } : {}),
+    ...(patch.phase !== undefined ? { phase: patch.phase } : {}),
+    ...(patch.note !== undefined ? { note: patch.note } : {}),
+    ...(patch.elapsedMs !== undefined ? { elapsedMs: patch.elapsedMs } : {}),
+    ...(patch.parentOpId !== undefined ? { parentId: patch.parentOpId } : {}),
+  };
+}
+
+function taskProcessId(runId: string, taskId: string): string {
+  return `task:${runId}:${taskId}`;
+}
+
+function agentProcessId(groupId: string, index: number): string {
+  return `agent:${groupId}:${index}`;
+}
+
+function isTaskWaveGroup(groupId: string): boolean {
+  return groupId.startsWith('tasks-wave-');
 }
 
 function rebuildToolIndex(blocks: StreamBlock[], toolIndex: Map<string, number>): void {

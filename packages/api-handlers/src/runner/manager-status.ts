@@ -9,16 +9,26 @@
  */
 
 import { execFile } from 'node:child_process';
-import { delimiter } from 'node:path';
+import { delimiter, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { RunnerManager } from '@mcp/api-bus';
 import { wslBash } from '../runtime/wsl-runtime.js';
+import { posixExportPrefix } from '../terminal/pty-manager.js';
+import type { RuntimeEnv } from '../runtime/runtime-resolve.js';
 
 const pexec = promisify(execFile);
 
 const KNOWN: ReadonlySet<string> = new Set([
-  'npm', 'yarn', 'pnpm', 'bun', 'composer', 'pip', 'poetry',
+  'npm', 'yarn', 'pnpm', 'bun', 'composer', 'pip', 'poetry', 'maven', 'gradle', 'dotnet',
 ]);
+const BIN: Readonly<Record<string, string>> = { maven: 'mvn', gradle: 'gradle', dotnet: 'dotnet' };
+
+function hasWrapper(root: string, manager: RunnerManager, family: 'windows' | 'posix'): boolean {
+  if (manager === 'maven') return existsSync(join(root, family === 'windows' ? 'mvnw.cmd' : 'mvnw'));
+  if (manager === 'gradle') return existsSync(join(root, family === 'windows' ? 'gradlew.bat' : 'gradlew'));
+  return false;
+}
 
 export interface ManagerStatus {
   found: boolean;
@@ -32,19 +42,23 @@ export interface ManagerStatus {
  */
 export async function probeManagerStatus(
   manager: RunnerManager,
-  pathPrepend: string[],
+  env: RuntimeEnv,
+  root: string,
+  family: 'windows' | 'posix' = process.platform === 'win32' ? 'windows' : 'posix',
 ): Promise<ManagerStatus> {
   if (!KNOWN.has(manager)) return { found: false };
-  const PATH = [...pathPrepend, process.env.PATH ?? ''].filter(Boolean).join(delimiter);
+  if (hasWrapper(root, manager, family)) return { found: true };
+  const PATH = [...env.pathPrepend, process.env.PATH ?? ''].filter(Boolean).join(delimiter);
+  const bin = BIN[manager] ?? manager;
   try {
-    const { stdout } = await pexec(manager, ['--version'], {
+    const { stdout, stderr } = await pexec(bin, ['--version'], {
       timeout: 4000,
       encoding: 'utf8',
       shell: true,
       windowsHide: true,
-      env: { ...process.env, PATH },
+      env: { ...process.env, ...env.extraEnv, PATH },
     });
-    const m = /(\d+\.\d+(?:\.\d+)?)/.exec(stdout.trim());
+    const m = /(\d+\.\d+(?:\.\d+)?)/.exec(`${stdout}\n${stderr}`.trim());
     return { found: true, version: m ? m[1] : undefined };
   } catch {
     return { found: false };
@@ -60,11 +74,14 @@ export async function probeManagerStatus(
 export async function probeWslManagerStatus(
   manager: RunnerManager,
   distro: string,
-  posixPathPrepend: string[],
+  env: RuntimeEnv,
+  root: string,
 ): Promise<ManagerStatus> {
   if (!KNOWN.has(manager)) return { found: false };
-  const prefix = posixPathPrepend.length > 0 ? `export PATH="${posixPathPrepend.join(':')}:$PATH"; ` : '';
-  const out = await wslBash(distro, `${prefix}command -v ${manager} >/dev/null 2>&1 && ${manager} --version 2>/dev/null || true`);
+  if (hasWrapper(root, manager, 'posix')) return { found: true };
+  const prefix = posixExportPrefix(env.posixPathPrepend, env.posixExtraEnv);
+  const bin = BIN[manager] ?? manager;
+  const out = await wslBash(distro, `${prefix}command -v ${bin} >/dev/null 2>&1 && ${bin} --version 2>&1 || true`);
   if (!out) return { found: false };
   const m = /(\d+\.\d+(?:\.\d+)?)/.exec(out);
   return { found: true, version: m ? m[1] : undefined };

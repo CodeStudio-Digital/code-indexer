@@ -15,5 +15,8 @@
     "@mcp/provider-sdk": "workspace:*",
     "@mcp/candidate-pipeline": "workspace:*",
     "chroma-js": "3.2.0"
+  },
+  "devDependencies": {
+    "@types/chroma-js": "^3.1.2"
   }
 }

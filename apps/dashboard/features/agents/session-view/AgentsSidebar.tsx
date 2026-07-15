@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Activity, Bot, Check, Crown, Folder, GitBranch, Plus, ScrollText, Server, Trash2, Users } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
+import { confirm, toast } from '../../../components/ui/prompt-dialog.js';
 import { cn } from '../../../lib/utils.js';
 import { apiPost } from '../../../hooks/useApi.js';
 import { AgentPane } from '../AgentPane.js';
@@ -101,22 +102,34 @@ export function AgentsSidebar({
     const msg = hasLiveAgent
       ? t('role.removeConfirmActive', { role: role.role })
       : t('role.removeConfirm', { role: role.role });
-    if (!confirm(msg)) return;
+    if (!(await confirm({
+      title: t('role.remove', 'Remover papel'),
+      description: msg,
+      confirmLabel: t('role.remove', 'Remover'),
+      tone: 'destructive',
+    }))) return;
     await patchRoleAssignments(roleAssignments.filter((_, i) => i !== idx));
   }
 
   async function deleteProject(p: SessionProject) {
     const isService = !!p.label;
     const confirmMsg = isService
-      ? `Remover microserviço '${p.label}'? O container e os arquivos serão destruídos.`
-      : `Desvincular '${p.project_name}' desta sessão? O projeto continua disponível em outras sessões.`;
-    if (!confirm(confirmMsg)) return;
+      ? t('company.removeServiceConfirm', { name: p.label })
+      : t('company.unlinkProjectConfirm', { name: p.project_name });
+    if (!(await confirm({
+      title: isService ? t('company.removeServiceTitle') : t('company.unlinkProjectTitle'),
+      description: confirmMsg,
+      confirmLabel: isService ? t('company.removeServiceAction') : t('company.unlinkProjectAction'),
+      tone: 'destructive',
+    }))) return;
     const r = await fetch(`/api/company/sessions/${sessionId}/projects/${p.project_id}`, {
       method: 'DELETE',
     });
     if (!r.ok) {
       const body = (await r.json().catch(() => ({}))) as { error?: string };
-      alert(body.error ?? `HTTP ${r.status}`);
+      toast.error(t('company.removeProjectFailed'), {
+        description: body.error ?? `HTTP ${r.status}`,
+      });
       return;
     }
     refetch();
@@ -379,8 +392,13 @@ export function AgentsSidebar({
             onClick={() => onOpenAgentRun(agent.agentRunId, agent.role, agent.status)}
             onPause={() => void stream.pauseAgent(agent.agentRunId)}
             onResume={() => void stream.resumeAgent(agent.agentRunId)}
-            onDelete={() => {
-              if (confirm(t('agentActions.deleteConfirm', { role: agent.role }))) {
+            onDelete={async () => {
+              if (await confirm({
+                title: t('agentActions.delete'),
+                description: t('agentActions.deleteConfirm', { role: agent.role }),
+                confirmLabel: t('agentActions.delete'),
+                tone: 'destructive',
+              })) {
                 void stream.deleteAgent(agent.agentRunId);
               }
             }}

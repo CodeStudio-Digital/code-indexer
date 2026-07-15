@@ -71,7 +71,13 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     const conn = await pool.getConnection();
     let onAbort: (() => void) | null = null;
+    let readOnlyTxn = false;
     try {
+      if (config.readOnly) {
+        // Must be the first SQL statement in the Oracle transaction.
+        await conn.execute('SET TRANSACTION READ ONLY');
+        readOnlyTxn = true;
+      }
       if (opts.signal) {
         if (opts.signal.aborted) throw new Error('query cancelled');
         onAbort = (): void => void conn.break().catch(() => undefined);
@@ -80,16 +86,18 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
       const res = await conn.execute(sql, opts.params ?? [], {
         maxRows: max + 1,
         outFormat: oracledb.OUT_FORMAT_OBJECT,
-        autoCommit: true,
+        autoCommit: !config.readOnly,
       });
       return shapeOracleResult(res, max);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      if (readOnlyTxn) await conn.rollback().catch(() => undefined);
       await conn.close().catch(() => undefined);
     }
   }
 
   async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pooled connection with autoCommit OFF for the whole batch, so the list
     // shares a session (a runQuery loop opens a fresh autoCommit connection per

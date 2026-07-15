@@ -128,8 +128,16 @@ describe('capability-aligned composition', () => {
   it('advertises the coordinator identity and its durable workflow tools', () => {
     const prompt = buildSystemPrompt(BASE_CTX);
     expect(prompt).toContain('# App Studio Coordinator mode is ACTIVE');
-    expect(prompt).toContain('`app_get_workflow`');
+    expect(prompt).toContain('A tool result is a continuation');
+    expect(prompt).not.toMatch(/start every turn from `app_get_workflow`/i);
     expect(prompt).toContain('`execute_tasks`');
+  });
+
+  it('scopes workflow reads to user requests instead of provider continuations', () => {
+    const workspacePrompt = loadPrompt('app-studio');
+    expect(workspacePrompt).toContain('call `app_get_workflow` once');
+    expect(workspacePrompt).toContain('MUST NOT trigger another workflow read');
+    expect(workspacePrompt).not.toMatch(/start every turn/i);
   });
 
   it('loads the coordinator identity exactly once', () => {

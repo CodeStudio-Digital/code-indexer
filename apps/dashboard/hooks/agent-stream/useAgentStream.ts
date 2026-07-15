@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { IdeContextInput } from '@mcp/api-bus';
+import type { AgentPreset, IdeContextInput } from '@mcp/api-bus';
 import { openStream } from './openStream.js';
 import type {
   AgentAttachment,
@@ -94,7 +94,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       extras?: {
         attachments?: AgentAttachment[];
         /** Agent preset selected for this run. Undefined keeps the session preset. */
-        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_orchestrator' | 'api' | 'diagram' | 'builder';
+        agent?: AgentPreset;
         /** Tool tier profile override (takes precedence over agent). */
         profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
         /** Override max turns for this run. null/undefined = use default. */
@@ -355,7 +355,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       spec_path: string,
       requested_changes?: string,
       onMessageComplete?: () => void,
-      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'app_orchestrator' },
+      extras?: { agent?: AgentPreset },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/spec-response`,
@@ -422,6 +422,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
     indexStatus: active.indexStatus,
     interactionPending: active.interactionPending,
     pipelineRuntime: active.pipelineRuntime,
+    activeProcesses: active.activeProcesses,
     sidebarRefreshTick: active.sidebarRefreshTick,
     tasksRefreshTick: active.tasksRefreshTick,
     snapshotTick: active.snapshotTick,

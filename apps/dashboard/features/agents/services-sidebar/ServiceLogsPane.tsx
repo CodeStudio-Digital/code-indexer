@@ -153,7 +153,7 @@ export function ServiceLogsPane({ sessionId, serviceId }: ServiceLogsPaneProps) 
           <div className="py-1 text-muted-foreground">{t('services.logs.empty')}</div>
         )}
         {merged.map((row) => (
-          <div key={row.key} className="whitespace-pre-wrap break-all">
+          <div key={row.key} data-text-selectable className="whitespace-pre-wrap break-all">
             <span className="text-muted-foreground">{timeLabel(row.atMs)} </span>
             <span className={row.stream === 'container' ? 'text-sky-600' : 'text-muted-foreground'}>
               [{row.stream}]{' '}

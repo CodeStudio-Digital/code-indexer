@@ -30,6 +30,12 @@ export function setReasoningEffort(db: DB, id: number, effort: string | null): v
   db.prepare("UPDATE coder_sessions SET reasoning_effort_override = ?, updated_at = datetime('now') WHERE id = ?").run(effort, id);
 }
 
+/** Persist the conversation's extended-thinking toggle. */
+export function setThinkingEnabled(db: DB, id: number, enabled: boolean): void {
+  db.prepare("UPDATE coder_sessions SET thinking_enabled = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(enabled ? 1 : 0, id);
+}
+
 /**
  * Persist the per-session sticky plan-depth override (migration 151):
  * `simple` | `normal` | `complex`. Pass `null` to clear (the runner defaults

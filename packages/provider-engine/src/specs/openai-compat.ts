@@ -17,7 +17,7 @@ export const openaiSpec: ProviderSpec = {
     'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10.0 },
     'gpt-4-turbo': { inputPer1M: 10.0, outputPer1M: 30.0 },
   },
-  capabilities: { supportsVision: true, supportsImageGen: true },
+  capabilities: { supportsVision: true, supportsImageGen: true, fileInput: 'native' },
   wire: 'openai-compat',
   wireOpts: { summaryModelDefault: 'gpt-4o-mini' },
   discovery: { from: 'openai-models' },
@@ -215,7 +215,7 @@ export const openrouterSpec: ProviderSpec = {
     'deepseek/deepseek-chat',
   ],
   pricing: {},
-  capabilities: { supportsVision: true, supportsThinking: true },
+  capabilities: { supportsVision: true, supportsThinking: true, fileInput: 'native' },
   wire: 'openai-compat',
   wireOpts: {
     vendor: 'openrouter',
@@ -338,7 +338,7 @@ export const mistralSpec: ProviderSpec = {
   },
   wire: 'openai-compat',
   wireOpts: {},
-  discovery: { from: 'openai-models' },
+  discovery: { from: 'openai-models', requiredCapabilities: ['completion_chat'] },
   test: { from: 'openai-models', fallbackBaseURL: 'https://api.mistral.ai/v1' },
 };
 

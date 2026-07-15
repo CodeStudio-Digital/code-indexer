@@ -295,6 +295,11 @@
   "skills.builtin": "nativa",
   "skills.imported": "importado",
   "skills.project": "projeto:",
+  "skills.namespaceUpdateFailed": "Não foi possível atualizar o namespace de skills",
+  "skills.namespaceUninstallFailed": "Não foi possível desinstalar o namespace de skills",
+  "skills.namespaceUninstallTitle": "Desinstalar namespace de skills?",
+  "skills.namespaceUninstallConfirm": "Todas as skills de “{{namespace}}” serão desinstaladas.",
+  "skills.namespaceUninstallAction": "Desinstalar",
   "skillEdit.createTitle": "Criar habilidade",
   "skillEdit.editTitle": "Editar \"{{name}}\"",
   "skillEdit.name": "Nome",
@@ -694,5 +699,6 @@
   "perf.tools.longTasksEmpty": "Nenhuma long task observada nesta sessão.",
   "perf.tools.when": "Quando",
   "perf.tools.durationMs": "Duração (ms)",
-  "perf.tools.attribution": "Atribuição"
+  "perf.tools.attribution": "Atribuição",
+  "lspServers.emptyInstances": "Nenhuma — servidores leves podem aquecer ao abrir um arquivo; servidores pesados sobem no primeiro uso interativo e todos param após inatividade."
 }

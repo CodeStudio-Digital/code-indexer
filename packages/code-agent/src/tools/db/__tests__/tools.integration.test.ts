@@ -24,6 +24,7 @@ const ctx = { cwd: tmpdir(), projectName: 't', projectId: 1 } as unknown as Tool
 let dir: string;
 let metaDb: InstanceType<typeof Database>;
 let store: DbClientStore;
+let mainConnectionId: number;
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'dbtools-'));
@@ -39,7 +40,7 @@ beforeAll(() => {
   metaDb.exec('CREATE TABLE IF NOT EXISTS ssh_hosts (id INTEGER PRIMARY KEY)');
   dbClient174.up(metaDb);
   store = new DbClientStore(metaDb);
-  store.createConnection({ project_id: 1, label: 'main', engine: 'sqlite', file_path: dataPath });
+  mainConnectionId = store.createConnection({ project_id: 1, label: 'main', engine: 'sqlite', file_path: dataPath }).id;
   store.createConnection({ project_id: 1, label: 'ro', engine: 'sqlite', file_path: dataPath, is_read_only: true });
   setDbToolsStores(store, null);
   setDbSecretDecryptor(() => {
@@ -97,12 +98,26 @@ describe('db_query', () => {
     expect(check.content).toContain('4');
   });
 
-  it('read-only connection: SELECT allowed, INSERT refused', async () => {
+  it('read-only connection: SELECT allowed, INSERT and SELECT INTO refused', async () => {
     const sel = await dbQuery.handler({ connection: 'ro', sql: 'SELECT COUNT(*) AS n FROM items' }, ctx);
     expect(sel.isError).toBeFalsy();
     const ins = await dbQuery.handler({ connection: 'ro', sql: "INSERT INTO items (name) VALUES ('x')" }, ctx);
     expect(ins.isError).toBe(true);
     expect(ins.content).toContain('read-only — writes are blocked');
+    const selectInto = await dbQuery.handler({ connection: 'ro', sql: 'SELECT * INTO copied FROM items' }, ctx);
+    expect(selectInto.isError).toBe(true);
+    expect(selectInto.content).toContain('read-only — writes are blocked');
+  });
+
+  it('reopens an existing agent pool immediately when read-only is toggled', async () => {
+    store.updateConnection(mainConnectionId, { is_read_only: true });
+    const blocked = await dbQuery.handler({ connection: 'main', sql: "INSERT INTO items (name) VALUES ('blocked')" }, ctx);
+    expect(blocked.isError).toBe(true);
+    expect(blocked.content).toContain('read-only — writes are blocked');
+
+    store.updateConnection(mainConnectionId, { is_read_only: false });
+    const allowed = await dbQuery.handler({ connection: 'main', sql: "INSERT INTO items (name) VALUES ('after-toggle')" }, ctx);
+    expect(allowed.isError).toBeFalsy();
   });
 
   it('refuses multiple statements', async () => {

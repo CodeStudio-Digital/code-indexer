@@ -9,6 +9,12 @@ export type SnapshotReviewSource = 'manual' | 'auto';
 export type SnapshotReviewRunStatus = 'running' | 'completed' | 'error';
 export type SnapshotReviewCommentStatus = 'open' | 'accepted' | 'dismissed' | 'sent';
 export type SnapshotReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | null;
+/** Unified finding kind (migration 224). 'defect' for pre-224 rows. */
+export type SnapshotReviewCommentKind =
+  | 'defect'
+  | 'missing_change'
+  | 'unfulfilled_obligation'
+  | 'scope_creep';
 
 export interface SnapshotReviewRun {
   id: number;
@@ -35,6 +41,9 @@ export interface SnapshotReviewComment {
   old_line: number | null;
   new_line: number | null;
   severity: SnapshotReviewSeverity;
+  kind: SnapshotReviewCommentKind;
+  obligation_id: string | null;
+  symbol_anchor: string | null;
   body: string;
   suggested_fix: string | null;
   diff_excerpt: string | null;
@@ -52,6 +61,9 @@ export interface CreateCommentInput {
   old_line?: number | null;
   new_line?: number | null;
   severity?: SnapshotReviewSeverity;
+  kind?: SnapshotReviewCommentKind;
+  obligation_id?: string | null;
+  symbol_anchor?: string | null;
   body: string;
   suggested_fix?: string | null;
   diff_excerpt?: string | null;
@@ -129,10 +141,12 @@ export class SessionFileReviewStore {
       .prepare(
         `INSERT INTO session_file_review_comments
           (run_id, baseline_id, source, status, file_path, hunk_fingerprint,
-           old_line, new_line, severity, body, suggested_fix, diff_excerpt)
+           old_line, new_line, severity, kind, obligation_id, symbol_anchor,
+           body, suggested_fix, diff_excerpt)
          VALUES
           (@run_id, @baseline_id, @source, @status, @file_path, @hunk_fingerprint,
-           @old_line, @new_line, @severity, @body, @suggested_fix, @diff_excerpt)`,
+           @old_line, @new_line, @severity, @kind, @obligation_id, @symbol_anchor,
+           @body, @suggested_fix, @diff_excerpt)`,
       )
       .run({
         run_id: input.run_id ?? null,
@@ -144,6 +158,9 @@ export class SessionFileReviewStore {
         old_line: input.old_line ?? null,
         new_line: input.new_line ?? null,
         severity: input.severity ?? null,
+        kind: input.kind ?? 'defect',
+        obligation_id: input.obligation_id ?? null,
+        symbol_anchor: input.symbol_anchor ?? null,
         body: input.body,
         suggested_fix: input.suggested_fix ?? null,
         diff_excerpt: input.diff_excerpt ?? null,

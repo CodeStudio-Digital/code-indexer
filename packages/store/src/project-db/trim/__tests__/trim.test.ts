@@ -141,3 +141,27 @@ describe('central-table migration on a trimmed project DB (mig 175 regression)',
     }
   });
 });
+
+describe('App Studio migration on a trimmed project DB (mig 218 regression)', () => {
+  it('records the pending migration without recreating central App Studio tables', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db);
+      expect(userTables(db)).not.toContain('app_studio_sessions');
+      expect(userTables(db)).not.toContain('app_studio_work_items');
+
+      // Reproduce an existing project DB opened after migration 218 shipped.
+      db.prepare('DELETE FROM schema_version WHERE version = ?').run(218);
+
+      expect(() => runMigrations(db)).not.toThrow();
+
+      expect(userTables(db)).not.toContain('app_studio_sessions');
+      expect(userTables(db)).not.toContain('app_studio_work_items');
+      expect(
+        db.prepare('SELECT version FROM schema_version WHERE version = 218').get(),
+      ).toBeTruthy();
+    } finally {
+      db.close();
+    }
+  });
+});

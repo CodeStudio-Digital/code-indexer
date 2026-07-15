@@ -16,6 +16,21 @@ import {
   documentSymbolsForModel,
   registerSymbolNavigationCodeLensProvider,
 } from '../symbol-navigation-ui.js';
+import { __emitLspServerReadyForTests } from '../server-ready.js';
+
+class FakeEmitter<T> {
+  private readonly listeners = new Set<(value: T) => void>();
+  readonly event = (listener: (value: T) => void) => {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  };
+  fire(value: T): void {
+    for (const listener of this.listeners) listener(value);
+  }
+  dispose(): void {
+    this.listeners.clear();
+  }
+}
 
 function fakeModel() {
   const lines = new Map([
@@ -69,6 +84,7 @@ describe('symbol navigation Code Vision', () => {
       ) {}
     }
     const monaco = {
+      Emitter: FakeEmitter,
       Range,
       Uri: { file: (path: string) => ({ scheme: 'file', path, toString: () => `file:///${path}` }) },
       languages: {
@@ -88,7 +104,7 @@ describe('symbol navigation Code Vision', () => {
       documentSymbolsForModel(model as never, 7),
       documentSymbolsForModel(model as never, 7),
     ]);
-    registerSymbolNavigationCodeLensProvider(monaco, 7);
+    const handles = registerSymbolNavigationCodeLensProvider(monaco, 7);
     const list = await provider!.provideCodeLenses(model, { isCancellationRequested: false });
 
     expect(apiCall).toHaveBeenCalledTimes(1);
@@ -110,6 +126,56 @@ describe('symbol navigation Code Vision', () => {
     const implementationLens = list.lenses[1];
     commands.get(implementationLens.command.id)!({}, implementationLens.command.arguments[0]);
     await vi.waitFor(() => expect(showPopup).toHaveBeenCalledTimes(2));
+    handles.forEach((handle) => handle.dispose());
+  });
+
+  it('retries a cold empty symbol result and invalidates CodeLens when the server becomes ready', async () => {
+    let provider: {
+      onDidChange?: (listener: () => void) => { dispose(): void };
+      provideCodeLenses: Function;
+    } | undefined;
+    class Range {
+      constructor(
+        public startLineNumber: number, public startColumn: number,
+        public endLineNumber: number, public endColumn: number,
+      ) {}
+    }
+    const monaco = {
+      Emitter: FakeEmitter,
+      Range,
+      Uri: { file: (path: string) => ({ scheme: 'file', path, toString: () => `file:///${path}` }) },
+      languages: {
+        registerCodeLensProvider: (_language: string, value: typeof provider) => {
+          provider = value; return { dispose() {} };
+        },
+      },
+      editor: {
+        getEditors: () => [],
+        registerCommand: () => ({ dispose() {} }),
+      },
+    } as never;
+    const model = fakeModel();
+    const symbols = [{
+      name: 'Example', kind: 'class',
+      range: { start: { line: 4, column: 1 }, end: { line: 20, column: 2 } },
+      selectionRange: { start: { line: 4, column: 7 }, end: { line: 4, column: 14 } },
+    }];
+    apiCall.mockResolvedValueOnce([]).mockResolvedValueOnce(symbols);
+
+    const handles = registerSymbolNavigationCodeLensProvider(monaco, 7);
+    const changed = vi.fn();
+    const changedHandle = provider!.onDidChange!(changed);
+    const cold = await provider!.provideCodeLenses(model, { isCancellationRequested: false });
+    expect(cold.lenses).toEqual([]);
+
+    __emitLspServerReadyForTests(7);
+    expect(changed).toHaveBeenCalledOnce();
+    const ready = await provider!.provideCodeLenses(model, { isCancellationRequested: false });
+    expect(ready.lenses).toHaveLength(2);
+    expect(apiCall).toHaveBeenCalledTimes(2);
+
+    changedHandle.dispose();
+    handles.forEach((handle) => handle.dispose());
   });
 
   it('turns Ctrl+click on a declaration into the usages command', async () => {

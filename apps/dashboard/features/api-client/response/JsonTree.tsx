@@ -10,7 +10,7 @@ import { cn } from '../../../lib/utils.js';
 export function JsonTree({ body }: { body: string }) {
   let data: unknown;
   try { data = JSON.parse(body); } catch { return <pre className="text-xs font-mono whitespace-pre-wrap break-words">{body}</pre>; }
-  return <div className="text-xs font-mono"><Node value={data} depth={0} /></div>;
+  return <div data-text-selectable className="text-xs font-mono"><Node value={data} depth={0} /></div>;
 }
 
 const PAGE = 100; // children rendered per node before a "show more" — bounds huge arrays/objects
@@ -36,11 +36,21 @@ function Node({ name, value, depth }: { name?: string; value: unknown; depth: nu
   const visible = entries.slice(0, shown);
   return (
     <div style={{ paddingLeft: depth * 12 }}>
-      <button className="flex items-center gap-0.5 hover:text-foreground text-muted-foreground" onClick={() => setOpen(!open)}>
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        {name !== undefined && <span className="text-sky-500">{name}: </span>}
-        <span>{bracket[0]}{!open && `… ${entries.length}`}{!open && bracket[1]}</span>
-      </button>
+      <div className="flex items-center gap-0.5 leading-5 text-muted-foreground">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={open ? 'Collapse JSON node' : 'Expand JSON node'}
+          className="grid h-4 w-4 shrink-0 place-items-center rounded hover:bg-muted hover:text-foreground"
+          onClick={() => setOpen(!open)}
+        >
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </button>
+        <span data-text-selectable>
+          {name !== undefined && <span className="text-sky-500">{name}: </span>}
+          <span>{bracket[0]}{!open && `… ${entries.length}`}{!open && bracket[1]}</span>
+        </span>
+      </div>
       {open && (
         <>
           {visible.map(([k, v]) => <Node key={k} name={isArr ? undefined : k} value={v} depth={depth + 1} />)}

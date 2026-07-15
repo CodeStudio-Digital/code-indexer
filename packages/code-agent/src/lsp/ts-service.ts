@@ -1303,7 +1303,12 @@ export class TsLanguageService {
       const start = spans[i];
       const length = spans[i + 1];
       const cls = spans[i + 2];
-      const tsType = cls >> TS_TYPE_OFFSET;
+      // classifier2020 encodes `(tokenType + 1) << typeOffset` so that zero
+      // remains available as "no semantic classification". Decode that
+      // sentinel offset before mapping onto our zero-based Monaco legend.
+      // Without the `- 1`, every token is shifted (class -> enum,
+      // property -> function) and the last type, member/method, is dropped.
+      const tsType = (cls >> TS_TYPE_OFFSET) - 1;
       const tsMods = cls & TS_MOD_MASK;
       const lspType = TS_TYPE_TO_LSP_INDEX[tsType];
       if (lspType === undefined) continue;
@@ -1351,6 +1356,11 @@ export const SEMANTIC_TOKEN_TYPES = [
   'property',      // 9
   'function',      // 10
   'method',        // 11
+  // Server-backed C# classifications. The TS classifier never emits these,
+  // but they keep the shared renderer/backend legend lossless for OmniSharp.
+  'struct',        // 12
+  'event',         // 13
+  'member',        // 14
 ] as const;
 
 export const SEMANTIC_TOKEN_MODIFIERS = [
@@ -1364,9 +1374,9 @@ export const SEMANTIC_TOKEN_MODIFIERS = [
 
 /**
  * Map TypeScript's ClassificationType (2020 format) → LSP type index.
- * The TS enum values (in `ts.ClassificationType`) line up 0..11 with
- * the legend above. Anything outside that range is dropped (returns
- * undefined → the for-loop skips it).
+ * The classifier2020 token values line up 0..11 with the legend above after
+ * removing the protocol's +1 sentinel offset. Anything outside that range is
+ * dropped (returns undefined -> the for-loop skips it).
  *
  * Numeric values come from the TypeScript source — they're stable
  * across versions because the encoded classification protocol is

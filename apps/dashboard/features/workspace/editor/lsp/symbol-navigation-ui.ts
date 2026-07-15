@@ -10,8 +10,10 @@ import i18n from '../../../../i18n/index.js';
 import { toast } from '../../../../components/ui/prompt-dialog.js';
 import { apiCall } from '../../../../lib/api-client.js';
 import { getActiveEditor } from '../editor-models.js';
-import { relPath, type LspLocationDTO, type Monaco, type Position } from './dto.js';
+import { modelBelongsToProject, relPath, type LspLocationDTO, type Monaco, type Position } from './dto.js';
 import { showSymbolNavigationPopup } from './symbol-navigation-popup.js';
+import { ensureDocumentSynced } from '../documentSync.js';
+import { onLspServerReady } from './server-ready.js';
 
 type SymbolAction = 'usages' | 'implementations';
 
@@ -33,12 +35,15 @@ interface NavigationPayload {
 type CacheEntry = {
   versionId: number;
   result: Promise<DocumentSymbolDTO[]>;
+  /** Empty/cold results are retried; populated results live for the model version. */
+  expiresAt: number | null;
 };
 
 const SHOW_USAGES_COMMAND = 'mcp.symbolNavigation.showUsages';
 const SHOW_IMPLEMENTATIONS_COMMAND = 'mcp.symbolNavigation.showImplementations';
 const MAX_NAVIGATION_SYMBOLS = 160;
 const symbolCache = new Map<string, CacheEntry>();
+const EMPTY_SYMBOL_TTL_MS = 750;
 let commandsRegistered = false;
 
 const USAGE_KINDS = new Set([
@@ -56,18 +61,40 @@ export function documentSymbolsForModel(
   model: MonacoNs.editor.ITextModel,
   projectId: number,
 ): Promise<DocumentSymbolDTO[]> {
+  if (!modelBelongsToProject(model, projectId)) return Promise.resolve([]);
   const key = cacheKey(projectId, model);
   const versionId = model.getVersionId();
   const cached = symbolCache.get(key);
-  if (cached?.versionId === versionId) return cached.result;
+  if (cached?.versionId === versionId && (cached.expiresAt === null || Date.now() < cached.expiresAt)) {
+    return cached.result;
+  }
 
-  const result = apiCall<DocumentSymbolDTO[]>('lsp.documentSymbols', {
-    projectId,
-    file: relPath(model),
-  }).then((symbols) => symbols ?? []).catch(() => []);
-  symbolCache.set(key, { versionId, result });
+  const entry: CacheEntry = {
+    versionId,
+    result: Promise.resolve([]),
+    expiresAt: null,
+  };
+  entry.result = ensureDocumentSynced(projectId, model)
+    .then(() => apiCall<DocumentSymbolDTO[]>('lsp.documentSymbols', {
+      projectId,
+      file: relPath(model),
+    }))
+    .then((symbols) => symbols ?? [])
+    .catch(() => [])
+    .then((symbols) => {
+      entry.expiresAt = symbols.length > 0 ? null : Date.now() + EMPTY_SYMBOL_TTL_MS;
+      return symbols;
+    });
+  symbolCache.set(key, entry);
   if (symbolCache.size > 80) symbolCache.delete(symbolCache.keys().next().value as string);
-  return result;
+  return entry.result;
+}
+
+function invalidateProjectSymbolCache(projectId: number): void {
+  const prefix = `${projectId}:`;
+  for (const key of symbolCache.keys()) {
+    if (key.startsWith(prefix)) symbolCache.delete(key);
+  }
 }
 
 function flattenNavigationSymbols(
@@ -154,6 +181,7 @@ async function showSymbolLocations(
   const method = payload.action === 'implementations' ? 'lsp.implementation' : 'lsp.references';
   let locations: LspLocationDTO[];
   try {
+    await ensureDocumentSynced(projectId, model);
     locations = await apiCall<LspLocationDTO[]>(method, {
       projectId,
       file,
@@ -237,11 +265,17 @@ function ensureNavigationCommands(monaco: Monaco): void {
 export function registerSymbolNavigationCodeLensProvider(
   monaco: Monaco,
   projectId: number,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void> = async () => undefined,
 ): MonacoNs.IDisposable[] {
   ensureNavigationCommands(monaco);
-  const provider = monaco.languages.registerCodeLensProvider('*', {
+  const changed = new monaco.Emitter<MonacoNs.languages.CodeLensProvider>();
+  let codeLensProvider!: MonacoNs.languages.CodeLensProvider;
+  codeLensProvider = {
+    onDidChange: changed.event,
     async provideCodeLenses(model, token) {
+      if (!modelBelongsToProject(model, projectId)) return { lenses: [], dispose() {} };
       const versionId = model.getVersionId();
+      await ensureSynced(model);
       const symbols = flattenNavigationSymbols(await documentSymbolsForModel(model, projectId), model);
       if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== versionId) {
         return { lenses: [], dispose() {} };
@@ -283,8 +317,13 @@ export function registerSymbolNavigationCodeLensProvider(
       }
       return { lenses, dispose() {} };
     },
+  };
+  const provider = monaco.languages.registerCodeLensProvider('*', codeLensProvider);
+  const ready = onLspServerReady(projectId, () => {
+    invalidateProjectSymbolCache(projectId);
+    changed.fire(codeLensProvider);
   });
-  return [provider];
+  return [provider, ready, changed];
 }
 
 /** Per-editor glyphs. Type declarations open implementations; members open usages. */
@@ -346,6 +385,10 @@ export function attachSymbolNavigationGutter(
   };
 
   void refresh();
+  const serverReady = onLspServerReady(projectId, () => {
+    invalidateProjectSymbolCache(projectId);
+    void refresh();
+  });
   const content = model.onDidChangeContent(() => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => { void refresh(); }, 450);
@@ -455,6 +498,7 @@ export function attachSymbolNavigationGutter(
       generation += 1;
       if (timer) clearTimeout(timer);
       content.dispose();
+      serverReady.dispose();
       mouse.dispose();
       if (typeof document !== 'undefined') document.removeEventListener('click', codeLensClick, true);
       collection.clear();

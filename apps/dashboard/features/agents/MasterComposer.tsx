@@ -2,8 +2,9 @@ import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Brain, Gauge, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { toast } from '../../components/ui/prompt-dialog.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
-import { fileToAttachment } from '../chat/utils.js';
+import { filesToAttachments } from '../chat/utils.js';
 import { useFileDrop } from '../chat/composer/useFileDrop.js';
 import { DropOverlay } from '../chat/composer/DropOverlay.js';
 import { useComposerDraft } from '../chat/composer/useComposerDraft.js';
@@ -50,15 +51,21 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    const arr = await Promise.all(Array.from(files).map(fileToAttachment));
-    setAttachments((prev) => [...prev, ...arr]);
+    try {
+      const arr = await filesToAttachments(files, attachments);
+      setAttachments((prev) => [...prev, ...arr]);
+    } catch (error) {
+      toast.error(t('composer.attachmentRejected', 'Attachment rejected'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled });
 
   async function handleSend() {
-    const text = input.trim();
-    if (!text) return;
+    const text = input.trim() || t('composer.analyzeAttachments', 'Analyze the attached files.');
+    if (!input.trim() && attachments.length === 0) return;
     const atts = attachments;
     setInput('');
     setAttachments([]);
@@ -130,7 +137,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html"
+                  accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.svg,.ts,.tsx,.js,.jsx,.py,.rb,.go,.rs,.java,.kt,.c,.cpp,.h,.hpp,.sh,.bash,.sql,.toml,.ini,.env,.log"
                   className="hidden"
                   onChange={(e) => {
                     handleFiles(e.target.files);
@@ -178,7 +185,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
               )}
           </div>
         </div>
-        <Button onClick={handleSend} disabled={disabled || !input.trim()} size="sm" className="h-9 shrink-0">
+        <Button onClick={handleSend} disabled={disabled || (!input.trim() && attachments.length === 0)} size="sm" className="h-9 shrink-0">
           <Send className="h-3.5 w-3.5" />
         </Button>
       </div>

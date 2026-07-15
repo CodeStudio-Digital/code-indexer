@@ -39,9 +39,19 @@ export async function discoverOpenAIModels(
   );
   const r = await fetch(base, { headers });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const data = (await r.json()) as { data?: { id?: string }[] };
+  const data = (await r.json()) as {
+    data?: Array<{
+      id?: string;
+      capabilities?: Record<string, boolean | undefined>;
+    }>;
+  };
+  const requiredCapabilities = spec.discovery?.requiredCapabilities ?? [];
   let list: UpsertModelInput[] = (data.data ?? [])
-    .filter((m) => m.id)
+    .filter(
+      (m) =>
+        m.id &&
+        requiredCapabilities.every((capability) => m.capabilities?.[capability] === true),
+    )
     .map((m) => ({
       model_id: m.id!,
       name: m.id!,

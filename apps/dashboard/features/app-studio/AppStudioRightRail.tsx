@@ -214,6 +214,7 @@ export function AppStudioRightPanel({
   coordinatorSessionId,
   initialPrompt,
   refreshKey,
+  onCoordinatorChanged,
 }: {
   active: AppStudioSidePanel;
   appSessionId: number;
@@ -222,10 +223,11 @@ export function AppStudioRightPanel({
   coordinatorSessionId: number | null;
   initialPrompt?: string | null;
   refreshKey: string;
+  onCoordinatorChanged?: (coderSessionId: number) => void | Promise<void>;
 }) {
   const { t } = useTranslation('appStudio');
   const state = useAgentOverview(appSessionId, refreshKey);
-  if (active === 'chat') return <AppStudioChatRail projectId={projectId} projectName={projectName} coordinatorSessionId={coordinatorSessionId} initialPrompt={initialPrompt} showHeader={false} />;
+  if (active === 'chat') return <AppStudioChatRail appSessionId={appSessionId} projectId={projectId} projectName={projectName} coordinatorSessionId={coordinatorSessionId} initialPrompt={initialPrompt} onCoordinatorChanged={onCoordinatorChanged} />;
   const icons = { agents: Bot, prompts: FileText, sessions: Activity } as const;
   const labels = { agents: t('agentRail.agents', { defaultValue: 'Agentes' }), prompts: t('agentRail.prompts', { defaultValue: 'Prompts adicionais' }), sessions: t('agentRail.sessions', { defaultValue: 'Sessões e execuções' }) };
   const applyConfig = (config: AppAgentConfigView) => state.setData((current) => current ? {

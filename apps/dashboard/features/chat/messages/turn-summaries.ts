@@ -16,10 +16,13 @@ export interface TurnEditSummary {
   paths: EditFileRef[];
 }
 
-export function computeTurnEditSummaries(groups: VisualGroup[]): Map<number, TurnEditSummary> {
+export function computeTurnEditSummaries(
+  groups: VisualGroup[],
+  precedingUserMessageId?: number | null,
+): Map<number, TurnEditSummary> {
   const out = new Map<number, TurnEditSummary>();
   let byPath = new Map<string, EditFileRef>();
-  let roundMessageId: number | undefined;
+  let roundMessageId = precedingUserMessageId ?? undefined;
 
   for (let gi = 0; gi < groups.length; gi++) {
     const g = groups[gi];

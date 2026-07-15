@@ -38,6 +38,7 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'session_file_round_snapshots', 'session_file_round_hunk_decisions',
   'session_file_round_review_findings',
   'session_file_review_comments', 'session_file_review_runs', 'session_disabled_tools',
+  'session_intent_contracts', 'review_comment_fates',
   // stats (central per Etapa A)
   'runs', 'costs', 'project_cost_rollup',
   // user/project snapshots (central) + memory
@@ -69,6 +70,8 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'installed_plugins', 'plugin_storage', 'verdaccio_configs', 'disabled_tools_global',
   'pending_vector_deletes',
   // guided App Studio lives in the central product DB, never in code-index DBs
+  'app_studio_workflow_snapshots', 'app_studio_delivery_blueprints', 'app_studio_work_items',
+  'app_studio_approvals', 'app_studio_decision_requests', 'app_studio_workflow_events',
   'app_studio_build_task_evidence', 'app_studio_build_groups', 'app_studio_wireframe_revisions', 'app_studio_ux_revisions', 'app_studio_product_revisions',
   'app_studio_pipeline_repairs', 'app_studio_architecture_revisions', 'app_studio_evolutions', 'app_studio_spec_revisions',
   'app_studio_features', 'app_studio_sessions',

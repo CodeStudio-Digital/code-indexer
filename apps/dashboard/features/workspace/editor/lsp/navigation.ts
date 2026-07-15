@@ -4,21 +4,23 @@
  * faz o Ctrl+Click abrir a aba no workspace store. O backend roteia por linguagem.
  */
 import type * as MonacoNs from 'monaco-editor';
-import { apiCall, apiStream, electronApi } from '../../../../lib/api-client.js';
+import { apiCall } from '../../../../lib/api-client.js';
 import { logLsp } from '../lsp-log.js';
 import { throttledPerKey, clearThrottleKey } from '../semanticTokensThrottle.js';
 import { pushCurrentNavPosition } from '../nav-commands.js';
-import { relPath, toMonacoRange, type HoverDTO, type LspLocationDTO, type Monaco } from './dto.js';
+import { cancelledWithin, withMonacoCancellation } from './cancellation.js';
+import { modelBelongsToProject, relPath, toMonacoRange, type HoverDTO, type LspLocationDTO, type Monaco } from './dto.js';
+import { onLspServerReady } from './server-ready.js';
 
 // MUST stay identical to MONACO_SEMANTIC_LEGEND in
 // packages/api-handlers/src/lsp/semantic-tokens-remap.ts — the backend encodes
 // the token stream against this exact ordering (TS service for ts/js; server
-// tokens remapped onto it for php/python).
+// tokens remapped onto it for php/python/java/csharp).
 const SEMANTIC_TOKEN_LEGEND: MonacoNs.languages.SemanticTokensLegend = {
   tokenTypes: [
     'class', 'enum', 'interface', 'namespace', 'typeParameter',
     'type', 'parameter', 'variable', 'enumMember', 'property',
-    'function', 'method',
+    'function', 'method', 'struct', 'event', 'member',
   ],
   tokenModifiers: [
     'declaration', 'static', 'async', 'readonly', 'defaultLibrary', 'local',
@@ -26,13 +28,19 @@ const SEMANTIC_TOKEN_LEGEND: MonacoNs.languages.SemanticTokensLegend = {
 };
 
 // Languages whose semantic tokens the backend can serve: ts/js via the
-// in-process TS service, php/python via their LSP server (intelephense/pyright),
+// in-process TS service, the remaining languages via their LSP servers,
 // remapped onto the legend above. Cold/absent servers return empty → Monaco
 // falls back to Monarch and re-requests once the server warms (or on edit).
-const SEMANTIC_TOKEN_LANGS = ['typescript', 'javascript', 'php', 'python'] as const;
+export const SEMANTIC_TOKEN_LANGS = [
+  'typescript', 'javascript', 'php', 'python', 'java', 'csharp',
+] as const;
 
-/** Semantic tokens — TS/JS (TS service) + php/python (language server). */
-export function registerSemanticTokenProviders(monaco: Monaco, projectId: number): MonacoNs.IDisposable[] {
+/** Semantic tokens — TS/JS (TS service) + server-backed languages. */
+export function registerSemanticTokenProviders(
+  monaco: Monaco,
+  projectId: number,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void> = async () => undefined,
+): MonacoNs.IDisposable[] {
   const disposers: MonacoNs.IDisposable[] = [];
   // Firing this tells Monaco to re-request semantic tokens for visible models.
   // The TS service answers instantly, but php/python servers spawn cold — the
@@ -46,16 +54,20 @@ export function registerSemanticTokenProviders(monaco: Monaco, projectId: number
       monaco.languages.registerDocumentSemanticTokensProvider(lang, {
         onDidChange: tokensChanged.event,
         getLegend: () => SEMANTIC_TOKEN_LEGEND,
-        async provideDocumentSemanticTokens(model) {
+        async provideDocumentSemanticTokens(model, _lastResultId, token) {
+          if (!modelBelongsToProject(model, projectId)) return { data: new Uint32Array(0) };
           // Monaco re-requests after every change — throttle per model so a
           // typing burst costs one trailing RPC instead of one per keystroke.
           const key = model.uri.toString();
           try {
+            await ensureSynced(model);
             const result = await throttledPerKey(key, () =>
-              apiCall<{ data: number[]; resultId?: string }>(
-                'lsp.semanticTokens',
-                { projectId, file: relPath(model) },
-              ));
+              withMonacoCancellation(token, (signal) =>
+                apiCall<{ data: number[]; resultId?: string }>(
+                  'lsp.semanticTokens',
+                  { projectId, file: relPath(model) },
+                  { signal },
+                )));
             if (model.isDisposed()) {
               clearThrottleKey(key);
               return { data: new Uint32Array(0) };
@@ -73,76 +85,34 @@ export function registerSemanticTokenProviders(monaco: Monaco, projectId: number
       }),
     );
   }
-  // Nudge a re-request when a language server warms up, so the first .php/.py
-  // opened before the server was ready picks up semantic colours without an edit.
-  disposers.push(startSemanticTokensRefresh(projectId, () => tokensChanged.fire()));
+  // Nudge a re-request when the owning language server warms up, so an empty
+  // cold-start response cannot remain painted until the user swaps tabs.
+  disposers.push(onLspServerReady(projectId, ({ languageId }) => {
+    if ((SEMANTIC_TOKEN_LANGS as readonly string[]).includes(languageId)) tokensChanged.fire();
+  }));
   return disposers;
 }
 
-/**
- * Subscribe to the LSP server-status stream and call `refresh` whenever a
- * server transitions to 'ready'. Mirrors diagnosticsStream's transport split
- * (Electron MessagePort vs SSE) with a light reconnect. Best-effort — a dropped
- * stream just means colours arrive on the next edit instead.
- */
-function startSemanticTokensRefresh(projectId: number, refresh: () => void): MonacoNs.IDisposable {
-  interface StatusFrame { languageId?: string; state?: string }
-  let stopped = false;
-  let es: EventSource | null = null;
-  let closeIterator: (() => void) | null = null;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const onFrame = (f: StatusFrame): void => {
-    if (f?.state === 'ready') refresh();
-  };
-
-  const connect = (): void => {
-    if (stopped) return;
-    if (electronApi()) {
-      const it = apiStream<StatusFrame>('lsp.serverStatusStream', { projectId })[Symbol.asyncIterator]();
-      closeIterator = () => { void it.return?.(); };
-      void (async () => {
-        try {
-          while (!stopped) {
-            const r = await it.next();
-            if (r.done || stopped) break;
-            onFrame(r.value);
-          }
-        } catch { /* stream dropped */ }
-        if (!stopped) retryTimer = setTimeout(connect, 2000);
-      })();
-    } else {
-      es = new EventSource(`/api/lsp/${projectId}/server-status/stream`);
-      es.addEventListener('serverStatus', (ev) => {
-        if (stopped) return;
-        try { onFrame(JSON.parse((ev as MessageEvent).data) as StatusFrame); } catch { /* bad frame */ }
-      });
-    }
-  };
-  connect();
-
-  return {
-    dispose() {
-      stopped = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      closeIterator?.();
-      es?.close();
-    },
-  };
-}
-
 /** Hover / definition / references — um provider '*' cada; o backend responde p/ toda linguagem. */
-export function registerNavProviders(monaco: Monaco, projectId: number): MonacoNs.IDisposable[] {
+export function registerNavProviders(
+  monaco: Monaco,
+  projectId: number,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void> = async () => undefined,
+): MonacoNs.IDisposable[] {
   const disposers: MonacoNs.IDisposable[] = [];
   disposers.push(
     monaco.languages.registerHoverProvider('*', {
-      async provideHover(model, position) {
+      async provideHover(model, position, token) {
+        if (!modelBelongsToProject(model, projectId)) return null;
+        if (await cancelledWithin(200, token)) return null;
         try {
-          const hover = await apiCall<HoverDTO | null>('lsp.hover', {
-            projectId,
-            file: relPath(model),
-            position: { line: position.lineNumber, column: position.column },
-          });
+          await ensureSynced(model);
+          const hover = await withMonacoCancellation(token, (signal) =>
+            apiCall<HoverDTO | null>('lsp.hover', {
+              projectId,
+              file: relPath(model),
+              position: { line: position.lineNumber, column: position.column },
+            }, { signal }));
           if (!hover) return null;
           return {
             contents: [{ value: hover.contents }],
@@ -159,13 +129,16 @@ export function registerNavProviders(monaco: Monaco, projectId: number): MonacoN
 
   disposers.push(
     monaco.languages.registerDefinitionProvider('*', {
-      async provideDefinition(model, position) {
+      async provideDefinition(model, position, token) {
+        if (!modelBelongsToProject(model, projectId)) return [];
         try {
-          const locs = await apiCall<LspLocationDTO[]>('lsp.definition', {
-            projectId,
-            file: relPath(model),
-            position: { line: position.lineNumber, column: position.column },
-          });
+          await ensureSynced(model);
+          const locs = await withMonacoCancellation(token, (signal) =>
+            apiCall<LspLocationDTO[]>('lsp.definition', {
+              projectId,
+              file: relPath(model),
+              position: { line: position.lineNumber, column: position.column },
+            }, { signal }));
           return locs.map((loc) => ({
             // Backend returns absolute canonical paths so Monaco can match
             // open models or hand off to the editor opener below.
@@ -186,13 +159,16 @@ export function registerNavProviders(monaco: Monaco, projectId: number): MonacoN
       // Ctrl+Alt+B (editor.action.goToImplementation, já no keymap). Sem
       // flushDoc — mesmo contrato do definition provider acima; o backend
       // roteia (TS service → server → fallback do índice de herança).
-      async provideImplementation(model, position) {
+      async provideImplementation(model, position, token) {
+        if (!modelBelongsToProject(model, projectId)) return [];
         try {
-          const locs = await apiCall<LspLocationDTO[]>('lsp.implementation', {
-            projectId,
-            file: relPath(model),
-            position: { line: position.lineNumber, column: position.column },
-          });
+          await ensureSynced(model);
+          const locs = await withMonacoCancellation(token, (signal) =>
+            apiCall<LspLocationDTO[]>('lsp.implementation', {
+              projectId,
+              file: relPath(model),
+              position: { line: position.lineNumber, column: position.column },
+            }, { signal }));
           return locs.map((loc) => ({
             uri: monaco.Uri.file(loc.file),
             range: toMonacoRange(monaco, loc.range),
@@ -208,13 +184,16 @@ export function registerNavProviders(monaco: Monaco, projectId: number): MonacoN
 
   disposers.push(
     monaco.languages.registerReferenceProvider('*', {
-      async provideReferences(model, position) {
+      async provideReferences(model, position, _context, token) {
+        if (!modelBelongsToProject(model, projectId)) return [];
         try {
-          const locs = await apiCall<LspLocationDTO[]>('lsp.references', {
-            projectId,
-            file: relPath(model),
-            position: { line: position.lineNumber, column: position.column },
-          });
+          await ensureSynced(model);
+          const locs = await withMonacoCancellation(token, (signal) =>
+            apiCall<LspLocationDTO[]>('lsp.references', {
+              projectId,
+              file: relPath(model),
+              position: { line: position.lineNumber, column: position.column },
+            }, { signal }));
           return locs.map((loc) => ({
             uri: monaco.Uri.file(loc.file),
             range: toMonacoRange(monaco, loc.range),

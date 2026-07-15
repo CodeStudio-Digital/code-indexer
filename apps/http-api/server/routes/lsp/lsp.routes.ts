@@ -40,7 +40,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/lsp/:projectId/did-open', async (c) => {
     try {
       const projectId = parseIdParam(c, 'projectId');
-      const body = await c.req.json<{ file: string; languageId: string; version: number; content: string }>();
+      const body = await c.req.json<{ file: string; languageId: string; version: number; content: string; syncSessionId: string }>();
       return c.json(await h.didOpen({ projectId, ...body }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
@@ -50,7 +50,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/lsp/:projectId/did-change', async (c) => {
     try {
       const projectId = parseIdParam(c, 'projectId');
-      const body = await c.req.json<{ file: string; version: number; changes: DocChange[] }>();
+      const body = await c.req.json<{ file: string; version: number; changes: DocChange[]; syncSessionId: string }>();
       return c.json(await h.didChange({ projectId, ...body }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
@@ -60,7 +60,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/lsp/:projectId/did-close', async (c) => {
     try {
       const projectId = parseIdParam(c, 'projectId');
-      const body = await c.req.json<{ file: string }>();
+      const body = await c.req.json<{ file: string; syncSessionId: string }>();
       return c.json(await h.didClose({ projectId, ...body }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
@@ -181,7 +181,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
-      return c.json(await h.completion({ projectId, ...body }, createContext()));
+      return c.json(await h.completion({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -191,7 +191,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<{ file: string; range: { start: Position; end: Position } }>();
-      return c.json(await h.codeActions({ projectId, ...body }, createContext()));
+      return c.json(await h.codeActions({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -201,7 +201,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<{ file: string; item: unknown }>();
-      return c.json(await h.resolveCompletion({ projectId, ...body }, createContext()));
+      return c.json(await h.resolveCompletion({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -211,7 +211,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<{ file: string; action: CodeActionDTO }>();
-      return c.json(await h.resolveCodeAction({ projectId, ...body }, createContext()));
+      return c.json(await h.resolveCodeAction({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) { return mapApiError(c, err); }
   });
 
@@ -227,7 +227,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
-      return c.json(await h.hover({ projectId, ...body }, createContext()));
+      return c.json(await h.hover({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -237,7 +237,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
-      return c.json(await h.definition({ projectId, ...body }, createContext()));
+      return c.json(await h.definition({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -247,7 +247,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
-      return c.json(await h.references({ projectId, ...body }, createContext()));
+      return c.json(await h.references({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -257,7 +257,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<{ file: string; position: Position; newName: string }>();
-      return c.json(await h.rename({ projectId, ...body }, createContext()));
+      return c.json(await h.rename({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -267,7 +267,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<{ file: string; position: Position }>();
-      return c.json(await h.signatureHelp({ projectId, ...body }, createContext()));
+      return c.json(await h.signatureHelp({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -277,7 +277,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<{ file: string }>();
-      return c.json(await h.documentSymbols({ projectId, ...body }, createContext()));
+      return c.json(await h.documentSymbols({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -291,7 +291,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
         range?: { start: Position; end: Position };
         options: { tabSize: number; insertSpaces: boolean };
       }>();
-      return c.json(await h.formatting({ projectId, ...body }, createContext()));
+      return c.json(await h.formatting({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -301,7 +301,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<{ file: string }>();
-      return c.json(await h.organizeImports({ projectId, ...body }, createContext()));
+      return c.json(await h.organizeImports({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -311,7 +311,7 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
-      return c.json(await h.implementation({ projectId, ...body }, createContext()));
+      return c.json(await h.implementation({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }

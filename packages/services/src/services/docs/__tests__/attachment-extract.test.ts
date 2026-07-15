@@ -32,6 +32,17 @@ describe('extractAttachmentText', () => {
     expect(out.base64).toBeUndefined();
   });
 
+  it('keeps Office bytes for providers with general native file input', async () => {
+    const base64 = rtfBase64('Native transport.');
+    const [out] = await extractAttachmentText({
+      name: 'memo.rtf',
+      mediaType: 'application/rtf',
+      base64,
+    }, { keepBinaryDocuments: true });
+    expect(out.base64).toBe(base64);
+    expect(out.text).toBeUndefined();
+  });
+
   it('passes images through untouched', async () => {
     const [out] = await extractAttachmentText({
       name: 'shot.png',
@@ -68,6 +79,16 @@ describe('extractAttachmentText', () => {
       base64: Buffer.from('not a real zip').toString('base64'),
     });
     expect(out.text).toContain('could not be read');
+    expect(out.base64).toBeUndefined();
+  });
+
+  it('turns an unsupported binary into an explicit note instead of silently dropping it', async () => {
+    const [out] = await extractAttachmentText({
+      name: 'archive.bin',
+      mediaType: 'application/octet-stream',
+      base64: Buffer.from('opaque bytes').toString('base64'),
+    });
+    expect(out.text).toContain('unsupported binary file type');
     expect(out.base64).toBeUndefined();
   });
 });

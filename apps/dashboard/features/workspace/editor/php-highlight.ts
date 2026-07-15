@@ -96,25 +96,27 @@ export function enrichedPhp(): MonacoNs.languages.IMonarchLanguage {
 }
 
 /**
- * Install the enriched PHP tokenizer. Registered via `onLanguage` (best-effort,
- * early) — but Monaco's basic-language loads its default tokenizer lazily and
- * asynchronously, which can clobber ours. `reassertPhpHighlighting` (called from
- * the editor mount, after Monaco has fully loaded php) is the deterministic
- * backstop that guarantees ours wins.
+ * Install the enriched PHP tokenizer as THE lazy factory for the language.
+ *
+ * Monaco ships PHP through its own async `registerTokensProviderFactory`. Using
+ * `setMonarchTokensProvider` beside that factory races it: whichever finishes
+ * last wins, which left the first visible model in plaintext until a tab swap.
+ * Registering our factory replaces (and disposes) Monaco's factory atomically,
+ * so the first request compiles the enriched grammar exactly once.
  */
+const installations = new WeakSet<object>();
+
 export function enrichPhpHighlighting(monaco: Monaco): void {
-  const apply = (): void => {
-    try { monaco.languages.setMonarchTokensProvider('php', enrichedPhp()); } catch { /* php not ready */ }
-  };
-  monaco.languages.onLanguage('php', apply);
-  try {
-    if (monaco.languages.getLanguages().some((l) => l.id === 'php')) apply();
-  } catch { /* registry not ready */ }
+  if (installations.has(monaco)) return;
+  monaco.languages.registerTokensProviderFactory('php', {
+    create: () => enrichedPhp(),
+  });
+  installations.add(monaco);
 }
 
-/** Re-assert ours over Monaco's async default. Cheap; call when a php editor mounts. */
+/** Backward-compatible alias; installation is now idempotent and race-free. */
 export function reassertPhpHighlighting(monaco: Monaco): void {
-  try { monaco.languages.setMonarchTokensProvider('php', enrichedPhp()); } catch { /* */ }
+  enrichPhpHighlighting(monaco);
 }
 
 // ─── Hover for language constructs ──────────────────────────────────

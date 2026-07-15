@@ -120,6 +120,14 @@ test.describe('AI-first project workbench', () => {
     await expect(page.locator('nav[aria-label="Context tool windows"]')).toHaveCount(0);
     await expect(page.locator('.workbench-shell')).toHaveScreenshot('project-sessions.png');
 
+    // A docked session list must not switch to the off-canvas mobile drawer
+    // when the app window crosses below Tailwind's `lg` viewport breakpoint.
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await expect(sessionDock).toBeVisible();
+    await expect(sessionDock).toHaveCSS('position', 'static');
+    await expect(sessionRows.first()).toBeVisible();
+    await expect(page.locator('nav[aria-label="Session tools"]')).toBeVisible();
+
     await page.getByRole('tab', { name: 'Code', exact: true }).click();
     await expect(page.getByRole('tab', { name: 'Session', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'AI Chat', exact: true })).toHaveCount(0);

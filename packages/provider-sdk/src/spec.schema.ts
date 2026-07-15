@@ -112,6 +112,7 @@ const discoveryDescriptorSchema = <F extends readonly [string, ...string[]]>(for
       modelsUrl: z.string().optional(),
       queryParams: z.record(z.string(), z.string()).optional(),
       filterPrefixes: z.array(z.string()).optional(),
+      requiredCapabilities: z.array(z.string()).optional(),
       supportsModes: z.array(z.string()).optional(),
       accountIdFrom: templateVarSchema.optional(),
     })
@@ -143,6 +144,7 @@ const capabilitiesSchema = z
     zaiCodingMode: z.boolean().optional(),
     supportsThinking: z.boolean().optional(),
     supportsVision: z.boolean().optional(),
+    fileInput: z.enum(['native', 'pdf-only', 'text', 'model-dependent']).optional(),
     supportsImageGen: z.boolean().optional(),
   })
   .strict();

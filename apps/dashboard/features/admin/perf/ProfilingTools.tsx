@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
+import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { apiBaseUrl } from '../../../lib/api-client.js';
 import { ensureRendererVitals, stopRendererVitals, getLongTasks, clearLongTasks } from './renderer-vitals.js';
 import { RouteStartupPanel } from './RouteStartupPanel.js';
@@ -138,7 +139,11 @@ export function ProfilingTools() {
   };
 
   const runHeapSnapshot = async () => {
-    if (!window.confirm(t('perf.tools.heapSnapshotConfirm'))) return;
+    if (!(await confirm({
+      title: t('perf.tools.heapSnapshot'),
+      description: t('perf.tools.heapSnapshotConfirm'),
+      confirmLabel: t('perf.tools.heapSnapshot'),
+    }))) return;
     setSnapshotBusy(true);
     setError(null);
     try {

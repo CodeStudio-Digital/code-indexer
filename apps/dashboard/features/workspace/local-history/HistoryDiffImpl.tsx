@@ -4,31 +4,17 @@
  * gutter, destaque intra-linha e cores de sintaxe. Carregado lazy via
  * LazyHistoryDiff. Usa o monaco bundlado localmente (setupMonaco), read-only.
  */
-import { useEffect, useState } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
 import { Loader2 } from 'lucide-react';
 import { setupMonaco } from '../../../lib/monaco-setup.js';
 import { normalizeForDiff } from './line-diff.js';
 import type { HistoryDiffProps } from './LazyHistoryDiff.js';
+import { useSharedMonacoTheme } from '../../../lib/monaco-theme.js';
 
 setupMonaco();
 
-/** Tema do Monaco acompanhando a classe `dark` do documento (reativo). */
-function useMonacoTheme(): 'vs-dark' | 'light' {
-  const read = (): 'vs-dark' | 'light' =>
-    typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'vs-dark' : 'light';
-  const [theme, setTheme] = useState<'vs-dark' | 'light'>(read);
-  useEffect(() => {
-    const el = document.documentElement;
-    const obs = new MutationObserver(() => setTheme(read()));
-    obs.observe(el, { attributes: true, attributeFilter: ['class'] });
-    return () => obs.disconnect();
-  }, []);
-  return theme;
-}
-
 export default function HistoryDiffImpl({ original, modified, language }: HistoryDiffProps) {
-  const theme = useMonacoTheme();
+  const theme = useSharedMonacoTheme();
   return (
     <DiffEditor
       height="100%"

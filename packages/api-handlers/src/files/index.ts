@@ -18,13 +18,17 @@ import AdmZip from 'adm-zip';
 import { ApiError, type FilesApi, type FileTreeNode } from '@mcp/api-bus';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
-import { TREE_BLOCK } from '@mcp/shared/utils/fs-ignore.js';
+import {
+  clearProjectIgnoreRulesCache,
+  getProjectIgnoreRules,
+  shouldIgnoreProjectPath,
+} from '@mcp/shared/utils/project-ignore.js';
 import type { HandlerDeps } from '../types.js';
 import { createDirCache } from './dir-cache.js';
 import { captureLocalHistory } from './local-history.js';
 import { createHistoryHandlers } from './history-handlers.js';
 
-// Blocklist de diretórios do `tree` — fonte única em @mcp/shared/utils/fs-ignore.
+// Baseline + Java/.NET/Unity project profiles live in project-ignore.ts.
 
 /**
  * Resolve a project-relative path to an absolute one, refusing any
@@ -115,6 +119,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       // Fast-path: symbols/FTS fresh in ~ms instead of waiting for the
       // chokidar debounce (the watcher event later short-circuits on hash).
       deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'upsert' }]);
+      clearProjectIgnoreRulesCache(project.root_path);
       dirCache.invalidate(projectId, rel); // próximo tree do parent reflete o arquivo novo
       return { ok: true as const, last_modified: stat.mtime.toISOString() };
     },
@@ -137,6 +142,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           await fs.unlink(abs);
           deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'delete' }]);
         }
+        clearProjectIgnoreRulesCache(project.root_path);
         dirCache.invalidate(projectId, rel);
         return { ok: true as const };
       } catch (err) {
@@ -179,6 +185,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           { path: to.replace(/\\/g, '/'), kind: 'upsert' },
         ]);
       }
+      clearProjectIgnoreRulesCache(project.root_path);
       dirCache.invalidate(projectId, from);
       dirCache.invalidate(projectId, to);
       return { ok: true as const, last_modified: lastModified };
@@ -193,6 +200,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       deps.projectIndexService.publishFsEvents(projectId, [
         { path: rel.replace(/\\/g, '/'), kind: 'upsert', isDir: true },
       ]);
+      clearProjectIgnoreRulesCache(project.root_path);
       dirCache.invalidate(projectId, rel);
       return { ok: true as const };
     },
@@ -245,6 +253,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
         files += 1;
       }
       deps.projectIndexService.publishFsEvents(projectId, [{ path: dest.replace(/\\/g, '/'), kind: 'upsert', isDir: true }]);
+      clearProjectIgnoreRulesCache(project.root_path);
       dirCache.invalidate(projectId, dest);
       return { ok: true as const, files, bytes };
     },
@@ -253,6 +262,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       const project = requireProject(projectId);
       const startAbs = resolveSafe(project.root_path, root);
       const startRel = root === '.' ? '' : root;
+      const projectIgnore = getProjectIgnoreRules(project.root_path);
 
       // Fast path — the lazy explorer (maxDepth 1) is the hot caller. ONE
       // readdir; entry types come from the Dirents (the old walk re-statted
@@ -269,7 +279,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           if (cached) return cached;
         }
         const entries = await fs.readdir(startAbs, { withFileTypes: true }).catch(() => []);
-        const filtered = entries.filter((e) => !TREE_BLOCK.has(e.name));
+        const filtered = entries.filter((e) => {
+          const relPath = path.posix.join(startRel, e.name);
+          return !shouldIgnoreProjectPath(projectIgnore, relPath, e.isDirectory());
+        });
         const children = await Promise.all(filtered.map(async (e): Promise<FileTreeNode> => {
           const relPath = path.posix.join(startRel, e.name);
           // Symlinked dirs (pnpm links) report as symlink, not directory —
@@ -323,12 +336,16 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
         if (depth >= maxDepth) {
           // Peek so the lazy tree knows whether to draw an expand chevron.
           const peek = await fs.readdir(absPath, { withFileTypes: true }).catch(() => []);
-          const hasChildren = peek.some((e) => !TREE_BLOCK.has(e.name));
+          const hasChildren = peek.some((e) =>
+            !shouldIgnoreProjectPath(projectIgnore, path.posix.join(relPath, e.name), e.isDirectory()),
+          );
           return { name, path: relPath, type: 'dir', hasChildren, ...stats };
         }
         const entries = await fs.readdir(absPath, { withFileTypes: true }).catch(() => []);
         // Stable, case-insensitive ordering: dirs first, then files alphabetically.
-        const filtered = entries.filter((e) => !TREE_BLOCK.has(e.name));
+        const filtered = entries.filter((e) =>
+          !shouldIgnoreProjectPath(projectIgnore, path.posix.join(relPath, e.name), e.isDirectory()),
+        );
         filtered.sort((a, b) => {
           if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
           return a.name.localeCompare(b.name);

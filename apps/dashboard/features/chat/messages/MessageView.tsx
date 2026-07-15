@@ -29,6 +29,7 @@ import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 import { FileEditBlock } from './FileEditBlock.js';
 import { isEditTool } from './edit-tools.js';
 import { deriveTaskCardState } from './task-card-state.js';
+import { derivePlanResolution } from './plan-card-state.js';
 import { parsePersistedAgentsGroup } from './agents-group-parser.js';
 import { cleanThinkingMarkdown, thinkingPreviewText } from './thinking-text.js';
 
@@ -170,7 +171,7 @@ function MessageViewInner({
           </div>
           {assistantMarkdown && <CopyMarkdownButton text={assistantMarkdown} />}
         </div>
-        <div className="max-h-[60vh] overflow-y-auto">
+        <div>
           {message.content.map((b, i) =>
             renderAssistantBlock(
               b,
@@ -296,7 +297,7 @@ function UserMessage({
           </div>
         </div>
         {hasUserBody && (
-          <div className="max-h-[60vh] overflow-y-auto rounded-xl bg-primary/[0.055] px-3 py-2 text-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)]">
+          <div className="rounded-xl bg-primary/[0.055] px-3 py-2 text-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)]">
             {text && (
               <div className="text-[13px] leading-5">
                 <Markdown text={text} />
@@ -569,15 +570,15 @@ export function renderAssistantBlock(
         />
       );
     }
-    const resolved: 'approved' | 'rejected' = result.content.startsWith('Plan approved')
-      ? 'approved'
-      : 'rejected';
+    const resolved = derivePlanResolution(result);
     const tc: ToolCallEvent = {
       id: b.id ?? '',
       name: b.name ?? '',
       input: b.input,
       result: { content: result.content, isError: result.isError },
-      status: result.isError ? 'error' : 'done',
+      // A user rejection deliberately ends the review but is still a valid
+      // decision. Only unclassified/validation failures render as tool errors.
+      status: resolved === 'validation_error' ? 'error' : 'done',
     };
     return (
       <ToolCallBlock key={`pl-${b.id}-${i}`} call={tc}>

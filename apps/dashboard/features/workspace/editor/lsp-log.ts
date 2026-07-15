@@ -37,6 +37,15 @@ const STORAGE_FLAG = 'mcp-ide:lsp-debug';
 
 interface WindowWithLog {
   __lspLog?: LspEvent[];
+  __lspCounters?: Record<LspCounter, number>;
+}
+
+export type LspCounter = 'rangeCorrected' | 'resync' | 'staleSessionIgnored' | 'lruEviction';
+
+export function incrementLspCounter(counter: LspCounter): void {
+  const w = window as unknown as WindowWithLog;
+  w.__lspCounters ??= { rangeCorrected: 0, resync: 0, staleSessionIgnored: 0, lruEviction: 0 };
+  w.__lspCounters[counter] += 1;
 }
 
 function ring(): LspEvent[] {

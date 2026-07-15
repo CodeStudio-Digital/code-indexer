@@ -6,10 +6,12 @@
  */
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../../lib/api-client.js';
-import { logLsp } from '../lsp-log.js';
+import { incrementLspCounter, logLsp } from '../lsp-log.js';
+import { withMonacoCancellation } from './cancellation.js';
 import {
   COMPLETION_TRIGGERS,
   mapCompletionKind,
+  modelBelongsToProject,
   relPath,
   toEditOps,
   type CompletionItemDTO,
@@ -22,7 +24,7 @@ export function registerCompletionProviders(
   monaco: Monaco,
   projectId: number,
   /** Drena o didChange pendente do arquivo antes de consultar o server (anti-race). */
-  flushDoc: (rel: string) => Promise<void>,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void>,
 ): MonacoNs.IDisposable[] {
   const disposers: MonacoNs.IDisposable[] = [];
 
@@ -38,6 +40,46 @@ export function registerCompletionProviders(
       startLineNumber: position.lineNumber, startColumn: word.startColumn,
       endLineNumber: position.lineNumber, endColumn: word.endColumn,
     };
+  };
+
+  const validRange = (
+    model: MonacoNs.editor.ITextModel,
+    position: MonacoNs.Position,
+    range: { start: { line: number; column: number }; end: { line: number; column: number } },
+  ): boolean => {
+    if (range.start.line !== position.lineNumber || range.end.line !== position.lineNumber) return false;
+    if (range.start.column > range.end.column) return false;
+    if (range.start.column > position.column || range.end.column < position.column) return false;
+    const maxColumn = model.getLineMaxColumn(position.lineNumber);
+    return range.start.column >= 1 && range.end.column <= maxColumn;
+  };
+
+  const completionRange = (
+    item: CompletionItemDTO,
+    model: MonacoNs.editor.ITextModel,
+    position: MonacoNs.Position,
+  ): MonacoNs.languages.CompletionItem['range'] => {
+    const fallback = wordRange(model, position);
+    if (item.insertReplaceEdit) {
+      const { insert, replace } = item.insertReplaceEdit;
+      if (!validRange(model, position, insert) || !validRange(model, position, replace)) {
+        incrementLspCounter('rangeCorrected');
+        return fallback;
+      }
+      return {
+        insert: new monaco.Range(insert.start.line, insert.start.column, insert.end.line, insert.end.column),
+        replace: new monaco.Range(replace.start.line, replace.start.column, replace.end.line, replace.end.column),
+      };
+    }
+    if (item.textEdit) {
+      const { range } = item.textEdit;
+      if (!validRange(model, position, range)) {
+        incrementLspCounter('rangeCorrected');
+        return fallback;
+      }
+      return new monaco.Range(range.start.line, range.start.column, range.end.line, range.end.column);
+    }
+    return fallback;
   };
 
   const mapSuggestion = (
@@ -61,27 +103,21 @@ export function registerCompletionProviders(
     commitCharacters: e.commitCharacters,
     // Server-chosen replace range is authoritative for `::`/`->` members;
     // fall back to the current word range.
-    range: e.insertReplaceEdit
-      ? {
-        insert: new monaco.Range(e.insertReplaceEdit.insert.start.line, e.insertReplaceEdit.insert.start.column, e.insertReplaceEdit.insert.end.line, e.insertReplaceEdit.insert.end.column),
-        replace: new monaco.Range(e.insertReplaceEdit.replace.start.line, e.insertReplaceEdit.replace.start.column, e.insertReplaceEdit.replace.end.line, e.insertReplaceEdit.replace.end.column),
-      }
-      : e.textEdit
-      ? new monaco.Range(
-        e.textEdit.range.start.line, e.textEdit.range.start.column,
-        e.textEdit.range.end.line, e.textEdit.range.end.column,
-      )
-      : wordRange(model, position),
+    range: completionRange(e, model, position),
     additionalTextEdits: e.additionalTextEdits ? toEditOps(monaco, e.additionalTextEdits) : undefined,
     _raw: e.raw,
     _file: file,
     tags: e.deprecated || e.tags?.includes(1) ? [monaco.languages.CompletionItemTag.Deprecated] : undefined,
   });
 
-  let latestRequest = 0;
+  // Requests only supersede older requests for the SAME model. A split pane or
+  // another tab must not cancel the active model's completion flight.
+  const latestRequest = new WeakMap<MonacoNs.editor.ITextModel, number>();
   const completionProvider: MonacoNs.languages.CompletionItemProvider = {
     async provideCompletionItems(model, position, context, token) {
-      const request = ++latestRequest;
+      if (!modelBelongsToProject(model, projectId)) return { suggestions: [] };
+      const request = (latestRequest.get(model) ?? 0) + 1;
+      latestRequest.set(model, request);
       const file = relPath(model);
       const lang = model.getLanguageId();
       const t0 = performance.now();
@@ -90,17 +126,18 @@ export function registerCompletionProviders(
         // chegar ao stdin FIFO do server) ANTES de pedir a completion — senão a completion
         // corre na frente do didChange e o server computa sobre um buffer velho → []. No-op
         // quando não há pending (Ctrl+Space / arquivo não-sincronizado).
-        await flushDoc(file);
-        if (token.isCancellationRequested || request !== latestRequest) return { suggestions: [] };
-        const response = await apiCall<CompletionListDTO>('lsp.completion', {
-          projectId,
-          file,
-          position: { line: position.lineNumber, column: position.column },
-          // Monaco triggerKind (Invoke 0 / TriggerCharacter 1 / Incomplete 2)
-          // → LSP (1 / 2 / 3): +1.
-          context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
-        });
-        if (token.isCancellationRequested || request !== latestRequest || model.isDisposed()) return { suggestions: [] };
+        await ensureSynced(model);
+        if (token.isCancellationRequested || request !== latestRequest.get(model)) return { suggestions: [] };
+        const response = await withMonacoCancellation(token, (signal) =>
+          apiCall<CompletionListDTO>('lsp.completion', {
+            projectId,
+            file,
+            position: { line: position.lineNumber, column: position.column },
+            // Monaco triggerKind (Invoke 0 / TriggerCharacter 1 / Incomplete 2)
+            // → LSP (1 / 2 / 3): +1.
+            context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
+          }, { signal }));
+        if (token.isCancellationRequested || request !== latestRequest.get(model) || model.isDisposed()) return { suggestions: [] };
         const entries = response.items;
         // Fase 0 — observabilidade: distinguir "vazio" de "lançou" é o que separa
         // "backend alcançável mas mudo" de "provider lançou" no diagnóstico de P2.
@@ -125,13 +162,14 @@ export function registerCompletionProviders(
     // Called by Monaco when an item is focused in the widget — fetch the
     // deferred fields (Intelephense/Pyright attach the use/import edit
     // ONLY here) before the user can accept.
-    async resolveCompletionItem(item) {
+    async resolveCompletionItem(item, token) {
       const it = item as SuggestionWithMeta;
       if (!it._raw || (it.additionalTextEdits && it.additionalTextEdits.length > 0)) return item;
       try {
-        const resolved = await apiCall<CompletionItemDTO | null>('lsp.resolveCompletion', {
-          projectId, file: it._file, item: it._raw,
-        });
+        const resolved = await withMonacoCancellation(token, (signal) =>
+          apiCall<CompletionItemDTO | null>('lsp.resolveCompletion', {
+            projectId, file: it._file, item: it._raw,
+          }, { signal }));
         if (resolved?.additionalTextEdits?.length) {
           it.additionalTextEdits = toEditOps(monaco, resolved.additionalTextEdits);
         }
@@ -163,6 +201,7 @@ export function registerCompletionProviders(
   disposers.push(
     monaco.languages.registerCompletionItemProvider('*', {
       async provideCompletionItems(model, position, context, token) {
+        if (!modelBelongsToProject(model, projectId)) return { suggestions: [] };
         if (model.getLanguageId() in COMPLETION_TRIGGERS) return { suggestions: [] };
         return completionProvider.provideCompletionItems(
           model, position, context, token,

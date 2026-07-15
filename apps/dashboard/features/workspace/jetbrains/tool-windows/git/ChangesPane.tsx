@@ -5,13 +5,23 @@
  * container lean.
  */
 
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Loader2, Minus, Plus, Trash2, Undo2 } from 'lucide-react';
 import { cn } from '../../../../../lib/utils.js';
-import { HoverLabelButton } from '../../../../../components/ui/hover-label-button.js';
 import { CollapsibleSection } from './CollapsibleSection.js';
 import { CommitBox } from './CommitBox.js';
 import { fileKind } from './file-kind.js';
+import {
+  changeSelectionState,
+  isChangeSelected,
+  pruneChangeSelection,
+  selectedChangePaths,
+  toggleChangeGroupSelection,
+  toggleChangeSelection,
+  type ChangeSelectionState,
+  type SelectableChangeGroup,
+} from './change-selection.js';
 // Tipos vêm do hook (fonte única). Evita a cópia local que dessincronizaria em
 // silêncio se o shape divergir (dashboard não roda tsc). W4 decompose.
 import type { GitStatus, GitStatusFile } from './use-git-window.js';
@@ -69,6 +79,38 @@ export function ChangesPane({
 }: ChangesPaneProps) {
   const { t } = useTranslation('workspace');
   const total = counts?.total ?? groups.staged.length + groups.unstaged.length + groups.untracked.length;
+  const [excludedChanges, setExcludedChanges] = useState<Set<string>>(() => new Set());
+  const selectedUnstagedPaths = useMemo(
+    () => selectedChangePaths('unstaged', groups.unstaged, excludedChanges),
+    [excludedChanges, groups.unstaged],
+  );
+  const selectedUntrackedPaths = useMemo(
+    () => selectedChangePaths('untracked', groups.untracked, excludedChanges),
+    [excludedChanges, groups.untracked],
+  );
+  const unstagedSelection = changeSelectionState('unstaged', groups.unstaged, excludedChanges);
+  const untrackedSelection = changeSelectionState('untracked', groups.untracked, excludedChanges);
+
+  useEffect(() => setExcludedChanges(new Set()), [projectId, repoPath]);
+
+  useEffect(() => {
+    setExcludedChanges((current) => {
+      const next = pruneChangeSelection(
+        { unstaged: groups.unstaged, untracked: groups.untracked },
+        current,
+      );
+      if (next.size === current.size && [...next].every((key) => current.has(key))) return current;
+      return next;
+    });
+  }, [groups.unstaged, groups.untracked]);
+
+  const toggleGroup = (group: SelectableChangeGroup) => {
+    const files = group === 'unstaged' ? groups.unstaged : groups.untracked;
+    setExcludedChanges((current) => toggleChangeGroupSelection(group, files, current));
+  };
+  const toggleFile = (group: SelectableChangeGroup, path: string) => {
+    setExcludedChanges((current) => toggleChangeSelection(group, path, current));
+  };
 
   if (!status && !error) {
     return (
@@ -92,9 +134,9 @@ export function ChangesPane({
           open={openSections.staged}
           onToggle={() => setOpenSections((s) => ({ ...s, staged: !s.staged }))}
           actions={
-            <HoverLabelButton
+            <HeaderActionButton
               icon={Minus}
-              label={t('git.unstageAll')}
+              title={t('git.unstageAll')}
               onClick={() => void onUnstage(groups.staged.map((f) => f.path))}
             />
           }
@@ -121,44 +163,61 @@ export function ChangesPane({
           title={t('git.changes', { count: groups.unstaged.length })}
           open={openSections.unstaged}
           onToggle={() => setOpenSections((s) => ({ ...s, unstaged: !s.unstaged }))}
+          headerControl={
+            <SelectionCheckbox
+              state={unstagedSelection}
+              label={t(unstagedSelection === 'all' ? 'git.deselectAllChanges' : 'git.selectAllChanges')}
+              onToggle={() => toggleGroup('unstaged')}
+            />
+          }
           actions={
             <div className="flex items-center gap-1">
-              <HoverLabelButton
+              <HeaderActionButton
                 icon={Undo2}
-                label={t('git.discardAll')}
-                tone="destructive"
-                onClick={() => void onDiscard(groups.unstaged.map((f) => f.path))}
+                title={t('git.discardSelected', { count: selectedUnstagedPaths.length })}
+                destructive
+                disabled={selectedUnstagedPaths.length === 0}
+                onClick={() => void onDiscard(selectedUnstagedPaths)}
               />
-              <HoverLabelButton
+              <HeaderActionButton
                 icon={Plus}
-                label={t('git.stageAll')}
-                onClick={() => void onStage(groups.unstaged.map((f) => f.path))}
+                title={t('git.stageSelected', { count: selectedUnstagedPaths.length })}
+                disabled={selectedUnstagedPaths.length === 0}
+                onClick={() => void onStage(selectedUnstagedPaths)}
               />
             </div>
           }
         >
-          {groups.unstaged.map((f) => (
-            <FileRow
-              key={`u-${f.path}`}
-              file={f}
-              onClick={() => void showDiff(f)}
-              actions={
-                <>
-                  <RowButton
-                    icon={Undo2}
-                    title={t('git.discard')}
-                    destructive
-                    onClick={() => void onDiscard([f.path])}
-                  />
-                  <RowButton
-                    icon={Plus}
-                    title={t('git.stage')}
-                    onClick={() => void onStage([f.path])}
-                  />
-                </>
-              }
-            />
-          ))}
+          {groups.unstaged.map((f) => {
+            const checked = isChangeSelected('unstaged', f.path, excludedChanges);
+            return (
+              <FileRow
+                key={`u-${f.path}`}
+                file={f}
+                onClick={() => void showDiff(f)}
+                selection={{
+                  checked,
+                  label: t(checked ? 'git.deselectFile' : 'git.selectFile', { path: f.path }),
+                  onToggle: () => toggleFile('unstaged', f.path),
+                }}
+                actions={
+                  <>
+                    <RowButton
+                      icon={Undo2}
+                      title={t('git.discard')}
+                      destructive
+                      onClick={() => void onDiscard([f.path])}
+                    />
+                    <RowButton
+                      icon={Plus}
+                      title={t('git.stage')}
+                      onClick={() => void onStage([f.path])}
+                    />
+                  </>
+                }
+              />
+            );
+          })}
         </CollapsibleSection>
       )}
 
@@ -169,43 +228,60 @@ export function ChangesPane({
           onToggle={() =>
             setOpenSections((s) => ({ ...s, untracked: !s.untracked }))
           }
+          headerControl={
+            <SelectionCheckbox
+              state={untrackedSelection}
+              label={t(untrackedSelection === 'all' ? 'git.deselectAllUntracked' : 'git.selectAllUntracked')}
+              onToggle={() => toggleGroup('untracked')}
+            />
+          }
           actions={
             <div className="flex items-center gap-1">
-              <HoverLabelButton
+              <HeaderActionButton
                 icon={Trash2}
-                label={t('git.deleteAll')}
-                tone="destructive"
-                onClick={() => void onDiscard(groups.untracked.map((f) => f.path))}
+                title={t('git.deleteSelected', { count: selectedUntrackedPaths.length })}
+                destructive
+                disabled={selectedUntrackedPaths.length === 0}
+                onClick={() => void onDiscard(selectedUntrackedPaths)}
               />
-              <HoverLabelButton
+              <HeaderActionButton
                 icon={Plus}
-                label={t('git.stageAll')}
-                onClick={() => void onStage(groups.untracked.map((f) => f.path))}
+                title={t('git.stageSelected', { count: selectedUntrackedPaths.length })}
+                disabled={selectedUntrackedPaths.length === 0}
+                onClick={() => void onStage(selectedUntrackedPaths)}
               />
             </div>
           }
         >
-          {groups.untracked.map((f) => (
-            <FileRow
-              key={`?-${f.path}`}
-              file={f}
-              actions={
-                <>
-                  <RowButton
-                    icon={Trash2}
-                    title={t('git.deleteFile')}
-                    destructive
-                    onClick={() => void onDiscard([f.path])}
-                  />
-                  <RowButton
-                    icon={Plus}
-                    title={t('git.stage')}
-                    onClick={() => void onStage([f.path])}
-                  />
-                </>
-              }
-            />
-          ))}
+          {groups.untracked.map((f) => {
+            const checked = isChangeSelected('untracked', f.path, excludedChanges);
+            return (
+              <FileRow
+                key={`?-${f.path}`}
+                file={f}
+                selection={{
+                  checked,
+                  label: t(checked ? 'git.deselectFile' : 'git.selectFile', { path: f.path }),
+                  onToggle: () => toggleFile('untracked', f.path),
+                }}
+                actions={
+                  <>
+                    <RowButton
+                      icon={Trash2}
+                      title={t('git.deleteFile')}
+                      destructive
+                      onClick={() => void onDiscard([f.path])}
+                    />
+                    <RowButton
+                      icon={Plus}
+                      title={t('git.stage')}
+                      onClick={() => void onStage([f.path])}
+                    />
+                  </>
+                }
+              />
+            );
+          })}
         </CollapsibleSection>
       )}
       {hasMore && (
@@ -241,10 +317,12 @@ function FileRow({
   file,
   actions,
   onClick,
+  selection,
 }: {
   file: GitStatusFile;
   actions: React.ReactNode;
   onClick?: () => void;
+  selection?: { checked: boolean; label: string; onToggle: () => void };
 }) {
   const { t } = useTranslation('workspace');
   const k = fileKind(file.state);
@@ -265,6 +343,13 @@ function FileRow({
       }}
       title={onClick ? t('git.openDiffFor', { path: file.path }) : file.path}
     >
+      {selection && (
+        <SelectionCheckbox
+          state={selection.checked ? 'all' : 'none'}
+          label={selection.label}
+          onToggle={selection.onToggle}
+        />
+      )}
       <span className={cn('font-mono text-[10px] w-3 shrink-0 text-center', k.color)}>
         {k.letter}
       </span>
@@ -274,6 +359,35 @@ function FileRow({
         {actions}
       </div>
     </div>
+  );
+}
+
+function SelectionCheckbox({
+  state,
+  label,
+  onToggle,
+}: {
+  state: ChangeSelectionState;
+  label: string;
+  onToggle: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === 'partial';
+  }, [state]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={state === 'all'}
+      aria-checked={state === 'partial' ? 'mixed' : state === 'all'}
+      aria-label={label}
+      title={label}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      onChange={onToggle}
+      className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+    />
   );
 }
 
@@ -301,6 +415,39 @@ function RowButton({
         destructive
           ? 'text-muted-foreground hover:text-destructive hover:bg-destructive/10'
           : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+      )}
+    >
+      <Icon className="h-3 w-3" />
+    </button>
+  );
+}
+
+/** Compact bulk action used in section headers; copy belongs to the tooltip. */
+function HeaderActionButton({
+  icon: Icon,
+  title,
+  onClick,
+  destructive,
+  disabled,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  onClick: () => void;
+  destructive?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'grid h-5 w-5 place-items-center rounded-sm transition-colors disabled:opacity-50',
+        destructive
+          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
     >
       <Icon className="h-3 w-3" />

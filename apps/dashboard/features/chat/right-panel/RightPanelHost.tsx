@@ -12,14 +12,12 @@
  * mounting that respects an `mounted: Set<RightPanelId>` cache.
  */
 import {
-  BarChart3,
   Bell,
   BookOpen,
+  ChartNoAxesCombined,
   ClipboardList,
   Compass,
-  Gauge,
   HardDrive,
-  Info,
   ScrollText,
   Settings,
   Workflow,
@@ -29,9 +27,7 @@ import { PanelChrome } from './PanelChrome.js';
 import { SessionStateSidebar } from '../SessionStateSidebar.js';
 import { SessionDriveView } from '../SessionDrivePanel.js';
 import { SessionConfigView } from './SessionConfigPanel.js';
-import { SessionMetricsView } from '../SessionMetricsModal.js';
-import { ToolStatsView } from '../ToolStatsModal.js';
-import { SessionDetailsView } from '../SessionDetailsModal.js';
+import { SessionInsightsPanel } from './SessionInsightsPanel.js';
 import { PlansPanel } from './PlansPanel.js';
 import { DiagramPanel } from './diagram/DiagramPanel.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
@@ -43,6 +39,7 @@ import type { ContribToolWindow } from '../../../state/contribution-registry.js'
 import type { RightPanelId } from './types.js';
 import type { CoderSession, CoderSessionStats, SessionData } from '../types.js';
 import type {
+  ActiveProcess,
   PipelineRuntimeState,
   TodoItem,
 } from '../../../hooks/agent-stream/types.js';
@@ -65,6 +62,7 @@ export interface RightPanelHostProps {
   skillPicks: string[];
   onToggleSkillPick: (id: string) => void;
   pipelineRuntime: PipelineRuntimeState | null;
+  activeProcesses: ActiveProcess[];
   /** Plugin tool windows (side: 'right') the rail can activate. */
   pluginWindows?: ContribToolWindow[];
   onClose: () => void;
@@ -111,6 +109,7 @@ export function RightPanelHost(props: RightPanelHostProps) {
             skillPicks={props.skillPicks}
             onToggleSkillPick={props.onToggleSkillPick}
             pipelineRuntime={props.pipelineRuntime}
+            activeProcesses={props.activeProcesses}
             embedded
           />
         </PanelChrome>
@@ -138,16 +137,19 @@ export function RightPanelHost(props: RightPanelHostProps) {
           <SessionConfigView sessionId={sessionId} loadKey={props.refreshKey} />
         </PanelChrome>
       );
-    case 'metrics':
+    case 'insights':
       return (
-        <PanelChrome title={t('chat:rightRail.metrics', 'Metrics')} icon={Gauge} onClose={onClose}>
-          <SessionMetricsView sessionId={sessionId} active />
-        </PanelChrome>
-      );
-    case 'tool-stats':
-      return (
-        <PanelChrome title={t('chat:rightRail.toolStats', 'Tool stats')} icon={BarChart3} onClose={onClose}>
-          <ToolStatsView sessionId={sessionId} active />
+        <PanelChrome
+          title={t('chat:rightRail.insights', 'Session insights')}
+          icon={ChartNoAxesCombined}
+          onClose={onClose}
+          bodyClassName="overflow-hidden"
+        >
+          <SessionInsightsPanel
+            sessionId={sessionId}
+            session={props.session}
+            stats={props.stats}
+          />
         </PanelChrome>
       );
     case 'plans':
@@ -173,17 +175,6 @@ export function RightPanelHost(props: RightPanelHostProps) {
         <PanelChrome title={t('chat:rightRail.diagram', 'Diagram')} icon={Workflow} onClose={onClose}
           bodyClassName="overflow-hidden">
           <DiagramPanel sessionId={sessionId} projectId={props.projectId} />
-        </PanelChrome>
-      );
-    case 'details':
-      return (
-        <PanelChrome title={t('chat:rightRail.details', 'Details')} icon={Info} onClose={onClose}>
-          <SessionDetailsView
-            sessionId={sessionId}
-            session={props.session}
-            stats={props.stats}
-            active
-          />
         </PanelChrome>
       );
     default:

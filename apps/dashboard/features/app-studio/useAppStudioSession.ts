@@ -34,7 +34,7 @@ export function useAppStudioSession(sessionId: number): {
       'workflow.migrated', 'work_item.upserted', 'work_item.status_changed',
       'work_item.reordered', 'approval.requested', 'approval.resolved',
       'decision.requested', 'decision.resolved', 'blueprint.saved',
-      'publish.completed',
+      'publish.completed', 'agents.coordinator_changed',
     ];
     eventNames.forEach((name) => events.addEventListener(name, changed));
     events.onerror = () => setError((current) => current ?? 'A conexão ao workflow será retomada automaticamente.');

@@ -35,6 +35,8 @@ describe('non-relational read/write classification', () => {
   it('classifies Mongo ops (reads vs writes), defaulting unknown to write', () => {
     expect(isWriteCommand({ kind: 'document', op: 'find' })).toBe(false);
     expect(isWriteCommand({ kind: 'document', op: 'aggregate' })).toBe(false);
+    expect(isWriteCommand({ kind: 'document', op: 'aggregate', payload: { pipeline: [{ $out: 'archive' }] } })).toBe(true);
+    expect(isWriteCommand({ kind: 'document', op: 'aggregate', payload: { pipeline: [{ $merge: { into: 'archive' } }] } })).toBe(true);
     expect(isWriteCommand({ kind: 'document', op: 'insertOne' })).toBe(true);
     expect(isWriteCommand({ kind: 'document', op: 'deleteMany' })).toBe(true);
     expect(isWriteCommand({ kind: 'document', op: 'whoKnows' })).toBe(true);
@@ -59,6 +61,8 @@ describe('non-relational read/write classification', () => {
     expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['HGETALL', 'h'] })).toBe(false);
     expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['SET', 'k', 'v'] })).toBe(true);
     expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['FLUSHALL'] })).toBe(true);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['DEBUG', 'RELOAD'] })).toBe(true);
+    expect(isWriteCommand({ kind: 'keyvalue', op: 'raw', args: ['MEMORY', 'PURGE'] })).toBe(true);
   });
 
   it('classifies complex-type + rename writers as writes', () => {

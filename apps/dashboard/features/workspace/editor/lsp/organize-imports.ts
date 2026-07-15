@@ -15,6 +15,7 @@ import { useWorkspaceStore } from '../../../../state/workspace.js';
 import { getActiveEditor } from '../editor-models.js';
 import { logLsp } from '../lsp-log.js';
 import type { Position } from './dto.js';
+import { ensureDocumentSynced } from '../documentSync.js';
 
 interface OrganizeImportsResult {
   edits: Array<{ file: string; range: { start: Position; end: Position }; newText: string }>;
@@ -55,6 +56,7 @@ export async function organizeImportsInActiveEditor(): Promise<void> {
   if (!projectId || !file || !model) return;
   const t0 = performance.now();
   try {
+    await ensureDocumentSynced(projectId, model);
     const res = await apiCall<OrganizeImportsResult>('lsp.organizeImports', { projectId, file });
     if (res.applied === false) {
       toast.info('Organize imports', { description: res.reason ?? 'Not supported for this file.' });

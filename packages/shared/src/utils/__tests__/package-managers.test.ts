@@ -7,9 +7,10 @@ import {
 
 describe('package-managers', () => {
   it('parses a well-formed JSON map', () => {
-    expect(parsePackageManagers('{"node":"pnpm","python":"poetry"}')).toEqual({
+    expect(parsePackageManagers('{"node":"pnpm","python":"poetry","java":"maven"}')).toEqual({
       node: 'pnpm',
       python: 'poetry',
+      java: 'maven',
     });
   });
 

@@ -2,9 +2,15 @@ import './i18n/index.js';
 import ReactDOM from 'react-dom/client';
 import App from './App.js';
 import './index.css';
-import { installFetchBase } from './lib/install-fetch-base.js';
+import { installFetchBase, isElectronRenderer } from './lib/install-fetch-base.js';
 import { setupMonaco } from './lib/monaco-setup.js';
 import { startUserTimingBufferGuard } from './lib/perf/user-timing-guard.js';
+
+// The desktop shell behaves like a native application: chrome is not text
+// selectable by default, while content surfaces opt back in explicitly. Keep
+// the marker on <html> so popouts (which mount outside AppShell) share the same
+// policy and the browser dashboard remains unaffected.
+document.documentElement.dataset.appRuntime = isElectronRenderer() ? 'electron' : 'browser';
 
 // Rewrites `/api/*` and `/ws/*` to the absolute backend URL when running
 // inside Electron. No-op in browser dev. Must run before any component

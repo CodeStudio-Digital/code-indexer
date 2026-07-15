@@ -29,7 +29,12 @@ type DB = InstanceType<typeof Database>;
 export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
   const filePath = config.filePath ?? config.database ?? config.connectionString;
   if (!filePath) throw new Error('sqlite: filePath is required');
-  const db: DB = new Database(filePath, { readonly: false, fileMustExist: false });
+  const readOnly = config.readOnly === true;
+  const db: DB = new Database(filePath, {
+    readonly: readOnly,
+    // Read-only must never create a new empty database as a side effect.
+    fileMustExist: readOnly,
+  });
 
   /** Run ONE statement synchronously, returning a capped QueryResult. */
   function execStatement(sql: string, params: unknown[], max: number): QueryResult {

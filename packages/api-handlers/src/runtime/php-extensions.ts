@@ -91,6 +91,11 @@ export function listExtensions(installDir: string): PhpExtension[] {
   }));
 }
 
+/** Names that the selected PHP process actually reported through `php -m`. */
+export function loadedExtensionNames(extensions: readonly PhpExtension[]): string[] {
+  return [...new Set(extensions.filter((extension) => extension.loaded === true).map((extension) => extension.name))];
+}
+
 /**
  * Enable/disable an extension by rewriting its `extension=` line in php.ini.
  * Enable: uncomment an existing line, else append one. Disable: comment any

@@ -53,7 +53,7 @@ const proseClasses =
 
 export const ResearchMarkdown = memo(function ResearchMarkdown({ text, className }: MarkdownProps) {
   return (
-    <div className={cn(proseClasses, className)}>
+    <div data-text-selectable className={cn(proseClasses, className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

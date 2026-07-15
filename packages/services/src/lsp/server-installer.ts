@@ -121,7 +121,11 @@ export function removeServer(serverId: string, baseDir = lspServersBaseDir()): b
   const def = serverById(serverId);
   if (!def) return false;
   try {
-    rmSync(installDirFor(baseDir, def), { recursive: true, force: true });
+    // Windows can release a terminated native executable a few milliseconds
+    // after the child exit event. Let fs.rm absorb that transient EPERM/EBUSY.
+    const removeOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
+    rmSync(installDirFor(baseDir, def), removeOptions);
+    rmSync(join(baseDir, '.workspaces', `${def.id}@${def.install.version}`), removeOptions);
     return true;
   } catch {
     return false;

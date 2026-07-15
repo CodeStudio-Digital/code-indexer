@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { listExtensions, phpIniPath, seedManagedIni, setExtension } from '../php-extensions.js';
+import { listExtensions, loadedExtensionNames, phpIniPath, seedManagedIni, setExtension } from '../php-extensions.js';
 
 let dir: string;
 
@@ -31,6 +31,16 @@ afterEach(() => {
 });
 
 describe('php-extensions', () => {
+  it('exposes only modules confirmed as loaded for LSP stub synchronization', () => {
+    expect(loadedExtensionNames([
+      { name: 'apcu', builtin: true, enabled: true, loaded: true },
+      { name: 'curl', builtin: true, enabled: true, loaded: true },
+      { name: 'redis', builtin: false, enabled: true, loaded: false },
+      { name: 'xdebug', builtin: false, enabled: true },
+      { name: 'apcu', builtin: true, enabled: true, loaded: true },
+    ])).toEqual(['apcu', 'curl']);
+  });
+
   it('seeds php.ini with an absolute extension_dir and enables defaults', () => {
     seedManagedIni(dir, ['curl', 'mbstring']);
     const text = ini();

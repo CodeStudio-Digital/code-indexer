@@ -36,6 +36,9 @@ import type {
   ConversationChapterStatus,
   FinishCompactionAttemptInput,
   StartCompactionAttemptInput,
+  ExternalSessionSource,
+  ImportExternalSessionResult,
+  PersistExternalSessionInput,
 } from '@mcp/code-agent/sessions/types.js';
 
 import * as core from './store/sessions-core.js';
@@ -62,6 +65,7 @@ import * as subagentTelemetry from './store/subagent-telemetry.js';
 import * as subagentRecommendations from './store/subagent-recommendations.js';
 import * as chapters from './store/chapters.js';
 import * as compactionAttempts from './store/compaction-attempts.js';
+import * as sessionImports from './store/imports.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -101,8 +105,15 @@ export class SessionStore {
   // usage stats faithful).
   createSession(input: core.CreateSessionInput): CoderSession { return core.create(this.db, input); }
   getSession(id: number): CoderSession | null { return core.get(this.db, id); }
+  getLastUsedProviderModel(): core.LastUsedProviderModel | null { return core.getLastUsedProviderModel(this.db); }
   listSessions(projectId: number, opts: { archived?: boolean | null; groupId?: number | null } = {}): CoderSession[] { return core.list(this.db, projectId, opts); }
   listRecentSessionsGlobal(limit = 10): RecentCoderSession[] { return core.listRecentGlobal(this.db, limit); }
+  findImportedSession(projectId: number, source: ExternalSessionSource, externalId: string): number | null {
+    return sessionImports.findImported(this.db, projectId, source, externalId);
+  }
+  importExternalSession(input: PersistExternalSessionInput): ImportExternalSessionResult {
+    return sessionImports.persist(this.db, input);
+  }
 
   // ─── Global (multi-project) sessions (migration 152) ───────────
   createGlobalSession(input: core.CreateGlobalSessionInput): CoderSession { return core.createGlobal(this.db, input); }
@@ -132,6 +143,7 @@ export class SessionStore {
   setSessionAgent(id: number, agent: string | null): void { state.setAgent(this.db, id, agent); }
   setSessionTemperature(id: number, temperature: number | null): void { state.setTemperature(this.db, id, temperature); }
   setSessionReasoningEffort(id: number, effort: string | null): void { state.setReasoningEffort(this.db, id, effort); }
+  setSessionThinkingEnabled(id: number, enabled: boolean): void { state.setThinkingEnabled(this.db, id, enabled); }
   setSessionPlanDepth(id: number, depth: string | null): void { state.setPlanDepth(this.db, id, depth); }
   setSessionResponseLanguage(id: number, language: string | null): void { state.setResponseLanguage(this.db, id, language); }
   setSessionOutputStyle(id: number, style: string | null): void { state.setOutputStyle(this.db, id, style); }
@@ -210,6 +222,9 @@ export class SessionStore {
   getSummaryBoundary(sessionId: number): number { return messages.getBoundary(this.db, sessionId); }
   getArchivedMessageCount(sessionId: number): number { return messages.getArchivedCount(this.db, sessionId); }
   maxMessageId(sessionId: number): number { return messages.maxMessageId(this.db, sessionId); }
+  previousUserMessageId(sessionId: number, beforeId: number): number | null {
+    return messages.previousUserMessageId(this.db, sessionId, beforeId);
+  }
   setCompactionBoundary(sessionId: number, summaryText: string, boundaryId: number, kind: 'auto' | 'manual'): { boundary_id: number; pruned_count: number } {
     return messages.setCompactionBoundary(this.db, sessionId, summaryText, boundaryId, kind);
   }

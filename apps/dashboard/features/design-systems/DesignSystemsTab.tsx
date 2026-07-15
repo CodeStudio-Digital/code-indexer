@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Loader2, Palette, Plus, Trash2, RefreshCcw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import {
   listDesignSystemSessions,
   deleteDesignSystemSession,
@@ -129,7 +130,11 @@ export function DesignSystemsTab() {
                       size="sm"
                       onClick={async () => {
                         const key = s.kind === 'studio' ? 'studio.deleteConfirm' : 'sessions.deleteConfirm';
-                        if (!confirm(t(key, { name: s.name }))) return;
+                        if (!(await confirm({
+                          title: t(key, { name: s.name }),
+                          confirmLabel: t('common:actions.delete'),
+                          tone: 'destructive',
+                        }))) return;
                         await deleteDesignSystemSession(s.id);
                         await refresh();
                       }}

@@ -531,6 +531,28 @@ export function maxMessageId(db: DB, sessionId: number): number {
 }
 
 /**
+ * User turn that owns a message window beginning at `beforeId`.
+ *
+ * Tail/paginated reads can start in the middle of a turn after compaction, so
+ * the dashboard cannot always recover the round id from the returned rows.
+ * Keep this lookup independent of the visibility boundary: an archived user
+ * message can still own the visible assistant tail that follows it.
+ */
+export function previousUserMessageId(db: DB, sessionId: number, beforeId: number): number | null {
+  const row = db.prepare(`
+    SELECT id
+      FROM coder_messages
+     WHERE session_id = ?
+       AND id < ?
+       AND role = 'user'
+       AND COALESCE(is_meta, 0) = 0
+     ORDER BY id DESC
+     LIMIT 1
+  `).get(sessionId, beforeId) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+/**
  * Set (or advance) the durable compaction boundary: hide every message with
  * `id <= boundaryId` and store `summaryText` as the prepended head summary
  * (the runner prepends it; the dashboard renders it as a card). Used by BOTH

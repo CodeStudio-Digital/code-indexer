@@ -48,7 +48,18 @@ describe('resolveConnConfig', () => {
       database: 'appdb',
     });
     expect(spec.config.connectionString).toBeUndefined();
+    expect(spec.config.readOnly).toBe(false);
     expect(spec.secrets).toContain('s3cr3t');
+  });
+
+  it('carries the saved read-only bit into the native driver config', async () => {
+    const field = await resolveConnConfig(row({ is_read_only: 1 }), decrypt);
+    expect(field.config.readOnly).toBe(true);
+    const url = await resolveConnConfig(
+      row({ is_read_only: 1, options_json: '{"urlMode":true}' }),
+      decrypt,
+    );
+    expect(url.config.readOnly).toBe(true);
   });
 
   it('urlMode: the decrypted blob IS the connection string', async () => {

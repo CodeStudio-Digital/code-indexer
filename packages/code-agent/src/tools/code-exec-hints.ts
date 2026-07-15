@@ -69,9 +69,9 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
   if (/^tool [\w$.]+: /.test(msg)) {
     return (
       '\n\nHint: a nested tool call failed and aborted the WHOLE script — work after that ' +
-      'point was lost (partial output above, if any). If a specific call may legitimately ' +
-      'fail (e.g. create_file on a file that may already exist, a probe read), wrap THAT ' +
-      'call in try/catch and continue; do not wrap everything blindly.'
+      'point could not run. If one specific call may legitimately fail (for example a probe ' +
+      'read or create_file on a path that may already exist), wrap THAT promise with ' +
+      'attempt(...) or catch only that call; do not make required calls best-effort.'
     );
   }
 

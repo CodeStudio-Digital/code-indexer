@@ -19,6 +19,7 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
+import { confirm, toast } from '../../components/ui/prompt-dialog.js';
 import { apiPost, apiDelete } from '../../hooks/useApi.js';
 import { useResizableWidth } from '../../hooks/useResizableWidth.js';
 import { cn } from '../../lib/utils.js';
@@ -289,7 +290,12 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
 
   const handleDelete = useCallback(
     async (path: string) => {
-      if (!confirm(`Delete "${path}" from the shared drive?`)) return;
+      if (!(await confirm({
+        title: t('drive.deleteFileTitle'),
+        description: t('drive.deleteFileConfirm', { path }),
+        confirmLabel: t('drive.deleteAction'),
+        tone: 'destructive',
+      }))) return;
       try {
         await apiDelete(`${url}?path=${encodeURIComponent(path)}`);
         if (selectedPath === path) {
@@ -298,7 +304,9 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
         }
         void refresh();
       } catch (e) {
-        alert(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
+        toast.error(t('drive.deleteFileFailed'), {
+          description: e instanceof Error ? e.message : String(e),
+        });
       }
     },
     [url, refresh, selectedPath],
@@ -311,7 +319,12 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
     async (node: Extract<DriveTreeNode, { type: 'dir' }>) => {
       const paths = collectFilePaths(node.children);
       if (paths.length === 0) return;
-      if (!confirm(`Delete folder "${node.path}" and all ${paths.length} file(s) inside?`)) return;
+      if (!(await confirm({
+        title: t('drive.deleteFolderTitle'),
+        description: t('drive.deleteFolderConfirm', { path: node.path, count: paths.length }),
+        confirmLabel: t('drive.deleteFolder'),
+        tone: 'destructive',
+      }))) return;
       const results = await Promise.allSettled(
         paths.map((p) => apiDelete(`${url}?path=${encodeURIComponent(p)}`)),
       );
@@ -323,7 +336,13 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
       void refresh();
       const failed = results.filter((r) => r.status === 'rejected').length;
       if (failed > 0) {
-        alert(`Folder delete: ${paths.length - failed}/${paths.length} removed, ${failed} failed.`);
+        toast.warning(t('drive.deleteFolderPartial'), {
+          description: t('drive.deleteFolderPartialDescription', {
+            done: paths.length - failed,
+            total: paths.length,
+            failed,
+          }),
+        });
       }
     },
     [url, refresh, selectedPath],

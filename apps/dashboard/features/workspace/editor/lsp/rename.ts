@@ -16,7 +16,7 @@ import { apiCall } from '../../../../lib/api-client.js';
 import { toast } from '../../../../components/ui/prompt-dialog.js';
 import { logLsp } from '../lsp-log.js';
 import { modelFor } from '../editor-models.js';
-import { relPath, toMonacoRange, type Monaco, type Position } from './dto.js';
+import { modelBelongsToProject, relPath, toMonacoRange, type Monaco, type Position } from './dto.js';
 import { applyWorkspaceEditToClosedFiles, type ContentEdit } from './apply-workspace-edit.js';
 
 interface RenameEditDTO {
@@ -49,7 +49,7 @@ export function registerRenameProviders(
   monaco: Monaco,
   projectId: number,
   /** Drena o didChange pendente do arquivo antes do rename (anti-race). */
-  flushDoc: (rel: string) => Promise<void>,
+  ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void>,
 ): MonacoNs.IDisposable[] {
   let projectRoot: string | null = null;
   const ensureRoot = async (): Promise<string | null> => {
@@ -67,10 +67,11 @@ export function registerRenameProviders(
       const lang = model.getLanguageId();
       const reject = (reason: string): MonacoNs.languages.WorkspaceEdit & MonacoNs.languages.Rejection =>
         ({ edits: [], rejectReason: reason });
+      if (!modelBelongsToProject(model, projectId)) return reject('Model belongs to another project.');
       if (!renameEnabled()) return reject('Rename is disabled (mcp-ide:rename-enabled=0).');
       const t0 = performance.now();
       try {
-        await flushDoc(file);
+        await ensureSynced(model);
         const [{ edits }, root] = await Promise.all([
           apiCall<{ edits: RenameEditDTO[] }>('lsp.rename', {
             projectId,

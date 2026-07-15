@@ -4,12 +4,12 @@
  * reads (node:fs), no spawning. Returns groups keyed by package manager
  * with an install hint each.
  *
- * Detection is intentionally shallow (root + recognised manifest files);
- * Java/.NET goals are a curated common set since those tools don't expose
+ * Detection is intentionally manifest-driven; .NET project discovery uses a
+ * bounded walk for conventional `src/App/App.csproj` layouts. Java/.NET goals are a curated common set since those tools don't expose
  * a cheap machine-readable task list without invoking the build.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   DetectedGroup,
@@ -17,6 +17,8 @@ import type {
   DetectedRunners,
   RunnerManager,
 } from '@mcp/api-bus';
+import { scanDotnetProjects } from './dotnet-project-files.js';
+import { quoteShellArgument, type ShellFamily } from '../terminal/shell-quote.js';
 
 function readJson(path: string): Record<string, unknown> | null {
   try {
@@ -40,6 +42,23 @@ export interface DetectOptions {
   nodeManager?: RunnerManager;
   /** Force the Python manager (else manifest auto-detect). */
   pythonManager?: RunnerManager;
+  /** Prefer Maven or Gradle when both manifests are present. */
+  javaManager?: RunnerManager;
+  /** Wrapper command syntax must match the execution target, not the host. */
+  shellFamily?: ShellFamily;
+}
+
+function defaultShellFamily(): ShellFamily {
+  return process.platform === 'win32' ? 'cmd' : 'posix';
+}
+
+/** Invalid cmd-only names are omitted instead of making project detection fail. */
+function safeShellArgument(value: string, shellFamily: ShellFamily): string | null {
+  try {
+    return quoteShellArgument(value, shellFamily);
+  } catch {
+    return null;
+  }
 }
 
 /** Pick the JS package manager from the lockfile present at the root. */
@@ -50,17 +69,15 @@ function detectJsManager(root: string): RunnerManager {
   return 'npm';
 }
 
-function detectJs(root: string, override?: RunnerManager): DetectedGroup | null {
+function detectJs(root: string, override: RunnerManager | undefined, shellFamily: ShellFamily): DetectedGroup | null {
   const pkg = readJson(join(root, 'package.json'));
   if (!pkg) return null;
   const manager = override ?? detectJsManager(root);
   const scripts = (pkg.scripts ?? {}) as Record<string, string>;
-  const runners: DetectedRunner[] = Object.keys(scripts).map((name) => ({
-    id: `${manager}:${name}`,
-    label: name,
-    manager,
-    command: `${manager} run ${name}`,
-  }));
+  const runners: DetectedRunner[] = Object.keys(scripts).flatMap((name) => {
+    const argument = safeShellArgument(name, shellFamily);
+    return argument ? [{ id: `${manager}:${name}`, label: name, manager, command: `${manager} run ${argument}` }] : [];
+  });
   return {
     manager,
     source: 'package.json',
@@ -70,16 +87,14 @@ function detectJs(root: string, override?: RunnerManager): DetectedGroup | null 
   };
 }
 
-function detectPhp(root: string): DetectedGroup | null {
+function detectPhp(root: string, shellFamily: ShellFamily): DetectedGroup | null {
   const composer = readJson(join(root, 'composer.json'));
   if (!composer) return null;
   const scripts = (composer.scripts ?? {}) as Record<string, unknown>;
-  const runners: DetectedRunner[] = Object.keys(scripts).map((name) => ({
-    id: `composer:${name}`,
-    label: name,
-    manager: 'composer' as const,
-    command: `composer run ${name}`,
-  }));
+  const runners: DetectedRunner[] = Object.keys(scripts).flatMap((name) => {
+    const argument = safeShellArgument(name, shellFamily);
+    return argument ? [{ id: `composer:${name}`, label: name, manager: 'composer' as const, command: `composer run ${argument}` }] : [];
+  });
   return {
     manager: 'composer',
     source: 'composer.json',
@@ -124,15 +139,27 @@ function detectPython(root: string, override?: RunnerManager): DetectedGroup | n
 const MAVEN_GOALS = ['compile', 'test', 'package', 'spring-boot:run'];
 const GRADLE_TASKS = ['build', 'test', 'bootRun', 'run'];
 
-function detectJava(root: string): DetectedGroup[] {
+function wrapperBin(root: string, manager: 'maven' | 'gradle', shellFamily: ShellFamily): string {
+  if (manager === 'maven') {
+    if (shellFamily !== 'posix' && existsSync(join(root, 'mvnw.cmd'))) return '.\\mvnw.cmd';
+    if (shellFamily === 'posix' && existsSync(join(root, 'mvnw'))) return './mvnw';
+    return 'mvn';
+  }
+  if (shellFamily !== 'posix' && existsSync(join(root, 'gradlew.bat'))) return '.\\gradlew.bat';
+  if (shellFamily === 'posix' && existsSync(join(root, 'gradlew'))) return './gradlew';
+  return 'gradle';
+}
+
+function detectJava(root: string, override: RunnerManager | undefined, shellFamily: ShellFamily): DetectedGroup[] {
   const groups: DetectedGroup[] = [];
   if (existsSync(join(root, 'pom.xml'))) {
-    const hasWrapper = existsSync(join(root, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw'));
-    const bin = hasWrapper ? (process.platform === 'win32' ? 'mvnw.cmd' : './mvnw') : 'mvn';
+    const bin = wrapperBin(root, 'maven', shellFamily);
     groups.push({
       manager: 'maven',
       source: 'pom.xml',
       installNeeded: false,
+      installCommand: `${bin} dependency:resolve`,
+      updateCommand: `${bin} -U dependency:resolve`,
       runners: MAVEN_GOALS.map((goal) => ({
         id: `maven:${goal}`,
         label: goal,
@@ -143,12 +170,13 @@ function detectJava(root: string): DetectedGroup[] {
   }
   const gradleBuild = ['build.gradle', 'build.gradle.kts'].find((f) => existsSync(join(root, f)));
   if (gradleBuild) {
-    const hasWrapper = existsSync(join(root, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'));
-    const bin = hasWrapper ? (process.platform === 'win32' ? 'gradlew.bat' : './gradlew') : 'gradle';
+    const bin = wrapperBin(root, 'gradle', shellFamily);
     groups.push({
       manager: 'gradle',
       source: gradleBuild,
       installNeeded: false,
+      installCommand: `${bin} build -x test`,
+      updateCommand: `${bin} build --refresh-dependencies -x test`,
       runners: GRADLE_TASKS.map((task) => ({
         id: `gradle:${task}`,
         label: task,
@@ -157,59 +185,62 @@ function detectJava(root: string): DetectedGroup[] {
       })),
     });
   }
+  if (override === 'gradle') groups.sort((a, b) => Number(b.manager === 'gradle') - Number(a.manager === 'gradle'));
+  if (override === 'maven') groups.sort((a, b) => Number(b.manager === 'maven') - Number(a.manager === 'maven'));
   return groups;
 }
 
-const DOTNET_VERBS = ['build', 'run', 'test', 'watch'];
-
-/** True when a `*.csproj` / `*.sln` exists at root or one level deep. */
-function hasDotnetProject(root: string): boolean {
-  const matches = (name: string) => /\.(csproj|sln)$/i.test(name);
-  try {
-    const top = readdirSync(root, { withFileTypes: true });
-    for (const e of top) {
-      if (e.isFile() && matches(e.name)) return true;
-    }
-    for (const e of top) {
-      if (!e.isDirectory() || e.name === 'node_modules' || e.name.startsWith('.')) continue;
-      try {
-        if (readdirSync(join(root, e.name)).some(matches)) return true;
-      } catch {
-        /* unreadable subdir — skip */
-      }
-    }
-  } catch {
-    /* unreadable root — no detection */
+function detectDotnet(root: string, shellFamily: ShellFamily): DetectedGroup | null {
+  const found = scanDotnetProjects(root);
+  // Unity generates root-level project/solution files for IDE integration.
+  // They are neither stable dependency manifests nor valid `dotnet run`
+  // targets. Keep a zero-runner C# marker so project-open LSP detection still
+  // starts/prompts OmniSharp without walking Library or offering bogus Play
+  // configurations.
+  if (found.unityRoot) {
+    return {
+      manager: 'dotnet',
+      source: 'ProjectSettings/ProjectVersion.txt',
+      installNeeded: false,
+      runners: [],
+    };
   }
-  return false;
-}
-
-function detectDotnet(root: string): DetectedGroup | null {
-  if (!hasDotnetProject(root)) return null;
+  if (found.projects.length === 0 && found.solutions.length === 0) return null;
+  const runners: DetectedRunner[] = [
+    { id: 'dotnet:build', label: 'build', manager: 'dotnet', command: 'dotnet build' },
+    { id: 'dotnet:test', label: 'test', manager: 'dotnet', command: 'dotnet test' },
+  ];
+  for (const project of found.projects) {
+    const name = project.split('/').pop()?.replace(/\.csproj$/i, '') ?? project;
+    const argument = safeShellArgument(project, shellFamily);
+    if (!argument) continue;
+    runners.push(
+      { id: `dotnet:run:${project}`, label: `run ${name}`, manager: 'dotnet', command: `dotnet run --project ${argument}` },
+      { id: `dotnet:watch:${project}`, label: `watch ${name}`, manager: 'dotnet', command: `dotnet watch --project ${argument} run` },
+    );
+  }
   return {
     manager: 'dotnet',
-    source: '*.csproj / *.sln',
+    source: found.projects.length === 1 ? found.projects[0] : '*.csproj / *.sln',
     installNeeded: false,
-    runners: DOTNET_VERBS.map((verb) => ({
-      id: `dotnet:${verb}`,
-      label: verb,
-      manager: 'dotnet' as const,
-      command: `dotnet ${verb}`,
-    })),
+    installCommand: 'dotnet restore',
+    updateCommand: 'dotnet restore --force',
+    runners,
   };
 }
 
 /** Detect all runnable commands for a project root. */
 export function detectRunners(root: string, opts?: DetectOptions): DetectedRunners {
   const groups: DetectedGroup[] = [];
-  const js = detectJs(root, opts?.nodeManager);
+  const shellFamily = opts?.shellFamily ?? defaultShellFamily();
+  const js = detectJs(root, opts?.nodeManager, shellFamily);
   if (js) groups.push(js);
-  const php = detectPhp(root);
+  const php = detectPhp(root, shellFamily);
   if (php) groups.push(php);
   const py = detectPython(root, opts?.pythonManager);
   if (py) groups.push(py);
-  groups.push(...detectJava(root));
-  const dotnet = detectDotnet(root);
+  groups.push(...detectJava(root, opts?.javaManager, shellFamily));
+  const dotnet = detectDotnet(root, shellFamily);
   if (dotnet) groups.push(dotnet);
   return { groups };
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronDown, GitBranch, Loader2, Play, Square } from 'lucide-react';
-import type { RunnerManager } from '@mcp/api-bus';
+import type { DetectedRunners, RunnerManager } from '@mcp/api-bus';
 import { apiCall } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
 import { useGitRevision } from '../../state/git-revision.js';
@@ -12,6 +13,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu.js';
 import { BranchPopover } from '../workspace/jetbrains/status-bar/BranchPopover.js';
@@ -67,6 +70,7 @@ export function ProjectBranchControl({ projectId }: { projectId: number }) {
 const MANAGERS = new Set<RunnerManager>([
   'npm', 'yarn', 'pnpm', 'bun', 'composer', 'pip', 'poetry', 'gradle', 'maven',
   'dotnet', 'node', 'php', 'python', 'shell',
+  'java',
 ]);
 
 function managerFor(command: string): RunnerManager {
@@ -80,35 +84,71 @@ function quoteArg(value: string): string {
 }
 
 export function ProjectRunControl({ projectId }: { projectId: number }) {
+  const { t } = useTranslation('projects');
   const allConfigurations = useContributions((state) => state.runConfigurations);
   // RunnerStartInput currently has no env field. Hide incompatible declarations
   // instead of presenting a control that silently runs with the wrong process env.
-  const configurations = useMemo(
-    () => allConfigurations.filter((config) => !config.env || Object.keys(config.env).length === 0),
+  const pluginConfigurations = useMemo(
+    () => allConfigurations
+      .filter((config) => !config.env || Object.keys(config.env).length === 0)
+      .map((config) => ({
+        key: `${config.pluginNs}:${config.id}`,
+        title: config.title,
+        description: config.description,
+        command: [config.command, ...(config.args ?? []).map(quoteArg)].join(' '),
+        manager: managerFor(config.command),
+        cwd: config.cwd,
+        source: 'plugin' as const,
+      })),
     [allConfigurations],
   );
+  const [detected, setDetected] = useState<DetectedRunners | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void apiCall<DetectedRunners>('runner.detect', { projectId })
+      .then((value) => { if (alive) setDetected(value); })
+      .catch(() => { if (alive) setDetected(null); });
+    return () => { alive = false; };
+  }, [projectId]);
+  const detectedConfigurations = useMemo(() => (detected?.groups ?? []).flatMap((group) =>
+    group.runners.map((runner) => ({
+      key: `detected:${runner.id}`,
+      title: runner.label,
+      description: `${group.manager} · ${group.source}`,
+      command: runner.command,
+      manager: runner.manager,
+      source: 'detected' as const,
+    }))), [detected]);
+  const configurations = useMemo(
+    () => [...pluginConfigurations, ...detectedConfigurations],
+    [pluginConfigurations, detectedConfigurations],
+  );
   const storageKey = `mcp-ide:run-config:${projectId}`;
-  const [selectedId, setSelectedId] = useState(() => {
-    try { return localStorage.getItem(storageKey); } catch { return null; }
+  const [selection, setSelection] = useState(() => {
+    try { return { projectId, id: localStorage.getItem(storageKey) }; } catch { return { projectId, id: null }; }
   });
+  const selectedId = selection.projectId === projectId ? selection.id : null;
   const allTasks = useRunningTasks((state) => state.tasks);
   const tasks = useMemo(() => tasksForProject(allTasks, projectId), [allTasks, projectId]);
   const running = tasks.filter((task) => task.status === 'running').sort((a, b) => b.startedAt - a.startedAt)[0];
-  const configKey = (config: (typeof configurations)[number]) => `${config.pluginNs}:${config.id}`;
-  const selected = configurations.find((config) => configKey(config) === selectedId) ?? configurations[0];
+  const selected = configurations.find((config) => config.key === selectedId) ?? configurations[0];
 
   useEffect(() => {
-    if (!selected || configKey(selected) === selectedId) return;
-    setSelectedId(configKey(selected));
-  }, [selected, selectedId]);
+    if (selection.projectId !== projectId || !selected || selected.key === selectedId) return;
+    setSelection({ projectId, id: selected.key });
+    try { localStorage.setItem(storageKey, selected.key); } catch { /* optional preference */ }
+  }, [projectId, selected, selectedId, selection.projectId, storageKey]);
+
+  useEffect(() => {
+    try { setSelection({ projectId, id: localStorage.getItem(storageKey) }); } catch { setSelection({ projectId, id: null }); }
+  }, [projectId, storageKey]);
 
   const select = (id: string) => {
-    setSelectedId(id);
+    setSelection({ projectId, id });
     try { localStorage.setItem(storageKey, id); } catch { /* optional preference */ }
   };
 
   if (!selected) return null;
-  const command = [selected.command, ...(selected.args ?? []).map(quoteArg)].join(' ');
 
   return (
     <div className="no-drag flex h-7 items-center rounded border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
@@ -124,9 +164,17 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-56">
-          {configurations.map((config) => (
-            <DropdownMenuItem key={configKey(config)} onSelect={() => select(configKey(config))}>
-              <span className={cn('truncate', configKey(config) === configKey(selected) && 'font-semibold')}>{config.title}</span>
+          {pluginConfigurations.length > 0 && <DropdownMenuLabel>{t('runners.pluginConfigurations')}</DropdownMenuLabel>}
+          {pluginConfigurations.map((config) => (
+            <DropdownMenuItem key={config.key} onSelect={() => select(config.key)}>
+              <span className={cn('truncate', config.key === selected.key && 'font-semibold')}>{config.title}</span>
+            </DropdownMenuItem>
+          ))}
+          {pluginConfigurations.length > 0 && detectedConfigurations.length > 0 && <DropdownMenuSeparator />}
+          {detectedConfigurations.length > 0 && <DropdownMenuLabel>{t('runners.detectedConfigurations')} · {detected?.groups.map((group) => group.manager).join(', ')}</DropdownMenuLabel>}
+          {detectedConfigurations.map((config) => (
+            <DropdownMenuItem key={config.key} onSelect={() => select(config.key)}>
+              <span className={cn('truncate', config.key === selected.key && 'font-semibold')}>{config.title}</span>
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>
@@ -147,9 +195,9 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
           type="button"
           onClick={() => void launchRun({
             projectId,
-            command,
+            command: selected.command,
             label: selected.title,
-            manager: managerFor(selected.command),
+            manager: selected.manager,
             cwd: selected.cwd,
           })}
           className="grid h-full w-7 place-items-center text-emerald-400 hover:bg-emerald-500/10"

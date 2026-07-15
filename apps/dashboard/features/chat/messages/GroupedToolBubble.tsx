@@ -102,7 +102,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
           </div>
           {allText && <CopyMarkdownButton text={allText} />}
         </div>
-        <div className="max-h-[60vh] overflow-y-auto">
+        <div>
           {group.messages.map((msg, mi) =>
             msg.content.map((b: ContentBlock, bi: number) =>
               renderAssistantBlock(

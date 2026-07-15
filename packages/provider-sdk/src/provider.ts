@@ -27,6 +27,8 @@ export interface ProviderCapabilities {
   zaiCodingMode?: boolean;
   supportsThinking?: boolean;
   supportsVision?: boolean;
+  /** How the transport consumes attached files before model inference. */
+  fileInput?: 'native' | 'pdf-only' | 'text' | 'model-dependent';
   /** Provider exposes image-generation models (rows with mode 'image'). */
   supportsImageGen?: boolean;
 }

@@ -42,7 +42,7 @@ const BOOTSTRAP_SET = [
 const NAVIGATE_SET = [
   'write_file', 'edit_file', 'multi_edit', 'create_file', 'run_command', 'get_diagnostics',
   'git_status', 'git_diff', 'git_log', 'web_fetch', 'web_search', 'task_complete',
-  'list_tasks', 'read_plan', 'list_notes', 'get_goal', 'mcp__find_references', 'mcp__save_memory',
+  'decision_gate', 'list_tasks', 'read_plan', 'list_notes', 'get_goal', 'mcp__find_references', 'mcp__save_memory',
 ];
 const ADMIN_SET = ['git_add', 'git_commit', 'git_branch'];
 const PREVIEW_SET = ['preview_open', 'preview_click'];
@@ -108,6 +108,9 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     // Regression: task_list is the ONE always-on task tool (todos+tasks merge);
     // the cap must never drop it, even at the most aggressive 32-tool cap.
     expect(names).toContain('task_list');
+    // plan.txt requires decision_gate for genuine multi-option forks, so a
+    // compact catalog must keep the direct interactive tool available.
+    expect(names).toContain('decision_gate');
     // Regression: self_review is floored in NEVER_TRIM — the Executing-node
     // nudge tells the agent to call it by name before declaring done, so the
     // cap must never drop it (else the agent must find_tools it back).

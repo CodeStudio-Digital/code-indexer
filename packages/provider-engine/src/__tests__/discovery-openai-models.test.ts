@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 
 import { discoverOpenAIModels } from '../discovery/openai-models.js';
-import { openaiSpec, zaiSpec, fuguSpec } from '../specs/openai-compat.js';
+import { openaiSpec, zaiSpec, fuguSpec, mistralSpec } from '../specs/openai-compat.js';
 import { moonshotSpec } from '../specs/moonshot.js';
 
 /**
@@ -133,6 +133,26 @@ describe('discoverOpenAIModels', () => {
     ]);
     // Hit the spec-declared discovery URL, not a base_url-derived one.
     expect(stub.calls).toEqual([zaiSpec.discovery!.modelsUrl]);
+  });
+
+  it('(c) mistral: keeps only models that advertise chat completions', async () => {
+    const cfg = baseCfg({
+      kind: 'mistral',
+      base_url: 'https://api.mistral.ai/v1',
+      api_key: 'k',
+    });
+    stubFetch({
+      data: [
+        { id: 'mistral-small-latest', capabilities: { completion_chat: true } },
+        { id: 'codestral-embed-latest', capabilities: { completion_chat: false } },
+        { id: 'mistral-ocr-latest', capabilities: { completion_chat: false } },
+        { id: 'legacy-row-without-capabilities' },
+      ],
+    });
+
+    const out = await discoverOpenAIModels(mistralSpec, cfg);
+
+    expect(out.map((m) => m.model_id)).toEqual(['mistral-small-latest']);
   });
 });
 

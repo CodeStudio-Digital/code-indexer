@@ -29,7 +29,7 @@ export const anthropicSpec: ProviderSpec = {
     'claude-sonnet-4-6-20260320': { inputPer1M: 3.0, outputPer1M: 15.0 },
     'claude-opus-4-6-20260320': { inputPer1M: 15.0, outputPer1M: 75.0 },
   },
-  capabilities: { supportsThinking: true, supportsVision: true },
+  capabilities: { supportsThinking: true, supportsVision: true, fileInput: 'pdf-only' },
   wire: 'anthropic',
   wireOpts: {
     defaultThinking: { type: 'enabled', budget_tokens: 32000 },

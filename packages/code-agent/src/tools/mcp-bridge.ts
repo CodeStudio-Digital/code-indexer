@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { getOverlayHandler } from '@mcp/code-agent/overlay/overlay-handlers.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
@@ -189,7 +190,14 @@ export class McpToolBridge {
         parameters: publicSchema,
         source: 'mcp',
         handler: async (args: Record<string, unknown>, toolCtx: ToolContext): Promise<ToolResult> => {
-          if (!this.client) return err('MCP client disconnected');
+          if (!this.client) {
+            return err('MCP client disconnected', {
+              code: 'MCP_DISCONNECTED',
+              kind: 'network',
+              retryable: true,
+              suggestedAction: 'Reconnect the MCP server before retrying.',
+            });
+          }
 
           const overlay = ctx.overlay ?? toolCtx.overlay;
           const projectRoot = toolCtx.cwd;
@@ -236,10 +244,18 @@ export class McpToolBridge {
               ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
               .map((c) => c.text!)
               .join('\n') ?? '';
-            if (result.isError) return err(text || 'MCP tool returned error');
+            if (result.isError) {
+              const message = text || 'MCP tool returned error';
+              return err(message, inferToolErrorInfo(`mcp__${t.name}`, message));
+            }
             mcpText = text;
           } catch (e) {
-            return err(`MCP tool '${t.name}' failed: ${e instanceof Error ? e.message : String(e)}`);
+            return err(`MCP tool '${t.name}' failed: ${e instanceof Error ? e.message : String(e)}`, {
+              code: 'MCP_CALL_FAILED',
+              kind: 'network',
+              retryable: true,
+              suggestedAction: 'Verify the MCP server connection and retry when it is healthy.',
+            });
           }
 
           // 3. Post-process — merge overlay data into the MCP output

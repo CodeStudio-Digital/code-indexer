@@ -166,6 +166,7 @@ export function registerInlineCompletions(monaco: Monaco, projectId: number): Mo
   return monaco.languages.registerInlineCompletionsProvider('*', {
     async provideInlineCompletions(model, position, context, token) {
       const empty = { items: [] as MonacoNs.languages.InlineCompletion[] };
+      if (parseModelPath(model.uri.path).projectId !== projectId) return empty;
       const store = useAiCompleteStore.getState();
       // Manual trigger (Alt+\ → inlineSuggest.trigger) bypasses snooze,
       // suggest-widget gate, prefilter and debounce — explicit intent.

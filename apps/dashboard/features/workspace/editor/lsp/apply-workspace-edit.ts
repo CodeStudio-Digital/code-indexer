@@ -14,11 +14,30 @@
  *    teste puro (vitest) sem puxar o runtime do renderer.
  */
 
+import type * as MonacoNs from 'monaco-editor';
+
 export interface EditPosition { line: number; column: number }
 
 export interface ContentEdit {
   range: { start: EditPosition; end: EditPosition };
   newText: string;
+}
+
+export interface ProjectWorkspaceEdit {
+  changes: Record<string, ContentEdit[]>;
+}
+
+/** Absolute native/LSP path -> project-relative path. */
+export function absoluteToProjectRelative(root: string, absolute: string): string | null {
+  const normalize = (path: string): string => path
+    .replace(/\\/g, '/')
+    .replace(/^\/([a-zA-Z]:\/)/, '$1')
+    .replace(/^([a-zA-Z]):/, (_match, drive: string) => `${drive.toLowerCase()}:`);
+  const normalizedRoot = normalize(root).replace(/\/+$/, '');
+  const normalizedFile = normalize(absolute);
+  if (normalizedFile.toLowerCase() === normalizedRoot.toLowerCase()) return '';
+  if (!normalizedFile.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}/`)) return null;
+  return normalizedFile.slice(normalizedRoot.length + 1);
 }
 
 /** (line, column) 1-based → offset absoluto, clampado ao tamanho do conteúdo.
@@ -95,4 +114,57 @@ export async function applyWorkspaceEditToClosedFiles(
     }
   }
   return { written, skipped };
+}
+
+/**
+ * Apply an LSP WorkspaceEdit to the real project models/files. Monaco
+ * standalone's bulk-edit service only resolves an exact URI; our live models
+ * are project-namespaced (`file:///p<id>/...`) while LSP edits use absolute
+ * filesystem URIs. Doing the translation here also lets edits reach closed
+ * files instead of disappearing into an unpersisted temporary model.
+ */
+export async function applyWorkspaceEditToProject(
+  monaco: typeof MonacoNs,
+  projectId: number,
+  edit: ProjectWorkspaceEdit,
+): Promise<{ appliedFiles: number; skipped: string[]; outside: string[] }> {
+  const [{ apiCall }, { modelFor }] = await Promise.all([
+    import('../../../../lib/api-client.js'),
+    import('../editor-models.js'),
+  ]);
+  const project = await apiCall<{ root_path?: string }>('projects.get', { id: projectId });
+  if (!project.root_path) throw new Error('Project root unavailable for workspace edit.');
+
+  const open = new Set<string>();
+  const closed = new Map<string, ContentEdit[]>();
+  const outside: string[] = [];
+
+  for (const [absolute, edits] of Object.entries(edit.changes)) {
+    const rel = absoluteToProjectRelative(project.root_path, absolute);
+    if (rel === null || rel === '') {
+      outside.push(absolute);
+      continue;
+    }
+    const model = modelFor(projectId, rel);
+    if (!model) {
+      closed.set(rel, edits);
+      continue;
+    }
+    const operations: MonacoNs.editor.ISingleEditOperation[] = edits.map((entry) => ({
+      range: new monaco.Range(
+        entry.range.start.line,
+        entry.range.start.column,
+        entry.range.end.line,
+        entry.range.end.column,
+      ),
+      text: entry.newText,
+    }));
+    model.pushStackElement();
+    model.pushEditOperations([], operations, () => null);
+    model.pushStackElement();
+    open.add(rel);
+  }
+
+  const { written, skipped } = await applyWorkspaceEditToClosedFiles(projectId, closed);
+  return { appliedFiles: open.size + written.length, skipped, outside };
 }

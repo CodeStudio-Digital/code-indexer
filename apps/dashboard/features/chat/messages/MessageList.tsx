@@ -242,7 +242,19 @@ const PersistedMessages = React.memo(function PersistedMessages({
 
   // Per-turn "files changed" summary refs, keyed by each turn's last assistant
   // group index. Derived from persisted tool calls → survives scrollback/reload.
-  const turnSummaries = useMemo(() => computeTurnEditSummaries(displayGroups), [displayGroups]);
+  const precedingDisplayRoundMessageId = useMemo(() => {
+    let roundMessageId = sessionData.preceding_user_message_id ?? undefined;
+    const skipped = groups.length - displayGroups.length;
+    for (let index = 0; index < skipped; index++) {
+      const group = groups[index];
+      if (group.kind === 'user') roundMessageId = group.messageId;
+    }
+    return roundMessageId;
+  }, [displayGroups.length, groups, sessionData.preceding_user_message_id]);
+  const turnSummaries = useMemo(
+    () => computeTurnEditSummaries(displayGroups, precedingDisplayRoundMessageId),
+    [displayGroups, precedingDisplayRoundMessageId],
+  );
 
   // Summary-boundary aware pagination. `total_messages` counts only VISIBLE
   // rows (above a "summarize & clear" boundary); `archived_count` is what's
@@ -676,7 +688,7 @@ export function MessageList({
         return sessionData.message_rows[index]?.id;
       }
     }
-    return undefined;
+    return sessionData.preceding_user_message_id ?? undefined;
   }, [sessionData]);
   const handleChapterNavigate = useCallback(() => {
     // A chapter jump is an explicit request to leave the live tail. Prevent
@@ -688,6 +700,7 @@ export function MessageList({
   return (
     <div
       ref={scrollRef}
+      data-text-selectable
       className="flex-1 overflow-y-auto overscroll-contain px-0 py-2 space-y-2 min-h-0"
     >
       <SnapshotFilesProvider actions={snapshotActions} files={snapshotFiles ?? EMPTY_FILES}>

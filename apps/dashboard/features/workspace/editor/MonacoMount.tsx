@@ -16,27 +16,30 @@
  *   (Save is dispatched via the keymap command registry — see 'file.save'.)
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as MonacoNs from 'monaco-editor';
 import { Loader2 } from 'lucide-react';
 // Single source of truth shared with the backend's language router — the
 // model's language id doubles as the LSP dispatch key (didOpen.languageId).
-import { languageIdForPath as inferLanguage } from '@mcp/shared/utils/language-id.js';
+import {
+  languageIdForDocument as inferLanguage,
+  languageIdForPath,
+} from '@mcp/shared/utils/language-id.js';
 import { useWorkspaceStore, type OpenFile } from '../../../state/workspace.js';
 import { useUiDensity } from '../../../state/ui-density.js';
 import { useEditorTheme, resolveThemeId } from '../../../state/editor-theme.js';
-import { registerLspProviders, unregisterLspProviders } from './lspProvider.js';
-import { reassertPhpHighlighting } from './php-highlight.js';
+import { registerLspProviders } from './lspProvider.js';
 import {
   getActiveEditor,
   initEditorModels,
+  isApplyingExternalContent,
   restoreViewStateFor,
   saveViewStateFor,
   setActiveEditor,
   touchModel,
 } from './editor-models.js';
-import { modelPathFor } from './editor-models-path.js';
+import { modelPathFor, parseModelPath } from './editor-models-path.js';
 import { consumePendingReveal } from './pending-reveal.js';
 import { attachNavTracking } from './nav-commands.js';
 import { registerChatActions } from './chat-actions.js';
@@ -48,6 +51,8 @@ import { useSymbolNavigationGutter } from './useSymbolNavigationGutter.js';
 import { registerRunActions } from './run/run-actions.js';
 import { applyMonacoKeymap, watchKeymapPreset } from './monaco-keymap.js';
 import { useEffectiveEditorSettings } from '../../../state/editor-settings.js';
+import { attachDiagnosticNavigation } from './diagnostic-navigation.js';
+import { activateSharedMonacoTheme } from '../../../lib/monaco-theme.js';
 
 function detectDarkMode(): boolean {
   if (typeof document === 'undefined') return true;
@@ -84,6 +89,27 @@ interface MonacoMountProps {
   isActivePane?: boolean;
 }
 
+/**
+ * @monaco-editor/react only reconciles language when its `language` prop
+ * changes. PHP → PHP swaps therefore leave restored models untouched. Own the
+ * invariant here on every concrete model activation.
+ */
+export function reconcileModelLanguage(
+  monaco: typeof MonacoNs,
+  model: MonacoNs.editor.ITextModel,
+): string {
+  const parsed = parseModelPath(model.uri.path);
+  const pathLanguage = languageIdForPath(parsed.relPath);
+  // Extensions/conventional filenames cover nearly every model. Only inspect
+  // the first line for truly extensionless files where a shebang can refine
+  // plaintext; never materialize a multi-megabyte buffer just on focus.
+  const expected = pathLanguage === 'plaintext'
+    ? inferLanguage(parsed.relPath, model.getLineContent(1))
+    : pathLanguage;
+  if (model.getLanguageId() !== expected) monaco.editor.setModelLanguage(model, expected);
+  return expected;
+}
+
 export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMountProps) {
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
   // Chave do modelo Monaco namespaced por projectId (W1b): keia o `path` da URI e as
@@ -99,6 +125,26 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // attach reactively once the editor has actually mounted.
   const [editorInstance, setEditorInstance] = useState<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
   const [monacoInstance, setMonacoInstance] = useState<typeof MonacoNs | null>(null);
+  const activeThemeRef = useRef('codestudio-dark');
+  const renderFrameRef = useRef<number | null>(null);
+  const contentReady = file.content !== null;
+
+  const scheduleEditorRefresh = useCallback((): void => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const refresh = (): void => {
+      renderFrameRef.current = null;
+      if (!editor.getModel()) return;
+      editor.layout();
+      editor.render(true);
+    };
+    if (typeof requestAnimationFrame !== 'function') {
+      refresh();
+      return;
+    }
+    if (renderFrameRef.current !== null) cancelAnimationFrame(renderFrameRef.current);
+    renderFrameRef.current = requestAnimationFrame(refresh);
+  }, []);
 
   // Lazy content: tabs open with null and fetch on activation; loaded tabs
   // revalidate by mtime (stat-only round trip when unchanged).
@@ -109,22 +155,37 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // IntelliJ-style git change markers: green/blue/triangle gutter bars vs the
   // file's HEAD baseline, live as you type (gated to git repos inside the hook).
   useChangeMarkers(file, editorInstance, monacoInstance);
-  // IntelliJ-style ▶ run gutter for package.json/composer.json scripts and
-  // Python __main__ (gated inside the hook to the relevant files).
+  // IntelliJ-style ▶ run gutter for scripts, project manifests, and source
+  // entry points (gated inside the hook to the relevant files).
   useRunGutter(file, editorInstance, monacoInstance);
-  // Code Vision is provider-backed; these glyph-margin affordances make
-  // usages/implementations visible even when CodeLens is outside the viewport.
-  useSymbolNavigationGutter(file, editorInstance, monacoInstance);
-
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
       editorRef.current = editor;
       setEditorInstance(editor);
       setMonacoInstance(monaco);
       initEditorModels(monaco);
-      // Deterministically (re)assert our richer PHP tokenizer over Monaco's
-      // async-loaded default for php files — see php-highlight.ts.
-      if (editor.getModel()?.getLanguageId() === 'php') reassertPhpHighlighting(monaco);
+      const activateModel = (): void => {
+        const model = editor.getModel();
+        if (!model) return;
+        const languageId = reconcileModelLanguage(monaco, model);
+        // setTheme is process-global. Reassert the active workspace owner on
+        // model activation so a retained auxiliary Monaco cannot leave it on
+        // its own theme.
+        if (isActivePane) {
+          activateSharedMonacoTheme(languageId);
+          monaco.editor.setTheme(activeThemeRef.current);
+        }
+        scheduleEditorRefresh();
+      };
+      activateModel();
+      const modelActivation = editor.onDidChangeModel(activateModel);
+      editor.onDidDispose(() => {
+        modelActivation.dispose();
+        if (renderFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(renderFrameRef.current);
+          renderFrameRef.current = null;
+        }
+      });
       // Split-safe active-editor tracking: with two panes mounted, the global
       // active editor (commands: go-to-line, format, add-to-chat) must follow
       // FOCUS, not mount order. Set it on mount only for the active pane so a
@@ -134,6 +195,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       if (isActivePane) setActiveEditor(editor);
       editor.onDidFocusEditorText(() => {
         setActiveEditor(editor);
+        const model = editor.getModel();
+        activateSharedMonacoTheme(model ? reconcileModelLanguage(monaco, model) : null);
+        monaco.editor.setTheme(activeThemeRef.current);
         onFocusPane?.();
       });
       // Editor-level keymap (Ctrl+D duplicate, Ctrl+B declaration, …) per
@@ -154,11 +218,14 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // posição DEIXADA em saltos >10 linhas (debounce) e trocas de aba.
       // Vida útil atada ao editor (onDidDispose) — nada a limpar aqui.
       attachNavTracking(editor);
+      // Replace Monaco's full-width marker zone with our compact floating
+      // problem navigator while preserving the managed F2/F8 keymap actions.
+      attachDiagnosticNavigation(editor, monaco);
       // Cursor/scroll/selection across UNMOUNTS (diff/welcome detours) —
       // while mounted, the wrapper handles per-path swaps itself.
       restoreViewStateFor(modelKey, editor);
     },
-    [modelKey, onFocusPane, isActivePane],
+    [modelKey, onFocusPane, isActivePane, scheduleEditorRefresh],
   );
 
   // LSP providers are project-scoped and live on the singleton Monaco namespace.
@@ -172,15 +239,24 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // or the project changes — not on every keystroke or tab swap.
   useEffect(() => {
     if (!monacoInstance) return;
-    registerLspProviders(monacoInstance, file.projectId);
-    return () => unregisterLspProviders(file.projectId);
+    const lease = registerLspProviders(monacoInstance, file.projectId);
+    return () => lease.dispose();
   }, [monacoInstance, file.projectId]);
+
+  // Code Vision is provider-backed. Declare this hook after the provider
+  // lease so its first effect observes an already-created DocumentSync instead
+  // of caching a pre-didOpen fallback result.
+  useSymbolNavigationGutter(file, editorInstance, monacoInstance);
 
   // Release the active-editor handle on unmount — but only if WE are the active
   // one. With a split, the other pane may currently hold focus; nulling it here
   // would break its commands.
   useEffect(() => () => {
     if (editorRef.current && getActiveEditor() === editorRef.current) setActiveEditor(null);
+    if (renderFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = null;
+    }
   }, []);
 
   // Track the active path: save view state when leaving a file (or
@@ -216,21 +292,21 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // Monaco emits undefined when the model is being swapped out; ignore
       // those — only real edits should flag dirty. The MODEL is the source
       // of truth; the store mirror exists for dirty-tracking + persistence.
-      if (value === undefined) return;
+      if (value === undefined || !contentReady) return;
+      if (isApplyingExternalContent(editorRef.current?.getModel() ?? null)) return;
       setContent(file.projectId, file.path, value);
     },
-    [file.projectId, file.path, setContent],
+    [contentReady, file.projectId, file.path, setContent],
   );
 
   // Ctrl+S lives in the command registry now ('file.save', allowInInputs)
   // — dispatched by the global keymap dispatcher, preset-rebindable.
 
-  const language = inferLanguage(file.path);
+  const language = inferLanguage(file.path, file.content);
   const dark = useIsDark();
-  // Resolve the editor color scheme from the global preference: per-language
-  // override (e.g. PHP → IntelliJ Darcula) beats the dark/light default. The
-  // theme prop drives `monaco.editor.setTheme`, which is GLOBAL — in a split
-  // view both panes follow whichever one last (re)rendered; acceptable for v1.
+  // Resolve the editor color scheme from the global preference. Monaco themes
+  // are process-global, so the active pane becomes the owner and all retained
+  // auxiliary editors consume the same shared theme snapshot.
   const themeDark = useEditorTheme((s) => s.darkTheme);
   const themeLight = useEditorTheme((s) => s.lightTheme);
   const perLanguage = useEditorTheme((s) => s.perLanguage);
@@ -239,6 +315,17 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
     languageId: language,
     state: { darkTheme: themeDark, lightTheme: themeLight, perLanguage },
   });
+  activeThemeRef.current = themeId;
+  const contentLoading = !contentReady;
+
+  // Split focus, tab activation and return from a retained surface all need to
+  // restore the global theme even when the theme prop itself stayed unchanged.
+  useLayoutEffect(() => {
+    if (!isActivePane) return;
+    activateSharedMonacoTheme(language);
+    if (monacoInstance) monacoInstance.editor.setTheme(themeId);
+    scheduleEditorRefresh();
+  }, [isActivePane, language, monacoInstance, modelKey, scheduleEditorRefresh, themeId]);
 
   // Stable options reference: @monaco-editor/react re-applies editor.updateOptions
   // whenever this object's identity changes, and MonacoMount re-renders on every
@@ -252,6 +339,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // must re-measure itself on reveal / window-resize instead of relying
       // on a remount. Modern Monaco uses a ResizeObserver here (cheap).
       automaticLayout: true,
+      // Keep one editor alive while a lazy file read is in flight, but block
+      // edits against the temporary empty model under the loading overlay.
+      readOnly: contentLoading,
       // Glyph margin hosts the run ▶ (and conflict/merge gutters). Explicit
       // so the run gutter always has a column to paint into.
       glyphMargin: true,
@@ -346,38 +436,37 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
         multipleImplementations: 'gotoAndPeek',
         multipleReferences: 'gotoAndPeek',
         multipleDeclarations: 'goto',
-        },
+      },
     }),
-    [editorFontPx, editorSettings],
+    [contentLoading, editorFontPx, editorSettings],
   );
 
-  if (file.content === null) {
-    return (
-      <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground gap-2">
-        <Loader2 className="h-4 w-4 animate-spin" />
-      </div>
-    );
-  }
-
   return (
-    <Editor
-      height="100%"
-      width="100%"
-      // Multi-model mode: `path` keys the model; keepCurrentModel keeps it
-      // (and its undo stack) alive across tab switches and detours through
-      // diff/welcome surfaces. UNCONTROLLED on purpose — a controlled
-      // `value` makes the wrapper issue spurious full-range edits.
-      // `modelKey` namespaces the URI by projectId (W1b) so two projects sharing
-      // a relative path don't collide on one model.
-      path={modelKey}
-      defaultValue={file.content}
-      keepCurrentModel
-      defaultLanguage={language}
-      language={language}
-      theme={themeId}
-      onMount={handleMount}
-      onChange={handleChange}
-      options={editorOptions}
-    />
+    <div className="absolute inset-0">
+      {/* Multi-model mode: `path` keys the model; keepCurrentModel keeps it
+          (and its undo stack) alive across tab switches and detours through
+          diff/welcome surfaces. UNCONTROLLED on purpose — a controlled
+          `value` makes the wrapper issue spurious full-range edits.
+          `modelKey` namespaces the URI by projectId so equal relative paths
+          from different projects cannot collide on one model. */}
+      <Editor
+        height="100%"
+        width="100%"
+        path={modelKey}
+        defaultValue={file.content ?? ''}
+        keepCurrentModel
+        defaultLanguage={language}
+        language={language}
+        theme={themeId}
+        onMount={handleMount}
+        onChange={handleChange}
+        options={editorOptions}
+      />
+      {contentLoading && (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-background/80 text-xs text-muted-foreground gap-2">
+          <Loader2 className="h-4 w-4 animate-spin" />
+        </div>
+      )}
+    </div>
   );
 }

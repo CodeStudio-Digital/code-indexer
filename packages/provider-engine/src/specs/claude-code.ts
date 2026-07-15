@@ -135,7 +135,7 @@ export const claudeCodeSpec: ProviderSpec = {
     'sonnet[1m]': { inputPer1M: 0.0, outputPer1M: 0.0 },
     haiku: { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
-  capabilities: { supportsThinking: true, supportsVision: true },
+  capabilities: { supportsThinking: true, supportsVision: true, fileInput: 'pdf-only' },
   wire: 'anthropic',
   wireOpts: { claudeCode: true },
   discovery: { from: 'sdk:claude-code' },

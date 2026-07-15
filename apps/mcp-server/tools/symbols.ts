@@ -12,6 +12,43 @@ import type { DBSymbol } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
 import { scanDiskForGrep } from './search.js';
 
+type SymbolSearchDb = {
+  searchSymbols(projectId: number, query: string, limit?: number): DBSymbol[];
+};
+
+function symbolNotFoundMessage(
+  db: SymbolSearchDb,
+  projectId: number,
+  symbolName: string,
+  filePath?: string,
+): string {
+  let nearby: DBSymbol[] = [];
+  try {
+    nearby = db.searchSymbols(projectId, symbolName, 8);
+  } catch {
+    // An unavailable/stale FTS index must not hide the original not-found error.
+  }
+  nearby.sort((a, b) => {
+    const aSameFile = filePath && a.file_path === filePath ? 0 : 1;
+    const bSameFile = filePath && b.file_path === filePath ? 0 : 1;
+    return aSameFile - bSameFile;
+  });
+  const suggestions = nearby.slice(0, 5).map((candidate) =>
+    `${candidate.name} (${candidate.file_path}:${candidate.line})`,
+  );
+  const nearbyText = suggestions.length > 0
+    ? ` Nearby indexed symbols: ${suggestions.join(', ')}.`
+    : '';
+  const scopedRecovery = filePath
+    ? `Call get_file_skeleton({file_path:"${filePath}"}) or search within that file to verify the declaration.`
+    : 'Call search or get_file_skeleton to discover the exact symbol name and file.';
+  return (
+    `[SYMBOL_NOT_FOUND] Symbol "${symbolName}" not found${filePath ? ` in "${filePath}"` : ''}.` +
+    nearbyText +
+    ` ${scopedRecovery} Do not retry with the same arguments.`
+  );
+}
+
 /**
  * Disk-only fallback that locates a symbol's defining file/line/body without
  * touching the symbol DB. Used by find_references / prepare_edit / trace_usage
@@ -384,10 +421,7 @@ const get_symbol_body = defineTool({
       }
     }
     if (!targetFile || !targetLine) {
-      throw new Error(
-        `Symbol "${symbolName}" not found. Use search or get_file_skeleton to find the correct symbol name. ` +
-        `If you already know the file path but the index is stale, call native read_file({ path, symbol: "${symbolName}" }) — it runs the same regex+brace fallback straight from disk. Do not retry with the same arguments.`,
-      );
+      throw new Error(symbolNotFoundMessage(db, project.id, symbolName, filePath));
     }
     try {
       const result = extractSymbolBody(project.root_path, targetFile, targetLine);
@@ -406,9 +440,7 @@ const get_symbol_body = defineTool({
       return `${result.file}:${result.start_line}-${result.end_line}${note}\n\n${result.body}`;
     } catch (e) {
       const msg = (e as Error).message;
-      return asJson
-        ? JSON.stringify({ error: 'read_failed', message: msg })
-        : `Failed to read body: ${msg}`;
+      throw new Error(`[SYMBOL_READ_FAILED] Failed to read body for "${symbolName}": ${msg}`);
     }
   }),
 });
@@ -453,10 +485,7 @@ const prepare_edit = defineTool({
         // dependency tables that are populated only by the LLM indexer.
         const located = await findSymbolOnDisk(project.root_path, symbolName, filePath);
         if (!located) {
-          throw new Error(
-            `Symbol "${symbolName}" not found. Use search or get_file_skeleton to find the correct symbol name. ` +
-            `If the project has not been indexed, call native read_file({ path, symbol: "${symbolName}" }) instead. Do not retry with the same arguments.`,
-          );
+          throw new Error(symbolNotFoundMessage(db, project.id, symbolName, filePath));
         }
         const callers = await findCallersOnDisk(
           project.root_path,

@@ -16,6 +16,7 @@ import { mountCoderSummarizeClearRoute } from './summarize-clear.js';
 import { mountCoderRollbackRoute } from './rollback.js';
 import { mountCoderTranscribeRoutes } from './transcribe.js';
 import { mountCoderChapterRoutes } from './chapters.js';
+import { mountCoderSessionImportRoutes } from './session-imports.js';
 import { rebuildConversationChapters } from './chapter-rebuild.js';
 import { withSessionLock } from './sessionLock.js';
 import { mountApiClientRoutes } from '../api-client/index.js';
@@ -46,6 +47,7 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
       return rebuildConversationChapters(deps, sessionId, input);
     }),
   });
+  mountCoderSessionImportRoutes(app, deps);
   mountApiClientRoutes(app, deps);
   mountSshRoutes(app, deps);
   mountDbClientRoutes(app, deps);

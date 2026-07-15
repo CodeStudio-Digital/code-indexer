@@ -71,6 +71,9 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
     const conn = await pool.getConnection();
     let onAbort: (() => void) | null = null;
     try {
+      // Applies to all subsequent transactions on this pooled session. MySQL
+      // enforces this below the app's SQL classifier for persistent tables.
+      if (config.readOnly) await conn.query('SET SESSION TRANSACTION READ ONLY');
       if (opts.signal) {
         if (opts.signal.aborted) throw new Error('query cancelled');
         const threadId = Number(conn.threadId);
@@ -108,6 +111,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
   }
 
   async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pooled connection for the whole batch so START TRANSACTION/COMMIT and
     // every statement share a backend (a runQuery loop could pool-hop between them).

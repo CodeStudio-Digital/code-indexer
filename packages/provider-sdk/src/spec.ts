@@ -193,6 +193,8 @@ export interface DiscoveryDescriptor {
   queryParams?: Record<string, string>;
   /** openai-compat: keep only ids with one of these prefixes (moonshot). */
   filterPrefixes?: string[];
+  /** openai-compat: require boolean capabilities advertised by each model row. */
+  requiredCapabilities?: string[];
   /** zai: also emit `::coding`/`::general` variants when the flag is set. */
   supportsModes?: string[];
   /** cloudflare: where the account id comes from. */

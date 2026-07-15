@@ -1,7 +1,25 @@
 import { describe, it, expect } from 'vitest';
-import { mapLspConfigSection, languageLevelForServer, initOptionsForServer } from '../lsp-config-map.js';
+import {
+  INTELEPHENSE_DEFAULT_STUBS,
+  initOptionsForServer,
+  intelephenseStubsForExtensions,
+  jdtJavaSettings,
+  languageLevelForServer,
+  mapLspConfigSection,
+} from '../lsp-config-map.js';
 
 describe('lsp-config-map', () => {
+  describe('mapLspConfigSection — jdtls', () => {
+    it('configura import Maven/Gradle automático e símbolos gerados', () => {
+      expect(mapLspConfigSection('jdtls', 'java', {})).toEqual(jdtJavaSettings());
+      expect(mapLspConfigSection('jdtls', 'java.configuration', {})).toEqual({
+        updateBuildConfiguration: 'automatic',
+      });
+      expect(mapLspConfigSection('jdtls', 'java.symbols.includeGeneratedCode', {})).toBe(true);
+      expect(mapLspConfigSection('jdtls', 'python', {})).toBeNull();
+    });
+  });
+
   describe('languageLevelForServer', () => {
     it('mapeia serverId → chave de linguagem', () => {
       expect(languageLevelForServer('intelephense', { php: '8.2' })).toBe('8.2');
@@ -23,6 +41,38 @@ describe('lsp-config-map', () => {
     });
     it('sem versão setada → null (server usa defaults completos — não silenciar a completion)', () => {
       expect(mapLspConfigSection('intelephense', 'intelephense', {})).toBeNull();
+    });
+    it('une os defaults completos com extensões carregadas fora do conjunto padrão', () => {
+      const settings = mapLspConfigSection(
+        'intelephense',
+        'intelephense',
+        { php: '8.3' },
+        { phpExtensions: ['curl', 'APCU', 'apcu', 'xdebug', 'not-a-stub'] },
+      );
+      expect(settings).toEqual({
+        environment: { phpVersion: '8.3' },
+        stubs: [...INTELEPHENSE_DEFAULT_STUBS, 'apcu', 'xdebug'],
+      });
+    });
+    it('envia stubs mesmo sem versão explícita quando há extensão extra carregada', () => {
+      expect(mapLspConfigSection(
+        'intelephense',
+        'intelephense',
+        {},
+        { phpExtensions: ['redis'] },
+      )).toEqual({ stubs: [...INTELEPHENSE_DEFAULT_STUBS, 'redis'] });
+    });
+  });
+
+  describe('intelephenseStubsForExtensions', () => {
+    it('não sobrescreve defaults quando todos os módulos já são padrão', () => {
+      expect(intelephenseStubsForExtensions(['curl', 'pdo_mysql', 'opcache'])).toBeUndefined();
+    });
+    it('normaliza aliases e ignora módulos desconhecidos', () => {
+      expect(intelephenseStubsForExtensions(['Zend OPcache', 'APCU', 'unknown'])).toEqual([
+        ...INTELEPHENSE_DEFAULT_STUBS,
+        'apcu',
+      ]);
     });
   });
 

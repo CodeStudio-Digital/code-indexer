@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeMssqlModule } from '../mssql.js';
+import { mssqlRequestOverrides, normalizeMssqlModule } from '../mssql.js';
 
 describe('mssql module loading', () => {
   it('normalizes the CommonJS namespace returned by native Node ESM', async () => {
@@ -17,5 +17,11 @@ describe('mssql module loading', () => {
       Request: Constructor,
     });
     expect(api.ConnectionPool).toBe(Constructor);
+  });
+
+  it('uses the request-construction override recognized by node-mssql', () => {
+    expect(mssqlRequestOverrides(60_000)).toEqual({ requestTimeout: 60_000 });
+    expect(mssqlRequestOverrides(undefined)).toBeUndefined();
+    expect(mssqlRequestOverrides(0)).toBeUndefined();
   });
 });

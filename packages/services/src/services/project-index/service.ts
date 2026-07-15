@@ -1,6 +1,7 @@
 import { isAbsolute, relative } from 'node:path';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
+import { getProjectIgnoreRules } from '@mcp/shared/utils/project-ignore.js';
 import { FileWatcherService, type WatcherFileEvent } from '../watcher.js';
 import { GitMetaWatcher, type GitMetaEvent } from '../git-meta-watcher.js';
 import { KeyedMutex } from './project-mutex.js';
@@ -27,6 +28,14 @@ export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'br
 const ENSURE_COOLDOWN_MS = 30_000;
 const DRAIN_BATCH = 200;
 const PROGRESS_MIN_INTERVAL_MS = 150;
+const LARGE_PROJECT_FILE_COUNT = 5_000;
+
+function envDelay(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -47,8 +56,9 @@ function toRelPath(root: string, absPath: string): string | null {
  * IntelliJ-style auto indexing: "project opened" triggers an idempotent
  * structural run; a chokidar watcher + dirty queue keep symbols/FTS fresh in
  * real time; everything per-project serializes on one mutex (structural run ×
- * incremental drain × manual full index). `ensureFresh` is the hot-path entry
- * (fired from GET /projects/:id) — memory-only checks, never awaits.
+ * incremental drain × manual full index). Metadata reads are intentionally
+ * pure; explicit view activation and session/manual events schedule work.
+ * `ensureFresh` stays fire-and-forget and never awaits on its callers.
  */
 export class ProjectIndexService {
   private mutex = new KeyedMutex<number>();
@@ -60,6 +70,10 @@ export class ProjectIndexService {
   private lastProgressAt = new Map<number, number>();
   /** Deferred-open timers (MCP_INDEX_OPEN_DELAY_MS) — cancelled when a run starts. */
   private pendingOpen = new Map<number, ReturnType<typeof setTimeout>>();
+  /** View-activation timers are separate so unmount cannot cancel session work. */
+  private pendingActivation = new Map<number, ReturnType<typeof setTimeout>>();
+  /** Active ProjectView instances; multiple windows can show one project. */
+  private activations = new Map<number, Set<string>>();
   /** Deferred heavy working-tree watcher start (MCP_WATCH_OPEN_DELAY_MS). */
   private fileWatchOpenTimers = new Map<number, ReturnType<typeof setTimeout>>();
   /** Idle stop timers for recursive file watchers after the UI unsubscribes. */
@@ -85,6 +99,81 @@ export class ProjectIndexService {
   /** Late-bound upgrade: in-process fallback → indexer worker client. */
   setExecutor(executor: StructuralExecutor): void {
     this.executor = executor;
+  }
+
+  /**
+   * Mark a project view active. Metadata reads stay pure; only this explicit
+   * lifecycle edge may schedule the eventual full reconciliation.
+   */
+  activate(projectId: number, activationId: string): {
+    scheduled: boolean;
+    delayMs: number | null;
+    largeProject: boolean;
+  } {
+    const project = this.db.getProject(projectId);
+    const largeProject = !!project && (
+      (project.file_count ?? 0) >= LARGE_PROJECT_FILE_COUNT
+      || getProjectIgnoreRules(project.root_path).scopes.some((scope) => scope.kind === 'unity')
+    );
+    let active = this.activations.get(projectId);
+    if (!active) {
+      active = new Set();
+      this.activations.set(projectId, active);
+    }
+    if (active.has(activationId)) {
+      return {
+        scheduled: this.pendingActivation.has(projectId),
+        delayMs: null,
+        largeProject,
+      };
+    }
+
+    const firstView = active.size === 0;
+    active.add(activationId);
+    this.ensureGitMetaWatching(projectId);
+    const s = this.settings();
+    if (!firstView || this.disposed || !s.autoIndex || this.running.has(projectId)
+      || this.pendingOpen.has(projectId) || this.pendingActivation.has(projectId)) {
+      return { scheduled: this.pendingActivation.has(projectId), delayMs: null, largeProject };
+    }
+
+    const delayMs = largeProject
+      ? envDelay('MCP_INDEX_LARGE_OPEN_DELAY_MS', 30_000)
+      : s.openDelayMs;
+    if (delayMs <= 0) {
+      this.startStructuralRun(projectId, s, false);
+      return { scheduled: false, delayMs: 0, largeProject };
+    }
+
+    const dueAt = Date.now() + delayMs;
+    const timer = setTimeout(() => {
+      this.pendingActivation.delete(projectId);
+      if (this.disposed || !this.activations.get(projectId)?.size) {
+        this.status.setScheduledRun(projectId, undefined);
+        return;
+      }
+      this.startStructuralRun(projectId, this.settings(), false);
+    }, delayMs);
+    timer.unref?.();
+    this.pendingActivation.set(projectId, timer);
+    this.status.setScheduledRun(projectId, { reason: 'activation', dueAt });
+    return { scheduled: true, delayMs, largeProject };
+  }
+
+  /** Last project view left: cancel deferred work and report final ownership release. */
+  deactivate(projectId: number, activationId: string): boolean {
+    const active = this.activations.get(projectId);
+    if (!active) return true;
+    active.delete(activationId);
+    if (active.size > 0) return false;
+    this.activations.delete(projectId);
+    const timer = this.pendingActivation.get(projectId);
+    if (timer) {
+      clearTimeout(timer);
+      this.pendingActivation.delete(projectId);
+      this.status.setScheduledRun(projectId, undefined);
+    }
+    return true;
   }
 
   /** Fire-and-forget "project became active". Cheap and re-entrant. */
@@ -125,6 +214,7 @@ export class ProjectIndexService {
     }, delay);
     t.unref?.();
     this.pendingOpen.set(projectId, t);
+    this.status.setScheduledRun(projectId, { reason, dueAt: Date.now() + delay });
   }
 
   /** Force a pending structural pass now and wait for a searchable index. */
@@ -133,7 +223,9 @@ export class ProjectIndexService {
     if (signal?.aborted) {
       return Promise.resolve({ status: 'aborted', phase: current.phase });
     }
-    const hasOutstandingRun = this.running.has(projectId) || this.pendingOpen.has(projectId);
+    const hasOutstandingRun = this.running.has(projectId)
+      || this.pendingOpen.has(projectId)
+      || this.pendingActivation.has(projectId);
     if (isStructurallyReady(current) && !hasOutstandingRun) {
       return Promise.resolve({ status: 'ready', phase: current.phase });
     }
@@ -160,6 +252,12 @@ export class ProjectIndexService {
       clearTimeout(pending);
       this.pendingOpen.delete(projectId);
     }
+    const activation = this.pendingActivation.get(projectId);
+    if (activation) {
+      clearTimeout(activation);
+      this.pendingActivation.delete(projectId);
+    }
+    this.status.setScheduledRun(projectId, undefined);
     if (this.disposed || this.running.has(projectId)) return;
     this.running.add(projectId);
     void this.mutex
@@ -349,6 +447,13 @@ export class ProjectIndexService {
   }
 
   async stopWatching(projectId: number): Promise<void> {
+    this.activations.delete(projectId);
+    const activation = this.pendingActivation.get(projectId);
+    if (activation) {
+      clearTimeout(activation);
+      this.pendingActivation.delete(projectId);
+      this.status.setScheduledRun(projectId, undefined);
+    }
     this.watchOrder = this.watchOrder.filter((id) => id !== projectId);
     await this.stopFileWatching(projectId);
     await this.gitMetaWatcher.stopWatching(projectId);
@@ -411,9 +516,12 @@ export class ProjectIndexService {
   async dispose(): Promise<void> {
     this.disposed = true;
     for (const t of this.pendingOpen.values()) clearTimeout(t);
+    for (const t of this.pendingActivation.values()) clearTimeout(t);
     for (const t of this.fileWatchOpenTimers.values()) clearTimeout(t);
     for (const t of this.fileWatchIdleTimers.values()) clearTimeout(t);
     this.pendingOpen.clear();
+    this.pendingActivation.clear();
+    this.activations.clear();
     this.fileWatchOpenTimers.clear();
     this.fileWatchIdleTimers.clear();
     await this.watcher.stopAll();

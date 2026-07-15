@@ -18,6 +18,7 @@
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Pause, Play, RefreshCw, RotateCw, Trash2, Zap } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
+import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { formatUptime, healthDotClassName, statusClassName, type ServiceRow } from './types.js';
 import type { UseServiceActionsResult } from './useServiceActions.js';
 
@@ -273,13 +274,14 @@ export function ServiceListItem({ svc, actions, expanded, onToggleExpand }: Serv
             variant="ghost"
             size="icon"
             className="h-5 w-5"
-            onClick={() => {
+            onClick={async () => {
               if (svc.is_primary) {
-                if (
-                  !confirm(
-                    `Retry the primary container? The current sandbox will be torn down and rebuilt from the same stack and bind-mount — your files on disk are preserved.`,
-                  )
-                ) {
+                if (!(await confirm({
+                  title: t('services.primaryRetryTitle'),
+                  description: t('services.primaryRetryConfirm'),
+                  confirmLabel: t('services.primaryRetryAction'),
+                  tone: 'destructive',
+                }))) {
                   return;
                 }
                 void retryPrimary();

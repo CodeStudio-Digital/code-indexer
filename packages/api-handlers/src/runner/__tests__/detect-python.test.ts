@@ -69,9 +69,9 @@ describe('detectPython', () => {
 describe('detectJs override', () => {
   it('forces the JS manager over the lockfile auto-detect', () => {
     writeFileSync(join(root, 'package.json'), '{"scripts":{"dev":"vite"}}');
-    const g = detectRunners(root, { nodeManager: 'pnpm' }).groups.find((x) => x.source === 'package.json');
+    const g = detectRunners(root, { nodeManager: 'pnpm', shellFamily: 'powershell' }).groups.find((x) => x.source === 'package.json');
     expect(g?.manager).toBe('pnpm');
     expect(g?.installCommand).toBe('pnpm install');
-    expect(g?.runners[0]?.command).toBe('pnpm run dev');
+    expect(g?.runners[0]?.command).toBe("pnpm run 'dev'");
   });
 });

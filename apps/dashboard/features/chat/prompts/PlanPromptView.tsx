@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ClipboardList, Copy, Pencil, X } from 'lucide-react';
+import { CircleAlert, Check, ClipboardList, Copy, Pencil, X } from 'lucide-react';
+import type { PlanResolution } from '../../../hooks/useAgentStream.js';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { copyText } from '../../../lib/clipboard.js';
@@ -8,7 +9,7 @@ import { cn } from '../../../lib/utils.js';
 import { Markdown } from '../messages/Markdown.js';
 
 interface PlanPromptViewProps {
-  plan: { id: string; plan: string; resolved?: 'approved' | 'rejected'; kind?: 'informational' | 'mutating' };
+  plan: { id: string; plan: string; resolved?: PlanResolution; kind?: 'informational' | 'mutating' };
   /**
    * Three verdicts: Accept (`approved`), Revise (`approved:false` — keep
    * planning with feedback), Reject (`aborted:true` — end the planning run).
@@ -19,7 +20,7 @@ interface PlanPromptViewProps {
 export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [feedback, setFeedback] = useState('');
-  const [resolved, setResolved] = useState<string | undefined>(plan.resolved);
+  const [resolved, setResolved] = useState<PlanResolution | undefined>(plan.resolved);
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     if (await copyText(plan.plan)) {
@@ -34,7 +35,11 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
           <ClipboardList className="h-4 w-4" />
         </div>
         <div className="text-xs font-semibold text-warning uppercase tracking-wider flex-1 flex items-center gap-2">
-          <span>{t('chat:plan.awaitingApproval')}</span>
+          <span>
+            {resolved === 'validation_error'
+              ? t('chat:plan.validationFailedTitle')
+              : t('chat:plan.awaitingApproval')}
+          </span>
           {plan.kind === 'informational' && (
             <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-muted-foreground">
               {t('chat:plan.kindInformational')}
@@ -82,7 +87,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
               variant="outline"
               onClick={async () => {
                 await onResponse({ approved: false, feedback });
-                setResolved('revise');
+                setResolved('revision_requested');
               }}
             >
               <Pencil className="h-3.5 w-3.5" /> {t('chat:plan.revise')}
@@ -93,7 +98,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
               variant="destructive"
               onClick={async () => {
                 await onResponse({ approved: false, aborted: true, feedback });
-                setResolved('reject');
+                setResolved('rejected');
               }}
             >
               <X className="h-3.5 w-3.5" /> {t('chat:plan.reject')}
@@ -106,23 +111,27 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
             'text-xs flex items-center gap-1.5',
             resolved === 'approved'
               ? 'text-success'
-              : resolved === 'revise'
+              : resolved === 'revision_requested'
                 ? 'text-warning'
                 : 'text-destructive',
           )}
         >
           {resolved === 'approved' ? (
             <Check className="h-3.5 w-3.5" />
-          ) : resolved === 'revise' ? (
+          ) : resolved === 'revision_requested' ? (
             <Pencil className="h-3.5 w-3.5" />
+          ) : resolved === 'validation_error' ? (
+            <CircleAlert className="h-3.5 w-3.5" />
           ) : (
             <X className="h-3.5 w-3.5" />
           )}
           {resolved === 'approved'
             ? t('chat:plan.approved')
-            : resolved === 'revise'
+            : resolved === 'revision_requested'
               ? t('chat:plan.reviseRequested')
-              : t('chat:plan.rejected')}
+              : resolved === 'validation_error'
+                ? t('chat:plan.validationError')
+                : t('chat:plan.rejected')}
         </div>
       )}
     </div>

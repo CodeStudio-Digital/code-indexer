@@ -1,5 +1,8 @@
 export { useAgentStream } from './useAgentStream.js';
 export type {
+  ActiveProcess,
+  ActiveProcessSource,
+  ActiveProcessStatus,
   AgentAttachment,
   AgentsGroup,
   AgentStatus,
@@ -13,6 +16,7 @@ export type {
   ParallelAgent,
   PipelineNodeRuntimeStatus,
   PipelineRuntimeState,
+  PlanResolution,
   PlanPrompt,
   QuestionPrompt,
   RunDelta,

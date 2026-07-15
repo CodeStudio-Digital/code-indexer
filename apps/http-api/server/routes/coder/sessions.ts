@@ -5,7 +5,10 @@ import { AGENTS, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { decide } from '@mcp/code-agent/agents/decision-engine.js';
 import { getAllKnownToolsMeta, getToolTier, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
 import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js';
-import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
+import {
+  cleanSessionTitleSeed,
+  isAutomaticSessionTitle,
+} from '@mcp/services/services/task-preflight/index.js';
 import { enumerateExternalTools } from '../../../admin/mcp-servers.routes.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { TOOL_PERMISSION_MODES } from '@mcp/code-agent/core/permission-gate.js';
@@ -228,18 +231,8 @@ function textFromUnknown(value: unknown): string {
   return '';
 }
 
-function cleanTitleSeed(text: string): string {
-  return text
-    .replace(/<file_refs>[\s\S]*?<\/file_refs>/g, '')
-    .replace(/<active_skills>[\s\S]*?<\/active_skills>/g, '')
-    .replace(/<active-context>[\s\S]*?<\/active-context>/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 500);
-}
-
 function extractTitleSeedFromBody(body: Partial<GenerateTitleBody>): string {
-  return cleanTitleSeed(
+  return cleanSessionTitleSeed(
     textFromUnknown(body.content)
       || textFromUnknown(body.text)
       || textFromUnknown(body.message),
@@ -248,17 +241,7 @@ function extractTitleSeedFromBody(body: Partial<GenerateTitleBody>): string {
 
 function extractTitleSeedFromRow(contentJson: string): string {
   const blocks = JSON.parse(contentJson) as unknown;
-  return cleanTitleSeed(textFromUnknown(blocks));
-}
-
-function cleanGeneratedTitle(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^["'`]+|["'`]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .replace(/[.!?;:]+$/g, '')
-    .trim()
-    .slice(0, 80);
+  return cleanSessionTitleSeed(textFromUnknown(blocks));
 }
 
 interface CreateGlobalSessionBody {
@@ -278,12 +261,16 @@ interface CreateGlobalSessionBody {
 interface CreateSessionBody {
   project_id: number;
   title: string;
-  provider: CoderProviderName;
+  provider?: CoderProviderName;
   model?: string;
+  /** Prefer the most recently active provider/model; explicit values are fallback. */
+  use_last_model?: boolean;
   /** Initial agent preset. Persisted on the session row. */
   agent?: AgentId;
   /** Sticky reasoning-effort override for the new session. Null = model default. */
   reasoning_effort?: string | null;
+  /** Initial sticky extended-thinking state. Defaults to false. */
+  thinking_enabled?: boolean;
   /** Optional phase profile binding (Camada 2). Null = walk cascade. */
   phase_profile_id?: number | null;
 }
@@ -554,6 +541,13 @@ export function mountCoderSessionsRoutes(
     const src = sessionStore.loadSessionWithMessages(id);
     if (!src) return notFound(c);
 
+    // Preflight normally titles the session before the agent run starts. This
+    // endpoint remains a retry/fallback, and must never overwrite a generated
+    // title or a manual rename after the request began.
+    if (!isAutomaticSessionTitle(src.session.title)) {
+      return c.json({ title: src.session.title, generated: false });
+    }
+
     const body = await parseJsonBody<GenerateTitleBody>(c);
     let text = extractTitleSeedFromBody(body);
     if (!text) {
@@ -574,31 +568,23 @@ export function mountCoderSessionsRoutes(
       return c.json({ error: 'no text content for title generation' }, 400);
     }
 
-    const prompt =
-      `Generate a concise title (3-7 words, no quotes, no trailing punctuation) for a chat session that starts with this user message:\n\n${text}\n\nRespond with only the title.`;
-
-    let title = '';
-    try {
-      title = await runGeneralAi(prompt, {
-        system:
-          'You generate short chat session titles. Respond with only the title, no quotes, no punctuation, no markdown.',
-      });
-    } catch (e) {
-      if (e instanceof GeneralAiNotConfiguredError) {
-        return c.json({ error: e.message, code: 'general_ai_not_configured' }, 412);
-      }
-      console.warn(
-        `[generate-title] session=${id}: general AI call failed:`,
-        e,
-      );
-      return c.json({ error: `AI call failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
+    const result = await deps.taskPreflight.generateSessionTitle({ userMessage: text });
+    if (result.status === 'unconfigured') {
+      return c.json({ error: 'Session-title pipeline is not configured', code: 'session_title_not_configured' }, 412);
+    }
+    if (result.status !== 'ok' || !result.title) {
+      console.warn(`[generate-title] session=${id}: pipeline title failed:`, result.error ?? result.status);
+      return c.json({ error: result.error ?? `title pipeline failed: ${result.status}` }, 500);
     }
 
-    title = cleanGeneratedTitle(title);
-    if (!title) return c.json({ error: 'empty title generated' }, 400);
-
-    sessionStore.setSessionTitle(id, title);
-    return c.json({ title });
+    // Re-read after the model call: a concurrent manual rename always wins.
+    const current = sessionStore.getSession(id);
+    if (!current) return notFound(c);
+    if (!isAutomaticSessionTitle(current.title)) {
+      return c.json({ title: current.title, generated: false });
+    }
+    sessionStore.setSessionTitle(id, result.title);
+    return c.json({ title: result.title, generated: true });
   });
 
   app.patch('/api/coder/sessions/:id/title', async (c) => {
@@ -687,6 +673,21 @@ export function mountCoderSessionsRoutes(
       }
     }
     sessionStore.setSessionReasoningEffort(id, effort);
+    const updated = sessionStore.getSession(id);
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
+  /** Persist the extended-thinking icon state for this conversation. */
+  app.patch('/api/coder/sessions/:id/thinking', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ thinking?: unknown }>(c);
+    if (typeof body.thinking !== 'boolean') {
+      return c.json({ error: 'thinking:boolean required' }, 400);
+    }
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    sessionStore.setSessionThinkingEnabled(id, body.thinking);
     const updated = sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
@@ -865,16 +866,32 @@ export function mountCoderSessionsRoutes(
 
   app.post('/api/coder/sessions', async (c) => {
     const body = await c.req.json<CreateSessionBody>();
-    if (!body.project_id || !body.title || !body.provider) {
+    const lastUsed = body.use_last_model === true
+      ? sessionStore.getLastUsedProviderModel()
+      : null;
+    const lastUsedMode = lastUsed?.model.split('::')[1] ?? '';
+    const lastUsedModelId = lastUsed?.model.split('::')[0] ?? '';
+    const canUseLast = !!lastUsed
+      && !!deps.providerStore.getProvider(lastUsed.provider)?.enabled
+      && deps.providerStore.listModels(lastUsed.provider, true).some((candidate) => (
+        candidate.model_id === lastUsedModelId
+        && (!lastUsedMode || candidate.mode === lastUsedMode)
+      ));
+    const provider = (canUseLast ? lastUsed!.provider : body.provider) as CoderProviderName | undefined;
+    const model = canUseLast ? lastUsed!.model : (body.model ?? '');
+    if (!body.project_id || !body.title || !provider) {
       return c.json({ error: 'project_id, title, provider required' }, 400);
     }
     if (body.reasoning_effort !== undefined && body.reasoning_effort !== null && typeof body.reasoning_effort !== 'string') {
       return c.json({ error: 'reasoning_effort:string|null required' }, 400);
     }
+    if (body.thinking_enabled !== undefined && typeof body.thinking_enabled !== 'boolean') {
+      return c.json({ error: 'thinking_enabled:boolean required' }, 400);
+    }
     const reasoningEffort = typeof body.reasoning_effort === 'string'
       ? body.reasoning_effort.trim() || null
       : null;
-    const effortError = validateReasoningEffort(body.provider, body.model, reasoningEffort);
+    const effortError = validateReasoningEffort(provider, model, reasoningEffort);
     if (effortError) return c.json({ error: effortError }, 400);
     // Builder projects (projects.builder_json set) default the chat agent to
     // `builder` (persona + scope) unless the caller passed an explicit agent.
@@ -882,13 +899,16 @@ export function mountCoderSessionsRoutes(
     const session = sessionStore.createSession({
       project_id: body.project_id,
       title: body.title,
-      provider: body.provider,
-      model: body.model ?? '',
+      provider,
+      model,
       agent: body.agent ?? (isBuilderProject ? 'builder' : null),
       phase_profile_id: body.phase_profile_id ?? null,
     });
     if (reasoningEffort) {
       sessionStore.setSessionReasoningEffort(session.id, reasoningEffort);
+    }
+    if (body.thinking_enabled === true) {
+      sessionStore.setSessionThinkingEnabled(session.id, true);
     }
     // Best-effort base_commit_sha capture for Camada 4's reviewer subagent.
     // We need the project workdir to run `git rev-parse HEAD`. If the project
@@ -907,7 +927,7 @@ export function mountCoderSessionsRoutes(
     } catch {
       /* not a git repo or no workdir — fine, reviewer handles this */
     }
-    return c.json(session, 201);
+    return c.json(sessionStore.getSession(session.id) ?? session, 201);
   });
 
   /**
@@ -975,6 +995,9 @@ export function mountCoderSessionsRoutes(
     // Count of pre-boundary rows hidden by a manual "summarize & clear" — the
     // dashboard shows a "view earlier history" affordance when this is > 0.
     const archived_count = sessionStore.getArchivedMessageCount(id);
+    const preceding_user_message_id = data.message_rows[0]
+      ? sessionStore.previousUserMessageId(id, data.message_rows[0].id)
+      : null;
     // Status fallback for tool calls whose tool_result block was lost (pre-fix
     // sessions). Empty for healthy sessions — costs nothing in the common case.
     const tool_results = reconstructMissingToolResults(sessionStore, id, data.messages);
@@ -985,10 +1008,10 @@ export function mountCoderSessionsRoutes(
     const linked_projects = data.session.is_global ? sessionStore.getSessionProjects(id) : [];
 
     if (full || !preview) {
-      return c.json({ ...data, total_messages, archived_count, tool_results, linked_projects });
+      return c.json({ ...data, total_messages, archived_count, preceding_user_message_id, tool_results, linked_projects });
     }
 
-    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, tool_results, linked_projects });
+    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, preceding_user_message_id, tool_results, linked_projects });
   });
 
   /**
@@ -1015,10 +1038,14 @@ export function mountCoderSessionsRoutes(
     if (!beforeId) beforeId = sessionStore.maxMessageId(sessionId) + 1;
 
     const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit, includeArchived);
+    const preceding_user_message_id = data.message_rows[0]
+      ? sessionStore.previousUserMessageId(sessionId, data.message_rows[0].id)
+      : null;
     const tool_results = reconstructMissingToolResults(sessionStore, sessionId, data.messages);
     return c.json({
       messages: preview ? trimMessageBlocks(data.messages) : data.messages,
       message_rows: data.message_rows,
+      preceding_user_message_id,
       tool_results,
     });
   });

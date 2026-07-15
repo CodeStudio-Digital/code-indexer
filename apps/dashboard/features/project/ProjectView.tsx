@@ -172,6 +172,42 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // tab and the chat-tab split.
   const hasDevTask = useRunningTasks((s) => tasksForProject(s.tasks, projectId).some(isDevServerTask));
   const previewEnabled = !!builderJson || hasDevTask;
+  // Keep project metadata reads side-effect free. The explicit lifecycle call
+  // runs after the first paint and is cancelled if this view disappears before
+  // the deferred large-project reconciliation begins.
+  useEffect(() => {
+    const activationId = crypto.randomUUID();
+    const clientId = (() => {
+      const key = 'mcp-project-lifecycle-client-id';
+      try {
+        const existing = window.sessionStorage.getItem(key);
+        if (existing) return existing;
+        const created = crypto.randomUUID();
+        window.sessionStorage.setItem(key, created);
+        return created;
+      } catch {
+        return crypto.randomUUID();
+      }
+    })();
+    let activation: Promise<unknown> | null = null;
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        activation = apiCall('projects.activate', { id: projectId, activationId, clientId }).catch(() => undefined);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+      // Always release: Monaco/LSP can mount before the deferred index
+      // activation. If activation started, serialize deactivation after it so
+      // HTTP and IPC cannot leave a late activation record behind.
+      void (activation ?? Promise.resolve())
+        .then(() => apiCall('projects.deactivate', { id: projectId, activationId, clientId }))
+        .catch(() => undefined);
+    };
+  }, [projectId]);
+
   useEffect(() => {
     markRouteEvent('ProjectView:mounted', { projectId, tab: layout.primarySurface });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,8 +227,6 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   useEffect(() => {
     if (initialSessionId) {
       layout.setPrimarySurface('sessions');
-      layout.setActiveLeft('sessions');
-      if (layout.activeRight === 'chat') layout.setActiveRight(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSessionId, projectId]);
@@ -214,11 +248,10 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       // Backward compatibility: the former full Chat rail tab is now the
       // explicit rich Sessions primary surface. Alt+2 owns the compact rail.
       useWorkspaceLayout.getState().setPrimarySurface('sessions');
-      useWorkspaceLayout.getState().setActiveLeft('sessions');
-      if (useWorkspaceLayout.getState().activeRight === 'chat') {
-        useWorkspaceLayout.getState().setActiveRight(null);
-      }
+    } else if (requested === 'api-navigation') {
+      useWorkspaceLayout.getState().setPrimarySurface('api');
     } else if (BOTTOM_BUILTIN_TAB_IDS.has(requested)) {
+      useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveBottom(requested);
     } else if (INDEX_ALIASES.has(requested)) {
       useWorkspaceLayout.getState().setPrimarySurface('index');
@@ -226,14 +259,18 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       useWorkspaceLayout.getState().setActiveLeft(requested);
       useWorkspaceLayout.getState().setPrimarySurface('editor');
     } else if (surface?.kind === 'right') {
+      useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveRight(requested);
     } else if (surface?.kind === 'primary') {
       useWorkspaceLayout.getState().setPrimarySurface(requested);
     } else if (pluginWindow?.side === 'left') {
+      useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveLeft(requested);
     } else if (pluginWindow?.side === 'right') {
+      useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveRight(requested);
     } else if (pluginWindow?.side === 'bottom') {
+      useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveBottom(requested);
     }
   }, [location.search, contribWindows]);
@@ -289,21 +326,45 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     pushRecentProject(projectId);
   }, [projectId]);
 
-  // Persiste as abas deste projeto a cada mudança ENQUANTO ele está ativo.
+  // Persiste mudanças estruturais das abas enquanto este projeto está ativo.
   // savePersistedTabs se auto-filtra por projectId, então uma aba estranha
   // jamais é escrita sob esta chave.
   useEffect(() => {
+    const tabIdentity = (state: ReturnType<typeof useWorkspaceStore.getState>): string =>
+      state.openFiles
+        .filter((file) => file.projectId === projectId && (!file.kind || file.kind === 'file'))
+        .map((file) => file.path)
+        .join('\u0000');
+    const initial = useWorkspaceStore.getState();
+    let previousTabs = tabIdentity(initial);
+    let previousActivePath = initial.activeFilePath;
+    let previousPanes = initial.panes;
+    let previousSplit = initial.splitDir;
+    let previousActivePane = initial.activePaneId;
     const unsubscribe = useWorkspaceStore.subscribe((state) => {
-      if (state.activeProjectId === projectId) {
-        savePersistedTabs(
-          projectId,
-          state.openFiles,
-          state.activeFilePath,
-          state.panes,
-          state.splitDir,
-          state.activePaneId,
-        );
-      }
+      if (state.activeProjectId !== projectId) return;
+      const nextTabs = tabIdentity(state);
+      // Buffer content/dirty metadata changes on every key, but persisted tabs
+      // contain only identity/layout. Avoid a synchronous localStorage write in
+      // the typing hot path; persist only structural navigation changes.
+      if (nextTabs === previousTabs
+        && state.activeFilePath === previousActivePath
+        && state.panes === previousPanes
+        && state.splitDir === previousSplit
+        && state.activePaneId === previousActivePane) return;
+      previousTabs = nextTabs;
+      previousActivePath = state.activeFilePath;
+      previousPanes = state.panes;
+      previousSplit = state.splitDir;
+      previousActivePane = state.activePaneId;
+      savePersistedTabs(
+        projectId,
+        state.openFiles,
+        state.activeFilePath,
+        state.panes,
+        state.splitDir,
+        state.activePaneId,
+      );
     });
     return () => unsubscribe();
   }, [projectId]);
@@ -321,16 +382,30 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       // live (this closure is registered once per project).
       toggleBottomTerminal: () => {
         const l = useWorkspaceLayout.getState();
+        if (l.primarySurface !== 'editor') {
+          l.setPrimarySurface('editor');
+          l.setActiveBottom('terminal');
+          return;
+        }
         l.setActiveBottom(l.activeBottom ? null : 'terminal');
       },
       toggleProjectFiles: () => {
         const state = useWorkspaceLayout.getState();
-        state.setPrimarySurface('editor');
+        if (state.primarySurface !== 'editor' || state.activeLeft !== 'files') {
+          state.setPrimarySurface('editor');
+          state.setActiveLeft('files');
+          return;
+        }
         state.toggleLeft('files');
       },
       toggleChat: () => {
         const state = useWorkspaceLayout.getState();
-        if (state.primarySurface !== 'sessions') state.toggleRight('chat');
+        if (state.primarySurface !== 'editor' || state.activeRight !== 'chat') {
+          state.setPrimarySurface('editor');
+          state.setActiveRight('chat');
+          return;
+        }
+        state.toggleRight('chat');
       },
     });
     const unregisterEditor = registerEditorCommands();
