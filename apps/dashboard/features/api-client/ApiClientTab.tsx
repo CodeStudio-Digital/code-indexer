@@ -269,7 +269,7 @@ export function ApiClientTab({
   ) : (
     <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
       <WorkbenchPanelHeader
-        title="API Client"
+        title={t('toolbar.clientTitle')}
         icon={Webhook}
         onClose={workbenchSlots?.onCloseLeft}
         actions={navTab === 'collections' ? (
@@ -377,7 +377,7 @@ export function ApiClientTab({
     <div className="grid h-full place-items-center text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /></div>
   ) : (
     <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
-      <WorkbenchPanelHeader title="API Inspector" icon={Activity} onClose={workbenchSlots?.onCloseRight} />
+      <WorkbenchPanelHeader title={t('toolbar.inspectorTitle')} icon={Activity} onClose={workbenchSlots?.onCloseRight} />
       <SubTabs
         tabs={RESP_TABS.map((tab) => ({ id: tab.id, label: t(`toolbar.${tab.labelKey}`) }))}
         active={respTab}

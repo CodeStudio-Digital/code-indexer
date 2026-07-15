@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, Search, Sparkles } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Badge } from '../ui/badge.js';
 
 export interface SkillAssignmentOption {
@@ -23,6 +24,7 @@ function CollapsibleSkillGroup({
   selected,
   forceOpen,
   compact,
+  selectedCountLabel,
   onToggleSkill,
 }: {
   name: string;
@@ -30,6 +32,7 @@ function CollapsibleSkillGroup({
   selected: Set<string>;
   forceOpen: boolean;
   compact: boolean;
+  selectedCountLabel: string;
   onToggleSkill: (skillId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -42,7 +45,7 @@ function CollapsibleSkillGroup({
     >
       <summary className={`flex cursor-pointer list-none items-center gap-1.5 select-none ${compact ? 'px-2 py-1.5' : 'px-2.5 py-2'}`}>
         <Badge variant="outline" className="h-4 max-w-[65%] truncate text-[9px] uppercase">{name}</Badge>
-        <span className="text-[9px] text-muted-foreground">{selectedCount > 0 ? `${selectedCount} selecionada${selectedCount === 1 ? '' : 's'} · ` : ''}{skills.length}</span>
+        <span className="text-[9px] text-muted-foreground">{selectedCountLabel}{skills.length}</span>
         <ChevronDown className="ml-auto h-3 w-3 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
       <div className={`flex flex-wrap gap-1 border-t border-border/60 ${compact ? 'p-2' : 'p-2.5'}`}>
@@ -68,8 +71,9 @@ function CollapsibleSkillGroup({
 }
 
 export function SkillAssignmentEditor({ skills, selected, onChange, compact = false }: { skills: SkillAssignmentOption[]; selected: string[]; onChange: (skills: string[]) => void; compact?: boolean }) {
+  const { t } = useTranslation('agents');
   const [query, setQuery] = useState('');
-  if (skills.length === 0) return <p className="rounded border border-dashed p-2 text-center text-[10px] text-muted-foreground">Nenhuma skill disponível neste projeto.</p>;
+  if (skills.length === 0) return <p className="rounded border border-dashed p-2 text-center text-[10px] text-muted-foreground">{t('agentConfig.skills.noneAvailable')}</p>;
 
   const selectedIds = new Set(selected);
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -86,13 +90,13 @@ export function SkillAssignmentEditor({ skills, selected, onChange, compact = fa
 
   return (
     <div className={compact ? 'space-y-1.5' : 'space-y-2'}>
-      <div className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground"><Sparkles className="h-3 w-3" />Skills atribuídas <span className="ml-auto">{selected.length}</span></div>
+      <div className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground"><Sparkles className="h-3 w-3" />{t('agentConfig.skills.assigned')} <span className="ml-auto">{selected.length}</span></div>
       <label className="relative block">
         <Search className={`pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground ${compact ? 'h-3 w-3' : 'h-3.5 w-3.5'}`} />
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Buscar por nome, comando ou origem…"
+          placeholder={t('agentConfig.skills.searchPlaceholder')}
           className={`${compact ? 'h-7 pl-7 text-[10px]' : 'h-8 pl-8 text-xs'} w-full rounded border bg-background pr-2`}
         />
       </label>
@@ -105,10 +109,11 @@ export function SkillAssignmentEditor({ skills, selected, onChange, compact = fa
             selected={selectedIds}
             forceOpen={normalizedQuery.length > 0}
             compact={compact}
+            selectedCountLabel={selectedIds.has ? t('agentConfig.skills.selectedPrefix', { count: (groups.get(key) ?? []).filter((skill) => selectedIds.has(skill.id)).length }) : ''}
             onToggleSkill={toggle}
           />
         ))}
-        {visibleSkills.length === 0 && <p className="rounded border border-dashed py-2 text-center text-[10px] text-muted-foreground">Nenhuma skill encontrada.</p>}
+        {visibleSkills.length === 0 && <p className="rounded border border-dashed py-2 text-center text-[10px] text-muted-foreground">{t('agentConfig.skills.noneFound')}</p>}
       </div>
     </div>
   );

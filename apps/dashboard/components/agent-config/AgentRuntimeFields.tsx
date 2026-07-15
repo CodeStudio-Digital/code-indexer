@@ -67,7 +67,7 @@ export function AgentRuntimeFields({
               {models.map((model) => <option key={`${model.id}:${model.mode ?? ''}`} value={modelValue(model)}>{model.name}{model.mode ? ` (${model.mode})` : ''}</option>)}
             </select>
           ) : (
-            <input value={value.model} disabled={disabled} onChange={(event) => onChange({ model: event.target.value, reasoningEffort: undefined })} className={`${controlClass} font-mono`} placeholder="model-name" />
+            <input value={value.model} disabled={disabled} onChange={(event) => onChange({ model: event.target.value, reasoningEffort: undefined })} className={`${controlClass} font-mono`} placeholder={t('agentConfig.modelPlaceholder')} />
           )}
         </label>
       </div>
@@ -83,7 +83,7 @@ export function AgentRuntimeFields({
           </select>
         </label>
       ) : (
-        <p className="text-[9px] text-muted-foreground">Este modelo não declara níveis discretos de reasoning effort.</p>
+        <p className="text-[9px] text-muted-foreground">{t('agentConfig.noReasoningLevels')}</p>
       )}
     </div>
   );

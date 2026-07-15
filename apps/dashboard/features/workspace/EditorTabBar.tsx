@@ -262,7 +262,7 @@ function RunFileButton({ file }: { file: OpenTab | undefined }) {
           projectId: file.projectId,
           file: file.path,
           content: liveContent,
-          label: `Run ${base}`,
+          label: t('run.runFileLabel', { file: base }),
         });
       }}
     >
@@ -283,6 +283,7 @@ function SplitMenuButton({
   onSplitDown: () => void;
   onUnsplit: () => void;
 }) {
+  const { t } = useTranslation('workspace');
   const [open, setOpen] = useState(false);
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -290,8 +291,8 @@ function SplitMenuButton({
         <button
           type="button"
           className="h-8 w-8 shrink-0 border-l grid place-items-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-          aria-label="Split editor"
-          title="Split editor"
+          aria-label={t('editorTabs.splitEditor')}
+          title={t('editorTabs.splitEditor')}
         >
           <SplitSquareHorizontal className="h-3.5 w-3.5" />
         </button>
@@ -299,18 +300,18 @@ function SplitMenuButton({
       <DropdownMenuContent align="end" className="w-44">
         <DropdownMenuItem onSelect={onSplitRight}>
           <Columns2 />
-          Split Right
+          {t('editorTabs.splitRight')}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={onSplitDown}>
           <Rows2 />
-          Split Down
+          {t('editorTabs.splitDown')}
         </DropdownMenuItem>
         {isSplit && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={onUnsplit}>
               <Minimize2 />
-              Unsplit
+              {t('editorTabs.unsplit')}
             </DropdownMenuItem>
           </>
         )}
@@ -359,6 +360,7 @@ function TabChip({
   onMoveToOther,
   onUnsplit,
 }: TabChipProps) {
+  const { t } = useTranslation('workspace');
   const isVirtual = isVirtualTab(file);
   // Local on-disk file: only these support reload-from-disk / copy-real-path.
   const isLocalFile = file.kind === undefined || file.kind === 'file';
@@ -369,25 +371,25 @@ function TabChip({
   const conflicted = !isVirtual && file.externallyChanged === true;
 
   const items: ContextMenuItem[] = [
-    { id: 'close', label: 'Close', onSelect: onClose },
-    { id: 'close-others', label: 'Close others', onSelect: onCloseOthers },
-    { id: 'close-right', label: 'Close all to the right', onSelect: onCloseRight },
+    { id: 'close', label: t('editorTabs.close'), onSelect: onClose },
+    { id: 'close-others', label: t('editorTabs.closeOthers'), onSelect: onCloseOthers },
+    { id: 'close-right', label: t('editorTabs.closeRight'), onSelect: onCloseRight },
     {
       id: 'close-all',
-      label: 'Close all',
+      label: t('editorTabs.closeAll'),
       separatorBefore: true,
       destructive: true,
       onSelect: onCloseAll,
     },
-    { id: 'split-right', label: 'Split Right', icon: Columns2, separatorBefore: true, onSelect: onSplitRight },
-    { id: 'split-down', label: 'Split Down', icon: Rows2, onSelect: onSplitDown },
+    { id: 'split-right', label: t('editorTabs.splitRight'), icon: Columns2, separatorBefore: true, onSelect: onSplitRight },
+    { id: 'split-down', label: t('editorTabs.splitDown'), icon: Rows2, onSelect: onSplitDown },
     ...(isSplit && onMoveToOther
-      ? [{ id: 'move-other', label: 'Move to Other Group', icon: MoveRight, onSelect: onMoveToOther } as ContextMenuItem]
+      ? [{ id: 'move-other', label: t('editorTabs.moveToOtherGroup'), icon: MoveRight, onSelect: onMoveToOther } as ContextMenuItem]
       : []),
-    ...(isSplit ? [{ id: 'unsplit', label: 'Unsplit', icon: Minimize2, onSelect: onUnsplit } as ContextMenuItem] : []),
+    ...(isSplit ? [{ id: 'unsplit', label: t('editorTabs.unsplit'), icon: Minimize2, onSelect: onUnsplit } as ContextMenuItem] : []),
     {
       id: 'copy-path',
-      label: 'Copy path',
+      label: t('editorTabs.copyPath'),
       separatorBefore: true,
       onSelect: () => {
         if (isVirtual) return;
@@ -400,7 +402,7 @@ function TabChip({
       ? [
           {
             id: 'reload-disk',
-            label: 'Reload from disk',
+            label: t('editorTabs.reloadFromDisk'),
             onSelect: () => void reloadFromDisk(file.projectId, file.path),
           } as ContextMenuItem,
         ]

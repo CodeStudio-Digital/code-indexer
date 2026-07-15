@@ -21,7 +21,7 @@ export function AppWorkItemDialog({ item, allItems, index, count, busy, onClose,
 
   const footer = (
     <>
-      <div className="flex min-w-0 flex-1 items-center gap-1 text-[10px] text-muted-foreground"><Clock className="h-3 w-3" /><span className="truncate">r{item.revision} · {new Date(item.updated_at).toLocaleString()}</span></div>
+      <div className="flex min-w-0 flex-1 items-center gap-1 text-[10px] text-muted-foreground"><Clock className="h-3 w-3" /><span className="truncate">{t('workflow.revision', { number: item.revision })} · {new Date(item.updated_at).toLocaleString()}</span></div>
       {item.status === 'running' || item.status === 'ready' ? <Button variant="outline" size="sm" disabled={busy} onClick={() => onAction('pause')}><CirclePause className="mr-1 h-3.5 w-3.5" />{t('workflow.pause')}</Button> : item.status === 'blocked' ? <Button variant="outline" size="sm" disabled={busy} onClick={() => onAction('resume')}><CirclePlay className="mr-1 h-3.5 w-3.5" />{t('workflow.resume')}</Button> : null}
       {item.status !== 'cancelled' && <Button variant="outline" size="sm" disabled={busy} onClick={() => setChanging((value) => !value)}><RotateCcw className="mr-1 h-3.5 w-3.5" />{t('workflow.requestChanges')}</Button>}
       {!['done', 'cancelled'].includes(item.status) && <Button variant="ghost" size="sm" className="text-destructive" disabled={busy} onClick={() => onAction('cancel')}><X className="mr-1 h-3.5 w-3.5" />{t('workflow.cancel')}</Button>}
@@ -37,7 +37,7 @@ export function AppWorkItemDialog({ item, allItems, index, count, busy, onClose,
       subtitle={item.slice_id ? `${item.slice_id} · ${item.owner_profile}` : item.owner_profile}
       footer={footer}
     >
-      <WorkBoardSection title={t('workflow.outcome', { defaultValue: 'Objetivo' })}>
+      <WorkBoardSection title={t('workflow.outcome')}>
         <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{item.outcome}</p>
       </WorkBoardSection>
 
@@ -56,23 +56,23 @@ export function AppWorkItemDialog({ item, allItems, index, count, busy, onClose,
         </div>
       </WorkBoardSection>
 
-      <WorkBoardSection icon={Users} title={t('workflow.agentExecution', { defaultValue: 'Agente e execução' })}>
-        <div className="grid gap-2 sm:grid-cols-2"><div className="rounded border bg-muted/20 p-2"><p className="text-[9px] uppercase tracking-wide text-muted-foreground">Perfil responsável</p><p className="mt-1 text-sm font-medium">{item.owner_profile}</p></div><div className="rounded border bg-muted/20 p-2"><p className="text-[9px] uppercase tracking-wide text-muted-foreground">Execução</p><p className="mt-1 truncate text-sm font-medium">{item.run?.agent ?? item.run?.mode ?? 'Aguardando despacho'}</p>{item.run?.run_id && <p className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">{item.run.run_id}</p>}</div></div>
+      <WorkBoardSection icon={Users} title={t('workflow.agentExecution')}>
+        <div className="grid gap-2 sm:grid-cols-2"><div className="rounded border bg-muted/20 p-2"><p className="text-[9px] uppercase tracking-wide text-muted-foreground">{t('workflow.ownerProfile')}</p><p className="mt-1 text-sm font-medium">{item.owner_profile}</p></div><div className="rounded border bg-muted/20 p-2"><p className="text-[9px] uppercase tracking-wide text-muted-foreground">{t('workflow.execution')}</p><p className="mt-1 truncate text-sm font-medium">{item.run?.agent ?? item.run?.mode ?? t('workflow.awaitingDispatch')}</p>{item.run?.run_id && <p className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">{item.run.run_id}</p>}</div></div>
       </WorkBoardSection>
 
       <WorkBoardSection icon={ShieldCheck} title={t('workflow.evidence')} count={item.evidence.length}>
-        <div className="space-y-1.5">{item.evidence.map((evidence, evidenceIndex) => <div key={`${evidence.kind}:${evidenceIndex}`} className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2"><div className="flex items-center gap-2"><WorkBoardBadge tone="green">{evidence.kind}</WorkBoardBadge>{evidence.recorded_at && <span className="ml-auto text-[9px] text-muted-foreground">{new Date(evidence.recorded_at).toLocaleString()}</span>}</div><p className="mt-1.5 whitespace-pre-wrap text-xs text-muted-foreground">{evidence.value}</p></div>)}{item.evidence.length === 0 && <p className="text-xs text-muted-foreground">Nenhuma evidência registrada.</p>}</div>
+        <div className="space-y-1.5">{item.evidence.map((evidence, evidenceIndex) => <div key={`${evidence.kind}:${evidenceIndex}`} className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2"><div className="flex items-center gap-2"><WorkBoardBadge tone="green">{evidence.kind}</WorkBoardBadge>{evidence.recorded_at && <span className="ml-auto text-[9px] text-muted-foreground">{new Date(evidence.recorded_at).toLocaleString()}</span>}</div><p className="mt-1.5 whitespace-pre-wrap text-xs text-muted-foreground">{evidence.value}</p></div>)}{item.evidence.length === 0 && <p className="text-xs text-muted-foreground">{t('workflow.noEvidence')}</p>}</div>
       </WorkBoardSection>
 
-      <WorkBoardSection icon={FileCode2} title={t('workflow.traceability', { defaultValue: 'Rastreabilidade e arquivos' })}>
+      <WorkBoardSection icon={FileCode2} title={t('workflow.traceability')}>
         <div className="space-y-2 text-xs"><div><p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">{t('workflow.sources')}</p><div className="flex flex-wrap gap-1">{item.source_ids.map((source) => <code key={source} className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{source}</code>)}{item.source_ids.length === 0 && '—'}</div></div><div><p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">{t('workflow.files')}</p><div className="space-y-0.5">{item.file_scope.map((file) => <p key={file} className="truncate font-mono text-[10px] text-muted-foreground">{file}</p>)}{item.file_scope.length === 0 && '—'}</div></div></div>
       </WorkBoardSection>
 
       {item.blocked_reason && <div className="mt-4 rounded border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">{item.blocked_reason}</div>}
 
-      {mutable && <div className="mt-5 flex items-center gap-2 border-t pt-3"><span className="text-xs text-muted-foreground">Ordem na coluna</span><Button variant="ghost" size="icon" className="h-7 w-7" disabled={busy || index === 0} onClick={() => onAction('reorder', index - 1)}><ArrowUp className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="icon" className="h-7 w-7" disabled={busy || index === count - 1} onClick={() => onAction('reorder', index + 1)}><ArrowDown className="h-3.5 w-3.5" /></Button></div>}
+      {mutable && <div className="mt-5 flex items-center gap-2 border-t pt-3"><span className="text-xs text-muted-foreground">{t('workflow.columnOrder')}</span><Button variant="ghost" size="icon" className="h-7 w-7" disabled={busy || index === 0} onClick={() => onAction('reorder', index - 1)}><ArrowUp className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="icon" className="h-7 w-7" disabled={busy || index === count - 1} onClick={() => onAction('reorder', index + 1)}><ArrowDown className="h-3.5 w-3.5" /></Button></div>}
 
-      {changing && <div className="mt-5 space-y-2 rounded border border-violet-500/20 bg-violet-500/5 p-3"><label className="text-xs font-semibold">{t('workflow.requestChanges')}</label><textarea className="min-h-24 w-full resize-y rounded border bg-background p-2 text-xs" value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder={t('workflow.changePlaceholder')} /><div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={() => setChanging(false)}>Fechar</Button><Button size="sm" disabled={busy || !feedback.trim()} onClick={() => { onAction('request_changes', feedback.trim()); setChanging(false); setFeedback(''); }}>{t('workflow.sendChanges')}</Button></div></div>}
+      {changing && <div className="mt-5 space-y-2 rounded border border-violet-500/20 bg-violet-500/5 p-3"><label className="text-xs font-semibold">{t('workflow.requestChanges')}</label><textarea className="min-h-24 w-full resize-y rounded border bg-background p-2 text-xs" value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder={t('workflow.changePlaceholder')} /><div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={() => setChanging(false)}>{t('workflow.close')}</Button><Button size="sm" disabled={busy || !feedback.trim()} onClick={() => { onAction('request_changes', feedback.trim()); setChanging(false); setFeedback(''); }}>{t('workflow.sendChanges')}</Button></div></div>}
     </WorkBoardDetailDialog>
   );
 }

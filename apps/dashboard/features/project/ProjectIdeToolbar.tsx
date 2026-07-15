@@ -26,6 +26,7 @@ interface GitSummary {
 }
 
 export function ProjectBranchControl({ projectId }: { projectId: number }) {
+  const { t } = useTranslation('projects');
   const revision = useGitRevision((state) => state.revByProject[projectId] ?? 0);
   const [summary, setSummary] = useState<GitSummary | null>(null);
   const [refresh, setRefresh] = useState(0);
@@ -48,10 +49,10 @@ export function ProjectBranchControl({ projectId }: { projectId: number }) {
         <button
           type="button"
           className="no-drag flex h-7 max-w-[220px] items-center gap-1.5 rounded px-2 text-[11px] text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
-          aria-label="Git branch"
+          aria-label={t('toolbar.gitBranch')}
         >
           {summary === null ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitBranch className="h-3.5 w-3.5" />}
-          <span className="truncate">{summary?.branch ?? 'Loading branch'}</span>
+          <span className="truncate">{summary?.branch ?? t('toolbar.loadingBranch')}</span>
           {dirty && <span className="text-amber-400">●</span>}
           <ChevronDown className="h-3 w-3 shrink-0" />
         </button>

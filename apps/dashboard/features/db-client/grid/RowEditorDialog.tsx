@@ -73,7 +73,7 @@ export function RowEditorDialog({
                   <div className="flex items-center gap-1.5 text-xs font-medium">
                     <TypeIcon kind={spec.kind} />
                     <span className="truncate" title={column.name}>{column.name}</span>
-                    {column.isPrimaryKey && <span className="text-[9px] text-amber-400">PK</span>}
+                    {column.isPrimaryKey && <span className="text-[9px] text-amber-400">{t('edit.primaryKey')}</span>}
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground" title={column.dataType}>{column.dataType}</div>
                 </div>
@@ -103,7 +103,7 @@ export function RowEditorDialog({
                           return next;
                         })}
                       />
-                      NULL
+                      {t('edit.null')}
                     </label>
                   )}
                 </div>
@@ -137,6 +137,7 @@ function ColumnControl({
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
+  const { t } = useTranslation('dbClient');
   const common = 'h-7 w-full rounded border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 font-mono text-xs outline-none focus:border-[var(--workbench-focus)]';
   if (kind === 'json') {
     return <textarea className={`${common} h-28 resize-y py-1.5`} value={value} disabled={disabled} spellCheck={false} onChange={(e) => onChange(e.target.value)} />;
@@ -152,8 +153,8 @@ function ColumnControl({
   if (kind === 'boolean') {
     return (
       <select className={common} value={value === '1' ? 'true' : value === '0' ? 'false' : value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
-        <option value="true">true</option>
-        <option value="false">false</option>
+        <option value="true">{t('edit.true')}</option>
+        <option value="false">{t('edit.false')}</option>
       </select>
     );
   }

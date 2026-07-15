@@ -427,4 +427,6 @@
     "sync": "Sincronizar",
     "untitledRequest": "Requisição sem título"
   }
+  ,"toolbar.clientTitle": "Cliente de API",
+  "toolbar.inspectorTitle": "Inspetor de API"
 }

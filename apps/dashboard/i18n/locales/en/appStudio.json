@@ -58,6 +58,7 @@
     "emptyBody": "The coordinator organizes stack, modules, data, UX and tests into a traceable Blueprint before construction.",
     "ready": "Plan checked",
     "pending": "{{count}} issue(s)",
+    "version": "v{{number}}",
     "modules": "System parts",
     "decisions": "Key decisions",
     "tests": "Quality guarantees",
@@ -87,7 +88,8 @@
     "principles": "Principles",
     "accessibility": "Accessibility",
     "dataBindings": "Data used",
-    "states": "Covered states"
+    "states": "Covered states",
+    "responsive": "Responsive"
   },
   "blueprint": {
     "locked": "Available once the app Scope exists.",
@@ -222,6 +224,7 @@
     "changes": "Changes",
     "noProposal": "No revisions have been recorded yet.",
     "history": "Version history",
+    "version": "v{{number}}",
     "impact": {
       "none": "No impact",
       "low": "Low impact",
@@ -266,6 +269,9 @@
     "queryPlaceholder": "SELECT * FROM Clubs LIMIT 20",
     "queryReadOnly": "SELECT queries only. Nothing is changed in the database.",
     "runQuery": "Run",
+    "queryAll": "SELECT *",
+    "queryCount": "COUNT",
+    "durationMs": "{{count}}ms",
     "result": "Result",
     "limited": "Result limited to the first {{count}} records.",
     "issue": {
@@ -372,7 +378,23 @@
     "connectingCoordinator": "Connecting to the persistent coordinator…",
     "coordinatorOwnsArtifacts": "Ask for changes in the coordinator conversation; it preserves context and updates only affected cards.",
     "versionHistoryHelp": "Immutable history. Approvals and changes happen in Guide.",
-    "publishIsExplicit": "Release approval only unlocks this action. Publishing remains your explicit decision."
+    "publishIsExplicit": "Release approval only unlocks this action. Publishing remains your explicit decision.",
+    "outcome": "Outcome",
+    "agentExecution": "Agent and execution",
+    "ownerProfile": "Responsible profile",
+    "execution": "Execution",
+    "awaitingDispatch": "Awaiting dispatch",
+    "noEvidence": "No evidence recorded.",
+    "traceability": "Traceability and files",
+    "columnOrder": "Column order",
+    "close": "Close",
+    "revision": "r{{number}}",
+    "prioritiesActive": "Priorities active",
+    "sortPriorities": "Sort priorities",
+    "multiAgentAuto": "Auto multi-agent",
+    "cardProgress": "{{total}} cards · {{complete}} complete",
+    "filterCards": "Filter cards…",
+    "refreshKanban": "Refresh Kanban"
   },
   "agentRail": {
     "label": "Agent panels",
@@ -388,6 +410,28 @@
     "save": "Save configuration",
     "agentRuns": "Agent runs",
     "noRuns": "No subagent has run yet.",
-    "selectRun": "Select a run."
-  }
+    "selectRun": "Select a run.",
+    "master": "MASTER",
+    "metrics": { "input": "Input", "output": "Output", "context": "Context", "turns": "Turns", "tools": "Tools", "productive": "Productive", "errors": "Errors", "duration": "Duration" },
+    "tools": "tools: {{value}}",
+    "reasoning": "reasoning: {{value}}",
+    "runtimeTitle": "App execution default",
+    "providerFallback": "provider",
+    "modelFallback": "model",
+    "runtimeHint": "The coordinator and every subagent inherit this provider, model, and reasoning effort.",
+    "coordinatorUnavailable": "Coordinator unavailable.",
+    "coordinatorSkills": "Coordinator skills ({{count}})",
+    "skillCount": "{{count}} skills",
+    "dispatchAsSubagent": "Dispatch as subagent",
+    "profileAdditionalPrompt": "Additional profile prompt",
+    "recordedRuns": "{{count}} recorded runs",
+    "sessionNumber": "session #{{id}}",
+    "detail": { "agent": "Agent", "model": "Model", "permissions": "Permissions", "reasoning": "Reasoning", "updated": "Updated" },
+    "toolCalls": "Tool calls",
+    "durationMs": "{{count}}ms",
+    "characterCount": "{{count}} ch",
+    "noToolCalls": "No calls recorded.",
+    "cardCount": "{{count}} cards"
+  },
+  "rail": { "label": "App Studio tool windows" }
 }

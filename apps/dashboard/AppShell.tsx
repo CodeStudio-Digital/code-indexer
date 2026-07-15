@@ -327,7 +327,7 @@ export function AppShell() {
               className="no-drag flex h-7 w-full max-w-md items-center gap-2 rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)] px-2 text-[11px] text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
             >
               <Search className="h-3.5 w-3.5" />
-              <span className="truncate">Search Everywhere</span>
+              <span className="truncate">{t('commandPalette.open')}</span>
               <kbd className="ml-auto rounded bg-[var(--workbench-raised)] px-1 font-sans text-[10px]">{shortcut}</kbd>
             </button>
           </div>

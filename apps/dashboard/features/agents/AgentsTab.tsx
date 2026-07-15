@@ -142,7 +142,7 @@ export function AgentsTab() {
         {selectedSession ? (
           <div ref={setSessionRailHost} className="contents" />
         ) : (
-        <RailContainer side="left" aria-label="Navegação de empresas de agentes">
+        <RailContainer side="left" aria-label={t('catalog.navigationLabel')}>
           <RailButton
             icon={Users}
             label={t('sessions')}
@@ -200,7 +200,7 @@ export function AgentsTab() {
                     </button>
                   }
                   onClose={() => setAgentsSidebarOpen(false)}
-                  closeLabel="Recolher catálogo"
+                  closeLabel={t('catalog.collapse')}
                 />
 
                 {sidebarView === 'sessions' ? (
@@ -211,7 +211,7 @@ export function AgentsTab() {
                         <input
                           value={sessionQuery}
                           onChange={(event) => setSessionQuery(event.target.value)}
-                          placeholder="Filtrar empresas…"
+                          placeholder={t('catalog.filterCompanies')}
                           className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
                         />
                       </label>
@@ -221,7 +221,7 @@ export function AgentsTab() {
                         <div className="px-3 py-8 text-center">
                           <Users className="mx-auto mb-2 h-6 w-6 text-muted-foreground/50" />
                           <p className="text-[11px] font-medium text-foreground">
-                            {sessionQuery ? 'Nenhuma empresa encontrada' : t('noSessions')}
+                            {sessionQuery ? t('catalog.noCompanyFound') : t('noSessions')}
                           </p>
                           {!sessionQuery && (
                             <button
@@ -246,7 +246,7 @@ export function AgentsTab() {
                       ))}
                     </div>
                     <div className="flex h-7 items-center border-t border-[var(--workbench-border)] px-2 text-[10px] text-muted-foreground">
-                      {filteredSessions.length} de {sessions?.length ?? 0} empresas
+                      {t('catalog.companyCount', { shown: filteredSessions.length, total: sessions?.length ?? 0 })}
                     </div>
                   </>
                 ) : (
@@ -338,17 +338,18 @@ function CompanyHome({
   onCreateTemplate: () => void;
   onOpenSession: (id: number) => void;
 }) {
+  const { t } = useTranslation('agents');
   const running = sessions.filter((session) => session.status === 'running').length;
   const recent = sessions.slice(0, 5);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <WorkbenchPanelHeader
-        title="Central de agentes"
+        title={t('catalog.title')}
         icon={Users}
         actions={
           <Button size="sm" className="h-6 gap-1 px-2 text-[10px]" onClick={onCreateCompany}>
-            <Plus className="h-3 w-3" /> Nova empresa
+            <Plus className="h-3 w-3" /> {t('newCompany')}
           </Button>
         }
       />
@@ -361,26 +362,25 @@ function CompanyHome({
                 <div className="mb-3 grid h-9 w-9 place-items-center rounded-md bg-violet-500/12 text-violet-400">
                   <Boxes className="h-5 w-5" />
                 </div>
-                <h1 className="text-lg font-semibold text-foreground">Times de IA que trabalham como uma empresa</h1>
+                <h1 className="text-lg font-semibold text-foreground">{t('catalog.heroTitle')}</h1>
                 <p className="mt-1.5 max-w-xl text-xs leading-5 text-muted-foreground">
-                  Combine projetos, um agente master e papéis especializados. Acompanhe execução, arquivos,
-                  pipelines, dados e decisões sem sair do workbench.
+                  {t('catalog.heroDescription')}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button size="sm" className="h-8 gap-1.5" onClick={onCreateCompany}>
-                    <Plus className="h-3.5 w-3.5" /> Criar empresa
+                    <Plus className="h-3.5 w-3.5" /> {t('catalog.createCompany')}
                   </Button>
                   <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={onCreateTemplate}>
-                    <LayoutTemplate className="h-3.5 w-3.5" /> Criar template
+                    <LayoutTemplate className="h-3.5 w-3.5" /> {t('catalog.createTemplate')}
                   </Button>
                 </div>
               </div>
             </div>
 
             <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
-              <Metric label="Empresas" value={sessions.length} icon={Users} />
-              <Metric label="Em execução" value={running} icon={Activity} tone="success" />
-              <Metric label="Templates" value={templateCount} icon={LayoutTemplate} />
+              <Metric label={t('catalog.companies')} value={sessions.length} icon={Users} />
+              <Metric label={t('catalog.running')} value={running} icon={Activity} tone="success" />
+              <Metric label={t('templates')} value={templateCount} icon={LayoutTemplate} />
             </div>
           </section>
 
@@ -388,13 +388,13 @@ function CompanyHome({
             <div className="rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
               <div className="flex h-9 items-center gap-2 border-b border-[var(--workbench-border)] px-3">
                 <FolderKanban className="h-4 w-4 text-muted-foreground" />
-                <h2 className="text-xs font-semibold">Empresas recentes</h2>
-                <span className="ml-auto text-[10px] text-muted-foreground">{sessions.length} no total</span>
+                <h2 className="text-xs font-semibold">{t('catalog.recentCompanies')}</h2>
+                <span className="ml-auto text-[10px] text-muted-foreground">{t('catalog.totalCount', { count: sessions.length })}</span>
               </div>
               <div className="p-1.5">
                 {recent.length === 0 ? (
                   <div className="px-4 py-10 text-center text-xs text-muted-foreground">
-                    Sua primeira empresa aparecerá aqui com status e acesso rápido.
+                    {t('catalog.emptyRecent')}
                   </div>
                 ) : recent.map((session) => (
                   <button
@@ -422,12 +422,12 @@ function CompanyHome({
             <div className="rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
               <div className="flex h-9 items-center gap-2 border-b border-[var(--workbench-border)] px-3">
                 <LayoutTemplate className="h-4 w-4 text-muted-foreground" />
-                <h2 className="text-xs font-semibold">Fluxo recomendado</h2>
+                <h2 className="text-xs font-semibold">{t('catalog.recommendedFlow')}</h2>
               </div>
               <div className="space-y-0 p-3">
-                <FlowStep number="1" title="Defina o blueprint" description="Crie ou escolha os papéis do time." />
-                <FlowStep number="2" title="Conecte os projetos" description="Selecione onde a empresa poderá atuar." />
-                <FlowStep number="3" title="Inicie pelo master" description="Dê o objetivo e acompanhe a delegação." last />
+                <FlowStep number="1" title={t('catalog.flow.blueprintTitle')} description={t('catalog.flow.blueprintDescription')} />
+                <FlowStep number="2" title={t('catalog.flow.projectsTitle')} description={t('catalog.flow.projectsDescription')} />
+                <FlowStep number="3" title={t('catalog.flow.masterTitle')} description={t('catalog.flow.masterDescription')} last />
               </div>
             </div>
           </section>

@@ -33,4 +33,23 @@
   "debug.noMatches": "No matches returned from vector store.",
   "debug.vectorsExist": "Vectors exist but metadata filter returned 0 results. This usually means Vectorize metadata indexes are missing. Run: ",
   "debug.thenReindex": " then re-index."
+  ,"keymap.replaceTitle": "Replace shortcut?",
+  "keymap.replaceDescription": "The {{binding}} shortcut is already assigned to {{names}}. The other action will lose only this binding.",
+  "keymap.replace": "Replace",
+  "keymap.cancel": "Cancel",
+  "keymap.intellijPreset": "IntelliJ (default)",
+  "keymap.filterPlaceholder": "Search action, category, id or shortcut…",
+  "keymap.filters.all": "All",
+  "keymap.filters.modified": "Modified",
+  "keymap.filters.conflicts": "Conflicts",
+  "keymap.resetTitle": "Reset every shortcut?",
+  "keymap.resetDescription": "Every shortcut will return to the selected preset.",
+  "keymap.reset": "Reset",
+  "keymap.resetAll": "Reset all",
+  "keymap.unavailable": "unavailable in this context",
+  "keymap.removeShortcut": "Remove shortcut",
+  "keymap.pressKeys": "Press keys…",
+  "keymap.shortcut": "Shortcut",
+  "keymap.resetToPreset": "Reset to preset",
+  "keymap.noActions": "No actions found."
 }

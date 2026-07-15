@@ -752,7 +752,7 @@ export class CodeIndexDB {
   listAllSymbols(projectId: number): DBSymbol[] { return symbols.listAll(this.idx(projectId), projectId); }
   searchSymbols(projectId: number, query: string, limit: number = 20): DBSymbol[] { return symbols.search(this.idx(projectId), projectId, query, limit); }
   /** Identifier-prefix completion (b-tree range scan — see symbols.searchByPrefix). */
-  searchSymbolsByPrefix(projectId: number, prefix: string, limit: number = 50, opts?: { exportedOnly?: boolean }): DBSymbol[] { return symbols.searchByPrefix(this.idx(projectId), projectId, prefix, limit, opts); }
+  searchSymbolsByPrefix(projectId: number, prefix: string, limit: number = 50, opts?: symbols.SearchByPrefixOptions): DBSymbol[] { return symbols.searchByPrefix(this.idx(projectId), projectId, prefix, limit, opts); }
   listSymbolsByKind(projectId: number, kind: string, limit: number = 50): DBSymbol[] { return symbols.listByKind(this.idx(projectId), projectId, kind, limit); }
 
   // ─── Symbol References & Relations ──────────────────────────────

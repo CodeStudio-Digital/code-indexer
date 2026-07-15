@@ -86,7 +86,7 @@ export function ProjectRail({
 
   return (
     <>
-      <RailContainer side="left" aria-label="Project tool windows">
+      <RailContainer side="left" aria-label={t('rail.projectTools')}>
         {LEFT_TOOL_TABS.map((tab) => (
           <Fragment key={tab.id}>
             {tab.separatorBefore && <RailSeparator />}

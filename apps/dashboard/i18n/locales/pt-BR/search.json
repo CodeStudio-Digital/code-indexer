@@ -33,4 +33,23 @@
   "debug.noMatches": "Nenhum match retornado do vector store.",
   "debug.vectorsExist": "Vetores existem mas o filtro de metadata retornou 0 resultados. Geralmente significa que índices de metadata do Vectorize estão faltando. Execute: ",
   "debug.thenReindex": " e depois re-indexe."
+  ,"keymap.replaceTitle": "Substituir atalho?",
+  "keymap.replaceDescription": "O atalho {{binding}} já pertence a {{names}}. A outra ação perderá apenas esta combinação.",
+  "keymap.replace": "Substituir",
+  "keymap.cancel": "Cancelar",
+  "keymap.intellijPreset": "IntelliJ (padrão)",
+  "keymap.filterPlaceholder": "Buscar por ação, categoria, id ou atalho…",
+  "keymap.filters.all": "Todos",
+  "keymap.filters.modified": "Modificados",
+  "keymap.filters.conflicts": "Conflitos",
+  "keymap.resetTitle": "Restaurar todos os atalhos?",
+  "keymap.resetDescription": "Todos os atalhos voltarão ao preset selecionado.",
+  "keymap.reset": "Restaurar",
+  "keymap.resetAll": "Restaurar tudo",
+  "keymap.unavailable": "indisponível neste contexto",
+  "keymap.removeShortcut": "Remover atalho",
+  "keymap.pressKeys": "Pressione…",
+  "keymap.shortcut": "Atalho",
+  "keymap.resetToPreset": "Herdar do preset",
+  "keymap.noActions": "Nenhuma ação encontrada."
 }

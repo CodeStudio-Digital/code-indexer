@@ -205,5 +205,6 @@
   "onboarding.project.name": "Project name",
   "onboarding.project.indexingHelp": "First-time indexing runs in the background. You can start typing in the chat and exploring files right away — search results will fill in as the index finishes (usually a few seconds per thousand files).",
   "onboarding.project.pickLater": "Pick later from the list",
-  "onboarding.project.open": "Open project"
+  "onboarding.project.open": "Open project",
+  "commandPalette.open": "Search Everywhere"
 }

@@ -6,6 +6,7 @@
  * external servers, etc.) surface through Monaco's native lightbulb path.
  */
 import type * as MonacoNs from 'monaco-editor';
+import i18n from '../../../../i18n/index.js';
 import { apiCall } from '../../../../lib/api-client.js';
 import { toast } from '../../../../components/ui/prompt-dialog.js';
 import { logLsp } from '../lsp-log.js';
@@ -39,10 +40,10 @@ export function registerCodeActionProvider(
         const apply = async (edit: NonNullable<CodeActionDTO['edit']>): Promise<void> => {
           const result = await applyWorkspaceEditToProject(monaco, payload.projectId, edit);
           if (result.skipped.length || result.outside.length) {
-            toast.warning('Code action applied partially', {
+            toast.warning(i18n.t('lsp.codeActionPartial', { ns: 'workspace' }), {
               description: [
-                result.skipped.length ? `${result.skipped.length} unsaved or unreadable file(s)` : '',
-                result.outside.length ? `${result.outside.length} file(s) outside the project` : '',
+                result.skipped.length ? i18n.t('lsp.codeActionSkippedFiles', { ns: 'workspace', count: result.skipped.length }) : '',
+                result.outside.length ? i18n.t('lsp.codeActionOutsideFiles', { ns: 'workspace', count: result.outside.length }) : '',
               ].filter(Boolean).join('; '),
             });
           }
@@ -63,7 +64,7 @@ export function registerCodeActionProvider(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[lsp] code action failed', error);
-        toast.error('Code action failed', { description: message });
+        toast.error(i18n.t('lsp.codeActionFailed', { ns: 'workspace' }), { description: message });
       }
     });
   }

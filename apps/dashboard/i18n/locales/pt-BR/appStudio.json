@@ -58,6 +58,7 @@
     "emptyBody": "O coordenador organiza stack, módulos, dados, UX e testes em um Blueprint rastreável antes da construção.",
     "ready": "Plano conferido",
     "pending": "{{count}} pendência(s)",
+    "version": "v{{number}}",
     "modules": "Partes do sistema",
     "decisions": "Decisões principais",
     "tests": "Garantias de qualidade",
@@ -94,7 +95,8 @@
     "principles": "Princípios",
     "accessibility": "Acessibilidade",
     "dataBindings": "Dados utilizados",
-    "states": "Estados cobertos"
+    "states": "Estados cobertos",
+    "responsive": "Responsivo"
   },
   "blueprint": {
     "locked": "Disponível quando o Escopo do app existir.",
@@ -229,6 +231,7 @@
     "changes": "Mudanças",
     "noProposal": "Ainda não há revisões registradas.",
     "history": "Histórico de versões",
+    "version": "v{{number}}",
     "impact": {
       "none": "Sem impacto",
       "low": "Baixo impacto",
@@ -273,6 +276,9 @@
     "queryPlaceholder": "SELECT * FROM Clubes LIMIT 20",
     "queryReadOnly": "Somente consultas SELECT. Nada é alterado no banco.",
     "runQuery": "Executar",
+    "queryAll": "SELECT *",
+    "queryCount": "CONTAR",
+    "durationMs": "{{count}}ms",
     "result": "Resultado",
     "limited": "Resultado limitado aos primeiros {{count}} registros.",
     "issue": {
@@ -379,7 +385,23 @@
     "connectingCoordinator": "Conectando ao coordenador persistente…",
     "coordinatorOwnsArtifacts": "Peça ajustes na conversa com o coordenador; ele preserva o contexto e atualiza somente os cards afetados.",
     "versionHistoryHelp": "Histórico imutável. Aprovações e mudanças acontecem na Guia.",
-    "publishIsExplicit": "A aprovação de Release apenas libera esta ação. Publicar continua sendo uma decisão explícita sua."
+    "publishIsExplicit": "A aprovação de Release apenas libera esta ação. Publicar continua sendo uma decisão explícita sua.",
+    "outcome": "Objetivo",
+    "agentExecution": "Agente e execução",
+    "ownerProfile": "Perfil responsável",
+    "execution": "Execução",
+    "awaitingDispatch": "Aguardando despacho",
+    "noEvidence": "Nenhuma evidência registrada.",
+    "traceability": "Rastreabilidade e arquivos",
+    "columnOrder": "Ordem na coluna",
+    "close": "Fechar",
+    "revision": "r{{number}}",
+    "prioritiesActive": "Prioridades ativas",
+    "sortPriorities": "Ordenar prioridades",
+    "multiAgentAuto": "Auto multiagente",
+    "cardProgress": "{{total}} cards · {{complete}} concluídos",
+    "filterCards": "Filtrar cards…",
+    "refreshKanban": "Atualizar Kanban"
   },
   "agentRail": {
     "label": "Painéis dos agentes",
@@ -395,6 +417,28 @@
     "save": "Salvar configuração",
     "agentRuns": "Execuções dos agentes",
     "noRuns": "Nenhum subagente executado ainda.",
-    "selectRun": "Selecione uma execução."
-  }
+    "selectRun": "Selecione uma execução.",
+    "master": "MASTER",
+    "metrics": { "input": "Entrada", "output": "Saída", "context": "Contexto", "turns": "Turnos", "tools": "Ferramentas", "productive": "Produtivas", "errors": "Erros", "duration": "Duração" },
+    "tools": "ferramentas: {{value}}",
+    "reasoning": "raciocínio: {{value}}",
+    "runtimeTitle": "Padrão de execução do app",
+    "providerFallback": "provider",
+    "modelFallback": "modelo",
+    "runtimeHint": "O coordenador e todos os subagentes herdam este provider, modelo e esforço de raciocínio.",
+    "coordinatorUnavailable": "Coordenador indisponível.",
+    "coordinatorSkills": "Skills do coordenador ({{count}})",
+    "skillCount": "{{count}} skills",
+    "dispatchAsSubagent": "Despachar como subagente",
+    "profileAdditionalPrompt": "Prompt adicional do perfil",
+    "recordedRuns": "{{count}} execuções registradas",
+    "sessionNumber": "sessão #{{id}}",
+    "detail": { "agent": "Agente", "model": "Modelo", "permissions": "Permissões", "reasoning": "Raciocínio", "updated": "Atualizada" },
+    "toolCalls": "Chamadas de ferramenta",
+    "durationMs": "{{count}}ms",
+    "characterCount": "{{count}} car.",
+    "noToolCalls": "Nenhuma chamada registrada.",
+    "cardCount": "{{count}} cards"
+  },
+  "rail": { "label": "Janelas de ferramentas do App Studio" }
 }

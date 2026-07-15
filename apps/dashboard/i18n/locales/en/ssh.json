@@ -254,4 +254,5 @@
   "error": {
     "connectFailed": "Connection failed: {{reason}}"
   }
+  ,"secrets.reference": "${secret:{{name}}}"
 }

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { RefreshCw, Search, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
 import { apiCall } from '../../../lib/api-client.js';
@@ -38,6 +39,7 @@ interface FileTreeViewProps {
 const ACTIVE_GIT_STATUS_POLL_MS = 30_000;
 
 export function FileTreeView({ projectId, active, activePath, projectRoot, onOpen, onClose }: FileTreeViewProps) {
+  const { t } = useTranslation('workspace');
   // Seletores ESTREITOS (não o store inteiro): assinar `useFileTreeStore()` sem
   // seletor re-renderizava a árvore a cada mudança de qualquer campo (incl. o set
   // `loading`). Não assinamos `children`/`loading` aqui — `rows` lê o snapshot via
@@ -232,10 +234,10 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
   return (
     <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
       <WorkbenchPanelHeader
-        title="Explorer"
+        title={t('fileTree.explorer')}
         onClose={onClose}
         actions={
-        <Button variant="ghost" size="icon" className="h-5 w-5 text-muted-foreground hover:text-foreground" onClick={refresh} aria-label="Reload file tree">
+        <Button variant="ghost" size="icon" className="h-5 w-5 text-muted-foreground hover:text-foreground" onClick={refresh} aria-label={t('fileTree.reload')}>
           <RefreshCw className="h-3 w-3" />
         </Button>
         }

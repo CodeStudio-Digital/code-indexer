@@ -184,14 +184,14 @@ export function JourneyPanel({ detail, onChanged }: { detail: AppStudioSessionDe
       {error && <p className="mx-3 mt-2 shrink-0 rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-400">{error}</p>}
 
       <WorkBoardToolbar>
-        <Button size="sm" variant={sortByPriority ? 'default' : 'outline'} className="h-7" onClick={() => setSortByPriority((value) => !value)}><Sparkles className="mr-1 h-3 w-3" />{sortByPriority ? 'Prioridades ativas' : 'Ordenar prioridades'}</Button>
-        <WorkBoardBadge tone="green">Auto multiagente</WorkBoardBadge>
-        <span className="hidden text-muted-foreground lg:inline">{workflow.work_items.length} cards · {workflow.work_items.filter((item) => item.status === 'done').length} concluídos</span>
+        <Button size="sm" variant={sortByPriority ? 'default' : 'outline'} className="h-7" onClick={() => setSortByPriority((value) => !value)}><Sparkles className="mr-1 h-3 w-3" />{sortByPriority ? t('workflow.prioritiesActive') : t('workflow.sortPriorities')}</Button>
+        <WorkBoardBadge tone="green">{t('workflow.multiAgentAuto')}</WorkBoardBadge>
+        <span className="hidden text-muted-foreground lg:inline">{t('workflow.cardProgress', { total: workflow.work_items.length, complete: workflow.work_items.filter((item) => item.status === 'done').length })}</span>
         <div className="ml-auto flex items-center gap-1">
-          {blockedCount > 0 && <Button size="sm" variant={exceptionFilter === 'blocked' ? 'destructive' : 'ghost'} className="h-7 px-2" onClick={() => setExceptionFilter((value) => value === 'blocked' ? 'all' : 'blocked')}>Bloqueados {blockedCount}</Button>}
-          {staleCount > 0 && <Button size="sm" variant={exceptionFilter === 'stale' ? 'secondary' : 'ghost'} className="h-7 px-2" onClick={() => setExceptionFilter((value) => value === 'stale' ? 'all' : 'stale')}>Desatualizados {staleCount}</Button>}
-          <label className="relative hidden sm:block"><Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" /><input value={query} onChange={(event) => setQuery(event.target.value)} className="h-7 w-44 rounded border bg-background pl-7 pr-2 text-[11px]" placeholder="Filtrar cards…" /></label>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onChanged} aria-label="Atualizar Kanban"><RefreshCcw className="h-3.5 w-3.5" /></Button>
+          {blockedCount > 0 && <Button size="sm" variant={exceptionFilter === 'blocked' ? 'destructive' : 'ghost'} className="h-7 px-2" onClick={() => setExceptionFilter((value) => value === 'blocked' ? 'all' : 'blocked')}>{t('workflow.blocked')} {blockedCount}</Button>}
+          {staleCount > 0 && <Button size="sm" variant={exceptionFilter === 'stale' ? 'secondary' : 'ghost'} className="h-7 px-2" onClick={() => setExceptionFilter((value) => value === 'stale' ? 'all' : 'stale')}>{t('workflow.stale')} {staleCount}</Button>}
+          <label className="relative hidden sm:block"><Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" /><input value={query} onChange={(event) => setQuery(event.target.value)} className="h-7 w-44 rounded border bg-background pl-7 pr-2 text-[11px]" placeholder={t('workflow.filterCards')} /></label>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onChanged} aria-label={t('workflow.refreshKanban')}><RefreshCcw className="h-3.5 w-3.5" /></Button>
         </div>
       </WorkBoardToolbar>
 

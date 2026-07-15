@@ -11,6 +11,12 @@ export interface FindSymbolsOptions extends FindSymbolOptions {
   limit?: number;
 }
 
+export interface SearchByPrefixOptions {
+  exportedOnly?: boolean;
+  /** Structural file languages allowed to contribute project-wide completions. */
+  languages?: readonly string[];
+}
+
 export function upsert(db: DB, projectId: number, fileId: number, filePath: string, symbols: LLMSymbol[]): void {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM symbol_relations WHERE symbol_id IN (SELECT id FROM symbols WHERE file_id = ?)').run(fileId);
@@ -135,16 +141,27 @@ export function searchByPrefix(
   projectId: number,
   prefix: string,
   limit: number = 50,
-  opts?: { exportedOnly?: boolean },
+  opts?: SearchByPrefixOptions,
 ): DBSymbol[] {
   if (!prefix) return [];
+  const languages = [...new Set((opts?.languages ?? []).filter(Boolean))];
+  if (opts?.languages && languages.length === 0) return [];
+  const languageFilter = languages.length > 0
+    ? `AND EXISTS (
+        SELECT 1 FROM files f
+        WHERE f.id = symbols.file_id
+          AND f.project_id = symbols.project_id
+          AND f.language IN (${languages.map(() => '?').join(', ')})
+      )`
+    : '';
   return db.prepare(`
     SELECT * FROM symbols
     WHERE project_id = ? AND name >= ? AND name < ?
       ${opts?.exportedOnly ? 'AND exported = 1' : ''}
+      ${languageFilter}
     ORDER BY exported DESC, LENGTH(name) ASC, name ASC
     LIMIT ?
-  `).all(projectId, prefix, prefix + '\u{10FFFF}', limit) as DBSymbol[];
+  `).all(projectId, prefix, prefix + '\u{10FFFF}', ...languages, limit) as DBSymbol[];
 }
 
 export function search(db: DB, projectId: number, query: string, limit: number = 20): DBSymbol[] {

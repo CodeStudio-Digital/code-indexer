@@ -147,7 +147,7 @@ export function AnimHeader({
           </div>
           <label className="block space-y-1 text-xs text-muted-foreground">
             <span>{t('animate.exportName')}</span>
-            <Input className="h-8 w-full text-xs" value={exportName} onChange={(e) => setExportName(e.target.value)} placeholder="walk_S" />
+            <Input className="h-8 w-full text-xs" value={exportName} onChange={(e) => setExportName(e.target.value)} placeholder={t('animate.exportNamePlaceholder')} />
           </label>
           <div className="flex items-center gap-2">
             <label className="flex flex-1 items-center gap-1 text-xs text-muted-foreground">

@@ -350,4 +350,8 @@
     "doneErrors": "Inseridas {{ok}}, {{errors}} com falha",
     "errorsN": "{{n}} erros"
   }
+  ,"edit.primaryKey": "PK",
+  "edit.null": "NULO",
+  "edit.true": "verdadeiro",
+  "edit.false": "falso"
 }

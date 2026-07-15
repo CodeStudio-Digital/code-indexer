@@ -172,7 +172,7 @@ export function SessionLaunchDialog({
                   id="session-launch-model"
                   value={value.model}
                   onChange={(event) => changeModel(event.target.value)}
-                  placeholder="model-name"
+                  placeholder={t('chat:sessionLaunch.modelPlaceholder')}
                   className="font-mono"
                 />
               )}

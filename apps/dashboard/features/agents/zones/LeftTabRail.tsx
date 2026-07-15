@@ -97,7 +97,7 @@ export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onTog
   const terminalLabel = t('company.terminal', { defaultValue: 'Terminal' });
 
   return (
-    <RailContainer side="left" aria-label="Ferramentas da empresa">
+    <RailContainer side="left" aria-label={t('company.leftRailLabel')}>
       {renderGroup(core)}
       <RailSeparator />
       <button

@@ -731,7 +731,7 @@ export function PipelineBindingsPanel() {
                               )}
                               {completionProbe && (
                                 <div className={`text-xs ${completionProbe.verifiedForAutomatic ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                  {completionProbe.message} p50 {completionProbe.latency.p50 ?? '—'}ms · p90 {completionProbe.latency.p90 ?? '—'}ms
+                                  {completionProbe.message} {t('admin:pipelines.completionProbeMetrics', { p50: completionProbe.latency.p50 ?? '—', p90: completionProbe.latency.p90 ?? '—' })}
                                   {completionProbe.route && ` · ${completionProbe.route.transport} · ${completionProbe.route.health}`}
                                 </div>
                               )}
@@ -745,7 +745,7 @@ export function PipelineBindingsPanel() {
                                 <PlayCircle className="h-3 w-3" />
                               </Button>
                               {isCompletion && (
-                                <Button size="sm" variant="ghost" onClick={() => void onCompletionProbe(row)} disabled={busy === row.id} title="Run 3-prompt completion probe (no project files)">
+                                <Button size="sm" variant="ghost" onClick={() => void onCompletionProbe(row)} disabled={busy === row.id} title={t('admin:pipelines.completionProbeTitle')}>
                                   <Sparkles className="h-3 w-3" />
                                 </Button>
                               )}
@@ -909,10 +909,10 @@ export function PipelineBindingsPanel() {
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
                   <div className="flex items-center gap-2">
                     <Switch checked={hasRelatedCodeConsent(editing.draft.config_json)} onCheckedChange={setRelatedConsent} />
-                    <span className="text-xs font-medium">Use indexed related code (context v3)</span>
+                    <span className="text-xs font-medium">{t('admin:pipelines.relatedCodeConsent.label')}</span>
                   </div>
                   <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
-                    Up to three relevant windows (700 tokens total) from other project files may be sent to this completion provider. Existing bindings remain off until you confirm here.
+                    {t('admin:pipelines.relatedCodeConsent.description')}
                   </p>
                 </div>
               )}

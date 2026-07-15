@@ -6,6 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { ExternalLink, Loader2, Sparkles } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
@@ -18,6 +19,7 @@ import { apiCall } from '../../../lib/api-client.js';
 import type { EditorProbeResult } from '@mcp/api-bus';
 
 export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t } = useTranslation('workspace');
   const [preset, setPreset] = useState<AcPreset | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -30,7 +32,7 @@ export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onCl
   const [error, setError] = useState<string | null>(null);
   const [testWarning, setTestWarning] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  const [doneMessage, setDoneMessage] = useState('Ghost text is on — Tab accepts, Alt+\\ triggers manually.');
+  const [doneMessage, setDoneMessage] = useState(t('autocompleteSetup.enabledMessage'));
   const [relatedCodeConsent, setRelatedCodeConsent] = useState(true);
 
   useEffect(() => {
@@ -169,7 +171,7 @@ export function AutocompleteSetupDialog({ open, onClose }: { open: boolean; onCl
             <label className="flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
               <input type="checkbox" className="mt-0.5" checked={relatedCodeConsent} onChange={(e) => setRelatedCodeConsent(e.target.checked)} />
               <span>
-                Use indexed related code. Up to three relevant windows (700 tokens total) from other project files may be sent to this provider.
+                {t('autocompleteSetup.relatedCodeConsent')}
               </span>
             </label>
 

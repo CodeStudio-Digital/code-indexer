@@ -108,7 +108,7 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
             </span>
             <span>
               <DialogTitle>{existingTemplate ? t('agents:template.editTitle') : t('agents:template.newTitle')}</DialogTitle>
-              <DialogDescription className="mt-1">Modele o time que poderá ser reutilizado ao criar novas empresas.</DialogDescription>
+              <DialogDescription className="mt-1">{t('agents:template.builderDescription')}</DialogDescription>
             </span>
           </div>
         </DialogHeader>
@@ -138,19 +138,19 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
               </div>
 
               <div className="rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-3">
-                <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Validação do blueprint</h3>
+                <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t('agents:template.blueprintValidation')}</h3>
                 <div className="mt-2 space-y-2">
-                  <ValidationRow valid={name.trim().length > 0} label="Template identificado" />
-                  <ValidationRow valid={roles.some((role) => role.role === 'master')} label="Agente master configurado" />
-                  <ValidationRow valid={roles.every((role) => role.role.trim().length > 0)} label="Todos os papéis nomeados" />
-                  <ValidationRow valid={roles.length > 1} label="Time com especialistas" optional />
+                  <ValidationRow valid={name.trim().length > 0} label={t('agents:template.validation.identified')} />
+                  <ValidationRow valid={roles.some((role) => role.role === 'master')} label={t('agents:template.validation.masterConfigured')} />
+                  <ValidationRow valid={roles.every((role) => role.role.trim().length > 0)} label={t('agents:template.validation.rolesNamed')} />
+                  <ValidationRow valid={roles.length > 1} label={t('agents:template.validation.specialistTeam')} optional />
                 </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2">
-                <SummaryMetric label="Papéis" value={roles.length} />
-                <SummaryMetric label="Skills" value={roles.reduce((total, role) => total + (role.skills?.length ?? 0), 0)} />
-                <SummaryMetric label="Providers" value={new Set(roles.map((role) => role.provider)).size} />
+                <SummaryMetric label={t('agents:template.roles')} value={roles.length} />
+                <SummaryMetric label={t('agents:role.skills')} value={roles.reduce((total, role) => total + (role.skills?.length ?? 0), 0)} />
+                <SummaryMetric label={t('agents:template.providers')} value={new Set(roles.map((role) => role.provider)).size} />
               </div>
             </div>
           </aside>
@@ -158,8 +158,8 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
           <section className="flex min-h-0 flex-col bg-[var(--workbench-canvas)]">
             <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--workbench-border)] px-4">
               <Bot className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs font-semibold">Blueprint do time</span>
-              <span className="text-[10px] text-muted-foreground">{roles.length} papéis</span>
+              <span className="text-xs font-semibold">{t('agents:template.teamBlueprint')}</span>
+              <span className="text-[10px] text-muted-foreground">{t('agents:template.roleCount', { count: roles.length })}</span>
               <Button variant="outline" size="sm" onClick={addRole} className="ml-auto h-7 gap-1 text-[10px]">
                 <Plus className="h-3 w-3" /> {t('agents:template.addRole')}
               </Button>
@@ -193,14 +193,14 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
                           <span className="mt-2 flex flex-wrap gap-1">
                             {(role.skills?.length ?? 0) > 0 && (
                               <Badge variant="outline" className="h-4 gap-0.5 px-1 text-[8px] font-normal">
-                                <Sparkles className="h-2 w-2" /> {role.skills!.length} skills
+                                <Sparkles className="h-2 w-2" /> {t('agents:template.skillCount', { count: role.skills!.length })}
                               </Badge>
                             )}
                             {role.systemPromptOverride && (
                               <Badge variant="outline" className="h-4 px-1 text-[8px] font-normal">{t('agents:template.customPrompt')}</Badge>
                             )}
                             {role.fallback_model && (
-                              <Badge variant="outline" className="h-4 px-1 text-[8px] font-normal">fallback configurado</Badge>
+                              <Badge variant="outline" className="h-4 px-1 text-[8px] font-normal">{t('agents:template.fallbackConfigured')}</Badge>
                             )}
                           </span>
                         </span>
@@ -214,7 +214,7 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
                             className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                             onClick={() => removeRole(index)}
                             disabled={isMaster && roles.filter((item) => item.role === 'master').length <= 1}
-                            aria-label={`Remover ${role.role || 'papel'}`}
+                            aria-label={t('agents:template.removeRoleLabel', { role: role.role || t('agents:template.role') })}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
@@ -229,7 +229,7 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
                   onClick={addRole}
                   className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--workbench-border)] py-4 text-[11px] text-muted-foreground transition-colors hover:border-violet-500/40 hover:bg-violet-500/5 hover:text-foreground"
                 >
-                  <Plus className="h-3.5 w-3.5" /> Adicionar especialista ao blueprint
+                  <Plus className="h-3.5 w-3.5" /> {t('agents:template.addSpecialist')}
                 </button>
 
                 {!roles.some((role) => role.role === 'master') && (
@@ -244,7 +244,7 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
         </div>
 
         <DialogFooter className="flex-row items-center border-t border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-5 py-3 sm:justify-between">
-          <span className="hidden text-[10px] text-muted-foreground sm:block">As alterações só serão aplicadas ao salvar o blueprint.</span>
+          <span className="hidden text-[10px] text-muted-foreground sm:block">{t('agents:template.saveChangesHint')}</span>
           <div className="ml-auto flex gap-2">
             <Button variant="outline" onClick={onClose} size="sm">{t('common:actions.cancel')}</Button>
             <Button
@@ -275,11 +275,12 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
 }
 
 function ValidationRow({ valid, label, optional = false }: { valid: boolean; label: string; optional?: boolean }) {
+  const { t } = useTranslation('agents');
   return (
     <div className="flex items-center gap-2 text-[10px]">
       <CheckCircle2 className={`h-3.5 w-3.5 ${valid ? 'text-emerald-400' : 'text-muted-foreground/40'}`} />
       <span className={valid ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>
-      {optional && <span className="ml-auto text-[8px] text-muted-foreground">opcional</span>}
+      {optional && <span className="ml-auto text-[8px] text-muted-foreground">{t('template.optional')}</span>}
     </div>
   );
 }

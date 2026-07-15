@@ -51,7 +51,7 @@ export function VersionsPanel({ detail }: { detail: AppStudioSessionDetail; onCh
             <div className="space-y-2">
               {(history?.revisions ?? []).map((revision) => (
                 <article key={revision.id} className="rounded-md border bg-card p-3">
-                  <div className="flex flex-wrap items-center gap-2"><strong className="font-mono text-xs">v{revision.revision_number}</strong><span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{revision.status}</span><span className="min-w-0 flex-1 truncate text-sm">{revision.title || revision.spec_summary?.summary || '—'}</span><time className="text-xs text-muted-foreground">{formatDate(revision.created_at)}</time></div>
+                  <div className="flex flex-wrap items-center gap-2"><strong className="font-mono text-xs">{t('versions.version', { number: revision.revision_number })}</strong><span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{revision.status}</span><span className="min-w-0 flex-1 truncate text-sm">{revision.title || revision.spec_summary?.summary || '—'}</span><time className="text-xs text-muted-foreground">{formatDate(revision.created_at)}</time></div>
                   {revision.summary && <p className="mt-2 text-xs text-muted-foreground">{revision.summary}</p>}
                 </article>
               ))}

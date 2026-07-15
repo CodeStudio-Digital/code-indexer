@@ -302,7 +302,7 @@ function SessionRow({
             {tokens > 0 && (
               <>
                 <span className="shrink-0 text-muted-foreground/40">·</span>
-                <span className="shrink-0">{compactNumber(tokens)} tok</span>
+                <span className="shrink-0">{t('chat:sessionPicker.tokens', { count: compactNumber(tokens) })}</span>
               </>
             )}
           </div>

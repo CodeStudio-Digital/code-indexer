@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Download, ExternalLink, Loader2, RotateCcw, Server, WandSparkles } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { EditorSettings, EditorSettingsOverride } from '@mcp/shared/editor-settings.js';
 import type { EditorStatsResult, LspInstallFrame, LspServerInfo } from '@mcp/api-bus';
 import { Switch } from '../../../../components/ui/switch.js';
@@ -17,15 +18,16 @@ const EMPTY_PROJECT_OVERRIDES = Object.freeze({}) as EditorSettingsOverride;
 function SettingRow({ title, description, inherited, overridden, onReset, children }: {
   title: string; description?: string; inherited?: string; overridden: boolean; onReset: () => void; children: ReactNode;
 }) {
+  const { t } = useTranslation('projects');
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(180px,260px)] items-center gap-4 border-b border-border/50 py-3 last:border-0">
       <div className="min-w-0">
         <div className="flex items-center gap-1.5 text-xs font-medium">
           {title}
-          {overridden ? <button type="button" onClick={onReset} title="Reset / Herdar" className="text-muted-foreground hover:text-foreground"><RotateCcw className="h-3 w-3" /></button> : null}
+          {overridden ? <button type="button" onClick={onReset} title={t('editorPreferences.resetInherited')} className="text-muted-foreground hover:text-foreground"><RotateCcw className="h-3 w-3" /></button> : null}
         </div>
         {description && <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">{description}</p>}
-        {!overridden && inherited && <p className="text-[9px] text-violet-400/80">Herdado de {inherited}</p>}
+        {!overridden && inherited && <p className="text-[9px] text-violet-400/80">{t('editorPreferences.inheritedFrom', { source: inherited })}</p>}
       </div>
       <div className="flex justify-end">{children}</div>
     </div>
@@ -33,21 +35,23 @@ function SettingRow({ title, description, inherited, overridden, onReset, childr
 }
 
 function ScopeHeader({ scope, setScope }: { scope: Scope; setScope: (scope: Scope) => void }) {
+  const { t } = useTranslation('projects');
   return (
     <div className="flex items-center justify-between rounded border bg-muted/20 px-3 py-2">
       <div>
-        <p className="text-xs font-medium">Escopo das preferências</p>
-        <p className="text-[10px] text-muted-foreground">Overrides do projeto ficam no banco roteado; nenhum arquivo é criado no repositório.</p>
+        <p className="text-xs font-medium">{t('editorPreferences.scopeTitle')}</p>
+        <p className="text-[10px] text-muted-foreground">{t('editorPreferences.scopeDescription')}</p>
       </div>
       <div className="inline-flex rounded border bg-background p-0.5">
-        <button type="button" onClick={() => setScope('global')} className={`rounded px-2 py-1 text-[11px] ${scope === 'global' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}`}>Global</button>
-        <button type="button" onClick={() => setScope('project')} className={`rounded px-2 py-1 text-[11px] ${scope === 'project' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}`}>Este projeto</button>
+        <button type="button" onClick={() => setScope('global')} className={`rounded px-2 py-1 text-[11px] ${scope === 'global' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}`}>{t('editorPreferences.scopeGlobal')}</button>
+        <button type="button" onClick={() => setScope('project')} className={`rounded px-2 py-1 text-[11px] ${scope === 'project' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}`}>{t('editorPreferences.scopeProject')}</button>
       </div>
     </div>
   );
 }
 
 function usePreferences(projectId: number) {
+  const { t } = useTranslation('projects');
   const [scope, setScope] = useState<Scope>('global');
   const [error, setError] = useState<string | null>(null);
   const global = useEditorSettingsStore((state) => state.global);
@@ -71,7 +75,7 @@ function usePreferences(projectId: number) {
     setError(null);
     void resetStoreField(scope, projectId, key).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
   };
-  return { scope, setScope, values, overrides, setField, resetField, error, inherited: scope === 'global' ? 'padrão do editor' : 'Global / padrão' };
+  return { scope, setScope, values, overrides, setField, resetField, error, inherited: scope === 'global' ? t('editorPreferences.editorDefault') : t('editorPreferences.globalDefault') };
 }
 
 function BoolSetting({ pref, name, title, description }: { pref: ReturnType<typeof usePreferences>; name: Key; title: string; description?: string }) {
@@ -83,6 +87,7 @@ function BoolSetting({ pref, name, title, description }: { pref: ReturnType<type
 }
 
 export function EditorGeneralPane({ projectId }: { projectId: number }) {
+  const { t } = useTranslation('projects');
   const pref = usePreferences(projectId);
   const rulers = pref.values.rulers.join(', ');
   return (
@@ -90,61 +95,63 @@ export function EditorGeneralPane({ projectId }: { projectId: number }) {
       <ScopeHeader scope={pref.scope} setScope={pref.setScope} />
       {pref.error && <div className="rounded border border-destructive/50 p-2 text-xs text-destructive">{pref.error}</div>}
       <section className="rounded border px-3">
-        <SettingRow title="Família da fonte" inherited={pref.inherited} overridden={'fontFamily' in pref.overrides} onReset={() => pref.resetField('fontFamily')}>
+        <SettingRow title={t('editorPreferences.fontFamily')} inherited={pref.inherited} overridden={'fontFamily' in pref.overrides} onReset={() => pref.resetField('fontFamily')}>
           <Input className="h-7 text-xs" value={pref.values.fontFamily} onChange={(event) => pref.setField('fontFamily', event.target.value)} />
         </SettingRow>
-        <SettingRow title="Tamanho da fonte" description="Vazio segue a densidade da interface." inherited={pref.inherited} overridden={'fontSize' in pref.overrides} onReset={() => pref.resetField('fontSize')}>
-          <Input className="h-7 w-24 text-xs" type="number" min={8} max={40} value={pref.values.fontSize ?? ''} placeholder="Auto" onChange={(event) => pref.setField('fontSize', event.target.value ? Number(event.target.value) : null)} />
+        <SettingRow title={t('editorPreferences.fontSize')} description={t('editorPreferences.fontSizeDescription')} inherited={pref.inherited} overridden={'fontSize' in pref.overrides} onReset={() => pref.resetField('fontSize')}>
+          <Input className="h-7 w-24 text-xs" type="number" min={8} max={40} value={pref.values.fontSize ?? ''} placeholder={t('editorPreferences.auto')} onChange={(event) => pref.setField('fontSize', event.target.value ? Number(event.target.value) : null)} />
         </SettingRow>
-        <BoolSetting pref={pref} name="fontLigatures" title="Ligaduras" />
-        <BoolSetting pref={pref} name="minimap" title="Minimap" />
-        <BoolSetting pref={pref} name="stickyScroll" title="Sticky scroll" />
-        <SettingRow title="Quebra de linha" inherited={pref.inherited} overridden={'wordWrap' in pref.overrides} onReset={() => pref.resetField('wordWrap')}>
+        <BoolSetting pref={pref} name="fontLigatures" title={t('editorPreferences.fontLigatures')} />
+        <BoolSetting pref={pref} name="minimap" title={t('editorPreferences.minimap')} />
+        <BoolSetting pref={pref} name="stickyScroll" title={t('editorPreferences.stickyScroll')} />
+        <SettingRow title={t('editorPreferences.wordWrap')} inherited={pref.inherited} overridden={'wordWrap' in pref.overrides} onReset={() => pref.resetField('wordWrap')}>
           <select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.wordWrap} onChange={(event) => pref.setField('wordWrap', event.target.value as EditorSettings['wordWrap'])}>
-            <option value="off">Desligada</option><option value="on">Ligada</option><option value="wordWrapColumn">Na coluna</option><option value="bounded">Limitada</option>
+            <option value="off">{t('editorPreferences.off')}</option><option value="on">{t('editorPreferences.on')}</option><option value="wordWrapColumn">{t('editorPreferences.atColumn')}</option><option value="bounded">{t('editorPreferences.bounded')}</option>
           </select>
         </SettingRow>
-        <SettingRow title="Exibir espaços" inherited={pref.inherited} overridden={'renderWhitespace' in pref.overrides} onReset={() => pref.resetField('renderWhitespace')}>
+        <SettingRow title={t('editorPreferences.renderWhitespace')} inherited={pref.inherited} overridden={'renderWhitespace' in pref.overrides} onReset={() => pref.resetField('renderWhitespace')}>
           <select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.renderWhitespace} onChange={(event) => pref.setField('renderWhitespace', event.target.value as EditorSettings['renderWhitespace'])}>
-            <option value="none">Nunca</option><option value="selection">Na seleção</option><option value="boundary">Nas bordas</option><option value="trailing">Ao final</option><option value="all">Sempre</option>
+            <option value="none">{t('editorPreferences.never')}</option><option value="selection">{t('editorPreferences.selection')}</option><option value="boundary">{t('editorPreferences.boundaries')}</option><option value="trailing">{t('editorPreferences.trailing')}</option><option value="all">{t('editorPreferences.always')}</option>
           </select>
         </SettingRow>
-        <SettingRow title="Réguas" description="Colunas separadas por vírgula." inherited={pref.inherited} overridden={'rulers' in pref.overrides} onReset={() => pref.resetField('rulers')}>
+        <SettingRow title={t('editorPreferences.rulers')} description={t('editorPreferences.rulersDescription')} inherited={pref.inherited} overridden={'rulers' in pref.overrides} onReset={() => pref.resetField('rulers')}>
           <Input className="h-7 w-48 text-xs" value={rulers} placeholder="80, 120" onChange={(event) => pref.setField('rulers', event.target.value.split(',').map(Number).filter(Number.isFinite))} />
         </SettingRow>
       </section>
-      <p className="text-[10px] text-muted-foreground">A precedência por arquivo é: <code>.editorconfig</code> → Este projeto → Global → padrão. Alterações são aplicadas imediatamente a todos os splits.</p>
+      <p className="text-[10px] text-muted-foreground">{t('editorPreferences.precedencePrefix')} <code>{t('editorPreferences.editorConfigFile')}</code> {t('editorPreferences.precedenceSuffix')}</p>
     </div>
   );
 }
 
 export function EditorCodeStylePane({ projectId }: { projectId: number }) {
+  const { t } = useTranslation('projects');
   const pref = usePreferences(projectId);
   return (
     <div className="max-w-3xl space-y-4">
       <ScopeHeader scope={pref.scope} setScope={pref.setScope} />
       {pref.error && <div className="rounded border border-destructive/50 p-2 text-xs text-destructive">{pref.error}</div>}
       <section className="rounded border px-3">
-        <BoolSetting pref={pref} name="respectEditorConfig" title="Respeitar .editorconfig" description="Configurações encontradas no repositório têm a maior precedência." />
-        <BoolSetting pref={pref} name="detectIndentation" title="Detectar indentação do arquivo" />
-        <SettingRow title="Tamanho da tabulação" inherited={pref.inherited} overridden={'tabSize' in pref.overrides} onReset={() => pref.resetField('tabSize')}>
+        <BoolSetting pref={pref} name="respectEditorConfig" title={t('editorPreferences.respectEditorConfig')} description={t('editorPreferences.respectEditorConfigDescription')} />
+        <BoolSetting pref={pref} name="detectIndentation" title={t('editorPreferences.detectIndentation')} />
+        <SettingRow title={t('editorPreferences.tabSize')} inherited={pref.inherited} overridden={'tabSize' in pref.overrides} onReset={() => pref.resetField('tabSize')}>
           <Input className="h-7 w-20 text-xs" type="number" min={1} max={16} value={pref.values.tabSize} onChange={(event) => pref.setField('tabSize', Number(event.target.value))} />
         </SettingRow>
-        <BoolSetting pref={pref} name="insertSpaces" title="Usar espaços em vez de tabs" />
-        <SettingRow title="Fim de linha" inherited={pref.inherited} overridden={'endOfLine' in pref.overrides} onReset={() => pref.resetField('endOfLine')}>
-          <select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.endOfLine} onChange={(event) => pref.setField('endOfLine', event.target.value as EditorSettings['endOfLine'])}><option value="auto">Automático</option><option value="lf">LF</option><option value="crlf">CRLF</option></select>
+        <BoolSetting pref={pref} name="insertSpaces" title={t('editorPreferences.insertSpaces')} />
+        <SettingRow title={t('editorPreferences.endOfLine')} inherited={pref.inherited} overridden={'endOfLine' in pref.overrides} onReset={() => pref.resetField('endOfLine')}>
+          <select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.endOfLine} onChange={(event) => pref.setField('endOfLine', event.target.value as EditorSettings['endOfLine'])}><option value="auto">{t('editorPreferences.automatic')}</option><option value="lf">{t('editorPreferences.lf')}</option><option value="crlf">{t('editorPreferences.crlf')}</option></select>
         </SettingRow>
-        <BoolSetting pref={pref} name="formatOnPaste" title="Formatar ao colar" />
-        <BoolSetting pref={pref} name="formatOnSave" title="Formatar ao salvar" description="Desligado por padrão; formatação permanece manual." />
-        <BoolSetting pref={pref} name="formatOnType" title="Formatar ao digitar" description="Desligado por padrão." />
-        <BoolSetting pref={pref} name="trimTrailingWhitespace" title="Remover espaços ao final ao salvar" />
-        <BoolSetting pref={pref} name="insertFinalNewline" title="Inserir nova linha final ao salvar" />
+        <BoolSetting pref={pref} name="formatOnPaste" title={t('editorPreferences.formatOnPaste')} />
+        <BoolSetting pref={pref} name="formatOnSave" title={t('editorPreferences.formatOnSave')} description={t('editorPreferences.formatOnSaveDescription')} />
+        <BoolSetting pref={pref} name="formatOnType" title={t('editorPreferences.formatOnType')} description={t('editorPreferences.formatOnTypeDescription')} />
+        <BoolSetting pref={pref} name="trimTrailingWhitespace" title={t('editorPreferences.trimTrailingWhitespace')} />
+        <BoolSetting pref={pref} name="insertFinalNewline" title={t('editorPreferences.insertFinalNewline')} />
       </section>
     </div>
   );
 }
 
 function LanguageSupport({ projectId }: { projectId: number }) {
+  const { t } = useTranslation('projects');
   const [servers, setServers] = useState<LspServerInfo[]>([]);
   const [instances, setInstances] = useState<Array<{ projectId: number; serverId: string; state: string }>>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -167,13 +174,13 @@ function LanguageSupport({ projectId }: { projectId: number }) {
   ];
   return (
     <section className="rounded border">
-      <div className="border-b px-3 py-2"><p className="text-xs font-medium">Linguagens, servidor e formatter</p><p className="text-[10px] text-muted-foreground">Downloads sempre exigem consentimento explícito.</p></div>
+      <div className="border-b px-3 py-2"><p className="text-xs font-medium">{t('editorPreferences.languageSupportTitle')}</p><p className="text-[10px] text-muted-foreground">{t('editorPreferences.languageSupportDescription')}</p></div>
       {rows.map((row) => {
         const instance = row.server ? instances.find((item) => item.projectId === projectId && item.serverId === row.server!.id) : null;
         return <div key={row.language} className="grid grid-cols-[1.2fr_1fr_1fr_auto] items-center gap-2 border-b px-3 py-2 text-[11px] last:border-0">
-          <span>{row.language}</span><span className="text-muted-foreground">{row.server?.label ?? 'Integrado'}</span><span className="text-muted-foreground">{row.formatter}</span>
+          <span>{row.language}</span><span className="text-muted-foreground">{row.server?.label ?? t('editorPreferences.builtIn')}</span><span className="text-muted-foreground">{row.formatter}</span>
           <div className="flex items-center gap-1">
-            <span className={row.server && !row.server.installed ? 'text-amber-500' : 'text-emerald-500'}>{instance?.state ?? (row.server?.installed === false ? 'não instalado' : 'pronto')}</span>
+            <span className={row.server && !row.server.installed ? 'text-amber-500' : 'text-emerald-500'}>{instance?.state ?? (row.server?.installed === false ? t('editorPreferences.notInstalled') : t('editorPreferences.ready'))}</span>
             {row.server && !row.server.installed && <Button size="sm" variant="outline" className="h-6 text-[10px]" disabled={busy === row.server.id} onClick={() => void install(row.server!.id)}>{busy === row.server.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}</Button>}
             {row.server?.installed && <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => void apiCall('lsp.restartServer', { projectId, serverId: row.server!.id }).then(refresh)}><RotateCcw className="h-3 w-3" /></Button>}
           </div>
@@ -184,6 +191,7 @@ function LanguageSupport({ projectId }: { projectId: number }) {
 }
 
 export function EditorAutocompletePane({ projectId }: { projectId: number }) {
+  const { t } = useTranslation('projects');
   const pref = usePreferences(projectId);
   const aiEnabled = useAiCompleteStore((state) => state.enabled);
   const aiBusy = useAiCompleteStore((state) => state.busy);
@@ -196,23 +204,23 @@ export function EditorAutocompletePane({ projectId }: { projectId: number }) {
     <div className="max-w-4xl space-y-4">
       <ScopeHeader scope={pref.scope} setScope={pref.setScope} />
       <section className="rounded border px-3">
-        <BoolSetting pref={pref} name="quickSuggestions" title="Sugestões enquanto digita" />
-        <BoolSetting pref={pref} name="suggestOnTriggerCharacters" title="Sugestões por caracteres de gatilho" />
-        <SettingRow title="Aceitar com Enter" inherited={pref.inherited} overridden={'acceptSuggestionOnEnter' in pref.overrides} onReset={() => pref.resetField('acceptSuggestionOnEnter')}><select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.acceptSuggestionOnEnter} onChange={(event) => pref.setField('acceptSuggestionOnEnter', event.target.value as EditorSettings['acceptSuggestionOnEnter'])}><option value="on">Ligado</option><option value="smart">Inteligente</option><option value="off">Desligado</option></select></SettingRow>
-        <SettingRow title="Snippets" inherited={pref.inherited} overridden={'snippetSuggestions' in pref.overrides} onReset={() => pref.resetField('snippetSuggestions')}><select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.snippetSuggestions} onChange={(event) => pref.setField('snippetSuggestions', event.target.value as EditorSettings['snippetSuggestions'])}><option value="top">No topo</option><option value="inline">Misturados</option><option value="bottom">No fim</option><option value="none">Ocultos</option></select></SettingRow>
+        <BoolSetting pref={pref} name="quickSuggestions" title={t('editorPreferences.quickSuggestions')} />
+        <BoolSetting pref={pref} name="suggestOnTriggerCharacters" title={t('editorPreferences.suggestOnTriggerCharacters')} />
+        <SettingRow title={t('editorPreferences.acceptSuggestionOnEnter')} inherited={pref.inherited} overridden={'acceptSuggestionOnEnter' in pref.overrides} onReset={() => pref.resetField('acceptSuggestionOnEnter')}><select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.acceptSuggestionOnEnter} onChange={(event) => pref.setField('acceptSuggestionOnEnter', event.target.value as EditorSettings['acceptSuggestionOnEnter'])}><option value="on">{t('editorPreferences.on')}</option><option value="smart">{t('editorPreferences.smart')}</option><option value="off">{t('editorPreferences.off')}</option></select></SettingRow>
+        <SettingRow title={t('editorPreferences.snippets')} inherited={pref.inherited} overridden={'snippetSuggestions' in pref.overrides} onReset={() => pref.resetField('snippetSuggestions')}><select className="h-7 rounded border bg-background px-2 text-xs" value={pref.values.snippetSuggestions} onChange={(event) => pref.setField('snippetSuggestions', event.target.value as EditorSettings['snippetSuggestions'])}><option value="top">{t('editorPreferences.top')}</option><option value="inline">{t('editorPreferences.inline')}</option><option value="bottom">{t('editorPreferences.bottom')}</option><option value="none">{t('editorPreferences.hidden')}</option></select></SettingRow>
       </section>
 
       <LanguageSupport projectId={projectId} />
 
       <section className="rounded border p-3">
-        <div className="flex items-center gap-2"><WandSparkles className="h-4 w-4 text-violet-400" /><div><p className="text-xs font-medium">AI ghost text</p><p className="text-[10px] text-muted-foreground">Reutiliza o pipeline existente; Tab aceita e Alt+\\ aciona manualmente.</p></div><Switch className="ml-auto" checked={aiEnabled} onCheckedChange={setAiEnabled} /></div>
+        <div className="flex items-center gap-2"><WandSparkles className="h-4 w-4 text-violet-400" /><div><p className="text-xs font-medium">{t('editorPreferences.aiGhostText')}</p><p className="text-[10px] text-muted-foreground">{t('editorPreferences.aiGhostTextDescription')}</p></div><Switch className="ml-auto" checked={aiEnabled} onCheckedChange={setAiEnabled} /></div>
         <div className="mt-3 grid grid-cols-2 gap-2 rounded bg-muted/20 p-2 text-[10px] text-muted-foreground">
-          <span>Modelo: <b className="text-foreground">{stats?.model ?? 'não configurado'}</b></span>
-          <span>Status: <b className="text-foreground">{aiBusy ? 'gerando…' : aiIssue?.message ?? stats?.route?.health ?? 'ocioso'}</b></span>
-          <span>Aceitação (7d): <b className="text-foreground">{stats?.acceptRate == null ? '—' : `${Math.round(stats.acceptRate * 100)}%`}</b></span>
-          <span>Modo: <b className="text-foreground">{stats?.route?.suitability === 'best-effort-chat' ? 'manual' : 'automático / manual'}</b></span>
+          <span>{t('editorPreferences.model')}: <b className="text-foreground">{stats?.model ?? t('editorPreferences.notConfigured')}</b></span>
+          <span>{t('editorPreferences.status')}: <b className="text-foreground">{aiBusy ? t('editorPreferences.generating') : aiIssue?.message ?? stats?.route?.health ?? t('editorPreferences.idle')}</b></span>
+          <span>{t('editorPreferences.acceptanceRate')}: <b className="text-foreground">{stats?.acceptRate == null ? '—' : `${Math.round(stats.acceptRate * 100)}%`}</b></span>
+          <span>{t('editorPreferences.mode')}: <b className="text-foreground">{stats?.route?.suitability === 'best-effort-chat' ? t('editorPreferences.manual') : t('editorPreferences.automaticManual')}</b></span>
         </div>
-        <div className="mt-3 flex gap-2"><Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setSetupOpen(true)}><Server className="mr-1 h-3 w-3" />Configurar / testar</Button><a href="/telemetry?panel=completion" className="inline-flex items-center text-[10px] text-primary hover:underline">Abrir telemetria <ExternalLink className="ml-1 h-3 w-3" /></a></div>
+        <div className="mt-3 flex gap-2"><Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setSetupOpen(true)}><Server className="mr-1 h-3 w-3" />{t('editorPreferences.configureTest')}</Button><a href="/telemetry?panel=completion" className="inline-flex items-center text-[10px] text-primary hover:underline">{t('editorPreferences.openTelemetry')} <ExternalLink className="ml-1 h-3 w-3" /></a></div>
       </section>
       <AutocompleteSetupDialog open={setupOpen} onClose={() => setSetupOpen(false)} />
     </div>

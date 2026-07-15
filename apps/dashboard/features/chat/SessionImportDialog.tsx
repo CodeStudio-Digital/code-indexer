@@ -154,8 +154,8 @@ export function SessionImportDialog(props: Props) {
                 <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t('chat:sessionImport.allSources')}</SelectItem>
-                  <SelectItem value="claude-code">Claude Code</SelectItem>
-                  <SelectItem value="codex">Codex</SelectItem>
+                  <SelectItem value="claude-code">{t('chat:sessionImport.claudeCode')}</SelectItem>
+                  <SelectItem value="codex">{t('chat:sessionImport.codex')}</SelectItem>
                 </SelectContent>
               </Select>
               <div className="relative flex-1">
@@ -178,7 +178,7 @@ export function SessionImportDialog(props: Props) {
                       {item.matches_project && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />}
                     </div>
                     <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">{item.cwd ?? 'cwd —'}</div>
-                    <div className="mt-1 text-[10px] text-muted-foreground">{displayDate(item.updated_at)} · {Math.ceil(item.size_bytes / 1024).toLocaleString()} KB</div>
+                    <div className="mt-1 text-[10px] text-muted-foreground">{displayDate(item.updated_at)} · {t('chat:sessionImport.kilobytes', { count: Math.ceil(item.size_bytes / 1024).toLocaleString() })}</div>
                   </button>
                   {item.already_imported_session_id ? (
                     <Button size="sm" variant="outline" onClick={() => { props.onOpenChange(false); props.onImported(item.already_imported_session_id!); }}>
@@ -196,7 +196,7 @@ export function SessionImportDialog(props: Props) {
             {preview && !previewing && (
               <div className="space-y-4">
                 <div>
-                  <div className="flex items-center gap-2"><Badge>{preview.source === 'claude-code' ? 'Claude Code' : 'Codex'}</Badge>{preview.has_source_summary && <Badge variant="outline">handoff</Badge>}</div>
+                  <div className="flex items-center gap-2"><Badge>{preview.source === 'claude-code' ? t('chat:sessionImport.claudeCode') : t('chat:sessionImport.codex')}</Badge>{preview.has_source_summary && <Badge variant="outline">{t('chat:sessionImport.handoff')}</Badge>}</div>
                   <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{preview.cwd ?? 'cwd —'}</p>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center text-xs">

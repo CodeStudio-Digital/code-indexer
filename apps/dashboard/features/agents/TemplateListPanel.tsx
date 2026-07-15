@@ -63,7 +63,7 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filtrar templates…"
+            placeholder={t('template.filterPlaceholder')}
             className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
           />
         </label>
@@ -74,7 +74,7 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
           <div className="px-3 py-8 text-center">
             <LayoutTemplate className="mx-auto mb-2 h-6 w-6 text-muted-foreground/50" />
             <p className="text-[11px] font-medium text-foreground">
-              {query ? 'Nenhum template encontrado' : t('template.noTemplates')}
+              {query ? t('template.noTemplateFound') : t('template.noTemplates')}
             </p>
             {!query && (
               <Button variant="outline" size="sm" className="mt-3 h-7 gap-1 text-[10px]" onClick={onNewTemplate}>
@@ -100,7 +100,7 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[11px] font-medium text-foreground">{template.name}</span>
                 <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">
-                  {template.description || 'Blueprint reutilizável de agentes'}
+                  {template.description || t('template.defaultDescription')}
                 </span>
               </span>
               <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -110,7 +110,7 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
                     event.stopPropagation();
                     setEditingTemplate(template);
                   }}
-                  aria-label={`Editar ${template.name}`}
+                  aria-label={t('template.editLabel', { name: template.name })}
                   className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-[var(--workbench-active)] hover:text-foreground"
                 >
                   <Pencil className="h-3 w-3" />
@@ -121,7 +121,7 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
                     event.stopPropagation();
                     setDeleteTarget(template);
                   }}
-                  aria-label={`Excluir ${template.name}`}
+                  aria-label={t('template.deleteLabel', { name: template.name })}
                   className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                 >
                   <Trash2 className="h-3 w-3" />
@@ -144,7 +144,7 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
       </div>
 
       <div className="flex h-7 items-center border-t border-[var(--workbench-border)] px-2 text-[10px] text-muted-foreground">
-        {filtered.length} de {templates?.length ?? 0} templates
+        {t('template.count', { shown: filtered.length, total: templates?.length ?? 0 })}
       </div>
 
       {editingTemplate && (
@@ -159,14 +159,14 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
         <Dialog open onOpenChange={(open) => !open && setDeleteTarget(null)}>
           <DialogContent className="max-w-md border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
             <DialogHeader>
-              <DialogTitle>Excluir template</DialogTitle>
+              <DialogTitle>{t('template.deleteTitle')}</DialogTitle>
               <DialogDescription>
-                O blueprint <strong className="text-foreground">{deleteTarget.name}</strong> deixará de aparecer na criação de empresas. As empresas existentes não serão alteradas.
+                {t('template.deleteDescriptionPrefix')} <strong className="text-foreground">{deleteTarget.name}</strong> {t('template.deleteDescriptionSuffix')}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>Cancelar</Button>
-              <Button variant="destructive" size="sm" onClick={() => void handleDelete(deleteTarget.id)}>Excluir template</Button>
+              <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>{t('common:actions.cancel')}</Button>
+              <Button variant="destructive" size="sm" onClick={() => void handleDelete(deleteTarget.id)}>{t('template.deleteTitle')}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

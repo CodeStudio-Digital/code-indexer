@@ -42,7 +42,7 @@ export function AppStudioRail({
 }) {
   const { t } = useTranslation('appStudio');
   return (
-    <RailContainer side="left" aria-label="App Studio tool windows">
+    <RailContainer side="left" aria-label={t('rail.label')}>
       {APP_STUDIO_RAIL_TABS.map(({ id, icon: Icon, labelKey, separated }) => {
         const isActive = active === id;
         const disabled =

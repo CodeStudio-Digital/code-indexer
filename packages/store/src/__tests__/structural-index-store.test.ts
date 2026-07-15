@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '../db.js';
+import type { LLMSymbol } from '@mcp/shared/types.js';
 
 const FULL_FILE = {
   path: 'src/auth/service.ts',
@@ -26,6 +27,24 @@ const FULL_FILE = {
   complexity: 'medium',
   layer: 'service',
 };
+
+function indexedSymbol(name: string): LLMSymbol {
+  return {
+    name,
+    kind: 'function',
+    signature: `${name}()`,
+    parent: null,
+    modifiers: [],
+    return_type: null,
+    parameters: '()',
+    line: 1,
+    col: 1,
+    end_line: 1,
+    exported: true,
+    comment: null,
+    tags: [],
+  };
+}
 
 describe('structural index store (migrations 139/140)', () => {
   let dir: string;
@@ -118,6 +137,60 @@ describe('structural index store (migrations 139/140)', () => {
       contentHash: 'h', dependencies: [], internalDeps: [], externalDeps: [],
     });
     expect(db.upsertFileContent(fileId, `abc${String.fromCharCode(0)}def`)).toBe(false);
+  });
+
+  it('filters prefix symbols by language before the limit and keeps project isolation', () => {
+    const python = db.upsertFileStructural(projectId, {
+      path: 'src/target.py', language: 'python', size: 10, lineCount: 1,
+      contentHash: 'py', dependencies: [], internalDeps: [], externalDeps: [],
+    });
+    db.upsertSymbols(projectId, python.fileId, 'src/target.py', [indexedSymbol('aczPythonTarget')]);
+
+    const typescript = db.upsertFileStructural(projectId, {
+      path: 'src/noise.ts', language: 'typescript', size: 10, lineCount: 1,
+      contentHash: 'ts', dependencies: [], internalDeps: [], externalDeps: [],
+    });
+    db.upsertSymbols(
+      projectId,
+      typescript.fileId,
+      'src/noise.ts',
+      Array.from({ length: 55 }, (_, i) => indexedSymbol(`ac${String(i).padStart(3, '0')}TsNoise`)),
+    );
+
+    const otherProjectId = db.createProject('other', join(dir, 'other')).id;
+    const otherPython = db.upsertFileStructural(otherProjectId, {
+      path: 'src/other.py', language: 'python', size: 10, lineCount: 1,
+      contentHash: 'other-py', dependencies: [], internalDeps: [], externalDeps: [],
+    });
+    db.upsertSymbols(otherProjectId, otherPython.fileId, 'src/other.py', [indexedSymbol('acaOtherProject')]);
+
+    const hits = db.searchSymbolsByPrefix(projectId, 'ac', 50, {
+      exportedOnly: true,
+      languages: ['python'],
+    });
+    expect(hits.map((s) => s.name)).toEqual(['aczPythonTarget']);
+  });
+
+  it('accepts multiple compatible structural languages in one prefix query', () => {
+    const seed = (path: string, language: string, symbol: string): void => {
+      const { fileId } = db.upsertFileStructural(projectId, {
+        path, language, size: 10, lineCount: 1,
+        contentHash: path, dependencies: [], internalDeps: [], externalDeps: [],
+      });
+      db.upsertSymbols(projectId, fileId, path, [indexedSymbol(symbol)]);
+    };
+    seed('src/a.ts', 'typescript', 'shareTypescript');
+    seed('src/b.tsx', 'tsx', 'shareTsx');
+    seed('src/c.js', 'javascript', 'shareJavascript');
+    seed('src/d.py', 'python', 'sharePython');
+
+    const hits = db.searchSymbolsByPrefix(projectId, 'share', 50, {
+      exportedOnly: true,
+      languages: ['typescript', 'tsx', 'javascript'],
+    });
+    expect(new Set(hits.map((s) => s.name))).toEqual(new Set([
+      'shareTypescript', 'shareTsx', 'shareJavascript',
+    ]));
   });
 
   it('missingContentFiles feeds the coverage sweep; repair recreates empty', () => {

@@ -158,7 +158,7 @@ export function ExportDialog({
                 <div className="mb-2 flex flex-wrap gap-3 text-muted-foreground">
                   <span>{t('export.plan.assets', { n: plan.assetCount })}</span><span>{t('export.plan.frames', { n: plan.frameCount })}</span><span>{t('export.plan.animations', { n: plan.animationCount })}</span>
                 </div>
-                <div className="max-h-24 space-y-1 overflow-auto">{plan.files.map((file) => <div key={file.path} className="flex items-center gap-2"><FileText className="h-3 w-3" /><span className="truncate">{file.path}</span><span className="ml-auto text-muted-foreground">{file.bytes} B</span></div>)}</div>
+                <div className="max-h-24 space-y-1 overflow-auto">{plan.files.map((file) => <div key={file.path} className="flex items-center gap-2"><FileText className="h-3 w-3" /><span className="truncate">{file.path}</span><span className="ml-auto text-muted-foreground">{t('export.bytes', { count: file.bytes })}</span></div>)}</div>
                 {plan.warnings.map((warning) => <div key={warning} className="mt-2 flex items-center gap-1 text-amber-400"><AlertTriangle className="h-3 w-3" />{t(`export.warning.${warning}`)}</div>)}
               </> : <span className="text-muted-foreground">{t('export.plan.empty')}</span>}
         </div>

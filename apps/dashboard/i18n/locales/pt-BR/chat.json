@@ -759,4 +759,12 @@
   "sessionImport.agent": "Agente",
   "sessionImport.import": "Importar e abrir",
   "sessionImport.importedBadge": "Histórico importado como snapshot externo unidirecional"
+  ,"sessionImport.claudeCode": "Claude Code",
+  "sessionImport.codex": "Codex",
+  "sessionImport.kilobytes": "{{count}} KB",
+  "sessionImport.handoff": "transferência",
+  "sessionLaunch.modelPlaceholder": "nome-do-modelo",
+  "dbQuery.sql": "SQL",
+  "dbQuery.maxRows": "máx. {{count}}",
+  "sessionPicker.tokens": "{{count}} tok"
 }

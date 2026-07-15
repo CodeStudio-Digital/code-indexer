@@ -111,15 +111,15 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
         <DialogHeader className="border-b border-[var(--workbench-border)] px-5 py-4 text-left">
           <DialogTitle>{t('agents:newCompanyDialog.title')}</DialogTitle>
           <DialogDescription>
-            Configure o time, conecte os projetos e revise a orquestração antes de iniciar.
+            {t('agents:newCompanyDialog.description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-3 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-5">
           {[
-            ['1', 'Identidade', LayoutTemplate],
-            ['2', 'Projetos', FolderKanban],
-            ['3', 'Orquestração', Sparkles],
+            ['1', t('agents:newCompanyDialog.steps.identity'), LayoutTemplate],
+            ['2', t('agents:newCompanyDialog.steps.projects'), FolderKanban],
+            ['3', t('agents:newCompanyDialog.steps.orchestration'), Sparkles],
           ].map(([number, label, Icon], index) => (
             <button
               type="button"
@@ -154,7 +154,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             <div className="mx-auto max-w-3xl space-y-5">
               <div>
                 <label className="text-[11px] font-medium text-foreground">{t('agents:newCompanyDialog.sessionName')}</label>
-                <p className="mb-2 text-[10px] text-muted-foreground">Um nome claro ajuda a distinguir objetivos e ambientes em execução.</p>
+                <p className="mb-2 text-[10px] text-muted-foreground">{t('agents:newCompanyDialog.sessionNameHint')}</p>
                 <input
                   autoFocus
                   value={name}
@@ -168,9 +168,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                 <div className="mb-2 flex items-end justify-between gap-3">
                   <div>
                     <label className="text-[11px] font-medium text-foreground">{t('agents:newCompanyDialog.template')}</label>
-                    <p className="text-[10px] text-muted-foreground">Comece livre ou aplique um blueprint reutilizável de papéis e modelos.</p>
+                    <p className="text-[10px] text-muted-foreground">{t('agents:newCompanyDialog.templateHint')}</p>
                   </div>
-                  <span className="text-[10px] text-muted-foreground">{templates?.length ?? 0} disponíveis</span>
+                  <span className="text-[10px] text-muted-foreground">{t('agents:newCompanyDialog.availableTemplates', { count: templates?.length ?? 0 })}</span>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <button
@@ -184,13 +184,13 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                   >
                     <div className="flex items-center gap-2">
                       <span className="grid h-7 w-7 place-items-center rounded bg-[var(--workbench-raised)]"><Sparkles className="h-3.5 w-3.5" /></span>
-                      <span className="text-[11px] font-medium">Configuração personalizada</span>
+                      <span className="text-[11px] font-medium">{t('agents:newCompanyDialog.customConfiguration')}</span>
                       {selectedTemplateId == null && <Check className="ml-auto h-3.5 w-3.5 text-violet-400" />}
                     </div>
-                    <p className="mt-2 text-[10px] leading-4 text-muted-foreground">Escolha manualmente o provider e o modelo do agente master.</p>
+                    <p className="mt-2 text-[10px] leading-4 text-muted-foreground">{t('agents:newCompanyDialog.customConfigurationHint')}</p>
                   </button>
                   {templatesLoading ? (
-                    <div className="rounded-md border border-[var(--workbench-border)] p-3 text-[10px] text-muted-foreground">Carregando templates…</div>
+                    <div className="rounded-md border border-[var(--workbench-border)] p-3 text-[10px] text-muted-foreground">{t('agents:newCompanyDialog.loadingTemplates')}</div>
                   ) : templates?.map((template) => (
                     <button
                       type="button"
@@ -207,8 +207,8 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                         <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{template.name}</span>
                         {selectedTemplateId === template.id && <Check className="h-3.5 w-3.5 text-violet-400" />}
                       </div>
-                      <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{template.description || 'Template de empresa'}</p>
-                      <span className="mt-2 block text-[9px] text-muted-foreground">{template.roles.length} papéis configurados</span>
+                      <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{template.description || t('agents:newCompanyDialog.defaultTemplateDescription')}</p>
+                      <span className="mt-2 block text-[9px] text-muted-foreground">{t('agents:newCompanyDialog.configuredRoles', { count: template.roles.length })}</span>
                     </button>
                   ))}
                 </div>
@@ -219,18 +219,18 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
           {step === 1 && (
             <div className="mx-auto flex h-full max-w-3xl flex-col">
               <div className="mb-3">
-                <h3 className="text-sm font-semibold">Selecione os projetos</h3>
-                <p className="text-[10px] text-muted-foreground">A empresa receberá contexto e permissão para trabalhar nos projetos marcados.</p>
+                <h3 className="text-sm font-semibold">{t('agents:newCompanyDialog.selectProjects')}</h3>
+                <p className="text-[10px] text-muted-foreground">{t('agents:newCompanyDialog.selectProjectsHint')}</p>
               </div>
               <label className="mb-2 flex h-8 items-center gap-2 rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 text-muted-foreground focus-within:border-[var(--workbench-focus)]">
                 <Search className="h-3.5 w-3.5" />
                 <input
                   value={projectQuery}
                   onChange={(event) => setProjectQuery(event.target.value)}
-                  placeholder="Buscar por nome ou caminho…"
+                  placeholder={t('agents:newCompanyDialog.projectSearchPlaceholder')}
                   className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none"
                 />
-                <span className="text-[9px] tabular-nums">{selectedProjectIds.length} selecionados</span>
+                <span className="text-[9px] tabular-nums">{t('agents:newCompanyDialog.selectedProjects', { count: selectedProjectIds.length })}</span>
               </label>
               <div className="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-md border border-[var(--workbench-border)] p-1.5">
                 {filteredProjects.map((project) => {
@@ -264,8 +264,8 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             <div className="mx-auto grid max-w-3xl gap-4 md:grid-cols-[minmax(0,1fr)_280px]">
               <div className="space-y-4">
                 <div>
-                  <h3 className="text-sm font-semibold">Agente master</h3>
-                  <p className="text-[10px] text-muted-foreground">Responsável por planejar, delegar e consolidar o trabalho do time.</p>
+                  <h3 className="text-sm font-semibold">{t('agents:newCompanyDialog.masterAgent')}</h3>
+                  <p className="text-[10px] text-muted-foreground">{t('agents:newCompanyDialog.masterAgentHint')}</p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
@@ -303,12 +303,12 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                 {templateMaster && (
                   <div className="flex gap-2 rounded-md border border-violet-500/30 bg-violet-500/8 p-3 text-[10px] text-muted-foreground">
                     <Crown className="h-4 w-4 shrink-0 text-amber-400" />
-                    <span>Provider e modelo são definidos pelo papel master do template <strong className="text-foreground">{selectedTemplate?.name}</strong>.</span>
+                    <span>{t('agents:newCompanyDialog.templateMasterHint')} <strong className="text-foreground">{selectedTemplate?.name}</strong>.</span>
                   </div>
                 )}
                 {selectedTemplate && (
                   <div className="rounded-md border border-[var(--workbench-border)]">
-                    <div className="border-b border-[var(--workbench-border)] px-3 py-2 text-[10px] font-medium">Papéis do blueprint</div>
+                    <div className="border-b border-[var(--workbench-border)] px-3 py-2 text-[10px] font-medium">{t('agents:newCompanyDialog.blueprintRoles')}</div>
                     <div className="divide-y divide-[var(--workbench-border)]">
                       {selectedTemplate.roles.map((role) => (
                         <div key={role.role} className="flex items-center gap-2 px-3 py-2 text-[10px]">
@@ -323,12 +323,12 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
               </div>
 
               <aside className="rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-raised)] p-3">
-                <h3 className="text-[11px] font-semibold">Resumo da empresa</h3>
+                <h3 className="text-[11px] font-semibold">{t('agents:newCompanyDialog.companySummary')}</h3>
                 <dl className="mt-3 space-y-3 text-[10px]">
-                  <div><dt className="text-muted-foreground">Nome</dt><dd className="mt-0.5 font-medium text-foreground">{name}</dd></div>
-                  <div><dt className="text-muted-foreground">Projetos</dt><dd className="mt-0.5 font-medium text-foreground">{selectedProjectIds.length} selecionados</dd></div>
-                  <div><dt className="text-muted-foreground">Blueprint</dt><dd className="mt-0.5 font-medium text-foreground">{selectedTemplate?.name ?? 'Personalizado'}</dd></div>
-                  <div><dt className="text-muted-foreground">Master</dt><dd className="mt-0.5 break-all font-mono text-[9px] text-foreground">{masterProvider}/{masterModel}</dd></div>
+                  <div><dt className="text-muted-foreground">{t('agents:newCompanyDialog.summary.name')}</dt><dd className="mt-0.5 font-medium text-foreground">{name}</dd></div>
+                  <div><dt className="text-muted-foreground">{t('agents:newCompanyDialog.summary.projects')}</dt><dd className="mt-0.5 font-medium text-foreground">{t('agents:newCompanyDialog.selectedProjects', { count: selectedProjectIds.length })}</dd></div>
+                  <div><dt className="text-muted-foreground">{t('agents:newCompanyDialog.summary.blueprint')}</dt><dd className="mt-0.5 font-medium text-foreground">{selectedTemplate?.name ?? t('agents:newCompanyDialog.custom')}</dd></div>
+                  <div><dt className="text-muted-foreground">{t('agents:newCompanyDialog.summary.master')}</dt><dd className="mt-0.5 break-all font-mono text-[9px] text-foreground">{masterProvider}/{masterModel}</dd></div>
                 </dl>
               </aside>
             </div>
@@ -342,7 +342,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
           <div className="ml-auto flex gap-2">
             {step > 0 && (
               <Button variant="outline" size="sm" className="gap-1" onClick={() => setStep((current) => current - 1)}>
-                <ChevronLeft className="h-3.5 w-3.5" /> Voltar
+                <ChevronLeft className="h-3.5 w-3.5" /> {t('agents:newCompanyDialog.back')}
               </Button>
             )}
             {step < 2 ? (
@@ -352,7 +352,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                 disabled={step === 0 ? !name.trim() : selectedProjectIds.length === 0}
                 onClick={() => setStep((current) => current + 1)}
               >
-                Continuar <ChevronRight className="h-3.5 w-3.5" />
+                {t('agents:newCompanyDialog.continue')} <ChevronRight className="h-3.5 w-3.5" />
               </Button>
             ) : (
               <Button onClick={handleCreate} disabled={creating || !name.trim() || selectedProjectIds.length === 0} size="sm">

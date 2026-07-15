@@ -21,7 +21,7 @@ export function AppWorkItemCard({ item, onOpen }: { item: AppWorkItemView; onOpe
         title={item.title}
         description={item.outcome}
         leading={item.status === 'running' ? <span className="mt-1 h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-400" /> : item.status === 'review' ? <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-violet-400" /> : undefined}
-        trailing={<span className="shrink-0 font-mono text-[9px] text-muted-foreground">P{item.priority}</span>}
+        trailing={<span className="shrink-0 font-mono text-[9px] text-muted-foreground">{item.priority}</span>}
         badges={<><WorkBoardBadge tone={KIND_TONE[item.kind]}>{item.kind}</WorkBoardBadge><WorkBoardBadge tone={STATUS_TONE[item.status] ?? 'neutral'}>{item.status}</WorkBoardBadge>{item.slice_id && <WorkBoardBadge>{item.slice_id}</WorkBoardBadge>}</>}
         footer={<><span className="flex min-w-0 items-center gap-1"><Users className="h-3 w-3" /><span className="truncate">{item.run?.agent ?? item.owner_profile}</span></span><span className="flex items-center gap-1"><CheckSquare className="h-3 w-3" />{completedAcceptance}/{item.acceptance.length}</span>{item.depends_on.length > 0 && <span className="flex items-center gap-1"><Link2 className="h-3 w-3" />{item.depends_on.length}</span>}{item.run && <span className="ml-auto flex items-center gap-1 text-emerald-400"><Activity className="h-3 w-3" />{item.run.mode ?? 'run'}</span>}</>}
       />

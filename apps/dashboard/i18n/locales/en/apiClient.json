@@ -427,4 +427,6 @@
     "sync": "Sync",
     "untitledRequest": "Untitled Request"
   }
+  ,"toolbar.clientTitle": "API Client",
+  "toolbar.inspectorTitle": "API Inspector"
 }

@@ -655,4 +655,6 @@
     "marginX": "Margin X",
     "marginY": "Margin Y"
   }
+  ,"animate.exportNamePlaceholder": "walk_S",
+  "export.bytes": "{{count}} B"
 }

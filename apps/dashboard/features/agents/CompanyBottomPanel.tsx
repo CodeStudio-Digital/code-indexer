@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { ChevronDown, Loader2, Play, TerminalSquare, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
 import { CompanyTerminalPanel } from './terminal/CompanyTerminalPanel.js';
@@ -22,8 +23,8 @@ interface CompanyBottomPanelProps {
 }
 
 const TABS = [
-  { id: 'terminal' as const, label: 'Terminal', Icon: TerminalSquare },
-  { id: 'runners' as const, label: 'Runners', Icon: Play },
+  { id: 'terminal' as const, labelKey: 'company.terminal', Icon: TerminalSquare },
+  { id: 'runners' as const, labelKey: 'company.runners', Icon: Play },
 ];
 
 /**
@@ -40,6 +41,7 @@ export function CompanyBottomPanel({
   onCollapse,
   onClose,
 }: CompanyBottomPanelProps) {
+  const { t } = useTranslation('agents');
   // Once opened, keep Runners mounted while switching bottom tabs. This avoids
   // re-detecting scripts and preserves its selected project during the panel
   // session. The terminal is also kept mounted so its xterm surface does not
@@ -56,7 +58,7 @@ export function CompanyBottomPanel({
     <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
       <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-1">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {TABS.map(({ id, label, Icon }) => (
+          {TABS.map(({ id, labelKey, Icon }) => (
             <button
               key={id}
               type="button"
@@ -70,7 +72,7 @@ export function CompanyBottomPanel({
               )}
             >
               <Icon className="h-3 w-3" />
-              <span>{label}</span>
+              <span>{t(labelKey)}</span>
             </button>
           ))}
         </div>
@@ -80,7 +82,7 @@ export function CompanyBottomPanel({
             size="icon"
             className="h-6 w-6"
             onClick={onCollapse}
-            aria-label="Recolher painel inferior"
+            aria-label={t('company.bottomPanel.collapse')}
           >
             <ChevronDown className="h-3 w-3" />
           </Button>
@@ -89,7 +91,7 @@ export function CompanyBottomPanel({
             size="icon"
             className="h-6 w-6"
             onClick={onClose}
-            aria-label="Fechar painel inferior"
+            aria-label={t('company.bottomPanel.close')}
           >
             <X className="h-3 w-3" />
           </Button>

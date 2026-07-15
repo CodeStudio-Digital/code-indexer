@@ -15,6 +15,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Building2, ChevronDown, ChevronUp, Database, Inbox, KeyRound, Puzzle, ShieldOff } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { RailButton, RailContainer, RailSeparator } from '../../../components/chrome/index.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 
@@ -65,6 +66,7 @@ function readStoredAdvanced(): boolean {
 }
 
 export function SidebarRail({ active, onToggle, pluginWindows = [] }: SidebarRailProps) {
+  const { t } = useTranslation('agents');
   const [expanded, setExpanded] = useState(readStoredAdvanced);
   useEffect(() => {
     try {
@@ -107,13 +109,14 @@ export function SidebarRail({ active, onToggle, pluginWindows = [] }: SidebarRai
   );
 
   return (
-    <RailContainer side="right" aria-label="Painéis da empresa">
+    <RailContainer side="right" aria-label={t('company.rightRailLabel')}>
       {core.map(renderIcon)}
       <RailSeparator />
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        title="More"
+        title={t('company.moreTabs')}
+        aria-label={t('company.moreTabs')}
         aria-expanded={showAdvanced}
         className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >

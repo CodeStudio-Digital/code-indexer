@@ -119,7 +119,7 @@ export function SecretsManager({ projectId, secrets, onChange }: Props) {
         <div className="max-h-32 overflow-y-auto">
           {secrets.map((s) => (
             <div key={s.id} className="flex items-center gap-2 px-3 py-1 text-[11px] group">
-              <code className="shrink-0 text-foreground">${'{'}secret:{s.name}{'}'}</code>
+              <code className="shrink-0 text-foreground">{t('secrets.reference', { name: s.name })}</code>
               {s.description && <span className="truncate text-muted-foreground">{s.description}</span>}
               <button
                 type="button"

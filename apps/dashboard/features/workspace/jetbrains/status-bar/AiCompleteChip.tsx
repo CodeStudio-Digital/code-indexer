@@ -11,6 +11,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Loader2, Sparkles } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../../components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverAnchor } from '../../../../components/ui/popover.js';
 import { Button } from '../../../../components/ui/button.js';
@@ -52,6 +53,7 @@ function topDiscardReason(reasons: Record<string, number>): string | null {
 }
 
 export function AiCompleteChip() {
+  const { t } = useTranslation('workspace');
   const enabled = useAiCompleteStore((s) => s.enabled);
   const busy = useAiCompleteStore((s) => s.busy);
   const issue = useAiCompleteStore((s) => s.issue);
@@ -142,16 +144,14 @@ export function AiCompleteChip() {
                         {stats.model} · {stats.route?.suitability ?? 'unknown'} · {stats.route?.health ?? 'unknown'}
                       </div>
                       <div>
-                        current: accept {pct(stats.current.acceptRate)} · p50 {stats.current.latency.p50 ?? '—'}ms
-                        · {stats.current.requests} requests
+                        {t('aiComplete.currentMetrics', { accept: pct(stats.current.acceptRate), p50: stats.current.latency.p50 ?? '—', requests: stats.current.requests })}
                       </div>
                       <div>
-                        delivery: {currentDelivery.received} received → {currentDelivery.returned} returned
-                        → {stats.current.shown} shown → {stats.current.accepted} accepted
+                        {t('aiComplete.deliveryMetrics', { received: currentDelivery.received, returned: currentDelivery.returned, shown: stats.current.shown, accepted: stats.current.accepted })}
                       </div>
                       {currentDelivery.discarded > 0 && (
                         <div className="text-amber-300">
-                          discarded {currentDelivery.discarded}{discardReason ? ` · ${discardReason}` : ''}
+                          {t('aiComplete.discarded', { count: currentDelivery.discarded })}{discardReason ? ` · ${discardReason}` : ''}
                         </div>
                       )}
                       {stats.route?.reason && <div className="mt-1 text-amber-300">{stats.route.reason}</div>}

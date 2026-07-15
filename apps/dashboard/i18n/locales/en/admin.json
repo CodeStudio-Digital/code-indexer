@@ -700,5 +700,9 @@
   "perf.tools.when": "When",
   "perf.tools.durationMs": "Duration (ms)",
   "perf.tools.attribution": "Attribution",
-  "lspServers.emptyInstances": "None — lightweight servers may warm when a file opens; heavy servers start on the first interactive use, and all stop after inactivity."
+  "lspServers.emptyInstances": "None — lightweight servers may warm when a file opens; heavy servers start on the first interactive use, and all stop after inactivity.",
+  "pipelines.completionProbeMetrics": "p50 {{p50}}ms · p90 {{p90}}ms",
+  "pipelines.completionProbeTitle": "Run a 3-prompt completion probe (without project files)",
+  "pipelines.relatedCodeConsent.label": "Use indexed related code (context v3)",
+  "pipelines.relatedCodeConsent.description": "Up to three relevant windows (700 tokens total) from other project files may be sent to this completion provider. Existing bindings remain off until you confirm here."
 }

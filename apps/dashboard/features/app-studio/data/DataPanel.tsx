@@ -420,7 +420,7 @@ export function DataPanel({
                           className="h-7 text-xs"
                           onClick={() => setSql(`SELECT * FROM ${q(selectedTable.name)} LIMIT 50`)}
                         >
-                          SELECT *
+                          {t('data.queryAll')}
                         </Button>
                         <Button
                           type="button"
@@ -429,7 +429,7 @@ export function DataPanel({
                           className="h-7 text-xs"
                           onClick={() => setSql(`SELECT COUNT(*) AS total FROM ${q(selectedTable.name)}`)}
                         >
-                          COUNT
+                          {t('data.queryCount')}
                         </Button>
                       </div>
                       {queryError && <p className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-800">{queryError}</p>}
@@ -537,7 +537,7 @@ function QueryResult({ result }: { result: AppDataQueryResult }) {
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2 text-xs">
         <span className="font-semibold">{t('data.result')}</span>
         <span className="text-[11px] text-muted-foreground">
-          {t('data.rows', { count: result.row_count })} | {result.duration_ms}ms
+          {t('data.rows', { count: result.row_count })} | {t('data.durationMs', { count: result.duration_ms })}
         </span>
       </div>
       {result.limited && (

@@ -8,6 +8,7 @@
 import { useRef } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useTranslation } from 'react-i18next';
 import { cn } from '../../../../lib/utils.js';
 import type { ContextMenuItem } from '../../../../components/ui/context-menu.js';
 import { BranchRow, type BranchRowData } from './branch-popover-rows.js';
@@ -56,6 +57,7 @@ export function RemoteBranchList({
 
 /** The IntelliJ action set for one branch, rendered inline with a back header. */
 export function BranchActionPanel({ branch, ops, onBack }: { branch: BranchRowData; ops: BranchActions; onBack: () => void }) {
+  const { t } = useTranslation('workspace');
   const renderItem = (item: ContextMenuItem) => {
     if (item.submenu) {
       return (
@@ -101,7 +103,7 @@ export function BranchActionPanel({ branch, ops, onBack }: { branch: BranchRowDa
         <span className="truncate font-medium">{branch.name}</span>
       </button>
       <div className="flex-1 min-h-0 overflow-y-auto py-1">
-        {buildBranchActions(branch, ops).map(renderItem)}
+        {buildBranchActions(branch, ops, { t: (key, options) => t(key, options) }).map(renderItem)}
       </div>
     </div>
   );

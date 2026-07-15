@@ -29,7 +29,7 @@ export function ArchitecturePanel({ detail }: {
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold">{t('architecture.title')}</h2>
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">v{architecture.revision_number}</span>
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{t('architecture.version', { number: architecture.revision_number })}</span>
             <span className={audit.ok ? 'text-xs text-green-600' : 'text-xs text-amber-600'}>
               {audit.ok ? t('architecture.ready') : t('architecture.pending', { count: audit.issues.length })}
             </span>

@@ -350,4 +350,8 @@
     "doneErrors": "Inserted {{ok}}, {{errors}} failed",
     "errorsN": "{{n}} errors"
   }
+  ,"edit.primaryKey": "PK",
+  "edit.null": "NULL",
+  "edit.true": "true",
+  "edit.false": "false"
 }

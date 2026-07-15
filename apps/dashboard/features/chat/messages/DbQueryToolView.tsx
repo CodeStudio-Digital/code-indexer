@@ -96,7 +96,7 @@ function SqlCode({ sql }: { sql: string }) {
   return (
     <div className="overflow-hidden rounded-lg border border-slate-700/70 bg-[#0b1020] shadow-inner">
       <div className="flex items-center justify-between gap-2 border-b border-slate-700/70 bg-slate-900/80 px-2.5 py-1.5 text-slate-300">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.14em]">SQL</span>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.14em]">{t('dbQuery.sql')}</span>
         <div className="flex items-center gap-1.5">
           <CopyAction text={sql} label={t('dbQuery.copySql')} />
           <button
@@ -243,7 +243,7 @@ export function DbQueryToolView({ input, result, variant = 'execution', gateRisk
         )}
         {query.maxRows !== null && (
           <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            <Rows3 className="h-3 w-3" /> max {query.maxRows}
+            <Rows3 className="h-3 w-3" /> {t('dbQuery.maxRows', { count: query.maxRows })}
           </span>
         )}
       </div>

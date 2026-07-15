@@ -700,5 +700,9 @@
   "perf.tools.when": "Quando",
   "perf.tools.durationMs": "Duração (ms)",
   "perf.tools.attribution": "Atribuição",
-  "lspServers.emptyInstances": "Nenhuma — servidores leves podem aquecer ao abrir um arquivo; servidores pesados sobem no primeiro uso interativo e todos param após inatividade."
+  "lspServers.emptyInstances": "Nenhuma — servidores leves podem aquecer ao abrir um arquivo; servidores pesados sobem no primeiro uso interativo e todos param após inatividade.",
+  "pipelines.completionProbeMetrics": "p50 {{p50}}ms · p90 {{p90}}ms",
+  "pipelines.completionProbeTitle": "Executar teste de conclusão com 3 prompts (sem arquivos do projeto)",
+  "pipelines.relatedCodeConsent.label": "Usar código relacionado indexado (contexto v3)",
+  "pipelines.relatedCodeConsent.description": "Até três janelas relevantes (700 tokens no total) de outros arquivos do projeto podem ser enviadas a este provedor de conclusão. Os vínculos existentes permanecem desativados até sua confirmação aqui."
 }
