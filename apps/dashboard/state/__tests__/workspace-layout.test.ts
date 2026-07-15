@@ -69,4 +69,27 @@ describe('workspace layout v3', () => {
       activeRight: 'chat',
     });
   });
+
+  it('promotes the former Snapshots right dock into its dedicated workspace', () => {
+    expect(normalizeWorkspaceLayout({
+      primarySurface: 'editor',
+      activeLeft: 'files',
+      activeRight: 'snapshots',
+    })).toMatchObject({
+      primarySurface: 'snapshots',
+      activeLeft: 'files',
+      activeRight: 'chat',
+    });
+  });
+
+  it('does not replace another active workspace with a stale Snapshots dock', () => {
+    expect(normalizeWorkspaceLayout({
+      primarySurface: 'sessions',
+      activeLeft: 'files',
+      activeRight: 'snapshots',
+    })).toMatchObject({
+      primarySurface: 'sessions',
+      activeRight: 'chat',
+    });
+  });
 });

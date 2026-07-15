@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Panel, PanelGroup } from 'react-resizable-panels';
-import { Brain, BookOpen } from 'lucide-react';
+import { Brain } from 'lucide-react';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import {
@@ -126,7 +126,6 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     !!activeLeftPlugin;
   const codeRightKnown =
     layout.activeRight === 'chat' ||
-    layout.activeRight === 'snapshots' ||
     layout.activeRight === 'memory' ||
     !!activeRightPlugin;
   const bottomKnown = !!layout.activeBottom && (
@@ -210,18 +209,17 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         />
       );
     }
-    if (layout.activeRight === 'snapshots' || layout.activeRight === 'memory') {
-      const snapshots = layout.activeRight === 'snapshots';
+    if (layout.activeRight === 'memory') {
       return (
         <div className="flex h-full min-h-0 flex-col">
           <WorkbenchPanelHeader
-            title={snapshots ? 'Snapshots' : 'Memory'}
-            icon={snapshots ? BookOpen : Brain}
+            title="Memory"
+            icon={Brain}
             onClose={() => layout.setActiveRight(null)}
           />
           <div className="min-h-0 flex-1 overflow-hidden">
             <TransientSurface
-              tab={layout.activeRight}
+              tab="memory"
               projectId={props.projectId}
               projectName={props.projectName}
               contribWindows={props.contribWindows}

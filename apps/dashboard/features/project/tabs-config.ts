@@ -35,7 +35,6 @@ export const LEFT_TOOL_TABS: TabDef[] = [
 
 export const RIGHT_TOOL_TABS: TabDef[] = [
   { id: 'chat', label: 'AI Chat', icon: MessageSquareCode, kind: 'right', group: 'core' },
-  { id: 'snapshots', label: 'Snapshots', icon: BookOpen, kind: 'right', group: 'analytics' },
   { id: 'memory', label: 'Memory', icon: Brain, kind: 'right', group: 'analytics' },
 ];
 
@@ -54,6 +53,7 @@ export const PRIMARY_SURFACES: TabDef[] = [
   { id: 'api', label: 'API', icon: Webhook, kind: 'primary', group: 'core' },
   { id: 'ssh', label: 'SSH', icon: Server, kind: 'primary', group: 'core' },
   { id: 'diagrams', label: 'Diagrams', icon: Workflow, kind: 'primary', group: 'core' },
+  { id: 'snapshots', label: 'Snapshots', icon: BookOpen, kind: 'primary', group: 'analytics' },
   { id: 'index', label: 'Index', icon: Database, kind: 'primary', group: 'analytics' },
   { id: 'preview', label: 'Preview', icon: Monitor, kind: 'primary', group: 'core' },
 ];

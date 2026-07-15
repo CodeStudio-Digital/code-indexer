@@ -12,12 +12,12 @@ import {
 describe('project workbench surface registry', () => {
   it('routes built-ins to their professional workbench side', () => {
     expect(LEFT_TOOL_TABS.map((tab) => tab.id)).toEqual(['files', 'git', 'databases']);
-    expect(RIGHT_TOOL_TABS.map((tab) => tab.id)).toEqual(['chat', 'snapshots', 'memory']);
+    expect(RIGHT_TOOL_TABS.map((tab) => tab.id)).toEqual(['chat', 'memory']);
     expect(PRIMARY_SURFACES.map((tab) => tab.id)).toEqual([
-      'editor', 'sessions', 'api', 'ssh', 'diagrams', 'index', 'preview',
+      'editor', 'sessions', 'api', 'ssh', 'diagrams', 'snapshots', 'index', 'preview',
     ]);
     expect(WORKSPACE_SURFACES.map((tab) => tab.id)).toEqual([
-      'sessions', 'api', 'ssh', 'diagrams', 'index', 'preview',
+      'sessions', 'api', 'ssh', 'diagrams', 'snapshots', 'index', 'preview',
     ]);
     expect(WORKSPACE_SURFACES.filter((tab) => tab.separatorBefore).map((tab) => tab.id)).toEqual(['sessions']);
   });
@@ -27,6 +27,7 @@ describe('project workbench surface registry', () => {
     expect(projectSurface('chat')?.kind).toBe('right');
     expect(projectSurface('api')?.kind).toBe('primary');
     expect(projectSurface('sessions')?.kind).toBe('primary');
+    expect(projectSurface('snapshots')?.kind).toBe('primary');
     expect(projectSurface('api-inspector')).toEqual(API_RIGHT_TOOL);
     expect(projectSurfacesFor('left')).toEqual(LEFT_TOOL_TABS);
   });

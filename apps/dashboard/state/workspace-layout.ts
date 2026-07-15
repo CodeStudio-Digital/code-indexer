@@ -67,6 +67,7 @@ export function normalizeWorkspaceLayout(
   const databaseSurface = value?.primarySurface === 'databases';
   const legacySessionSurface = value?.activeLeft === 'sessions';
   const legacyApiSurface = value?.activeLeft === 'api-navigation';
+  const legacySnapshotsSurface = value?.activeRight === 'snapshots';
   const requestedSurface = value?.primarySurface || DEFAULT_WORKSPACE_LAYOUT.primarySurface;
   const primarySurface = databaseSurface
     ? 'editor'
@@ -74,14 +75,16 @@ export function normalizeWorkspaceLayout(
       ? 'sessions'
       : requestedSurface === 'editor' && legacyApiSurface
         ? 'api'
-        : requestedSurface;
+        : requestedSurface === 'editor' && legacySnapshotsSurface
+          ? 'snapshots'
+          : requestedSurface;
   return {
     activeLeft: databaseSurface
       ? 'databases'
       : legacySessionSurface || legacyApiSurface
         ? DEFAULT_WORKSPACE_LAYOUT.activeLeft
         : (value?.activeLeft === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeLeft : value.activeLeft),
-    activeRight: value?.activeRight === 'api-inspector'
+    activeRight: value?.activeRight === 'api-inspector' || legacySnapshotsSurface
       ? DEFAULT_WORKSPACE_LAYOUT.activeRight
       : (value?.activeRight === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeRight : value.activeRight),
     activeBottom: value?.activeBottom === undefined ? DEFAULT_WORKSPACE_LAYOUT.activeBottom : value.activeBottom,
